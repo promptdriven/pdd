@@ -64,6 +64,9 @@ MAX_WORKERS = _read_sync_max_workers()
 STDOUT_CAPTURE_LINE_LIMIT = 5000
 STDOUT_CAPTURE_BYTE_LIMIT = 1024 * 1024
 OUTPUT_CAPTURE_READ_CHUNK_SIZE = 8192
+STRUCTURED_SURFACE_MAX_BYTES = 64 * 1024
+STRUCTURED_SURFACE_MAX_FIELD_BYTES = 16 * 1024
+STRUCTURED_SURFACE_MAX_DETAILS = 64
 
 
 class _BoundedTextCapture:
@@ -136,6 +139,88 @@ class _BoundedTextCapture:
 
     def reversed_lines(self):
         return reversed(self.lines)
+
+
+class _StructuredSurfaceCapture:
+    """Bounded, validated capture of one public-surface diagnostic block.
+
+    This intentionally is not a general log spool: only the wire fields emitted
+    by ``PublicSurfaceRegressionError`` are accepted.  A second block, duplicate
+    scalar field, malformed detail or size overflow invalidates the record so a
+    hostile child cannot smuggle an unbounded repair contract through the runner.
+    """
+
+    _scalar_fields = {
+        "removed:", "signature_changed:", "output:", "pre_surface_size:",
+        "post_surface_size:",
+    }
+
+    def __init__(self) -> None:
+        self._lines: List[str] = []
+        self._seen: set[str] = set()
+        self._bytes = 0
+        self._details = 0
+        self._started = False
+        self.error: Optional[str] = None
+
+    def _reject(self, reason: str) -> None:
+        if self.error is None:
+            self.error = reason
+
+    def feed(self, line: str) -> None:
+        stripped = line.strip()
+        if _PUBLIC_SURFACE_PREFIX in stripped:
+            if self._started:
+                self._reject("multiple public-surface diagnostic blocks")
+                return
+            self._started = True
+            self._append(line)
+            return
+        if not self._started or self.error is not None:
+            return
+        prefix = next((field for field in self._scalar_fields if stripped.startswith(field)), None)
+        if prefix is not None:
+            if prefix in self._seen:
+                self._reject(f"duplicate structured field {prefix.rstrip(':')}")
+                return
+            self._seen.add(prefix)
+            self._append(line)
+            return
+        if stripped.startswith("signature_detail:"):
+            payload = stripped[len("signature_detail:"):].strip()
+            try:
+                detail = json.loads(payload)
+                if not isinstance(detail, dict) or set(detail) != {"symbol", "expected", "actual", "source"} or not all(
+                    isinstance(detail[field], str) for field in detail
+                ):
+                    raise ValueError("invalid detail shape")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                self._reject("malformed signature_detail field")
+                return
+            self._details += 1
+            if self._details > STRUCTURED_SURFACE_MAX_DETAILS:
+                self._reject("too many signature_detail fields")
+                return
+            self._append(line)
+
+    def _append(self, line: str) -> None:
+        line_bytes = len(line.encode("utf-8", errors="replace"))
+        if line_bytes > STRUCTURED_SURFACE_MAX_FIELD_BYTES:
+            self._reject("structured field exceeds byte limit")
+            return
+        if self._bytes + line_bytes > STRUCTURED_SURFACE_MAX_BYTES:
+            self._reject("structured diagnostic exceeds byte limit")
+            return
+        self._lines.append(line if line.endswith("\n") else f"{line}\n")
+        self._bytes += line_bytes
+
+    def materialize(self) -> Tuple[str, Optional[str]]:
+        required = {"removed:", "signature_changed:", "output:", "pre_surface_size:", "post_surface_size:"}
+        if self._started and self.error is None and not required.issubset(self._seen):
+            self._reject("incomplete public-surface diagnostic block")
+        if self.error is not None:
+            return "", f"Structured public-surface evidence rejected: {self.error}"
+        return "".join(self._lines), None
 
 # Heartbeat interval for printing progress hints during long-running modules
 HEARTBEAT_INTERVAL = 60
@@ -2915,15 +3000,6 @@ class AsyncSyncRunner:
 
         cost_file = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
         cost_file.close()
-        # Keep machine-readable public-surface evidence separate from the
-        # bounded human-output tails.  A failing child can print thousands of
-        # lines *after* this block; retaining that flood just to recover six
-        # diagnostic fields defeats the memory cap.  The spill file keeps the
-        # complete structured fields available to the retry parser without
-        # making normal stdout/stderr retention unbounded.
-        surface_evidence_file = tempfile.NamedTemporaryFile(
-            mode="w+", encoding="utf-8", suffix=".surface", delete=False
-        )
 
         env = self._build_env(cost_file.name, repair_directive=repair_directive)
 
@@ -2948,6 +3024,7 @@ class AsyncSyncRunner:
         verbose_print = self.verbose and not self.quiet
         line_lock = threading.Lock()
         evidence_lock = threading.Lock()
+        surface_evidence = _StructuredSurfaceCapture()
 
         # Sticky capture of the child's "Overall status: ... Failed" verdict.
         # Recorded as each stdout line streams in (see _process_child_line) so a
@@ -2957,37 +3034,14 @@ class AsyncSyncRunner:
         streamed_failure_markers: List[str] = []
 
         def _capture_surface_evidence(line: str) -> None:
-            """Persist only the structured public-surface failure fields."""
-            stripped = line.strip()
-            if not (
-                _PUBLIC_SURFACE_PREFIX in stripped
-                or stripped.startswith((
-                    "removed:", "signature_changed:", "output:",
-                    "pre_surface_size:", "post_surface_size:",
-                    "signature_detail:",
-                ))
-            ):
-                return
+            """Capture only one bounded, validated diagnostic block."""
             with evidence_lock:
-                surface_evidence_file.write(line)
-                if not line.endswith("\n"):
-                    surface_evidence_file.write("\n")
+                surface_evidence.feed(line)
 
-        def _take_surface_evidence() -> str:
-            """Read and remove the compact spill artifact exactly once."""
-            try:
-                with evidence_lock:
-                    surface_evidence_file.flush()
-                    surface_evidence_file.seek(0)
-                    return surface_evidence_file.read()
-            finally:
-                try:
-                    surface_evidence_file.close()
-                finally:
-                    try:
-                        os.unlink(surface_evidence_file.name)
-                    except OSError:
-                        pass
+        def _take_surface_evidence() -> Tuple[str, Optional[str]]:
+            """Materialize the fixed-size record without an on-disk spool."""
+            with evidence_lock:
+                return surface_evidence.materialize()
 
         def _dropped_output_message() -> str:
             out_lines = stdout_capture.dropped_lines
@@ -3230,12 +3284,16 @@ class AsyncSyncRunner:
                 pass
             stdout = stdout_capture.text()
             stderr = stderr_capture.text()
-            surface_evidence = _take_surface_evidence()
-            if surface_evidence:
-                stderr = f"{stderr}\n{surface_evidence}" if stderr else surface_evidence
+            surface_text, surface_error = _take_surface_evidence()
+            if surface_text:
+                stderr = f"{stderr}\n{surface_text}" if stderr else surface_text
+            if surface_error:
+                stderr = f"{stderr}\n{surface_error}" if stderr else surface_error
             _log_dropped_output()
             truncation_msg = _dropped_output_message()
             error_msg = f"Timeout after {int(effective_timeout)}s waiting for sync"
+            if surface_error:
+                error_msg = f"{error_msg}\n{surface_error}"
             if truncation_msg:
                 error_msg = f"{error_msg}\n{truncation_msg}"
             return (
@@ -3257,9 +3315,11 @@ class AsyncSyncRunner:
 
         stdout = stdout_capture.text()
         stderr = stderr_capture.text()
-        surface_evidence = _take_surface_evidence()
-        if surface_evidence:
-            stderr = f"{stderr}\n{surface_evidence}" if stderr else surface_evidence
+        surface_text, surface_error = _take_surface_evidence()
+        if surface_text:
+            stderr = f"{stderr}\n{surface_text}" if stderr else surface_text
+        if surface_error:
+            stderr = f"{stderr}\n{surface_error}" if stderr else surface_error
         _log_dropped_output()
 
         success = exit_code == 0
@@ -3347,6 +3407,8 @@ class AsyncSyncRunner:
                 )
 
         error = "\n".join(p for p in summary_parts if p)
+        if surface_error:
+            error = f"{error}\n{surface_error}" if error else surface_error
         truncation_msg = _dropped_output_message()
         if truncation_msg:
             error = f"{error}\n{truncation_msg}" if error else truncation_msg

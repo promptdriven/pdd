@@ -2,12 +2,13 @@
   "pdd_version": "0.0.268",
   "timestamp": "2026-06-09T23:30:32.073262+00:00",
   "command": "example",
-  "prompt_hash": "9c646810b3e55fa6ba5c0bb1d8210e459446ffa6826c565d7012ea6bd55fb6d5",
-  "code_hash": "1293a25723fdcb7870711b4759248fe4681d5107cf2106feff61df57cb56ee96",
-  "example_hash": "25bb0d4b5fe4f31d0d4d3795d24e8e9bb2cd346c74e4fc916d0a9ba8590141be",
-  "test_hash": "3cc05a05384f982254fdb38d8a156fc7507a1dfec200fc91705d01fbbfad134d",
+  "prompt_hash": "b75c4ed71938f93b1326b793cd10116f11593a24310a63c37ad3177f01653dac",
+  "code_hash": "541191bdb9ec85015ea118c53b28d16b4a45b8b3ba1c5cb77c2662b45abdf50f",
+  "example_hash": "4b66f24a1e2ac4195255738566b0cccdac0971523a245d3a8b78ad45d9e1a872",
+  "test_hash": "61a74c8b0f5f9eaf6b2ce7cbd526198bea0561852d370a337c543edf92622769",
   "test_files": {
-    "test_code_generator_main.py": "3cc05a05384f982254fdb38d8a156fc7507a1dfec200fc91705d01fbbfad134d"
+    "test_code_generator_main.py": "5770dba6d2f38bfb7d8051e866bf622b43401b073ac8d97202fe25b4e805d231",
+    "test_issue_1900_surface_contract.py": "61a74c8b0f5f9eaf6b2ce7cbd526198bea0561852d370a337c543edf92622769"
   },
   "include_deps": {
     "context/__init__example.py": "84208a445d03a336e465709ec0687eb969c8d865e6739bf8b79f2c8a8aad351a",
@@ -18,7 +19,7 @@
     "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
     "context/auto_include_example.py": "0c278ed716298149777bc7082827eb8aa6d80dac264c66b6cded6871232f2df7",
     "pdd/code_generator.py": "33235364b431edbb0fb1c4d8eb03fa21a3b776e07ea585530c19212da20c486d",
-    "pdd/code_generator_main.py": "1293a25723fdcb7870711b4759248fe4681d5107cf2106feff61df57cb56ee96",
+    "pdd/code_generator_main.py": "8b419e13014beab491baf1ebcbfce6f75bbb73b218e6df19f558ee5feb74d416",
     "pdd/construct_paths.py": "832d478849bfe83c12d4a473c270902d0af0be577ae3276b07ef8a48c148d35f",
     "pdd/core/cloud.py": "0487c0b989996af144df3af1c818a6eeafe52fd209710e5a54eb43990c89ae97",
     "pdd/incremental_code_generator.py": "266a4bed6ea41519a1b1c3c33057cb33cffecd2a3075ee0c2f790798bfff4834",

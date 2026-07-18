@@ -57,6 +57,7 @@ from .interface_semantics import (
 
 console = Console()
 logger = logging.getLogger(__name__)
+_MISSING_INTERFACE_VALUE = object()
 
 # Extensions for languages that follow the `<name>_test.<ext>` /
 # `<name>_spec.<ext>` sibling-file convention (file lives next to
@@ -2357,7 +2358,7 @@ def _prompt_allows_breaking_change(prompt_content: Optional[str]) -> bool:
 
 def _parse_declared_module_interface(
     prompt_content: Optional[str], prompt_name: str, output_path: str = ""
-) -> Optional[Dict[str, Tuple[str, Optional[str]]]]:
+) -> Optional[Dict[str, Tuple[str, Optional[str], Dict[str, Any]]]]:
     """Return a complete module declaration or fail closed when one is malformed.
 
     ``None`` means the prompt genuinely contains no interface marker and is the
@@ -2387,9 +2388,20 @@ def _parse_declared_module_interface(
     module = interface.get("module")
     if not isinstance(module, dict):
         raise PromptInterfaceContractError(prompt_name, output_path, "missing module object")
-    result: Dict[str, Tuple[str, Optional[str]]] = {}
+    result: Dict[str, Tuple[str, Optional[str], Dict[str, Any]]] = {}
+    unknown_module_fields = sorted(
+        set(module) - {"functions", "classes", "constants", "dataclasses", "enums", "typeAliases", "models"}
+    )
+    if unknown_module_fields:
+        raise PromptInterfaceContractError(
+            prompt_name, output_path,
+            f"module has unsupported field(s): {', '.join(unknown_module_fields)}",
+        )
 
-    def add(name: Any, kind: str, signature: Any, location: str, *, required: bool) -> None:
+    def add(
+        name: Any, kind: str, signature: Any, location: str, *, required: bool,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
         if not isinstance(name, str) or not name or any(
             not part.isidentifier() for part in name.split(".")
         ):
@@ -2408,45 +2420,216 @@ def _parse_declared_module_interface(
             raise PromptInterfaceContractError(
                 prompt_name, output_path, f"duplicate declaration for {name}"
             )
-        result[name] = (kind, signature)
+        result[name] = (kind, signature, metadata or {})
 
     functions = module.get("functions", [])
     classes = module.get("classes", [])
+    dataclasses = module.get("dataclasses", [])
+    enums = module.get("enums", [])
+    type_aliases = module.get("typeAliases", [])
+    models = module.get("models", [])
     constants = module.get("constants", [])
-    if not all(isinstance(items, list) for items in (functions, classes, constants)):
+    if not all(isinstance(items, list) for items in (functions, classes, dataclasses, enums, type_aliases, models, constants)):
         raise PromptInterfaceContractError(
-            prompt_name, output_path, "functions, classes, and constants must be lists"
+            prompt_name, output_path,
+            "functions, classes, dataclasses, enums, typeAliases, models, and constants must be lists",
         )
     for index, item in enumerate(functions):
         if not isinstance(item, dict):
             raise PromptInterfaceContractError(prompt_name, output_path, f"functions[{index}] must be an object")
-        add(item.get("name"), "function", item.get("signature"), f"functions[{index}]", required=True)
-    for index, item in enumerate(classes):
+        unknown = sorted(set(item) - {"name", "signature", "returns", "description", "errors", "sideEffects", "binding"})
+        if unknown:
+            raise PromptInterfaceContractError(
+                prompt_name, output_path,
+                f"functions[{index}] has unsupported field(s): {', '.join(unknown)}",
+            )
+        signature = item.get("signature")
+        if isinstance(signature, str) and isinstance(item.get("returns"), str):
+            try:
+                declared_callable = _declared_callable_ast(item.get("name") or "_pdd", signature)
+            except ValueError as exc:
+                raise PromptInterfaceContractError(
+                    prompt_name, output_path, f"functions[{index}]: {exc}"
+                ) from exc
+            return_field = item["returns"]
+            declared_return = _annotation_source(getattr(declared_callable, "returns", None))
+            # Some established prompts use prose here, but whenever this is a
+            # real annotation it is a second contract source and must agree.
+            if parse_semantic_type(return_field) is not None and (
+                declared_return is None or not _exact_annotations_match(declared_return, return_field)
+            ):
+                raise PromptInterfaceContractError(
+                    prompt_name, output_path,
+                    f"functions[{index}].returns conflicts with its signature return annotation",
+                )
+        binding = item.get("binding")
+        if binding is not None and binding not in {"instance", "staticmethod", "classmethod", "property"}:
+            raise PromptInterfaceContractError(
+                prompt_name, output_path, f"functions[{index}].binding is unsupported"
+            )
+        add(item.get("name"), "function", signature, f"functions[{index}]", required=True,
+            metadata={"binding": binding})
+
+    def add_class(item: Any, index: int, location: str, *, force_dataclass: bool = False) -> None:
         if not isinstance(item, dict):
-            raise PromptInterfaceContractError(prompt_name, output_path, f"classes[{index}] must be an object")
+            raise PromptInterfaceContractError(prompt_name, output_path, f"{location}[{index}] must be an object")
+        unknown = sorted(set(item) - {"name", "kind", "members", "values", "methods", "fields", "description"})
+        if unknown:
+            raise PromptInterfaceContractError(
+                prompt_name, output_path,
+                f"{location}[{index}] has unsupported field(s): {', '.join(unknown)}",
+            )
         class_name = item.get("name")
-        add(class_name, "class", item.get("signature"), f"classes[{index}]", required=False)
+        class_kind = "dataclass" if force_dataclass else item.get("kind")
+        if class_kind is not None and class_kind not in {"class", "dataclass", "enum", "protocol", "dict"}:
+            raise PromptInterfaceContractError(
+                prompt_name, output_path, f"{location}[{index}].kind is unsupported"
+            )
+        if force_dataclass and item.get("kind") not in {None, "dataclass"}:
+            raise PromptInterfaceContractError(
+                prompt_name, output_path,
+                f"{location}[{index}].kind conflicts with dataclasses declaration",
+            )
+        members = item.get("members", item.get("values"))
+        if "members" in item and "values" in item and item["members"] != item["values"]:
+            raise PromptInterfaceContractError(
+                prompt_name, output_path, f"{location}[{index}] has conflicting members and values"
+            )
+        if members is not None and (
+            class_kind != "enum" or not isinstance(members, list) or not all(isinstance(member, str) for member in members)
+        ):
+            raise PromptInterfaceContractError(
+                prompt_name, output_path,
+                f"{location}[{index}].members is valid only as a list on enum classes",
+            )
+        fields = item.get("fields")
+        if fields is not None and not isinstance(fields, list):
+            raise PromptInterfaceContractError(
+                prompt_name, output_path, f"{location}[{index}].fields must be a list"
+            )
+        if fields is not None:
+            for field_index, field_spec in enumerate(fields):
+                if isinstance(field_spec, str):
+                    field_spec = {"name": field_spec.split(":", 1)[0].strip()}
+                if not isinstance(field_spec, dict) or set(field_spec) - {"name", "type", "default"}:
+                    raise PromptInterfaceContractError(
+                        prompt_name, output_path,
+                        f"{location}[{index}].fields[{field_index}] is unsupported or malformed",
+                    )
+                if not isinstance(field_spec.get("name"), str):
+                    raise PromptInterfaceContractError(
+                        prompt_name, output_path,
+                        f"{location}[{index}].fields[{field_index}] must declare a name",
+                    )
+        add(class_name, "class", None, f"{location}[{index}]", required=False,
+            metadata={"class_kind": class_kind, "members": members, "fields": fields})
         methods = item.get("methods", [])
         if methods is None:
             methods = []
         if not isinstance(methods, list):
             raise PromptInterfaceContractError(
-                prompt_name, output_path, f"classes[{index}].methods must be a list"
+                prompt_name, output_path, f"{location}[{index}].methods must be a list"
             )
         for method_index, method in enumerate(methods):
             if not isinstance(method, dict) or not isinstance(class_name, str):
                 raise PromptInterfaceContractError(
                     prompt_name, output_path,
-                    f"classes[{index}].methods[{method_index}] must be an object",
+                    f"{location}[{index}].methods[{method_index}] must be an object",
+                )
+            unknown_method = sorted(set(method) - {"name", "signature", "returns", "binding", "description"})
+            if unknown_method:
+                raise PromptInterfaceContractError(
+                    prompt_name, output_path,
+                    f"{location}[{index}].methods[{method_index}] has unsupported field(s): {', '.join(unknown_method)}",
                 )
             method_name = method.get("name")
             qualified = f"{class_name}.{method_name}" if isinstance(method_name, str) else method_name
+            binding = method.get("binding")
+            if binding is not None and binding not in {"instance", "staticmethod", "classmethod", "property"}:
+                raise PromptInterfaceContractError(
+                    prompt_name, output_path,
+                    f"{location}[{index}].methods[{method_index}].binding is unsupported",
+                )
+            if isinstance(method.get("signature"), str) and isinstance(method.get("returns"), str):
+                try:
+                    declared_callable = _declared_callable_ast(method_name or "_pdd", method["signature"])
+                except ValueError as exc:
+                    raise PromptInterfaceContractError(
+                        prompt_name, output_path, f"{location}[{index}].methods[{method_index}]: {exc}"
+                    ) from exc
+                declared_return = _annotation_source(getattr(declared_callable, "returns", None))
+                if parse_semantic_type(method["returns"]) is not None and (
+                    declared_return is None or not _exact_annotations_match(declared_return, method["returns"])
+                ):
+                    raise PromptInterfaceContractError(
+                        prompt_name, output_path,
+                        f"{location}[{index}].methods[{method_index}].returns conflicts with its signature return annotation",
+                    )
             add(qualified, "method", method.get("signature"),
-                f"classes[{index}].methods[{method_index}]", required=True)
+                f"{location}[{index}].methods[{method_index}]", required=True,
+                metadata={"binding": binding})
+
+    for index, item in enumerate(classes):
+        add_class(item, index, "classes")
+    for index, item in enumerate(dataclasses):
+        add_class(item, index, "dataclasses", force_dataclass=True)
+    for index, item in enumerate(enums):
+        if not isinstance(item, dict):
+            raise PromptInterfaceContractError(prompt_name, output_path, f"enums[{index}] must be an object")
+        enum_item = dict(item)
+        enum_item.setdefault("kind", "enum")
+        add_class(enum_item, index, "enums", force_dataclass=False)
+    for index, item in enumerate(type_aliases):
+        if not isinstance(item, dict) or set(item) - {"name", "definition", "description"}:
+            raise PromptInterfaceContractError(
+                prompt_name, output_path, f"typeAliases[{index}] is unsupported or malformed"
+            )
+        definition = item.get("definition")
+        if not isinstance(definition, str) or not definition:
+            raise PromptInterfaceContractError(
+                prompt_name, output_path, f"typeAliases[{index}].definition must be a non-empty string"
+            )
+        add(item.get("name"), "type_alias", None, f"typeAliases[{index}]", required=False,
+            metadata={"definition": definition})
+    for location, entries in (("models", models),):
+        for index, item in enumerate(entries):
+            if not isinstance(item, dict) or set(item) - {"name", "type", "description", "fields"}:
+                raise PromptInterfaceContractError(
+                    prompt_name, output_path, f"{location}[{index}] is unsupported or malformed"
+                )
+            fields = item.get("fields")
+            if not isinstance(fields, list):
+                raise PromptInterfaceContractError(
+                    prompt_name, output_path, f"{location}[{index}].fields must be a list"
+                )
+            for field_index, field_spec in enumerate(fields):
+                if isinstance(field_spec, str):
+                    continue
+                if not isinstance(field_spec, dict) or set(field_spec) - {"name", "type", "default"} or not isinstance(
+                    field_spec.get("name"), str
+                ):
+                    raise PromptInterfaceContractError(
+                        prompt_name, output_path,
+                        f"{location}[{index}].fields[{field_index}] is unsupported or malformed",
+                    )
+            add(item.get("name"), "class", None, f"{location}[{index}]", required=False,
+                metadata={"class_kind": None, "members": None, "fields": fields})
     for index, item in enumerate(constants):
         if not isinstance(item, dict):
             raise PromptInterfaceContractError(prompt_name, output_path, f"constants[{index}] must be an object")
-        add(item.get("name"), "constant", None, f"constants[{index}]", required=False)
+        unknown = sorted(set(item) - {"name", "type", "kind", "value", "description"})
+        if unknown:
+            raise PromptInterfaceContractError(
+                prompt_name, output_path,
+                f"constants[{index}] has unsupported field(s): {', '.join(unknown)}",
+            )
+        declared_type = item.get("type", item.get("kind"))
+        if declared_type is not None and not isinstance(declared_type, str):
+            raise PromptInterfaceContractError(
+                prompt_name, output_path, f"constants[{index}].type must be a string"
+            )
+        add(item.get("name"), "constant", None, f"constants[{index}]", required=False,
+            metadata={"type": declared_type, "value": item.get("value", _MISSING_INTERFACE_VALUE)})
     return result
 
 
@@ -2477,7 +2660,7 @@ def _collect_declared_surface(
     parsed = _parse_declared_module_interface(prompt_content, prompt_name)
     if parsed is None:
         return {}
-    return {name: signature for name, (_kind, signature) in parsed.items()}
+    return {name: signature for name, (_kind, signature, _metadata) in parsed.items()}
 
 
 def _declared_signature_to_entry(
@@ -2674,6 +2857,15 @@ def _exact_semantic_type_key(value: SemanticType) -> Tuple[Any, ...]:
 
 def _exact_annotations_match(expected: str, actual: str) -> bool:
     """Allow spelling aliases (``List``/``list``), never type widening."""
+    def unquote_forward_reference(value: str) -> str:
+        try:
+            node = ast.parse(value, mode="eval").body
+        except SyntaxError:
+            return value
+        return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else value
+
+    expected = unquote_forward_reference(expected)
+    actual = unquote_forward_reference(actual)
     expected_type = parse_semantic_type(expected)
     actual_type = parse_semantic_type(actual)
     if expected_type is not None and actual_type is not None:
@@ -2686,7 +2878,9 @@ def _exact_annotations_match(expected: str, actual: str) -> bool:
         return expected == actual
 
 
-def _exact_callable_matches(expected: ast.AST, actual: ast.AST, symbols: Dict[str, Any]) -> bool:
+def _exact_callable_matches(
+    expected: ast.AST, actual: ast.AST, symbols: Dict[str, Any], *, strip_receiver: bool = False,
+) -> bool:
     """Compare a declaration exactly, allowing only semantic spelling aliases."""
     if not isinstance(expected, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return False
@@ -2696,6 +2890,8 @@ def _exact_callable_matches(expected: ast.AST, actual: ast.AST, symbols: Dict[st
         return False
     expected_params = _exact_parameter_shape(expected)
     actual_params = _exact_parameter_shape(actual)
+    if strip_receiver and actual_params and actual_params[0][1] in {"self", "cls"}:
+        actual_params = actual_params[1:]
     if expected_params is None or actual_params is None or len(expected_params) != len(actual_params):
         return False
     for expected_param, actual_param in zip(expected_params, actual_params):
@@ -2738,6 +2934,84 @@ def _declared_callable_ast(name: str, signature: str) -> ast.AST:
     return parsed[0]
 
 
+def _method_binding(node: ast.AST) -> Optional[str]:
+    """Classify a method binding from decorators without importing user code."""
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return None
+    names = {ast.unparse(decorator).split("(", 1)[0].split(".")[-1] for decorator in node.decorator_list}
+    if "staticmethod" in names:
+        return "staticmethod"
+    if "classmethod" in names:
+        return "classmethod"
+    if "property" in names or any(name in {"setter", "deleter"} for name in names):
+        return "property"
+    return "instance"
+
+
+def _class_kind_matches(node: ast.ClassDef, expected_kind: str) -> bool:
+    """Check documented class kinds using syntax only."""
+    decorators = {ast.unparse(decorator).split("(", 1)[0].split(".")[-1] for decorator in node.decorator_list}
+    bases = {ast.unparse(base).split(".")[-1] for base in node.bases}
+    if expected_kind == "dataclass":
+        return "dataclass" in decorators
+    if expected_kind == "enum":
+        return bool(bases & {"Enum", "IntEnum", "StrEnum", "Flag", "IntFlag"})
+    if expected_kind == "protocol":
+        return "Protocol" in bases
+    if expected_kind == "class":
+        return not (decorators & {"dataclass"}) and not (bases & {"Enum", "IntEnum", "StrEnum", "Flag", "IntFlag", "Protocol"})
+    if expected_kind == "dict":
+        return "dict" in bases or "Dict" in bases
+    return False
+
+
+def _declared_constant_matches(node: ast.AST, metadata: Dict[str, Any], symbols: Dict[str, Any]) -> bool:
+    """Validate a declared constant's type/value when those fields are supplied."""
+    value = node.value if isinstance(node, (ast.Assign, ast.AnnAssign)) else None
+    if value is None:
+        return False
+    declared_value = metadata.get("value", _MISSING_INTERFACE_VALUE)
+    if declared_value is not _MISSING_INTERFACE_VALUE:
+        expected_text = repr(declared_value)
+        if compare_default_sources(expected_text, ast.unparse(value), symbols) is not DefaultCompatibility.COMPATIBLE:
+            return False
+    declared_type = metadata.get("type")
+    if not declared_type:
+        return True
+    if isinstance(node, ast.AnnAssign) and node.annotation is not None:
+        return _exact_annotations_match(declared_type, ast.unparse(node.annotation))
+    inferred = {
+        ast.Constant: type(value.value).__name__ if isinstance(value, ast.Constant) else "",
+        ast.Dict: "dict", ast.List: "list", ast.Set: "set", ast.Tuple: "tuple",
+    }.get(type(value), "")
+    return inferred == declared_type.lower().replace("typing.", "")
+
+
+def _exact_expression_matches(expected: str, actual: ast.AST, symbols: Dict[str, Any]) -> bool:
+    """Compare a declared expression without evaluating generated code."""
+    try:
+        expected_node = ast.parse(expected, mode="eval").body
+    except SyntaxError:
+        return False
+    if ast.dump(expected_node, include_attributes=False) == ast.dump(actual, include_attributes=False):
+        return True
+    return compare_default_sources(expected, ast.unparse(actual), symbols) is DefaultCompatibility.COMPATIBLE
+
+
+def _declared_api_exports(tree: ast.Module) -> Set[str]:
+    """Only callable/class definitions are implicit module API exports.
+
+    Imports, loggers and assignments are implementation state unless explicitly
+    declared as constants.  This avoids treating ``logger = logging.getLogger``
+    as a public API while still rejecting new public callables/classes.
+    """
+    return {
+        node.name for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and not node.name.startswith("_")
+    }
+
+
 def _verify_declared_interface_exact(
     generated_code: str, prompt_content: Optional[str], prompt_name: str,
     output_path: Optional[str], language: Optional[str],
@@ -2756,33 +3030,108 @@ def _verify_declared_interface_exact(
     missing: List[str] = []
     changed: List[str] = []
     details: List[Tuple[str, str, str, str]] = []
-    for name, (kind, signature) in declared.items():
+    for name, (kind, signature, metadata) in declared.items():
         actual = _declared_symbol_node(tree, name)
         if actual is None:
             missing.append(name)
             continue
         if kind == "class":
-            if not isinstance(actual, ast.ClassDef):
+            if not isinstance(actual, ast.ClassDef) or (
+                metadata.get("class_kind") is not None
+                and not _class_kind_matches(actual, metadata["class_kind"])
+            ):
                 changed.append(name)
                 details.append((name, "[class]", type(actual).__name__, "pdd-interface"))
+                continue
+            members = metadata.get("members")
+            if members is not None:
+                actual_members = {
+                    target.id for statement in actual.body if isinstance(statement, ast.Assign)
+                    for target in statement.targets if isinstance(target, ast.Name)
+                }
+                if set(members) != actual_members:
+                    changed.append(name)
+                    details.append((name, f"enum members {members}", str(sorted(actual_members)), "pdd-interface"))
+            declared_fields = metadata.get("fields")
+            if declared_fields is not None:
+                expected_fields = {}
+                for field_spec in declared_fields:
+                    if isinstance(field_spec, str):
+                        field_name, _, field_type = field_spec.partition(":")
+                        expected_fields[field_name.strip()] = (field_type.strip() or None, _MISSING_INTERFACE_VALUE)
+                    else:
+                        expected_fields[field_spec["name"]] = (
+                            field_spec.get("type"), field_spec.get("default", _MISSING_INTERFACE_VALUE),
+                        )
+                actual_fields = {
+                    statement.target.id: (_annotation_source(statement.annotation), statement.value)
+                    for statement in actual.body
+                    if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name)
+                }
+                fields_match = set(expected_fields) == set(actual_fields)
+                for field_name, (expected_type, expected_default) in expected_fields.items():
+                    if not fields_match:
+                        break
+                    actual_type, actual_default = actual_fields[field_name]
+                    if expected_type is not None and (
+                        actual_type is None or not _exact_annotations_match(expected_type, actual_type)
+                    ):
+                        fields_match = False
+                        break
+                    if expected_default is not _MISSING_INTERFACE_VALUE and (
+                        actual_default is None
+                        or compare_default_sources(
+                            repr(expected_default), ast.unparse(actual_default), symbols,
+                        ) is not DefaultCompatibility.COMPATIBLE
+                    ):
+                        fields_match = False
+                        break
+                if not fields_match:
+                    changed.append(name)
+                    details.append((name, f"fields {sorted(expected_fields)}", str(sorted(actual_fields)), "pdd-interface"))
             continue
         if kind == "constant":
-            if not isinstance(actual, (ast.Assign, ast.AnnAssign)):
+            if not isinstance(actual, (ast.Assign, ast.AnnAssign)) or not _declared_constant_matches(
+                actual, metadata, symbols
+            ):
                 changed.append(name)
                 details.append((name, "[constant]", type(actual).__name__, "pdd-interface"))
+            continue
+        if kind == "type_alias":
+            if not isinstance(actual, (ast.Assign, ast.AnnAssign)) or not _exact_expression_matches(
+                metadata["definition"], actual.value, symbols
+            ):
+                changed.append(name)
+                details.append((name, metadata["definition"], ast.unparse(actual), "pdd-interface"))
             continue
         try:
             expected = _declared_callable_ast(name, signature or "")
         except ValueError as exc:
             raise PromptInterfaceContractError(prompt_name, output_path or "", f"{name}: {exc}") from exc
-        if not _exact_callable_matches(expected, actual, symbols):
+        actual_binding = _method_binding(actual) if "." in name else None
+        expected_binding = metadata.get("binding")
+        if expected_binding is None and "." in name:
+            # Prompt declarations historically omit ``self`` for instance
+            # methods (e.g. ResolvedSyncUnit.relocate).  A written ``self`` or
+            # ``cls`` remains an explicit instance/classmethod convention.
+            expected_params = _exact_parameter_shape(expected) or []
+            expected_binding = (
+                "classmethod" if expected_params and expected_params[0][1] == "cls"
+                else "instance"
+            )
+        strip_receiver = (
+            "." in name
+            and actual_binding in {"instance", "classmethod"}
+            and not (( _exact_parameter_shape(expected) or []) and ( _exact_parameter_shape(expected) or [])[0][1] in {"self", "cls"})
+        )
+        if (
+            expected_binding is not None and actual_binding != expected_binding
+        ) or not _exact_callable_matches(expected, actual, symbols, strip_receiver=strip_receiver):
             changed.append(name)
             details.append((name, signature or "", ast.unparse(actual), "pdd-interface"))
     # A dotted declaration implies its owning top-level class is intentional.
     expected_top_level = {name.split(".", 1)[0] for name in declared}
-    actual_top_level = {
-        name for name in _snapshot_public_surface(generated_code, "python") if "." not in name
-    }
+    actual_top_level = _declared_api_exports(tree)
     unexpected = sorted(actual_top_level - expected_top_level)
     if missing or changed or unexpected:
         raise PublicSurfaceRegressionError(
@@ -2819,6 +3168,43 @@ def _verify_public_surface_regression(
     )
     if not existing_code or not existing_code.strip():
         return
+
+    # Older documented dotted-method declarations omit an explicit ``binding``
+    # field.  Their receiver convention is enough to validate a generated
+    # method, but not enough to authorize a static/class/property flip between
+    # generations.  Preserve that ABI facet from the established module until a
+    # declaration explicitly names a binding.
+    declared_contract = _parse_declared_module_interface(
+        prompt_content, prompt_name, output_path or ""
+    )
+    if declared_contract:
+        try:
+            old_tree = ast.parse(existing_code)
+            new_tree = ast.parse(generated_code)
+        except SyntaxError:
+            old_tree = new_tree = None
+        if old_tree is not None and new_tree is not None:
+            binding_changed = []
+            for symbol, (_kind, _signature, metadata) in declared_contract.items():
+                if "." not in symbol or metadata.get("binding") is not None:
+                    continue
+                old_node = _declared_symbol_node(old_tree, symbol)
+                new_node = _declared_symbol_node(new_tree, symbol)
+                if old_node is not None and new_node is not None and _method_binding(old_node) != _method_binding(new_node):
+                    binding_changed.append(symbol)
+            if binding_changed:
+                raise PublicSurfaceRegressionError(
+                    prompt_name=prompt_name,
+                    output_path=output_path or "",
+                    removed_symbols=[],
+                    changed_signatures=sorted(binding_changed),
+                    pre_surface_size=len(_declared_api_exports(old_tree)),
+                    post_surface_size=len(_declared_api_exports(new_tree)),
+                    signature_details=[
+                        (symbol, "unchanged method binding", "binding changed", "pdd-interface")
+                        for symbol in sorted(binding_changed)
+                    ],
+                )
 
     # The prompt's ``<pdd-interface>`` declaration is the stable surface contract
     # (issue #1900), and it is authoritative like ``__all__``. Collect it BEFORE
