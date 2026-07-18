@@ -1023,6 +1023,8 @@ def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> N
             if item["validator_id"] == "threshold-ed25519"
         )
         assert human["requirement_ids"] == [expected_requirement]
+
+
 def test_step13_snapshot_tracks_the_path_construction_guide(monkeypatch) -> None:
     """Step 13's included path guide is part of its verified snapshot closure."""
     manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
