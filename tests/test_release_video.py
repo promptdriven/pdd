@@ -664,6 +664,12 @@ def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_ho
         "A shell with a pane listing files glows.",
         "A shell with a pane that lists files glows.",
         "A shell with a pane, and it is displaying output.",
+        "A shell with a pane that accepts keyboard input glows.",
+        "A shell with a pane which waits for user input glows.",
+        "A shell with a pane receiving input glows.",
+        "A shell with a pane, and it takes input.",
+        "A shell with a pane that has a prompt glows.",
+        "A shell with a pane which has current output glows.",
     ],
 )
 def test_release_video_visual_safety_rejects_technical_surface_after_punctuation(
