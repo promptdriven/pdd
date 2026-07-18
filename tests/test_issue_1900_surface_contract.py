@@ -65,6 +65,75 @@ def _detail_line(symbol, expected, actual, source="pdd-interface"):
 
 
 class TestIssue1900SurfaceContract:
+    def test_full_tracked_module_contract_corpus_manifest(self):
+        """Audit every direct Python prompt/code contract, not selected examples."""
+        prompts = Path("pdd/prompts")
+        candidates = []
+        contracts = []
+        prose_only = []
+        for prompt_path in sorted(prompts.glob("*_python.prompt")):
+            code_path = Path("pdd") / f"{prompt_path.name.removesuffix('_python.prompt')}.py"
+            text = prompt_path.read_text(encoding="utf-8")
+            if not code_path.exists() or "<pdd-interface" not in text:
+                continue
+            candidates.append(prompt_path.name)
+            if "\n<pdd-interface" not in text:
+                prose_only.append(prompt_path.name)
+                continue
+            contracts.append((prompt_path, code_path, text))
+        assert len(candidates) == 110
+        assert prose_only == ["architecture_include_validation_python.prompt"]
+        assert len(contracts) == 109
+        for prompt_path, code_path, text in contracts:
+            _verify_declared_interface_exact(
+                code_path.read_text(encoding="utf-8"), text, prompt_path.name,
+                str(code_path), "python",
+            )
+
+    def test_returns_can_supply_missing_signature_annotation_but_conflicts_fail(self):
+        """``returns`` is authoritative when a legacy signature omits ``->``."""
+        prompt = _iface_prompt([("f", "(x: int)")]).replace(
+            '"signature": "(x: int)"', '"signature": "(x: int)", "returns": "str"'
+        )
+        _verify_public_surface_regression(
+            "def f(x: int) -> str:\n    return str(x)\n",
+            "def f(x: int) -> str:\n    return str(x)\n", PROMPT, OUT, "python", prompt,
+        )
+        conflicting = _iface_prompt([("f", "(x: int) -> str")]).replace(
+            '"signature": "(x: int) -> str"',
+            '"signature": "(x: int) -> str", "returns": "int"',
+        )
+        with pytest.raises(PromptInterfaceContractError, match="conflicts"):
+            _verify_public_surface_regression(
+                "def f(x: int) -> str:\n    return str(x)\n",
+                "def f(x: int) -> str:\n    return str(x)\n", PROMPT, OUT, "python", conflicting,
+            )
+
+    def test_prose_marker_is_not_a_contract_but_unterminated_tag_fails_closed(self):
+        """Literal documentation is distinct from a malformed metadata block."""
+        prose = "% Explain the <pdd-interface> contract in this prose.\n"
+        _verify_public_surface_regression("def f():\n    pass\n", "def f():\n    pass\n", PROMPT, OUT, "python", prose)
+        malformed = "<pdd-interface>\n{\"type\": \"module\"}\n"
+        with pytest.raises(PromptInterfaceContractError, match="unterminated"):
+            _verify_public_surface_regression("def f():\n    pass\n", "def f():\n    pass\n", PROMPT, OUT, "python", malformed)
+
+    def test_unknown_interface_root_field_fails_closed(self):
+        """The contract root has the same closed-schema treatment as members."""
+        prompt = '<pdd-interface>{"type":"module","mystery":true,"module":{"functions":[{"name":"f","signature":"()"}]}}</pdd-interface>'
+        with pytest.raises(PromptInterfaceContractError, match="interface root has unsupported"):
+            _verify_public_surface_regression("def f():\n    pass\n", "def f():\n    pass\n", PROMPT, OUT, "python", prompt)
+
+    def test_large_callable_body_uses_compact_actionable_signature_evidence(self):
+        """A mismatch record remains below structured transport bounds."""
+        prompt = _iface_prompt([("f", "(value: int) -> str")])
+        before = "def f(value: int) -> str:\n    return str(value)\n"
+        after = "def f(value: int) -> int:\n" + "    payload = 'x' * 80\n" * 600 + "    return value\n"
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(before, after, PROMPT, OUT, "python", prompt)
+        detail = next(detail for detail in exc.value.signature_details if detail[0] == "f")
+        assert "f(value: int) -> int" in detail[2]
+        assert len(detail[2].encode("utf-8")) < 1024
+
     @pytest.mark.parametrize(
         ("prompt_name", "code_path"),
         [
@@ -152,8 +221,8 @@ class TestIssue1900SurfaceContract:
         with pytest.raises(PublicSurfaceRegressionError):
             _verify_public_surface_regression(invalid, invalid, PROMPT, OUT, "python", prompt)
 
-    def test_exact_contract_rejects_optional_annotation_and_unexpected_export(self):
-        """Declared parameter/return annotations and symbol set are exact."""
+    def test_exact_contract_rejects_optional_annotation(self):
+        """A new optional parameter still violates the declared signature."""
         prompt = _iface_prompt([("f", "(x: int) -> str")])
         with pytest.raises(PublicSurfaceRegressionError) as exc:
             _verify_public_surface_regression(
@@ -161,7 +230,16 @@ class TestIssue1900SurfaceContract:
                 "def f(x, y=None):\n    return str(x)\ndef g():\n    return 1\n",
                 PROMPT, OUT, "python", prompt,
             )
-        assert {"f", "g"}.issubset(exc.value.changed_signatures)
+        assert "f" in exc.value.changed_signatures
+
+    def test_delta_rejects_new_undeclared_callable_and_explicit_all_constant(self):
+        """Legacy exports may remain, but new exports and ``__all__`` entries may not."""
+        prompt = _iface_prompt([("f", "() -> int")])
+        before = "def f() -> int:\n    return 1\ndef legacy():\n    return 2\n"
+        after = before + "def extra():\n    return 3\n__all__ = ['f', 'EXTRA']\nEXTRA = 1\n"
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(before, after, PROMPT, OUT, "python", prompt)
+        assert {"extra", "EXTRA"}.issubset(exc.value.changed_signatures)
 
     def test_exact_contract_handles_decorated_multiline_and_nested_methods(self):
         """AST comparison handles formatting while preserving exact contracts."""
@@ -341,12 +419,16 @@ class TestIssue1900SurfaceContract:
         assert "(a, b='x')" in text  # declared expected
         assert "*, c" in text  # actual generated drift
 
-    def test_missing_declared_signature_fails_closed(self):
-        """A module function declaration without a signature is unusable."""
+    def test_presence_only_declared_signature_requires_the_symbol(self):
+        """Repository presence-only declarations are valid but not optional."""
         prompt = _iface_prompt([("f", None)])
-        with pytest.raises(PromptInterfaceContractError, match="must declare a signature"):
+        _verify_public_surface_regression(
+            "def f(a):\n    return a\n", "def f(a):\n    return a\n",
+            PROMPT, OUT, "python", prompt,
+        )
+        with pytest.raises(PublicSurfaceRegressionError):
             _verify_public_surface_regression(
-                "def f(a):\n    return a\n", "def f(a):\n    return a\n",
+                "def f(a):\n    return a\n", "def other(a):\n    return a\n",
                 PROMPT, OUT, "python", prompt,
             )
 

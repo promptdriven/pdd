@@ -4,7 +4,6 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "story_id", "signature": "(path: str | Path)", "returns": "str"},
       {"name": "tests_for_story", "signature": "(story_ref: str | Path)", "returns": "set[str]"},
       {"name": "story_for_test", "signature": "(nodeid: str)", "returns": "str | set[str] | None"},
       {"name": "has_regression_test", "signature": "(story_ref: str | Path)", "returns": "bool"}
