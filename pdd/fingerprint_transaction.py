@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 from typing import Any, Mapping
 
 from . import __version__
@@ -18,6 +19,12 @@ from .sync_determine_operation import (
     get_pdd_file_paths,
     read_fingerprint,
 )
+
+try:  # Keep module importable on Windows; locking is selected at runtime.
+    import fcntl  # type: ignore
+except ImportError:  # pragma: no cover - Windows fallback is exercised there.
+    fcntl = None
+    import msvcrt  # type: ignore
 
 
 class FingerprintFinalizeError(RuntimeError):
@@ -31,6 +38,9 @@ class FingerprintFinalizeError(RuntimeError):
             f"[{operation}] fingerprint finalization failed for "
             f"{fingerprint_path}: {cause}"
         )
+
+
+_LOCK_CONTEXT = threading.local()
 
 
 @dataclass
@@ -61,12 +71,19 @@ class AtomicStateUpdate:
         self._lock_handle: Any = None
         self._journal_path: Path | None = None
 
+    @property
+    def _identity(self) -> str:
+        raw = f"{self.basename}\0{self.language}".encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()[:24]
+
     def __enter__(self) -> "AtomicStateUpdate":
         return self
 
     @classmethod
     def recover(cls, basename: str, language: str, directory: Path) -> None:
         """Recover an interrupted transaction before a new command reads state."""
+        if str(Path(directory).resolve()) in getattr(_LOCK_CONTEXT, "directories", set()):
+            return
         state = cls(basename, language)
         try:
             state._lock_and_recover(Path(directory).resolve())
@@ -105,19 +122,32 @@ class AtomicStateUpdate:
         return targets
 
     def _lock_and_recover(self, directory: Path) -> None:
+        if self._lock_handle is not None:
+            return
         directory.mkdir(parents=True, exist_ok=True)
-        self._journal_path = directory / f".{self.basename.replace('/', '_')}_{self.language}.state-txn.json"
-        lock_path = directory / f".{self.basename.replace('/', '_')}_{self.language}.state-txn.lock"
+        self._journal_path = directory / f".{self._identity}.state-txn.json"
+        lock_path = directory / f".{self._identity}.state-txn.lock"
         self._lock_handle = open(lock_path, "a+", encoding="utf-8")
-        fcntl.flock(self._lock_handle.fileno(), fcntl.LOCK_EX)
+        if fcntl is not None:
+            fcntl.flock(self._lock_handle.fileno(), fcntl.LOCK_EX)
+        else:  # pragma: no cover - Windows only
+            msvcrt.locking(self._lock_handle.fileno(), msvcrt.LK_LOCK, 1)
+        directories = getattr(_LOCK_CONTEXT, "directories", set())
+        _LOCK_CONTEXT.directories = {*directories, str(directory.resolve())}
         self._recover_locked()
 
     def _release_lock(self) -> None:
         if self._lock_handle is None:
             return
         try:
-            fcntl.flock(self._lock_handle.fileno(), fcntl.LOCK_UN)
+            if fcntl is not None:
+                fcntl.flock(self._lock_handle.fileno(), fcntl.LOCK_UN)
+            else:  # pragma: no cover - Windows only
+                msvcrt.locking(self._lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
         finally:
+            if self._journal_path is not None:
+                directories = getattr(_LOCK_CONTEXT, "directories", set())
+                _LOCK_CONTEXT.directories = directories - {str(self._journal_path.parent.resolve())}
             self._lock_handle.close()
             self._lock_handle = None
 
@@ -178,8 +208,55 @@ class AtomicStateUpdate:
             raise RuntimeError("transaction journal is not initialized")
         atomic_write_json(
             self._journal_path,
-            {"version": 1, "state": state, "records": records},
+            {"version": 2, "identity": self._identity, "state": state, "records": records},
         )
+
+    def _validated_records(self, journal: object) -> tuple[str, list[dict[str, Any]]]:
+        """Validate untrusted journal data before any filesystem mutation."""
+        if not isinstance(journal, dict) or set(journal) != {"version", "identity", "state", "records"}:
+            raise ValueError("invalid state transaction journal schema")
+        state = journal.get("state")
+        records = journal.get("records")
+        if journal.get("version") != 2 or journal.get("identity") != self._identity:
+            raise ValueError("state transaction journal identity mismatch")
+        if state not in {"prepared", "publishing", "report_published", "committed"}:
+            raise ValueError("invalid state transaction state")
+        if not isinstance(records, list) or len(records) not in {1, 2}:
+            raise ValueError("invalid state transaction record count")
+        if self._journal_path is None:
+            raise RuntimeError("transaction journal is not initialized")
+        directory = self._journal_path.parent.resolve()
+        safe_base = self.basename.replace("/", "_")
+        expected = {
+            "run_report": directory / f"{safe_base}_{self.language}_run.json",
+            "fingerprint": directory / f"{safe_base}_{self.language}.json",
+        }
+        seen: set[str] = set()
+        validated: list[dict[str, Any]] = []
+        for record in records:
+            if not isinstance(record, dict) or set(record) != {"role", "target", "staged", "backup"}:
+                raise ValueError("invalid state transaction record schema")
+            role = record.get("role")
+            if role not in expected or role in seen:
+                raise ValueError("invalid state transaction record role")
+            seen.add(role)
+            target = Path(record["target"])
+            staged = Path(record["staged"])
+            backup_raw = record["backup"]
+            backup = Path(backup_raw) if backup_raw is not None else None
+            if target.resolve(strict=False) != expected[role] or target.parent.resolve() != directory:
+                raise ValueError("transaction target escapes metadata directory")
+            for candidate, suffix in ((staged, ".state-new"), (backup, ".state-old")):
+                if candidate is None:
+                    continue
+                if candidate.parent.resolve() != directory or not candidate.name.startswith(f".{target.name}.") or not candidate.name.endswith(suffix):
+                    raise ValueError("transaction artifact escapes metadata directory")
+                if candidate.exists() and (candidate.is_symlink() or not candidate.is_file()):
+                    raise ValueError("unsafe transaction artifact")
+            validated.append({"role": role, "target": str(target), "staged": str(staged), "backup": str(backup) if backup else None})
+        if len(records) == 2 and [record["role"] for record in validated] != ["run_report", "fingerprint"]:
+            raise ValueError("transaction records have invalid order")
+        return state, validated
 
     @staticmethod
     def _unlink_if_present(path: Path | None) -> None:
@@ -222,13 +299,10 @@ class AtomicStateUpdate:
         if self._journal_path is None or not self._journal_path.exists():
             return
         try:
+            if self._journal_path.stat().st_size > 65536:
+                raise ValueError("oversized state transaction journal")
             journal = json.loads(self._journal_path.read_text(encoding="utf-8"))
-            records = journal["records"]
-            state = journal["state"]
-            if not isinstance(records, list) or state not in {
-                "prepared", "publishing", "report_published", "committed",
-            }:
-                raise ValueError("invalid state transaction journal")
+            state, records = self._validated_records(journal)
             if state != "committed":
                 for record in records:
                     target = Path(record["target"])
@@ -258,6 +332,7 @@ class AtomicStateUpdate:
                 for payload, target in targets:
                     staged = self._atomic_write(payload, target)
                     record = {
+                        "role": "run_report" if self.pending.run_report_path and target == self.pending.run_report_path.resolve() else "fingerprint",
                         "target": str(target),
                         "staged": str(staged),
                         "backup": None,
@@ -281,15 +356,23 @@ class AtomicStateUpdate:
                     fsync_directory(target.parent)
                     self._write_journal("report_published" if index == 0 else "committed", records)
                 self._cleanup_records(records)
-            except Exception:
+            except Exception as publish_error:
                 # A journal that reached disk is itself the recovery authority.
-                # If it never appeared, no target was published and cleanup is safe.
+                # Recover immediately while this process still owns the lock; a
+                # caller must never receive a publish failure beside split state.
                 if self._journal_path is None or not self._journal_path.exists():
                     for record in records:
                         self._unlink_if_present(Path(record["staged"]))
                         self._unlink_if_present(
                             Path(record["backup"]) if record["backup"] else None
                         )
+                else:
+                    try:
+                        self._recover_locked()
+                    except Exception as recovery_error:
+                        raise RuntimeError(
+                            f"publish failed: {publish_error}; recovery failed: {recovery_error}"
+                        ) from recovery_error
                 raise
         except FingerprintFinalizeError:
             raise
@@ -335,9 +418,15 @@ def _canonical_paths(
     resolved = _coerce_paths(
         get_pdd_file_paths(basename, language, prompts_dir=str(prompts_root))
     )
-    # Explicit absolute paths are authoritative for output redirections, but
-    # never shrink the canonical set discovered from the prompt's own root.
-    resolved.update(explicit)
+    # Explicit real paths can override configured outputs, but optional null or
+    # empty hints are absence of information, never an instruction to erase a
+    # discovered existing artifact.
+    for key, value in explicit.items():
+        if key == "prompt":
+            continue
+        if value is None or (key == "test_files" and not value):
+            continue
+        resolved[key] = value
     resolved["prompt"] = prompt_path
     return resolved
 
@@ -403,10 +492,20 @@ class FingerprintTransaction:
 
     def commit(self) -> None:
         try:
-            payload = self.payload()
             if self.atomic_state is None:
-                atomic_write_json(self.fingerprint_path, payload)
+                # Hashing, prior-state reads, recovery, and publication share
+                # one per-unit critical section so an older snapshot cannot win
+                # after a newer finalizer has already completed.
+                state = AtomicStateUpdate(self.basename, self.language)
+                state._lock_and_recover(self.fingerprint_path.parent)
+                try:
+                    payload = self.payload()
+                    state.set_fingerprint(payload, self.fingerprint_path)
+                    state._commit()
+                finally:
+                    state._release_lock()
             else:
+                payload = self.payload()
                 setter = getattr(self.atomic_state, "set_fingerprint", None)
                 if not callable(setter):
                     raise TypeError("atomic_state does not provide set_fingerprint()")
