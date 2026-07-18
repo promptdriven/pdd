@@ -2558,6 +2558,8 @@ def _load_fallback_scope_execution(
             cwd.relative_to(project_root.resolve())
         except ValueError as exc:
             raise SyncPlanError(f"frozen candidate {module_id!r} escapes project root") from exc
+        if not cwd.is_dir():
+            raise SyncPlanError(f"frozen candidate {module_id!r} has no governing directory")
         module_cwds[module_id] = cwd
         module_targets[module_id] = target
         context = candidate.get("context")
