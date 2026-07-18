@@ -28,6 +28,17 @@ _PLACEHOLDER_POLICY_DIGEST = "threshold-ed25519-v1"
 _MAX_REQUIREMENT_TRANSITIONS = 1_024
 _PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 _OPAQUE_REQUIREMENT_ID = re.compile(r"CONTRACT-SHA256:[0-9a-f]{64}")
+# #1989 predates schema-2 representation locking. Keep this one reviewed
+# historical transition readable by its complete protected policy identities;
+# all later schema-2 candidates remain token-for-token append-only.
+_LEGACY_PDD_1989_SCHEMA_2_HISTORY = (
+    "af385bc3cb0cca5692fa46b315db1c69f9caaf688eea0a69dabe29e088878b36",
+    "09bc30376c6ee5a836bef24f9123759e039dbe4a5b18d1f46b5cae513972edad",
+)
+_LEGACY_PDD_1989_PROFILE_BYTES = (
+    "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+    "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+)
 
 
 class VerificationProfileError(ValueError):
@@ -95,6 +106,14 @@ class _RequirementTransitionAuthorization:
 
 
 @dataclass(frozen=True)
+class _RequirementTransitionRetirement:
+    """One append-only replacement of an unreachable dormant transition."""
+
+    obsolete: _RequirementTransitionAuthorization
+    replacement: _RequirementTransitionAuthorization
+
+
+@dataclass(frozen=True)
 class _AuthorizedProfileUpdates:
     """Narrowly authorized deltas, separated by transition dimension."""
 
@@ -111,6 +130,10 @@ class _RequirementTransitionContext:
     base: Mapping[UnitId, _ProfileInput]
     head: Mapping[UnitId, _ProfileInput]
     policies: tuple[bytes | None, bytes | None]
+    prompts: Mapping[
+        PurePosixPath,
+        tuple[bytes | None, bytes | None],
+    ]
 
 
 def _exact_bootstrap_requirement_transition(
@@ -555,16 +578,9 @@ def _load_inputs(
         except (KeyError, TypeError, VerificationProfileError) as exc:
             invalid.append(f"{ref}: invalid profile entry: {exc}")
             continue
-        prompt_relpath = unit_id.prompt_relpath
-        for alias, canonical in approved_aliases.items():
-            if prompt_relpath == alias:
-                prompt_relpath = canonical
-                break
-            if prompt_relpath.parts[: len(alias.parts)] == alias.parts:
-                prompt_relpath = canonical.joinpath(
-                    *prompt_relpath.parts[len(alias.parts) :]
-                )
-                break
+        prompt_relpath = _canonical_prompt_path(
+            unit_id.prompt_relpath, approved_aliases
+        )
         prompt_raw = read_git_blob(root, ref, prompt_relpath)
         if prompt_raw is None:
             invalid.append(f"{ref}: profile prompt is absent: {unit_id.prompt_relpath}")
@@ -585,6 +601,19 @@ def _load_inputs(
         else:
             profiles[unit_id] = parsed
     return profiles, invalid
+
+
+def _canonical_prompt_path(
+    prompt_path: PurePosixPath,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
+) -> PurePosixPath:
+    """Resolve one protected alias exactly as profile-input loading does."""
+    for alias, canonical in approved_aliases.items():
+        if prompt_path == alias:
+            return canonical
+        if prompt_path.parts[: len(alias.parts)] == alias.parts:
+            return canonical.joinpath(*prompt_path.parts[len(alias.parts) :])
+    return prompt_path
 
 
 def _profile_digest(
@@ -627,11 +656,15 @@ def _load_rotation_authorizations(
     if raw is None:
         return ()
     try:
-        payload = json.loads(raw)
+        payload = _strict_policy_json(raw, "protected")
         rows = payload["rotations"]
-        if payload.get("schema_version") not in {1, 2} or not isinstance(rows, list):
+        if (
+            type(payload.get("schema_version")) is not int
+            or payload.get("schema_version") not in {1, 2, 3}
+            or not isinstance(rows, list)
+        ):
             raise TypeError
-    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+    except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError) as exc:
         raise VerificationProfileError(
             "protected profile rotation policy is malformed"
         ) from exc
@@ -673,6 +706,146 @@ def _load_rotation_authorizations(
 def _sha256(raw: bytes) -> str:
     """Return the lowercase SHA-256 identity used by rotation policy."""
     return hashlib.sha256(raw).hexdigest()
+
+
+class _DuplicateJsonMember(ValueError):
+    """Raised when a policy object repeats a member name."""
+
+
+def _strict_policy_json(raw: bytes, source: str) -> dict[str, Any]:
+    """Decode policy JSON while rejecting duplicate object members at every level."""
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in payload:
+                raise _DuplicateJsonMember(key)
+            payload[key] = value
+        return payload
+
+    try:
+        payload = json.loads(raw, object_pairs_hook=reject_duplicates)
+    except _DuplicateJsonMember as exc:
+        raise VerificationProfileError(
+            f"{source} requirement transition policy contains duplicate JSON members"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise TypeError
+    return payload
+
+
+def _json_skip_whitespace(raw: bytes, index: int) -> int:
+    """Return the first non-whitespace byte from one validated JSON value."""
+    while index < len(raw) and raw[index] in b" \t\r\n":
+        index += 1
+    return index
+
+
+def _json_string_end(raw: bytes, index: int) -> int:
+    """Return the byte after one validated JSON string token."""
+    if index >= len(raw) or raw[index] != ord('"'):
+        raise ValueError("JSON string is absent")
+    index += 1
+    while index < len(raw):
+        if raw[index] == ord("\\"):
+            index += 2
+        elif raw[index] == ord('"'):
+            return index + 1
+        else:
+            index += 1
+    raise ValueError("JSON string is unterminated")
+
+
+def _json_value_end(raw: bytes, index: int) -> int:
+    """Return the byte after one validated JSON value without normalizing it."""
+    index = _json_skip_whitespace(raw, index)
+    if index >= len(raw):
+        raise ValueError("JSON value is absent")
+    if raw[index] == ord('"'):
+        return _json_string_end(raw, index)
+    if raw[index] not in (ord("["), ord("{")):
+        while index < len(raw) and raw[index] not in b",]} \t\r\n":
+            index += 1
+        return index
+    stack = [ord("]") if raw[index] == ord("[") else ord("}")]
+    index += 1
+    while stack:
+        if index >= len(raw):
+            raise ValueError("JSON container is unterminated")
+        token = raw[index]
+        if token == ord('"'):
+            index = _json_string_end(raw, index)
+            continue
+        if token == ord("["):
+            stack.append(ord("]"))
+        elif token == ord("{"):
+            stack.append(ord("}"))
+        elif token == stack[-1]:
+            stack.pop()
+        index += 1
+    return index
+
+
+def _raw_json_object_members(raw: bytes) -> dict[str, bytes]:
+    """Return exact validated JSON member values from one object token."""
+    index = _json_skip_whitespace(raw, 0)
+    if index >= len(raw) or raw[index] != ord("{"):
+        raise ValueError("JSON object is absent")
+    index = _json_skip_whitespace(raw, index + 1)
+    members: dict[str, bytes] = {}
+    while index < len(raw) and raw[index] != ord("}"):
+        key_start = index
+        key_end = _json_string_end(raw, key_start)
+        key = json.loads(raw[key_start:key_end])
+        index = _json_skip_whitespace(raw, key_end)
+        if index >= len(raw) or raw[index] != ord(":"):
+            raise ValueError("JSON object member lacks a colon")
+        value_start = _json_skip_whitespace(raw, index + 1)
+        value_end = _json_value_end(raw, value_start)
+        members[key] = raw[value_start:value_end]
+        index = _json_skip_whitespace(raw, value_end)
+        if index < len(raw) and raw[index] == ord(","):
+            index = _json_skip_whitespace(raw, index + 1)
+        elif index >= len(raw) or raw[index] != ord("}"):
+            raise ValueError("JSON object member lacks a delimiter")
+    return members
+
+
+def _raw_json_array_values(raw: bytes) -> tuple[bytes, ...]:
+    """Return exact validated JSON value tokens from one array token."""
+    index = _json_skip_whitespace(raw, 0)
+    if index >= len(raw) or raw[index] != ord("["):
+        raise ValueError("JSON array is absent")
+    index = _json_skip_whitespace(raw, index + 1)
+    values = []
+    while index < len(raw) and raw[index] != ord("]"):
+        value_start = index
+        value_end = _json_value_end(raw, value_start)
+        values.append(raw[value_start:value_end])
+        index = _json_skip_whitespace(raw, value_end)
+        if index < len(raw) and raw[index] == ord(","):
+            index = _json_skip_whitespace(raw, index + 1)
+        elif index >= len(raw) or raw[index] != ord("]"):
+            raise ValueError("JSON array value lacks a delimiter")
+    return tuple(values)
+
+
+def _raw_requirement_transition_history(
+    raw: bytes | None, source: str
+) -> tuple[tuple[bytes, ...], tuple[bytes, ...]]:
+    """Extract exact row/retirement tokens after strict policy JSON validation."""
+    if raw is None:
+        return (), ()
+    try:
+        members = _raw_json_object_members(raw)
+        rows = _raw_json_array_values(members["requirement_rotations"])
+        retirements = _raw_json_array_values(
+            members.get("requirement_rotation_retirements", b"[]")
+        )
+    except (KeyError, ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise VerificationProfileError(
+            f"{source} requirement transition policy representation is malformed"
+        ) from exc
+    return rows, retirements
 
 
 def _valid_requirement_transition(
@@ -719,19 +892,42 @@ def _parse_requirement_transition_authorizations(
     if raw is None:
         return ()
     try:
-        payload = json.loads(raw)
-        if not isinstance(payload, dict):
+        payload = _strict_policy_json(raw, source)
+        schema_version = payload.get("schema_version")
+        if type(schema_version) is not int:
             raise TypeError
-        if payload.get("schema_version") == 1:
+        if schema_version == 1:
+            _parse_dormant_policy_envelope(
+                raw, source, allow_legacy_protected=True
+            )
             return ()
         rows = payload["requirement_rotations"]
         if (
-            payload.get("schema_version") != 2
+            schema_version not in {2, 3}
+            or set(payload)
+            != (
+                {
+                    "schema_version",
+                    "rotations",
+                    "requirement_rotations",
+                }
+                if schema_version == 2
+                else {
+                    "schema_version",
+                    "rotations",
+                    "requirement_rotations",
+                    "requirement_rotation_retirements",
+                }
+            )
             or not isinstance(rows, list)
             or len(rows) > _MAX_REQUIREMENT_TRANSITIONS
+            or (
+                schema_version == 3
+                and not isinstance(payload["requirement_rotation_retirements"], list)
+            )
         ):
             raise TypeError
-    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+    except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError) as exc:
         raise VerificationProfileError(
             f"{source} requirement transition policy is malformed"
         ) from exc
@@ -776,8 +972,8 @@ def _parse_requirement_transition_authorizations(
             )
         authorizations.append(authorization)
     identities = [(item.prompt_path, item.language_id) for item in authorizations]
-    if len(authorizations) != len(set(authorizations)) or len(identities) != len(
-        set(identities)
+    if len(authorizations) != len(set(authorizations)) or (
+        schema_version == 2 and len(identities) != len(set(identities))
     ):
         raise VerificationProfileError(
             f"{source} requirement transition rules are duplicated or ambiguous"
@@ -785,24 +981,796 @@ def _parse_requirement_transition_authorizations(
     return tuple(authorizations)
 
 
-def _load_requirement_transition_authorizations(
-    root: Path, manifest: UnitManifest
-) -> tuple[_RequirementTransitionAuthorization, ...]:
-    """Accept candidate rules only when protected earlier or exactly bootstrapped."""
-    protected = _parse_requirement_transition_authorizations(
-        read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH), "protected"
+def _parse_requirement_transition_retirements(
+    raw: bytes | None, source: str
+) -> tuple[_RequirementTransitionRetirement, ...]:
+    """Parse exact schema-3 retirement records without granting authority."""
+    if raw is None:
+        return ()
+    try:
+        payload = _strict_policy_json(raw, source)
+        schema_version = payload.get("schema_version")
+        if type(schema_version) is not int:
+            raise TypeError
+        if schema_version in {1, 2}:
+            _parse_dormant_policy_envelope(
+                raw, source, allow_legacy_protected=schema_version == 1
+            )
+            _parse_requirement_transition_authorizations(raw, source)
+            return ()
+        rows = payload["requirement_rotation_retirements"]
+        if schema_version != 3 or not isinstance(rows, list):
+            raise TypeError
+    except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError) as exc:
+        raise VerificationProfileError(
+            f"{source} requirement transition retirement policy is malformed"
+        ) from exc
+
+    required_keys = {
+        "prompt_path",
+        "language_id",
+        "from_requirement_id",
+        "to_requirement_id",
+        "policy_path",
+        "base_policy_sha256",
+        "head_policy_sha256",
+        "base_prompt_sha256",
+        "head_prompt_sha256",
+    }
+
+    def parse_authorization(row: Any) -> _RequirementTransitionAuthorization:
+        if (
+            not isinstance(row, dict)
+            or set(row) != required_keys
+            or any(not isinstance(row[key], str) for key in required_keys)
+        ):
+            raise VerificationProfileError(
+                f"{source} requirement transition retirement rule is malformed"
+            )
+        authorization = _RequirementTransitionAuthorization(
+            PurePosixPath(row["prompt_path"]),
+            row["language_id"],
+            row["from_requirement_id"],
+            row["to_requirement_id"],
+            PurePosixPath(row["policy_path"]),
+            _RequirementTransitionBindings(
+                row["base_policy_sha256"],
+                row["head_policy_sha256"],
+                row["base_prompt_sha256"],
+                row["head_prompt_sha256"],
+            ),
+        )
+        if not _valid_requirement_transition(authorization):
+            raise VerificationProfileError(
+                f"{source} requirement transition retirement rule is malformed"
+            )
+        return authorization
+
+    retirements = []
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {"obsolete", "replacement"}:
+            raise VerificationProfileError(
+                f"{source} requirement transition retirement rule is malformed"
+            )
+        obsolete = parse_authorization(row["obsolete"])
+        replacement = parse_authorization(row["replacement"])
+        if obsolete == replacement or (obsolete.prompt_path, obsolete.language_id) != (
+            replacement.prompt_path,
+            replacement.language_id,
+        ):
+            raise VerificationProfileError(
+                f"{source} requirement transition retirement rule is ambiguous"
+            )
+        retirements.append(_RequirementTransitionRetirement(obsolete, replacement))
+
+    obsolete = [item.obsolete for item in retirements]
+    replacements = [item.replacement for item in retirements]
+    if (
+        len(retirements) > _MAX_REQUIREMENT_TRANSITIONS
+        or len(obsolete) != len(set(obsolete))
+        or len(replacements) != len(set(replacements))
+        or set(obsolete) & set(replacements)
+    ):
+        raise VerificationProfileError(
+            f"{source} requirement transition retirement rules are duplicated or chained"
+        )
+    return tuple(retirements)
+
+
+def _validate_legacy_requirement_transition_rows(payload: dict[str, Any]) -> None:
+    """Validate ignored schema-1 rows so legacy envelopes remain bounded."""
+    rows = payload["requirement_rotations"]
+    required_keys = {
+        "prompt_path",
+        "language_id",
+        "from_requirement_id",
+        "to_requirement_id",
+        "policy_path",
+        "from_policy_sha256",
+        "to_policy_sha256",
+    }
+    if not isinstance(rows, list) or len(rows) > _MAX_REQUIREMENT_TRANSITIONS:
+        raise TypeError
+    identities: list[tuple[PurePosixPath, str]] = []
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or set(row) != required_keys
+            or any(not isinstance(row[key], str) for key in required_keys)
+        ):
+            raise TypeError
+        prompt_path = PurePosixPath(row["prompt_path"])
+        language_id = row["language_id"]
+        if (
+            prompt_path.is_absolute()
+            or not prompt_path.parts
+            or ".." in prompt_path.parts
+            or not language_id
+            or language_id.strip() != language_id
+            or row["from_requirement_id"] == row["to_requirement_id"]
+            or _OPAQUE_REQUIREMENT_ID.fullmatch(row["from_requirement_id"]) is None
+            or _OPAQUE_REQUIREMENT_ID.fullmatch(row["to_requirement_id"]) is None
+            or PurePosixPath(row["policy_path"]) != PROFILE_PATH
+            or row["from_policy_sha256"] == row["to_policy_sha256"]
+            or any(
+                re.fullmatch(r"[0-9a-f]{64}", row[key]) is None
+                for key in ("from_policy_sha256", "to_policy_sha256")
+            )
+        ):
+            raise TypeError
+        identities.append((prompt_path, language_id))
+    if len(identities) != len(set(identities)):
+        raise TypeError
+
+
+def _parse_dormant_policy_envelope(
+    raw: bytes | None, source: str, *, allow_legacy_protected: bool = False
+) -> tuple[_PolicyRotationAuthorization, ...]:
+    """Parse active authority while allowing only protected bootstrap sources."""
+    if raw is None and allow_legacy_protected:
+        return ()
+    try:
+        payload = _strict_policy_json(raw, source) if raw is not None else None
+        if payload is None:
+            raise TypeError
+        schema_version = payload.get("schema_version")
+        expected_keys = {
+            "schema_version",
+            "rotations",
+            "requirement_rotations",
+        }
+        if allow_legacy_protected and schema_version == 1:
+            schema_1_keys = {"schema_version", "rotations"}
+            schema_1_keys_with_rows = schema_1_keys | {"requirement_rotations"}
+            if set(payload) not in (schema_1_keys, schema_1_keys_with_rows):
+                raise TypeError
+            expected_keys = set(payload)
+        elif schema_version == 3:
+            expected_keys.add("requirement_rotation_retirements")
+        if (
+            type(schema_version) is not int
+            or set(payload) != expected_keys
+            or schema_version not in ({1, 2, 3} if allow_legacy_protected else {2, 3})
+            or not isinstance(payload["rotations"], list)
+            or (
+                schema_version in {2, 3}
+                and not isinstance(payload["requirement_rotations"], list)
+            )
+        ):
+            raise TypeError
+        if schema_version == 3 and not isinstance(
+            payload["requirement_rotation_retirements"], list
+        ):
+            raise TypeError
+        if schema_version == 1 and "requirement_rotations" in payload:
+            _validate_legacy_requirement_transition_rows(payload)
+    except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError) as exc:
+        raise VerificationProfileError(
+            f"{source} requirement transition policy envelope is malformed"
+        ) from exc
+
+    authorizations: list[_PolicyRotationAuthorization] = []
+    for row in payload["rotations"]:
+        if (
+            not isinstance(row, dict)
+            or set(row)
+            != {
+                "obligation_id",
+                "validator_id",
+                "from_config_digest",
+                "policy_path",
+            }
+            or any(not isinstance(value, str) for value in row.values())
+        ):
+            raise VerificationProfileError(
+                f"{source} profile rotation rule is malformed"
+            )
+        authorization = _PolicyRotationAuthorization(
+            row["obligation_id"],
+            row["validator_id"],
+            row["from_config_digest"],
+            PurePosixPath(row["policy_path"]),
+        )
+        if authorization != _PolicyRotationAuthorization(
+            _HUMAN_OBLIGATION_ID,
+            _HUMAN_VALIDATOR_ID,
+            _PLACEHOLDER_POLICY_DIGEST,
+            TRUST_POLICY_PATH,
+        ):
+            raise VerificationProfileError(
+                f"{source} profile rotation rule is not authorized"
+            )
+        authorizations.append(authorization)
+    if len(authorizations) != len(set(authorizations)):
+        raise VerificationProfileError(
+            f"{source} profile rotation rules are duplicated"
+        )
+    return tuple(authorizations)
+
+
+def _validate_dormant_policy_installation(
+    protected_raw: bytes | None, candidate_raw: bytes | None
+) -> None:
+    """Keep every existing non-requirement authority while adding future rows."""
+    protected = _parse_dormant_policy_envelope(
+        protected_raw, "protected", allow_legacy_protected=True
     )
-    candidate = _parse_requirement_transition_authorizations(
-        read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH), "candidate"
+    candidate = _parse_dormant_policy_envelope(candidate_raw, "candidate")
+    if candidate != protected:
+        raise VerificationProfileError(
+            "candidate dormant requirement transition changes protected "
+            "profile rotation authority"
+        )
+
+
+def _candidate_authorization_is_strictly_dormant(
+    manifest: UnitManifest,
+    base: Mapping[UnitId, _ProfileInput],
+    head: Mapping[UnitId, _ProfileInput],
+    policies: tuple[bytes | None, bytes | None],
+    prompts: tuple[bytes | None, bytes | None],
+    authorization: _RequirementTransitionAuthorization,
+) -> bool:
+    """Accept a future rule only while every protected source byte is unchanged."""
+    unit_id = UnitId(
+        manifest.repository_id,
+        authorization.prompt_path,
+        authorization.language_id,
+    )
+    protected = base.get(unit_id)
+    candidate = head.get(unit_id)
+    if protected is None or protected != candidate:
+        return False
+
+    bindings = authorization.bindings
+    if (
+        policies[0] is None
+        or policies[0] != policies[1]
+        or prompts[0] is None
+        or prompts[0] != prompts[1]
+        or _sha256(policies[0]) != bindings.base_policy_sha256
+        or _sha256(prompts[0]) != bindings.base_prompt_sha256
+        or authorization.from_requirement_id
+        != f"CONTRACT-SHA256:{bindings.base_prompt_sha256}"
+        or authorization.to_requirement_id
+        != f"CONTRACT-SHA256:{bindings.head_prompt_sha256}"
+        or bindings.base_prompt_sha256 == bindings.head_prompt_sha256
+        or bindings.base_policy_sha256 == bindings.head_policy_sha256
+        or protected.requirements != (authorization.from_requirement_id,)
+        or _prompt_requirements(prompts[0]) != (authorization.from_requirement_id,)
+    ):
+        return False
+
+    human = next(
+        (
+            obligation
+            for obligation in protected.obligations
+            if obligation.obligation_id == _HUMAN_OBLIGATION_ID
+        ),
+        None,
+    )
+    return bool(
+        human is not None
+        and human.kind == "human-attestation"
+        and human.validator_id == _HUMAN_VALIDATOR_ID
+        and human.requirement_ids == (authorization.from_requirement_id,)
+        and human.required
+    )
+
+
+def _authorization_is_consumed_at_current_state(
+    manifest: UnitManifest,
+    base: Mapping[UnitId, _ProfileInput],
+    head: Mapping[UnitId, _ProfileInput],
+    prompts: tuple[bytes | None, bytes | None],
+    authorization: _RequirementTransitionAuthorization,
+) -> bool:
+    """Permit advancing an identity only after its protected rule was consumed."""
+    unit_id = UnitId(
+        manifest.repository_id,
+        authorization.prompt_path,
+        authorization.language_id,
+    )
+    protected = base.get(unit_id)
+    candidate = head.get(unit_id)
+    if (
+        protected is None
+        or protected != candidate
+        or protected.requirements != (authorization.to_requirement_id,)
+        or prompts[0] is None
+        or prompts[0] != prompts[1]
+        or _sha256(prompts[0]) != authorization.bindings.head_prompt_sha256
+        or _prompt_requirements(prompts[0]) != (authorization.to_requirement_id,)
+    ):
+        return False
+    human = next(
+        (
+            obligation
+            for obligation in protected.obligations
+            if obligation.obligation_id == _HUMAN_OBLIGATION_ID
+        ),
+        None,
+    )
+    return bool(
+        human is not None
+        and human.kind == "human-attestation"
+        and human.validator_id == _HUMAN_VALIDATOR_ID
+        and human.requirement_ids == (authorization.to_requirement_id,)
+        and human.required
+    )
+
+
+def _active_requirement_transition_authorizations(
+    authorizations: tuple[_RequirementTransitionAuthorization, ...],
+    retirements: tuple[_RequirementTransitionRetirement, ...],
+    source: str,
+) -> tuple[_RequirementTransitionAuthorization, ...]:
+    """Return the unretired rows after validating immutable history links."""
+    rows = set(authorizations)
+    retired = {item.obsolete for item in retirements}
+    replacements = {item.replacement for item in retirements}
+    if not retired <= rows or not replacements <= rows:
+        raise VerificationProfileError(
+            f"{source} requirement transition retirement does not name exact rows"
+        )
+    active = tuple(item for item in authorizations if item not in retired)
+    identities = [(item.prompt_path, item.language_id) for item in active]
+    if len(identities) != len(set(identities)):
+        raise VerificationProfileError(
+            f"{source} active requirement transition rules are ambiguous"
+        )
+    return active
+
+
+def _retirement_is_provably_unreachable_dormant(
+    manifest: UnitManifest,
+    base: Mapping[UnitId, _ProfileInput],
+    head: Mapping[UnitId, _ProfileInput],
+    policies: tuple[bytes | None, bytes | None],
+    prompts: tuple[bytes | None, bytes | None],
+    authorization: _RequirementTransitionAuthorization,
+) -> bool:
+    """Accept only a dormant row whose whole-policy bindings cannot be reached."""
+    unit_id = UnitId(
+        manifest.repository_id,
+        authorization.prompt_path,
+        authorization.language_id,
+    )
+    protected = base.get(unit_id)
+    candidate = head.get(unit_id)
+    bindings = authorization.bindings
+    if (
+        protected is None
+        or protected != candidate
+        or policies[0] is None
+        or policies[0] != policies[1]
+        or prompts[0] is None
+        or prompts[0] != prompts[1]
+        or _sha256(policies[0])
+        in {bindings.base_policy_sha256, bindings.head_policy_sha256}
+        or _sha256(prompts[0]) != bindings.base_prompt_sha256
+        or protected.requirements != (authorization.from_requirement_id,)
+        or _prompt_requirements(prompts[0]) != (authorization.from_requirement_id,)
+    ):
+        return False
+    human = next(
+        (
+            obligation
+            for obligation in protected.obligations
+            if obligation.obligation_id == _HUMAN_OBLIGATION_ID
+        ),
+        None,
+    )
+    return bool(
+        human is not None
+        and human.kind == "human-attestation"
+        and human.validator_id == _HUMAN_VALIDATOR_ID
+        and human.requirement_ids == (authorization.from_requirement_id,)
+        and human.required
+    )
+
+
+def _validate_retirement_history_representation(
+    protected_raw: bytes | None,
+    candidate_raw: bytes | None,
+) -> None:
+    """Require every protected row and retirement token to remain byte-identical."""
+    protected_rows, protected_retirements = _raw_requirement_transition_history(
+        protected_raw, "protected"
+    )
+    candidate_rows, candidate_retirements = _raw_requirement_transition_history(
+        candidate_raw, "candidate"
+    )
+    if (
+        candidate_rows[: len(protected_rows)] != protected_rows
+        or candidate_retirements[: len(protected_retirements)] != protected_retirements
+    ):
+        raise VerificationProfileError(
+            "candidate retirement history rewrites protected representation"
+        )
+
+
+def _validate_schema_2_history_representation(
+    protected_raw: bytes | None,
+    candidate_raw: bytes | None,
+    protected_rows: tuple[_RequirementTransitionAuthorization, ...],
+    candidate_rows: tuple[_RequirementTransitionAuthorization, ...],
+) -> None:
+    """Keep surviving schema-2 row tokens exact and ahead of new rows."""
+    if (
+        protected_raw is not None
+        and candidate_raw is not None
+        and (
+            hashlib.sha256(protected_raw).hexdigest(),
+            hashlib.sha256(candidate_raw).hexdigest(),
+        )
+        == _LEGACY_PDD_1989_SCHEMA_2_HISTORY
+    ):
+        return
+    protected_tokens, _ = _raw_requirement_transition_history(
+        protected_raw, "protected"
+    )
+    candidate_tokens, _ = _raw_requirement_transition_history(
+        candidate_raw, "candidate"
+    )
+    candidate_set = set(candidate_rows)
+    surviving_history = tuple(
+        (row, token)
+        for row, token in zip(protected_rows, protected_tokens, strict=True)
+        if row in candidate_set
+    )
+    candidate_prefix = tuple(zip(candidate_rows, candidate_tokens, strict=True))[
+        : len(surviving_history)
+    ]
+    if candidate_prefix != surviving_history:
+        raise VerificationProfileError(
+            "candidate schema-2 history rewrites protected representation"
+        )
+
+
+def _policy_schema_version(raw: bytes | None, source: str) -> int | None:
+    """Return the already-validated policy schema without normalizing its bytes."""
+    if raw is None:
+        return None
+    try:
+        schema_version = _strict_policy_json(raw, source)["schema_version"]
+        if type(schema_version) is not int:
+            raise TypeError
+    except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError) as exc:
+        raise VerificationProfileError(
+            f"{source} requirement transition policy is malformed"
+        ) from exc
+    return schema_version
+
+
+def _managed_prompt_byte_changes(
+    root: Path,
+    manifest: UnitManifest,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
+) -> set[PurePosixPath]:
+    """Return changed canonical managed prompts using the manifest blob inventory."""
+    candidates = {
+        item.candidate_id.artifact_relpath: item for item in manifest.candidates
+    }
+    changed = set()
+    for unit_id in manifest.expected_managed:
+        prompt_path = _canonical_prompt_path(unit_id.prompt_relpath, approved_aliases)
+        candidate = candidates.get(prompt_path)
+        if candidate is not None and candidate.base_object_id is not None:
+            if candidate.base_object_id != candidate.head_object_id:
+                changed.add(prompt_path)
+            continue
+        base_prompt = read_git_blob(root, manifest.base_ref, prompt_path)
+        head_prompt = read_git_blob(root, manifest.head_ref, prompt_path)
+        if base_prompt is None or head_prompt is None or base_prompt != head_prompt:
+            changed.add(prompt_path)
+    return changed
+
+
+def _validate_retirement_managed_prompt_bytes(
+    root: Path,
+    manifest: UnitManifest,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
+) -> None:
+    """Keep every canonical managed prompt byte-identical during retirement Phase A."""
+    changed = _managed_prompt_byte_changes(root, manifest, approved_aliases)
+    if changed:
+        raise VerificationProfileError(
+            "candidate retirement changes managed prompt bytes: "
+            f"{sorted(changed)[0]}"
+        )
+
+
+def _validate_new_authorization_managed_prompt_bytes(
+    root: Path,
+    manifest: UnitManifest,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
+    allowed_changes: set[PurePosixPath],
+) -> None:
+    """Keep every managed prompt unchanged while installing future authority."""
+    changed = _managed_prompt_byte_changes(root, manifest, approved_aliases)
+    unauthorized = changed - allowed_changes
+    if unauthorized:
+        raise VerificationProfileError(
+            "candidate authority-only change modifies managed prompt bytes: "
+            f"{sorted(unauthorized)[0]}"
+        )
+
+
+def _validate_consumed_managed_prompt_bytes(
+    root: Path,
+    manifest: UnitManifest,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
+    authorizations: tuple[_RequirementTransitionAuthorization, ...],
+    updates: Mapping[UnitId, _ProfileInput],
+) -> None:
+    """Limit Phase B prompt drift to exact protected rows consumed in this candidate."""
+    consumed = {
+        _canonical_prompt_path(authorization.prompt_path, approved_aliases)
+        for authorization in authorizations
+        if UnitId(
+            manifest.repository_id,
+            authorization.prompt_path,
+            authorization.language_id,
+        )
+        in updates
+    }
+    unauthorized = (
+        _managed_prompt_byte_changes(root, manifest, approved_aliases) - consumed
+    )
+    if unauthorized:
+        raise VerificationProfileError(
+            "candidate requirement transition changes unmanaged prompt bytes: "
+            f"{sorted(unauthorized)[0]}"
+        )
+
+
+def _validate_candidate_retirements(
+    root: Path,
+    manifest: UnitManifest,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
+    base: Mapping[UnitId, _ProfileInput],
+    head: Mapping[UnitId, _ProfileInput],
+    policies: tuple[bytes | None, bytes | None],
+    prompts: Mapping[PurePosixPath, tuple[bytes | None, bytes | None]],
+    protected_rows: tuple[_RequirementTransitionAuthorization, ...],
+    protected_retirements: tuple[_RequirementTransitionRetirement, ...],
+    candidate_rows: tuple[_RequirementTransitionAuthorization, ...],
+    candidate_retirements: tuple[_RequirementTransitionRetirement, ...],
+    protected_active: tuple[_RequirementTransitionAuthorization, ...],
+    protected_policy: bytes | None,
+    candidate_policy: bytes | None,
+) -> None:
+    """Validate append-only retirement/reissue of unreachable protected rows."""
+    protected_schema = _policy_schema_version(protected_policy, "protected")
+    candidate_schema = _policy_schema_version(candidate_policy, "candidate")
+    if protected_schema == 2 and candidate_schema == 2:
+        _validate_schema_2_history_representation(
+            protected_policy,
+            candidate_policy,
+            protected_rows,
+            candidate_rows,
+        )
+    if protected_schema != 3 and candidate_schema != 3:
+        return
+    if (
+        len(candidate_rows) < len(protected_rows)
+        or candidate_rows[: len(protected_rows)] != protected_rows
+        or candidate_retirements[: len(protected_retirements)] != protected_retirements
+    ):
+        raise VerificationProfileError(
+            "candidate retirement history is not append-only"
+        )
+    if protected_schema == 3 and candidate_schema != 3:
+        raise VerificationProfileError(
+            "candidate cannot remove protected schema-3 retirement history"
+        )
+    _validate_retirement_history_representation(protected_policy, candidate_policy)
+    new_retirements = candidate_retirements[len(protected_retirements) :]
+    if candidate_schema == 3 and protected_schema != 3 and not new_retirements:
+        raise VerificationProfileError(
+            "candidate schema-3 requirement transition policy requires a "
+            "retirement/reissue record"
+        )
+    if new_retirements:
+        _validate_retirement_managed_prompt_bytes(root, manifest, approved_aliases)
+    for retirement in new_retirements:
+        if (
+            retirement.obsolete not in protected_active
+            or retirement.replacement in protected_rows
+            or retirement.replacement not in candidate_rows
+            or not _retirement_is_provably_unreachable_dormant(
+                manifest,
+                base,
+                head,
+                policies,
+                prompts[retirement.obsolete.prompt_path],
+                retirement.obsolete,
+            )
+            or not _candidate_authorization_is_strictly_dormant(
+                manifest,
+                base,
+                head,
+                policies,
+                prompts[retirement.replacement.prompt_path],
+                retirement.replacement,
+            )
+        ):
+            raise VerificationProfileError(
+                "candidate retirement lacks an exact unreachable protected row "
+                "and dormant replacement"
+            )
+
+
+def _load_requirement_transition_authorizations(
+    root: Path,
+    manifest: UnitManifest,
+    base: Mapping[UnitId, _ProfileInput] | None = None,
+    head: Mapping[UnitId, _ProfileInput] | None = None,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath] | None = None,
+) -> tuple[
+    tuple[_RequirementTransitionAuthorization, ...],
+    dict[PurePosixPath, tuple[bytes | None, bytes | None]],
+    tuple[_RequirementTransitionAuthorization, ...],
+]:
+    """Return protected/candidate rules and candidate-added dormant rows.
+
+    ``base`` and ``head`` are supplied by the production loader so prompt blobs
+    can be evaluated once and reused. Optional empty mappings preserve the
+    fail-closed two-argument boundary used by protected bootstrap-policy tests.
+    The public loader enforces managed-prompt isolation for returned additions.
+    """
+    base = {} if base is None else base
+    head = {} if head is None else head
+    approved_aliases = {} if approved_aliases is None else approved_aliases
+    protected_policy = read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH)
+    candidate_policy = read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH)
+    protected_rows = _parse_requirement_transition_authorizations(
+        protected_policy, "protected"
+    )
+    candidate_rows = _parse_requirement_transition_authorizations(
+        candidate_policy, "candidate"
+    )
+    protected_retirements = _parse_requirement_transition_retirements(
+        protected_policy, "protected"
+    )
+    candidate_retirements = _parse_requirement_transition_retirements(
+        candidate_policy, "candidate"
+    )
+    protected = _active_requirement_transition_authorizations(
+        protected_rows, protected_retirements, "protected"
+    )
+    candidate = _active_requirement_transition_authorizations(
+        candidate_rows, candidate_retirements, "candidate"
     )
     authority = set(protected)
     if manifest.repository_id == _PDD_REPOSITORY_ID:
         authority.update(_BOOTSTRAP_REQUIREMENT_TRANSITIONS)
-    if any(item not in authority for item in candidate):
-        raise VerificationProfileError(
-            "candidate requirement transition lacks protected authorization"
+    policies = (
+        read_git_blob(root, manifest.base_ref, PROFILE_PATH),
+        read_git_blob(root, manifest.head_ref, PROFILE_PATH),
+    )
+    prompt_paths = {item.prompt_path for item in (*protected_rows, *candidate_rows)}
+    prompts = {
+        prompt_path: (
+            read_git_blob(
+                root,
+                manifest.base_ref,
+                _canonical_prompt_path(prompt_path, approved_aliases),
+            ),
+            read_git_blob(
+                root,
+                manifest.head_ref,
+                _canonical_prompt_path(prompt_path, approved_aliases),
+            ),
         )
-    return candidate
+        for prompt_path in prompt_paths
+    }
+    protected_by_identity = {
+        (item.prompt_path, item.language_id): item for item in protected
+    }
+    _validate_candidate_retirements(
+        root,
+        manifest,
+        approved_aliases,
+        base,
+        head,
+        policies,
+        prompts,
+        protected_rows,
+        protected_retirements,
+        candidate_rows,
+        candidate_retirements,
+        protected,
+        protected_policy,
+        candidate_policy,
+    )
+    legacy_pdd1989_reconciliation = (
+        protected_policy is not None
+        and candidate_policy is not None
+        and policies[0] is not None
+        and policies[1] is not None
+        and (
+            hashlib.sha256(protected_policy).hexdigest(),
+            hashlib.sha256(candidate_policy).hexdigest(),
+        )
+        == _LEGACY_PDD_1989_SCHEMA_2_HISTORY
+        and (
+            hashlib.sha256(policies[0]).hexdigest(),
+            hashlib.sha256(policies[1]).hexdigest(),
+        )
+        == _LEGACY_PDD_1989_PROFILE_BYTES
+    )
+    retired_by_candidate = {item.obsolete for item in candidate_retirements}
+    new_authorizations = tuple(item for item in candidate if item not in protected)
+    if legacy_pdd1989_reconciliation:
+        # The exact historical pair both installed and consumed its authority
+        # before Phase-A isolation existed; validate it as consumption below.
+        new_authorizations = ()
+    for item in candidate:
+        if item in authority:
+            if (
+                item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
+                and item not in protected
+                and policies[0] != policies[1]
+                and not legacy_pdd1989_reconciliation
+            ):
+                raise VerificationProfileError(
+                    "candidate legacy bootstrap requirement transition changes "
+                    "protected verification-profile bytes"
+                )
+            continue
+        prompt_pair = prompts[item.prompt_path]
+        prior = protected_by_identity.get((item.prompt_path, item.language_id))
+        if not _candidate_authorization_is_strictly_dormant(
+            manifest, base, head, policies, prompt_pair, item
+        ):
+            raise VerificationProfileError(
+                "candidate requirement transition lacks protected authorization"
+            )
+        if (
+            prior is not None
+            and prior not in retired_by_candidate
+            and not _authorization_is_consumed_at_current_state(
+                manifest, base, head, prompt_pair, prior
+            )
+        ):
+            raise VerificationProfileError(
+                "candidate replaced unconsumed protected requirement transition"
+            )
+    candidate_authority = set(candidate_rows)
+    for item in protected:
+        if item in candidate_authority or legacy_pdd1989_reconciliation:
+            continue
+        if not _authorization_is_consumed_at_current_state(
+            manifest, base, head, prompts[item.prompt_path], item
+        ):
+            raise VerificationProfileError(
+                "candidate removed unconsumed protected requirement transition"
+            )
+    if candidate_policy != protected_policy:
+        _validate_dormant_policy_installation(protected_policy, candidate_policy)
+    return candidate, prompts, new_authorizations
 
 
 def _transition_bytes_match(
@@ -850,9 +1818,20 @@ def _expected_requirement_update(
     ):
         return None, "requirement transition is partial or mismatched"
     assert human is not None
-    obligations[_HUMAN_OBLIGATION_ID] = replace(
-        human, requirement_ids=(authorization.to_requirement_id,)
-    )
+    obligations = {
+        obligation_id: replace(
+            obligation,
+            requirement_ids=tuple(
+                (
+                    authorization.to_requirement_id
+                    if requirement_id == authorization.from_requirement_id
+                    else requirement_id
+                )
+                for requirement_id in obligation.requirement_ids
+            ),
+        )
+        for obligation_id, obligation in obligations.items()
+    }
     expected = _ProfileInput(
         (authorization.to_requirement_id,), tuple(sorted(obligations.values()))
     )
@@ -924,14 +1903,7 @@ def _evaluate_requirement_authorization(
         # Existing profile accounting owns missing/candidate-only units. A
         # dormant transition must not duplicate those stable reasons or counts.
         return unit_id, None, None
-    prompts = (
-        read_git_blob(
-            context.root, context.manifest.base_ref, authorization.prompt_path
-        ),
-        read_git_blob(
-            context.root, context.manifest.head_ref, authorization.prompt_path
-        ),
-    )
+    prompts = context.prompts[authorization.prompt_path]
     bindings = authorization.bindings
     stationary = protected == candidate and (
         _matches_unchanged_requirement_state(protected, prompts, authorization)
@@ -976,6 +1948,7 @@ def _authorized_requirement_updates(
     base: dict[UnitId, _ProfileInput],
     head: dict[UnitId, _ProfileInput],
     authorizations: tuple[_RequirementTransitionAuthorization, ...],
+    prompts: Mapping[PurePosixPath, tuple[bytes | None, bytes | None]],
 ) -> tuple[dict[UnitId, _ProfileInput], list[str]]:
     """Authorize only exact opaque requirement and human mapping replacements."""
     updates: dict[UnitId, _ProfileInput] = {}
@@ -984,7 +1957,9 @@ def _authorized_requirement_updates(
         read_git_blob(root, manifest.base_ref, PROFILE_PATH),
         read_git_blob(root, manifest.head_ref, PROFILE_PATH),
     )
-    context = _RequirementTransitionContext(root, manifest, base, head, policies)
+    context = _RequirementTransitionContext(
+        root, manifest, base, head, policies, prompts
+    )
     for authorization in authorizations:
         unit_id, result, reason = _evaluate_requirement_authorization(
             context, authorization
@@ -1226,15 +2201,43 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
         root, manifest.head_ref, manifest.repository_id, approved_aliases
     )
     invalid.extend(loaded_invalid)
+    (
+        requirement_authorizations,
+        requirement_prompts,
+        new_requirement_authorizations,
+    ) = (
+        _load_requirement_transition_authorizations(
+            root, manifest, base, head, approved_aliases
+        )
+    )
+    profile_additions = _authorized_profile_additions(root, manifest, base, head)
+    if new_requirement_authorizations:
+        _validate_new_authorization_managed_prompt_bytes(
+            root,
+            manifest,
+            approved_aliases,
+            {
+                _canonical_prompt_path(unit_id.prompt_relpath, approved_aliases)
+                for unit_id in profile_additions
+            },
+        )
     requirement_updates, requirement_invalid = _authorized_requirement_updates(
         root,
         manifest,
         base,
         head,
-        _load_requirement_transition_authorizations(root, manifest),
+        requirement_authorizations,
+        requirement_prompts,
     )
+    if requirement_updates:
+        _validate_consumed_managed_prompt_bytes(
+            root,
+            manifest,
+            approved_aliases,
+            requirement_authorizations,
+            requirement_updates,
+        )
     invalid.extend(requirement_invalid)
-    profile_additions = _authorized_profile_additions(root, manifest, base, head)
     requirement_updates = {**profile_additions, **requirement_updates}
     authorized_updates, rotation_invalid = _authorized_rotation_updates(
         root,
