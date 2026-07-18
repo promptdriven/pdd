@@ -4,10 +4,14 @@
 child runner permission to generate files. Module IDs are canonical,
 slash-qualified paths. A legacy basename is accepted only where it maps to one
 candidate; an ambiguous basename is rejected with its path-qualified choices.
-The runner consumes the frozen selected IDs and dependency order as its schedule
-and writes a narrow `pdd.sync.scope-evidence.v1` artifact under
-`.pdd/evidence/sync-plans/`. This is plan evidence for a later result-envelope
-builder; it is not itself a `pdd.sync.result.v1` result envelope.
+The runner consumes the frozen selected IDs and dependency order as its schedule.
+It writes immutable full-primary `pdd.sync.scope-evidence.v1` plan evidence
+under `.pdd/evidence/sync-plans/<plan-digest>.json` and a separate bounded
+execution-selection artifact under `.pdd/evidence/sync-executions/`. A fallback
+never overwrites the primary plan artifact. These are inputs to a later
+result-envelope builder, not `pdd.sync.result.v1` envelopes themselves; Cloud
+must copy the ignored local primary-plan artifact to the exact-SHA fallback
+checkout.
 
 Selection precedence is deterministic:
 
@@ -23,8 +27,9 @@ Selection precedence is deterministic:
    governing `.pddrc` root; it records lower-confidence provenance and never
    scans arbitrary repository content.
 6. Only unresolved choices may be sent to an ambiguity agent. Its compact
-   protocol contains bounded candidate IDs and metadata, and a response can
-   select only those IDs.
+   protocol contains at most 64 candidate IDs and compact metadata. The sole
+   accepted response field is a sorted, unique `selected_module_ids` subset;
+   commands, paths, prose, dependency edits, and invented IDs fail closed.
 
 The plan records governing root/context, prompt and output paths, reason,
 operation, dependency/SCC order, confidence, and provenance. Required
