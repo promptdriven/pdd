@@ -429,6 +429,82 @@ def test_vitest_termination_diagnostic_rejects_broad_no_reporter_signature(
     assert not output.exists()
 
 
+@pytest.mark.parametrize(
+    ("lane", "runner_origin"),
+    (("source", "source-checkout"), ("installed-wheel", "installed-wheel")),
+)
+def test_vitest_no_result_observation_writes_only_exact_cause_ineligible_lanes(
+    tmp_path: Path, lane: str, runner_origin: str,
+) -> None:
+    """An exit-zero missing frame is observable without becoming a cause claim."""
+    root = tmp_path / "candidate"
+    root.mkdir()
+    output = tmp_path / "protected" / f"vitest-{lane}-observation-v1.json"
+    output.parent.mkdir(mode=0o700)
+    repository = Path(__file__).parents[1]
+    observation_verifier = repository / "scripts/verify_vitest_no_result_observation.py"
+    termination_verifier = repository / "scripts/verify_vitest_termination_evidence.py"
+    producer = Path(runner_module.__file__).resolve(strict=True)
+    common = {
+        "output": output,
+        "failure_baseline_sha": _VITEST_FAILURE_BASELINE_SHA,
+        "protected_base_sha": _VITEST_PROTECTED_BASE_SHA,
+        "trigger_head_sha": _repository_head(),
+        "checkout_head_sha": _repository_head(),
+        "reviewed_head_sha": _repository_head(),
+        "review_evidence_sha256": "c" * 64,
+        "producer_sha256": hashlib.sha256(producer.read_bytes()).hexdigest(),
+        "termination_verifier_sha256": hashlib.sha256(termination_verifier.read_bytes()).hexdigest(),
+        "observation_verifier_sha256": hashlib.sha256(observation_verifier.read_bytes()).hexdigest(),
+        "runner_image": _VITEST_RUNNER_IMAGE,
+        "runner_provisioner": _VITEST_RUNNER_PROVISIONER,
+        "python": _VITEST_PYTHON_VERSION,
+        "node": _VITEST_NODE_VERSION,
+        "vitest_package_sha256": _VITEST_PACKAGE_SHA256,
+        "vitest_lock_sha256": _VITEST_LOCK_SHA256,
+        "test_node": _VITEST_DIAGNOSTIC_TEST_NODE,
+        "lane": lane,
+        "runner_origin": runner_origin,
+    }
+    if lane == "installed-wheel":
+        common.update({
+            "package_attestation_sha256": "a" * 64,
+            "wheel_sha256": "b" * 64,
+            "installed_runner_sha256": common["producer_sha256"],
+        })
+    config = runner_module.VitestNoResultObservationConfig(**common)
+    result = SupervisedCompletedProcess(
+        ["vitest"], 0, "", "candidate secret /candidate/path",
+        termination=SupervisorTermination(
+            TerminationKind.EXIT,
+            exit_code=0,
+            resource_telemetry=CgroupResourceTelemetry(0, 0, 0),
+        ),
+    )
+    progress = _diagnostic_before_exit_progress()
+
+    observed = runner_module._write_vitest_no_result_observation(
+        root, result, progress, result_frame_present=False, diagnostic_config=config,
+    )
+
+    assert observed == output
+    encoded = output.read_bytes()
+    payload = json.loads(encoded)
+    assert encoded == (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("ascii")
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    assert payload["cause_eligible"] is False
+    assert payload["result_frame_present"] is False
+    assert payload["supervisor_exit_code"] == 0
+    assert payload["progress_frames"] == [stage.value for stage in progress]
+    assert "candidate secret" not in encoded.decode("ascii")
+    if lane == "source":
+        assert not {"package_attestation_sha256", "wheel_sha256", "installed_runner_sha256"} & set(payload)
+    else:
+        assert payload["package_attestation_sha256"] == "a" * 64
+
+
 def test_vitest_termination_diagnostic_rejects_candidate_checkout_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

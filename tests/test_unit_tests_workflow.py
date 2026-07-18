@@ -37,6 +37,7 @@ PROVISION_STEP_NAME = "Provision and verify protected Linux sandbox"
 HOSTED_STEP_NAME = "Run real protected Playwright and authenticated supervisor protocols"
 HELD_NAMESPACE_SMOKE_STEP_NAME = "Verify held-namespace transport and FD-only cleanup smoke"
 VITEST_SANDBOX_ISOLATION_STEP_NAME = "Verify real Vitest sandbox isolation"
+VITEST_NO_RESULT_OBSERVATION_STEP_NAME = "Verify Vitest no-result observation"
 FOCUSED_STEP_NAME = "Run focused protected-runner tests"
 BROAD_SUITE_STEP_NAME = "Run unit tests"
 HOSTED_SUPERVISOR_NODE = "tests/test_sync_core_supervisor.py::"
@@ -276,6 +277,24 @@ def test_unit_tests_vitest_sandbox_isolation_is_bounded_and_precedes_focused_sui
     assert _shell_commands(dedicated.get("run")) == (
         EXPECTED_VITEST_SANDBOX_ISOLATION_COMMAND,
     )
+
+
+def test_vitest_no_result_workflow_binds_observation_verifier_and_lane_artifacts() -> None:
+    """Stage A0 keeps source and wheel observations separate and cause-ineligible."""
+    workflow = _workflow()
+    source_job = workflow["jobs"][LINUX_JOB_ID]
+    source = _named_step(source_job, VITEST_NO_RESULT_OBSERVATION_STEP_NAME)["run"]
+    wheel_job = workflow["jobs"]["package-preprocess-smoke"]
+    wheel = _named_step(wheel_job, "Verify installed-wheel Vitest no-result observation")["run"]
+    assert "PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256" in source_job["env"]
+    assert "PDD_VITEST_OBSERVATION_LANE=source" in source
+    assert "PDD_VITEST_OBSERVATION_RUNNER_ORIGIN=source-checkout" in source
+    assert "package_attestation" not in source
+    assert "PDD_VITEST_OBSERVATION_LANE=installed-wheel" in wheel
+    assert "PDD_VITEST_OBSERVATION_RUNNER_ORIGIN=installed-wheel" in wheel
+    assert "PDD_WHEEL_ATTESTATION_SHA256" in wheel
+    assert "Vitest termination evidence rejected" in source
+    assert "Vitest termination evidence rejected" in wheel
 def test_unit_tests_broad_suite_keeps_xdist_with_bounded_reporting() -> None:
     """The broad lane retains parallel coverage without per-test verbose output."""
     workflow = _workflow()
