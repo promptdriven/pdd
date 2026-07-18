@@ -19,6 +19,7 @@ from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import echo_model_line
 from ..operation_log import log_operation
+from ..fingerprint_transaction import FingerprintFinalizeError
 from ..evidence_manifest import write_evidence_manifest
 from ..prompt_gate import (
     maybe_run_workflow_prompt_gate,
@@ -633,6 +634,8 @@ def update(
         # (raised e.g. when sync_metadata finalization fails — see
         # update_main). Letting `except Exception` swallow it would silently
         # convert it to exit 0 and re-introduce the bug fixed for #871.
+        raise
+    except FingerprintFinalizeError:
         raise
     except Exception as e:
         handle_error(e, "update", ctx.obj.get("quiet", False))

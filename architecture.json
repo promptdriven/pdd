@@ -11660,5 +11660,38 @@
         "keys": []
       }
     }
+  },
+  {
+    "reason": "Finalizes complete PDD artifact fingerprints and coupled runtime state durably.",
+    "description": "Canonical transactional persistence boundary for legacy fingerprints. Resolves the prompt-rooted complete artifact set, rejects null hashes, and provides journaled, fsync-backed, lock-serialized recovery for coupled run-report/fingerprint publication.",
+    "dependencies": [
+      "sync_determine_operation_python.prompt"
+    ],
+    "priority": 209,
+    "filename": "fingerprint_transaction_python.prompt",
+    "filepath": "pdd/fingerprint_transaction.py",
+    "tags": [
+      "module",
+      "python",
+      "sync",
+      "durability"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "finalize_fingerprint",
+            "signature": "(*args: Any, **kwargs: Any) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "AtomicStateUpdate.recover",
+            "signature": "(basename: str, language: str, directory: Path) -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    }
   }
 ]

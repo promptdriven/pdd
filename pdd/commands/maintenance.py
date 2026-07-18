@@ -14,6 +14,7 @@ from ..construct_paths import _find_pddrc_file, _load_pddrc_config
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..sync_determine_operation import AmbiguousModuleError
+from ..fingerprint_transaction import FingerprintFinalizeError
 from ..core.utils import _run_setup_utility, echo_model_line
 from ..evidence_manifest import (
     collect_sync_evidence_paths,
@@ -528,6 +529,8 @@ def sync(
         # quiet runs and the agentic child runners never read it as success.
         handle_error(exc, "sync", quiet=False)
         raise click.exceptions.Exit(1)
+    except FingerprintFinalizeError:
+        raise
     except Exception as exception:
         if evidence and basename and not _is_github_issue_url(basename):
             _write_sync_evidence_manifest(
@@ -619,6 +622,8 @@ def _run_agentic_sync_dispatch(
         # as success.
         handle_error(exc, "sync", quiet=False)
         raise click.exceptions.Exit(1)
+    except FingerprintFinalizeError:
+        raise
     except Exception as exception:
         handle_error(exception, "sync", ctx.obj.get("quiet", False))
         return None
@@ -686,6 +691,8 @@ def _run_global_sync_dispatch(
         # as success.
         handle_error(exc, "sync", quiet=False)
         raise click.exceptions.Exit(1)
+    except FingerprintFinalizeError:
+        raise
     except Exception as exception:
         handle_error(exception, "sync", ctx.obj.get("quiet", False))
         return None
@@ -1000,6 +1007,8 @@ def auto_deps(
         )
         return result, total_cost, model_name
     except click.Abort:
+        raise
+    except FingerprintFinalizeError:
         raise
     except Exception as exception:
         handle_error(exception, "auto-deps", ctx.obj.get("quiet", False))
