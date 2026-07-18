@@ -536,6 +536,16 @@ jobs:
           check_equal \
             "review-evidence-sha256" "$PDD_REVIEW_EVIDENCE_SHA256" \
             "$actual_review_sha256"
+          review_sidecar="$review_evidence.sha256"
+          prepare_predicate "review-evidence-sidecar-write" "sha256=$actual_review_sha256"
+          printf '%s\n' "$actual_review_sha256" > "$review_sidecar"
+          chmod 600 "$review_sidecar"
+          prepare_predicate "review-evidence-sidecar-mode" "mode=0600"
+          test "$(stat -c '%a' "$review_sidecar")" = 600
+          prepare_predicate "review-evidence-sidecar-size" "bytes=65"
+          test "$(wc -c < "$review_sidecar")" -eq 65
+          prepare_predicate "review-evidence-sidecar-content" "sha256=$actual_review_sha256"
+          test "$(tr -d '\n' < "$review_sidecar")" = "$actual_review_sha256"
 
           check_equal "runner-image-os" "ubuntu24" "${ImageOS:-}"
           check_nonempty "runner-image-version" "${ImageVersion:-}"
@@ -1290,6 +1300,21 @@ jobs:
           test "$actual_package_provenance_sha256" = \
             "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256"
           bash scripts/verify_vitest_package_provenance.sh
+          review_directory="$RUNNER_TEMP/pdd-vitest-wheel-review-evidence"
+          review_evidence="$review_directory/vitest-diagnostic-review-v1.json"
+          mkdir -m 700 "$review_directory"
+          printf '%s' "$PDD_REVIEW_EVIDENCE_B64" \
+            | base64 --decode > "$review_evidence"
+          chmod 600 "$review_evidence"
+          actual_review_sha256="$(sha256sum "$review_evidence" | awk '{print $1}')"
+          test "$actual_review_sha256" = "$PDD_REVIEW_EVIDENCE_SHA256"
+          review_sidecar="$review_evidence.sha256"
+          printf '%s\n' "$actual_review_sha256" > "$review_sidecar"
+          chmod 600 "$review_sidecar"
+          test "$(stat -c '%a' "$review_sidecar")" = 600
+          test "$(wc -c < "$review_sidecar")" -eq 65
+          test "$(tr -d '\n' < "$review_sidecar")" = "$actual_review_sha256"
+          echo "PDD_WHEEL_REVIEW_EVIDENCE_PATH=$review_evidence" >> "$GITHUB_ENV"
 
       - name: Provision identity-bound Vitest toolchain
         shell: bash

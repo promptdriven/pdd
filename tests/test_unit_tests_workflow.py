@@ -301,6 +301,51 @@ def test_vitest_no_result_workflow_binds_observation_verifier_and_lane_artifacts
     assert "Vitest termination evidence rejected" in wheel
 
 
+def test_vitest_observation_review_evidence_sidecars_are_protected_and_ordered() -> None:
+    """Both Stage A0 lanes materialize canonical review sidecars before verify."""
+    workflow = _workflow()
+    source_job = workflow["jobs"][LINUX_JOB_ID]
+    source_review_step = _named_step(
+        source_job, "Verify reviewed identity and runner provenance",
+    )
+    source_observation_step = _named_step(
+        source_job, VITEST_NO_RESULT_OBSERVATION_STEP_NAME,
+    )
+    source_review = source_review_step["run"]
+    source_observation = source_observation_step["run"]
+    wheel_job = workflow["jobs"]["package-preprocess-smoke"]
+    wheel_review_step = _named_step(
+        wheel_job, "Verify reviewed Package identity and provenance",
+    )
+    wheel_observation_step = _named_step(
+        wheel_job, "Verify installed-wheel Vitest no-result observation",
+    )
+    wheel_review = wheel_review_step["run"]
+    wheel_observation = wheel_observation_step["run"]
+    for review in (source_review, wheel_review):
+        assert 'mkdir -m 700 "$review_directory"' in review
+        assert 'chmod 600 "$review_evidence"' in review
+        assert 'review_sidecar="$review_evidence.sha256"' in review
+        assert "printf '%s\\n' \"$actual_review_sha256\" > \"$review_sidecar\"" in review
+        assert 'chmod 600 "$review_sidecar"' in review
+        assert 'test "$(stat -c \'%a\' "$review_sidecar")" = 600' in review
+        assert 'test "$(wc -c < "$review_sidecar")" -eq 65' in review
+    assert source_review.index('review_sidecar="$review_evidence.sha256"') < (
+        source_review.index('echo "PDD_REVIEW_EVIDENCE_PATH=$review_evidence"')
+    )
+    assert wheel_review.index('review_sidecar="$review_evidence.sha256"') < (
+        wheel_review.index('echo "PDD_WHEEL_REVIEW_EVIDENCE_PATH=$review_evidence"')
+    )
+    assert source_job["steps"].index(source_review_step) < source_job["steps"].index(
+        source_observation_step,
+    )
+    assert wheel_job["steps"].index(wheel_review_step) < wheel_job["steps"].index(
+        wheel_observation_step,
+    )
+    assert "--review-evidence \"$PDD_REVIEW_EVIDENCE_PATH\"" in source_observation
+    assert "--review-evidence \"$PDD_WHEEL_REVIEW_EVIDENCE_PATH\"" in wheel_observation
+
+
 def test_stage_a0_plan_uses_integrated_live_main_protected_base() -> None:
     """The executable Stage A0 plan pin must match the integrated protected main."""
     plan = (REPO_ROOT / "docs/global_sync_resolution_plan.md").read_text(
