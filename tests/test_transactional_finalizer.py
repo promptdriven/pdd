@@ -104,6 +104,26 @@ def test_same_root_wrong_module_code_is_rejected_without_discovery(tmp_path: Pat
         )
 
 
+def test_aggregate_new_state_payload_limit_fails_before_publication(tmp_path: Path) -> None:
+    """Two individually valid records cannot exceed the transaction budget."""
+    meta = tmp_path / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    report = meta / "sample_python_run.json"
+    fingerprint = meta / "sample_python.json"
+    old_report, old_fingerprint = b'{"old": "report"}\n', b'{"old": "fingerprint"}\n'
+    report.write_bytes(old_report)
+    fingerprint.write_bytes(old_fingerprint)
+    payload = {"payload": "x" * (5 * 1024 * 1024)}
+
+    with pytest.raises(FingerprintFinalizeError, match="aggregate"):
+        with AtomicStateUpdate("sample", "python") as state:
+            state.set_run_report(payload, report)
+            state.set_fingerprint(payload, fingerprint)
+
+    assert report.read_bytes() == old_report
+    assert fingerprint.read_bytes() == old_fingerprint
+
+
 @pytest.mark.parametrize(
     ("target", "error"),
     (
