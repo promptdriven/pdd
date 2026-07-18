@@ -96,8 +96,6 @@ def __getattr__(name: str):
     module_name, attribute = target
     value = getattr(_import_module(f".{module_name}", __package__), attribute)
     globals()[name] = value
-    if name == "templates_group":
-        cli.add_command(value, name="templates")
     return value
 
 
