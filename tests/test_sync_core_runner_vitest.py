@@ -2600,6 +2600,7 @@ def test_vitest_phase_canonicalizes_trusted_temporary_root(
     aliased_prefixes = {
         "pdd-vitest-protected-base-",
         "pdd-vitest-checked-head-",
+        "pdd-trusted-vitest-",
     }
     aliases_created = 0
 
@@ -2622,12 +2623,23 @@ def test_vitest_phase_canonicalizes_trusted_temporary_root(
     monkeypatch.setattr(
         runner_module.tempfile, "TemporaryDirectory", aliased_temporary_directory
     )
+    load_addon = runner_module._load_vitest_coordinator_addon
+
+    def load_addon_from_canonical_staging(staging_directory: Path, *args, **kwargs):
+        assert not staging_directory.is_symlink()
+        return load_addon(staging_directory, *args, **kwargs)
+
+    monkeypatch.setattr(
+        runner_module,
+        "_load_vitest_coordinator_addon",
+        load_addon_from_canonical_staging,
+    )
     root, commit = _repository(tmp_path)
 
     _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
 
     assert executions[0].outcome is EvidenceOutcome.PASS
-    assert aliases_created == 2
+    assert aliases_created == 4
 
 
 @pytest.mark.parametrize(

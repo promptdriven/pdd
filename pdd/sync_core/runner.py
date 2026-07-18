@@ -3757,7 +3757,7 @@ def _run_vitest(
     except (OSError, ValueError) as exc:
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-config", str(exc)), ()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-vitest-") as directory:
-        temporary = Path(directory)
+        temporary = Path(directory).resolve(strict=True)
         try:
             _verify_vitest_phase_toolchain(phase_toolchain)
             coordinator_addon = _load_vitest_coordinator_addon(
