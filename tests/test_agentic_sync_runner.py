@@ -3981,6 +3981,43 @@ class TestBoundedSubprocessOutputCapture:
 
     @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
     @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    def test_public_surface_evidence_survives_large_tail_for_retry(
+        self, mock_popen, _mock_exe
+    ):
+        """A structured surface failure at the start must survive a >1 MiB tail.
+
+        This exercises the real runner retry path: the tail deliberately evicts
+        the marker from stdout, while a split UTF-8 character verifies the
+        streaming decoder remains in use.  The repair parser must still see the
+        complete expected/actual detail and launch the second attempt.
+        """
+        failure = (
+            "Public surface regression for foo_python.prompt:\n"
+            "removed: <none>\n"
+            "signature_changed: f\n"
+            "output: pdd/foo.py\n"
+            "pre_surface_size: 1\n"
+            "post_surface_size: 1\n"
+            "signature_detail: {\"symbol\": \"f\", \"expected\": \"(x)\", "
+            "\"actual\": \"(x, y=None)\", \"source\": \"pdd-interface\"}\n"
+        )
+        flood = "".join(
+            f"trailing {index} {'é' * 180}\n"
+            for index in range(STDOUT_CAPTURE_LINE_LIMIT + 250)
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stdout_text=failure + flood, stderr_text="", exit_code=1),
+            _make_mock_popen(stdout_text="Overall status: Success\n", stderr_text="", exit_code=0),
+        ]
+
+        runner = self._make_runner()
+        success, _cost, error = runner._sync_one_module("foo")
+
+        assert success, error
+        assert mock_popen.call_count == 2
+
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
     def test_failed_child_stdout_capture_is_bounded(
         self, mock_popen, _mock_exe
     ):
