@@ -525,6 +525,14 @@ def test_release_video_visual_safety_allows_local_physical_shell_materials(
         "A physical shell rests under a lantern, while another lamp presents its output as diffuse light.",
         "A physical shell rests under a lantern as a nearby lamp presents its output as diffuse light.",
         "A physical shell surrounds an orb and a nearby lantern displays its output as blue light.",
+        "A physical shell is matte, while a nearby lamp presents its output as blue light.",
+        "A physical shell has concentric rings, and another lamp displays output as diffuse light.",
+        "A physical shell is translucent and a nearby lantern displays its output as blue light.",
+        "A physical shell is beside a sculpture that displays its output as diffuse light.",
+        "A physical shell with concentric rings rests beside a lamp that displays output as diffuse light.",
+        "A physical shell is matte: a lamp displays output as diffuse light.",
+        "A shell that shows a prompt-shaped ornament surrounds an orb.",
+        "A physical shell shows a prompt-like glow around the package cube.",
     ],
 )
 def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_homonyms(
@@ -592,6 +600,16 @@ def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_ho
         "A shell lists files.",
         "A shell shows filenames.",
         "A shell transcript appears.",
+        "A shell that lists files appears.",
+        "A shell which waits for user input appears.",
+        "A shell that awaits keyboard input appears.",
+        "A shell that shows file names appears.",
+        "A shell that displays files appears.",
+        "A shell which lists a directory appears.",
+        "A shell which renders build output appears.",
+        "A Bash transcript appears in the foreground.",
+        "A Bash directory listing appears in the foreground.",
+        "A Bash cursor appears in the foreground.",
     ],
 )
 def test_release_video_visual_safety_rejects_technical_surface_after_punctuation(
