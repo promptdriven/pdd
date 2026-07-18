@@ -496,8 +496,12 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
     # ── Pytest chunk ──────────────────────────────────────────────────
     if [ "${PDD_BATCH_ENABLE_PYTEST_CLOUD_E2E:-}" != "1" ]; then
         export PDD_FORCE_LOCAL=1
+        # Unit-test shards must not inherit the release lane's provider-bound
+        # default model; many tests intentionally load tiny mock catalogs that
+        # reject cross-provider surrogate matches fail-closed.
+        unset PDD_MODEL_DEFAULT
         unset PDD_JWT_TOKEN
-        echo "=== Pytest shard forced local: PDD_FORCE_LOCAL=1, PDD_JWT_TOKEN unset ==="
+        echo "=== Pytest shard forced local: PDD_FORCE_LOCAL=1, PDD_MODEL_DEFAULT/PDD_JWT_TOKEN unset ==="
     fi
 
     CHUNK_INDEX="${TASK_INDEX}"

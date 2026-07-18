@@ -198,6 +198,36 @@ def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
     monkeypatch.setattr(verification, "read_git_blob", protected_read)
 
 
+def _skip_if_required_git_history_missing(root: Path, *refs: str) -> None:
+    """Skip exact-base assertions when the checkout lacks the required commits."""
+    git_dir = subprocess.run(
+        ["git", "rev-parse", "--git-dir"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    missing_refs = list(refs)
+    if git_dir.returncode == 0:
+        missing_refs = [
+            ref
+            for ref in refs
+            if subprocess.run(
+                ["git", "cat-file", "-e", f"{ref}^{{commit}}"],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+            ).returncode
+            != 0
+        ]
+    if missing_refs:
+        pytest.skip(
+            "requires local git history for #1989 exact-base verification: "
+            + ", ".join(missing_refs)
+        )
+
+
 def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     """The committed PDD tree has a non-waived protected inventory partition."""
     assert EXPECTED_PATH.is_file(), "missing protected expected-managed registry"
@@ -651,6 +681,11 @@ def test_bootstrap_install_cannot_change_active_rotation_authority(
 
 def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     """The #1989 transition table must load a complete exact-base profile set."""
+    _skip_if_required_git_history_missing(
+        ROOT,
+        PDD_1989_ACTUAL_BASE,
+        PDD_1989_ACTUAL_HEAD,
+    )
     manifest = build_unit_manifest(
         ROOT,
         base_ref=PDD_1989_ACTUAL_BASE,

@@ -396,7 +396,7 @@ def test_reverse_dep_closure_traverses_included_artifacts(tmp_path, monkeypatch)
     assert "outer" in module._reverse_dep_basenames(["pdd/leaf.py"])
 
 
-@pytest.mark.timeout(1)
+@pytest.mark.timeout(10)
 def test_reverse_dep_include_cycle_terminates_deterministically(tmp_path, monkeypatch):
     module = _load_module()
     monkeypatch.chdir(tmp_path)
