@@ -633,9 +633,13 @@ steps:
     exact_repository_sha: "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
     contract_rebaseline_recorded: true
     validation_commands:
-      - "python -m pdd.sync_core.extraction_manifest_verifier --manifest docs/global_sync_extraction_manifest.md --diagnostic-base 39776aa9bb027c638812a01b8dabbe03cab92f64 --diagnostic-head d334266680881cbda59de4ecd4df967c92159fa7 --protected-main e7735e0f35a0915707142bfd4c767df59f8c3b9e --require-complete-net-diff --require-disjoint-classifications already-merged-prerequisite,release-required-delta,excluded-diagnostic --require-fresh-main-release-prs --require-complete-review --output \"$RUNNER_TEMP/extraction-manifest.json\""
       - "git diff --name-status 39776aa9bb027c638812a01b8dabbe03cab92f64..d334266680881cbda59de4ecd4df967c92159fa7"
-      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --repository-sha 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 --output \"$RUNNER_TEMP/pdd-adapter-demand.json\" --require-exact-validators pytest --require-no-unknown-adapters"
+      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --profile-evidence-source-sha 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 --protected-main-sha e7735e0f35a0915707142bfd4c767df59f8c3b9e --profiles-sha256 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6 --output \"$RUNNER_TEMP/pdd-adapter-demand.json\" --require-exact-validators pytest --require-no-unknown-adapters"
+    planned_future_evidence:
+      extraction_manifest_verifier:
+        status: planned-non-executable
+        command: "python -m pdd.sync_core.extraction_manifest_verifier --manifest docs/global_sync_extraction_manifest.md --diagnostic-base 39776aa9bb027c638812a01b8dabbe03cab92f64 --diagnostic-head d334266680881cbda59de4ecd4df967c92159fa7 --protected-main e7735e0f35a0915707142bfd4c767df59f8c3b9e --require-complete-net-diff --require-disjoint-classifications already-merged-prerequisite,release-required-delta,excluded-diagnostic --require-fresh-main-release-prs --require-complete-review --output \"$RUNNER_TEMP/extraction-manifest.json\""
+        blocker: "Not implemented in this cycle; it is planned future evidence and cannot prove gate 1."
     required_predicate:
       diagnostic_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
       diagnostic_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
@@ -651,13 +655,16 @@ steps:
       release_required_deltas_mapped_to_fresh_main_prs: true
       excluded_diagnostics_absent_from_release_prs: true
       complete_release_net_diff_reviewed: true
-      pdd_adapter_demand_repository_sha_matches: true
+      adapter_demand_profile_evidence_source_sha_matches: true
+      adapter_demand_protected_main_sha_matches: true
       pdd_demanded_validator_ids: [pytest]
       unknown_pdd_adapter_ids: 0
     artifact_check_urls: []
     local_artifact_evidence:
       adapter_demand_artifact: "docs/global_sync_pdd_adapter_demand.json"
-      adapter_demand_source_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
+      adapter_demand_schema_version: 2
+      adapter_demand_profile_evidence_source_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
+      adapter_demand_protected_main_sha: "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
       adapter_demand_registry_sha256: "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
       extraction_manifest: "docs/global_sync_extraction_manifest.md"
       local_sol_review_status: "approved-artifacts-only; no approval is asserted for this rebaseline commit"
@@ -686,6 +693,7 @@ steps:
       - "pytest -q tests/test_sync_core_artifact_provenance.py tests/test_sync_core_lifecycle.py -k 'candidate or released or credential or environment'"
       - "python -m pdd.sync_core.intermediate_certificate_verifier --certificate \"$PDD_INTERMEDIATE_CERTIFICATE\" --repository-sha \"$PDD_SHA\" --require-named-included-units --require-named-excluded-units --require-denominator --require-global-completion-false --forbid-gate-satisfaction 6,10"
     required_predicate:
+      ledger_generator_and_protected_drift_check_pass: true
       diagnostic_pr_used_as_release_vehicle: false
       release_changes_extracted_from_live_main: true
       complete_release_net_diff_independently_reviewed: true
@@ -710,7 +718,10 @@ steps:
       intermediate_certificate_satisfies_gate_10: false
     artifact_check_urls: []
     predicate_result: "No protected checker release is authorized."
-    blocker: "Complete gate-1 live-main rebaseline and extract only the pytest-only checker release deltas that are absent from protected main. #1995 is frozen diagnostic evidence and must not merge as the release vehicle."
+    blocker: "Gate 2 is blocked first on the pending deterministic ledger generator and protected drift check, then on complete gate-1 review/hosted evidence and the pytest-only fresh-main extraction. #1995 is frozen diagnostic evidence and must not merge as the release vehicle."
+    prerequisite_blockers:
+      ledger_generator: "pending; regenerate the ledger from the ratified plan before checker release evidence is accepted"
+      protected_drift_check: "pending; fail protected validation when regenerated ledger bytes differ"
     owning_pr: null
     diagnostic_evidence_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 3
@@ -764,16 +775,17 @@ steps:
       released: pending
       deployed: pending
       certified: pending
-    exact_repository_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
+    exact_repository_sha: "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
     failure_baseline_sha: "b09b6bef2c8c4bee762965be463527cd0b050154"
     diagnostic_head_sha: "4bba47d60e03093707962712334e7340734a84a4"
     current_stage: "pdd-adapter-demand-matrix"
     cause_red_status: frozen-diagnostic
     validation_commands:
-      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --repository-sha 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 --profiles-sha256 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6 --output \"$RUNNER_TEMP/pdd-adapter-demand.json\" --require-exact-validators pytest --require-no-unknown-adapters"
+      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --profile-evidence-source-sha 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 --protected-main-sha e7735e0f35a0915707142bfd4c767df59f8c3b9e --profiles-sha256 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6 --output \"$RUNNER_TEMP/pdd-adapter-demand.json\" --require-exact-validators pytest --require-no-unknown-adapters"
       - "pytest -q tests/test_sync_core_runner_pytest.py -k 'collected or executed or plugin or skip or xfail or deselect or support'"
     required_predicate:
-      pdd_repository_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
+      pdd_repository_sha: "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
+      pdd_profile_evidence_source_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
       pdd_profile_registry_sha256: "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
       pdd_profile_count: 468
       pdd_machine_obligation_profile_count: 1
@@ -788,8 +800,8 @@ steps:
       undemanded_universal_adapters_may_be_deferred: true
       frozen_diagnostic_required_for_gate_pass: false
     artifact_check_urls: []
-    predicate_result: "Protected PDD profiles demand exactly pytest. No active PDD profile demands Vitest, Jest, or Playwright. The active gate is PDD-only until an exact-SHA pdd_cloud protected registry exists."
-    blocker: "Generate and review the exact-SHA PDD adapter-demand artifact and prove the pytest adapter's complete collection/execution contract."
+    predicate_result: "The canonical PDD-only adapter-demand artifact binds immutable profile evidence source 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 and protected main e7735e0f35a0915707142bfd4c767df59f8c3b9e, requiring byte-identical registry digest 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6. Protected PDD profiles demand exactly pytest; no active PDD profile demands Vitest, Jest, or Playwright. The active gate is PDD-only until an exact-SHA pdd_cloud protected registry exists."
+    blocker: "Review the dual-SHA exact adapter-demand artifact and prove the pytest adapter's complete collection/execution contract; pdd_cloud's protected registry remains absent."
     owning_pr: null
     archived_validation_commands:
       - "pytest -q tests/test_sync_core_runner_pytest.py tests/test_sync_core_runner_vitest.py tests/test_sync_core_supervisor.py"

@@ -16,7 +16,8 @@ from typing import Any, Sequence
 
 PROFILE_PATH = PurePosixPath(".pdd/verification-profiles.json")
 REPOSITORY_ID_PATH = PurePosixPath(".pdd/repository-id")
-PROTECTED_REPOSITORY_SHA = "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
+PROFILE_EVIDENCE_SOURCE_SHA = "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
+PROTECTED_MAIN_SHA = "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
 PROTECTED_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 PROTECTED_PROFILES_SHA256 = (
     "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
@@ -69,24 +70,43 @@ def canonical_json(payload: dict[str, Any]) -> bytes:
 
 def build_adapter_demand(
     root: Path,
-    repository_sha: str,
+    profile_evidence_source_sha: str,
+    protected_main_sha: str,
     profiles_path: PurePosixPath = PROFILE_PATH,
     profiles_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Build the exact protected PDD machine-adapter demand artifact."""
-    _validate_inputs(repository_sha, profiles_path, profiles_sha256)
-    resolved_sha = _resolve_git_commit(root, repository_sha)
-    if resolved_sha != repository_sha or resolved_sha != PROTECTED_REPOSITORY_SHA:
-        raise AdapterDemandError("repository SHA does not match the protected registry")
-    profile_bytes = _read_git_regular_blob(root, resolved_sha, profiles_path)
-    if profile_bytes is None:
+    """Build exact adapter demand only when source and protected main agree."""
+    _validate_inputs(
+        profile_evidence_source_sha, protected_main_sha, profiles_path, profiles_sha256
+    )
+    if profile_evidence_source_sha != PROFILE_EVIDENCE_SOURCE_SHA:
+        raise AdapterDemandError("profile evidence source SHA does not match")
+    if protected_main_sha != PROTECTED_MAIN_SHA:
+        raise AdapterDemandError("protected main SHA does not match")
+    resolved_source_sha = _resolve_git_commit(root, profile_evidence_source_sha)
+    resolved_main_sha = _resolve_git_commit(root, protected_main_sha)
+    if resolved_source_sha != profile_evidence_source_sha:
+        raise AdapterDemandError("profile evidence source SHA does not match")
+    if resolved_main_sha != protected_main_sha:
+        raise AdapterDemandError("protected main SHA does not match")
+    source_profile_bytes = _read_git_regular_blob(
+        root, resolved_source_sha, profiles_path
+    )
+    main_profile_bytes = _read_git_regular_blob(root, resolved_main_sha, profiles_path)
+    if source_profile_bytes is None or main_profile_bytes is None:
         raise AdapterDemandError("protected profile registry is missing or not regular")
-    registry_digest = hashlib.sha256(profile_bytes).hexdigest()
+    if source_profile_bytes != main_profile_bytes:
+        raise AdapterDemandError(
+            "protected-main profile registry differs from immutable evidence source"
+        )
+    registry_digest = hashlib.sha256(source_profile_bytes).hexdigest()
     expected_digest = profiles_sha256 or PROTECTED_PROFILES_SHA256
     if registry_digest != expected_digest or registry_digest != PROTECTED_PROFILES_SHA256:
         raise AdapterDemandError("protected profile registry digest does not match")
-    repository_id = _read_repository_id(root, resolved_sha)
-    profiles = _parse_profiles(profile_bytes)
+    repository_id = _read_repository_id(root, resolved_source_sha)
+    if _read_repository_id(root, resolved_main_sha) != repository_id:
+        raise AdapterDemandError("protected repository identity differs from evidence source")
+    profiles = _parse_profiles(source_profile_bytes)
     if len(profiles) != EXPECTED_PROFILE_COUNT:
         raise AdapterDemandError("profile count does not match")
     summary = _summarize_profiles(profiles)
@@ -100,8 +120,9 @@ def build_adapter_demand(
         "profile_count": len(profiles),
         "registry_sha256": registry_digest,
         "repository_id": repository_id,
-        "repository_sha": resolved_sha,
-        "schema_version": 1,
+        "profile_evidence_source_sha": resolved_source_sha,
+        "protected_main_sha": resolved_main_sha,
+        "schema_version": 2,
         "unknown_demanded_adapters": list(summary.unknown_adapters),
     }
 
@@ -118,11 +139,18 @@ class _DemandSummary:
 
 
 def _validate_inputs(
-    repository_sha: str, profiles_path: PurePosixPath, profiles_sha256: str | None
+    profile_evidence_source_sha: str,
+    protected_main_sha: str,
+    profiles_path: PurePosixPath,
+    profiles_sha256: str | None,
 ) -> None:
     """Reject mutable paths and malformed protected identities."""
-    if repository_sha != repository_sha.lower() or _SHA1.fullmatch(repository_sha) is None:
-        raise AdapterDemandError("repository SHA must be a lowercase full SHA-1")
+    for name, value in (
+        ("profile evidence source SHA", profile_evidence_source_sha),
+        ("protected main SHA", protected_main_sha),
+    ):
+        if value != value.lower() or _SHA1.fullmatch(value) is None:
+            raise AdapterDemandError(f"{name} must be a lowercase full SHA-1")
     if profiles_path != PROFILE_PATH:
         raise AdapterDemandError("PDD profile registry path does not match")
     if profiles_sha256 is not None and (
@@ -340,7 +368,8 @@ def _parse_arguments() -> argparse.Namespace:
     """Parse the ledger-controlled command shape."""
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("--pdd-profiles", required=True)
-    parser.add_argument("--repository-sha", required=True)
+    parser.add_argument("--profile-evidence-source-sha", required=True)
+    parser.add_argument("--protected-main-sha", required=True)
     parser.add_argument("--profiles-sha256")
     parser.add_argument("--output", type=_output_path, required=True)
     parser.add_argument("--require-exact-validators", nargs="+", default=[])
@@ -356,7 +385,8 @@ def main() -> None:
         _remove_output(arguments.output)
         demand = build_adapter_demand(
             Path.cwd(),
-            arguments.repository_sha,
+            arguments.profile_evidence_source_sha,
+            arguments.protected_main_sha,
             PurePosixPath(arguments.pdd_profiles),
             arguments.profiles_sha256,
         )

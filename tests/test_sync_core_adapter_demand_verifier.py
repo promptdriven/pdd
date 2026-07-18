@@ -13,8 +13,9 @@ from pdd.sync_core.adapter_demand_verifier import (
     AdapterDemandError,
     EXPECTED_MACHINE_OBLIGATION_IDS,
     EXPECTED_MACHINE_VALIDATOR_IDS,
+    PROFILE_EVIDENCE_SOURCE_SHA,
     PROTECTED_PROFILES_SHA256,
-    PROTECTED_REPOSITORY_SHA,
+    PROTECTED_MAIN_SHA,
     PROFILE_PATH,
     _parse_profiles,
     _summarize_profiles,
@@ -31,7 +32,8 @@ def test_adapter_demand_protected_registry_matches_committed_artifact() -> None:
     """The committed artifact is the exact canonical protected-Git result."""
     demand = build_adapter_demand(
         ROOT,
-        PROTECTED_REPOSITORY_SHA,
+        PROFILE_EVIDENCE_SOURCE_SHA,
+        PROTECTED_MAIN_SHA,
         PROFILE_PATH,
         PROTECTED_PROFILES_SHA256,
     )
@@ -41,6 +43,8 @@ def test_adapter_demand_protected_registry_matches_committed_artifact() -> None:
     assert demand["machine_validator_ids"] == list(EXPECTED_MACHINE_VALIDATOR_IDS)
     assert demand["machine_obligation_ids"] == list(EXPECTED_MACHINE_OBLIGATION_IDS)
     assert not demand["unknown_demanded_adapters"]
+    assert demand["profile_evidence_source_sha"] == PROFILE_EVIDENCE_SOURCE_SHA
+    assert demand["protected_main_sha"] == PROTECTED_MAIN_SHA
     assert ARTIFACT.read_bytes() == canonical_json(demand)
 
 
@@ -54,8 +58,10 @@ def test_adapter_demand_cli_writes_exact_canonical_artifact(tmp_path: Path) -> N
             "pdd.sync_core.adapter_demand_verifier",
             "--pdd-profiles",
             ".pdd/verification-profiles.json",
-            "--repository-sha",
-            PROTECTED_REPOSITORY_SHA,
+            "--profile-evidence-source-sha",
+            PROFILE_EVIDENCE_SOURCE_SHA,
+            "--protected-main-sha",
+            PROTECTED_MAIN_SHA,
             "--profiles-sha256",
             PROTECTED_PROFILES_SHA256,
             "--output",
@@ -86,10 +92,12 @@ def test_adapter_demand_cli_failure_removes_preseeded_output_and_temp_files(
             "pdd.sync_core.adapter_demand_verifier",
             "--pdd-profiles",
             ".pdd/verification-profiles.json",
-            "--repository-sha",
-            PROTECTED_REPOSITORY_SHA,
+            "--profile-evidence-source-sha",
+            PROFILE_EVIDENCE_SOURCE_SHA,
+            "--protected-main-sha",
+            "0" * 40,
             "--profiles-sha256",
-            "0" * 64,
+            PROTECTED_PROFILES_SHA256,
             "--output",
             str(output),
             "--require-exact-validators",
@@ -102,6 +110,7 @@ def test_adapter_demand_cli_failure_removes_preseeded_output_and_temp_files(
         text=True,
     )
     assert result.returncode == 1
+    assert "protected main SHA does not match" in result.stderr
     assert not output.exists()
     assert not list(tmp_path.iterdir())
 
@@ -149,8 +158,10 @@ def test_adapter_demand_rejects_abbreviated_output_without_invalidating_its_valu
             "pdd.sync_core.adapter_demand_verifier",
             "--pdd-profiles",
             ".pdd/verification-profiles.json",
-            "--repository-sha",
-            PROTECTED_REPOSITORY_SHA,
+            "--profile-evidence-source-sha",
+            PROFILE_EVIDENCE_SOURCE_SHA,
+            "--protected-main-sha",
+            PROTECTED_MAIN_SHA,
             "--output",
             str(valid_output),
             "--out",
@@ -180,8 +191,10 @@ def test_adapter_demand_does_not_invalidate_output_tokens_after_double_dash(
             "pdd.sync_core.adapter_demand_verifier",
             "--pdd-profiles",
             ".pdd/verification-profiles.json",
-            "--repository-sha",
-            PROTECTED_REPOSITORY_SHA,
+            "--profile-evidence-source-sha",
+            PROFILE_EVIDENCE_SOURCE_SHA,
+            "--protected-main-sha",
+            PROTECTED_MAIN_SHA,
             "--",
             "--output",
             str(post_boundary_output),
@@ -219,8 +232,10 @@ def test_adapter_demand_rejects_dash_prefixed_outputs_without_deletion(
             "adapter-demand-verifier",
             "--pdd-profiles",
             ".pdd/verification-profiles.json",
-            "--repository-sha",
-            PROTECTED_REPOSITORY_SHA,
+            "--profile-evidence-source-sha",
+            PROFILE_EVIDENCE_SOURCE_SHA,
+            "--protected-main-sha",
+            PROTECTED_MAIN_SHA,
             *output_arguments,
         ],
     )
@@ -239,8 +254,10 @@ def test_adapter_demand_cli_rejects_required_validator_mismatch(tmp_path: Path) 
             "pdd.sync_core.adapter_demand_verifier",
             "--pdd-profiles",
             ".pdd/verification-profiles.json",
-            "--repository-sha",
-            PROTECTED_REPOSITORY_SHA,
+            "--profile-evidence-source-sha",
+            PROFILE_EVIDENCE_SOURCE_SHA,
+            "--protected-main-sha",
+            PROTECTED_MAIN_SHA,
             "--output",
             str(tmp_path / "should-not-exist.json"),
             "--require-exact-validators",
@@ -325,10 +342,40 @@ def test_adapter_demand_rejects_unpinned_digest() -> None:
     with pytest.raises(AdapterDemandError, match="digest does not match"):
         build_adapter_demand(
             ROOT,
-            PROTECTED_REPOSITORY_SHA,
+            PROFILE_EVIDENCE_SOURCE_SHA,
+            PROTECTED_MAIN_SHA,
             PROFILE_PATH,
             "0" * 64,
         )
+
+
+def test_adapter_demand_rejects_protected_main_profile_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Divergent protected-main profile bytes cannot produce trusted demand."""
+    root = tmp_path / "repository"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "verifier@example.com")
+    _git(root, "config", "user.name", "Verifier Test")
+    profile_bytes = json.dumps(_human_profile_payload(), sort_keys=True).encode("utf-8")
+    policy = root / ".pdd" / "verification-profiles.json"
+    policy.parent.mkdir()
+    policy.write_bytes(profile_bytes)
+    repository_id = "11111111-1111-1111-1111-111111111111"
+    (root / ".pdd" / "repository-id").write_text(repository_id, encoding="ascii")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "immutable profile evidence source")
+    source_sha = _git(root, "rev-parse", "HEAD")
+    policy.write_bytes(profile_bytes + b"\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "divergent protected main")
+    main_sha = _git(root, "rev-parse", "HEAD")
+    _configure_minimal_protected_registry(
+        monkeypatch, source_sha, main_sha, profile_bytes, repository_id
+    )
+    with pytest.raises(AdapterDemandError, match="differs from immutable evidence"):
+        build_adapter_demand(root, source_sha, main_sha, PROFILE_PATH)
 
 
 def test_adapter_demand_ignores_replace_ref_for_repository_identity(
@@ -357,19 +404,10 @@ def test_adapter_demand_ignores_replace_ref_for_repository_identity(
     forged_sha = _git(root, "rev-parse", "HEAD")
     _git(root, "replace", protected_sha, forged_sha)
     assert _git(root, "show", f"{protected_sha}:.pdd/repository-id") == forged_id
-    monkeypatch.setattr(adapter_demand_verifier, "PROTECTED_REPOSITORY_SHA", protected_sha)
-    monkeypatch.setattr(adapter_demand_verifier, "PROTECTED_REPOSITORY_ID", expected_id)
-    monkeypatch.setattr(
-        adapter_demand_verifier,
-        "PROTECTED_PROFILES_SHA256",
-        hashlib.sha256(profile_bytes).hexdigest(),
+    _configure_minimal_protected_registry(
+        monkeypatch, protected_sha, protected_sha, profile_bytes, expected_id
     )
-    monkeypatch.setattr(adapter_demand_verifier, "EXPECTED_PROFILE_COUNT", 1)
-    monkeypatch.setattr(adapter_demand_verifier, "EXPECTED_MACHINE_PROFILE_COUNT", 0)
-    monkeypatch.setattr(adapter_demand_verifier, "EXPECTED_HUMAN_ONLY_PROFILE_COUNT", 1)
-    monkeypatch.setattr(adapter_demand_verifier, "EXPECTED_MACHINE_VALIDATOR_IDS", ())
-    monkeypatch.setattr(adapter_demand_verifier, "EXPECTED_MACHINE_OBLIGATION_IDS", ())
-    demand = build_adapter_demand(root, protected_sha, PROFILE_PATH)
+    demand = build_adapter_demand(root, protected_sha, protected_sha, PROFILE_PATH)
     assert demand["repository_id"] == expected_id
 
 
@@ -382,6 +420,29 @@ def _git(root: Path, *arguments: str) -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
+
+
+def _configure_minimal_protected_registry(
+    monkeypatch: pytest.MonkeyPatch,
+    source_sha: str,
+    main_sha: str,
+    profile_bytes: bytes,
+    repository_id: str,
+) -> None:
+    """Bind the verifier's immutable expectations to one local test repository."""
+    monkeypatch.setattr(adapter_demand_verifier, "PROFILE_EVIDENCE_SOURCE_SHA", source_sha)
+    monkeypatch.setattr(adapter_demand_verifier, "PROTECTED_MAIN_SHA", main_sha)
+    monkeypatch.setattr(adapter_demand_verifier, "PROTECTED_REPOSITORY_ID", repository_id)
+    monkeypatch.setattr(
+        adapter_demand_verifier,
+        "PROTECTED_PROFILES_SHA256",
+        hashlib.sha256(profile_bytes).hexdigest(),
+    )
+    monkeypatch.setattr(adapter_demand_verifier, "EXPECTED_PROFILE_COUNT", 1)
+    monkeypatch.setattr(adapter_demand_verifier, "EXPECTED_MACHINE_PROFILE_COUNT", 0)
+    monkeypatch.setattr(adapter_demand_verifier, "EXPECTED_HUMAN_ONLY_PROFILE_COUNT", 1)
+    monkeypatch.setattr(adapter_demand_verifier, "EXPECTED_MACHINE_VALIDATOR_IDS", ())
+    monkeypatch.setattr(adapter_demand_verifier, "EXPECTED_MACHINE_OBLIGATION_IDS", ())
 
 
 def _human_profile_payload() -> dict[str, object]:
