@@ -11485,3 +11485,61 @@ def test_issue_1724_whitespace_only_directive_is_inactive(
     mock_local_generator_fixture.assert_not_called()
     # And no repair-directive block was injected into the prompt.
     assert "<architecture_repair_directive>" not in (captured.get("new_prompt") or "")
+
+
+class TestIssue1900LeadR5InterfaceBoundary:
+    """Reproduced production boundaries fixed in lead round five."""
+
+    @staticmethod
+    def _prompt(functions=None, classes=None, constants=None, enums=None, dataclasses=None):
+        module = {"functions": functions or []}
+        for key, value in (("classes", classes), ("constants", constants),
+                           ("enums", enums), ("dataclasses", dataclasses)):
+            if value is not None:
+                module[key] = value
+        return '<pdd-interface>' + json.dumps({"type": "module", "module": module}) + '</pdd-interface>'
+
+    @pytest.mark.parametrize("source,prompt", [
+        ("f = lambda: None\n", _prompt.__func__(functions=[{"name": "f", "signature": "()"}])),
+        ("VERSION = 'v2'\n", _prompt.__func__(constants=[{"name": "VERSION", "value": "v1"}])),
+        ("from enum import Enum\nclass Status(Enum):\n    WRONG = 1\n", _prompt.__func__(enums=[{"name": "Status", "members": ["READY"]}])),
+        ("class Record:\n    value: str\n", _prompt.__func__(dataclasses=[{"name": "Record", "fields": ["value"]}])),
+    ])
+    def test_existing_invalid_data_declarations_are_not_grandfathered(self, source, prompt):
+        from pdd.code_generator_main import PublicSurfaceRegressionError, _verify_public_surface_regression
+        with pytest.raises(PublicSurfaceRegressionError):
+            _verify_public_surface_regression(source, source, "module_python.prompt", "pdd/module.py", "python", prompt)
+
+    def test_first_generation_rejects_undeclared_top_level_and_nested_exports(self):
+        from pdd.code_generator_main import PublicSurfaceRegressionError, _verify_public_surface_regression
+        prompt = self._prompt(functions=[{"name": "f", "signature": "()"}], classes=[{"name": "C"}])
+        source = "__all__ = ['f', 'G']\ndef f(): pass\ndef g(): pass\nclass G: pass\nclass C:\n    def stop(self): pass\n"
+        with pytest.raises(PublicSurfaceRegressionError) as raised:
+            _verify_public_surface_regression(None, source, "module_python.prompt", "pdd/module.py", "python", prompt)
+        assert {"g", "G", "C.stop"}.issubset(set(raised.value.changed_signatures))
+
+    def test_legacy_callable_body_change_is_allowed_but_abi_change_is_not(self):
+        from pdd.code_generator_main import PublicSurfaceRegressionError, _verify_public_surface_regression
+        prompt = self._prompt(functions=[{"name": "f", "signature": "(x: int) -> int"}])
+        old = "def f(x):\n    return x\n"
+        _verify_public_surface_regression(old, "def f(x):\n    return x.strip()\n", "module_python.prompt", "pdd/module.py", "python", prompt)
+        with pytest.raises(PublicSurfaceRegressionError):
+            _verify_public_surface_regression(old, "async def f(x):\n    return x\n", "module_python.prompt", "pdd/module.py", "python", prompt)
+
+    @pytest.mark.parametrize("signature,source", [
+        ("(...) -> str", "def f(x) -> int:\n    return 1\n"),
+        ("async def f(...) -> dict[str, int]", "def f(x) -> dict[str, str]:\n    return {}\n"),
+    ])
+    def test_presence_only_parameters_keep_async_and_return_contract(self, signature, source):
+        from pdd.code_generator_main import PublicSurfaceRegressionError, _verify_public_surface_regression
+        prompt = self._prompt(functions=[{"name": "f", "signature": signature}])
+        with pytest.raises(PublicSurfaceRegressionError):
+            _verify_public_surface_regression(None, source, "module_python.prompt", "pdd/module.py", "python", prompt)
+
+    def test_invalid_async_placeholder_and_type_ellipses_are_distinguished(self):
+        from pdd.code_generator_main import PromptInterfaceContractError, _verify_public_surface_regression
+        invalid = self._prompt(functions=[{"name": "f", "signature": "async (...) -> str"}])
+        with pytest.raises(PromptInterfaceContractError):
+            _verify_public_surface_regression(None, "async def f() -> str:\n    return ''\n", "module_python.prompt", "pdd/module.py", "python", invalid)
+        valid = self._prompt(functions=[{"name": "f", "signature": "(callback: Callable[..., str]) -> tuple[str, ...]"}])
+        _verify_public_surface_regression(None, "def f(callback: Callable[..., str]) -> tuple[str, ...]:\n    return ()\n", "module_python.prompt", "pdd/module.py", "python", valid)
