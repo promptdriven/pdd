@@ -77,7 +77,9 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"(?:if|when)\s+[\w\s]+fail(?:s|ed)?\s+on\s+(?:the\s+)?"
     r"\d+(?:st|nd|rd|th)\s+attempt|"
     r"(?:if|when)\s+(?:the\s+)?\d+(?:st|nd|rd|th)\s+attempt\s+"
-    r"(?:(?:also|still)\s+)?fail(?:s|ed)?|"
+    r"(?:(?:also|still)\s+)?fail(?:s|ed)?"
+    r"(?:\s+with\s+(?:(?:a|an|the)\s+)?(?:connection\s+)?"
+    r"(?:error|exception|failure))?|"
     r"(?:if|when)\s+(?:the\s+)?(?:connection\s+)?"
     r"(?:error|exception|failure)\s+(?:still\s+)?"
     r"(?:persist(?:s|ed)?|remain(?:s|ed)?)\s+after\s+(?:the\s+)?"
@@ -87,7 +89,9 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"(?:once|when|if)\s+(?:the\s+)?max(?:imum)?\s+number\s+of\s+attempts?\s+"
     r"(?:is\s+|are\s+|has\s+been\s+)?(?:reached|exceeded|exhausted)|"
     r"(?:retry\s+)?limit\s+(?:is\s+|has\s+been\s+)?(?:reached|exceeded)|"
-    r"(?:final|last)\s+(?:retry\s+)?attempt|"
+    r"(?:final|last)\s+(?:retry\s+)?attempt"
+    r"(?:\s+(?:(?:also|still)\s+)?"
+    r"(?:fail(?:s|ed)?|encounters?|raises?|has)\b.{0,80})?|"
     r"if\s+(?:it\s+)?still\s+fail(?:s|ed)?|"
     r"when\s+(?:all\s+)?(?:retry\s+)?attempts?\s+fail|"
     r"stop\s+retrying"
@@ -95,54 +99,32 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_FALLBACK_ACTION_PATTERNS = (
-    re.compile(r"\b(?:re[- ]?)?rais(?:e|es|ed|ing)\b", re.IGNORECASE),
-    re.compile(r"\b(?:surfac|propagat)(?:e|es|ed|ing)\b", re.IGNORECASE),
-    re.compile(r"\b(?:abort|skip)(?:s|ped|ping|ed|ing)?\b", re.IGNORECASE),
-    re.compile(
-        r"\breturn(?:s|ed|ing)?\b.{0,48}\b(?:error|exception|failure)\b",
-        re.IGNORECASE | re.DOTALL,
-    ),
-    re.compile(
-        r"\blog(?:s|ged|ging)?\b.{0,48}\b(?:error|exception|failure)\b",
-        re.IGNORECASE | re.DOTALL,
-    ),
-    re.compile(
-        r"\bfail(?:s|ed|ing)?\s+with\b.{0,48}\b(?:error|exception|failure)\b",
-        re.IGNORECASE | re.DOTALL,
-    ),
-    re.compile(
-        r"\buse(?:s|d|ing)?\b.{1,64}\bas\s+(?:the\s+)?fallback\b",
-        re.IGNORECASE | re.DOTALL,
-    ),
-    re.compile(r"\b(?:fallback|fall\s+back)\s+to\b", re.IGNORECASE),
-    re.compile(r"\bfail(?:s|ed|ing)?\s+closed\b", re.IGNORECASE),
-)
-
-_RETRY_SENTENCE_PATTERN = re.compile(r"[^.!?]+(?:[.!?]+|$)", re.DOTALL)
+_RETRY_UNIT_PATTERN = re.compile(r"[^,;.!?]+(?:[,;.!?]+|$)", re.DOTALL)
 
 _RETRY_CONTINUATION_PATTERN = re.compile(
     r"\b(?:keep(?:s|ing)?|continu(?:e|es|ed|ing)|resum(?:e|es|ed|ing))\s+"
     r"(?:(?:to|with)\s+)?(?:retry(?:ing)?|retries)\b|"
     r"\btry\s+again\b|"
     r"\banother\s+(?:retry\s+)?attempt\b|"
-    r"\bcontinu(?:e|es|ed|ing)\s+(?:processing\s+)?normally\b",
+    r"\b(?:continu(?:e|es|ed|ing)|resum(?:e|es|ed|ing)|proceed(?:s|ed|ing)?)\s+"
+    r"(?:processing\s+)?normally\b",
     re.IGNORECASE,
 )
 
-_NEGATED_FALLBACK_ACTION_PATTERN = re.compile(
+_REJECTED_ACTION_PATTERN = re.compile(
     r"(?:"
-    r"\bunder\s+no\s+circumstances\b.{0,96}|"
+    r"\bunder\s+no\s+circumstances\b|"
     r"\b(?:do|does|did|must|should|shall|will|would|can|could|may|might)\s+"
-    r"not\b.{0,64}|"
-    r"\b(?:mustn|shouldn|shan|won|wouldn|can|couldn|mayn|mightn)['’]t\b.{0,64}|"
-    r"\bcannot\b.{0,64}|"
-    r"\bnot\s+(?:ever\s+|to\s+)?.{0,64}|"
-    r"\bnever\b.{0,64}|"
-    r"\bavoid(?:s|ed|ing)?\b.{0,64}|"
-    r"\bwithout\b.{0,64}|"
-    r"\brefrain(?:s|ed|ing)?\s+from\b.{0,64}"
-    r")$",
+    r"not\b|"
+    r"\b(?:mustn|shouldn|shan|won|wouldn|can|couldn|mayn|mightn)['’]t\b|"
+    r"\bcannot\b|"
+    r"\bnever\b|"
+    r"\bavoid(?:s|ed|ing)?\b|"
+    r"\bwithout\b|"
+    r"\brefrain(?:s|ed|ing)?\s+from\b|"
+    r"\bno\s+(?:error|exception|failure)\b|"
+    r"\b(?:forbidden|prohibited|disallowed|not\s+allowed|not\s+permitted)\b"
+    r")",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -152,34 +134,64 @@ _SUCCESS_RETURN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_ACTION_CONNECTOR_PATTERN = re.compile(r"\b(?:after|once|when)\b", re.IGNORECASE)
-
-_CONDITIONAL_PREFIX_PATTERN = re.compile(
-    r"^\s*(?:if|when|whenever|unless|while)\b", re.IGNORECASE
-)
-
-_ACTION_LEAD_PATTERN = re.compile(
-    r"^[\s,;:\-]*(?:(?:then|otherwise|stop\s+retrying\s+and|"
-    r"as\s+(?:a|the)\s+fallback)"
-    r"[\s,;:\-]*)?(?:"
-    r"allow(?:s|ed|ing)?\b.{0,48}\bto\s+|"
-    r"(?:(?:the|a|an|this|that)\s+)?(?:[\w`.-]+\s+){1,8}"
-    r"(?:(?:must|should|shall|will|would|can|could|may|might)"
-    r"(?:\s+be)?|(?:has|have)\s+to|is|are|be)\s+"
-    r")?$",
-    re.IGNORECASE | re.DOTALL,
-)
-
 _CONNECTIVE_ONLY_PATTERN = re.compile(
-    r"^[\s,;:.!?\-]*(?:(?:then|otherwise|as\s+(?:a|the)\s+fallback)"
-    r"[\s,;:.!?\-]*)?$",
+    r"^\s*(?:then|otherwise|as\s+(?:a|the)\s+fallback)?\s*$",
     re.IGNORECASE,
 )
 
-_CONDITION_TAIL_PATTERN = re.compile(
-    r"^\s*(?:(?:with|from|due\s+to|because\s+of)\b|"
-    r"still\s+(?:encounters?|raises?|has)\b)[^,;]{0,80}[,;]",
+_ACTION_ADVERBS = (
+    r"(?:(?:immediately|gracefully|clearly|explicitly|directly|finally)\s+)*"
+)
+_ACTION_INTRO = (
+    r"(?:(?:then|otherwise|as\s+(?:a|the)\s+fallback|stop\s+retrying\s+and)\s+)?"
+)
+_DIRECT_ACTION_PATTERNS = tuple(
+    re.compile(rf"^\s*{_ACTION_INTRO}{_ACTION_ADVERBS}{body}\s*$", re.IGNORECASE)
+    for body in (
+        r"(?:re[- ]?)?raise\b.{0,96}",
+        r"(?:surface|propagate|abort|skip)\b.{0,96}",
+        r"return\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
+        r"log\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
+        r"fail\s+with\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
+        r"use\b.{1,80}\bas\s+(?:the\s+)?fallback\b.{0,32}",
+        r"(?:fallback|fall\s+back)\s+to\b.{1,80}",
+        r"fail\s+closed\b.{0,64}",
+        r"allow\b.{1,64}\bto\s+(?:surface|propagate|abort|skip)\b.{0,64}",
+    )
+)
+_MODAL_ACTION_PATTERN = re.compile(
+    rf"^\s*{_ACTION_INTRO}(?:(?:the|a|an|this|that)\s+)?"
+    rf"(?:[\w`.-]+\s+){{1,8}}"
+    rf"(?:(?:must|should|shall|will|would|can|could|may|might)\s+"
+    rf"{_ACTION_ADVERBS}(?:be\s+{_ACTION_ADVERBS})?|"
+    rf"(?:has|have)\s+to\s+{_ACTION_ADVERBS}|(?:is|are)\s+{_ACTION_ADVERBS})"
+    r"(?:re[- ]?)?rais(?:e|ed)\b.{0,96}$|"
+    rf"^\s*{_ACTION_INTRO}(?:(?:the|a|an|this|that)\s+)?"
+    rf"(?:[\w`.-]+\s+){{1,8}}"
+    rf"(?:(?:must|should|shall|will|would|can|could|may|might)\s+"
+    rf"{_ACTION_ADVERBS}(?:be\s+{_ACTION_ADVERBS})?|"
+    rf"(?:has|have)\s+to\s+{_ACTION_ADVERBS}|(?:is|are)\s+{_ACTION_ADVERBS})"
+    r"(?:surface|propagate|abort|skip|return|log|use|fallback|fail)\b.{0,112}$",
     re.IGNORECASE | re.DOTALL,
+)
+
+_INVERSE_EXHAUSTION_PATTERN = re.compile(
+    r"^\s*(?:when|once|after)\s+(?:"
+    r"(?:the\s+)?(?:max(?:imum)?\s+)?(?:retry\s+)?(?:attempts?|retries)\s+"
+    r"(?:(?:is|are|have\s+been|has\s+been)\s+)?(?:exhausted|fail(?:s|ed)?)|"
+    r"all\s+(?:\d+\s+)?(?:retry\s+)?(?:attempts?|retries)\s+"
+    r"(?:(?:are|have\s+been)\s+)?(?:exhausted|fail(?:s|ed)?)|"
+    r"(?:the\s+)?(?:retry\s+)?limit\s+"
+    r"(?:(?:is|has\s+been)\s+)?(?:reached|exceeded|exhausted)|"
+    r"(?:the\s+)?max(?:imum)?\s+number\s+of\s+attempts?\s+"
+    r"(?:(?:is|has\s+been)\s+)?(?:reached|exceeded|exhausted)|"
+    r"(?:the\s+)?(?:connection\s+)?(?:error|exception|failure)\s+"
+    r"(?:still\s+)?(?:persists?|remains?)\s+after\s+(?:the\s+)?"
+    r"\d+(?:st|nd|rd|th)\s+(?:retry\s+)?attempt|"
+    r"(?:the\s+)?\d+(?:st|nd|rd|th)\s+(?:retry\s+)?attempt\s+"
+    r"(?:(?:also|still)\s+)?fails?"
+    r")\s*$",
+    re.IGNORECASE,
 )
 
 
@@ -222,105 +234,98 @@ def _judge_retry_bound(prompt_output: str) -> JudgmentResult:
     )
 
 
-def _retry_sentences(prompt_output: str) -> tuple[str, ...]:
-    """Split prose at terminal punctuation while retaining action continuations."""
+def _retry_units(prompt_output: str) -> tuple[str, ...]:
+    """Split prose into ordered comma, semicolon, and sentence units."""
     return tuple(
-        match.group(0).strip()
-        for match in _RETRY_SENTENCE_PATTERN.finditer(prompt_output)
-        if match.group(0).strip()
+        match.group(0).rstrip(" ,;.!?\t\r\n").strip()
+        for match in _RETRY_UNIT_PATTERN.finditer(prompt_output)
+        if match.group(0).rstrip(" ,;.!?\t\r\n").strip()
     )
 
 
 def _fallback_action_state(text: str) -> tuple[bool, bool]:
-    """Classify explicit fallback actions within one ordered text span."""
-    condition_tail = _CONDITION_TAIL_PATTERN.match(text)
-    if condition_tail:
-        text = text[condition_tail.end() :]
+    """Classify one self-contained action unit as affirmative or rejected."""
+    text = text.strip(" ,;:.!?\t\r\n")
     if _RETRY_CONTINUATION_PATTERN.search(text):
         return False, True
     if _SUCCESS_RETURN_PATTERN.search(text):
         return False, True
+    if _REJECTED_ACTION_PATTERN.search(text):
+        return False, True
 
-    actions = sorted(
-        (
-            action
-            for pattern in _FALLBACK_ACTION_PATTERNS
-            for action in pattern.finditer(text)
-        ),
-        key=lambda action: action.start(),
+    candidates = [text]
+    coordinated = re.split(r"\band\b", text, flags=re.IGNORECASE)[-1].strip()
+    if coordinated != text:
+        candidates.append(coordinated)
+    affirmative = any(
+        pattern.fullmatch(candidate)
+        for candidate in candidates
+        for pattern in (*_DIRECT_ACTION_PATTERNS, _MODAL_ACTION_PATTERN)
     )
-    if not actions:
-        return False, False
+    return affirmative, False
 
-    affirmative = False
-    for action in actions:
-        prefix = text[: action.start()]
-        if _NEGATED_FALLBACK_ACTION_PATTERN.search(prefix):
+
+def _inverse_action_state(unit: str) -> tuple[bool, bool]:
+    """Classify only a self-contained ``ACTION when EXHAUSTED`` unit."""
+    connectors = tuple(re.finditer(r"\b(?:when|once|after)\b", unit, re.IGNORECASE))
+    for connector in reversed(connectors):
+        condition = unit[connector.start() :].strip()
+        if not _INVERSE_EXHAUSTION_PATTERN.fullmatch(condition):
             continue
-        if not _ACTION_LEAD_PATTERN.fullmatch(prefix):
-            continue
-        affirmative = True
-
-    return affirmative, not affirmative
-
-
-def _has_action_before_exhaustion(sentence: str, exhaustion: re.Match[str]) -> bool:
-    """Accept explicit ``ACTION when EXHAUSTED`` grammar in one sentence."""
-
-    def has_affirmative_action(action_text: str) -> bool:
+        action_text = unit[: connector.start()].strip()
         action, rejected = _fallback_action_state(action_text)
-        if action and not rejected:
-            return True
-        continuation = re.split(r"\band\b", action_text, flags=re.IGNORECASE)[-1]
-        if continuation == action_text:
-            return False
-        action, rejected = _fallback_action_state(continuation)
-        return action and not rejected
+        return action, rejected
+    return False, False
 
-    prefix = sentence[: exhaustion.start()]
-    if re.match(r"\s*(?:after|once|when)\b", exhaustion.group(), re.IGNORECASE):
-        action_text = prefix.strip(" ,;:-")
-        if not action_text or _CONDITIONAL_PREFIX_PATTERN.match(action_text):
-            return False
-        return has_affirmative_action(action_text)
 
-    connectors = tuple(_ACTION_CONNECTOR_PATTERN.finditer(prefix))
-    if not connectors:
+def _is_immediate_contradiction(units: tuple[str, ...], index: int) -> bool:
+    """Return whether the unit immediately after an action contradicts it."""
+    if index + 1 >= len(units):
         return False
-
-    connector = connectors[-1]
-    action_text = prefix[: connector.start()].strip(" ,;:-")
-    condition_bridge = prefix[connector.end() :]
-    if not action_text or len(condition_bridge) > 80:
-        return False
-    if _CONDITIONAL_PREFIX_PATTERN.match(action_text):
-        return False
-
-    return has_affirmative_action(action_text)
+    _, rejected = _fallback_action_state(units[index + 1])
+    return rejected
 
 
 def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
     """Check that retry exhaustion has explicit fallback behavior."""
-    sentences = _retry_sentences(prompt_output)
+    units = _retry_units(prompt_output)
     has_exhaustion = False
     has_action = False
-    for index, sentence in enumerate(sentences):
-        for exhaustion in _RETRY_EXHAUSTION_PATTERN.finditer(sentence):
+    for index, unit in enumerate(units):
+        for exhaustion in _RETRY_EXHAUSTION_PATTERN.finditer(unit):
             has_exhaustion = True
-            suffix = sentence[exhaustion.end() :]
+            suffix = unit[exhaustion.end() :]
             action, rejected = _fallback_action_state(suffix)
-            if action and not rejected:
+            if (
+                action
+                and not rejected
+                and not _is_immediate_contradiction(units, index)
+            ):
                 has_action = True
                 break
-            if _has_action_before_exhaustion(sentence, exhaustion):
+            action, rejected = _inverse_action_state(unit)
+            if (
+                action
+                and not rejected
+                and not _is_immediate_contradiction(units, index)
+            ):
                 has_action = True
                 break
-            if rejected or not _CONNECTIVE_ONLY_PATTERN.fullmatch(suffix):
+            if rejected or suffix.strip():
                 continue
-            if index + 1 >= len(sentences):
+            action_index = index + 1
+            if action_index < len(units) and _CONNECTIVE_ONLY_PATTERN.fullmatch(
+                units[action_index]
+            ):
+                action_index += 1
+            if action_index >= len(units):
                 continue
-            action, rejected = _fallback_action_state(sentences[index + 1])
-            if action and not rejected:
+            action, rejected = _fallback_action_state(units[action_index])
+            if (
+                action
+                and not rejected
+                and not _is_immediate_contradiction(units, action_index)
+            ):
                 has_action = True
                 break
         if has_action:
@@ -721,6 +726,96 @@ class TestDeterministicChangeJudges:
         judgment = _judge_retry_fallback(guidance)
 
         assert not judgment.passed
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            "Log parsing error when validation fails; if retries are exhausted, "
+            "keep retrying.",
+            "If retries are exhausted, raising the exception is forbidden.",
+            "Raise no error when retries are exhausted.",
+            "If retries are exhausted, logs indicate an error.",
+            "If retries are exhausted. Raise an error. Keep retrying.",
+            "Log the parsing error when validation fails; if all retry attempts "
+            "are exhausted, keep retrying.",
+            "If all retry attempts are exhausted, raising the exception is forbidden.",
+            "If all retry attempts are exhausted, raising the exception is prohibited.",
+            "Raise no error when all retry attempts are exhausted.",
+            "If all retry attempts are exhausted, logs indicate an error.",
+            "If all retry attempts are exhausted. Raise the final error. Keep retrying.",
+            "If all retry attempts are exhausted, immediately raise no error.",
+            "If all retry attempts are exhausted, raise the final error under no circumstances.",
+            "If all retry attempts are exhausted, raise the final error without surfacing it.",
+            "If all retry attempts are exhausted, raise the final error; continue normally.",
+            "If all retry attempts are exhausted. Raise the final error. Return success.",
+            "If all retry attempts are exhausted. Raise the final error; continue retrying.",
+        ),
+    )
+    def test_retry_fallback_judge_rejects_postposed_negation_and_contradiction(
+        self, guidance: str
+    ) -> None:
+        """Negation and immediate contradictions dominate an apparent action."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            "If all retry attempts are exhausted, immediately raise the error.",
+            "If all retry attempts are exhausted, the runner must immediately raise the error.",
+            "If all retry attempts are exhausted, gracefully abort the operation.",
+            "Immediately re-raise the exception when all retry attempts are exhausted.",
+            "The runner must gracefully propagate the error once retries are exhausted.",
+            "Surface a clear error immediately after all retry attempts are exhausted.",
+            "When all retry attempts fail, immediately return an error result.",
+            "When all retry attempts fail, clearly log the final error.",
+            "When the retry limit is reached, gracefully use cached data as the fallback.",
+            "After all retries are exhausted; fall back to cached data.",
+        ),
+    )
+    def test_retry_fallback_judge_accepts_modal_and_adverbial_actions(
+        self, guidance: str
+    ) -> None:
+        """Bounded modal and adverb prefixes preserve affirmative actions."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize("action_before", (False, True))
+    @pytest.mark.parametrize("same_clause", (False, True))
+    @pytest.mark.parametrize("negated", (False, True))
+    @pytest.mark.parametrize("contradiction", (False, True))
+    def test_retry_fallback_clause_state_cross_product(
+        self,
+        action_before: bool,
+        same_clause: bool,
+        negated: bool,
+        contradiction: bool,
+    ) -> None:
+        """Pairing, order, negation, and contradiction define acceptance."""
+        action = (
+            "must not raise the final error"
+            if negated
+            else "must immediately raise the final error"
+        )
+        if same_clause and action_before:
+            guidance = f"The runner {action} when all retry attempts are exhausted."
+        elif same_clause:
+            guidance = f"When all retry attempts are exhausted, the runner {action}."
+        elif action_before:
+            guidance = f"The runner {action}. When all retry attempts are exhausted."
+        else:
+            guidance = f"When all retry attempts are exhausted. The runner {action}."
+        if contradiction:
+            guidance += " Keep retrying."
+
+        judgment = _judge_retry_fallback(guidance)
+
+        expected = (
+            not negated and not contradiction and (same_clause or not action_before)
+        )
+        assert judgment.passed is expected, guidance
 
 
 @pytest.mark.real
