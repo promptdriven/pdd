@@ -1,13 +1,14 @@
 {
   "pdd_version": "0.0.305.dev0",
-  "timestamp": "2026-07-18T04:49:51.339403+00:00",
+  "timestamp": "2026-07-18T05:09:46.784412+00:00",
   "command": "fix",
-  "prompt_hash": "aa58f300077226fa382f9461e0765957bf36ccb324fe1a9510a457f084ec5c30",
-  "code_hash": "8e9ce14e5fc1590100d9cb38ffcf16e832f2dcc7f2174a7c97de3f6676ca5d49",
+  "prompt_hash": "351f41ebd12856754027f52ff854c4ed5d4b1e787161fc1a5b6035f322e962cf",
+  "code_hash": "0044f1a2bbbfd5f2dcaf55c40fdf18a2c72cae52bb47c0f1fe9fa524509ad695",
   "example_hash": "91d357f59c2f098065e54fe78d88907dc717f3cb21845618bbfcdea421fc29b2",
   "test_hash": "d24e8900629d8fc260d163165f25de5543362e7752b2e7248c2db0d59ccf0b85",
   "test_files": {
-    "test_fingerprint_transaction.py": "d24e8900629d8fc260d163165f25de5543362e7752b2e7248c2db0d59ccf0b85"
+    "test_fingerprint_transaction.py": "d24e8900629d8fc260d163165f25de5543362e7752b2e7248c2db0d59ccf0b85",
+    "test_transactional_finalizer.py": "17f62405c2ae73ebf2fbed60de82ebbcc3a040b2f8e20d47e1ad1488fac8b53b"
   },
   "include_deps": {}
 }
