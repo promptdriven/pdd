@@ -315,6 +315,14 @@ def _declared_workspace_membership(
     )
     if prepared_patterns is None:
         return None
+    if (
+        declaration.provider
+        in (_WorkspaceProvider.NPM, _WorkspaceProvider.PNPM)
+        and "node_modules" in rel_parts
+    ):
+        # npm and pnpm package discovery both exclude dependencies, regardless
+        # of an otherwise matching workspace glob.
+        return False
     wildcards_match_dot = declaration.provider is not _WorkspaceProvider.NPM
 
     if declaration.provider is not _WorkspaceProvider.PNPM:
@@ -344,7 +352,9 @@ def _declared_workspace_membership(
                 _workspace_segments_match(
                     rel_parts[:depth],
                     segments,
-                    wildcards_match_dot=wildcards_match_dot,
+                    # npm evaluates surviving negations as ignore globs, which
+                    # include dot directories even when a positive glob does not.
+                    wildcards_match_dot=True,
                 )
                 for depth in range(1, len(rel_parts) + 1)
                 for segments in alternatives
@@ -354,10 +364,6 @@ def _declared_workspace_membership(
         return (
             positive
             and not excluded
-            and not (
-                declaration.provider is _WorkspaceProvider.NPM
-                and "node_modules" in rel_parts
-            )
         )
 
     member = False
@@ -607,6 +613,13 @@ def _ancestor_workspace_root(
                 return ancestor.resolve()
             if any(membership is None for membership in memberships):
                 return None
+        # A lexical package marker is an ownership boundary. It may authorize
+        # its direct descendants through a declaration above, but a package
+        # below it cannot skip this boundary merely because a more distant root
+        # has a glob that happens to match the deeper path. The caller climbs a
+        # proven workspace chain one package boundary at a time.
+        if os.path.lexists(ancestor / "package.json"):
+            return None
         if os.path.lexists(ancestor / "pnpm-workspace.yaml"):
             return None
         if os.path.lexists(ancestor / ".git"):
