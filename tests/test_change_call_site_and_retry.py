@@ -111,9 +111,12 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
 )
 
 _NON_EXHAUSTION_PREFIX_PATTERN = re.compile(
-    r"(?:\bbefore|\bunless|\buntil|\bprior\s+to|\bnot)\s*$",
+    r"(?:\bbefore|\bunless|\bprior\s+to|\bnot|\bexcept(?:\s+when)?|"
+    r"\b(?:fewer|less)\s+than)\s*$",
     re.IGNORECASE,
 )
+
+_UNTIL_EXHAUSTION_PREFIX_PATTERN = re.compile(r"\buntil\s*$", re.IGNORECASE)
 
 _STOP_RETRYING_EXHAUSTION_PATTERN = re.compile(
     r"(?:do\s+not|don['’]t|must\s+not|mustn['’]t)\s+"
@@ -122,7 +125,7 @@ _STOP_RETRYING_EXHAUSTION_PATTERN = re.compile(
 )
 
 _CONDITIONAL_UNIT_PATTERN = re.compile(
-    r"^\s*(?:if|when|unless|before|until|provided\s+that)\b",
+    r"^\s*(?:if|when|unless|before|until|for|on|upon|in\s+case|provided\s+that)\b",
     re.IGNORECASE,
 )
 
@@ -162,7 +165,8 @@ _SUCCESS_RETURN_PATTERN = re.compile(
 )
 
 _CONNECTIVE_ONLY_PATTERN = re.compile(
-    r"^\s*(?:then|otherwise|however|but|as\s+(?:a|the)\s+fallback)?\s*$",
+    r"^\s*(?:then|(?:and|but)\s+then|otherwise|however|but|nevertheless|"
+    r"as\s+(?:a|the)\s+fallback)?\s*$",
     re.IGNORECASE,
 )
 
@@ -321,10 +325,28 @@ def _is_immediate_contradiction(units: tuple[str, ...], index: int) -> bool:
 def _has_affirmative_exhaustion(text: str) -> bool:
     """Return whether *text* names exhaustion without negating or preposing it."""
     return any(
-        not _NON_EXHAUSTION_PREFIX_PATTERN.search(text[: match.start()])
+        _is_affirmative_exhaustion_match(text, match)
         and not _STOP_RETRYING_EXHAUSTION_PATTERN.fullmatch(match.group())
         for match in _RETRY_EXHAUSTION_PATTERN.finditer(text)
     )
+
+
+def _is_affirmative_exhaustion_match(text: str, match: re.Match[str]) -> bool:
+    """Bind one exhaustion phrase to affirmative local temporal context."""
+    prefix = text[: match.start()]
+    if _NON_EXHAUSTION_PREFIX_PATTERN.search(prefix):
+        return False
+    if _UNTIL_EXHAUSTION_PREFIX_PATTERN.search(prefix):
+        return bool(_RETRY_CONTINUATION_PATTERN.search(prefix))
+    return True
+
+
+def _previous_meaningful_unit(units: tuple[str, ...], index: int) -> str | None:
+    """Return the prior non-connective unit, if one exists."""
+    previous = index - 1
+    while previous >= 0 and _CONNECTIVE_ONLY_PATTERN.fullmatch(units[previous]):
+        previous -= 1
+    return units[previous] if previous >= 0 else None
 
 
 def _stop_exhaustion_has_retry_context(
@@ -333,9 +355,10 @@ def _stop_exhaustion_has_retry_context(
     """Reject stop-only guidance inherited from an unrelated conditional branch."""
     if unit_prefix.strip() and not _has_affirmative_exhaustion(unit_prefix):
         return False
-    if index == 0 or not _CONDITIONAL_UNIT_PATTERN.match(units[index - 1]):
+    previous = _previous_meaningful_unit(units, index)
+    if previous is None or not _CONDITIONAL_UNIT_PATTERN.match(previous):
         return True
-    return _has_affirmative_exhaustion(units[index - 1])
+    return _has_affirmative_exhaustion(previous)
 
 
 def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
@@ -346,7 +369,7 @@ def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
     for index, unit in enumerate(units):
         for exhaustion in _RETRY_EXHAUSTION_PATTERN.finditer(unit):
             prefix = unit[: exhaustion.start()]
-            if _NON_EXHAUSTION_PREFIX_PATTERN.search(prefix):
+            if not _is_affirmative_exhaustion_match(unit, exhaustion):
                 continue
             if _STOP_RETRYING_EXHAUSTION_PATTERN.fullmatch(exhaustion.group()) and not (
                 _stop_exhaustion_has_retry_context(units, index, prefix)
