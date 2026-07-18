@@ -19,17 +19,32 @@ ledger_generation:
   current_mode: manually_updated_machine_readable_source
   required_generator_command: "python -m pdd.sync_core.global_sync_ledger --plan docs/global_sync_resolution_plan.md --output docs/global_sync_evidence_ledger.yaml"
   blocker: "The deterministic ledger generator and protected drift check are not implemented; this file must not be described as generated until they pass."
+governance:
+  ratified_at: "2026-07-18"
+  last_state_change_rule: "Every gate records the date its evidence_state or status last changed; the initial ratified baseline date is used until the next evidence-backed transition."
+  same_day_blocker_rule: "Every status update names one concrete deliverable sized for completion on the reporting date."
+  three_day_rule: "Three working days without a gate-state transition triggers a recorded descope or architecture decision; this is governance discipline, not a certificate predicate."
+  gate_tooling_exempt_from_diagnostic_caps: true
+  diagnostic_growth_frozen: true
+  branch_and_worktree_pruning_requires_preservation_audit: true
 live_rebaseline:
   captured_at: "2026-07-18"
   gates_passed: 0
   gates_required: 10
   qualifying_nights: 0
   qualifying_nights_required: 7
-  pdd_expected_managed_units: 472
-  pdd_verification_profiles: 472
+  pdd_registry_state: protected_main
+  pdd_repository_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+  pdd_expected_managed_units: 468
+  pdd_verification_profiles: 468
   pdd_machine_obligation_profiles: 1
-  pdd_human_attestation_only_units: 471
-  pdd_machine_obligation_profile_coverage_percent: 0.211864
+  pdd_demanded_validator_ids: [pytest]
+  pdd_machine_obligation_ids:
+    - pytest-descriptor-store
+    - pytest-supervisor
+    - pytest-signer-process
+  pdd_human_attestation_only_units: 467
+  pdd_machine_obligation_profile_coverage_percent: 0.213675
   pdd_machine_verified_units: null
   pdd_machine_trusted_evidence_coverage_percent: null
   released_checker_sha256: null
@@ -41,44 +56,203 @@ live_rebaseline:
     derivation_command: "python -c 'from pdd.sync_core.scenario_contract import REQUIRED_SCENARIOS; print(len(REQUIRED_SCENARIOS))'"
     required_scenario_count: 18
   pdd_cloud_canary: pending
-  single_next_blocker: "Collect one reconciled protected source and installed-wheel fixed-enum Stage A diagnostic without expanding observability."
+  pdd_cloud_protected_profile_registry_present: false
+  pdd_cloud_demanded_validator_ids: null
+  single_next_blocker: "Rebaseline gate 1 against live main by generating the PDD pytest-only adapter-demand artifact and an extraction manifest of release-required #1995 net changes that are absent from protected main."
+  same_day_deliverable: "Open the reviewed docs-gate PR containing the freeze record, corrected critical path, ratified dispositions, and gate state-change metadata."
   pr_1995:
-    remote_head_sha: "08cc80e0ab752414eb1527a1652181ef9b4e2679"
-    changed_files: 40
-    additions: 34800
-    deletions: 2885
+    remote_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
+    changed_files: 48
+    additions: 39468
+    deletions: 5130
     release_vehicle: false
     disposition: "Preserve as diagnostic evidence; extract reviewed release changes from live main."
+    candidate_registry:
+      pdd_expected_managed_units: 472
+      pdd_verification_profiles: 472
+      pdd_machine_obligation_profiles: 1
+      pdd_human_attestation_only_units: 471
+      pdd_machine_obligation_profile_coverage_percent: 0.211864
 current_critical_path:
   status: in-progress
-  next_gate: "Rotate the exact reviewed Stage A head/digest/review bindings, guarded-push without overwriting remote work, and reconcile verifier-accepted source and installed-wheel hosted Stage A artifacts"
-  owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
-  reviewed_diagnostic_head_sha: "4bba47d60e03093707962712334e7340734a84a4"
+  next_gate: "Rebaseline gate 1 on live main and define the minimal pytest-only checker release extraction"
+  owning_pr: null
+  reviewed_diagnostic_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
   reviewed_head_protected_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
-  evidence_snapshot_main_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
-  minimum_required_main_ancestor_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
-  reviewed_head_contains_minimum_main_ancestor: true
+  evidence_snapshot_main_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+  minimum_required_main_ancestor_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+  reviewed_head_contains_minimum_main_ancestor: false
   next_cycle_live_main_gate:
-    status: passed
+    status: pending
     resolution_command: "git fetch origin main && git rev-parse origin/main"
     required_predicate: "git merge-base --is-ancestor $(git rev-parse origin/main) $PDD_SHA"
-    resolved_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
+    observed_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+    blocker: "Main advanced after the guarded diagnostic push via PR #2212. This does not invalidate exact-head diagnostic evidence, but no release extraction or merge may treat d334266680881cbda59de4ecd4df967c92159fa7 as containing live main."
   local_stage_a_candidate:
     status: passed
-    exact_head_sha: "4bba47d60e03093707962712334e7340734a84a4"
-    hosted_status: pending
+    exact_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
+    hosted_status: passed-stage-a-diagnostic
     review_verdict: APPROVE
     behavioral_verdict: NO_BEHAVIORAL_FIX
     producer_sha256: "c3e77f4fa3605c269dcc7c8299dca768c9e975d267cedf2af5422ab5d48164fc"
     termination_verifier_sha256: "133d5be5c9035a7f45c96e47666280b59c1e34f088862a64c3d39dd613026ed1"
     observation_verifier_sha256: "a9d097950c718edd0834e3c69bfaf948627e0498ab5de56858e9196525dba0d2"
     stage_a_verifier_sha256: "31575aafcefa94d789fe412c225c024454c5463101bd334587674c7a789e9add"
-    native_addon_sha256: "9fefb3805e0f4b65fcfb6bf992733fc2994aa338fa1a412ba20d26b31f1afa59"
+    native_addon_sha256: "534d3afd44ceb4e578fc7ca2b6dea82d000a191104876efc65b54137f7196ace"
     package_verifier_sha256: "b6e923061ea73ed46af4d03e497aa9ed4e538129f85b1c0eabc1bd47d45e177e"
     package_provenance_sha256: "12bc5a1950d9f2768ecb313cb32204e550a71799db4a747f700d2238921481d5"
-    focused_test_result: "487 passed, 48 skipped"
+    review_evidence_sha256: "6b0f634f49e7aacde102e1d20a1ff3dc8c4c0f67a2e1f74c6eeb0da14414c1d5"
+    focused_test_result: "Prior Stage A composite: 487 passed, 48 skipped. Bounded correction review: 4 affected tests passed; the new Linux-only regression skipped locally and remains hosted-required."
     protected_metadata_test_result: "216 passed"
-    blocker: "No protected source or installed-wheel Stage A artifact exists for this reviewed composite."
+    blocker: "Stage A is reconciled and frozen as diagnostic evidence. Protected PDD profiles demand only pytest, so no further Vitest correction will be pushed or hosted on PR #1995."
+  bounded_behavioral_correction:
+    status: pending
+    base_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
+    red_test_commit_sha: "07fa09010"
+    native_fix_commit_sha: "c8fbbb43f"
+    review_correction_test_commit_sha: "acc80f993"
+    review_correction_fix_commit_sha: "6ee03883a"
+    proposed_head_sha: "6ee03883aa39bf1a4eb822bfc259c9c23f92b80a"
+    fixed_cause: PDD_VITEST_SEAL_DESCRIPTOR_TABLE_OPEN
+    implemented: passed
+    local_green: in-progress
+    independently_reviewed: in-progress
+    hosted_green: pending
+    merged: pending
+    released: pending
+    deployed: pending
+    certified: pending
+    validating_commands:
+      - "/opt/homebrew/Caskroom/miniforge/base/envs/pdd/bin/python -m pytest -q <focused native authority tests> --timeout=60"
+      - "git diff --check d334266680881cbda59de4ecd4df967c92159fa7..c8fbbb43f"
+    artifact_check_urls: []
+    predicate_result: "The RED ordering assertion fails on the exact base and passes after the native fix. A single review correction added retained descriptor-table cleanup/leak coverage and test-only close-failure precedence; 3 focused tests passed and 22 Linux-only cases skipped on Darwin. The local head is unpushed and has no protected Linux proof."
+    blocker: "Frozen as unpushed diagnostic evidence because no protected PDD profile demands Vitest. Do not continue or push this branch."
+  red_to_green_workflow_transition:
+    status: pending
+    base_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
+    test_commit_sha: "79f2e1440"
+    implementation_commit_sha: "6c02fb5ff"
+    proposed_head_sha: "6c02fb5ff"
+    implemented: passed
+    local_green: passed
+    independently_reviewed: pending
+    hosted_green: pending
+    merged: pending
+    released: pending
+    deployed: pending
+    certified: pending
+    validating_commands:
+      - "/opt/homebrew/Caskroom/miniforge/base/envs/pdd/bin/pytest -q tests/test_unit_tests_workflow.py tests/test_verify_vitest_termination_evidence.py tests/test_verify_vitest_package_attestation.py --timeout=60"
+      - "python -c 'import yaml; yaml.safe_load(open(\".github/workflows/unit-tests.yml\"))'"
+      - "bash -n scripts/verify_vitest_package_provenance.sh"
+      - "git diff --check d334266680881cbda59de4ecd4df967c92159fa7..6c02fb5ff"
+    artifact_check_urls: []
+    predicate_result: "The final source and installed-wheel PR steps now require the exact protected Vitest test to return status 0. RED-only evidence generation and uploads are removed from the final phase, while exact reviewed identity, protected preflight evidence, package attestation, installed-wheel provenance, and pinned toolchains remain required. Review-only evidence explicitly requires APPROVED_BEHAVIORAL_FIX; diagnostic artifact mode continues to reject that verdict and require NO_BEHAVIORAL_FIX. Focused validation passed 158 tests, YAML parsing, Bash syntax, and clean-diff checks."
+    blocker: "Sol HIGH found two blocking defects: four obsolete Stage A tests still fail in the broad suite, and push runs can check out the stale reviewed PR SHA. The branch is frozen and unpushed because this undemanded adapter is not on the PDD release critical path."
+  current_hosted_stage_a_attempt:
+    run_url: "https://github.com/promptdriven/pdd/actions/runs/29658808029"
+    exact_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
+    reviewed_protected_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
+    live_main_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+    live_main_ancestor: false
+    status: passed
+    source_lane:
+      status: passed
+      job_url: "https://github.com/promptdriven/pdd/actions/runs/29658808029/job/88117749946"
+      artifact_url: "https://github.com/promptdriven/pdd/actions/runs/29658808029/artifacts/8433732767"
+      preflight_sha256: "62a6c37e423984586533f0f4d953cb926f73d62f0a1bf100102c188102c06794"
+      observation_sha256: "fa283ea951d7b4ec6bc0852fa85bc2b101adcba36b3e0d8903e7e368482df3f5"
+      stage_a_evidence_sha256: "5972d8ae01213e069b886e16cfac65301a609c0aaa08e8844c7365fcd47a9000"
+      stage_a_verifier_result: passed
+      native_failure_reason: PDD_VITEST_SEAL_DESCRIPTOR_TABLE_OPEN
+      failure_stage: reporter-authority-seal
+      process_role: vitest-coordinator
+      result_frame_present: false
+      cause_red_status: pending
+      cgroup_resource_event_deltas: 0
+    installed_wheel_lane:
+      status: passed
+      attempt_1_job_url: "https://github.com/promptdriven/pdd/actions/runs/29658808029/job/88117749939"
+      attempt_1_status: failed-before-stage-a
+      attempt_1_predicate_result: "The mandatory real-browser Playwright suite timed out waiting for protected descriptor transport in all seven config-suffix cases; Vitest Stage A did not run. The identical lane on prior head 4bba47d60e03093707962712334e7340734a84a4 passed all seven cases in 385.92 seconds, and the bounded correction changes no runner, supervisor, Playwright, or workflow file."
+      attempt_2_job_url: "https://github.com/promptdriven/pdd/actions/runs/29658808029/job/88118943320"
+      attempt_2_status: passed
+      attempt_2_playwright_result: "7 passed in the mandatory real-browser suite"
+      artifact_url: "https://github.com/promptdriven/pdd/actions/runs/29658808029/artifacts/8433907757"
+      observation_sha256: "c70af508bc12ea431876ea6a6b744f4bf4e297a8924bf244433bc7114a156f6b"
+      stage_a_evidence_sha256: "894a56e3333012fec433507235309c8a60b641a8a25556ea9e066ff6bb743bb6"
+      package_attestation_sha256: "be7e0711f93a54c60dc9b8dfc98c00de14bce1e8e4f541d62649fd7355bd044c"
+      wheel_sha256: "be1c1379608f7390dbd2be3cb1cacbf482446942fb7d84d58fa785e9eae6d717"
+      installed_runner_sha256: "c3e77f4fa3605c269dcc7c8299dca768c9e975d267cedf2af5422ab5d48164fc"
+      stage_a_verifier_result: passed
+      native_failure_reason: PDD_VITEST_SEAL_DESCRIPTOR_TABLE_OPEN
+      failure_stage: reporter-authority-seal
+      process_role: vitest-coordinator
+      result_frame_present: false
+      cause_red_status: pending
+      cgroup_resource_event_deltas: 0
+    lane_reconciliation:
+      fixed_enum_matches: true
+      failure_stage_matches: true
+      process_role_matches: true
+      progress_frames_match: true
+      result_frame_absent_in_both: true
+      cause_specific_red_permitted: true
+    predicate_result: "Both fail-closed Stage A verifiers accepted fixed enum PDD_VITEST_SEAL_DESCRIPTOR_TABLE_OPEN at reporter-authority-seal in the Vitest coordinator with matching progress frames, no result frame, and zero cgroup resource-event deltas. The installed-wheel rerun also passed all seven mandatory real-browser Playwright cases."
+    blocker: "PR #1995 is frozen at this exact hosted diagnostic head. The cause-specific local correction is preserved unpushed and is not required by the protected PDD pytest-only demand set."
+  latest_hosted_stage_a_attempt:
+    run_url: "https://github.com/promptdriven/pdd/actions/runs/29657916916/attempts/2"
+    exact_head_sha: "4bba47d60e03093707962712334e7340734a84a4"
+    protected_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
+    status: failed-before-stage-a
+    predicate_result: "Both protected lanes accepted exact reviewed identity, provenance, and pinned toolchain data, then returned RunnerExecution ERROR 'trusted Vitest coordinator addon build failed' before Vitest execution; no Stage A artifact exists."
+    source_lane:
+      job_url: "https://github.com/promptdriven/pdd/actions/runs/29657916916/job/88116016312"
+      status: failed-before-stage-a
+      artifact_url: "https://github.com/promptdriven/pdd/actions/runs/29657916916/artifacts/8433533058"
+      preflight_sha256: "c0e8e85f642bf770cf2fb6df9d015a7188ec154b9a4df8dfa7d413a5d9164467"
+      stage_a_artifact_present: false
+    installed_wheel_lane:
+      job_url: "https://github.com/promptdriven/pdd/actions/runs/29657916916/job/88116016316"
+      status: failed-before-stage-a
+      artifact_url: "https://github.com/promptdriven/pdd/actions/runs/29657916916/artifacts/8433580646"
+      package_attestation_sha256: "bd7deb386e2be1249bedbce9cbe0c9f39764b7b9b78dca729eadacd9a8d3a75e"
+      wheel_sha256: "a05d7405503a3e0a8065602f69664e4ce0cada4d5f700bae749bd92d33349e95"
+      installed_runner_sha256: "c3e77f4fa3605c269dcc7c8299dca768c9e975d267cedf2af5422ab5d48164fc"
+      stage_a_artifact_present: false
+    hosted_checks:
+      codeql: passed
+      story_regression: passed
+      public_cli_regression: passed
+      repo_bloat_docker_e2e: passed
+      run_unit_tests: failed
+      package_preprocess_smoke: failed
+      auto_heal: in-progress
+      heal: in-progress
+    blocker: "Closed by Sol-approved bounded correction d334266680881cbda59de4ecd4df967c92159fa7; exact-head hosted rerun 29658808029 is tracked separately."
+  bounded_addon_build_correction:
+    status: passed
+    candidate_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
+    test_commit_sha: "20401071697f8bdf5206d381142532e182b409eb"
+    fix_commit_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
+    corrected_native_addon_sha256: "534d3afd44ceb4e578fc7ca2b6dea82d000a191104876efc65b54137f7196ace"
+    implemented: passed
+    local_green: passed
+    independently_reviewed: passed
+    hosted_green: passed
+    merged: pending
+    released: pending
+    deployed: pending
+    certified: pending
+    validating_commands:
+      - "cc -std=c11 -Wall -Wextra -Werror -shared -fPIC -I <pinned-node-headers> pdd/sync_core/native/vitest_fd_cloexec.c -o <addon>"
+      - "pytest -q tests/test_sync_core_runner_vitest.py::test_vitest_coordinator_addon_builds_without_test_hooks"
+      - "git diff --check 4bba47d60e03093707962712334e7340734a84a4..d334266680881cbda59de4ecd4df967c92159fa7"
+    artifact_check_urls:
+      - "https://github.com/promptdriven/pdd/actions/runs/29658808029"
+    predicate_result: "The strict production compile failed before the fix with -Werror=unused-function and passed after the test-only helper moved under PDD_TEST_EXEC_PROBE. Sol HIGH approved the exact two-commit correction with no findings after strict base/head production compile comparison, strict test-probe compile, four affected test passes, wheel source-parity validation, and clean-diff checks. The exact reviewed head was fast-forward pushed without overwriting remote work. The new Linux-only regression skipped locally, so protected Python 3.12 Ubuntu execution remains required."
+    blocker: null
   latest_hosted_stage_a0_attempt:
     run_url: "https://github.com/promptdriven/pdd/actions/runs/29649405805"
     exact_head_sha: "08cc80e0ab752414eb1527a1652181ef9b4e2679"
@@ -240,6 +414,7 @@ steps:
   - order: 1
     name: "Reviewable implementation foundations"
     status: in-progress
+    last_state_change: "2026-07-18"
     evidence_state:
       implemented: in-progress
       local_green: in-progress
@@ -249,7 +424,8 @@ steps:
       released: pending
       deployed: pending
       certified: pending
-    exact_repository_sha: "4bba47d60e03093707962712334e7340734a84a4"
+    exact_repository_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
+    contract_rebaseline_required: true
     validation_commands:
       - "test -z \"$(git status --porcelain=v1 --untracked-files=all)\""
       - "git merge-base --is-ancestor \"$PDD_PROTECTED_BASE_SHA\" \"$PDD_SHA\""
@@ -299,12 +475,13 @@ steps:
       - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345757"
       - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642167"
       - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642157"
-    predicate_result: "Exact locally reviewed Stage A candidate 4bba47d60e03093707962712334e7340734a84a4 contains protected base 39776aa9bb027c638812a01b8dabbe03cab92f64 and is locally green. Earlier hosted run 29649405805 on exact reviewed head 08cc80e0ab752414eb1527a1652181ef9b4e2679 passed 10 non-diagnostic checks; both exact-lane observation verifiers accepted cause_eligible:false and both termination-verifier rejection assertions passed before the intentional candidate exit. Stage A0 is closed, but the new fixed-enum Stage A candidate has no hosted evidence and no all-green hosted head exists."
-    blocker: "Add and independently review a trusted native fixed-enum sealResultAuthority failure reason, then recollect and reconcile source and installed-wheel Stage A evidence."
-    owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
+    predicate_result: "Protected main already contains identity, manifest, classifier, include, path-policy, snapshot, language, fingerprint-store, transaction, and certificate foundations. Those modules are not #1995 net changes; only types, finalize, trust, and reporting have small #1995 deltas among the proposed foundation groups. The old exact-five-commit candidate contract is therefore stale and cannot close this gate."
+    blocker: "Generate the protected PDD adapter-demand artifact and write a live-main extraction manifest that distinguishes already-merged foundations from release-required #1995 net changes. Then replace the stale five-candidate-commit predicate with fresh-main PR and complete-net-diff review evidence."
+    owning_pr: null
   - order: 2
     name: "Protected reviewed checker release and pinned wheel digest"
     status: pending
+    last_state_change: "2026-07-18"
     evidence_state:
       implemented: in-progress
       local_green: in-progress
@@ -337,12 +514,13 @@ steps:
       candidate_children_have_credentials: false
     artifact_check_urls: []
     predicate_result: "No protected checker release is authorized."
-    blocker: "Close the bounded #1995 diagnostic, then extract and completely review fresh live-main release PRs; #1995 must not merge as the release vehicle."
+    blocker: "Complete gate-1 live-main rebaseline and extract only the pytest-only checker release deltas that are absent from protected main. #1995 is frozen diagnostic evidence and must not merge as the release vehicle."
     owning_pr: null
     diagnostic_evidence_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 3
     name: "Transactional generation-to-staging and crash recovery"
     status: pending
+    last_state_change: "2026-07-18"
     evidence_state:
       implemented: in-progress
       local_green: in-progress
@@ -380,6 +558,7 @@ steps:
   - order: 4
     name: "Complete demanded protected runner adapters"
     status: in-progress
+    last_state_change: "2026-07-18"
     evidence_state:
       implemented: in-progress
       local_green: in-progress
@@ -389,11 +568,11 @@ steps:
       released: pending
       deployed: pending
       certified: pending
-    exact_repository_sha: "4bba47d60e03093707962712334e7340734a84a4"
+    exact_repository_sha: "c887daba0d171585658f8205e79316e5f36f82c6"
     failure_baseline_sha: "b09b6bef2c8c4bee762965be463527cd0b050154"
     diagnostic_head_sha: "4bba47d60e03093707962712334e7340734a84a4"
-    current_stage: "stage-a-hosted-recollection"
-    cause_red_status: pending
+    current_stage: "pdd-adapter-demand-matrix"
+    cause_red_status: frozen-diagnostic
     validation_commands:
       - "pytest -q tests/test_sync_core_runner_pytest.py tests/test_sync_core_runner_vitest.py tests/test_sync_core_supervisor.py"
       - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --pdd-cloud-profiles \"$PDD_CLOUD_PROFILES\" --output \"$RUNNER_TEMP/adapter-demand-matrix.json\" --require-no-unknown-adapters --require-real-browser-for-playwright"
@@ -782,12 +961,13 @@ steps:
       current_attempt_2_installed_wheel_detail: "Vitest reporter produced no result"
       current_attempt_2_installed_wheel_cause_artifact_present: false
       current_attempt_2_source_and_wheel_symptoms_match: true
-    predicate_result: "Exact reviewed head 08cc80e0ab752414eb1527a1652181ef9b4e2679 produced source observation daeb1f9e0d97888a0e2634378d73c4395b08f3b125139954ded4412bcdccb02f and installed-wheel observation e69d0f124d2f23790659d22fac4dabe962c4c6ff654bf549e2973da0ec8f6c4e in hosted run 29649405805. Both hosted observation verifiers accepted cause_eligible=false, both termination-verifier rejection assertions passed, and independent downloaded-byte replay reproduced those results. Their authenticated traces match and stop at reporter-authority-seal-failed with supervisor exit zero and no result frame. Stage A0 is passed; Stage A and Stage B remain pending."
-    blocker: "Rotate exact final bindings, guarded-push the reviewed composite, and collect verifier-accepted fixed-enum Stage A evidence in both hosted lanes before any cause-specific RED or behavioral correction."
-    owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
+    predicate_result: "Protected main has 468 profiles. Exactly one profile has machine obligations, all three use validator_id pytest, and no protected PDD profile demands Vitest, Jest, or Playwright. The #1995 candidate has the same pytest-only demanded validator set across 472 profiles. PR #1995 Stage A artifacts remain useful diagnostic evidence but do not satisfy or block the demanded-adapter gate."
+    blocker: "Implement the deterministic adapter-demand matrix for protected PDD profiles and prove demanded validators equal {pytest}. pdd_cloud protected main has no verification-profiles registry, so a combined PDD+pdd_cloud demand claim remains pending until gate 7 creates that registry."
+    owning_pr: null
   - order: 5
     name: "Canonical production routing"
     status: pending
+    last_state_change: "2026-07-18"
     evidence_state:
       implemented: in-progress
       local_green: pending
@@ -817,6 +997,16 @@ steps:
   - order: 6
     name: "PDD complete inventory, profiles, and trusted evidence"
     status: pending
+    last_state_change: "2026-07-18"
+    coverage_strategy_schedule:
+      due_before_gate_5_completes: true
+      current_human_only_units: 467
+      generator_required: true
+      partitions:
+        obligations_derivable_from_existing_tests: pending
+        new_tests_required: pending
+        expected_managed_narrowing_candidates_with_named_exclusions: pending
+      human_scoping_decision_required: true
     evidence_state:
       implemented: in-progress
       local_green: pending
@@ -843,12 +1033,13 @@ steps:
       red_baseline_states: 0
       waivers: 0
     artifact_check_urls: []
-    predicate_result: "Current registry evidence is 1 machine-obligation profile out of 472 expected managed units (0.211864%); 471 profiles are human-attestation-only. No protected clean-clone PDD scan satisfies the machine-only predicate."
-    blocker: "Create machine obligations and current trusted machine evidence for 471 units after canonical routing and the protected checker release are complete."
+    predicate_result: "Protected main 39776aa9bb027c638812a01b8dabbe03cab92f64 has 1 machine-obligation profile out of 468 expected managed units (0.213675%); 467 profiles are human-attestation-only. PR #1995 candidate 4bba47d60e03093707962712334e7340734a84a4 has 1 out of 472 (0.211864%) and 471 human-only profiles. Neither exact-SHA registry has a protected clean-clone scan satisfying the machine-only predicate."
+    blocker: "Create machine obligations and current trusted machine evidence for every remaining unit after canonical routing and the protected checker release are complete: 467 on protected main, or 471 if all PR #1995 candidate units remain expected."
     owning_pr: null
   - order: 7
     name: "Released PDD pin and pdd_cloud migration"
     status: pending
+    last_state_change: "2026-07-18"
     evidence_state:
       implemented: in-progress
       local_green: pending
@@ -882,6 +1073,7 @@ steps:
   - order: 8
     name: "Protected merge-group lifecycle lane and real pdd_cloud canary"
     status: pending
+    last_state_change: "2026-07-18"
     evidence_state:
       implemented: pending
       local_green: pending
@@ -914,6 +1106,7 @@ steps:
   - order: 9
     name: "Seven consecutive full nightly certificates"
     status: pending
+    last_state_change: "2026-07-18"
     evidence_state:
       implemented: pending
       local_green: pending
@@ -947,6 +1140,7 @@ steps:
   - order: 10
     name: "Final independent certificate verification"
     status: pending
+    last_state_change: "2026-07-18"
     evidence_state:
       implemented: pending
       local_green: pending

@@ -33,9 +33,11 @@ itself, prove that those bytes express the same intent.
 
 ### Current critical-path unblock (2026-07-18)
 
-This immediate runner prerequisite is a PR gate only. It does not authorize a
-release, merge #1995, or claim global certification; the ten-step sequence below
-remains controlling.
+This diagnostic snapshot is not a release prerequisite. Protected PDD profiles
+demand only the `pytest` validator, so undemanded Vitest, Jest, and Playwright
+work is frozen with PR #1995 and does not block gates 1-6. It does not authorize
+a release, merge #1995, or claim global certification; the ten-step sequence
+below remains controlling.
 
 #### Authoritative execution snapshot
 
@@ -45,12 +47,12 @@ release state.
 
 | Verification boundary | Exact evidence | State |
 | --- | --- | --- |
-| Locally validated | PR #1995 Stage A candidate [`4bba47d60e03093707962712334e7340734a84a4`](https://github.com/promptdriven/pdd/commit/4bba47d60e03093707962712334e7340734a84a4) contains protected base [`39776aa9bb027c638812a01b8dabbe03cab92f64`](https://github.com/promptdriven/pdd/commit/39776aa9bb027c638812a01b8dabbe03cab92f64). The native fixed-enum implementation, source and installed-wheel producer paths, fail-closed Stage A verifier, workflow bindings, and protected metadata passed 487 focused tests with 48 platform skips after review correction; the protected metadata/package/architecture suite passed 216 tests. Independent runs passed the prior 468-test core set and the three previously failing rollout predicates. YAML, JSON, 17 embedded Bash blocks, pycompile, pylint, canonical artifact byte/mode/sidecar assertions, clean-tree, and ancestry checks passed. Linux native hooks remain a hosted requirement. | local Stage A candidate green; not hosted |
-| Independently reviewed | Sol HIGH approved exact Stage A candidate `4bba47d60e03093707962712334e7340734a84a4` with `NO_BEHAVIORAL_FIX` after one correction cycle. The review binds producer `c3e77f4fa3605c269dcc7c8299dca768c9e975d267cedf2af5422ab5d48164fc`, termination verifier `133d5be5c9035a7f45c96e47666280b59c1e34f088862a64c3d39dd613026ed1`, observation verifier `a9d097950c718edd0834e3c69bfaf948627e0498ab5de56858e9196525dba0d2`, Stage A verifier `31575aafcefa94d789fe412c225c024454c5463101bd334587674c7a789e9add`, native addon source `9fefb3805e0f4b65fcfb6bf992733fc2994aa338fa1a412ba20d26b31f1afa59`, Package verifier `b6e923061ea73ed46af4d03e497aa9ed4e538129f85b1c0eabc1bd47d45e177e`, Package provenance `12bc5a1950d9f2768ecb313cb32204e550a71799db4a747f700d2238921481d5`, and protected base `39776aa9bb027c638812a01b8dabbe03cab92f64`. | exact local composite approved; final docs-only head review pending |
-| Hosted evidence collected | Exact-head [run 29649405805](https://github.com/promptdriven/pdd/actions/runs/29649405805) passed 10 non-diagnostic checks, including CodeQL, both auto-heal checks, Public CLI Regression, Story Regression, and Repo Bloat Docker E2E. Source [job 88093035447](https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035447) and installed-wheel [job 88093035441](https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035441) each printed `Vitest no-result observation verified; cause_eligible: false`, asserted the exact termination-verifier rejection, uploaded the expected artifact, and only then exited `1` with the intentional candidate test status. Source artifact [`8431053984`](https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431053984) has payload digest `daeb1f9e0d97888a0e2634378d73c4395b08f3b125139954ded4412bcdccb02f`; installed-wheel artifact [`8431093575`](https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431093575) has payload digest `e69d0f124d2f23790659d22fac4dabe962c4c6ff654bf549e2973da0ec8f6c4e` and Package-attestation digest `43187c6768a858bc1e6d05234ea82196fc65d8f4bc87bad98ca5f0dc1ecd179c`, binding wheel `1c4bfd9305a35b4772c7c880b03822bce3c702cb17456d709d6cdb2dfa7f775b` to installed runner `fd02005eb5367c9990aae94d515041686f37f6cee5dc6e28e4b03cdd2eb1e51d`. | hosted Stage A0 passed; overall diagnostic jobs remain intentionally red |
+| Locally validated | PR #1995 Stage A correction [`d334266680881cbda59de4ecd4df967c92159fa7`](https://github.com/promptdriven/pdd/commit/d334266680881cbda59de4ecd4df967c92159fa7) is the two-commit fast-forward successor to reviewed diagnostic `4bba47d60e03093707962712334e7340734a84a4`. The strict production native compile failed on the base with `-Werror=unused-function` and passed after the test-only helper moved under `PDD_TEST_EXEC_PROBE`; the strict probe compile also passed. Four affected fixed-reason, authority, and wheel source-parity tests passed. The new Linux-only regression skipped locally and remains hosted-required. The prior Stage A composite passed 487 focused tests with 48 platform skips and 216 protected metadata/package/architecture tests. | bounded correction locally green; Linux execution hosted-required |
+| Independently reviewed | Sol HIGH approved exact correction `d334266680881cbda59de4ecd4df967c92159fa7` with no findings after reviewing only commits `20401071697f8bdf5206d381142532e182b409eb` and `d334266680881cbda59de4ecd4df967c92159fa7`. Production sealing logic, fixed enums, N-API error behavior, probe behavior, and wheel/source parity are unchanged. Review evidence digest `6b0f634f49e7aacde102e1d20a1ff3dc8c4c0f67a2e1f74c6eeb0da14414c1d5` binds corrected native source `534d3afd44ceb4e578fc7ca2b6dea82d000a191104876efc65b54137f7196ace`, producer `c3e77f4fa3605c269dcc7c8299dca768c9e975d267cedf2af5422ab5d48164fc`, termination verifier `133d5be5c9035a7f45c96e47666280b59c1e34f088862a64c3d39dd613026ed1`, observation verifier `a9d097950c718edd0834e3c69bfaf948627e0498ab5de56858e9196525dba0d2`, Stage A verifier `31575aafcefa94d789fe412c225c024454c5463101bd334587674c7a789e9add`, Package verifier `b6e923061ea73ed46af4d03e497aa9ed4e538129f85b1c0eabc1bd47d45e177e`, Package provenance `12bc5a1950d9f2768ecb313cb32204e550a71799db4a747f700d2238921481d5`, and reviewed base `39776aa9bb027c638812a01b8dabbe03cab92f64`. | exact bounded correction approved |
+| Hosted evidence collected | Exact-head [run 29658808029](https://github.com/promptdriven/pdd/actions/runs/29658808029) bound reviewed head `d334266680881cbda59de4ecd4df967c92159fa7`, reviewed base, review evidence, producer, verifiers, corrected native source, and pinned toolchains. Source [job 88117749946](https://github.com/promptdriven/pdd/actions/runs/29658808029/job/88117749946) verified artifact [`8433732767`](https://github.com/promptdriven/pdd/actions/runs/29658808029/artifacts/8433732767), Stage A digest `5972d8ae01213e069b886e16cfac65301a609c0aaa08e8844c7365fcd47a9000`. Package attempt 1 timed out all seven mandatory Playwright cases before Vitest, while the identical prior lane had passed; the same-SHA bounded rerun [job 88118943320](https://github.com/promptdriven/pdd/actions/runs/29658808029/job/88118943320) passed all seven real-browser cases and verified installed-wheel artifact [`8433907757`](https://github.com/promptdriven/pdd/actions/runs/29658808029/artifacts/8433907757), Stage A digest `894a56e3333012fec433507235309c8a60b641a8a25556ea9e066ff6bb743bb6`. Both fail-closed verifiers accepted `PDD_VITEST_SEAL_DESCRIPTOR_TABLE_OPEN` at `reporter-authority-seal` in the `vitest-coordinator`, with matching progress frames, no result frame, zero cgroup event deltas, and `cause_red_status: pending`. The wheel artifact binds package attestation `be7e0711f93a54c60dc9b8dfc98c00de14bce1e8e4f541d62649fd7355bd044c`, wheel `be1c1379608f7390dbd2be3cb1cacbf482446942fb7d84d58fa785e9eae6d717`, and installed runner `c3e77f4fa3605c269dcc7c8299dca768c9e975d267cedf2af5422ab5d48164fc`. CodeQL, Story Regression, Public CLI Regression, and Repo Bloat Docker E2E passed. Unit and Package remain intentionally red after verifier acceptance because the candidate test still fails. | Stage A reconciled; one cause-specific RED is permitted |
 | Artifact predicates | Both hosted observation verifiers accepted their exact-lane artifacts. Independent replay of the downloaded bytes, after restoring archive-normalized mode `0600` and protected parent mode `0700`, reproduced both accepts and both exact termination-verifier rejections. Both traces are identical through `reporter-addon-load-succeeded`, `reporter-authority-seal-start`, `reporter-authority-seal-failed`, `coordinator-explicit-exit`, and `coordinator-exit`; supervisor exit is `0` and no result frame exists. | Stage A0 closed; evidence is explicitly non-causal |
-| Hosted blocker | The fixed-enum Stage A diagnostic is locally validated and independently reviewed, but no protected source or installed-wheel Stage A artifact exists for that composite. Rotate the exact reviewed head/digest/review bindings, guarded-push without overwriting remote work, and require both hosted lanes to emit verifier-accepted `vitest-stage-a-native-seal-v1` artifacts with the same fixed enum. Do not create a cause-specific RED until those hosted artifacts reconcile. | in progress; owned by PR #1995 |
-| Merged to protected `main` | [PR #2208](https://github.com/promptdriven/pdd/pull/2208) merged the prior plan update as [`39776aa9bb027c638812a01b8dabbe03cab92f64`](https://github.com/promptdriven/pdd/commit/39776aa9bb027c638812a01b8dabbe03cab92f64). That SHA is an ancestor of reviewed Stage A candidate `4bba47d60e03093707962712334e7340734a84a4`. PR #1995 is not merged. | runner prerequisite remains unmerged |
+| Diagnostic disposition | Freeze remote PR #1995 at `d334266680881cbda59de4ecd4df967c92159fa7`; do not push or merge another diagnostic correction. Local native correction branch head `6ee03883aa39bf1a4eb822bfc259c9c23f92b80a` and GREEN-transition head `6c02fb5ff80c64956ff90792e7873fda56aa2de0` are preserved as unpushed evidence only. Sol found one native coverage gap, then the correction added cleanup and close-precedence coverage but remained Linux-unhosted. Sol found two blocking defects in the separate GREEN transition: four obsolete Stage A tests still fail and push runs can check out the stale reviewed PR SHA. These findings will not be corrected on #1995 because no protected PDD profile demands Vitest. | frozen diagnostic evidence; not on gates 1-6 critical path |
+| Merged to protected `main` | [PR #2212](https://github.com/promptdriven/pdd/pull/2212) advanced protected `main` to [`c887daba0d171585658f8205e79316e5f36f82c6`](https://github.com/promptdriven/pdd/commit/c887daba0d171585658f8205e79316e5f36f82c6) after the guarded diagnostic push. The change is release-video-only and leaves the 468-unit registry unchanged, but it is not an ancestor of diagnostic head `d334266680881cbda59de4ecd4df967c92159fa7`. PR #1995 is not merged and is not a release vehicle. | live-main ancestry red; no merge authorized |
 | Released checker | No protected reviewed checker release or pinned wheel digest exists. | pending |
 | Globally certified | No protected merge-group certificate or seven-night streak exists. | pending |
 
@@ -69,19 +71,28 @@ release state.
    `CLOEXEC` set/verification, alias-not-found, and response failures. This is
    locally complete on `4bba47d60e03093707962712334e7340734a84a4` but has no
    hosted Stage A artifact.
-3. Rotate exact reviewed bindings, guarded-push the final docs-only composite,
-   and recollect source and installed-wheel Stage A evidence on that one exact
-   reviewed
-   SHA. Require exact head/base/toolchain/package bindings, authenticated
-   fixed-enum reason, process role, failure stage, no result frame, and
-   reconciliation of the two lanes before writing a cause-specific RED.
-4. Only after Stage A passes, add one RED that reproduces the collected native
-   reason, implement one bounded behavioral correction, and have the same Sol
-   reviewer verify the finding and affected behavior.
-5. Require every hosted check to pass on that exact reviewed SHA, refetch main,
-   recheck remote-head and ancestry guards, and merge #1995 only from the main
-   clone. Then advance to the released-checker gate. No downstream step may use
-   the diagnostic branch as a released or certified implementation.
+3. Exact-head run `29658808029` closed Stage A in both protected lanes on
+   `d334266680881cbda59de4ecd4df967c92159fa7`. Both verifiers accepted
+   `PDD_VITEST_SEAL_DESCRIPTOR_TABLE_OPEN` at `reporter-authority-seal` in the
+   `vitest-coordinator`, with no result frame and matching bound evidence. The
+   same-SHA Package rerun passed all seven mandatory real-browser cases before
+   producing the installed-wheel Stage A artifact.
+4. Freeze #1995 at remote head `d334266680881cbda59de4ecd4df967c92159fa7`.
+   Preserve the local unpushed correction branches and Sol findings as evidence,
+   but do not integrate, push, host, or merge them. No protected PDD profile
+   demands Vitest, Jest, or Playwright. pdd_cloud has no protected verification
+   profile registry yet, so its future adapter demand is unknown and must be
+   generated at migration time rather than assumed.
+5. Rebaseline gate 1 against live main. The identity, manifest, classifier,
+   includes, path-policy, snapshot, language, fingerprint-store, transaction,
+   and certificate foundations are already present on protected main and are not
+   net changes from #1995. Generate the PDD adapter-demand artifact, write an
+   extraction manifest that lists only release-required net changes absent from
+   live main, and split those changes into reviewable fresh-main PRs. Then publish
+   the protected pytest-only checker and pin its wheel digest. Any early
+   certificate is explicitly narrower and cannot satisfy the final global
+   predicate until all managed units and both repositories meet the gate-10
+   denominator.
 
 #### Historical attempt ledger
 
@@ -642,19 +653,27 @@ machine evidence.
 Progress is reported by closed evidence gates, never by commit count or local
 test volume. The live scoreboard is `0/10` passed and the qualifying nightly
 streak is `0/7`. PR #1995 remains an unstable diagnostic branch at remote head
-`08cc80e0ab752414eb1527a1652181ef9b4e2679`, with 40 changed files,
-34,800 additions, and 2,885 deletions. Its Unit and Package jobs intentionally
-preserve the `Vitest reporter produced no result` baseline after Stage A0
-verification; they are not green merge evidence. The locally reviewed fixed-enum
-Stage A successor has not yet produced protected hosted Stage A evidence.
+`d334266680881cbda59de4ecd4df967c92159fa7`, with 48 changed files,
+39,468 additions, and 5,130 deletions. The previous exact-head Unit and Package
+jobs intentionally preserved the `Vitest reporter produced no result` baseline
+after Stage A0 verification; they are not green merge evidence. The locally
+reviewed fixed-enum Stage A successor and its bounded addon-build correction have
+been pushed, but neither protected lane has yet produced reconciled Stage A
+evidence on the corrected head.
 
-The protected PDD registry currently contains 472 expected managed units and 472
-profiles. Only one profile has any required machine-test obligation; 471 are
-human-attestation-only. Current machine-obligation profile coverage is therefore
-`1/472` (`0.211864%`), not 100%. This proves only profile configuration. No
-protected artifact currently establishes the number of machine-verified units or
-current machine-evidence coverage; both remain unknown. Profile presence and
-trusted human attestation coverage must not be reported as machine verification.
+Protected PDD `main` at
+`c887daba0d171585658f8205e79316e5f36f82c6` contains 468 expected managed
+units and 468 profiles. Only one profile has a required machine-test obligation;
+467 are human-attestation-only, so protected machine-obligation profile coverage
+is `1/468` (`0.213675%`). The PR #1995 candidate contains 472 expected units and
+profiles, but still only one machine-obligation profile and 471 human-only
+profiles (`1/472`, `0.211864%`). These figures prove only profile configuration.
+No protected artifact establishes machine-verified unit count or current machine-
+evidence coverage for either exact SHA; both remain unknown. Profile presence and
+trusted human attestation must not be reported as machine verification.
+Diagnostic head `d334266680881cbda59de4ecd4df967c92159fa7` contains reviewed
+base `39776aa9bb027c638812a01b8dabbe03cab92f64` but not current protected
+`main`; live-main ancestry remains a separate red gate.
 
 The recommendations are adopted with these corrections:
 
@@ -671,6 +690,28 @@ The recommendations are adopted with these corrections:
 | Nonqualifying shadow nightlies | Adopt | Start shadows immediately for infrastructure debugging. They never increment the official streak, which starts only after steps 1-8 pass. |
 | Evidence-based progress format | Adopt | Every update reports gates, machine profile coverage, released digest, lifecycle rows, cloud canary, qualifying nights, and one blocker. |
 
+The 2026-07-18 execution ratification fixes the immediate sequencing:
+
+- Generate the PDD-only adapter-demand matrix first. Protected PDD profiles
+  demand only `pytest`. A combined matrix is deferred until pdd_cloud has a
+  protected verification-profile registry; its future demand is not inferred.
+- Classify every possible #1995 extraction as an already-merged prerequisite,
+  a release-required delta, or excluded diagnostic work. Already-protected
+  foundation code is not re-extracted. Fresh-main release PRs should target
+  roughly 2,000 net lines when module boundaries permit, but complete review and
+  coherent ownership are the controlling predicates.
+- Freeze #1995 and every unpushed correction branch. Preserve before pruning;
+  do not discard branches or worktrees without a clean-state and ownership audit.
+- Gate tooling required by the delivery program is exempt from the ban on new
+  diagnostic layers. No new #1995 verifier, artifact schema, or observability
+  stage is permitted.
+- Define the ledger generator schema before moving attempt history out of this
+  plan. The future design separates generated current state from append-only
+  historical evidence; an arbitrary line count cannot remove evidence.
+- The three-working-day and same-day-deliverable rules are governance discipline,
+  not certificate predicates. Every gate initializes `last_state_change` at this
+  ratified baseline and updates it only on an evidence-backed state transition.
+
 For the full global claim, the certificate predicate is non-negotiable:
 `machine_verified_units == expected_managed_units`, machine verification-profile
 coverage and current trusted machine-evidence coverage are both 100%,
@@ -686,21 +727,18 @@ named in the YAML and a protected drift check that regenerates the ledger and
 fails on a diff. Until then the machine-readable ledger is authoritative but
 manually maintained, and `ledger_generation.status` remains `pending`.
 
-PR #1995 has one remaining diagnostic budget. Run the already reviewed fixed-enum
-Stage A once in both protected lanes. If it identifies one authenticated cause,
-permit one cause-specific RED and one bounded Terra HIGH correction followed by
-same-Sol finding verification. Both source and installed-wheel lanes must then be
-green on the exact reviewed SHA. Otherwise stop adding observability, preserve the
-branch and artifacts as diagnostic evidence, and reopen the adapter architecture.
-Regardless of the diagnostic outcome, #1995 is not the release vehicle: release
-changes are extracted onto fresh live-main PRs and receive complete net-diff review.
+PR #1995 is frozen at remote head
+`d334266680881cbda59de4ecd4df967c92159fa7`. Its hosted Stage A artifacts and
+unpushed correction branches are diagnostic evidence only. No further correction,
+hosted run, merge, or release extraction may be pushed to that PR. Release changes
+are extracted onto fresh live-main PRs and receive complete net-diff review.
 
 | Order | Unblock | Required exit evidence |
 | --- | --- | --- |
-| 1 | Split the current dirty implementation into reviewable foundation, transaction, runner/trust, command-routing, and rollout commits. Do not activate enforcement in these commits. | Each commit has focused tests; the branch is clean; source and built-wheel suites agree. |
+| 1 | Rebaseline against protected live main. Inventory already-merged prerequisites, release-required #1995 deltas, and excluded diagnostic work in `docs/global_sync_extraction_manifest.md`; define only the fresh-main layers actually required for a pytest-only checker release. | The manifest accounts for the complete #1995 net diff, identifies already-protected foundations without re-extracting them, excludes all undemanded diagnostics, and maps every release-required delta to a bounded fresh-main PR with complete net-diff review. |
 | 2 | Publish the checker from fresh live-main PRs and a protected reviewed tag; pin its wheel digest in protected CI. PR #1995 remains diagnostic evidence and is not the release vehicle. The released checker, not candidate code, owns scenario definitions, lifecycle metrics, certificate predicate recomputation, and signing. Candidate generators and tests run only in credential-free children. | The extracted net diff has complete review, hosted green, and ancestry evidence. A candidate change that returns unconditional PASS, edits lifecycle scenarios, or prints environment variables still produces a red unsigned observation; the released checker artifact digest and workflow identity are present in the signed certificate. |
 | 3 | Replace direct production writes with generate-to-staging followed by one durable transaction containing artifacts, shared metadata, evidence, report, and fingerprint. Use descriptor-relative no-follow commit operations and verify all WAL blobs before the first destination change. Before broad migration, run the protected vertical slice from clean clones and built wheels against one fixture, one PDD unit, and one real pdd_cloud unit. | Process death at every generation/journal/install phase recovers to the complete old or complete new state; prompt/include/code/test edits, stale evidence, and candidate tampering are detected; signed evidence binds exact SHAs; immediate rerun writes zero files. |
-| 4 | Generate an adapter-demand matrix from the protected PDD and pdd_cloud profiles. Make the pytest adapter compare protected expected node IDs with collected and executed node IDs and bind every config-loaded plugin and executable support module. Implement every demanded adapter before claiming coverage; defer undemanded universal adapters. | The matrix accounts for every protected profile and has no unknown adapter. Removed parametrized cases, config-loaded local plugins, collection hooks, skips, xfails, deselection, and dirty support fail closed. Any demanded Playwright profile passes a real-browser source and installed-wheel lane. |
+| 4 | Generate the PDD-only adapter-demand matrix now. Make the pytest adapter compare protected expected node IDs with collected and executed node IDs and bind every config-loaded plugin and executable support module. Defer a combined PDD/pdd_cloud matrix until pdd_cloud has a protected profile registry. Implement every actually demanded adapter before claiming coverage; defer undemanded universal adapters. | The PDD matrix accounts for all 468 protected profiles, reports demanded validators exactly `{pytest}`, and has no unknown adapter. Removed parametrized cases, config-loaded local plugins, collection hooks, skips, xfails, deselection, and dirty support fail closed. The later combined matrix accounts for every protected pdd_cloud profile and requires real-browser execution only if a protected profile demands Playwright. |
 | 5 | Route every production mutator, runtime preprocessor, dependency discoverer, change detector, legacy operation selector, and fingerprint writer through the canonical include graph, identity, classifier, staging transaction, and fingerprint APIs. | A protected static enforcement test reports zero independent include parsers, fingerprint hashers, drift classifiers, or canonical metadata writers; compatibility modules contain orchestration only. |
 | 6 | Land and release the PDD foundation. Run the released checker against clean exact-SHA PDD clones, then create protected machine-verification profiles and trusted evidence for every expected managed unit. Human review may supplement but cannot solely satisfy a managed unit. | PDD exact-SHA report has complete inventory, `machine_verified_units == expected_managed_units`, 100% machine profile/evidence coverage, `human_attestation_only_units == 0`, zero unaccounted tracked paths, red states, or waivers. |
 | 7 | Pin that release in pdd_cloud, remove `metadata_finalize.py` and all other vendored sync semantics, resolve the duplicate output conflict, then migrate machine profiles, fingerprints, and evidence by bounded subtree PRs. A unit that cannot be machine verified must be excluded from a clearly narrower claim, never silently accepted via human-only evidence. | Independent semantic ownership audit and exact-tree scan report zero consumer-owned sync semantics; pdd_cloud has `machine_verified_units == expected_managed_units`, 100% machine profile/evidence coverage, zero human-attestation-only managed units, unaccounted paths, red units, or waivers. |
@@ -719,13 +757,18 @@ non-pytest adapters, and repository profile/evidence rollout are not complete.
 Up to three implementation workstreams may run concurrently when their write
 sets are disjoint:
 
-- **A, checker release:** close the single fixed-enum #1995 diagnostic, extract
-  reviewed release PRs from live main, and publish the protected checker digest.
+- **A, checker release:** preserve frozen #1995 diagnostics, classify its net
+  diff, extract only release-required pytest checker deltas from live main, and
+  publish the protected checker digest.
 - **B, transaction:** implement generation-to-staging, durable recovery, and
   zero-write reruns without touching A's adapter/release files.
-- **C, certification data:** build PDD/pdd_cloud inventories, machine profiles,
-  evidence, and the adapter-demand matrix without touching A or B production
-  modules.
+- **C, certification data:** build the PDD demand matrix and ledger generator,
+  then build PDD/pdd_cloud inventories, machine profiles, and evidence without
+  touching A or B production modules. Once profile generation exists and before
+  gate 5 completes, partition all 467 current human-only PDD units into:
+  obligations derivable from existing tests, units requiring new tests, and
+  candidates for protected expected-managed narrowing with named exclusions.
+  Surface that partition for a human scoping decision before gate 6 begins.
 
 Local work may overlap in time, but B cannot close protected/released evidence
 before A, and C cannot claim trusted current coverage before the released checker
@@ -748,7 +791,13 @@ protected lifecycle rows: passed/required
 pdd_cloud canary: pass | fail | pending
 qualifying nights/7: N/7
 single next blocker: <one evidence gate>
+gate last_state_change: 1=YYYY-MM-DD ... 10=YYYY-MM-DD
+same-day deliverable: <one concrete artifact or PR>
 ```
+
+The profile denominator in each update is the exact protected target SHA. A
+candidate denominator may be reported separately but must never replace protected
+state until that candidate merges and becomes the protected target.
 
 ## 3. Scope
 
