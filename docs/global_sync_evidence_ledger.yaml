@@ -6,12 +6,18 @@ status_vocabulary: [pending, in-progress, passed]
 pass_rule: "A step may be passed only when every required_predicate field is proven by an exact-SHA artifact URL produced by the listed validation commands."
 current_critical_path:
   status: in-progress
-  next_gate: "Under an exact remote-head guard, integrate protected main 301b3cab9 into the canonical PR #1995 branch; add the reviewed fail-closed Stage A0 cause-ineligible observation protocol; rotate exact bindings; recollect both lanes"
+  next_gate: "Under an exact remote-head guard, resolve and integrate live origin/main into the canonical PR #1995 branch; add the reviewed fail-closed Stage A0 cause-ineligible observation protocol; rotate exact bindings; recollect both lanes"
   owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
   reviewed_diagnostic_head_sha: "07d3d7d71d1dd308984d349d6751da9378579cf1"
   reviewed_head_protected_base_sha: "0e22fe9f42f72a70fc85cb6f9c289fd8187df451"
-  current_protected_main_sha: "301b3cab9e72123eaa66dc31babb9d49eab84918"
-  current_main_is_ancestor_of_reviewed_head: false
+  evidence_snapshot_main_sha: "301b3cab9e72123eaa66dc31babb9d49eab84918"
+  minimum_required_main_ancestor_sha: "301b3cab9e72123eaa66dc31babb9d49eab84918"
+  reviewed_head_contains_minimum_main_ancestor: false
+  next_cycle_live_main_gate:
+    status: pending
+    resolution_command: "git fetch origin main && git rev-parse origin/main"
+    required_predicate: "git merge-base --is-ancestor $(git rev-parse origin/main) $PDD_SHA"
+    resolved_sha: null
   second_hosted_attempt:
     run_url: "https://github.com/promptdriven/pdd/actions/runs/29637193871"
     unit_job_url: "https://github.com/promptdriven/pdd/actions/runs/29637193871/job/88061484993"
@@ -96,7 +102,7 @@ current_critical_path:
     vitest_cause_collected: false
     cause_red_status: pending
   unblock_actions:
-    - "Under an exact remote-head guard, integrate current protected main 301b3cab9 into the one canonical PR #1995 implementation branch."
+    - "Under an exact remote-head guard, resolve live origin/main and integrate that exact SHA into the one canonical PR #1995 implementation branch; it must contain at least 301b3cab9."
     - "Name every preflight predicate and write nonsecret expected/actual measurements to a machine-readable artifact before exit."
     - "Preserve all trigger-head, checkout-head, ancestry, digest, review, runtime, and toolchain checks."
     - "Obtain exact Sol review, integrate protected main without overwriting remote work, and obtain exact-composite approval."
@@ -120,6 +126,16 @@ current_critical_path:
     exact_head_hosted_green: true
     merged: true
     merge_sha: "301b3cab9e72123eaa66dc31babb9d49eab84918"
+  status_correction_pr:
+    url: "https://github.com/promptdriven/pdd/pull/2207"
+    reviewed_head_sha: "54a2a8d8b67c682a940884c749ae60b684738fde"
+    unit_tests_run_url: "https://github.com/promptdriven/pdd/actions/runs/29641467089"
+    codeql_run_url: "https://github.com/promptdriven/pdd/actions/runs/29641466395"
+    auto_heal_run_url: "https://github.com/promptdriven/pdd/actions/runs/29641467071"
+    pr_check_rollup_total: 12
+    pr_check_rollup_success: 12
+    merged: true
+    merge_sha: "8c5ac0d556e64b8f660336795f740bec7431b402"
 steps:
   - order: 1
     name: "Reviewable implementation foundations"
@@ -174,8 +190,8 @@ steps:
       - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345757"
       - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642167"
       - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642157"
-    predicate_result: "Exact head 07d3d7d71 is locally validated, independently reviewed, pushed, and contains its reviewed protected base 0e22fe9f4. Current protected main is now 301b3cab9 and is not its ancestor. Exact-head hosted attempt 2 completed: both provenance chains, source preflight/candidate execution, Package attestation, and seven installed-wheel Playwright variants passed; both Vitest lanes then failed with the same unclassified no-result symptom and no cause artifact."
-    blocker: "The completed attempt-2 evidence requires a fresh authorized Stage A0 observation cycle. That cycle must first integrate current protected main under a remote-head guard and rotate exact review bindings; no current hosted lane is executing and no Stage A cause is verified."
+    predicate_result: "Exact head 07d3d7d71 is locally validated, independently reviewed, pushed, and contains its reviewed protected base 0e22fe9f4. It does not contain minimum required main ancestor 301b3cab9; live origin/main must be resolved at cycle start. Exact-head hosted attempt 2 completed: both provenance chains, source preflight/candidate execution, Package attestation, and seven installed-wheel Playwright variants passed; both Vitest lanes then failed with the same unclassified no-result symptom and no cause artifact."
+    blocker: "The completed attempt-2 evidence requires a fresh authorized Stage A0 observation cycle. That cycle must first resolve and integrate live origin/main under a remote-head guard and rotate exact review bindings; no current hosted lane is executing and no Stage A cause is verified."
     owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 2
     name: "Protected reviewed checker release and pinned wheel digest"
@@ -499,7 +515,7 @@ steps:
       hosted_cause_artifact_verified: false
       cause_specific_red_exists: false
       current_exact_head_reviewed: true
-      current_exact_head_contains_protected_main: false
+      reviewed_head_contains_minimum_required_main_ancestor: false
       current_exact_head_hosted_status: failed
       named_preflight_failure_artifact_verified: true
       named_preflight_failure_predicate: "runner-provisioner-version-count"
@@ -521,7 +537,7 @@ steps:
       current_attempt_2_installed_wheel_cause_artifact_present: false
       current_attempt_2_source_and_wheel_symptoms_match: true
     predicate_result: "Exact head 07d3d7d71 is locally validated and reviewed. Attempt 2 proves source preflight, both provenance chains, source candidate execution, installed-wheel identity, all seven Playwright variants, and installed-wheel candidate execution. Both candidates returned COLLECTION_ERROR/Vitest reporter produced no result and neither emitted an eligible fixed-enum cause artifact. Stage A remains red and no cause-specific RED exists."
-    blocker: "The current correction cycle is exhausted. A fresh explicitly authorized Terra/Sol cycle must integrate current protected main, add the separate cause-ineligible Stage A0 observation protocol, rotate exact bindings, and then recollect both lanes on a newly reviewed exact head before any cause frame, behavioral RED, or fix."
+    blocker: "The current correction cycle is exhausted. A fresh explicitly authorized Terra/Sol cycle must resolve and integrate live origin/main, add the separate cause-ineligible Stage A0 observation protocol, rotate exact bindings, and then recollect both lanes on a newly reviewed exact head before any cause frame, behavioral RED, or fix."
     owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 5
     name: "Canonical production routing"

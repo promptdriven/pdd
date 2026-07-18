@@ -42,8 +42,8 @@ remains controlling.
 | Locally validated | PR #2164 exact reviewed head `5f6d747aa75a0629f33d0900489a613a3f1e2b8d` passed its affected suites. PR #1995 exact head [`07d3d7d71d1dd308984d349d6751da9378579cf1`](https://github.com/promptdriven/pdd/commit/07d3d7d71d1dd308984d349d6751da9378579cf1) contains protected base `0e22fe9f4`. Terra reported 305 affected passes and 36 platform skips for the protected Package authority correction; post-main integration verifier/package/tamper tests passed 44. YAML, 45 embedded shell scripts, bash syntax, pycompile, pylint, and diff checks passed. | local evidence green for both diagnostic lanes |
 | Independently reviewed | Sol approved exact head `07d3d7d71`, producer digest `146919c7c1c2bbd09c9d0577723638b41591f09c301a7467d0ab5bb96fc2394b`, termination verifier `e371cd4d12a6b4d64ea3488d773054b2dfc51320db892e7019d1f20db393d1f2`, Package verifier `b6e923061ea73ed46af4d03e497aa9ed4e538129f85b1c0eabc1bd47d45e177e`, Package provenance `36f27b84f21b62b80dd5f2ad826e2fde395d986a5eec35936f9462335faa8ff1`, protected base `0e22fe9f4`, and verdict `NO_BEHAVIORAL_FIX`. | exact-composite approved |
 | Hosted green | #2164 exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907) passed all required checks. On #1995 prior head `daa67f2044`, [run 29635743590](https://github.com/promptdriven/pdd/actions/runs/29635743590) had green CodeQL, Story/Public CLI regressions, and Docker E2E, but Unit failed in silent preflight; Package passed all seven installed-wheel Playwright variants, then reproduced the installed-wheel Vitest exit with untrusted diagnostic `340afd630c05209f62419c312abe3aeb7464262e3c5d8367e8d28fec22428471`. On exact head `84b19758f`, [Unit job 88061484993](https://github.com/promptdriven/pdd/actions/runs/29637193871/job/88061484993) uploaded checksummed failure artifact `aec9faa5a2c27cfdaddfb0b82135493d7cafb594728ac22a897a738da0f8cbee`: predicate `runner-provisioner-version-count`, expected 1, actual 0, command exit 0, decoded observation `version=20260707.563`, full-output digest `1e40203d955c084de9ec279dbe867aa074eb9697c4549b763eb753e048536840`. On exact head `07d3d7d71`, [run 29639041827 attempt 1](https://github.com/promptdriven/pdd/actions/runs/29639041827/attempts/1) failed both lanes at `review-evidence-decode` because the protected base64 variable was missing one trailing padding character; the corrected value decodes to reviewed digest `c8ad0ae8e96806928d971e710be64bb5648fe7ed96fc5235a0e31561e5cff39c`. [Attempt 2](https://github.com/promptdriven/pdd/actions/runs/29639041827/attempts/2) passed provenance, all pre-Vitest Unit sandbox/transport checks, the Package wheel attestation, and all seven installed-wheel Playwright variants. Both source and wheel candidates then returned `COLLECTION_ERROR: Vitest reporter produced no result` without an eligible fixed-enum cause artifact. Source preflight PASS digest is `e9b33d7c02f55a9361ba74a1fd908d948bd60c5d6e288926e6822a8aa6d014c7`; wheel attestation digest is `52726db19e9ec485e8be54406c8629a0433f40739842409a57df667086be07a5`, binding wheel `41b528e5ebad9b25818d7cc89036ebaa4b3542401d7e0524792b4e051053cadd` to the reviewed runner. CodeQL, Story, Public CLI, and Docker E2E passed; Unit, Package, heal, and auto-heal remain red. | #1995 Stage A red at one shared unclassified coordinator exit |
-| Merged to protected `main` | #2164 merged with ancestry preserved at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e). #1995 is not merged. Remote PR head `07d3d7d71` contains its reviewed protected base `0e22fe9f4`, but current protected `main` advanced to `301b3cab9`; the next reviewed head must integrate that drift. | exact hosted checks, current-main ancestry, and cause gates remain pending |
-| Plan and ledger | [PR #2199](https://github.com/promptdriven/pdd/pull/2199) exact reviewed head `0d1d7919f763eee5fb96db17d43cd437e7ff03c7` passed its 12-check PR rollup. The contributing hosted evidence includes [Unit Tests run 29639929336](https://github.com/promptdriven/pdd/actions/runs/29639929336), [CodeQL run 29639928377](https://github.com/promptdriven/pdd/actions/runs/29639928377), [auto-heal run 29639928801](https://github.com/promptdriven/pdd/actions/runs/29639928801), and the exact-head aggregate CodeQL and auto-heal checks. It merged to protected `main` as [`301b3cab9e72123eaa66dc31babb9d49eab84918`](https://github.com/promptdriven/pdd/commit/301b3cab9e72123eaa66dc31babb9d49eab84918). | hosted green and merged; no global exit gate closed by this documentation merge |
+| Merged to protected `main` | #2164 merged with ancestry preserved at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e). #1995 is not merged. Remote PR head `07d3d7d71` contains its reviewed protected base `0e22fe9f4`, but does not contain minimum required ancestor `301b3cab9`; the next cycle must resolve and integrate live `origin/main`, which may be later. | exact hosted checks, live-main ancestry, and cause gates remain pending |
+| Plan and ledger | [PR #2199](https://github.com/promptdriven/pdd/pull/2199) exact reviewed head `0d1d7919f763eee5fb96db17d43cd437e7ff03c7` passed its 12-check PR rollup. The contributing hosted evidence includes [Unit Tests run 29639929336](https://github.com/promptdriven/pdd/actions/runs/29639929336), [CodeQL run 29639928377](https://github.com/promptdriven/pdd/actions/runs/29639928377), [auto-heal run 29639928801](https://github.com/promptdriven/pdd/actions/runs/29639928801), and the exact-head aggregate CodeQL and auto-heal checks. It merged as [`301b3cab9e72123eaa66dc31babb9d49eab84918`](https://github.com/promptdriven/pdd/commit/301b3cab9e72123eaa66dc31babb9d49eab84918). [PR #2207](https://github.com/promptdriven/pdd/pull/2207) then passed 12/12 checks on exact reviewed head `54a2a8d8b67c682a940884c749ae60b684738fde` and merged the status correction as [`8c5ac0d556e64b8f660336795f740bec7431b402`](https://github.com/promptdriven/pdd/commit/8c5ac0d556e64b8f660336795f740bec7431b402). | hosted green and merged; no global exit gate closed by either documentation merge |
 | Released checker | No protected reviewed checker release or pinned wheel digest exists. | pending |
 | Globally certified | No protected merge-group certificate or seven-night streak exists. | pending |
 
@@ -65,17 +65,18 @@ collection remains pending.
    `M2164 = d91b07a90` is on protected `main`.
 2. **Passed locally and reviewed; hosted parser RED closed in code:** exact head
    `07d3d7d71` contains reviewed protected base `0e22fe9f4`, has exact Sol
-   approval, and is the remote PR head. Current protected main advanced to
-   `301b3cab9` when #2199 merged, so the fresh cycle must integrate that main
-   drift and rotate all exact review bindings before recollection. Its
+   approval, and is the remote PR head. Protected main advanced at least through
+   `301b3cab9` after that review, so the fresh cycle must resolve live
+   `origin/main`, integrate it, and rotate all exact review bindings before
+   recollection. Its
    preflight emits canonical checksummed PASS or named failure evidence without
    changing candidate behavior. Hosted evidence proves the provisioner command
    succeeds and emits the pinned version as exact machine form
    `version=20260707.563`; the parser rejected that form.
-3. **Current gate, integrate then observe without classifying:** under a guarded
-   remote-head check, integrate current protected main into the one canonical
-   #1995 implementation branch and obtain fresh exact-composite review. Then add
-   Stage A0. Exact-head attempt 2 proves
+3. **Current gate, integrate then observe without classifying:** fetch and resolve
+   live `origin/main` under a guarded remote-head check, integrate that exact SHA
+   into the one canonical #1995 implementation branch, and obtain fresh
+   exact-composite review. Then add Stage A0. Exact-head attempt 2 proves
    that both source and installed-wheel lanes reach the same no-result exit after
    their identity and environment gates, but the protected coordinator emits no
    eligible fixed-enum cause. Reviewed control flow reaches this branch only
@@ -125,10 +126,11 @@ and merge_result(H1995) is on protected main
 ```
 
 For #2164, the complete first half of the predicate is true. For #1995,
-`H1995 = 07d3d7d71` is reviewed and pushed, but protected main has advanced to
-`301b3cab9`; its exact hosted checks and Stage A cause artifacts are not complete,
+`H1995 = 07d3d7d71` is reviewed and pushed, but it does not contain minimum main
+ancestor `301b3cab9`; live `origin/main` must be resolved at cycle start and may
+be later. Its exact hosted checks and Stage A cause artifacts are not complete,
 and no merge result exists. Therefore the #1995 predicate remains false. The
-single next gate is a guarded current-main integration followed by the separate
+single next gate is a guarded live-main integration followed by the separate
 evidence-only observation protocol for the shared
 exit-zero/no-result path observed in both source and wheel lanes. The observation
 must remain ineligible as cause proof; it is not a retry, a behavioral fix, or a
