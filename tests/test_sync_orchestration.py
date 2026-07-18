@@ -8906,9 +8906,15 @@ class TestIssue1080MonorepoCwd:
             result.stderr = ""
             return result
 
-        with patch('pdd.sync_orchestration.subprocess.run', side_effect=capture_run), \
-             patch('pdd.sync_orchestration.calculate_sha256', return_value="abc123"), \
-             patch('pdd.sync_orchestration.save_run_report'):
+        with (
+            patch('pdd.sync_orchestration.subprocess.run', side_effect=capture_run),
+            patch(
+                'pdd.sync_orchestration.trusted_hash_root_for_paths',
+                return_value=tmp_path,
+            ) as hash_root,
+            patch('pdd.sync_orchestration.calculate_sha256', return_value="abc123") as hash_file,
+            patch('pdd.sync_orchestration.save_run_report'),
+        ):
             try:
                 _execute_tests_and_create_run_report(
                     test_file=test_file,
@@ -8931,6 +8937,11 @@ class TestIssue1080MonorepoCwd:
             f"got cwd={actual_cwd}. _execute_tests_and_create_run_report uses "
             f"test_file.parent instead of config dir."
         )
+        assert hash_root.call_count == 2
+        assert [hash_call.args[1] for hash_call in hash_file.call_args_list] == [
+            tmp_path,
+            tmp_path,
+        ]
 
     # --- Test 13: sync_orchestration fix-operation path uses config dir ---
 
