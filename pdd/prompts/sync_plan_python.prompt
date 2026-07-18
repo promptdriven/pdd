@@ -51,9 +51,10 @@ excerpt; it must reject invented selections before writes.
    accepting any digest-consistent fallback document.
 6. Serialize canonical graph order separately from dependency-safe execution
    order.  Preserve an authoritative requested order only among independent
-   ready nodes; dependencies always execute first between SCCs, while members
-   of one SCC retain deterministic/requested order. Execution order is
-   validated, digested, persisted, and used by normal/durable resume.
+   ready SCC nodes in the condensed DAG; dependencies always execute first
+   between SCCs, while members of one SCC retain deterministic/requested order
+   and remain contiguous. Execution order is validated, digested, persisted,
+   and used by normal/durable resume.
 
 % Deliverables
 - Code: `pdd/sync_plan.py`
