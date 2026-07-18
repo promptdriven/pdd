@@ -119,9 +119,13 @@ READABLE_VISUAL_RE = re.compile(
     flags=re.IGNORECASE,
 )
 COMMAND_SHELL_VISUAL_RE = re.compile(
-    r"\b(?:(?:terminal|interactive|login|command(?:[-\s]+line)?)"
-    r"[-\s]+shell|shell[-\s]+(?:prompt|commands?|output|session|terminal|"
-    r"console|windows?|screens?|interfaces?))\b",
+    r"\b(?:(?:bash|posix|unix|zsh|fish|ksh|csh|tcsh|dash|"
+    r"bourne(?:[-\s]+again)?|terminal|interactive|login|"
+    r"command(?:[-\s]+line)?)[-\s]+shell|"
+    r"shell(?:[-\s]+(?:cli|prompt|commands?|output|session|terminal|console|"
+    r"windows?|screens?|interfaces?)|['’]s\s+(?:cli|prompt|commands?|output)|"
+    r"\s+(?:display(?:s|ed|ing)|show(?:s|ed|ing)|render(?:s|ed|ing)|"
+    r"present(?:s|ed|ing))\s+(?:(?:its|the)\s+)?(?:prompt|commands?|output)))\b",
     flags=re.IGNORECASE,
 )
 EXACT_GEOMETRY_VISUAL_RE = re.compile(
