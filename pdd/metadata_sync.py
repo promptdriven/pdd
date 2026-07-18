@@ -191,7 +191,7 @@ def _load_arch_entry_for_prompt(
     return None
 
 
-def run_metadata_sync(
+def _run_metadata_sync_locked(
     prompt_path: Path,
     code_path: Optional[Path] = None,
     *,
@@ -537,3 +537,40 @@ def run_metadata_sync(
         _stage_log_exit("fingerprint", "failed", reason)
 
     return result
+
+
+def run_metadata_sync(
+    prompt_path: Path,
+    code_path: Optional[Path] = None,
+    *,
+    dry_run: bool = False,
+    repo_root: Optional[Path] = None,
+    architecture_path: Optional[Path] = None,
+) -> MetadataSyncResult:
+    """Run metadata mutation and finalization under the owning unit lock."""
+    if dry_run:
+        return _run_metadata_sync_locked(
+            prompt_path, code_path, dry_run=dry_run, repo_root=repo_root,
+            architecture_path=architecture_path,
+        )
+    from .fingerprint_transaction import AtomicStateUpdate
+    from .operation_log import get_fingerprint_path, infer_module_identity
+
+    prompt = Path(prompt_path)
+    basename, language = infer_module_identity(prompt)
+    if not basename or not language:
+        return _run_metadata_sync_locked(
+            prompt, code_path, dry_run=dry_run, repo_root=repo_root,
+            architecture_path=architecture_path,
+        )
+    paths: Dict[str, Path] = {"prompt": prompt}
+    if code_path is not None:
+        paths["code"] = Path(code_path)
+    with AtomicStateUpdate(
+        basename, language,
+        directory=get_fingerprint_path(basename, language, paths=paths).parent,
+    ):
+        return _run_metadata_sync_locked(
+            prompt, code_path, dry_run=dry_run, repo_root=repo_root,
+            architecture_path=architecture_path,
+        )

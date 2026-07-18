@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+from contextlib import nullcontext
 import json
 import logging
 import os
@@ -631,6 +632,7 @@ def save_fingerprint(
     model: str = "unknown",
     *,
     remove_run_report: bool = False,
+    atomic_state: Any = None,
 ) -> None:
     """
     Save the current fingerprint/state to the state file.
@@ -652,7 +654,7 @@ def save_fingerprint(
 
     finalize_fingerprint(
         basename, language, operation, paths, cost, model,
-        remove_run_report=remove_run_report,
+        remove_run_report=remove_run_report, atomic_state=atomic_state,
     )
 
 
@@ -789,75 +791,60 @@ def log_operation(
             result = None
             error_msg = None
 
-            try:
-                result = func(*args, **kwargs)
-                success = True
-                return result
-            except Exception as e:
-                success = False
-                error_msg = str(e)
-                raise
-            finally:
-                duration = time.time() - start_time
-                cost = 0.0
-                model = "unknown"
-                if success and result:
-                    if isinstance(result, tuple) and len(result) >= 3:
-                        from .sync_orchestration import _extract_cost_from_result, _extract_model_from_result
-                        cost = _extract_cost_from_result(operation, result)
-                        model = _extract_model_from_result(operation, result)
+            outer_state = None
+            if basename and language:
+                # This outer scope begins before the decorated command body,
+                # then remains active while path completion, hashing, and
+                # journaled publication run in the finally block below.  Some
+                # commands only clear a report, but their writes must still be
+                # serialized with a concurrent command for the same unit.
+                from .fingerprint_transaction import AtomicStateUpdate
+                outer_state = AtomicStateUpdate(
+                    basename,
+                    language,
+                    directory=get_fingerprint_path(
+                        basename, language, paths=log_paths
+                    ).parent,
+                )
 
-                update_log_entry(entry, success=success, cost=cost, model=model, duration=duration, error=error_msg)
-                if _estimate_mode_active():
-                    pass
-                elif basename and language:
-                    append_log_entry(basename, language, entry, paths=log_paths)
-                    if success:
-                        fingerprint_allowed = True
-                        # Clear the stale run report only after the command
-                        # succeeds, so a failed run cannot erase existing
-                        # runtime verification state that still describes the
-                        # current code. The clear must happen before
-                        # save_fingerprint so a fresh fingerprint never
-                        # coexists with a stale per-module run report
-                        # (issue #1057).
-                        if clears_run_report:
-                            if updates_fingerprint:
-                                # The finalizer journals this tombstone with the
-                                # new fingerprint. Do not unlink evidence before
-                                # the durable commit point.
-                                fingerprint_allowed = True
-                            else:
+            with outer_state if outer_state is not None else nullcontext():
+                try:
+                    result = func(*args, **kwargs)
+                    success = True
+                    return result
+                except Exception as e:
+                    success = False
+                    error_msg = str(e)
+                    raise
+                finally:
+                    duration = time.time() - start_time
+                    cost = 0.0
+                    model = "unknown"
+                    if success and result:
+                        if isinstance(result, tuple) and len(result) >= 3:
+                            from .sync_orchestration import _extract_cost_from_result, _extract_model_from_result
+                            cost = _extract_cost_from_result(operation, result)
+                            model = _extract_model_from_result(operation, result)
+
+                    update_log_entry(entry, success=success, cost=cost, model=model, duration=duration, error=error_msg)
+                    if _estimate_mode_active():
+                        pass
+                    elif basename and language:
+                        append_log_entry(basename, language, entry, paths=log_paths)
+                        if success:
+                            fingerprint_allowed = True
+                            if clears_run_report and not updates_fingerprint:
                                 fingerprint_allowed = _clear_run_report_before_fingerprint(
                                     basename, language, paths=log_paths
                                 )
-                        if updates_fingerprint and not fingerprint_allowed:
-                            from .fingerprint_transaction import FingerprintFinalizeError
-                            raise FingerprintFinalizeError(
-                                operation,
-                                get_fingerprint_path(basename, language, paths=log_paths),
-                                "stale run report could not be cleared",
-                            )
-                        if updates_fingerprint and fingerprint_allowed:
-                            # Issue #1305 + #1211: save_fingerprint hashes only
-                            # Path values, so a bare {"prompt": <str>} hint
-                            # yields all-null hashes (the prompt string is
-                            # skipped and code/example/test keys are absent) and
-                            # the fingerprint never converges (CI auto-heal
-                            # loops). Resolve the authoritative, complete Path
-                            # set here. get_pdd_file_paths re-resolves the
-                            # prompts root from the run CWD, so anchor it at the
-                            # prompt file's subproject via an absolute
-                            # prompts_dir — otherwise a command run from a PARENT
-                            # CWD for a nested subproject resolves to the parent
-                            # (null hashes again) and writes the fingerprint
-                            # outside the subproject, splitting it from the log /
-                            # run report that log_paths anchors. Fall back to a
-                            # Path-coerced prompt hint (never a raw string) if
-                            # resolution fails, so anchoring still works. The
-                            # #983 contract is preserved: the caller resolves the
-                            # paths, so save_fingerprint does not.
-                            try:
+                            if updates_fingerprint and not fingerprint_allowed:
+                                from .fingerprint_transaction import FingerprintFinalizeError
+                                raise FingerprintFinalizeError(
+                                    operation,
+                                    get_fingerprint_path(basename, language, paths=log_paths),
+                                    "stale run report could not be cleared",
+                                )
+                            if updates_fingerprint:
                                 fingerprint_paths = resolve_fingerprint_paths(
                                     basename, language, Path(prompt_file), paths=log_paths
                                 )
@@ -869,10 +856,9 @@ def log_operation(
                                     cost=cost,
                                     model=model,
                                     remove_run_report=clears_run_report,
+                                    atomic_state=outer_state,
                                 )
-                            except Exception:
-                                raise
-                        if updates_run_report and isinstance(result, dict):
-                            save_run_report(basename, language, result, paths=log_paths)
+                            if updates_run_report and isinstance(result, dict):
+                                save_run_report(basename, language, result, paths=log_paths)
         return wrapper
     return decorator
