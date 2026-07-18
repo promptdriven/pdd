@@ -433,6 +433,33 @@ class TestDeterministicChangeJudges:
                 "available for inspection."
             ),
             "If all 3 attempts fail, fallback diagnostics remain available.",
+            (
+                "If fetch_data raises a connection error, retry from the "
+                "beginning. Use a maximum of 3 attempts. If the connection "
+                "error persists after the 3rd attempt, keep retrying."
+            ),
+            (
+                "Use a maximum of 3 attempts. If the connection error persists "
+                "after the 3rd attempt, return success."
+            ),
+            (
+                "Use a maximum of 3 attempts. If the connection error persists "
+                "after the 3rd attempt, do not raise it; keep retrying."
+            ),
+            (
+                "Use a maximum of 3 attempts. If the connection error persists "
+                "after the 3rd attempt, avoid raising the exception."
+            ),
+            (
+                "Log each fetch attempt for diagnostics. Use a maximum of 3 "
+                "attempts. If the connection error persists after the 3rd "
+                "attempt, keep retrying."
+            ),
+            (
+                "Use a maximum of 3 attempts. If the connection error persists "
+                "after the 3rd attempt, keep retrying. Separately, log request "
+                "metrics."
+            ),
         ),
     )
     def test_retry_fallback_judge_rejects_non_fallback_conditions(
