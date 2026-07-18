@@ -144,7 +144,11 @@ class LazyCommandMapping(dict[str, click.Command]):
                 module_name, attribute = target
                 module = sys.modules.get(module_name)
                 current = getattr(module, attribute, value) if module else value
-                if key not in self._resolved_keys and current is value:
+                if (
+                    key not in self._resolved_keys
+                    and module is not None
+                    and current is value
+                ):
                     with self._lock:
                         if dict.__getitem__(self, key) is value:
                             self._resolved_keys.add(key)
@@ -230,7 +234,10 @@ class LazyCommandMapping(dict[str, click.Command]):
 
     def clear(self) -> None:
         dict.clear(self)
-        self._targets.clear()
+        # Targets describe which names are canonical, not which slots are
+        # currently present. Retain them so a normal clear/update snapshot
+        # restore can recover canonical provenance without turning explicit
+        # plugin replacements into reload-managed commands.
         self._resolved_keys.clear()
 
     def pop(self, key: str, *default: Any) -> Any:
