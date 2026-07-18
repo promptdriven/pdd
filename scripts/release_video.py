@@ -125,6 +125,13 @@ UNAMBIGUOUS_SHELL_IMPLEMENTATION_RE = re.compile(
 COMMAND_SHELL_NAME_PATTERN = (
     r"(?:bash|zsh|xonsh|korn|ksh|csh|tcsh|bourne(?:[-\s]+again)?|powershell)"
 )
+BASH_NAMED_SURFACE_RE = re.compile(
+    r"\bBash\s+(?:history|scripts?|sessions?|windows?)\b"
+)
+COMMAND_SHELL_PATH_RE = re.compile(
+    rf"(?<!\w)/bin/{COMMAND_SHELL_NAME_PATTERN}\b",
+    flags=re.IGNORECASE,
+)
 NAMED_COMMAND_SHELL_RE = re.compile(
     rf"(?<!\w)(?:/bin/)?{COMMAND_SHELL_NAME_PATTERN}\s+"
     r"(?:prompts?|outputs?|standard\s+outputs?)\b|"
@@ -142,22 +149,27 @@ COMMAND_SHELL_EXECUTION_RE = re.compile(
     rf"(?:a\s+|the\s+)?(?:/bin/)?{COMMAND_SHELL_NAME_PATTERN}\b",
     flags=re.IGNORECASE,
 )
+SHELL_SUBJECT_CONTEXT_PATTERN = (
+    r"(?:(?![.!?;]|\b(?:that|who|which)\b|"
+    r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b).){0,100}"
+)
 SHELL_OWNED_COMPUTING_RE = re.compile(
+    r"\bshell[-\s]+outputs?\s+windows?\b|"
     r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
-    r"(?:scripts?|history|prompts?|cli|screens?|sessions?|"
+    r"(?:scripts?|prompts?|cli|screens?|sessions?|"
     r"working\s+director(?:y|ies)|standard\s+outputs?|current\s+outputs?|"
-    r"outputs?|technical\s+surfaces?)\b|"
+    r"command\s+outputs?|technical\s+surfaces?)\b|"
     r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
     r"windows?\b(?!\s+of\s+(?:light|glow))|"
     r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
     r"interfaces?\b(?!\s+between\b)|"
     r"\bshell(?:s|-like)?(?:['’]s)?\b"
-    r"(?:(?![.!?;]).){0,100}\b"
+    rf"{SHELL_SUBJECT_CONTEXT_PATTERN}\b"
     r"(?:is|has|with|hosts?|contains?|shows?|reads?|invokes?|displays?|"
     r"displaying|presents?|presenting|renders?|rendering)\b"
     r"(?:(?![.!?;]).){0,60}\b"
     rf"(?:{COMMAND_SHELL_NAME_PATTERN}\s+sessions?|prompts?|"
-    r"(?:blinking\s+)?(?:cursors?|carets?)|cli|keystrokes?|"
+    r"(?:blinking\s+)?(?:cursors?|carets?)(?![-\s]+shaped\b)|cli|keystrokes?|"
     r"stdout|stderr|system\s+sessions?|login\s+sessions?|stdin|"
     r"working\s+director(?:y|ies)|"
     r"standard\s+outputs?|current\s+outputs?|command\s+outputs?|outputs?)\b",
@@ -165,8 +177,7 @@ SHELL_OWNED_COMPUTING_RE = re.compile(
 )
 SHELL_INPUT_INTERACTION_RE = re.compile(
     r"\bshell(?:s|-like)?(?:['’]s)?\b"
-    r"(?:(?![.!?;]|\b(?:that|who|which)\b|"
-    r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b).){0,80}"
+    rf"{SHELL_SUBJECT_CONTEXT_PATTERN}"
     r"\b(?:accepts?|awaits?|receives?|takes?|waits\s+for)\b"
     r"(?:(?![.!?;]).){0,20}\b(?:keyboard\s+|typed\s+|user\s+)?inputs?\b",
     flags=re.IGNORECASE | re.DOTALL,
@@ -179,7 +190,7 @@ UNAMBIGUOUS_COMPUTING_SURFACE_RE = re.compile(
     r"\b(?:shows?|displays?|presents?|contains?)\s+(?:a\s+|the\s+|its\s+)?"
     r"(?:cursors?|carets?)\b(?![-\s]+shaped\b)|"
     r"\btyped\s+inputs?\b|"
-    r"\b(?:prints?|writes?)\s+(?:(?:its|the|current)\s+){0,2}outputs?\b|"
+    r"\b(?:prints?|writes?)\b(?:(?![.!?;]).){0,40}\boutputs?\b|"
     r"\b(?:stdout|stderr|cli|repl|keystrokes?|command\s+outputs?|"
     r"standard\s+outputs?|stdin|environment\s+variables?|"
     r"(?:login|terminal|command|system)\s+sessions?)\b",
@@ -3524,6 +3535,8 @@ def has_risky_shell_visual(cue: str) -> bool:
         pattern.search(cue)
         for pattern in (
             UNAMBIGUOUS_SHELL_IMPLEMENTATION_RE,
+            BASH_NAMED_SURFACE_RE,
+            COMMAND_SHELL_PATH_RE,
             NAMED_COMMAND_SHELL_RE,
             COMMAND_SHELL_EXECUTION_RE,
             SHELL_OWNED_COMPUTING_RE,
