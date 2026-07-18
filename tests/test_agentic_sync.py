@@ -1679,7 +1679,7 @@ class TestRunAgenticSync:
             0.05,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path.cwd()}, {"foo": "foo"}, [], 0.0)
 
         mock_runner = MagicMock()
         # Runner now includes initial_cost (0.05) + per-module (0.10) = 0.15
@@ -1737,7 +1737,7 @@ class TestRunAgenticSync:
             0.05,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path.cwd()}, {"foo": "foo"}, [], 0.0)
 
         success, msg, cost, model = run_agentic_sync(
             "https://github.com/owner/repo/issues/1",
@@ -1801,7 +1801,7 @@ class TestRunAgenticSync:
             0.05,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path.cwd()}, {"foo": "foo"}, [], 0.0)
 
         success, msg, cost, model = run_agentic_sync(
             "https://github.com/owner/repo/issues/1",
@@ -1852,7 +1852,7 @@ class TestRunAgenticSync:
         mock_build_graph.return_value = DepGraphFromArchitectureResult(
             {"crm_models": ["api_orders"], "api_orders": []}, []
         )
-        mock_dry_run.return_value = (True, {"crm_models": Path("/tmp"), "api_orders": Path("/tmp")}, {"crm_models": "crm_models", "api_orders": "api_orders"}, [], 0.0)
+        mock_dry_run.return_value = (True, {"crm_models": Path.cwd(), "api_orders": Path.cwd()}, {"crm_models": "crm_models", "api_orders": "api_orders"}, [], 0.0)
 
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "All 2 modules synced successfully", 0.20)
@@ -1909,7 +1909,7 @@ class TestRunAgenticSync:
             0.07,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path.cwd()}, {"foo": "foo"}, [], 0.0)
 
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
@@ -1962,7 +1962,7 @@ class TestRunAgenticSync:
             0.05,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": tmp_path}, {"foo": "foo"}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path.cwd()}, {"foo": "foo"}, [], 0.0)
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "durable done", 0.15)
         mock_durable_runner_cls.return_value = mock_runner
@@ -3446,7 +3446,7 @@ class TestRuntimeLlmTemplateNoop:
             0.06,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path.cwd()}, {"foo": "foo"}, [], 0.0)
 
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
