@@ -562,12 +562,12 @@ def test_architecture_stage_skipped_with_correct_reason(tmp_path: Path) -> None:
 # Stage-specific behavior — run_report
 # ---------------------------------------------------------------------------
 
-def test_run_report_clears_via_clear_run_report(tmp_path: Path) -> None:
+def test_run_report_tombstone_is_owned_by_fingerprint_transaction(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     with patch.object(ms, "clear_run_report") as mock_clear, \
          patch.object(ms, "save_fingerprint"):
         result = run_metadata_sync(ws["prompt_path"], dry_run=False)
-    mock_clear.assert_called_once_with("demo", "python", paths=ANY)
+    mock_clear.assert_not_called()
     assert result.stages["run_report"].status == "ok"
 
 
@@ -616,8 +616,8 @@ def test_fingerprint_runs_last_after_other_stages(tmp_path: Path) -> None:
     with patch.object(ms, "clear_run_report", side_effect=_record_clear), \
          patch.object(ms, "save_fingerprint", side_effect=_record_save):
         run_metadata_sync(ws["prompt_path"], dry_run=False)
-    # save_fingerprint must run AFTER clear_run_report.
-    assert call_order == ["clear_run_report", "save_fingerprint"], call_order
+    # The journaled finalizer owns the tombstone; no pre-publication unlink.
+    assert call_order == ["save_fingerprint"], call_order
 
 
 def test_fingerprint_dry_run_does_not_persist(tmp_path: Path) -> None:
