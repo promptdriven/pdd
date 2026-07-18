@@ -381,6 +381,52 @@ class TestDeterministicChangeJudges:
         assert not missing.passed
         assert "exhaust" in missing.reasoning
 
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "The runner must allow for a maximum of 3 attempts. If the "
+                "connection error persists after the 3rd attempt, run_pipeline "
+                "must raise the exception to the user."
+            ),
+            "If the error remains after the 3rd attempt, raise it.",
+            "When the exception persists after the 4th retry attempt, abort.",
+            "When the exception remains after the 4th attempt, surface it.",
+            "If failure persists after the 2nd attempt, return an error result.",
+            "If the failure remains after the 2nd retry attempt, propagate it.",
+        ),
+    )
+    def test_retry_fallback_judge_accepts_persistent_ordinal_failure(
+        self, guidance: str
+    ) -> None:
+        """Persistent failure at the final ordinal attempt is exhaustion."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "If the connection error does not persist after the 3rd "
+                "attempt, return success."
+            ),
+            "If the connection error persists after the 3rd attempt, keep retrying.",
+            "If all 3 attempts fail, keep retrying.",
+            (
+                "If all 3 attempts fail, the final connection error remains "
+                "available for inspection."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_non_fallback_conditions(
+        self, guidance: str
+    ) -> None:
+        """Failure state alone, negation, or continued retry is no fallback."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed
+
 
 @pytest.mark.real
 class TestCallSiteEnumeration:
