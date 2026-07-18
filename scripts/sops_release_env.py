@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,131 @@ CLAUDE_SLOT_NAMES = (
     "CLAUDE_CODE_OAUTH_TOKEN_2",
     "CLAUDE_CODE_OAUTH_TOKEN_3",
 )
+
+# This is deliberately an internal constant rather than a caller override:
+# its purpose is to keep command lookup out of ambient/decrypted PATH. These
+# are the conventional system/admin executable locations on Linux and macOS.
+RELEASE_TRUSTED_PATH = (
+    "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+)
+
+# GNU Make accepts control input from its environment before it reads the
+# Makefile. Do not let either the caller's ambient state or decrypted release
+# data provide include files, flags, recursive overrides, or an alternate
+# shell/Make command to the child process.
+MAKE_CONTROL_NAMES = (
+    "MAKEFILES",
+    "MAKEFLAGS",
+    "GNUMAKEFLAGS",
+    "MFLAGS",
+    "MAKEOVERRIDES",
+    "MAKELEVEL",
+    "MAKE_RESTARTS",
+    "MAKE_TERMOUT",
+    "MAKE_TERMERR",
+    "MAKE",
+    "MAKE_COMMAND",
+    "MAKE_INCLUDE_PATH",
+    "VPATH",
+    "SHELL",
+)
+
+# The reviewed public Make invocation supplies these again as explicit command
+# arguments after SOPS. They must never originate in decrypted or ambient env.
+ATTESTATION_NAMES = (
+    "PDD_CLOUD_RELEASE_ATTESTATION_VERSION",
+    "PDD_CLOUD_VALIDATED_SHA",
+    "PDD_CLOUD_RELEASE_LEASE_OWNER",
+    "PDD_CLOUD_RELEASE_LEASE_REF",
+)
+
+# Release credentials are decrypted immediately before the recursive Make. A
+# caller or decrypted dotenv file must not choose shell startup code, Python
+# imports, Git configuration/hooks, repository/object storage, or Git helper
+# executables for that credentialed process.
+EXECUTION_CONTROL_NAMES = (
+    "PATH",
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_RUNTIME_DIR",
+    "BASH_ENV",
+    "ENV",
+    "SHELLOPTS",
+    "BASHOPTS",
+    "CDPATH",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PYTHONSTARTUP",
+    "PYTHONUSERBASE",
+    "PYTHONINSPECT",
+    "PYTHONBREAKPOINT",
+    "PYTHONPYCACHEPREFIX",
+    "PYTHONSAFEPATH",
+    "SOPS",
+    "CLAUDE_CLI",
+    "PDS_CLI",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG_NOSYSTEM",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_INDEX_VERSION",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_QUARANTINE_PATH",
+    "GIT_EXEC_PATH",
+    "GIT_TEMPLATE_DIR",
+    "GIT_SSH",
+    "GIT_SSH_COMMAND",
+    "GIT_ASKPASS",
+    "SSH_ASKPASS",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    "GIT_OPTIONAL_LOCKS",
+    "GIT_ATTR_NOSYSTEM",
+    "GIT_REPLACE_REF_BASE",
+)
+
+EXECUTION_CONTROL_PREFIXES = (
+    "GIT_CONFIG_KEY_",
+    "GIT_CONFIG_VALUE_",
+    # Dynamic-loader injection executes before a credentialed binary's own
+    # code. Node/NPM controls can likewise load modules or redirect the pinned
+    # `npx` PDS command to an attacker-selected package.
+    "LD_",
+    "DYLD_",
+    "NODE_",
+    "NPM_CONFIG_",
+    "npm_config_",
+    "BASH_FUNC_",
+)
+
+
+def discard_execution_controls(env: dict[str, str]) -> None:
+    """Remove executable-control values, including indexed Git config input."""
+    for name in (*MAKE_CONTROL_NAMES, *ATTESTATION_NAMES, *EXECUTION_CONTROL_NAMES):
+        env.pop(name, None)
+    for name in tuple(env):
+        if name.startswith(EXECUTION_CONTROL_PREFIXES):
+            env.pop(name, None)
+
+
+def trusted_execution_env() -> dict[str, str]:
+    """Return an environment safe for resolving release executables."""
+    env = os.environ.copy()
+    discard_execution_controls(env)
+    # `npx` consults HOME/XDG configuration before it downloads the pinned PDS
+    # package. Derive the account home from the OS database, not an input env.
+    env["HOME"] = pwd.getpwuid(os.getuid()).pw_dir
+    env["PATH"] = RELEASE_TRUSTED_PATH
+    return env
 
 
 def parse_dotenv(text: str) -> dict[str, str]:
@@ -48,6 +174,7 @@ def decrypt_env_file(sops: str, path: Path) -> dict[str, str]:
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=trusted_execution_env(),
     )
     if completed.returncode != 0:
         details = completed.stderr.strip() or "sops decrypt failed"
@@ -57,11 +184,13 @@ def decrypt_env_file(sops: str, path: Path) -> dict[str, str]:
 
 def build_env(args: argparse.Namespace) -> dict[str, str]:
     """Build the child process environment from release and Claude SOPS files."""
-    if shutil.which(args.sops) is None:
+    sops = shutil.which(args.sops, path=RELEASE_TRUSTED_PATH)
+    if sops is None:
         raise RuntimeError(f"{args.sops} CLI is required")
 
-    env = os.environ.copy()
-    release_env = decrypt_env_file(args.sops, Path(args.release_env_file))
+    env = trusted_execution_env()
+    release_env = decrypt_env_file(sops, Path(args.release_env_file))
+    discard_execution_controls(release_env)
     env.update(release_env)
 
     for name in CLAUDE_SLOT_NAMES:
@@ -78,7 +207,7 @@ def build_env(args: argparse.Namespace) -> dict[str, str]:
             )
             continue
         slot_name = CLAUDE_SLOT_NAMES[slot_index]
-        source_env = decrypt_env_file(args.sops, source_path)
+        source_env = decrypt_env_file(sops, source_path)
         token = source_env.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
         if not token:
             print(

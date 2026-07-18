@@ -124,7 +124,13 @@ PDS_API_URL ?= https://video.promptdriven.ai
 SOPS ?= sops
 SOPS_RELEASE_ENV_FILE ?= $(firstword $(wildcard ../secrets/pdd_cloud/shared.prod.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.prod.sops.env secrets/pdd_cloud/shared.prod.sops.env) ../secrets/pdd_cloud/shared.prod.sops.env)
 SOPS_RELEASE_CLAUDE_ENV_FILES ?= $(wildcard ../secrets/pdd_cloud/shared.staging.sops.env ../secrets/pdd_cloud/shared.staging2.sops.env ../secrets/pdd_cloud/shared.prod.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.staging.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.staging2.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.prod.sops.env secrets/pdd_cloud/shared.staging.sops.env secrets/pdd_cloud/shared.staging2.sops.env secrets/pdd_cloud/shared.prod.sops.env)
-SOPS_RELEASE_ENV_RUNNER := python scripts/sops_release_env.py --sops "$(SOPS)" --release-env-file "$(SOPS_RELEASE_ENV_FILE)" $(foreach file,$(SOPS_RELEASE_CLAUDE_ENV_FILES),--claude-env-file "$(file)")
+# The credentialed release path must not resolve its launchers from an ambient
+# or decrypted PATH. Keep this to conventional system/admin locations on Linux
+# and macOS (including Apple Silicon Homebrew), never a project/user directory.
+RELEASE_TRUSTED_PATH := /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+# Isolated mode rejects caller/decrypted PYTHONPATH and other PYTHON* import
+# controls before this script decrypts release credentials.
+SOPS_RELEASE_ENV_RUNNER := env -u PATH PATH="$(RELEASE_TRUSTED_PATH)" python3 -I scripts/sops_release_env.py --sops "$(SOPS)" --release-env-file "$(SOPS_RELEASE_ENV_FILE)" $(foreach file,$(SOPS_RELEASE_CLAUDE_ENV_FILES),--claude-env-file "$(file)")
 REQUIRE_CLAUDE_OAUTH_SLOTS ?= 1
 
 RELEASE_VIDEO_STATUS_QUERY_FLAG :=
@@ -146,7 +152,11 @@ ifeq ($(CI),true)
 SKIP_MAKEFILE_REGEN := 1
 endif
 
-RELEASE_MAKE_GOALS := release release-video release-video-status release-video-discord-backfill release-video-skip release-local release-sops release-infisical check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
+RELEASE_MAKE_GOALS := release release-video release-video-status release-video-discord-backfill release-video-skip release-local release-sops release-infisical check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops test-release-sops-attestation-recursion
+# Target-specific export reaches prerequisites and recursive Make invocations.
+# `override` prevents a command-line PATH assignment from reintroducing an
+# attacker-selected executable before SOPS decryption.
+$(RELEASE_MAKE_GOALS): override export PATH := $(RELEASE_TRUSTED_PATH)
 ifneq ($(filter $(RELEASE_MAKE_GOALS),$(MAKECMDGOALS)),)
 SKIP_MAKEFILE_REGEN := 1
 endif
@@ -167,7 +177,23 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-sops release-infisical release-video release-video-status release-video-discord-backfill release-video-skip check-release-remote check-release-branch check-release-clean check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
+# Source marker consumed by pdd_cloud before it validates a public revision.
+PDD_CLOUD_RELEASE_ATTESTATION_CONTRACT_VERSION := 2
+PDD_CLOUD_RELEASE_LEASE_REF ?= refs/pdd-cloud/release-lease
+# A SOPS-backed recursive Make does not inherit command-line variable origin.
+# Keep the reviewed attestation inputs explicit at that boundary so the nested
+# Make can verify their origin is "command line" even after its environment is
+# sanitized.
+PDD_CLOUD_RELEASE_ATTESTATION_ARGS :=
+ifneq ($(strip $(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)$(PDD_CLOUD_VALIDATED_SHA)$(PDD_CLOUD_RELEASE_LEASE_OWNER)),)
+PDD_CLOUD_RELEASE_ATTESTATION_ARGS := \
+	"PDD_CLOUD_RELEASE_ATTESTATION_VERSION=$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" \
+	"PDD_CLOUD_VALIDATED_SHA=$(PDD_CLOUD_VALIDATED_SHA)" \
+	"PDD_CLOUD_RELEASE_LEASE_OWNER=$(PDD_CLOUD_RELEASE_LEASE_OWNER)" \
+	"PDD_CLOUD_RELEASE_LEASE_REF=$(PDD_CLOUD_RELEASE_LEASE_REF)"
+endif
+
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-sops release-infisical release-video release-video-status release-video-discord-backfill release-video-skip check-release-remote check-release-branch check-release-clean check-release-attestation-contract check-release-attestation-existing-tag check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -686,27 +712,33 @@ upload-pypi:
 	@echo "Uploading wheel to PyPI"
 	@conda run -n pdd --no-capture-output twine upload --repository pypi dist/*.whl
 
+# Release trust-boundary operations must use canonical objects named by their
+# SHA/ref arguments. Close caller/decrypted config injection, hook,
+# repository/object, and helper-path controls; only canonical transport auth
+# remains available to Git.
+RELEASE_TRUSTED_GIT = env -u PATH PATH="$(RELEASE_TRUSTED_PATH)" env -u GIT_CONFIG -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_CONFIG_GLOBAL -u GIT_CONFIG_SYSTEM -u GIT_CONFIG_NOSYSTEM -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE -u GIT_INDEX_VERSION -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_QUARANTINE_PATH -u GIT_EXEC_PATH -u GIT_TEMPLATE_DIR -u GIT_SSH -u GIT_SSH_COMMAND -u GIT_ASKPASS -u SSH_ASKPASS -u GIT_CEILING_DIRECTORIES -u GIT_DISCOVERY_ACROSS_FILESYSTEM -u GIT_OPTIONAL_LOCKS -u GIT_ATTR_NOSYSTEM -u GIT_REPLACE_REF_BASE GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_NO_REPLACE_OBJECTS=1 git -c core.hooksPath=/dev/null
+
 publish:
 	@set -e; \
-	if [ -n "$$(git status --porcelain)" ]; then \
+	if [ -n "$$($(RELEASE_TRUSTED_GIT) status --porcelain)" ]; then \
 		echo "Error: working tree is dirty; refusing to publish."; \
 		echo "python -m build reads files from the working tree, not from the commit,"; \
 		echo "so uncommitted edits would be baked into the wheel. Commit or stash first."; \
-		git status --short; \
+		$(RELEASE_TRUSTED_GIT) status --short; \
 		exit 1; \
 	fi; \
-	HEAD_SHA=$$(git rev-parse HEAD); \
-	TAG=$$(git tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
+	HEAD_SHA=$$($(RELEASE_TRUSTED_GIT) rev-parse HEAD); \
+	TAG=$$($(RELEASE_TRUSTED_GIT) tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
 	if [ -z "$$TAG" ]; then \
 		echo "Error: HEAD has no release tag (vN.N.N) pointing at it; refusing to publish."; \
 		echo "Run 'make release' to create and push a tag instead."; \
 		exit 1; \
 	fi; \
 	echo "Verifying $$TAG exists on origin at HEAD"; \
-	git fetch --tags --prune origin; \
-	REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$TAG^{}" "refs/tags/$$TAG" 2>/dev/null | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
+	$(RELEASE_TRUSTED_GIT) fetch --tags --prune origin; \
+	REMOTE_TAG_COMMIT=$$($(RELEASE_TRUSTED_GIT) ls-remote origin "refs/tags/$$TAG^{}" "refs/tags/$$TAG" 2>/dev/null | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
 	if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
-		REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$TAG" 2>/dev/null | awk 'NR==1 {print $$1}'); \
+		REMOTE_TAG_COMMIT=$$($(RELEASE_TRUSTED_GIT) ls-remote origin "refs/tags/$$TAG" 2>/dev/null | awk 'NR==1 {print $$1}'); \
 	fi; \
 	if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
 		echo "Error: tag $$TAG is local-only; push it first ('git push origin $$TAG') or use 'make release'."; \
@@ -751,8 +783,8 @@ check-suspicious-files:
 	fi
 
 check-release-remote:
-	@FETCH_URL=$$(git remote get-url origin); \
-	PUSH_URL=$$(git remote get-url --push origin); \
+	@FETCH_URL=$$($(RELEASE_TRUSTED_GIT) remote get-url origin); \
+	PUSH_URL=$$($(RELEASE_TRUSTED_GIT) remote get-url --push origin); \
 	for url in "$$FETCH_URL" "$$PUSH_URL"; do \
 		case "$$url" in \
 			*github.com:promptdriven/pdd|*github.com:promptdriven/pdd.git|*github.com/promptdriven/pdd|*github.com/promptdriven/pdd.git) ;; \
@@ -768,14 +800,14 @@ check-release-remote:
 
 check-release-branch:
 	@set -e; \
-	BRANCH=$$(git symbolic-ref --quiet --short HEAD || echo ""); \
+	BRANCH=$$($(RELEASE_TRUSTED_GIT) symbolic-ref --quiet --short HEAD || echo ""); \
 	if [ "$$BRANCH" != "main" ]; then \
 		echo "Error: release must run from branch main, not '$$BRANCH'."; \
 		exit 1; \
 	fi; \
-	git fetch origin main; \
-	LOCAL=$$(git rev-parse HEAD); \
-	REMOTE=$$(git rev-parse origin/main); \
+	$(RELEASE_TRUSTED_GIT) fetch origin main; \
+	LOCAL=$$($(RELEASE_TRUSTED_GIT) rev-parse HEAD); \
+	REMOTE=$$($(RELEASE_TRUSTED_GIT) rev-parse origin/main); \
 	if [ "$$LOCAL" != "$$REMOTE" ]; then \
 		echo "Error: local main must be aligned with origin/main before release."; \
 		echo "  local HEAD:  $$LOCAL"; \
@@ -785,10 +817,47 @@ check-release-branch:
 	echo "Release branch verified: main is aligned with origin/main"
 
 check-release-clean:
-	@if [ -n "$$(git status --porcelain)" ]; then \
+	@if [ -n "$$($(RELEASE_TRUSTED_GIT) status --porcelain)" ]; then \
 		echo "Error: working tree must be clean before release."; \
-		git status --short; \
+		$(RELEASE_TRUSTED_GIT) status --short; \
 		exit 1; \
+	fi
+
+# With no PDD_CLOUD_* inputs this is an explicit standalone release. It retains
+# the historical direct-release behavior, but makes no pdd_cloud attestation
+# guarantee. Supplying any such input selects the closed version-2 contract.
+check-release-attestation-contract:
+	@set -e; \
+	if [ -z "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" ] && [ -z "$(PDD_CLOUD_VALIDATED_SHA)" ] && [ -z "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" ] && [ "$(origin PDD_CLOUD_RELEASE_LEASE_REF)" != "command line" ]; then \
+		echo "Standalone direct release: no pdd_cloud attestation guarantee."; \
+		exit 0; \
+	fi; \
+	for variable in PDD_CLOUD_RELEASE_ATTESTATION_VERSION PDD_CLOUD_VALIDATED_SHA PDD_CLOUD_RELEASE_LEASE_OWNER PDD_CLOUD_RELEASE_LEASE_REF; do \
+		case "$$variable" in \
+			PDD_CLOUD_RELEASE_ATTESTATION_VERSION) origin="$(origin PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" ;; \
+			PDD_CLOUD_VALIDATED_SHA) origin="$(origin PDD_CLOUD_VALIDATED_SHA)" ;; \
+			PDD_CLOUD_RELEASE_LEASE_OWNER) origin="$(origin PDD_CLOUD_RELEASE_LEASE_OWNER)" ;; \
+			PDD_CLOUD_RELEASE_LEASE_REF) origin="$(origin PDD_CLOUD_RELEASE_LEASE_REF)" ;; \
+		esac; \
+		[ "$$origin" = "command line" ] || { echo "Error: $$variable must be a GNU Make command-line assignment for the pdd_cloud release path."; exit 1; }; \
+	done; \
+	python3 -I scripts/release_attestation.py validate \
+		--version "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" \
+		--sha "$(PDD_CLOUD_VALIDATED_SHA)" \
+		--owner "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" \
+		--lease-ref "$(PDD_CLOUD_RELEASE_LEASE_REF)"
+
+# A v2 attestation authorizes one new-tag final boundary only. A locally known
+# tag stops here before release preflights. A remote-only tag is discovered
+# after release fetches tags, so preflights may already have run; either path
+# stops before GitHub/video or other release side effects from release-local.
+check-release-attestation-existing-tag:
+	@if [ "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" = "2" ]; then \
+		EXISTING_TAG=$$($(RELEASE_TRUSTED_GIT) tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1 || true); \
+		if [ -n "$$EXISTING_TAG" ]; then \
+			echo "Error: contract-v2 release-local refuses existing tag $$EXISTING_TAG before release side effects. Verify the exact tag, run, and PyPI state, then follow docs/contributors/pdd-cli-release-process.md#same-tag-package-workflow-recovery." >&2; \
+			exit 1; \
+		fi; \
 	fi
 
 check-release-video-config:
@@ -798,7 +867,7 @@ check-release-video-config:
 	export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
 	RELEASE_VIDEO="$(RELEASE_VIDEO)" \
 	RELEASE_VIDEO_PDS_CREATE_TIMEOUT="$(RELEASE_VIDEO_PDS_CREATE_TIMEOUT)" \
-	python scripts/release_video.py \
+	python3 -I scripts/release_video.py \
 		--preflight \
 		--pds-cli "$(PDS_CLI)" \
 		--claude-model "$(RELEASE_VIDEO_CLAUDE_MODEL)" \
@@ -855,15 +924,42 @@ check-release-video-config-infisical:
 	@echo "check-release-video-config-infisical is deprecated; use make check-release-video-config-local (SOPS-backed)." >&2
 	@$(MAKE) --no-print-directory check-release-video-config-sops
 
-release-local: release-sops
+release-local: check-release-attestation-contract check-release-attestation-existing-tag release-sops
 
-release-sops:
+release-sops: check-release-attestation-contract check-release-attestation-existing-tag
 	@command -v "$(SOPS)" >/dev/null 2>&1 || { echo "Error: $(SOPS) CLI is required."; exit 1; }
 	@test -f "$(SOPS_RELEASE_ENV_FILE)" || { echo "Error: SOPS release env file not found: $(SOPS_RELEASE_ENV_FILE)"; echo "Set SOPS_RELEASE_ENV_FILE to the prod SOPS env file."; exit 1; }
 	@$(SOPS_RELEASE_ENV_RUNNER) \
 		--require-claude-slots "$(REQUIRE_CLAUDE_OAUTH_SLOTS)" \
 		--release-video "$(RELEASE_VIDEO)" \
-		-- $(MAKE) --no-print-directory check-release-claude-oauth-config release
+		-- $(MAKE) --no-print-directory $(PDD_CLOUD_RELEASE_ATTESTATION_ARGS) check-release-claude-oauth-config release
+
+# This exercises the same SOPS-to-recursive-Make attestation handoff as
+# release-sops without performing release preflights or Git mutations. It is
+# used only by deterministic boundary coverage.
+.PHONY: test-release-sops-attestation-recursion
+test-release-sops-attestation-recursion: check-release-attestation-contract
+	@MAKEFILES="$(SOPS_TEST_MAKEFILES)" \
+		MAKEFLAGS="$(SOPS_TEST_MAKEFLAGS)" \
+		GNUMAKEFLAGS="$(SOPS_TEST_GNUMAKEFLAGS)" \
+		MFLAGS="$(SOPS_TEST_MFLAGS)" \
+		MAKEOVERRIDES="$(SOPS_TEST_MAKEOVERRIDES)" \
+		$(SOPS_RELEASE_ENV_RUNNER) \
+		--require-claude-slots "$(REQUIRE_CLAUDE_OAUTH_SLOTS)" \
+		--release-video "$(RELEASE_VIDEO)" \
+		-- $(MAKE) --no-print-directory $(PDD_CLOUD_RELEASE_ATTESTATION_ARGS) check-release-attestation-contract-required
+
+.PHONY: check-release-attestation-contract-required
+check-release-attestation-contract-required: check-release-attestation-contract
+	@for variable in PDD_CLOUD_RELEASE_ATTESTATION_VERSION PDD_CLOUD_VALIDATED_SHA PDD_CLOUD_RELEASE_LEASE_OWNER PDD_CLOUD_RELEASE_LEASE_REF; do \
+		case "$$variable" in \
+			PDD_CLOUD_RELEASE_ATTESTATION_VERSION) origin="$(origin PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" ;; \
+			PDD_CLOUD_VALIDATED_SHA) origin="$(origin PDD_CLOUD_VALIDATED_SHA)" ;; \
+			PDD_CLOUD_RELEASE_LEASE_OWNER) origin="$(origin PDD_CLOUD_RELEASE_LEASE_OWNER)" ;; \
+			PDD_CLOUD_RELEASE_LEASE_REF) origin="$(origin PDD_CLOUD_RELEASE_LEASE_REF)" ;; \
+		esac; \
+		[ "$$origin" = "command line" ] || { echo "Error: required attestation input $$variable lost command-line provenance."; exit 1; }; \
+	done
 
 release-infisical:
 	@echo "release-infisical is deprecated; use make release-local (SOPS-backed)." >&2
@@ -889,7 +985,7 @@ release-video:
 	RELEASE_VIDEO_METADATA_CONFLICT="$(RELEASE_VIDEO_METADATA_CONFLICT)" \
 	RELEASE_VIDEO_PDS_CREATE_TIMEOUT="$(RELEASE_VIDEO_PDS_CREATE_TIMEOUT)" \
 	RELEASE_VIDEO_RELEASE_NOTES_PATH="$(RELEASE_VIDEO_RELEASE_NOTES_PATH)" \
-	python scripts/release_video.py \
+	python3 -I scripts/release_video.py \
 		--output-dir "$(RELEASE_VIDEO_OUTPUT_DIR)" \
 		--claude-cli "$(CLAUDE_CLI)" \
 		--claude-model "$(RELEASE_VIDEO_CLAUDE_MODEL)" \
@@ -916,7 +1012,7 @@ release-video-status:
 		export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
 	fi; \
 	STATUS_QUERY_ARGS="$(RELEASE_VIDEO_STATUS_QUERY_FLAG)"; \
-	python scripts/release_video.py \
+	python3 -I scripts/release_video.py \
 		--status \
 		--tag "$(RELEASE_TAG)" \
 		--output-dir "$(RELEASE_VIDEO_OUTPUT_DIR)" \
@@ -924,33 +1020,40 @@ release-video-status:
 		$$STATUS_QUERY_ARGS
 
 release-video-discord-backfill:
-	@python scripts/backfill_release_video_discord.py \
+	@python3 -I scripts/backfill_release_video_discord.py \
 		--tag "$(RELEASE_TAG)" \
 		--youtube-url "$(RELEASE_VIDEO_YOUTUBE_URL)" \
 		--repo "$${GITHUB_REPOSITORY:-promptdriven/pdd}"
 
 release-video-skip:
-	@python scripts/backfill_release_video_discord.py \
+	@python3 -I scripts/backfill_release_video_discord.py \
 		--tag "$(RELEASE_TAG)" \
 		--skip-reason "$(RELEASE_VIDEO_SKIP_REASON)" \
 		--repo "$${GITHUB_REPOSITORY:-promptdriven/pdd}"
 
-release: check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean check-release-video-config
+release: check-release-attestation-contract check-release-attestation-existing-tag check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean check-release-video-config
 	@echo "Preparing release"
 	@set -e; \
 	echo "Fetching tags from origin"; \
-	git fetch --tags --prune origin; \
-	HEAD_SHA=$$(git rev-parse HEAD); \
-	EXISTING_TAG=$$(git tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1 || true); \
+	$(RELEASE_TRUSTED_GIT) fetch --tags --prune origin; \
+	HEAD_SHA=$$($(RELEASE_TRUSTED_GIT) rev-parse HEAD); \
+	EXISTING_TAG=$$($(RELEASE_TRUSTED_GIT) tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1 || true); \
 	if [ -n "$$EXISTING_TAG" ]; then \
+		if [ "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" = "2" ]; then \
+			echo "Error: contract-v2 release-local refuses existing tag $$EXISTING_TAG before release side effects. Verify the exact tag, run, and PyPI state, then follow docs/contributors/pdd-cli-release-process.md#same-tag-package-workflow-recovery." >&2; \
+			exit 1; \
+		fi; \
 		echo "HEAD is already tagged as $$EXISTING_TAG."; \
-		REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$EXISTING_TAG^{}" "refs/tags/$$EXISTING_TAG" 2>/dev/null | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
+		REMOTE_TAG_COMMIT=$$($(RELEASE_TRUSTED_GIT) ls-remote origin "refs/tags/$$EXISTING_TAG^{}" "refs/tags/$$EXISTING_TAG" 2>/dev/null | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
 		if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
-			REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$EXISTING_TAG" 2>/dev/null | awk 'NR==1 {print $$1}'); \
+			REMOTE_TAG_COMMIT=$$($(RELEASE_TRUSTED_GIT) ls-remote origin "refs/tags/$$EXISTING_TAG" 2>/dev/null | awk 'NR==1 {print $$1}'); \
 		fi; \
 		if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
 			echo "Local tag $$EXISTING_TAG not on origin; pushing."; \
-			git push origin "$$EXISTING_TAG"; \
+			if [ "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" = "2" ]; then \
+				python3 -I scripts/release_attestation.py final-boundary --canonical-origin --version "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" --sha "$(PDD_CLOUD_VALIDATED_SHA)" --owner "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" --lease-ref "$(PDD_CLOUD_RELEASE_LEASE_REF)"; \
+			fi; \
+			$(RELEASE_TRUSTED_GIT) push origin "$$EXISTING_TAG"; \
 			echo "Tag $$EXISTING_TAG pushed. GHA will request gltanaka approval, then publish."; \
 		elif [ "$$REMOTE_TAG_COMMIT" = "$$HEAD_SHA" ]; then \
 			echo "Tag $$EXISTING_TAG already on origin at HEAD."; \
@@ -969,7 +1072,7 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 				else \
 					case "$$LATEST_RUN_STATUS" in \
 						completed:success) echo "release.yml run for this tag: success.";; \
-						completed:*) echo "release.yml run for this tag did not succeed ($$LATEST_RUN_STATUS). To re-trigger, delete and re-push the tag, or run 'gh workflow run release.yml'."; RECOVERY_FAILED=1;; \
+					completed:*) echo "release.yml run for this tag did not succeed ($$LATEST_RUN_STATUS). Verify this exact tag/run and PyPI state, then follow docs/contributors/pdd-cli-release-process.md#same-tag-package-workflow-recovery; rerun only the matching run with gh run rerun after its state checks."; RECOVERY_FAILED=1;; \
 						*) echo "release.yml run for this tag status: $$LATEST_RUN_STATUS (may still be pending gltanaka approval).";; \
 					esac; \
 				fi; \
@@ -984,7 +1087,7 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 		make --no-print-directory release-video RELEASE_TAG="$$EXISTING_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
 		exit 0; \
 	fi; \
-	LATEST_TAG=$$(git tag --list --merged HEAD --sort=-v:refname 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
+	LATEST_TAG=$$($(RELEASE_TRUSTED_GIT) tag --list --merged HEAD --sort=-v:refname 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
 	if [ -z "$$LATEST_TAG" ]; then LATEST_TAG="v0.0.0"; fi; \
 	CURRENT_VERSION=$${LATEST_TAG#v}; \
 	BUMP=$${BUMP:-patch}; \
@@ -995,16 +1098,19 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 	NEW_VERSION=$$(python -c "v=[int(x) for x in '$$CURRENT_VERSION'.split('.')]; i={'major':0,'minor':1,'patch':2}['$$BUMP']; v[i]+=1; [v.__setitem__(j,0) for j in range(i+1,3)]; print('.'.join(map(str,v)))"); \
 	NEW_TAG="v$$NEW_VERSION"; \
 	echo "Releasing $$LATEST_TAG → $$NEW_TAG at $$HEAD_SHA"; \
-	if git rev-parse --verify --quiet "refs/tags/$$NEW_TAG" >/dev/null; then \
+	if $(RELEASE_TRUSTED_GIT) rev-parse --verify --quiet "refs/tags/$$NEW_TAG" >/dev/null; then \
 		echo "Error: tag $$NEW_TAG exists locally at a different commit than HEAD."; \
 		exit 1; \
 	fi; \
-	if git ls-remote --exit-code --tags origin "$$NEW_TAG" >/dev/null 2>&1; then \
+	if $(RELEASE_TRUSTED_GIT) ls-remote --exit-code --tags origin "$$NEW_TAG" >/dev/null 2>&1; then \
 		echo "Error: tag $$NEW_TAG already exists on origin."; \
 		exit 1; \
 	fi; \
-	git tag -a "$$NEW_TAG" -m "Release $$NEW_TAG"; \
-	git push origin "$$NEW_TAG"; \
+	$(RELEASE_TRUSTED_GIT) tag -a "$$NEW_TAG" -m "Release $$NEW_TAG"; \
+	if [ "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" = "2" ]; then \
+		python3 -I scripts/release_attestation.py final-boundary --canonical-origin --version "$(PDD_CLOUD_RELEASE_ATTESTATION_VERSION)" --sha "$(PDD_CLOUD_VALIDATED_SHA)" --owner "$(PDD_CLOUD_RELEASE_LEASE_OWNER)" --lease-ref "$(PDD_CLOUD_RELEASE_LEASE_REF)"; \
+	fi; \
+	$(RELEASE_TRUSTED_GIT) push origin "$$NEW_TAG"; \
 	echo "Tag $$NEW_TAG is on origin. GHA will request gltanaka approval, then publish."; \
 	make --no-print-directory release-video RELEASE_TAG="$$NEW_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"
 	@# Post-release cleanup check (Issue #186)
