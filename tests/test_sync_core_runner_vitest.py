@@ -6,6 +6,7 @@ import json
 import os
 import errno as errno_module
 import signal
+import shlex
 import shutil
 import stat
 import subprocess
@@ -3073,15 +3074,65 @@ def test_vitest_preflight_helpers_capture_commands_and_write_pass_artifact(
         payload["observation_base64"], validate=True
     )
 
+    hosted_temp = tmp_path / "hosted-machine-version"
+    hosted_temp.mkdir()
+    hosted_parse = subprocess.run(
+        [
+            "bash", "-c", function_prefix + "\n"
+            'source_file="$RUNNER_TEMP/provisioner-source"\n'
+            "printf '%s\\n' 'version=20260707.563' > \"$source_file\"\n"
+            'parse_provisioner_versions "$source_file"\n'
+            "printf 'parsed=%s\\n' \"${provisioner_versions[0]}\"\n",
+        ],
+        cwd=repository,
+        env={**os.environ, "RUNNER_TEMP": str(hosted_temp)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert hosted_parse.returncode == 0, hosted_parse.stderr
+    assert hosted_parse.stdout == "parsed=20260707.563\n"
+
     completed, _artifact, payload = execute_case(
         "version-count",
         "source_file=\"$RUNNER_TEMP/provisioner-source\"\n"
-        "printf '%s\\n' 'no version record' > \"$source_file\"\n"
+        "printf '%s\\n' 'version=20260707.563.1' > \"$source_file\"\n"
         "parse_provisioner_versions \"$source_file\"\n",
     )
     assert completed.returncode == 1
     assert payload["predicate"] == "runner-provisioner-version-count"
     assert payload["command_exit_code"] == 0
+
+    completed, _artifact, payload = execute_case(
+        "duplicate-version-rows",
+        "source_file=\"$RUNNER_TEMP/provisioner-source\"\n"
+        "printf '%s\\n' 'version=20260707.563' 'version=20260707.563' "
+        "> \"$source_file\"\n"
+        "parse_provisioner_versions \"$source_file\"\n",
+    )
+    assert completed.returncode == 1
+    assert payload["predicate"] == "runner-provisioner-version-count"
+    assert payload["expected"] == "1"
+    assert payload["actual"] == "2"
+
+    for name, rows in (
+        (
+            "mixed-version-rows",
+            ("version=20260707.563", "Version: 20260707.563"),
+        ),
+        ("extra-version-row", ("version=20260707.563", "extra")),
+    ):
+        row_arguments = " ".join(shlex.quote(row) for row in rows)
+        completed, _artifact, payload = execute_case(
+            name,
+            "source_file=\"$RUNNER_TEMP/provisioner-source\"\n"
+            f"printf '%s\\n' {row_arguments} > \"$source_file\"\n"
+            "parse_provisioner_versions \"$source_file\"\n",
+        )
+        assert completed.returncode == 1
+        assert payload["predicate"] == "runner-provisioner-output-shape"
+        assert payload["expected"] == "exact-machine-version-row"
+        assert payload["actual"] == "unexpected-output-shape"
 
     head = "a" * 40
     pass_suffix = f"""

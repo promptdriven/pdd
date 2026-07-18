@@ -396,12 +396,14 @@ jobs:
 
           parse_provisioner_versions() {
             local source="$1"
+            local expected_capture
             local parser_capture
             local parser_status
+            local shape_status
             new_preflight_capture \
               parser_capture "runner-provisioner-version-parse"
             set +e
-            sed -n 's/^Version: \([0-9][0-9.]*\)$/\1/p' "$source" \
+            sed -n 's/^version=\([0-9]\{8\}\.[0-9]\{3\}\)$/\1/p' "$source" \
               > "$parser_capture" 2>&1
             parser_status="$?"
             set -e
@@ -417,6 +419,21 @@ jobs:
               preflight_fail \
                 "runner-provisioner-version-count" "1" \
                 "${#provisioner_versions[@]}" 1 "$source" 0
+            fi
+            new_preflight_capture \
+              expected_capture "runner-provisioner-output-shape"
+            printf 'version=%s\n' "${provisioner_versions[0]}" \
+              > "$expected_capture"
+            set +e
+            cmp -s -- "$source" "$expected_capture"
+            shape_status="$?"
+            set -e
+            rm -f -- "$expected_capture"
+            if [[ "$shape_status" -ne 0 ]]; then
+              preflight_fail \
+                "runner-provisioner-output-shape" \
+                "exact-machine-version-row" "unexpected-output-shape" \
+                1 "$source" "$shape_status"
             fi
           }
 
