@@ -24,11 +24,13 @@ plus one test that the ``signature_detail:`` lines propagate through
 ``pdd.agentic_sync_runner``'s subprocess parser.
 """
 
+import ast
 import json
 import time
 from pathlib import Path
 
 import pytest
+from rich.theme import Theme
 
 from pdd.code_generator_main import (
     PromptInterfaceContractError,
@@ -228,6 +230,52 @@ class TestIssue1900SurfaceContract:
         )
         assert cache_keys == (first_key, third_key)
         assert second_key not in cache_keys
+
+    def test_annotated_constant_contracts_reject_type_and_value_drift_without_runtime_change(self):
+        """Explicit annotations make the two generated constant contracts strict
+        without changing either established runtime value or RHS expression."""
+        from pdd import cli_branding, cli_theme
+
+        branding_path = Path("pdd/cli_branding.py")
+        theme_path = Path("pdd/cli_theme.py")
+        branding_prompt = Path("pdd/prompts/cli_branding_python.prompt")
+        theme_prompt = Path("pdd/prompts/cli_theme_python.prompt")
+        branding_source = branding_path.read_text(encoding="utf-8")
+        theme_source = theme_path.read_text(encoding="utf-8")
+
+        _verify_declared_interface_exact(
+            branding_source, branding_prompt.read_text(encoding="utf-8"),
+            branding_prompt.name, str(branding_path), "python", allow_legacy_extensions=False,
+        )
+        _verify_declared_interface_exact(
+            theme_source, theme_prompt.read_text(encoding="utf-8"),
+            theme_prompt.name, str(theme_path), "python", allow_legacy_extensions=False,
+        )
+        for source, prompt_path, code_path, old, new in (
+            (branding_source, branding_prompt, branding_path, "PDD_FULL_TAGLINE: str", "PDD_FULL_TAGLINE: int"),
+            (theme_source, theme_prompt, theme_path, "PDD_THEME: Theme", "PDD_THEME: str"),
+        ):
+            with pytest.raises(PublicSurfaceRegressionError):
+                _verify_declared_interface_exact(
+                    source.replace(old, new, 1), prompt_path.read_text(encoding="utf-8"),
+                    prompt_path.name, str(code_path), "python", allow_legacy_extensions=False,
+                )
+
+        expected_branding_rhs = ast.parse('f"PDD: {PDD_TAGLINE}"', mode="eval").body
+        actual_branding_rhs = next(
+            node.value for node in ast.parse(branding_source).body
+            if isinstance(node, ast.AnnAssign) and node.target.id == "PDD_FULL_TAGLINE"
+        )
+        drifted_branding_rhs = ast.parse('f"Changed: {PDD_TAGLINE}"', mode="eval").body
+        assert ast.dump(actual_branding_rhs, include_attributes=False) == ast.dump(
+            expected_branding_rhs, include_attributes=False
+        )
+        assert ast.dump(drifted_branding_rhs, include_attributes=False) != ast.dump(
+            expected_branding_rhs, include_attributes=False
+        )
+        assert cli_branding.PDD_FULL_TAGLINE == "PDD: The Last Programming Language™"
+        assert isinstance(cli_theme.PDD_THEME, Theme)
+        assert cli_theme.PDD_THEME.styles == Theme(cli_theme.SEMANTIC_STYLES).styles
 
     def test_full_tracked_module_contract_corpus_manifest(self):
         """Audit every real recursive Python prompt/code contract in bounded time."""

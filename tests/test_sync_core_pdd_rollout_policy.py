@@ -50,7 +50,7 @@ FOUNDATION_PROFILE_DIGEST = (
     "3fb63c651345467be6b2cb445b34edf979b35ffba1bb1ebb44a81f1313beb244"
 )
 PDD_1900_PROFILE_DIGEST = (
-    "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b"
+    "6723a8ae4be8f46d26027f17ab23d0226aab9e3f6095e34c528d70658d218824"
 )
 PDD_1989_PROMPT_PATHS = {
     "pdd/prompts/agentic_common_python.prompt",
@@ -68,6 +68,7 @@ PDD_1900_PROMPT_PATHS = {
     "pdd/prompts/checkup_interactive_session_python.prompt",
     "pdd/prompts/checkup_planner_python.prompt",
     "pdd/prompts/checkup_tools_python.prompt",
+    "pdd/prompts/cli_branding_python.prompt",
     "pdd/prompts/cli_theme_python.prompt",
     "pdd/prompts/code_generator_main_python.prompt",
     "pdd/prompts/evidence_manifest_python.prompt",
@@ -455,10 +456,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 25
-    story_identity = (STORY_REGRESSION_DORMANT_ROTATION["prompt_path"], "python")
-    assert bootstrap_rows[story_identity] != STORY_REGRESSION_DORMANT_ROTATION
-    bootstrap_rows[story_identity] = STORY_REGRESSION_DORMANT_ROTATION
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 34
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
@@ -540,7 +538,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     pdd1900_rows = [
         row for row in rows if row["prompt_path"] in PDD_1900_PROMPT_PATHS
     ]
-    assert len(pdd1900_rows) == len(PDD_1900_PROMPT_PATHS) == 14
+    assert len(pdd1900_rows) == len(PDD_1900_PROMPT_PATHS) == 15
     assert {row["prompt_path"] for row in pdd1900_rows} == PDD_1900_PROMPT_PATHS
     for row in pdd1900_rows:
         assert row["base_policy_sha256"] == (
