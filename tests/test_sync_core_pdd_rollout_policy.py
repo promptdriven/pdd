@@ -50,7 +50,7 @@ FOUNDATION_PROFILE_DIGEST = (
     "3fb63c651345467be6b2cb445b34edf979b35ffba1bb1ebb44a81f1313beb244"
 )
 PDD_1900_PROFILE_DIGEST = (
-    "b9bc5c4ecc112ce5bad2315c4d50ba1902cf066677c73983c0b9eb71f2923483"
+    "04c2b5431bd730416d87991e87c3a00eb6adc6cd51cb4deaab54ddea2be0089b"
 )
 PDD_1989_PROMPT_PATHS = {
     "pdd/prompts/agentic_common_python.prompt",

@@ -6,6 +6,7 @@ import errno
 import re
 import subprocess
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -150,24 +151,32 @@ class _PatchTargetCorpus:
     process therefore observes added, removed, and edited tests.
     """
 
-    directory_signatures: tuple[Optional[tuple[int, int]], ...]
+    directory_signatures: tuple[Optional[tuple[int, int, int, int, int]], ...]
     test_files: tuple[Path, ...]
-    test_signatures: dict[Path, Optional[tuple[int, int]]]
+    test_signatures: dict[Path, Optional[tuple[int, int, int, int, int]]]
     symbols_by_stem: dict[str, set[str]]
     validated_at: float
+    incomplete: bool = False
 
 
-_PATCH_TARGET_CORPUS_CACHE: dict[tuple[str, ...], _PatchTargetCorpus] = {}
+_PATCH_TARGET_CORPUS_CACHE: OrderedDict[tuple[str, ...], _PatchTargetCorpus] = OrderedDict()
 _PATCH_TARGET_CACHE_VALIDATION_SECONDS = 1.0
+_PATCH_TARGET_CORPUS_CACHE_MAX_ENTRIES = 32
 
 
-def _stat_signature(path: Path) -> Optional[tuple[int, int]]:
-    """Return a cheap change token for a path, tolerating transient removal."""
+def _stat_signature(path: Path) -> Optional[tuple[int, int, int, int, int]]:
+    """Return a cheap identity/change token, tolerating transient removal."""
     try:
         status = path.stat()
     except OSError:
         return None
-    return status.st_mtime_ns, status.st_size
+    return (
+        int(getattr(status, "st_ino", 0)),
+        int(getattr(status, "st_mode", 0)),
+        int(getattr(status, "st_ctime_ns", 0)),
+        int(getattr(status, "st_mtime_ns", 0)),
+        int(getattr(status, "st_size", 0)),
+    )
 
 
 def _sibling_test_directories(file_path: Path) -> tuple[Path, ...]:
@@ -233,7 +242,7 @@ def _index_test_patch_symbols(test_file_content: str) -> dict[str, set[str]]:
 
 def _build_patch_target_corpus(
     directories: tuple[Path, ...],
-    directory_signatures: tuple[Optional[tuple[int, int]], ...],
+    directory_signatures: tuple[Optional[tuple[int, int, int, int, int]], ...],
 ) -> _PatchTargetCorpus:
     """Discover and parse sibling tests once for a cache refresh."""
     seen: set[str] = set()
@@ -247,12 +256,16 @@ def _build_patch_target_corpus(
                 seen.add(key)
                 test_files.append(candidate)
     symbols_by_stem: dict[str, set[str]] = {}
-    test_signatures: dict[Path, Optional[tuple[int, int]]] = {}
+    test_signatures: dict[Path, Optional[tuple[int, int, int, int, int]]] = {}
+    incomplete = False
     for test_file in test_files:
         test_signatures[test_file] = _stat_signature(test_file)
         try:
             indexed = _index_test_patch_symbols(test_file.read_text(encoding="utf-8"))
         except OSError:
+            # Do not treat a momentarily unreadable file as a complete corpus:
+            # its stat token can remain unchanged while access recovers.
+            incomplete = True
             continue
         for stem, symbols in indexed.items():
             symbols_by_stem.setdefault(stem, set()).update(symbols)
@@ -262,7 +275,18 @@ def _build_patch_target_corpus(
         test_signatures=test_signatures,
         symbols_by_stem=symbols_by_stem,
         validated_at=time.monotonic(),
+        incomplete=incomplete,
     )
+
+
+def _cache_patch_target_corpus(
+    cache_key: tuple[str, ...], corpus: _PatchTargetCorpus
+) -> None:
+    """Store a corpus with deterministic least-recently-used eviction."""
+    _PATCH_TARGET_CORPUS_CACHE[cache_key] = corpus
+    _PATCH_TARGET_CORPUS_CACHE.move_to_end(cache_key)
+    while len(_PATCH_TARGET_CORPUS_CACHE) > _PATCH_TARGET_CORPUS_CACHE_MAX_ENTRIES:
+        _PATCH_TARGET_CORPUS_CACHE.popitem(last=False)
 
 
 def _collect_patch_paths(test_file_content: str) -> list[str]:
@@ -471,9 +495,13 @@ def collect_patch_symbols_for_module(file_path: Path | str | None) -> set[str]:
     cache_key = tuple(str(directory.resolve()) for directory in directories)
     directory_signatures = tuple(_stat_signature(directory) for directory in directories)
     corpus = _PATCH_TARGET_CORPUS_CACHE.get(cache_key)
+    if corpus is not None:
+        _PATCH_TARGET_CORPUS_CACHE.move_to_end(cache_key)
     needs_refresh = corpus is None
     if corpus is not None and time.monotonic() - corpus.validated_at >= _PATCH_TARGET_CACHE_VALIDATION_SECONDS:
         needs_refresh = (
+            corpus.incomplete
+            or
             corpus.directory_signatures != directory_signatures
             or any(
                 _stat_signature(test_file) != signature
@@ -485,7 +513,7 @@ def collect_patch_symbols_for_module(file_path: Path | str | None) -> set[str]:
         corpus.validated_at = time.monotonic()
     if needs_refresh:
         corpus = _build_patch_target_corpus(directories, directory_signatures)
-        _PATCH_TARGET_CORPUS_CACHE[cache_key] = corpus
+        _cache_patch_target_corpus(cache_key, corpus)
     return set(corpus.symbols_by_stem.get(path.stem, set()))
 
 
