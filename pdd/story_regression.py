@@ -291,9 +291,12 @@ def build_story_map(tests_dir: Optional[PathLike] = None) -> StoryTestMap:
     ``--continue-on-collection-errors``) rather than crashing the build.
     """
     resolved_dir = Path(tests_dir) if tests_dir is not None else _default_tests_dir()
-    collector = _StoryCollector(resolved_dir)
     if not resolved_dir.exists():
         return StoryTestMap({}, {})
+    if not any(path.is_file() for path in resolved_dir.rglob("test*.py")):
+        return StoryTestMap({}, {})
+
+    collector = _StoryCollector(resolved_dir)
 
     args = [
         "--collect-only",

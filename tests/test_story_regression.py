@@ -24,6 +24,7 @@ from __future__ import annotations
 import tomllib
 import sys
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -386,11 +387,14 @@ class TestGracefulDegradation:
         assert smap.story_to_tests == {}
         assert smap.test_to_stories == {}
 
-    def test_empty_existing_tests_dir_does_not_start_nested_pytest(
-        self, tmp_path: Path, monkeypatch
+    @pytest.mark.parametrize("non_test_file", [None, "helper.py"])
+    def test_existing_tests_dir_without_discoverable_tests_skips_nested_pytest(
+        self, tmp_path: Path, monkeypatch, non_test_file: Optional[str]
     ):
         tests_dir = tmp_path / "tests"
         tests_dir.mkdir()
+        if non_test_file:
+            (tests_dir / non_test_file).write_text("VALUE = 1\n", encoding="utf-8")
 
         nested_pytest_calls = []
 
@@ -404,7 +408,9 @@ class TestGracefulDegradation:
 
         assert smap.story_to_tests == {}
         assert smap.test_to_stories == {}
-        assert nested_pytest_calls == [], "empty tests directory invoked pytest.main"
+        assert nested_pytest_calls == [], (
+            "tests directory without test*.py files invoked pytest.main"
+        )
 
     def test_unparseable_module_is_skipped(self, tmp_path: Path):
         d = tmp_path / "tests"
