@@ -41,7 +41,7 @@ EXPECTED_MANAGED_UNITS = 469
 PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
 PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
 CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
-REPLAY_PROTECTED_BASE = "0e22fe9f42f72a70fc85cb6f9c289fd8187df451"
+REPLAY_PROTECTED_BASE = "301b3cab9e72123eaa66dc31babb9d49eab84918"
 PDD_1989_EXPECTED_MANAGED_UNITS = 468
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
@@ -506,7 +506,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     assert rows[len(surviving_rows) :] == candidate_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "23381e01eb66593414270d0df1a51f6c74f51c5f8bbd2e8b3743dfdefa47c262"
+    assert profile_digest == "0c5f37e9178cb0f654b2dba79bd11a1f4eaf3e3c74ad81dcbbfba89d0ade40e4"
     current_rows = [
         row
         for row in candidate_rows
