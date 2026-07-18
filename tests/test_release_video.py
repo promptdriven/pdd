@@ -545,6 +545,9 @@ def test_release_video_visual_safety_allows_local_physical_shell_materials(
         "A physical shell is translucent as machinery presents output as diffuse light.",
         "A physical shell is matte, with machinery displaying output as colored light.",
         "A physical shell has concentric rings and Alice presents her output as a soft glow.",
+        "A physical shell with a glass pane surrounds a matte orb.",
+        "A physical shell with a window pane of diffuse light surrounds a matte orb.",
+        "A physical shell with a ceramic pane-like opening surrounds a matte orb.",
     ],
 )
 def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_homonyms(
@@ -650,6 +653,8 @@ def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_ho
         "A shell with a softly blinking prompt glows.",
         "A shell with a bright pane displaying output glows.",
         "A shell with its bright current output visible glows.",
+        "A shell with a bright rectangular pane displaying output glows.",
+        "A shell with a large bright pane showing files glows.",
     ],
 )
 def test_release_video_visual_safety_rejects_technical_surface_after_punctuation(
