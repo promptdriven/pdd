@@ -93,13 +93,13 @@ def canonical_module_id(project_root: Path, unit: ResolvedSyncUnit) -> str:
     normal operation.  The fallback below also makes direct/legacy callers safe
     by deriving a project-relative ID from the unit's owning cwd and target.
     """
-    key = unit.key.replace("\\", "/").strip("/")
-    if MODULE_ID_RE.fullmatch(key):
-        return key
     try:
         relative_cwd = unit.cwd.resolve().relative_to(project_root.resolve())
     except ValueError as exc:
         raise SyncPlanError(f"module cwd escapes governing root: {unit.cwd}") from exc
+    key = unit.key.replace("\\", "/").strip("/")
+    if MODULE_ID_RE.fullmatch(key):
+        return key
     parts = [part for part in relative_cwd.parts if part not in (".", "")]
     parts.extend(part for part in unit.target_basename.replace("\\", "/").split("/") if part)
     module_id = "/".join(parts)
@@ -120,16 +120,12 @@ def _root_relative(root: Path, path: Path | None) -> str | None:
 def _governing_root_label(root: Path, cwd: Path) -> str:
     """Serialize a validated unit's governing root without leaking a local path.
 
-    Legacy callers may provide an isolated, already-validated child checkout
-    outside the process project root.  It is not a prompt/output path and must
-    not make generic plan serialization reject that identity.  Production
-    fallback loading separately requires a root-relative label before it can
-    reconstruct a child cwd.
+    An escaped cwd must never be relabelled as the project root: a fallback
+    checkout would otherwise reconstruct a different unit than the frozen
+    plan.  Callers that need an isolated checkout must make that checkout the
+    plan root.
     """
-    try:
-        return _root_relative(root, cwd) or "."
-    except SyncPlanError:
-        return "."
+    return _root_relative(root, cwd) or "."
 
 
 @dataclass(frozen=True)
