@@ -1,6 +1,30 @@
 <include>context/python_preamble.prompt</include>
 <pdd-reason>Pure deterministic SyncPlan model, digesting, and bounded ambiguity protocol for agentic sync.</pdd-reason>
 
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "classes": [
+      {"name": "SyncPlan", "kind": "dataclass"},
+      {"name": "SyncPlanCandidate", "kind": "dataclass"},
+      {"name": "SyncPlanDetails", "kind": "dataclass"},
+      {"name": "PlanProvenance", "kind": "dataclass"}
+    ],
+    "functions": [
+      {"name": "build_sync_plan", "signature": "(root: Path, candidates: Iterable[SyncPlanCandidate], selected_module_ids: Iterable[str]) -> SyncPlan", "returns": "SyncPlan"},
+      {"name": "selection_digest", "signature": "(module_ids: Sequence[str]) -> str", "returns": "str"},
+      {"name": "plan_digest", "signature": "(plan_document: Mapping[str, Any]) -> str", "returns": "str"},
+      {"name": "resolve_selection_aliases", "signature": "(aliases: Iterable[str], candidates: Iterable[SyncPlanCandidate]) -> tuple[str, ...]", "returns": "tuple[str, ...]"},
+      {"name": "ambiguity_request", "signature": "(plan: SyncPlan, unresolved_ids: Iterable[str]) -> dict[str, object]", "returns": "dict[str, object]"},
+      {"name": "apply_ambiguity_selection", "signature": "(plan: SyncPlan, unresolved_ids: Iterable[str], selected_ids: object) -> SyncPlan", "returns": "SyncPlan"},
+      {"name": "parse_explicit_scope", "signature": "(raw_scope: str) -> dict[str, object]", "returns": "dict[str, object]"},
+      {"name": "validate_explicit_scope_evidence", "signature": "(scope: Mapping[str, Any], evidence: Mapping[str, Any]) -> tuple[dict[str, object], tuple[str, ...]]", "returns": "tuple[dict[str, object], tuple[str, ...]]"}
+    ]
+  }
+}
+</pdd-interface>
+
 % Goal
 Write `pdd/sync_plan.py`. It must build a serializable path-aware `SyncPlan`
 from `ResolvedSyncUnit` candidates without providers, subprocesses, or writes.
@@ -10,6 +34,15 @@ plus canonical sorted module-ID JSON.  Legacy leaf aliases remain valid only
 when unique; ambiguity must list canonical path-qualified candidates.  The
 ambiguity protocol may expose only a bounded candidate ID list and compact
 path metadata, and must reject invented selections before writes.
+
+% Requirements
+1. The candidate set is complete before selection; missing dependency edges fail
+   closed and selected targets include their transitive dependency closure.
+2. Limit selected and fallback ID lists to 64 canonical path-qualified IDs.
+3. Parse fallback scope as a closed JSON object and verify it against persisted
+   full primary-plan evidence without rediscovering paths from a fallback diff.
+4. Serialize only canonical relative paths and reject prompt/output containment
+   escapes before execution.
 
 % Deliverables
 - Code: `pdd/sync_plan.py`

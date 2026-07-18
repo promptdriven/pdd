@@ -1,11 +1,15 @@
 """Focused contracts for the deterministic Agentic Sync V1 planner."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from pdd.resolved_sync_unit import resolve_sync_unit
+from pdd.agentic_sync import _load_fallback_scope_execution
+from pdd.agentic_sync_runner import AsyncSyncRunner
+from pdd.json_atomic import atomic_write_json
 from pdd.sync_plan import (
     AmbiguousSyncModuleError,
     PlanProvenance,
@@ -16,6 +20,8 @@ from pdd.sync_plan import (
     apply_ambiguity_selection,
     build_sync_plan,
     canonical_module_id,
+    plan_digest,
+    validate_explicit_scope_evidence,
     resolve_selection_aliases,
     selection_digest,
     validate_explicit_scope,
@@ -94,6 +100,127 @@ def test_fallback_scope_must_match_frozen_plan_and_digests(tmp_path: Path) -> No
     scope["selection_digest"] = selection_digest(["outside/profile"])
     with pytest.raises(SyncPlanError, match="stale or extra"):
         validate_explicit_scope(plan, scope)
+
+
+def test_persisted_primary_evidence_binds_fallback_scope(tmp_path: Path) -> None:
+    backend = _candidate(tmp_path, "backend/service")
+    frontend = _candidate(
+        tmp_path, "frontend/profile", dependencies=("backend/service",)
+    )
+    plan = build_sync_plan(tmp_path, [backend, frontend], ["frontend/profile"])
+    document = plan.to_dict()
+    evidence = {
+        "schema_version": "pdd.sync.scope-evidence.v1",
+        "module_id_encoding": "pdd.module-id-list.v1",
+        "selected_module_ids": list(plan.selected_module_ids),
+        "sync_plan_digest": plan_digest(document),
+        "selection_digest": plan.selection_digest,
+        "sync_plan": document,
+    }
+    scope = {
+        "module_id_encoding": "pdd.module-id-list.v1",
+        "module_ids": ["frontend/profile"],
+        "sync_plan_digest": plan.sync_plan_digest,
+        "selection_digest": selection_digest(["frontend/profile"]),
+    }
+    persisted, selected = validate_explicit_scope_evidence(scope, evidence)
+    assert persisted == document
+    assert selected == ("frontend/profile",)
+
+    evidence["sync_plan_digest"] = "0" * 64
+    with pytest.raises(SyncPlanError, match="persisted SyncPlan digest mismatch"):
+        validate_explicit_scope_evidence(scope, evidence)
+
+
+def test_dependency_closure_is_selected_and_missing_edges_fail(tmp_path: Path) -> None:
+    backend = _candidate(tmp_path, "backend/service")
+    frontend = _candidate(
+        tmp_path, "frontend/profile", dependencies=("backend/service",)
+    )
+    plan = build_sync_plan(tmp_path, [frontend, backend], ["frontend/profile"])
+    assert plan.selected_module_ids == ("backend/service", "frontend/profile")
+    assert plan.dependency_order == ("backend/service", "frontend/profile")
+
+    missing = _candidate(
+        tmp_path, "frontend/missing", dependencies=("not/in-candidates",)
+    )
+    with pytest.raises(SyncPlanError, match="missing dependency IDs"):
+        build_sync_plan(tmp_path, [missing], ["frontend/missing"])
+
+
+def test_fallback_loader_rejects_ambient_diff_scope_before_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = _candidate(tmp_path, "frontend/profile")
+    plan = build_sync_plan(tmp_path, [candidate], ["frontend/profile"])
+    evidence = {
+        "schema_version": "pdd.sync.scope-evidence.v1",
+        "module_id_encoding": "pdd.module-id-list.v1",
+        "selected_module_ids": list(plan.selected_module_ids),
+        "sync_plan_digest": plan.sync_plan_digest,
+        "selection_digest": plan.selection_digest,
+        "sync_plan": plan.to_dict(),
+    }
+    evidence_path = tmp_path / ".pdd" / "evidence" / "sync-plans" / f"{plan.sync_plan_digest}.json"
+    atomic_write_json(evidence_path, evidence)
+    scope = {
+        "module_id_encoding": "pdd.module-id-list.v1",
+        "module_ids": ["frontend/profile"],
+        "sync_plan_digest": plan.sync_plan_digest,
+        "selection_digest": plan.selection_digest,
+    }
+    monkeypatch.setenv("PDD_EXPLICIT_SYNC_SCOPE_V1", json.dumps(scope))
+    loaded, selected, cwds, targets, _contexts, _raw = _load_fallback_scope_execution(tmp_path)
+    assert loaded == plan.to_dict()
+    assert selected == ("frontend/profile",)
+    assert cwds["frontend/profile"] == tmp_path / "frontend"
+    assert targets["frontend/profile"] == "profile"
+
+    monkeypatch.setenv("PDD_CHANGED_MODULES", "frontend/profile")
+    with pytest.raises(SyncPlanError, match="forbidden"):
+        _load_fallback_scope_execution(tmp_path)
+
+
+def test_runner_uses_frozen_plan_for_order_env_and_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = _candidate(tmp_path, "backend/service")
+    frontend = _candidate(
+        tmp_path, "frontend/profile", dependencies=("backend/service",)
+    )
+    plan = build_sync_plan(tmp_path, [frontend, backend], ["frontend/profile"])
+    scope = {
+        "module_id_encoding": "pdd.module-id-list.v1",
+        "module_ids": ["frontend/profile"],
+        "sync_plan_digest": plan.sync_plan_digest,
+        "selection_digest": selection_digest(["frontend/profile"]),
+    }
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_CHANGED_MODULES", "must-not-reach-child")
+    runner = AsyncSyncRunner(
+        basenames=["untrusted"],
+        dep_graph={"untrusted": []},
+        sync_options={
+            "sync_plan": plan.to_dict(),
+            "sync_plan_digest": plan.sync_plan_digest,
+            "selection_digest": scope["selection_digest"],
+            "execution_selected_module_ids": ["frontend/profile"],
+            "execution_dependency_order": ["frontend/profile"],
+            "explicit_sync_scope": json.dumps(scope),
+        },
+        github_info=None,
+        quiet=True,
+    )
+    assert runner.basenames == ["frontend/profile"]
+    assert runner.dep_graph == {"frontend/profile": []}
+    child_env = runner._build_env("/tmp/cost.csv")
+    assert "PDD_CHANGED_MODULES" not in child_env
+    assert child_env["PDD_SYNC_SCOPE_SOURCE"] == "fallback_payload_v1"
+    runner._persist_scope_evidence()
+    evidence = tmp_path / ".pdd" / "evidence" / "sync-plans" / f"{plan.sync_plan_digest}.json"
+    assert json.loads(evidence.read_text(encoding="utf-8"))["selected_module_ids"] == [
+        "frontend/profile"
+    ]
 
 
 def test_wrong_root_output_is_rejected_before_execution(tmp_path: Path) -> None:
