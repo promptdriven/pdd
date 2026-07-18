@@ -1,0 +1,15 @@
+<include>context/python_preamble.prompt</include>
+<pdd-reason>Pure deterministic SyncPlan model, digesting, and bounded ambiguity protocol for agentic sync.</pdd-reason>
+
+% Goal
+Write `pdd/sync_plan.py`. It must build a serializable path-aware `SyncPlan`
+from `ResolvedSyncUnit` candidates without providers, subprocesses, or writes.
+Use the Wave 0 canonical digests: SHA-256 over UTF-8
+`pdd.sync.plan.v1\n` plus canonical plan JSON and `pdd.sync.selection.v1\n`
+plus canonical sorted module-ID JSON.  Legacy leaf aliases remain valid only
+when unique; ambiguity must list canonical path-qualified candidates.  The
+ambiguity protocol may expose only a bounded candidate ID list and compact
+path metadata, and must reject invented selections before writes.
+
+% Deliverables
+- Code: `pdd/sync_plan.py`
