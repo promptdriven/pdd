@@ -9627,7 +9627,7 @@
       "prompt_path": "pdd/prompts/story_regression_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:fbd4c2c6592bcb6950868a6b57691a66c2c3cd16d0ffd4a39abf3081ba613931"
+        "CONTRACT-SHA256:da8a86cb53ed4f826b6b2b2c6eebf1ccd207485259adbeb9ffe3e53eaba0af27"
       ],
       "obligations": [
         {
@@ -9636,7 +9636,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:fbd4c2c6592bcb6950868a6b57691a66c2c3cd16d0ffd4a39abf3081ba613931"
+            "CONTRACT-SHA256:da8a86cb53ed4f826b6b2b2c6eebf1ccd207485259adbeb9ffe3e53eaba0af27"
           ],
           "artifact_paths": [
             "pdd/prompts/story_regression_python.prompt"
