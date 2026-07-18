@@ -442,6 +442,13 @@ def test_duplicate_architecture_output_is_invalid(tmp_path) -> None:
 def test_external_context_template_is_not_a_generated_prompt_mapping() -> None:
     """Context config entries remain real architecture dependencies, not units."""
     external_context = {
+        "reason": "Provides shared Python generation conventions for prompt templates.",
+        "description": (
+            "Human-maintained context template included by Python prompt modules to "
+            "define package, typing, import, error-handling, and preservation conventions."
+        ),
+        "dependencies": [],
+        "priority": 98,
         "filename": "context/python_preamble.prompt",
         "filepath": "context/python_preamble.prompt",
         "tags": ["config", "context", "python", "template"],
@@ -457,18 +464,48 @@ def test_external_context_template_is_not_a_generated_prompt_mapping() -> None:
     assert outputs == {}
     assert invalid == []
 
-    # A near-match cannot suppress ordinary managed-prompt validation.
-    external_context["interface"] = {"type": "module"}
-    _outputs, invalid = _map_architecture_modules(
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("filename", "context/missing.prompt"),
+        ("filename", "context/../prompts/escape.prompt"),
+        ("filepath", "context/missing.prompt"),
+        ("tags", ["config", "context", "python"]),
+        ("description", "Mutated context metadata"),
+    ),
+)
+def test_external_context_template_near_matches_remain_managed_prompt_errors(
+    field: str, value: object
+) -> None:
+    """The manifest maps only the exact registered external context artifact."""
+    external_context = {
+        "reason": "Provides shared Python generation conventions for prompt templates.",
+        "description": (
+            "Human-maintained context template included by Python prompt modules to "
+            "define package, typing, import, error-handling, and preservation conventions."
+        ),
+        "dependencies": [],
+        "priority": 98,
+        "filename": "context/python_preamble.prompt",
+        "filepath": "context/python_preamble.prompt",
+        "tags": ["config", "context", "python", "template"],
+        "interface": {"type": "config", "config": {"keys": []}},
+    }
+    external_context[field] = value
+
+    outputs, invalid = _map_architecture_modules(
         "HEAD",
         PurePosixPath("architecture.json"),
         [external_context],
         {},
         {},
     )
+
+    assert outputs == {}
     assert invalid == [
         "HEAD:architecture.json: prompt mapping for "
-        "'context/python_preamble.prompt' has 0 matches"
+        f"{external_context['filename']!r} has 0 matches"
     ]
 
 

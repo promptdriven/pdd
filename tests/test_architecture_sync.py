@@ -339,25 +339,31 @@ def test_shared_python_preamble_is_registered_architecture_context():
     )
 
 
+def _registered_external_context_template() -> dict:
+    """Return the single immutable architecture row for the shared preamble."""
+    return {
+        "reason": "Provides shared Python generation conventions for prompt templates.",
+        "description": (
+            "Human-maintained context template included by Python prompt modules to "
+            "define package, typing, import, error-handling, and preservation conventions."
+        ),
+        "dependencies": [],
+        "priority": 98,
+        "filename": "context/python_preamble.prompt",
+        "filepath": "context/python_preamble.prompt",
+        "tags": ["config", "context", "python", "template"],
+        "interface": {"type": "config", "config": {"keys": []}},
+    }
+
+
 def test_sync_all_skips_registered_external_context_templates(tmp_path):
-    """A validated context include must not require a prompts-root shadow copy."""
+    """The exact preamble include needs no prompts-root shadow copy."""
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
     architecture_path = tmp_path / "architecture.json"
     architecture_path.write_text(
         json.dumps(
-            [
-                {
-                    "filename": "context/python_preamble.prompt",
-                    "filepath": "context/python_preamble.prompt",
-                    "reason": "Shared Python conventions",
-                    "description": "Human-maintained prompt context",
-                    "dependencies": [],
-                    "priority": 1,
-                    "tags": ["config", "context", "python", "template"],
-                    "interface": {"type": "config", "config": {"keys": []}},
-                }
-            ]
+            [_registered_external_context_template()]
         ),
         encoding="utf-8",
     )
@@ -371,6 +377,45 @@ def test_sync_all_skips_registered_external_context_templates(tmp_path):
     assert result["success"] is True
     assert result["errors"] == []
     assert result["skipped_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("filename", "context/missing.prompt"),
+        ("filename", "context/../prompts/escape.prompt"),
+        ("filepath", "context/missing.prompt"),
+        ("description", "Mutated context metadata"),
+        ("tags", ["config", "context", "python"]),
+        ("interface", {"type": "config", "config": {"keys": ["mutated"]}}),
+    ),
+)
+def test_external_context_exception_rejects_noncanonical_or_mutated_rows(
+    tmp_path, field, value
+):
+    """Only the exact registered preamble row may skip generated-prompt sync."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    architecture_path = tmp_path / "architecture.json"
+    context = _registered_external_context_template()
+    context[field] = value
+    architecture_path.write_text(json.dumps([context]), encoding="utf-8")
+
+    validation = validate_architecture_modules([context])
+    result = sync_all_prompts_to_architecture(
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=True,
+    )
+
+    assert validation["valid"] is False
+    assert any(
+        error["type"] == "invalid_external_context_template"
+        for error in validation["errors"]
+    )
+    assert result["success"] is False
+    assert result["skipped_count"] == 0
+    assert result["errors"]
 
 
 def test_sync_prompts_to_architecture_updates_selected_prompts_and_validates(tmp_path):

@@ -2,12 +2,12 @@
   "pdd_version": "0.0.268",
   "timestamp": "2026-06-09T23:29:39.505348+00:00",
   "command": "example",
-  "prompt_hash": "c2e6895fd950babf1e0434ea51d6fe79f509f561befe56ab93f9def24fc6cb28",
-  "code_hash": "d0cfe46b75c77ffae1bf0c98f58e1ff4ebab74b16149b453a24f531c435befb5",
+  "prompt_hash": "a185f24be906990dc3aa7ae5475ec34df05f93e4f6fb3afda3dd20afa1a2c5cf",
+  "code_hash": "9e0072efd5f3d49e3a7473c71fc6723c0d3c20a34f7c6f32d30f52bf0237fbcc",
   "example_hash": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
-  "test_hash": "47f495bceeb0e807ba68f5ea915fc7e5eacfd1fe00af97d1c6c9d26510ca16da",
+  "test_hash": "8468b53b3844bf737bfff4e9d5c7ed84d5d3b65f72788f8d5d53aa5a5fd8786a",
   "test_files": {
-    "test_architecture_sync.py": "47f495bceeb0e807ba68f5ea915fc7e5eacfd1fe00af97d1c6c9d26510ca16da"
+    "test_architecture_sync.py": "8468b53b3844bf737bfff4e9d5c7ed84d5d3b65f72788f8d5d53aa5a5fd8786a"
   },
   "include_deps": {
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"

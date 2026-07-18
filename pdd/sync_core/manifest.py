@@ -638,22 +638,24 @@ def _architecture_modules(
     return modules, None
 
 
+_EXTERNAL_CONTEXT_TEMPLATE: dict[object, object] = {
+    "reason": "Provides shared Python generation conventions for prompt templates.",
+    "description": (
+        "Human-maintained context template included by Python prompt modules to "
+        "define package, typing, import, error-handling, and preservation conventions."
+    ),
+    "dependencies": [],
+    "priority": 98,
+    "filename": "context/python_preamble.prompt",
+    "filepath": "context/python_preamble.prompt",
+    "tags": ["config", "context", "python", "template"],
+    "interface": {"type": "config", "config": {"keys": []}},
+}
+
+
 def _is_external_context_template(item: dict[object, object]) -> bool:
-    """Return whether an architecture entry is a non-managed context artifact."""
-    filename = item.get("filename")
-    filepath = item.get("filepath")
-    tags = item.get("tags")
-    interface = item.get("interface")
-    return (
-        isinstance(filename, str)
-        and filename.startswith("context/")
-        and filename.endswith(".prompt")
-        and filepath == filename
-        and isinstance(tags, list)
-        and "context" in tags
-        and isinstance(interface, dict)
-        and interface.get("type") == "config"
-    )
+    """Return whether an entry is the one non-managed context artifact."""
+    return item == _EXTERNAL_CONTEXT_TEMPLATE
 
 
 def _map_architecture_modules(
