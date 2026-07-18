@@ -2915,6 +2915,15 @@ class AsyncSyncRunner:
 
         cost_file = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
         cost_file.close()
+        # Keep machine-readable public-surface evidence separate from the
+        # bounded human-output tails.  A failing child can print thousands of
+        # lines *after* this block; retaining that flood just to recover six
+        # diagnostic fields defeats the memory cap.  The spill file keeps the
+        # complete structured fields available to the retry parser without
+        # making normal stdout/stderr retention unbounded.
+        surface_evidence_file = tempfile.NamedTemporaryFile(
+            mode="w+", encoding="utf-8", suffix=".surface", delete=False
+        )
 
         env = self._build_env(cost_file.name, repair_directive=repair_directive)
 
@@ -2938,6 +2947,7 @@ class AsyncSyncRunner:
         )
         verbose_print = self.verbose and not self.quiet
         line_lock = threading.Lock()
+        evidence_lock = threading.Lock()
 
         # Sticky capture of the child's "Overall status: ... Failed" verdict.
         # Recorded as each stdout line streams in (see _process_child_line) so a
@@ -2945,6 +2955,39 @@ class AsyncSyncRunner:
         # bounded tail still yields a failed verdict and a correct failure
         # reason. Only the stdout reader thread writes it, so no lock is needed.
         streamed_failure_markers: List[str] = []
+
+        def _capture_surface_evidence(line: str) -> None:
+            """Persist only the structured public-surface failure fields."""
+            stripped = line.strip()
+            if not (
+                _PUBLIC_SURFACE_PREFIX in stripped
+                or stripped.startswith((
+                    "removed:", "signature_changed:", "output:",
+                    "pre_surface_size:", "post_surface_size:",
+                    "signature_detail:",
+                ))
+            ):
+                return
+            with evidence_lock:
+                surface_evidence_file.write(line)
+                if not line.endswith("\n"):
+                    surface_evidence_file.write("\n")
+
+        def _take_surface_evidence() -> str:
+            """Read and remove the compact spill artifact exactly once."""
+            try:
+                with evidence_lock:
+                    surface_evidence_file.flush()
+                    surface_evidence_file.seek(0)
+                    return surface_evidence_file.read()
+            finally:
+                try:
+                    surface_evidence_file.close()
+                finally:
+                    try:
+                        os.unlink(surface_evidence_file.name)
+                    except OSError:
+                        pass
 
         def _dropped_output_message() -> str:
             out_lines = stdout_capture.dropped_lines
@@ -2984,6 +3027,7 @@ class AsyncSyncRunner:
 
         def _process_child_line(line: str, prefix: str = "") -> None:
             stripped = line.strip()
+            _capture_surface_evidence(line)
             # Record the failure verdict on the stdout stream (prefix == "") the
             # moment it is seen, mirroring the success-scan predicate, so it is
             # not lost if later output evicts the line from the bounded tail.
@@ -3073,6 +3117,7 @@ class AsyncSyncRunner:
                 os.unlink(cost_file.name)
             except OSError:
                 pass
+            _take_surface_evidence()
             return False, cost, str(exc), "", ""
 
         t_out = threading.Thread(
@@ -3185,6 +3230,9 @@ class AsyncSyncRunner:
                 pass
             stdout = stdout_capture.text()
             stderr = stderr_capture.text()
+            surface_evidence = _take_surface_evidence()
+            if surface_evidence:
+                stderr = f"{stderr}\n{surface_evidence}" if stderr else surface_evidence
             _log_dropped_output()
             truncation_msg = _dropped_output_message()
             error_msg = f"Timeout after {int(effective_timeout)}s waiting for sync"
@@ -3209,6 +3257,9 @@ class AsyncSyncRunner:
 
         stdout = stdout_capture.text()
         stderr = stderr_capture.text()
+        surface_evidence = _take_surface_evidence()
+        if surface_evidence:
+            stderr = f"{stderr}\n{surface_evidence}" if stderr else surface_evidence
         _log_dropped_output()
 
         success = exit_code == 0

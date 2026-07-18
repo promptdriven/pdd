@@ -46,10 +46,12 @@ from .grounding_provenance import (
 from .compressed_sync_context import compressed_context_is_active, render_for_prompt
 from .interface_semantics import (
     DefaultCompatibility,
+    SemanticType,
     annotations_compatible,
     build_module_default_symbols,
     compare_default_sources,
     parse_callable_contract,
+    parse_semantic_type,
     signature_entries_compatible,
 )
 
@@ -274,6 +276,28 @@ class PublicSurfaceRegressionError(click.UsageError):
             "the intended removals with BREAKING-CHANGE: remove <symbol>."
         )
         return "\n".join(lines)
+
+
+class PromptInterfaceContractError(ArchitectureConformanceError):
+    """Raised when a prompt advertises an unusable public interface contract."""
+
+    def __init__(self, prompt_name: str, output_path: str, detail: str) -> None:
+        super().__init__(
+            prompt_name=prompt_name,
+            output_path=output_path,
+            architecture_entry={},
+            expected_symbols=[],
+            found_symbols=[],
+            missing_symbols=[],
+            message=(
+                f"Architecture conformance error for {prompt_name}: "
+                f"invalid <pdd-interface> contract: {detail}"
+            ),
+            repair_directive=(
+                "Fix the prompt's <pdd-interface> JSON contract before retrying: "
+                f"{detail}"
+            ),
+        )
 
 
 class TestChurnError(click.UsageError):
@@ -2331,6 +2355,101 @@ def _prompt_allows_breaking_change(prompt_content: Optional[str]) -> bool:
     return _prompt_has_breaking_change_marker(prompt_content)
 
 
+def _parse_declared_module_interface(
+    prompt_content: Optional[str], prompt_name: str, output_path: str = ""
+) -> Optional[Dict[str, Tuple[str, Optional[str]]]]:
+    """Return a complete module declaration or fail closed when one is malformed.
+
+    ``None`` means the prompt genuinely contains no interface marker and is the
+    only state that may use the historical snapshot gate.  A marker is a public
+    contract boundary, so malformed JSON, unsupported interface kinds, partial
+    entries, and duplicate names are never silently demoted to legacy behavior.
+    """
+    if not prompt_content or not re.search(r"<pdd-interface\b[^>]*>", prompt_content):
+        return None
+    tags = parse_prompt_tags(prompt_content)
+    if tags.get("interface_parse_error"):
+        raise PromptInterfaceContractError(
+            prompt_name, output_path, str(tags["interface_parse_error"])
+        )
+    interface = tags.get("interface")
+    if not isinstance(interface, dict):
+        raise PromptInterfaceContractError(prompt_name, output_path, "expected an object")
+    if interface.get("type") in {"cli", "command", "frontend", "entrypoint"}:
+        # These documented shapes are not Python module-public-surface
+        # declarations.  Their own conformance paths remain authoritative.
+        return None
+    if interface.get("type") != "module":
+        raise PromptInterfaceContractError(
+            prompt_name, output_path,
+            "only type 'module' is valid for a Python public-surface contract",
+        )
+    module = interface.get("module")
+    if not isinstance(module, dict):
+        raise PromptInterfaceContractError(prompt_name, output_path, "missing module object")
+    result: Dict[str, Tuple[str, Optional[str]]] = {}
+
+    def add(name: Any, kind: str, signature: Any, location: str, *, required: bool) -> None:
+        if not isinstance(name, str) or not name or any(
+            not part.isidentifier() for part in name.split(".")
+        ):
+            raise PromptInterfaceContractError(
+                prompt_name, output_path, f"{location} has an invalid symbol name"
+            )
+        if required and not isinstance(signature, str):
+            raise PromptInterfaceContractError(
+                prompt_name, output_path, f"{location} must declare a signature"
+            )
+        if signature is not None and not isinstance(signature, str):
+            raise PromptInterfaceContractError(
+                prompt_name, output_path, f"{location} signature must be a string"
+            )
+        if name in result:
+            raise PromptInterfaceContractError(
+                prompt_name, output_path, f"duplicate declaration for {name}"
+            )
+        result[name] = (kind, signature)
+
+    functions = module.get("functions", [])
+    classes = module.get("classes", [])
+    constants = module.get("constants", [])
+    if not all(isinstance(items, list) for items in (functions, classes, constants)):
+        raise PromptInterfaceContractError(
+            prompt_name, output_path, "functions, classes, and constants must be lists"
+        )
+    for index, item in enumerate(functions):
+        if not isinstance(item, dict):
+            raise PromptInterfaceContractError(prompt_name, output_path, f"functions[{index}] must be an object")
+        add(item.get("name"), "function", item.get("signature"), f"functions[{index}]", required=True)
+    for index, item in enumerate(classes):
+        if not isinstance(item, dict):
+            raise PromptInterfaceContractError(prompt_name, output_path, f"classes[{index}] must be an object")
+        class_name = item.get("name")
+        add(class_name, "class", item.get("signature"), f"classes[{index}]", required=False)
+        methods = item.get("methods", [])
+        if methods is None:
+            methods = []
+        if not isinstance(methods, list):
+            raise PromptInterfaceContractError(
+                prompt_name, output_path, f"classes[{index}].methods must be a list"
+            )
+        for method_index, method in enumerate(methods):
+            if not isinstance(method, dict) or not isinstance(class_name, str):
+                raise PromptInterfaceContractError(
+                    prompt_name, output_path,
+                    f"classes[{index}].methods[{method_index}] must be an object",
+                )
+            method_name = method.get("name")
+            qualified = f"{class_name}.{method_name}" if isinstance(method_name, str) else method_name
+            add(qualified, "method", method.get("signature"),
+                f"classes[{index}].methods[{method_index}]", required=True)
+    for index, item in enumerate(constants):
+        if not isinstance(item, dict):
+            raise PromptInterfaceContractError(prompt_name, output_path, f"constants[{index}] must be an object")
+        add(item.get("name"), "constant", None, f"constants[{index}]", required=False)
+    return result
+
+
 def _collect_declared_surface(
     prompt_content: Optional[str],
     prompt_name: str,
@@ -2351,30 +2470,14 @@ def _collect_declared_surface(
     command signature conformance stays owned by the conformance gate
     (:func:`_extract_pdd_interface_signatures` still covers them).
 
-    Returns ``{}`` when there is no prompt, no ``type: "module"``
-    ``<pdd-interface>`` block, or the JSON is malformed. The conformance gate owns
-    the parse-error warning, so this stays silent to avoid a duplicate warning.
+    Returns ``{}`` only when the prompt has no module declaration. A present
+    malformed declaration raises :class:`PromptInterfaceContractError` so it
+    cannot accidentally fall back to the historical snapshot path.
     """
-    declared: Dict[str, Optional[str]] = {}
-    if not prompt_content:
-        return declared
-    tags = parse_prompt_tags(prompt_content)
-    if tags.get("interface_parse_error"):
-        return declared
-    interface = tags.get("interface")
-    if not isinstance(interface, dict) or interface.get("type") != "module":
-        return declared
-
-    module_spec = interface.get("module") or {}
-    for item in module_spec.get("functions") or []:
-        if not isinstance(item, dict):
-            continue
-        name = item.get("name")
-        if not name or not isinstance(name, str):
-            continue
-        sig = item.get("signature")
-        declared[name] = sig if isinstance(sig, str) else None
-    return declared
+    parsed = _parse_declared_module_interface(prompt_content, prompt_name)
+    if parsed is None:
+        return {}
+    return {name: signature for name, (_kind, signature) in parsed.items()}
 
 
 def _declared_signature_to_entry(
@@ -2507,6 +2610,193 @@ def _declared_patch_targets(
     return targets
 
 
+def _declared_symbol_node(tree: ast.Module, symbol: str) -> Optional[ast.AST]:
+    """Resolve a declared top-level or dotted class member without execution."""
+    parts = symbol.split(".")
+    body: List[ast.stmt] = list(tree.body)
+    for part in parts[:-1]:
+        owner = next(
+            (node for node in body if isinstance(node, ast.ClassDef) and node.name == part),
+            None,
+        )
+        if owner is None:
+            return None
+        body = list(owner.body)
+    for node in body:
+        if getattr(node, "name", None) == parts[-1]:
+            return node
+        if len(parts) == 1 and isinstance(node, ast.Assign):
+            if any(isinstance(target, ast.Name) and target.id == parts[-1] for target in node.targets):
+                return node
+        if len(parts) == 1 and isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == parts[-1]:
+                return node
+    return None
+
+
+def _exact_parameter_shape(node: ast.AST) -> Optional[List[Tuple[str, str, Optional[str], Optional[str]]]]:
+    """Capture the full Python calling shape, preserving order and separators."""
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return None
+    args = node.args
+    positional = list(args.posonlyargs) + list(args.args)
+    defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
+    result: List[Tuple[str, str, Optional[str], Optional[str]]] = []
+    for index, arg in enumerate(args.posonlyargs):
+        result.append(("posonly", arg.arg, _annotation_source(arg.annotation),
+                       ast.unparse(defaults[index]) if defaults[index] is not None else None))
+    offset = len(args.posonlyargs)
+    for index, arg in enumerate(args.args):
+        result.append(("positional", arg.arg, _annotation_source(arg.annotation),
+                       ast.unparse(defaults[offset + index]) if defaults[offset + index] is not None else None))
+    if args.vararg is not None:
+        result.append(("vararg", args.vararg.arg, _annotation_source(args.vararg.annotation), None))
+    for index, arg in enumerate(args.kwonlyargs):
+        default = args.kw_defaults[index]
+        result.append(("keyword_only", arg.arg, _annotation_source(arg.annotation),
+                       ast.unparse(default) if default is not None else None))
+    if args.kwarg is not None:
+        result.append(("kwarg", args.kwarg.arg, _annotation_source(args.kwarg.annotation), None))
+    return result
+
+
+def _annotation_source(annotation: Optional[ast.AST]) -> Optional[str]:
+    return ast.unparse(annotation) if annotation is not None else None
+
+
+def _exact_semantic_type_key(value: SemanticType) -> Tuple[Any, ...]:
+    """Canonicalize the supported annotation aliases without widening types."""
+    args = tuple(_exact_semantic_type_key(arg) for arg in value.args)
+    if value.base == "Union":
+        args = tuple(sorted(args))
+    return value.base, value.optional, args
+
+
+def _exact_annotations_match(expected: str, actual: str) -> bool:
+    """Allow spelling aliases (``List``/``list``), never type widening."""
+    expected_type = parse_semantic_type(expected)
+    actual_type = parse_semantic_type(actual)
+    if expected_type is not None and actual_type is not None:
+        return _exact_semantic_type_key(expected_type) == _exact_semantic_type_key(actual_type)
+    try:
+        return ast.dump(ast.parse(expected, mode="eval").body, include_attributes=False) == ast.dump(
+            ast.parse(actual, mode="eval").body, include_attributes=False
+        )
+    except SyntaxError:
+        return expected == actual
+
+
+def _exact_callable_matches(expected: ast.AST, actual: ast.AST, symbols: Dict[str, Any]) -> bool:
+    """Compare a declaration exactly, allowing only semantic spelling aliases."""
+    if not isinstance(expected, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return False
+    if not isinstance(actual, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return False
+    if isinstance(expected, ast.AsyncFunctionDef) != isinstance(actual, ast.AsyncFunctionDef):
+        return False
+    expected_params = _exact_parameter_shape(expected)
+    actual_params = _exact_parameter_shape(actual)
+    if expected_params is None or actual_params is None or len(expected_params) != len(actual_params):
+        return False
+    for expected_param, actual_param in zip(expected_params, actual_params):
+        expected_kind, expected_name, expected_ann, expected_default = expected_param
+        actual_kind, actual_name, actual_ann, actual_default = actual_param
+        if expected_kind != actual_kind or expected_name != actual_name:
+            return False
+        if (expected_ann is None) != (actual_ann is None):
+            return False
+        if expected_ann is not None and not _exact_annotations_match(expected_ann, actual_ann):
+            return False
+        if (expected_default is None) != (actual_default is None):
+            return False
+        if expected_default is not None and compare_default_sources(
+            expected_default, actual_default, symbols
+        ) is not DefaultCompatibility.COMPATIBLE:
+            return False
+    expected_return = _annotation_source(expected.returns)
+    actual_return = _annotation_source(actual.returns)
+    return ((expected_return is None) == (actual_return is None)
+            and (expected_return is None or _exact_annotations_match(expected_return, actual_return)))
+
+
+def _declared_callable_ast(name: str, signature: str) -> ast.AST:
+    """Parse a signature declaration into a synthetic callable AST."""
+    text = signature.strip()
+    if text.startswith("("):
+        text = f"def {name.rsplit('.', 1)[-1]}{text}: pass"
+    elif re.match(r"^(?:async\s+)?def\s+", text):
+        if not text.rstrip().endswith(":"):
+            text = f"{text}: pass"
+    else:
+        raise ValueError("signature must be a Python parameter list or def declaration")
+    try:
+        parsed = ast.parse(text).body
+    except SyntaxError as exc:
+        raise ValueError("signature is not valid Python syntax") from exc
+    if len(parsed) != 1 or not isinstance(parsed[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
+        raise ValueError("signature is not a callable declaration")
+    return parsed[0]
+
+
+def _verify_declared_interface_exact(
+    generated_code: str, prompt_content: Optional[str], prompt_name: str,
+    output_path: Optional[str], language: Optional[str],
+) -> None:
+    """Enforce a valid module declaration as the exact generated public API."""
+    if not _is_python_generation(language, output_path):
+        return
+    declared = _parse_declared_module_interface(prompt_content, prompt_name, output_path or "")
+    if declared is None:
+        return
+    try:
+        tree = ast.parse(generated_code or "")
+    except SyntaxError as exc:
+        raise PromptInterfaceContractError(prompt_name, output_path or "", f"generated Python is invalid: {exc}") from exc
+    symbols = build_module_default_symbols(generated_code)
+    missing: List[str] = []
+    changed: List[str] = []
+    details: List[Tuple[str, str, str, str]] = []
+    for name, (kind, signature) in declared.items():
+        actual = _declared_symbol_node(tree, name)
+        if actual is None:
+            missing.append(name)
+            continue
+        if kind == "class":
+            if not isinstance(actual, ast.ClassDef):
+                changed.append(name)
+                details.append((name, "[class]", type(actual).__name__, "pdd-interface"))
+            continue
+        if kind == "constant":
+            if not isinstance(actual, (ast.Assign, ast.AnnAssign)):
+                changed.append(name)
+                details.append((name, "[constant]", type(actual).__name__, "pdd-interface"))
+            continue
+        try:
+            expected = _declared_callable_ast(name, signature or "")
+        except ValueError as exc:
+            raise PromptInterfaceContractError(prompt_name, output_path or "", f"{name}: {exc}") from exc
+        if not _exact_callable_matches(expected, actual, symbols):
+            changed.append(name)
+            details.append((name, signature or "", ast.unparse(actual), "pdd-interface"))
+    # A dotted declaration implies its owning top-level class is intentional.
+    expected_top_level = {name.split(".", 1)[0] for name in declared}
+    actual_top_level = {
+        name for name in _snapshot_public_surface(generated_code, "python") if "." not in name
+    }
+    unexpected = sorted(actual_top_level - expected_top_level)
+    if missing or changed or unexpected:
+        raise PublicSurfaceRegressionError(
+            prompt_name=prompt_name, output_path=output_path or "",
+            removed_symbols=sorted(set(missing)),
+            changed_signatures=sorted(set(changed + unexpected)),
+            pre_surface_size=len(expected_top_level), post_surface_size=len(actual_top_level),
+            signature_details=details + [
+                (name, "<not declared>", "public export", "pdd-interface")
+                for name in unexpected
+            ],
+        )
+
+
 def _verify_public_surface_regression(
     existing_code: Optional[str],
     generated_code: str,
@@ -2517,13 +2807,17 @@ def _verify_public_surface_regression(
 ) -> None:
     """Fail when a mature Python module generation removes public symbols."""
     if (
-        not existing_code
-        or not existing_code.strip()
-        or _env_flag_enabled("PDD_SKIP_PUBLIC_SURFACE_GATE")
+        _env_flag_enabled("PDD_SKIP_PUBLIC_SURFACE_GATE")
         or _env_flag_enabled("PDD_SKIP_CONFORMANCE")
         or _is_test_output_path(output_path)
         or not _is_python_generation(language, output_path)
     ):
+        return
+
+    _verify_declared_interface_exact(
+        generated_code, prompt_content, prompt_name, output_path, language
+    )
+    if not existing_code or not existing_code.strip():
         return
 
     # The prompt's ``<pdd-interface>`` declaration is the stable surface contract
@@ -2659,7 +2953,13 @@ def _verify_public_surface_regression(
     # signature where ``_declared_signature_to_entry`` returns None — is NOT
     # added, so it falls back to the exact old-code baseline (added-required-param
     # / binding-kind flip / ctor ABI drift stay caught; codex over-skip fix).
-    declared_validated: Set[str] = set()
+    # Exact declaration validation above already owns every declared symbol.
+    # Keep the old-code compatibility baseline exclusively for undeclared
+    # exports; otherwise an intended declaration change would be re-rejected.
+    declared_validated: Set[str] = {
+        name[: -len(".__init__")] if name.endswith(".__init__") else name
+        for name in declared_names
+    }
 
     # DECLARED symbols: validate the generated signature against the DECLARED
     # PARAM/return contract (a stable target), NEVER re-comparing params against
@@ -5238,7 +5538,6 @@ def code_generator_main(
             if (
                 not _env_flag_enabled("PDD_SKIP_CONFORMANCE")
                 and generated_code_content is not None
-                and existing_code_content is not None
             ):
                 # Gate on `is not None` rather than a truthy check so an
                 # empty generation over an existing module still fires the
@@ -5257,14 +5556,19 @@ def code_generator_main(
                         language=language,
                         prompt_content=prompt_content,
                     )
-                    _verify_test_churn(
-                        existing_code=existing_code_content,
-                        generated_code=generated_code_content,
-                        prompt_name=prompt_name,
-                        output_path=output_path,
-                        prompt_content=prompt_content,
-                    )
-                except (PublicSurfaceRegressionError, TestChurnError) as compat_err:
+                    if existing_code_content is not None:
+                        _verify_test_churn(
+                            existing_code=existing_code_content,
+                            generated_code=generated_code_content,
+                            prompt_name=prompt_name,
+                            output_path=output_path,
+                            prompt_content=prompt_content,
+                        )
+                except (
+                    PromptInterfaceContractError,
+                    PublicSurfaceRegressionError,
+                    TestChurnError,
+                ) as compat_err:
                     if output_path and existing_code_content is not None:
                         try:
                             pathlib.Path(output_path).write_text(
