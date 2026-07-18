@@ -498,6 +498,16 @@ class TestGlobalSyncHelpers:
 
         assert result == ["agentic_sync", "commands/maintenance"]
 
+    def test_architecture_module_basenames_keeps_duplicate_leaf_output_roots(self):
+        architecture = [
+            {"filename": "page_Python.prompt", "filepath": "apps/a/page.py"},
+            {"filename": "page_Python.prompt", "filepath": "apps/b/page.py"},
+        ]
+
+        assert _architecture_module_basenames(architecture) == [
+            "apps/a/page", "apps/b/page"
+        ]
+
     @patch("pdd.agentic_sync.sync_determine_operation")
     @patch("pdd.agentic_sync._detect_languages_with_context")
     def test_analyze_global_sync_modules_collects_stale_modules(

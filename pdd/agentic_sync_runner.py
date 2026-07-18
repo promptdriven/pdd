@@ -38,7 +38,7 @@ from .construct_paths import (
     _is_known_language,
     _load_pddrc_config,
 )
-from .resolved_sync_unit import ResolvedSyncUnit
+from .resolved_sync_unit import ResolvedSyncUnit, resolve_sync_unit
 from .json_atomic import atomic_write_json
 from .sync_plan import plan_digest, selection_digest, validate_serialized_sync_plan
 from .sync_order import compute_sccs
@@ -1189,14 +1189,27 @@ class AsyncSyncRunner:
         module_contexts: Optional[Dict[str, Optional[str]]] = None,
         module_units: Optional[Dict[str, ResolvedSyncUnit]] = None,
         initial_cost: float = 0.0,
+        project_root: Optional[Path] = None,
+        checkout_identity: Optional[str] = None,
     ):
         self.basenames: List[str] = list(basenames)
         self.dep_graph: Dict[str, List[str]] = {
             b: list(dep_graph.get(b, [])) for b in self.basenames
         }
-        # Establish the root before freezing scope/resume identity so the
-        # binding records the checkout that will execute its child commands.
-        self.project_root: Path = Path.cwd()
+        # The caller owns execution authority.  Never derive it from an
+        # ambient nested CWD after a complete plan was frozen for its parent.
+        supplied_root = project_root or (github_info or {}).get("cwd") or Path.cwd()
+        self.project_root: Path = Path(supplied_root).resolve()
+        self._checkout_identity = (
+            checkout_identity
+            if isinstance(checkout_identity, str)
+            and re.fullmatch(r"[0-9a-f]{40}", checkout_identity)
+            else None
+        )
+        self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
+        self.module_targets: Dict[str, str] = dict(module_targets or {})
+        self.module_contexts: Dict[str, Optional[str]] = dict(module_contexts or {})
+        self.module_units: Dict[str, ResolvedSyncUnit] = dict(module_units or {})
         self.sync_options: Dict[str, Any] = dict(sync_options or {})
         self._scope_evidence = self._consume_frozen_scope()
         self._resume_binding = self._build_resume_binding()
@@ -1204,17 +1217,13 @@ class AsyncSyncRunner:
         self.quiet = quiet
         self.verbose = verbose
         self.issue_url = issue_url
-        self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
-        self.module_targets: Dict[str, str] = dict(module_targets or {})
         # Per-module context resolved against each module's own .pddrc (issue
         # #1675). Mirrors module_cwds/module_targets; the runner never forwards
         # a context that is invalid for the cwd the child will run in.
-        self.module_contexts: Dict[str, Optional[str]] = dict(module_contexts or {})
         # Canonical per-module identity (issue #1675). When a unit exists for a
         # key it is the single source of truth for cwd / target / context; the
         # module_cwds/targets/contexts dicts are a fallback for callers that pass
         # no units (ad-hoc callers, unit tests).
-        self.module_units: Dict[str, ResolvedSyncUnit] = dict(module_units or {})
         self.initial_cost = float(initial_cost or 0.0)
         self._steer_state: Dict[str, Any] = {}
 
@@ -1310,6 +1319,32 @@ class AsyncSyncRunner:
         supplied_selection_digest = self.sync_options.get("selection_digest")
         if supplied_selection_digest != selection_digest(selected):
             raise ValueError("sync_plan selection digest does not match frozen selection")
+        # Dependency closure may add IDs the normal issue adapter did not
+        # individually dry-run. Reconstruct their exact frozen identity before
+        # scheduler state is created; a child must never fall back to ambient
+        # root/target resolution for a closed-plan dependency.
+        for module_id in canonical_order:
+            candidate = candidate_by_id[module_id]
+            root_label = candidate["governing_root"]
+            target = candidate["target_basename"]
+            cwd = (self.project_root / root_label).resolve()
+            try:
+                cwd.relative_to(self.project_root)
+            except ValueError as exc:
+                raise ValueError("frozen candidate cwd escapes project root") from exc
+            self.module_cwds.setdefault(module_id, cwd)
+            self.module_targets.setdefault(module_id, target)
+            context = candidate.get("context")
+            self.module_contexts.setdefault(
+                module_id, context if isinstance(context, str) else None
+            )
+            if module_id not in self.module_units:
+                self.module_units[module_id] = resolve_sync_unit(
+                    module_id,
+                    target,
+                    cwd,
+                    requested_context=self.module_contexts[module_id],
+                )
         # Do not retain caller-selected scheduler data after a plan is frozen.
         self.basenames = canonical_order
         self.dep_graph = plan_graph
@@ -1324,22 +1359,6 @@ class AsyncSyncRunner:
 
     def _build_resume_binding(self) -> Dict[str, Any]:
         """Return the immutable schedule identity accepted by resume state."""
-        checkout_identity: Optional[str] = None
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=str(self.project_root),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                candidate = result.stdout.strip()
-                if re.fullmatch(r"[0-9a-f]{40}", candidate):
-                    checkout_identity = candidate
-        except (OSError, subprocess.SubprocessError):
-            pass
         if self._scope_evidence is not None:
             return {
                 "attempt_kind": "fallback" if self.sync_options.get("explicit_sync_scope") else "primary",
@@ -1347,7 +1366,7 @@ class AsyncSyncRunner:
                 "selection_digest": self._scope_evidence["selection_digest"],
                 "ordered_module_ids": list(self.basenames),
                 "dependency_graph": {key: list(self.dep_graph.get(key, [])) for key in self.basenames},
-                "checkout_identity": checkout_identity,
+                "checkout_identity": self._checkout_identity,
             }
         # Non-V1 callers retain resumability, but their state is still tied to
         # this exact ordered graph rather than only an issue URL.
@@ -1357,7 +1376,7 @@ class AsyncSyncRunner:
             "selection_digest": None,
             "ordered_module_ids": list(self.basenames),
             "dependency_graph": {key: list(self.dep_graph.get(key, [])) for key in self.basenames},
-            "checkout_identity": checkout_identity,
+            "checkout_identity": self._checkout_identity,
         }
 
     def _persist_scope_evidence(self) -> None:
@@ -1435,6 +1454,10 @@ class AsyncSyncRunner:
             return
 
         if saved.get("issue_url") != self.issue_url:
+            return
+        if self._resume_binding.get("checkout_identity") is None:
+            # An unproven checkout can never authorize a skipped child, even
+            # when two independent lookup failures would both serialize None.
             return
         if saved.get("resume_binding") != self._resume_binding:
             # Legacy, partial, fallback/primary-mixed, and changed-plan state

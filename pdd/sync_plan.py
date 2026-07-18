@@ -276,10 +276,24 @@ class SyncPlan:
             raise SyncPlanError("selected module is absent from frozen candidates")
         if set(self.dependency_order) != selected or len(self.dependency_order) != len(selected):
             raise SyncPlanError("dependency order does not exactly cover selected modules")
-        for module_id in self.selected_module_ids:
-            candidate = candidates[module_id]
-            canonical_module_id(self.root, candidate.unit)
+        for module_id, candidate in candidates.items():
+            derived_id = canonical_module_id(self.root, candidate.unit)
+            if module_id != derived_id:
+                raise SyncPlanError(
+                    f"candidate ID {module_id!r} does not match resolved unit "
+                    f"identity {derived_id!r}"
+                )
+            if not isinstance(candidate.prompt_paths, (tuple, list)) or not isinstance(
+                candidate.output_paths, (tuple, list)
+            ):
+                raise SyncPlanError("candidate path collections must be lists or tuples")
+            if not isinstance(candidate.dependencies, (tuple, list)) or any(
+                not isinstance(dependency, str) for dependency in candidate.dependencies
+            ):
+                raise SyncPlanError("candidate dependencies must be a string collection")
             for path in (*candidate.prompt_paths, *candidate.output_paths):
+                if not isinstance(path, Path):
+                    raise SyncPlanError("candidate paths must be pathlib paths")
                 _root_relative(self.root, path)
         expected_plan_digest = plan_digest(self.to_dict())
         if self.sync_plan_digest != expected_plan_digest:
@@ -646,7 +660,13 @@ def validate_serialized_sync_plan(plan: Mapping[str, Any]) -> None:
         target = candidate["target_basename"]
         if not isinstance(target, str) or MODULE_ID_RE.fullmatch(target) is None:
             raise SyncPlanError("persisted SyncPlan has an unsafe target basename")
-        for path in (*candidate["prompt_paths"], *candidate["output_paths"]):
+        prompt_paths = candidate["prompt_paths"]
+        output_paths = candidate["output_paths"]
+        if not isinstance(prompt_paths, list) or not isinstance(output_paths, list):
+            raise SyncPlanError("persisted SyncPlan has malformed path collections")
+        if any(not isinstance(path, str) for path in (*prompt_paths, *output_paths)):
+            raise SyncPlanError("persisted SyncPlan has non-string candidate paths")
+        for path in (*prompt_paths, *output_paths):
             _canonical_relative_path(path, "candidate path")
         root = candidate.get("governing_root")
         if root != ".":
@@ -657,9 +677,13 @@ def validate_serialized_sync_plan(plan: Mapping[str, Any]) -> None:
             raise SyncPlanError("persisted SyncPlan has an invalid context")
         if not isinstance(candidate["changed_reason"], str) or not candidate["changed_reason"]:
             raise SyncPlanError("persisted SyncPlan has an invalid changed reason")
-        if candidate["expected_operation"] not in allowed_operations:
+        if not isinstance(candidate["expected_operation"], str) or candidate[
+            "expected_operation"
+        ] not in allowed_operations:
             raise SyncPlanError("persisted SyncPlan has an unsupported operation")
-        if candidate["confidence"] not in allowed_confidence:
+        if not isinstance(candidate["confidence"], str) or candidate[
+            "confidence"
+        ] not in allowed_confidence:
             raise SyncPlanError("persisted SyncPlan has an invalid confidence")
         if not isinstance(candidate["dependency_order"], int) or not isinstance(candidate["scc_index"], int):
             raise SyncPlanError("persisted SyncPlan has invalid graph indexes")

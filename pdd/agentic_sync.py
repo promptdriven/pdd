@@ -688,17 +688,37 @@ class GlobalSyncModule(NamedTuple):
 
 
 def _architecture_module_basenames(architecture: List[Dict[str, Any]]) -> List[str]:
-    """Return syncable architecture module basenames, preserving declaration order."""
-    basenames: List[str] = []
-    seen = set()
+    """Return stable path-qualified keys without collapsing duplicate leaves."""
+    discovered: List[Tuple[str, str]] = []
     for entry in architecture:
         if not isinstance(entry, dict):
             continue
         basename = _basename_from_architecture_filename(entry.get("filename", ""))
-        if basename and basename not in seen:
-            basenames.append(basename)
-            seen.add(basename)
-    return basenames
+        if basename:
+            discovered.append((basename, str(entry.get("filepath") or "")))
+    counts: Dict[str, int] = {}
+    for basename, _filepath in discovered:
+        counts[basename] = counts.get(basename, 0) + 1
+
+    keys: List[str] = []
+    used: set[str] = set()
+    for basename, filepath in discovered:
+        key = basename
+        if counts[basename] > 1:
+            parent = Path(filepath.replace("\\", "/")).parent
+            # Combined architecture records retain their output path even when
+            # their source architecture roots differ.  It is the only stable
+            # path evidence available at this adapter boundary.
+            if str(parent) not in ("", "."):
+                key = (parent / basename).as_posix()
+        if key in used:
+            # Repeated records for the same declared output are aliases, not
+            # a second governing unit. Distinct duplicate leaves were given a
+            # qualified key above and therefore cannot reach this branch.
+            continue
+        used.add(key)
+        keys.append(key)
+    return keys
 
 
 def _merge_duplicate_output_dependencies(
@@ -2420,6 +2440,23 @@ def _path_is_within_root(path: Optional[Path], root: Path) -> bool:
         return False
 
 
+def _validated_checkout_identity(project_root: Path) -> Optional[str]:
+    """Return the exact checked-out SHA, or no resume authority at all."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    candidate = result.stdout.strip() if result.returncode == 0 else ""
+    return candidate if re.fullmatch(r"[0-9a-f]{40}", candidate) else None
+
+
 def _derive_readonly_expected_operation(
     target: str,
     cwd: Path,
@@ -2857,6 +2894,8 @@ def _run_fallback_scope_sync(
         module_targets=module_targets,
         module_contexts=module_contexts,
         initial_cost=0.0,
+        project_root=project_root,
+        checkout_identity=_validated_checkout_identity(project_root),
     )
     if durable:
         runner = DurableSyncRunner(
@@ -3705,6 +3744,7 @@ def run_agentic_sync(
             module_contexts=module_contexts,
             module_units=module_units,
             initial_cost=llm_cost,
+            checkout_identity=_validated_checkout_identity(project_root),
         )
     else:
         runner = AsyncSyncRunner(
@@ -3720,6 +3760,8 @@ def run_agentic_sync(
             module_contexts=module_contexts,
             module_units=module_units,
             initial_cost=llm_cost,
+            project_root=project_root,
+            checkout_identity=_validated_checkout_identity(project_root),
         )
 
     runner_success, runner_msg, total_cost = runner.run()

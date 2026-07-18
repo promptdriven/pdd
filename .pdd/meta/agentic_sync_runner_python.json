@@ -3,12 +3,12 @@
   "timestamp": "2026-07-17T21:42:00+00:00",
   "command": "fix",
   "prompt_hash": "0e179d02d4e211007d12c239389c8d62d34cdb9332ad4f19a62cc6cffaa5e28a",
-  "code_hash": "5594e533ac9e43babf67d0e165fd49903f6b08034d749010ef8953d802e17356",
+  "code_hash": "ae51e809a5bfe7617a835cf31bdb0a0b3ed7b90b87e62b491d39fa34876b8137",
   "example_hash": "fcb36209abb5ab882ad551754fb574d62509c968f8c564e18163be7f2b7ef35a",
-  "test_hash": "e3394868678ec1c12503659099128ab7bd513d517b6dfc4b67eca6feec233c34",
+  "test_hash": "6a1504d075e53aca056100fb6eebaa5f18ff36c59e17cc9a36629e959d90df1a",
   "test_files": {
-    "test_agentic_sync_runner.py": "e3394868678ec1c12503659099128ab7bd513d517b6dfc4b67eca6feec233c34",
-    "test_sync_plan.py": "89a6c3c8b1b9608038b92f42af22d81f1eb81b6ba3cc733bbb45fb19712a9a05"
+    "test_agentic_sync_runner.py": "6a1504d075e53aca056100fb6eebaa5f18ff36c59e17cc9a36629e959d90df1a",
+    "test_sync_plan.py": "c5d5914210524e4ba48d6cb13f251ce4891f475da0afd2106424ef98a903988b"
   },
   "include_deps": {
     "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",

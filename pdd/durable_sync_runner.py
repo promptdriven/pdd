@@ -11,6 +11,9 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import base64
+import binascii
+import json
 # Durable sync shells out to git with shell=False.
 import subprocess  # nosec B404
 import threading
@@ -26,6 +29,7 @@ from .resolved_sync_unit import ResolvedSyncUnit
 MAX_WORKERS = _read_sync_max_workers()
 
 CHECKPOINT_TRAILER = "PDD-Sync-Checkpoint-V1"
+CHECKPOINT_TRAILER_V2 = "PDD-Sync-Checkpoint-V2"
 CHECKPOINT_AUTHOR_NAME = "PDD Durable Sync"
 CHECKPOINT_AUTHOR_EMAIL = "pdd-durable-sync@example.invalid"
 
@@ -53,6 +57,7 @@ class DurableSyncRunner(AsyncSyncRunner):
         module_contexts: Optional[Dict[str, Optional[str]]] = None,
         module_units: Optional[Dict[str, ResolvedSyncUnit]] = None,
         initial_cost: float = 0.0,
+        checkout_identity: Optional[str] = None,
     ) -> None:
         self.issue_number = issue_number
         self.git_root = project_root.resolve()
@@ -71,6 +76,7 @@ class DurableSyncRunner(AsyncSyncRunner):
         self._checkpoint_halted = threading.Event()
         self._run_id = uuid.uuid4().hex[:8]
         self._prepared = False
+        self._durable_resume_binding: Optional[Dict[str, object]] = None
 
         super().__init__(
             basenames=basenames,
@@ -91,6 +97,8 @@ class DurableSyncRunner(AsyncSyncRunner):
             module_contexts=dict(module_contexts or {}),
             module_units={},
             initial_cost=initial_cost,
+            project_root=self.git_root,
+            checkout_identity=checkout_identity,
         )
         self.project_root = self.git_root
         if self.total_budget is not None:
@@ -151,6 +159,15 @@ class DurableSyncRunner(AsyncSyncRunner):
             return False, "Durable sync requires a git repository"
         self.git_root = Path(root.stdout.strip()).resolve()
         self.project_root = self.git_root
+
+        head = self._git(["rev-parse", "HEAD"], cwd=self.git_root)
+        checkout = head.stdout.strip() if head.returncode == 0 else ""
+        if not re.fullmatch(r"[0-9a-f]{40}", checkout):
+            self._durable_resume_binding = None
+        else:
+            binding = dict(self._resume_binding)
+            binding["checkout_identity"] = checkout
+            self._durable_resume_binding = binding
 
         if self._git(["remote", "get-url", "origin"], cwd=self.git_root).returncode != 0:
             return False, "Durable sync requires an origin remote for checkpoint pushes"
@@ -616,7 +633,7 @@ class DurableSyncRunner(AsyncSyncRunner):
 
         has_current_issue_checkpoint = False
         for line in log.stdout.splitlines():
-            parsed = _parse_checkpoint_trailer(line)
+            parsed = _parse_checkpoint_binding(line)
             if parsed and parsed[0] == self.issue_number:
                 has_current_issue_checkpoint = True
                 break
@@ -636,16 +653,25 @@ class DurableSyncRunner(AsyncSyncRunner):
 
         completed: Set[str] = set()
         for line in log.stdout.splitlines():
-            parsed = _parse_checkpoint_trailer(line)
+            parsed = _parse_checkpoint_binding(line)
             if not parsed:
                 continue
-            issue, module = parsed
-            if issue == self.issue_number:
+            issue, module, binding = parsed
+            if issue == self.issue_number and binding == self._durable_resume_binding:
                 completed.add(module)
         return completed
 
     def _checkpoint_trailer(self, basename: str) -> str:
-        return f"{CHECKPOINT_TRAILER}: issue={self.issue_number} module={basename}"
+        binding = self._durable_resume_binding
+        if binding is None:
+            return f"{CHECKPOINT_TRAILER_V2}: issue={self.issue_number} module={basename} resume=disabled"
+        encoded = base64.urlsafe_b64encode(
+            json.dumps(binding, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii")
+        return (
+            f"{CHECKPOINT_TRAILER_V2}: issue={self.issue_number} module={basename} "
+            f"binding={encoded}"
+        )
 
     def _ensure_clean_durable_worktree(self) -> Tuple[bool, str]:
         status = self._git(["status", "--porcelain"], cwd=self.durable_worktree_path)
@@ -802,6 +828,42 @@ def _parse_checkpoint_trailer(line: str) -> Optional[Tuple[int, str]]:
     if not module:
         return None
     return issue, module
+
+
+def _parse_checkpoint_binding(
+    line: str,
+) -> Optional[Tuple[int, str, Dict[str, object]]]:
+    """Parse only complete V2 checkpoint authority; legacy trailers never resume."""
+    prefix = f"{CHECKPOINT_TRAILER_V2}:"
+    stripped = line.strip()
+    if not stripped.startswith(prefix):
+        return None
+    fields = dict(re.findall(r"(\w+)=([^\s]+)", stripped[len(prefix):].strip()))
+    try:
+        issue = int(fields["issue"])
+        module = fields["module"]
+        encoded = fields["binding"]
+        decoded = base64.urlsafe_b64decode(encoded.encode("ascii"))
+        binding = json.loads(decoded.decode("utf-8"))
+    except (KeyError, ValueError, UnicodeError, binascii.Error, json.JSONDecodeError):
+        return None
+    if not module or not isinstance(binding, dict):
+        return None
+    required = {
+        "attempt_kind", "sync_plan_digest", "selection_digest",
+        "ordered_module_ids", "dependency_graph", "checkout_identity",
+    }
+    if set(binding) != required:
+        return None
+    if not all(
+        isinstance(binding[field], str)
+        and re.fullmatch(r"[0-9a-f]{64}", binding[field])
+        for field in ("sync_plan_digest", "selection_digest")
+    ) or not isinstance(binding["checkout_identity"], str) or re.fullmatch(
+        r"[0-9a-f]{40}", binding["checkout_identity"]
+    ) is None:
+        return None
+    return issue, module, binding
 
 
 def _slugify_basename(basename: str) -> str:
