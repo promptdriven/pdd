@@ -229,8 +229,18 @@ class LazyCommandMapping(dict[str, click.Command]):
         dict.__delitem__(self, key)
 
     def __setitem__(self, key: str, value: click.Command) -> None:
-        self._resolved_keys.discard(key)
         dict.__setitem__(self, key, value)
+        target = self._targets.get(key)
+        if target is not None:
+            module_name, attribute = target
+            module = sys.modules.get(module_name)
+            if (
+                module is not None
+                and getattr(module, attribute, self._unloaded_command) is value
+            ):
+                self._resolved_keys.add(key)
+                return
+        self._resolved_keys.discard(key)
 
     def clear(self) -> None:
         dict.clear(self)
@@ -261,7 +271,7 @@ class LazyCommandMapping(dict[str, click.Command]):
     def setdefault(self, key: str, default: click.Command | None = None) -> Any:
         if key in self:
             return self[key]
-        dict.__setitem__(self, key, default)
+        self[key] = default
         return default
 
     def update(self, *args: Any, **kwargs: click.Command) -> None:
