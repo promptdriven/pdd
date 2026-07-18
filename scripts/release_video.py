@@ -118,38 +118,59 @@ READABLE_VISUAL_RE = re.compile(
     r"(?:graphical|software|application|app)\s+(?:user\s+)?interfaces?)\b",
     flags=re.IGNORECASE,
 )
-NAMED_COMMAND_SHELL_PATTERN = (
-    r"(?:bash|posix|unix|zsh|fish|ksh|csh|tcsh|dash|"
-    r"bourne(?:[-\s]+again)?|powershell)"
+UNAMBIGUOUS_SHELL_IMPLEMENTATION_RE = re.compile(
+    r"\b(?:powershell|pwsh|xonsh|zsh|ksh|csh|tcsh)\b",
+    flags=re.IGNORECASE,
 )
-TECHNICAL_SHELL_VISUAL_RE = re.compile(
-    rf"\b{NAMED_COMMAND_SHELL_PATTERN}\s+(?:sessions?|prompts?)\b|"
-    rf"\b(?:runs?|executes?|invokes?|launches?)\s+(?:a\s+|the\s+)?"
-    rf"{NAMED_COMMAND_SHELL_PATTERN}\b|"
-    rf"\b(?:{NAMED_COMMAND_SHELL_PATTERN}|root|system|windows?|default|os|"
-    r"terminal|console|interactive|login|command(?:[-\s]+line)?)"
+COMMAND_SHELL_NAME_PATTERN = (
+    r"(?:bash|zsh|xonsh|korn|ksh|csh|tcsh|bourne(?:[-\s]+again)?|powershell)"
+)
+NAMED_COMMAND_SHELL_RE = re.compile(
+    rf"\b(?:{COMMAND_SHELL_NAME_PATTERN}|posix|unix)\s+shell(?:s|-like)?\b|"
+    r"\b(?:root|system|windows?|default|os|terminal|console|interactive|login|"
+    r"command(?:[-\s]+line)?)"
     r"(?:[\s,-]+(?:driven|based|style|styled|technical|interactive|login|"
     r"abstract|translucent|protective|geometric|outer|physical|luminous|"
     r"glowing|transparent|frosted|matte|ceramic|delicate|organic|glass)){0,3}"
-    r"[\s,-]+shell(?:s|-like)?\b|"
+    r"[\s,-]+shell(?:s|-like)?\b",
+    flags=re.IGNORECASE,
+)
+COMMAND_SHELL_EXECUTION_RE = re.compile(
+    rf"\b(?:runs?|executes?|invokes?|launches?|starts?|spawns?)\s+"
+    rf"(?:a\s+|the\s+)?(?:/bin/)?{COMMAND_SHELL_NAME_PATTERN}\b",
+    flags=re.IGNORECASE,
+)
+SHELL_OWNED_COMPUTING_RE = re.compile(
     r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
-    r"(?:blinking\s+)?(?:prompts?|cli|windows?|screens?|interfaces?|sessions?|"
-    r"current\s+outputs?|outputs?|technical\s+surfaces?)\b|"
+    r"(?:scripts?|history|prompts?|cli|windows?|screens?|interfaces?|sessions?|"
+    r"working\s+director(?:y|ies)|standard\s+outputs?|current\s+outputs?|"
+    r"outputs?|technical\s+surfaces?)\b|"
     r"\bshell(?:s|-like)?(?:['’]s)?\b"
     r"(?:(?![.!?;]).){0,100}\b"
-    r"(?:is|has|hosts?|contains?|shows?|invokes?|displays?|displaying|"
-    r"presents?|presenting|renders?|rendering|accepts?|awaits?|waits\s+for)\b"
+    r"(?:is|has|with|hosts?|contains?|shows?|reads?|invokes?|displays?|"
+    r"displaying|presents?|presenting|renders?|rendering|accepts?|awaits?|"
+    r"waits\s+for)\b"
     r"(?:(?![.!?;]).){0,60}\b"
-    rf"(?:{NAMED_COMMAND_SHELL_PATTERN}\s+sessions?|prompts?|"
-    r"blinking\s+(?:cursors?|carets?)|cli|keystrokes?|"
+    rf"(?:{COMMAND_SHELL_NAME_PATTERN}\s+sessions?|prompts?|"
+    r"(?:blinking\s+)?(?:cursors?|carets?)|cli|keystrokes?|"
     r"keyboard\s+inputs?|typed\s+inputs?|stdout|stderr|system\s+sessions?|"
-    r"login\s+sessions?|current\s+outputs?|command\s+outputs?|outputs?)\b|"
+    r"login\s+sessions?|stdin|user\s+inputs?|working\s+director(?:y|ies)|"
+    r"standard\s+outputs?|current\s+outputs?|command\s+outputs?|outputs?)\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+UNAMBIGUOUS_COMPUTING_SURFACE_RE = re.compile(
     r"\b(?:a|an|the|its|shell(?:s|['’]s|-like)?)?\s*"
     r"(?:blinking\s+)?prompts?\s+(?:appears?|blinks?|rests?|waits?|is\b)|"
-    r"\b(?:cursors?|carets?)\b|"
-    r"\b(?:typed|keyboard)\s+inputs?\b|"
+    r"\b(?:blinking|visible|onscreen|on[-\s]+screen)\s+"
+    r"(?:cursors?|carets?)\b|"
+    r"\b(?:shows?|displays?|presents?|contains?)\s+(?:a\s+|the\s+|its\s+)?"
+    r"(?:cursors?|carets?)\b|"
+    r"\btyped\s+inputs?\b|"
+    r"\b(?:accepts?|awaits?|waits\s+for)\s+(?:typed\s+|keyboard\s+|user\s+)"
+    r"inputs?\b|"
     r"\b(?:stdout|stderr|cli|repl|keystrokes?|command\s+outputs?|"
-    r"environment\s+variables?|(?:login|terminal|command)\s+sessions?)\b",
+    r"standard\s+outputs?|stdin|environment\s+variables?|"
+    r"(?:login|terminal|command|system)\s+sessions?)\b",
     flags=re.IGNORECASE | re.DOTALL,
 )
 EXACT_GEOMETRY_VISUAL_RE = re.compile(
@@ -3487,7 +3508,16 @@ def visual_safety_categories(cue: str) -> list[str]:
 
 def has_risky_shell_visual(cue: str) -> bool:
     """Return whether a cue positively identifies a command/readable surface."""
-    return bool(TECHNICAL_SHELL_VISUAL_RE.search(cue))
+    return any(
+        pattern.search(cue)
+        for pattern in (
+            UNAMBIGUOUS_SHELL_IMPLEMENTATION_RE,
+            NAMED_COMMAND_SHELL_RE,
+            COMMAND_SHELL_EXECUTION_RE,
+            SHELL_OWNED_COMPUTING_RE,
+            UNAMBIGUOUS_COMPUTING_SURFACE_RE,
+        )
+    )
 
 
 def has_unsafe_visual_motion(cue: str) -> bool:
