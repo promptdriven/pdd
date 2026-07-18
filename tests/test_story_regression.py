@@ -412,6 +412,28 @@ class TestGracefulDegradation:
             "tests directory without test*.py files invoked pytest.main"
         )
 
+    def test_pytest_suffix_named_candidate_still_starts_collection(
+        self, tmp_path: Path, monkeypatch
+    ):
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "example_test.py").write_text(
+            "def test_example():\n    assert True\n", encoding="utf-8"
+        )
+        nested_pytest_calls = []
+
+        def _record_pytest_main(*args, **kwargs):
+            nested_pytest_calls.append((args, kwargs))
+            return 0
+
+        monkeypatch.setattr(story_regression.pytest, "main", _record_pytest_main)
+
+        build_story_map(tests_dir)
+
+        assert len(nested_pytest_calls) == 1, (
+            "pytest's default *_test.py discovery pattern must remain supported"
+        )
+
     def test_unparseable_module_is_skipped(self, tmp_path: Path):
         d = tmp_path / "tests"
         d.mkdir()
