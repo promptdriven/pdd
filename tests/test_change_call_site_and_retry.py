@@ -76,6 +76,10 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"\d+(?:st|nd|rd|th)\s+attempt|"
     r"(?:if|when)\s+(?:the\s+)?\d+(?:st|nd|rd|th)\s+attempt\s+"
     r"(?:(?:also|still)\s+)?fail(?:s|ed)?|"
+    r"(?:if|when)\s+(?:the\s+)?(?:connection\s+)?"
+    r"(?:error|exception|failure)\s+(?:still\s+)?"
+    r"(?:persist(?:s|ed)?|remain(?:s|ed)?)\s+after\s+(?:the\s+)?"
+    r"\d+(?:st|nd|rd|th)\s+(?:retry\s+)?attempt|"
     r"once\s+(?:the\s+)?(?:max(?:imum)?\s+)?(?:retry\s+)?attempts?\s+"
     r"(?:is\s+|are\s+)?(?:reached|exhausted)|"
     r"(?:once|when|if)\s+(?:the\s+)?max(?:imum)?\s+number\s+of\s+attempts?\s+"
@@ -93,7 +97,18 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
 )
 
 _FALLBACK_ACTION_PATTERN = re.compile(
-    r"\b(?:raise|return|log|skip|abort|surface|propagate|fail|error|exception|fallback)\b",
+    r"\b(?:"
+    r"(?:re-?)?rais(?:e|es|ed|ing)|"
+    r"return(?:s|ed|ing)?|"
+    r"log(?:s|ged|ging)?|"
+    r"skip(?:s|ped|ping)?|"
+    r"abort(?:s|ed|ing)?|"
+    r"surfac(?:e|es|ed|ing)|"
+    r"propagat(?:e|es|ed|ing)"
+    r")\b|"
+    r"\buse(?:s|d|ing)?\s+(?:(?:a|the)\s+)?fallback\b|"
+    r"\b(?:fall(?:s|ing)?|fell)\s+back\b|"
+    r"\bfail(?:s|ed|ing)?\s+(?:closed|with\b|the\b)",
     re.IGNORECASE,
 )
 
@@ -417,6 +432,7 @@ class TestDeterministicChangeJudges:
                 "If all 3 attempts fail, the final connection error remains "
                 "available for inspection."
             ),
+            "If all 3 attempts fail, fallback diagnostics remain available.",
         ),
     )
     def test_retry_fallback_judge_rejects_non_fallback_conditions(
