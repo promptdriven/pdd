@@ -125,11 +125,15 @@ UNAMBIGUOUS_SHELL_IMPLEMENTATION_RE = re.compile(
 COMMAND_SHELL_NAME_PATTERN = (
     r"(?:bash|zsh|xonsh|korn|ksh|csh|tcsh|bourne(?:[-\s]+again)?|powershell)"
 )
-BASH_NAMED_SURFACE_RE = re.compile(
-    r"\bBash\s+(?:history|scripts?|sessions?|windows?)\b"
+BASH_STRONG_SURFACE_RE = re.compile(
+    r"\bbash\s+(?:history|scripts?|windows?)\b",
+    flags=re.IGNORECASE,
+)
+BASH_SESSION_RE = re.compile(
+    r"\bBash\s+sessions?\b"
 )
 COMMAND_SHELL_PATH_RE = re.compile(
-    rf"(?<!\w)/bin/{COMMAND_SHELL_NAME_PATTERN}\b",
+    rf"(?<!\w)/bin/(?:sh|dash|fish|{COMMAND_SHELL_NAME_PATTERN})\b",
     flags=re.IGNORECASE,
 )
 NAMED_COMMAND_SHELL_RE = re.compile(
@@ -151,7 +155,8 @@ COMMAND_SHELL_EXECUTION_RE = re.compile(
 )
 SHELL_SUBJECT_CONTEXT_PATTERN = (
     r"(?:(?![.!?;]|\b(?:that|who|which)\b|"
-    r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b).){0,100}"
+    r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b|"
+    r",\s*(?:and|but|while|whereas|yet)\s+(?:a|an|the)\b).){0,100}"
 )
 SHELL_OWNED_COMPUTING_RE = re.compile(
     r"\bshell[-\s]+outputs?\s+windows?\b|"
@@ -166,10 +171,11 @@ SHELL_OWNED_COMPUTING_RE = re.compile(
     r"\bshell(?:s|-like)?(?:['’]s)?\b"
     rf"{SHELL_SUBJECT_CONTEXT_PATTERN}\b"
     r"(?:is|has|with|hosts?|contains?|shows?|reads?|invokes?|displays?|"
-    r"displaying|presents?|presenting|renders?|rendering)\b"
+    r"displaying|presents?|presenting|renders?|rendering|prints?|writes?)\b"
     r"(?:(?![.!?;]).){0,60}\b"
     rf"(?:{COMMAND_SHELL_NAME_PATTERN}\s+sessions?|prompts?|"
-    r"(?:blinking\s+)?(?:cursors?|carets?)(?![-\s]+shaped\b)|cli|keystrokes?|"
+    r"(?:blinking\s+)?(?:cursors?|carets?)(?![-\s]+(?:shaped|like)\b)|"
+    r"cli|keystrokes?|"
     r"stdout|stderr|system\s+sessions?|login\s+sessions?|stdin|"
     r"working\s+director(?:y|ies)|"
     r"standard\s+outputs?|current\s+outputs?|command\s+outputs?|outputs?)\b",
@@ -186,11 +192,10 @@ UNAMBIGUOUS_COMPUTING_SURFACE_RE = re.compile(
     r"\b(?:a|an|the|its|shell(?:s|['’]s|-like)?)?\s*"
     r"(?:blinking\s+)?prompts?\s+(?:appears?|blinks?|rests?|waits?|is\b)|"
     r"\b(?:blinking|visible|onscreen|on[-\s]+screen)\s+"
-    r"(?:cursors?|carets?)(?![-\s]+shaped\b)\b|"
+    r"(?:cursors?|carets?)(?![-\s]+(?:shaped|like)\b)\b|"
     r"\b(?:shows?|displays?|presents?|contains?)\s+(?:a\s+|the\s+|its\s+)?"
-    r"(?:cursors?|carets?)\b(?![-\s]+shaped\b)|"
+    r"(?:cursors?|carets?)\b(?![-\s]+(?:shaped|like)\b)|"
     r"\btyped\s+inputs?\b|"
-    r"\b(?:prints?|writes?)\b(?:(?![.!?;]).){0,40}\boutputs?\b|"
     r"\b(?:stdout|stderr|cli|repl|keystrokes?|command\s+outputs?|"
     r"standard\s+outputs?|stdin|environment\s+variables?|"
     r"(?:login|terminal|command|system)\s+sessions?)\b",
@@ -3535,7 +3540,8 @@ def has_risky_shell_visual(cue: str) -> bool:
         pattern.search(cue)
         for pattern in (
             UNAMBIGUOUS_SHELL_IMPLEMENTATION_RE,
-            BASH_NAMED_SURFACE_RE,
+            BASH_STRONG_SURFACE_RE,
+            BASH_SESSION_RE,
             COMMAND_SHELL_PATH_RE,
             NAMED_COMMAND_SHELL_RE,
             COMMAND_SHELL_EXECUTION_RE,
