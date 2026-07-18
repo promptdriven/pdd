@@ -2941,7 +2941,10 @@ class TestSyncOneModule:
 # ---------------------------------------------------------------------------
 
 class TestResumability:
-    def _make_runner(self, basenames, dep_graph=None, issue_url=None, tmp_path=None):
+    def _make_runner(
+        self, basenames, dep_graph=None, issue_url=None, tmp_path=None,
+        checkout_identity=None,
+    ):
         """Create a runner, optionally with a custom project_root."""
         runner = AsyncSyncRunner(
             basenames=basenames,
@@ -2950,6 +2953,7 @@ class TestResumability:
             github_info=None,
             quiet=True,
             issue_url=issue_url,
+            checkout_identity=checkout_identity,
         )
         if tmp_path:
             runner.project_root = tmp_path
@@ -2979,13 +2983,20 @@ class TestResumability:
 
         # Persist a state using the exact same schedule identity.  Resume is
         # intentionally not compatible with old issue-url-only state files.
-        source = self._make_runner(["a", "b"], issue_url=url, tmp_path=tmp_path)
+        checkout = "1" * 40
+        source = self._make_runner(
+            ["a", "b"], issue_url=url, tmp_path=tmp_path,
+            checkout_identity=checkout,
+        )
         source.project_root = tmp_path
         source._record_result("a", True, 0.10, "")
         source.comment_id = 999
         source._save_state()
 
-        runner = self._make_runner(["a", "b"], issue_url=url, tmp_path=tmp_path)
+        runner = self._make_runner(
+            ["a", "b"], issue_url=url, tmp_path=tmp_path,
+            checkout_identity=checkout,
+        )
         runner.project_root = tmp_path
         # Re-trigger load since project_root was set after init
         runner._load_state()

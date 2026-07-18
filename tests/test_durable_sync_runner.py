@@ -179,7 +179,7 @@ def test_empty_success_creates_empty_checkpoint_and_marker(tmp_path: Path, capsy
     assert success is True
     assert "All 1 modules synced successfully" in message
     log = _git(repo, "log", "sync/issue-1328", "--format=%B").stdout
-    assert "PDD-Sync-Checkpoint-V1: issue=1328 module=foo" in log
+    assert "PDD-Sync-Checkpoint-V2: issue=1328 module=foo" in log
     output = capsys.readouterr().out
     assert "PDD_CHECKPOINT: issue=1328 module=foo" in output
     assert "empty=true" in output
@@ -229,8 +229,8 @@ def test_trailers_from_other_issues_do_not_resume_current_issue(tmp_path: Path):
     assert success is True, message
     assert current_issue._resumed_modules == []
     log = _git(repo, "log", "sync/shared", "--format=%B").stdout
-    assert "PDD-Sync-Checkpoint-V1: issue=999 module=foo" in log
-    assert "PDD-Sync-Checkpoint-V1: issue=1328 module=foo" in log
+    assert "PDD-Sync-Checkpoint-V2: issue=999 module=foo" in log
+    assert "PDD-Sync-Checkpoint-V2: issue=1328 module=foo" in log
 
 
 def test_module_metadata_is_force_added_even_when_pdd_dir_is_ignored(tmp_path: Path):
@@ -341,7 +341,7 @@ def test_push_failure_preserves_local_checkpoint_and_next_run_pushes_it(tmp_path
         "log",
         "--format=%B",
     ).stdout
-    assert "PDD-Sync-Checkpoint-V1: issue=1328 module=foo" in local_log
+    assert "PDD-Sync-Checkpoint-V2: issue=1328 module=foo" in local_log
 
     second = _runner(repo)
     success, message, _ = second.run()
@@ -350,7 +350,7 @@ def test_push_failure_preserves_local_checkpoint_and_next_run_pushes_it(tmp_path
     assert second._resumed_modules == ["foo"]
     _git(repo, "fetch", "origin", "sync/issue-1328")
     remote_log = _git(repo, "log", "origin/sync/issue-1328", "--format=%B").stdout
-    assert "PDD-Sync-Checkpoint-V1: issue=1328 module=foo" in remote_log
+    assert "PDD-Sync-Checkpoint-V2: issue=1328 module=foo" in remote_log
 
 
 def test_non_fast_forward_push_rejection_halts_run(tmp_path: Path):
@@ -402,9 +402,9 @@ def test_fresh_clone_resumes_checkpointed_modules_after_partial_failure(
     assert "simulated c failure" in message
     _git(repo, "fetch", "origin", "sync/issue-1328")
     first_remote_log = _git(repo, "log", "origin/sync/issue-1328", "--format=%B").stdout
-    assert "PDD-Sync-Checkpoint-V1: issue=1328 module=a" in first_remote_log
-    assert "PDD-Sync-Checkpoint-V1: issue=1328 module=b" in first_remote_log
-    assert "PDD-Sync-Checkpoint-V1: issue=1328 module=c" not in first_remote_log
+    assert "PDD-Sync-Checkpoint-V2: issue=1328 module=a" in first_remote_log
+    assert "PDD-Sync-Checkpoint-V2: issue=1328 module=b" in first_remote_log
+    assert "PDD-Sync-Checkpoint-V2: issue=1328 module=c" not in first_remote_log
 
     fresh = tmp_path / "fresh-worker"
     _git(tmp_path, "clone", str(tmp_path / "origin.git"), str(fresh))
@@ -421,10 +421,12 @@ def test_fresh_clone_resumes_checkpointed_modules_after_partial_failure(
     success, message, _ = second.run()
 
     assert success is True, message
-    assert sorted(second._resumed_modules) == ["a", "b"]
+    # These direct legacy runners have no frozen plan/selection authority.
+    # V2 trailers preserve their checkpoints but must not authorize resume.
+    assert second._resumed_modules == []
     _git(fresh, "fetch", "origin", "sync/issue-1328")
     final_log = _git(fresh, "log", "origin/sync/issue-1328", "--format=%B").stdout
-    assert "PDD-Sync-Checkpoint-V1: issue=1328 module=c" in final_log
+    assert "PDD-Sync-Checkpoint-V2: issue=1328 module=c" in final_log
     assert _git(fresh, "show", "origin/sync/issue-1328:c.txt").stdout == "synced c\n"
 
 
@@ -440,7 +442,7 @@ def test_halted_checkpoint_prevents_later_in_flight_module_checkpoint(tmp_path: 
     assert success is False
     assert "Checkpointing halted" in error
     log = _git(runner.durable_worktree_path, "log", "--format=%B").stdout
-    assert "PDD-Sync-Checkpoint-V1: issue=1328 module=foo" not in log
+    assert "PDD-Sync-Checkpoint-V2: issue=1328 module=foo" not in log
 
 
 def test_durable_runner_end_to_end_uses_child_subprocess_and_resumes(

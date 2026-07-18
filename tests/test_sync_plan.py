@@ -10,7 +10,7 @@ import pytest
 
 from pdd.resolved_sync_unit import resolve_sync_unit
 from pdd.agentic_sync import _load_fallback_scope_execution, _run_fallback_scope_sync
-from pdd.agentic_sync_runner import AsyncSyncRunner
+from pdd.agentic_sync_runner import AsyncSyncRunner, STATE_FILE_PATH
 from pdd.json_atomic import atomic_write_json
 from pdd.sync_plan import (
     AmbiguousSyncModuleError,
@@ -27,6 +27,7 @@ from pdd.sync_plan import (
     resolve_selection_aliases,
     selection_digest,
     validate_explicit_scope,
+    validate_serialized_sync_plan,
 )
 
 
@@ -379,6 +380,7 @@ def test_resume_requires_exact_frozen_selection_and_schedule(
             "selection_digest": plan.selection_digest,
             "execution_selected_module_ids": list(plan.selected_module_ids),
             "execution_dependency_order": list(plan.dependency_order),
+            "checkout_identity": "0" * 40,
         }
 
     monkeypatch.chdir(tmp_path)
@@ -390,6 +392,7 @@ def test_resume_requires_exact_frozen_selection_and_schedule(
         github_info=None,
         quiet=True,
         issue_url=issue_url,
+        checkout_identity=first_only.sync_plan_digest[:40],
     )
     source._record_result("service/first", True, 0.1, "")
 
@@ -400,6 +403,7 @@ def test_resume_requires_exact_frozen_selection_and_schedule(
         github_info=None,
         quiet=True,
         issue_url=issue_url,
+        checkout_identity=first_only.sync_plan_digest[:40],
     )
     assert same.module_states["service/first"].status == "success"
 
@@ -410,9 +414,35 @@ def test_resume_requires_exact_frozen_selection_and_schedule(
         github_info=None,
         quiet=True,
         issue_url=issue_url,
+        checkout_identity=both.sync_plan_digest[:40],
     )
     assert changed.module_states["service/first"].status == "pending"
     assert changed.module_states["service/second"].status == "pending"
+
+
+def test_runner_uses_explicit_governing_root_not_nested_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = _candidate(tmp_path, "nested/job")
+    plan = build_sync_plan(tmp_path, [candidate], ["nested/job"])
+    monkeypatch.chdir(tmp_path / "nested")
+    runner = AsyncSyncRunner(
+        basenames=["nested/job"],
+        dep_graph={"nested/job": []},
+        sync_options={
+            "sync_plan": plan.to_dict(),
+            "sync_plan_digest": plan.sync_plan_digest,
+            "selection_digest": plan.selection_digest,
+        },
+        github_info=None,
+        quiet=True,
+        issue_url="https://github.com/owner/repo/issues/77",
+        project_root=tmp_path,
+        checkout_identity="7" * 40,
+    )
+    runner._record_result("nested/job", True, 0.0, "")
+    assert (tmp_path / STATE_FILE_PATH).exists()
+    assert not (tmp_path / "nested" / STATE_FILE_PATH).exists()
 
 
 def test_wrong_root_output_is_rejected_before_execution(tmp_path: Path) -> None:
@@ -435,6 +465,38 @@ def test_path_aware_identity_reuses_resolved_sync_unit(tmp_path: Path) -> None:
     assert canonical_module_id(
         tmp_path, resolve_sync_unit("wrong-id", "job", nested)
     ) == "apps/worker/job"
+
+
+def test_plan_rejects_regex_valid_id_that_disagrees_with_resolved_unit(
+    tmp_path: Path,
+) -> None:
+    candidate = _candidate(tmp_path, "actual/thing")
+    wrong = SyncPlanCandidate(
+        module_id="wrong/id",
+        unit=candidate.unit,
+        prompt_paths=candidate.prompt_paths,
+        output_paths=candidate.output_paths,
+        details=candidate.details,
+    )
+    with pytest.raises(SyncPlanError, match="does not match resolved unit"):
+        build_sync_plan(tmp_path, [wrong], ["wrong/id"])
+
+
+@pytest.mark.parametrize("field,value", [
+    ("prompt_paths", "ab"),
+    ("output_paths", {"path": "x"}),
+    ("dependencies", None),
+    ("provenance", {"source": "bad"}),
+])
+def test_serialized_plan_rejects_digest_consistent_scalar_collections(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    candidate = _candidate(tmp_path, "service/worker")
+    plan = build_sync_plan(tmp_path, [candidate], ["service/worker"])
+    document = plan.to_dict()
+    document["candidates"][0][field] = value
+    with pytest.raises(SyncPlanError):
+        validate_serialized_sync_plan(document)
 
 
 def test_external_validated_cwd_is_rejected_instead_of_being_relabelled(
