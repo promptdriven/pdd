@@ -251,16 +251,24 @@ class AtomicStateUpdate:
         return False
 
     def set_run_report(self, report: dict[str, Any], path: Path) -> None:
-        if self.pending.remove_run_report:
-            raise ValueError("state transaction cannot write and remove one run report")
+        report_path = Path(path)
+        if self.pending.remove_run_report and self.pending.run_report_path != report_path:
+            raise ValueError("state transaction has conflicting run report paths")
+        # A post-mutation verification report supersedes an earlier stale-report
+        # tombstone in this same unit transaction.
+        self.pending.remove_run_report = False
         self.pending.run_report = report
-        self.pending.run_report_path = Path(path)
+        self.pending.run_report_path = report_path
 
     def remove_run_report(self, path: Path) -> None:
-        if self.pending.run_report is not None:
-            raise ValueError("state transaction cannot write and remove one run report")
+        report_path = Path(path)
+        if self.pending.run_report is not None and self.pending.run_report_path != report_path:
+            raise ValueError("state transaction has conflicting run report paths")
+        # A later invalidation is authoritative until verification publishes a
+        # replacement report through ``set_run_report``.
+        self.pending.run_report = None
         self.pending.remove_run_report = True
-        self.pending.run_report_path = Path(path)
+        self.pending.run_report_path = report_path
 
     def set_fingerprint(
         self, fingerprint: dict[str, Any], path: Path, *, operation: str | None = None,
@@ -512,7 +520,9 @@ class AtomicStateUpdate:
             path.unlink()
 
     @staticmethod
-    def _restore_backup(backup: Path, target: Path) -> None:
+    def _restore_backup(
+        backup: Path, target: Path, *, sync_directory: bool = True,
+    ) -> None:
         """Restore without consuming the backup, so recovery itself is restartable."""
         identity = AtomicStateUpdate._file_identity(backup)
         if identity is None:
@@ -542,7 +552,8 @@ class AtomicStateUpdate:
             AtomicStateUpdate._assert_identity(backup, identity)
             AtomicStateUpdate._file_identity(temporary_path)
             os.replace(temporary_path, target)
-            fsync_directory(target.parent)
+            if sync_directory:
+                fsync_directory(target.parent)
         except BaseException:
             try:
                 temporary_path.unlink()
@@ -602,7 +613,11 @@ class AtomicStateUpdate:
                         backup = Path(backup_value)
                         if not backup.exists():
                             raise FileNotFoundError(f"missing transaction backup {backup}")
-                        self._restore_backup(backup, target)
+                        # Recovery restores every target first, then makes one
+                        # directory-sync attempt while removing the journal.
+                        # This avoids abandoning later staged files solely
+                        # because an earlier recovery fsync was interrupted.
+                        self._restore_backup(backup, target, sync_directory=False)
             self._cleanup_records(records)
         except Exception as exc:
             raise FingerprintFinalizeError(
