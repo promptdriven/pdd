@@ -20,6 +20,7 @@
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>sync_determine_operation_python.prompt</pdd-dependency>
 <pdd-dependency>operation_log_python.prompt</pdd-dependency>
+<pdd-dependency>fingerprint_transaction_python.prompt</pdd-dependency>
 
 % Goal
 Write `pdd/metadata_sync.py` — a single-function orchestrator that runs prompt metadata finalization stages in a fixed order and returns a structured result.
