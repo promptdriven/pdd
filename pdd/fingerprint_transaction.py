@@ -742,7 +742,7 @@ def _canonical_paths(
             except ValueError as exc:
                 raise ValueError(f"{key} path escapes owning project root: {candidate}") from exc
             expected_names = canonical_names(key)
-            if expected_names:
+            if expected_names and key != "prompt":
                 if key == "test_files":
                     expected_stem = Path(next(iter(expected_names))).stem
                     if not (candidate.stem == expected_stem or candidate.stem.startswith(f"{expected_stem}_")):
@@ -770,7 +770,13 @@ def _canonical_paths(
             continue
         supplied_values = value if key == "test_files" else [value]
         discovered_values = discovered if key == "test_files" else [discovered]
-        if {Path(item).resolve() for item in supplied_values} != {
+        # A configured path that does not exist is advisory only.  A real
+        # explicit artifact with the canonical role/name may legitimately
+        # be the configured non-default output; only two existing,
+        # conflicting files establish an ownership conflict.
+        if all(Path(item).exists() for item in supplied_values) and all(
+            Path(item).exists() for item in discovered_values
+        ) and {Path(item).resolve() for item in supplied_values} != {
             Path(item).resolve() for item in discovered_values
         }:
             raise ValueError(f"{key} path conflicts with canonical unit identity")
