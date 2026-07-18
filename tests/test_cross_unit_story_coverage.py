@@ -113,15 +113,20 @@ def _make_prompt(directory: Path, content: str, name: str = "test_python.prompt"
 
 def _parse_cli_json(result, args: list[str]) -> dict:
     """Parse CLI JSON after preserving actionable Click failure diagnostics."""
-    assert result.output.strip(), (
-        "coverage CLI emitted no JSON\n"
+    context = (
         f"args={args!r}\n"
         f"exit_code={result.exit_code}\n"
         f"exception={result.exception!r}\n"
         f"stdout={result.stdout!r}\n"
         f"stderr={result.stderr!r}"
     )
-    return json.loads(result.output)
+    assert result.output.strip(), "coverage CLI emitted no JSON\n" + context
+    try:
+        return json.loads(result.output)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"coverage CLI emitted malformed JSON: {exc}\n{context}"
+        ) from exc
 
 
 def test_parse_cli_json_preserves_context_for_malformed_output() -> None:
