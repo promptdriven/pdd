@@ -1587,3 +1587,28 @@ def test_aggregate_agentic_fallback_metadata_does_not_equate_sync_mode_with_used
     assert aggregated["used"] is False
     assert aggregated["agentic_sync_mode"] is True
     assert "agentic sync mode enabled" in aggregated["reason"]
+
+
+def test_save_run_report_joins_active_transaction_without_truncating_old_bytes(
+    tmp_path: Path,
+) -> None:
+    """Report publication is buffered until the owning transaction commits."""
+    from pdd.fingerprint_transaction import AtomicStateUpdate
+
+    root = tmp_path / "project"
+    prompt = root / "prompts" / "sample_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    (root / ".pddrc").write_text("contexts: {}\n", encoding="utf-8")
+    prompt.write_text("% Goal\nSample\n", encoding="utf-8")
+    report = root / ".pdd" / "meta" / "sample_python_run.json"
+    report.parent.mkdir(parents=True)
+    old = b'{"tests_passed": 1}\n'
+    report.write_bytes(old)
+
+    with AtomicStateUpdate("sample", "python", directory=report.parent):
+        operation_log.save_run_report(
+            "sample", "python", {"tests_passed": 2}, paths={"prompt": prompt}
+        )
+        assert report.read_bytes() == old
+
+    assert json.loads(report.read_text(encoding="utf-8")) == {"tests_passed": 2}
