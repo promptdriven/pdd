@@ -140,6 +140,14 @@ def _write_vitest_review_evidence(
         Path(__file__).parents[1]
         / "scripts/verify_vitest_no_result_observation.py"
     )
+    stage_a_verifier = (
+        Path(__file__).parents[1]
+        / "scripts/verify_vitest_stage_a_evidence.py"
+    )
+    native_addon = (
+        Path(__file__).parents[1]
+        / "pdd/sync_core/native/vitest_fd_cloexec.c"
+    )
     payload = {
         "schema": "vitest-diagnostic-review-v1",
         "failure_baseline_sha": _VITEST_FAILURE_BASELINE_SHA,
@@ -150,6 +158,10 @@ def _write_vitest_review_evidence(
         "observation_verifier_sha256": hashlib.sha256(
             observation_verifier.read_bytes()
         ).hexdigest(),
+        "stage_a_verifier_sha256": hashlib.sha256(
+            stage_a_verifier.read_bytes()
+        ).hexdigest(),
+        "native_addon_sha256": hashlib.sha256(native_addon.read_bytes()).hexdigest(),
         "package_verifier_sha256": hashlib.sha256(
             package_verifier.read_bytes()
         ).hexdigest(),
@@ -202,6 +214,83 @@ def _diagnostic_before_exit_progress() -> tuple[runner_module.VitestProgressStag
         runner_module.VitestProgressStage.COORDINATOR_BEFORE_EXIT,
         runner_module.VitestProgressStage.COORDINATOR_EXIT,
     )
+
+
+def _stage_a_progress() -> tuple[runner_module.VitestProgressStage, ...]:
+    """Return the exact native seal reporter failure route for Stage A."""
+    return (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        runner_module.VitestProgressStage.COORDINATOR_BOOTSTRAP,
+        runner_module.VitestProgressStage.REPORTER_MODULE_START,
+        runner_module.VitestProgressStage.REPORTER_ADDON_LOAD_START,
+        runner_module.VitestProgressStage.REPORTER_ADDON_LOAD_SUCCEEDED,
+        runner_module.VitestProgressStage.REPORTER_AUTHORITY_SEAL_START,
+        runner_module.VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED,
+        runner_module.VitestProgressStage.COORDINATOR_EXIT,
+    )
+
+
+def _stage_a_exit_result() -> SupervisedCompletedProcess:
+    """Return the historical exit-zero/no-result result without classifying it."""
+    return SupervisedCompletedProcess(
+        ["vitest"], 0, "", "candidate diagnostic must stay unpublished",
+        termination=SupervisorTermination(
+            TerminationKind.EXIT,
+            exit_code=0,
+            resource_telemetry=CgroupResourceTelemetry(0, 0, 0),
+        ),
+    )
+
+
+def _stage_a_config(output: Path, lane: str = "source") -> runner_module.VitestStageAEvidenceConfig:
+    """Build direct complete Stage A configuration for producer contracts."""
+    repository = Path(__file__).parents[1]
+    runner = Path(runner_module.__file__).resolve(strict=True)
+    values: dict[str, object] = {
+        "output": output,
+        "failure_baseline_sha": _VITEST_FAILURE_BASELINE_SHA,
+        "protected_base_sha": _VITEST_PROTECTED_BASE_SHA,
+        "trigger_head_sha": _repository_head(),
+        "checkout_head_sha": _repository_head(),
+        "reviewed_head_sha": _repository_head(),
+        "review_evidence_sha256": "c" * 64,
+        "producer_sha256": hashlib.sha256(runner.read_bytes()).hexdigest(),
+        "termination_verifier_sha256": hashlib.sha256(
+            (repository / "scripts/verify_vitest_termination_evidence.py").read_bytes()
+        ).hexdigest(),
+        "observation_verifier_sha256": hashlib.sha256(
+            (repository / "scripts/verify_vitest_no_result_observation.py").read_bytes()
+        ).hexdigest(),
+        "stage_a_verifier_sha256": hashlib.sha256(
+            (repository / "scripts/verify_vitest_stage_a_evidence.py").read_bytes()
+        ).hexdigest(),
+        "native_addon_sha256": hashlib.sha256(
+            (repository / "pdd/sync_core/native/vitest_fd_cloexec.c").read_bytes()
+        ).hexdigest(),
+        "package_verifier_sha256": hashlib.sha256(
+            (repository / "scripts/verify_vitest_package_attestation.py").read_bytes()
+        ).hexdigest(),
+        "package_provenance_sha256": hashlib.sha256(
+            (repository / "scripts/verify_vitest_package_provenance.sh").read_bytes()
+        ).hexdigest(),
+        "runner_image": _VITEST_RUNNER_IMAGE,
+        "runner_provisioner": _VITEST_RUNNER_PROVISIONER,
+        "python": _VITEST_PYTHON_VERSION,
+        "node": _VITEST_NODE_VERSION,
+        "vitest_package_sha256": _VITEST_PACKAGE_SHA256,
+        "vitest_lock_sha256": _VITEST_LOCK_SHA256,
+        "test_node": _VITEST_DIAGNOSTIC_TEST_NODE,
+        "lane": lane,
+        "runner_origin": "source-checkout" if lane == "source" else "installed-wheel",
+    }
+    if lane == "installed-wheel":
+        values.update({
+            "package_attestation_sha256": "a" * 64,
+            "wheel_sha256": "b" * 64,
+            "installed_runner_sha256": values["producer_sha256"],
+        })
+    return runner_module.VitestStageAEvidenceConfig(**values)
 
 
 def test_vitest_termination_diagnostic_is_opt_in(tmp_path: Path) -> None:
@@ -338,6 +427,12 @@ def test_vitest_termination_diagnostic_verifies_against_current_producer(
             "--verifier-sha256", configured["PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256"],
             "--observation-verifier-sha256", hashlib.sha256(
                 (repository / "scripts/verify_vitest_no_result_observation.py").read_bytes()
+            ).hexdigest(),
+            "--stage-a-verifier-sha256", hashlib.sha256(
+                (repository / "scripts/verify_vitest_stage_a_evidence.py").read_bytes()
+            ).hexdigest(),
+            "--native-addon-sha256", hashlib.sha256(
+                (repository / "pdd/sync_core/native/vitest_fd_cloexec.c").read_bytes()
             ).hexdigest(),
             "--package-verifier-sha256", hashlib.sha256(
                 package_verifier.read_bytes()
@@ -615,6 +710,80 @@ def test_vitest_no_result_observation_never_writes_outside_exact_path(
     assert not Path(str(output) + ".sha256").exists()
 
 
+@pytest.mark.parametrize("lane", ("source", "installed-wheel"))
+def test_vitest_stage_a_evidence_binds_only_a_fixed_native_reason(
+    tmp_path: Path, lane: str,
+) -> None:
+    """Stage A records the enum, not exit zero or broad seal failure as cause."""
+    root = tmp_path / "candidate"
+    root.mkdir()
+    output = tmp_path / "protected" / f"vitest-{lane}-stage-a.json"
+    output.parent.mkdir(mode=0o700)
+    reason = runner_module.VitestNativeSealFailureReason.DESCRIPTOR_TABLE_OPEN
+
+    observed = runner_module._write_vitest_stage_a_evidence(
+        root, _stage_a_exit_result(), _stage_a_progress(), (reason,),
+        result_frame_present=False, diagnostic_config=_stage_a_config(output, lane),
+    )
+
+    assert observed == output
+    payload = json.loads(output.read_text(encoding="ascii"))
+    assert payload["supervisor_exit_code"] == 0
+    assert payload["native_failure_reason"] == reason.value
+    assert payload["failure_stage"] == "reporter-authority-seal"
+    assert payload["cause_red_status"] == "pending"
+    assert "candidate diagnostic" not in output.read_text(encoding="ascii")
+    if lane == "source":
+        assert "wheel_sha256" not in payload
+    else:
+        assert payload["wheel_sha256"] == "b" * 64
+
+
+def test_vitest_stage_a_evidence_rejects_broad_boundary_without_native_enum(
+    tmp_path: Path,
+) -> None:
+    """Exit zero and the broad authority stage never create a Stage A cause."""
+    root = tmp_path / "candidate"
+    root.mkdir()
+    output = tmp_path / "protected" / "vitest-stage-a.json"
+    output.parent.mkdir(mode=0o700)
+
+    observed = runner_module._write_vitest_stage_a_evidence(
+        root, _stage_a_exit_result(), _stage_a_progress(), (),
+        result_frame_present=False, diagnostic_config=_stage_a_config(output),
+    )
+
+    assert observed is None
+    assert not output.exists()
+
+
+def test_vitest_stage_a_evidence_rejects_pre_seal_exit_boundary(
+    tmp_path: Path,
+) -> None:
+    """Lifecycle exit markers cannot precede the exact native seal failure."""
+    root = tmp_path / "candidate"
+    root.mkdir()
+    output = tmp_path / "protected" / "vitest-stage-a.json"
+    output.parent.mkdir(mode=0o700)
+    progress = (
+        *_stage_a_progress()[:3],
+        runner_module.VitestProgressStage.COORDINATOR_EXPLICIT_EXIT,
+        *_stage_a_progress()[3:],
+    )
+
+    observed = runner_module._write_vitest_stage_a_evidence(
+        root,
+        _stage_a_exit_result(),
+        progress,
+        (runner_module.VitestNativeSealFailureReason.DESCRIPTOR_TABLE_OPEN,),
+        result_frame_present=False,
+        diagnostic_config=_stage_a_config(output),
+    )
+
+    assert observed is None
+    assert not output.exists()
+
+
 def test_vitest_termination_diagnostic_rejects_candidate_checkout_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -731,16 +900,87 @@ def test_generated_diagnostic_reporter_attributes_real_addon_load_failure(
             runner_module.VitestProgressStage.COORDINATOR_EXIT
         ),
     ))
-    _result, progress = runner_module._parse_vitest_transport(transport)
+    _result, progress, native_failure_reasons = runner_module._parse_vitest_transport(
+        transport
+    )
 
     classification = runner_module._vitest_termination_classification(
         _diagnostic_exit_result("diagnostic"), progress,
     )
 
     assert completed.returncode != 0
+    assert native_failure_reasons == ()
     assert classification is not None
     assert classification.failure_stage.value == "reporter-addon-load"
     assert classification.cause_code.value == "reporter-addon-load-failed"
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="the production coordinator authority addon is Linux-only",
+)
+def test_generated_diagnostic_reporter_transports_only_fixed_native_seal_enum(
+    tmp_path: Path,
+) -> None:
+    """The reporter authenticates native `error.code`, never exception prose."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    addon = tmp_path / "forced-native-seal.node"
+    subprocess.run(
+        [
+            sys.executable, "scripts/build_vitest_fd_cloexec_addon.py",
+            "--output", str(addon), "--headers", str(_node_headers(Path(node))),
+            "--force-seal-failure", "descriptor-table-open",
+        ],
+        cwd=Path(__file__).parents[1], check=True,
+    )
+    read_fd, write_fd = os.pipe()
+    identity = os.fstat(write_fd)
+    reporter = tmp_path / "diagnostic-reporter.mjs"
+    reporter.write_text(
+        runner_module._vitest_reporter_source(
+            write_fd, identity.st_dev, identity.st_ino, addon, diagnostic=True,
+        ),
+        encoding="utf-8",
+    )
+    try:
+        completed = subprocess.run(
+            [node, str(reporter)], pass_fds=(write_fd,), capture_output=True,
+            text=True, timeout=2, check=False,
+        )
+    finally:
+        os.close(write_fd)
+    try:
+        emitted = bytearray()
+        while chunk := os.read(read_fd, 4096):
+            emitted.extend(chunk)
+    finally:
+        os.close(read_fd)
+    transport = b"".join((
+        runner_module._vitest_progress_frame(
+            runner_module.VitestProgressStage.POST_DROP_PROBES
+        ),
+        runner_module._vitest_progress_frame(
+            runner_module.VitestProgressStage.CANDIDATE_EXEC
+        ),
+        runner_module._vitest_progress_frame(
+            runner_module.VitestProgressStage.COORDINATOR_BOOTSTRAP
+        ),
+        bytes(emitted),
+        runner_module._vitest_progress_frame(
+            runner_module.VitestProgressStage.COORDINATOR_EXIT
+        ),
+    ))
+
+    _result, progress, reasons = runner_module._parse_vitest_transport(transport)
+
+    assert completed.returncode != 0
+    assert reasons == (
+        runner_module.VitestNativeSealFailureReason.DESCRIPTOR_TABLE_OPEN,
+    )
+    assert progress == _stage_a_progress()
+    assert b"Error" not in bytes(emitted)
 
 
 def test_vitest_diagnostic_launch_binds_coordinator_source_and_artifact(
@@ -847,12 +1087,13 @@ def test_vitest_progress_transport_localizes_each_trusted_boundary() -> None:
         runner_module._vitest_progress_frame(stage) for stage in stages
     ) + runner_module._vitest_result_frame(payload)
 
-    observed_payload, observed_stages = runner_module._parse_vitest_transport(
+    observed_payload, observed_stages, native_failure_reasons = runner_module._parse_vitest_transport(
         transport
     )
 
     assert observed_payload == payload
     assert observed_stages == stages
+    assert native_failure_reasons == ()
 
 @pytest.mark.skipif(
     not sys.platform.startswith("linux"),
@@ -909,12 +1150,13 @@ def test_vitest_progress_transport_accepts_worker_reporter_race() -> None:
         runner_module._vitest_progress_frame(stage) for stage in stages
     ) + runner_module._vitest_result_frame(payload)
 
-    observed_payload, observed_stages = runner_module._parse_vitest_transport(
+    observed_payload, observed_stages, native_failure_reasons = runner_module._parse_vitest_transport(
         transport
     )
 
     assert observed_payload == payload
     assert observed_stages == stages
+    assert native_failure_reasons == ()
 
 
 def test_vitest_progress_transport_accepts_optional_stage_gaps() -> None:
@@ -930,12 +1172,13 @@ def test_vitest_progress_transport_accepts_optional_stage_gaps() -> None:
         runner_module._vitest_progress_frame(stage) for stage in stages
     ) + runner_module._vitest_result_frame(payload)
 
-    observed_payload, observed_stages = runner_module._parse_vitest_transport(
+    observed_payload, observed_stages, native_failure_reasons = runner_module._parse_vitest_transport(
         transport
     )
 
     assert observed_payload == payload
     assert observed_stages == stages
+    assert native_failure_reasons == ()
 
 
 @pytest.mark.parametrize(
@@ -2182,10 +2425,16 @@ def test_vitest_coordinator_addon_denies_cross_process_reopen_after_seal(
     reason="requires the Linux production addon",
 )
 @pytest.mark.parametrize(
-    "mode", ("wrong-identity", "non-fifo", "fcntl-error", "prctl-error"),
+    ("mode", "expected_code"),
+    (
+        ("wrong-identity", "PDD_VITEST_SEAL_DESCRIPTOR_IDENTITY"),
+        ("non-fifo", "PDD_VITEST_SEAL_DESCRIPTOR_IDENTITY"),
+        ("fcntl-error", "PDD_VITEST_SEAL_CLOEXEC_SET"),
+        ("prctl-error", "PDD_VITEST_SEAL_PROCFS_SEAL"),
+    ),
 )
 def test_vitest_coordinator_addon_failures_publish_no_result(
-    tmp_path: Path, mode: str
+    tmp_path: Path, mode: str, expected_code: str,
 ) -> None:
     """Identity/type/sealing failures fail before the reporter can publish."""
     node = shutil.which("node")
@@ -2218,11 +2467,11 @@ def test_vitest_coordinator_addon_failures_publish_no_result(
         program = (
             "const fs=require('node:fs'); const addon=require(process.argv[1]);"
             "try { addon.sealResultAuthority(Number(process.argv[2]),BigInt(process.argv[3]),BigInt(process.argv[4])); }"
-            "catch (_) { process.exit(41); } process.exit(0);"
+            "catch (error) { process.exit(error.code === process.argv[5] && error.message === process.argv[5] ? 41 : 42); } process.exit(0);"
         )
         completed = subprocess.run(
             [node, "-e", program, str(addon_path), str(descriptor),
-             str(identity.st_dev), str(expected_inode)],
+             str(identity.st_dev), str(expected_inode), expected_code],
             pass_fds=(descriptor,), capture_output=True, text=True,
             timeout=5, check=False,
         )
@@ -2235,6 +2484,56 @@ def test_vitest_coordinator_addon_failures_publish_no_result(
             os.close(descriptor)
         os.close(write_fd)
         os.close(read_fd)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="requires the Linux production addon",
+)
+@pytest.mark.parametrize(
+    ("hook", "expected_code"),
+    (
+        ("invalid-argument", "PDD_VITEST_SEAL_INVALID_ARGUMENT"),
+        ("descriptor-identity", "PDD_VITEST_SEAL_DESCRIPTOR_IDENTITY"),
+        ("procfs-seal", "PDD_VITEST_SEAL_PROCFS_SEAL"),
+        ("descriptor-table-open", "PDD_VITEST_SEAL_DESCRIPTOR_TABLE_OPEN"),
+        ("descriptor-inspection", "PDD_VITEST_SEAL_DESCRIPTOR_INSPECTION"),
+        ("cloexec-set", "PDD_VITEST_SEAL_CLOEXEC_SET"),
+        ("cloexec-verification", "PDD_VITEST_SEAL_CLOEXEC_VERIFICATION"),
+        ("descriptor-table-read", "PDD_VITEST_SEAL_DESCRIPTOR_TABLE_READ"),
+        ("descriptor-table-close", "PDD_VITEST_SEAL_DESCRIPTOR_TABLE_CLOSE"),
+        ("alias-not-found", "PDD_VITEST_SEAL_ALIAS_NOT_FOUND"),
+        ("response-creation", "PDD_VITEST_SEAL_RESPONSE_CREATION"),
+    ),
+)
+def test_vitest_coordinator_addon_forced_hooks_emit_fixed_enums(
+    tmp_path: Path, hook: str, expected_code: str,
+) -> None:
+    """Every native failure hook exposes one fixed code and no errno prose."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    addon = tmp_path / f"forced-{hook}.node"
+    subprocess.run(
+        [
+            sys.executable, "scripts/build_vitest_fd_cloexec_addon.py",
+            "--output", str(addon), "--headers", str(_node_headers(Path(node))),
+            "--force-seal-failure", hook,
+        ],
+        cwd=Path(__file__).parents[1], check=True,
+    )
+    program = (
+        "const addon=require(process.argv[1]);"
+        "try { addon.sealResultAuthority(-1, 0n, 0n); }"
+        "catch (error) { process.exit(error.code === process.argv[2] && error.message === process.argv[2] ? 41 : 42); }"
+        "process.exit(0);"
+    )
+    completed = subprocess.run(
+        [node, "-e", program, str(addon), expected_code],
+        capture_output=True, text=True, timeout=5, check=False,
+    )
+
+    assert completed.returncode == 41, completed.stderr
 
 
 @pytest.mark.parametrize(
@@ -2936,7 +3235,7 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
         "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
     )
     sandbox_step = "- name: Provision and verify protected Linux sandbox"
-    dedicated_step = "- name: Verify Vitest no-result observation"
+    dedicated_step = "- name: Verify Vitest Stage A evidence"
     focused_step = "- name: Run focused protected-runner tests"
     bulk_step = "- name: Run unit tests"
     sandbox_index = workflow.index(sandbox_step)
@@ -2972,8 +3271,8 @@ def test_vitest_stage_a0_workflow_preserves_red_probe_and_uploads_observation(
         for step in workflow_payload["jobs"]["unit-tests"]["steps"]
         if step.get("name") == "Verify reviewed identity and runner provenance"
     )
-    dedicated_step = "- name: Verify Vitest no-result observation"
-    upload_step = "- name: Upload Vitest no-result observation"
+    dedicated_step = "- name: Verify Vitest Stage A evidence"
+    upload_step = "- name: Upload Vitest Stage A evidence"
     focused_step = "- name: Run focused protected-runner tests"
     dedicated_body = workflow[
         workflow.index(dedicated_step):workflow.index(upload_step)
@@ -3418,7 +3717,7 @@ write_preflight_pass
         "\nwrite_preflight_pass\n"
     )
     upload_step = next(
-        step for step in steps if step.get("name") == "Upload Vitest no-result observation"
+        step for step in steps if step.get("name") == "Upload Vitest Stage A evidence"
     )
     upload_inputs = upload_step["with"]["path"].splitlines()
     mapped_inputs = tuple(
@@ -3426,8 +3725,9 @@ write_preflight_pass
         for value in upload_inputs
     )
     assert not mapped_inputs[0].exists()
-    assert pass_artifact.is_relative_to(mapped_inputs[1])
-    assert any(path.is_file() for path in mapped_inputs[1].iterdir())
+    assert not mapped_inputs[1].exists()
+    assert pass_artifact.is_relative_to(mapped_inputs[2])
+    assert any(path.is_file() for path in mapped_inputs[2].iterdir())
 
 def test_vitest_uses_packaged_grammars_without_language_pack(
     monkeypatch: pytest.MonkeyPatch,
@@ -6084,7 +6384,7 @@ def test_package_vitest_stage_a0_binds_reviewed_installed_wheel_observation(
     assert "pdd-cli pytest pytest-timeout" not in install_body
 
     push_probe = by_name["Run ordinary Vitest installed-wheel descriptor boundary"]
-    observation = by_name["Verify installed-wheel Vitest no-result observation"]
+    observation = by_name["Verify installed-wheel Vitest Stage A evidence"]
     observation_body = observation["run"]
     assert push_probe["if"] == "github.event_name == 'push'"
     assert observation["if"] == "github.event_name == 'pull_request'"
@@ -6169,14 +6469,14 @@ def test_package_vitest_stage_a0_binds_reviewed_installed_wheel_observation(
         observation_body.index("verify_vitest_termination_evidence.py")
     )
 
-    upload = by_name["Upload installed-wheel Vitest no-result observation"]
+    upload = by_name["Upload installed-wheel Vitest Stage A evidence"]
     assert steps.index(attestation) < steps.index(
         by_name["Run real protected Playwright installed-wheel protocol"]
     ) < steps.index(observation) < steps.index(upload)
     assert upload["if"] == "always() && github.event_name == 'pull_request'"
     assert upload["uses"] == "actions/upload-artifact@v4"
     assert upload["with"]["name"] == (
-        "vitest-wheel-no-result-observation-${{ github.event.pull_request.head.sha }}"
+        "vitest-wheel-stage-a-evidence-${{ github.event.pull_request.head.sha }}"
     )
     assert upload["with"]["path"] == (
         "${{ runner.temp }}/pdd-vitest-wheel-termination-evidence/"
@@ -7262,6 +7562,7 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
         "_VITEST_PROGRESS_MAX_RECORDS",
         "_VITEST_PROGRESS_PREFIX",
         "_VITEST_RESULT_PREFIX",
+        "_VITEST_NATIVE_SEAL_FAILURE_PREFIX",
     }
     assert "--pool=forks" in observed[0]
     if worker_wasm_guard is None:

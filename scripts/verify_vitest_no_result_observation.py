@@ -51,6 +51,7 @@ _WHEEL_FIELDS = frozenset({
 _REVIEW_FIELDS = frozenset({
     "schema", "failure_baseline_sha", "protected_base_sha", "diagnostic_head_sha",
     "producer_sha256", "verifier_sha256", "observation_verifier_sha256",
+    "stage_a_verifier_sha256", "native_addon_sha256",
     "package_verifier_sha256", "package_provenance_sha256", "verdict",
     "behavioral_verdict",
 })
@@ -267,6 +268,8 @@ def _require_review(review: dict[str, object], arguments: argparse.Namespace) ->
         "producer_sha256": arguments.producer_sha256,
         "verifier_sha256": arguments.termination_verifier_sha256,
         "observation_verifier_sha256": arguments.observation_verifier_sha256,
+        "stage_a_verifier_sha256": arguments.stage_a_verifier_sha256,
+        "native_addon_sha256": arguments.native_addon_sha256,
         "package_verifier_sha256": arguments.package_verifier_sha256,
         "package_provenance_sha256": arguments.package_provenance_sha256,
     }
@@ -312,6 +315,10 @@ def _verify_local_identities(arguments: argparse.Namespace) -> None:
          arguments.termination_verifier_sha256),
         (Path(__file__).resolve(strict=True),
          arguments.observation_verifier_sha256),
+        (repository / "scripts/verify_vitest_stage_a_evidence.py",
+         arguments.stage_a_verifier_sha256),
+        (repository / "pdd/sync_core/native/vitest_fd_cloexec.c",
+         arguments.native_addon_sha256),
         (repository / "scripts/verify_vitest_package_attestation.py",
          arguments.package_verifier_sha256),
         (repository / "scripts/verify_vitest_package_provenance.sh",
@@ -338,6 +345,8 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--producer-sha256", required=True)
     parser.add_argument("--termination-verifier-sha256", required=True)
     parser.add_argument("--observation-verifier-sha256", required=True)
+    parser.add_argument("--stage-a-verifier-sha256", required=True)
+    parser.add_argument("--native-addon-sha256", required=True)
     parser.add_argument("--package-verifier-sha256", required=True)
     parser.add_argument("--package-provenance-sha256", required=True)
     parser.add_argument("--runner-image", required=True)
@@ -370,6 +379,7 @@ def main() -> int:
         for field in (
             "producer_sha256", "termination_verifier_sha256",
             "observation_verifier_sha256", "package_verifier_sha256",
+            "stage_a_verifier_sha256", "native_addon_sha256",
             "package_provenance_sha256", "review_evidence_sha256",
         ):
             if not _is_digest(getattr(arguments, field), 64):

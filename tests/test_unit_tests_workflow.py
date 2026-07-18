@@ -36,8 +36,8 @@ APPROVED_DRAFT_GUARD = "github.event.pull_request.draft != true"
 PROVISION_STEP_NAME = "Provision and verify protected Linux sandbox"
 HOSTED_STEP_NAME = "Run real protected Playwright and authenticated supervisor protocols"
 HELD_NAMESPACE_SMOKE_STEP_NAME = "Verify held-namespace transport and FD-only cleanup smoke"
-VITEST_SANDBOX_ISOLATION_STEP_NAME = "Verify Vitest no-result observation"
-VITEST_NO_RESULT_OBSERVATION_STEP_NAME = "Verify Vitest no-result observation"
+VITEST_SANDBOX_ISOLATION_STEP_NAME = "Verify Vitest Stage A evidence"
+VITEST_NO_RESULT_OBSERVATION_STEP_NAME = "Verify Vitest Stage A evidence"
 FOCUSED_STEP_NAME = "Run focused protected-runner tests"
 BROAD_SUITE_STEP_NAME = "Run unit tests"
 HOSTED_SUPERVISOR_NODE = "tests/test_sync_core_supervisor.py::"
@@ -285,7 +285,7 @@ def test_vitest_no_result_workflow_binds_observation_verifier_and_lane_artifacts
     source_job = workflow["jobs"][LINUX_JOB_ID]
     source = _named_step(source_job, VITEST_NO_RESULT_OBSERVATION_STEP_NAME)["run"]
     wheel_job = workflow["jobs"]["package-preprocess-smoke"]
-    wheel = _named_step(wheel_job, "Verify installed-wheel Vitest no-result observation")["run"]
+    wheel = _named_step(wheel_job, "Verify installed-wheel Vitest Stage A evidence")["run"]
     assert "PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256" in source_job["env"]
     assert "PDD_VITEST_OBSERVATION_LANE=source" in source
     assert "PDD_VITEST_OBSERVATION_RUNNER_ORIGIN=source-checkout" in source
@@ -299,6 +299,42 @@ def test_vitest_no_result_workflow_binds_observation_verifier_and_lane_artifacts
     assert "PDD_WHEEL_ATTESTATION_SHA256" in wheel
     assert "Vitest termination evidence rejected" in source
     assert "Vitest termination evidence rejected" in wheel
+
+
+def test_vitest_stage_a_workflow_orders_native_evidence_before_intentional_red() -> None:
+    """Source and wheel lanes verify exact native evidence before candidate RED."""
+    workflow = _workflow()
+    source_job = workflow["jobs"][LINUX_JOB_ID]
+    wheel_job = workflow["jobs"]["package-preprocess-smoke"]
+    source = _named_step(source_job, VITEST_NO_RESULT_OBSERVATION_STEP_NAME)["run"]
+    wheel = _named_step(
+        wheel_job, "Verify installed-wheel Vitest Stage A evidence",
+    )["run"]
+    for job in (source_job, wheel_job):
+        assert "PDD_REVIEWED_STAGE_A_VERIFIER_SHA256" in job["env"]
+        assert "PDD_REVIEWED_NATIVE_ADDON_SHA256" in job["env"]
+    assert "PDD_VITEST_STAGE_A_LANE=source" in source
+    assert "PDD_VITEST_STAGE_A_RUNNER_ORIGIN=source-checkout" in source
+    assert "vitest-source-stage-a-native-seal-v1.json" in source
+    assert "verify_vitest_stage_a_evidence.py" in source
+    assert source.index("test_status=$?") < source.index(
+        "verify_vitest_stage_a_evidence.py"
+    ) < source.rindex('exit "$test_status"')
+    assert "PDD_VITEST_STAGE_A_LANE=installed-wheel" in wheel
+    assert "PDD_VITEST_STAGE_A_RUNNER_ORIGIN=installed-wheel" in wheel
+    assert "vitest-wheel-stage-a-native-seal-v1.json" in wheel
+    assert "--package-attestation \"$PDD_WHEEL_ATTESTATION_PATH\"" in wheel
+    assert "verify_vitest_stage_a_evidence.py" in wheel
+    assert wheel.index("verify_vitest_package_attestation.py verify") < wheel.index(
+        "pdd-wheel-smoke/bin/pytest"
+    ) < wheel.index("verify_vitest_stage_a_evidence.py") < wheel.rindex(
+        'exit "$test_status"'
+    )
+    assert "verify_vitest_no_result_observation.py" in source
+    assert "verify_vitest_no_result_observation.py" in wheel
+    assert "cause_eligible: false" in (
+        REPO_ROOT / "scripts/verify_vitest_no_result_observation.py"
+    ).read_text(encoding="utf-8")
 
 
 def test_vitest_observation_review_evidence_sidecars_are_protected_and_ordered() -> None:
@@ -318,7 +354,7 @@ def test_vitest_observation_review_evidence_sidecars_are_protected_and_ordered()
         wheel_job, "Verify reviewed Package identity and provenance",
     )
     wheel_observation_step = _named_step(
-        wheel_job, "Verify installed-wheel Vitest no-result observation",
+        wheel_job, "Verify installed-wheel Vitest Stage A evidence",
     )
     wheel_review = wheel_review_step["run"]
     wheel_observation = wheel_observation_step["run"]

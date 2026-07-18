@@ -167,6 +167,7 @@ VITEST_CACHE_NAMES = {".vite", ".vite-temp"}
 VITEST_RESULT_MAX_BYTES = 16 * 1024 * 1024
 _VITEST_PROGRESS_PREFIX = b"PDD-VITEST-PROGRESS-V1 "
 _VITEST_RESULT_PREFIX = b"PDD-VITEST-RESULT-V1 "
+_VITEST_NATIVE_SEAL_FAILURE_PREFIX = b"PDD-VITEST-NATIVE-SEAL-FAILURE-V1 "
 _VITEST_PROGRESS_MAX_RECORDS = 256
 _TERMINATION_EVIDENCE_SCHEMA = "vitest-termination-v1"
 _TERMINATION_EVIDENCE_FAILURE_BASELINE_SHA = (
@@ -242,6 +243,37 @@ _NO_RESULT_OBSERVATION_WHEEL_ENVIRONMENT = {
     "wheel_sha256": "PDD_VITEST_OBSERVATION_WHEEL_SHA256",
     "installed_runner_sha256": "PDD_VITEST_OBSERVATION_INSTALLED_RUNNER_SHA256",
 }
+_STAGE_A_EVIDENCE_SCHEMA = "vitest-stage-a-native-seal-v1"
+_STAGE_A_EVIDENCE_ENVIRONMENT = {
+    "output": "PDD_VITEST_STAGE_A_OUTPUT",
+    "failure_baseline_sha": "PDD_VITEST_STAGE_A_FAILURE_BASELINE_SHA",
+    "protected_base_sha": "PDD_VITEST_STAGE_A_PROTECTED_BASE_SHA",
+    "trigger_head_sha": "PDD_VITEST_STAGE_A_TRIGGER_HEAD_SHA",
+    "checkout_head_sha": "PDD_VITEST_STAGE_A_CHECKOUT_HEAD_SHA",
+    "reviewed_head_sha": "PDD_VITEST_STAGE_A_REVIEWED_HEAD_SHA",
+    "review_evidence_sha256": "PDD_VITEST_STAGE_A_REVIEW_EVIDENCE_SHA256",
+    "producer_sha256": "PDD_VITEST_STAGE_A_PRODUCER_SHA256",
+    "termination_verifier_sha256": "PDD_VITEST_STAGE_A_TERMINATION_VERIFIER_SHA256",
+    "observation_verifier_sha256": "PDD_VITEST_STAGE_A_OBSERVATION_VERIFIER_SHA256",
+    "stage_a_verifier_sha256": "PDD_VITEST_STAGE_A_VERIFIER_SHA256",
+    "native_addon_sha256": "PDD_VITEST_STAGE_A_NATIVE_ADDON_SHA256",
+    "package_verifier_sha256": "PDD_VITEST_STAGE_A_PACKAGE_VERIFIER_SHA256",
+    "package_provenance_sha256": "PDD_VITEST_STAGE_A_PACKAGE_PROVENANCE_SHA256",
+    "runner_image": "PDD_VITEST_STAGE_A_RUNNER_IMAGE",
+    "runner_provisioner": "PDD_VITEST_STAGE_A_RUNNER_PROVISIONER",
+    "python": "PDD_VITEST_STAGE_A_PYTHON_VERSION",
+    "node": "PDD_VITEST_STAGE_A_NODE_VERSION",
+    "vitest_package_sha256": "PDD_VITEST_STAGE_A_PACKAGE_SHA256",
+    "vitest_lock_sha256": "PDD_VITEST_STAGE_A_LOCK_SHA256",
+    "test_node": "PDD_VITEST_STAGE_A_TEST_NODE",
+    "lane": "PDD_VITEST_STAGE_A_LANE",
+    "runner_origin": "PDD_VITEST_STAGE_A_RUNNER_ORIGIN",
+}
+_STAGE_A_EVIDENCE_WHEEL_ENVIRONMENT = {
+    "package_attestation_sha256": "PDD_VITEST_STAGE_A_PACKAGE_ATTESTATION_SHA256",
+    "wheel_sha256": "PDD_VITEST_STAGE_A_WHEEL_SHA256",
+    "installed_runner_sha256": "PDD_VITEST_STAGE_A_INSTALLED_RUNNER_SHA256",
+}
 
 
 class VitestProgressStage(str, Enum):
@@ -269,6 +301,22 @@ class VitestProgressStage(str, Enum):
     WORKER_START = "worker-start"
     COLLECTION_COMPLETE = "collection-complete"
     RESULT_PUBLISHED = "result-published"
+
+
+class VitestNativeSealFailureReason(str, Enum):
+    """Fixed native sealResultAuthority failures eligible for Stage A only."""
+
+    INVALID_ARGUMENT = "PDD_VITEST_SEAL_INVALID_ARGUMENT"
+    DESCRIPTOR_IDENTITY = "PDD_VITEST_SEAL_DESCRIPTOR_IDENTITY"
+    PROCFS_SEAL = "PDD_VITEST_SEAL_PROCFS_SEAL"
+    DESCRIPTOR_TABLE_OPEN = "PDD_VITEST_SEAL_DESCRIPTOR_TABLE_OPEN"
+    DESCRIPTOR_INSPECTION = "PDD_VITEST_SEAL_DESCRIPTOR_INSPECTION"
+    CLOEXEC_SET = "PDD_VITEST_SEAL_CLOEXEC_SET"
+    CLOEXEC_VERIFICATION = "PDD_VITEST_SEAL_CLOEXEC_VERIFICATION"
+    DESCRIPTOR_TABLE_READ = "PDD_VITEST_SEAL_DESCRIPTOR_TABLE_READ"
+    DESCRIPTOR_TABLE_CLOSE = "PDD_VITEST_SEAL_DESCRIPTOR_TABLE_CLOSE"
+    ALIAS_NOT_FOUND = "PDD_VITEST_SEAL_ALIAS_NOT_FOUND"
+    RESPONSE_CREATION = "PDD_VITEST_SEAL_RESPONSE_CREATION"
 
 
 class VitestTerminationProcessRole(str, Enum):
@@ -342,12 +390,51 @@ class VitestNoResultObservationConfig:  # pylint: disable=too-many-instance-attr
 
 
 @dataclass(frozen=True)
+class VitestStageAEvidenceConfig:  # pylint: disable=too-many-instance-attributes
+    """Complete source or installed-wheel provenance for Stage A evidence."""
+
+    output: Path
+    failure_baseline_sha: str
+    protected_base_sha: str
+    trigger_head_sha: str
+    checkout_head_sha: str
+    reviewed_head_sha: str
+    review_evidence_sha256: str
+    producer_sha256: str
+    termination_verifier_sha256: str
+    observation_verifier_sha256: str
+    stage_a_verifier_sha256: str
+    native_addon_sha256: str
+    package_verifier_sha256: str
+    package_provenance_sha256: str
+    runner_image: str
+    runner_provisioner: str
+    python: str
+    node: str
+    vitest_package_sha256: str
+    vitest_lock_sha256: str
+    test_node: str
+    lane: str
+    runner_origin: str
+    package_attestation_sha256: str | None = None
+    wheel_sha256: str | None = None
+    installed_runner_sha256: str | None = None
+
+
+@dataclass(frozen=True)
 class VitestTerminationClassification:
     """One fixed diagnostic cause derived from protected coordinator frames."""
 
     process_role: VitestTerminationProcessRole
     failure_stage: VitestTerminationFailureStage
     cause_code: VitestTerminationCauseCode
+
+
+@dataclass(frozen=True)
+class VitestStageAClassification:
+    """A native fixed enum authenticated by the Stage A reporter trace."""
+
+    native_failure_reason: VitestNativeSealFailureReason
 
 
 COORDINATOR_ADDON_NAME = "vitest_fd_cloexec.node"
@@ -5945,6 +6032,81 @@ def _vitest_no_result_observation_config(
     )
 
 
+def _vitest_stage_a_evidence_config() -> VitestStageAEvidenceConfig | None:
+    """Read complete, exact provenance for one native Stage A diagnostic."""
+    output_value = os.environ.get(_STAGE_A_EVIDENCE_ENVIRONMENT["output"])
+    if output_value is None:
+        return None
+    values: dict[str, str] = {}
+    for field, environment_name in _STAGE_A_EVIDENCE_ENVIRONMENT.items():
+        if field == "output":
+            continue
+        value = os.environ.get(environment_name)
+        if type(value) is not str or not value:  # pylint: disable=unidiomatic-typecheck
+            raise ValueError("Vitest Stage A configuration is incomplete")
+        values[field] = value
+    output = Path(output_value)
+    if not output_value or not output.is_absolute():
+        raise ValueError("Vitest Stage A output must be absolute")
+    if any(
+        values[field] != expected
+        for field, expected in _TERMINATION_EVIDENCE_CONFIG_VALUES.items()
+    ):
+        raise ValueError("Vitest Stage A configuration does not match pins")
+    sha_fields = (
+        "failure_baseline_sha", "protected_base_sha", "trigger_head_sha",
+        "checkout_head_sha", "reviewed_head_sha",
+    )
+    digest_fields = (
+        "review_evidence_sha256", "producer_sha256",
+        "termination_verifier_sha256", "observation_verifier_sha256",
+        "stage_a_verifier_sha256", "native_addon_sha256",
+        "package_verifier_sha256", "package_provenance_sha256",
+    )
+    if not all(_vitest_termination_is_sha(values[field]) for field in sha_fields) or not all(
+        _vitest_termination_is_sha256(values[field]) for field in digest_fields
+    ):
+        raise ValueError("Vitest Stage A identity is invalid")
+    producer = Path(__file__).resolve(strict=True)
+    native_source = producer.parent / "native" / "vitest_fd_cloexec.c"
+    native_metadata = native_source.lstat()
+    if (
+        native_source.is_symlink()
+        or not stat.S_ISREG(native_metadata.st_mode)
+        or values["producer_sha256"] != hashlib.sha256(producer.read_bytes()).hexdigest()
+        or values["native_addon_sha256"] != hashlib.sha256(
+            native_source.read_bytes()
+        ).hexdigest()
+    ):
+        raise ValueError("Vitest Stage A local identity does not match")
+    if not (
+        values["trigger_head_sha"] == values["checkout_head_sha"]
+        == values["reviewed_head_sha"]
+    ):
+        raise ValueError("Vitest Stage A reviewed head does not match")
+    lane = values["lane"]
+    expected_origin = "source-checkout" if lane == "source" else "installed-wheel"
+    if lane not in {"source", "installed-wheel"} or values["runner_origin"] != expected_origin:
+        raise ValueError("Vitest Stage A lane is invalid")
+    wheel_values = {
+        field: os.environ.get(environment_name)
+        for field, environment_name in _STAGE_A_EVIDENCE_WHEEL_ENVIRONMENT.items()
+    }
+    if lane == "source":
+        if any(value is not None for value in wheel_values.values()):
+            raise ValueError("source Vitest Stage A evidence forbids wheel identity")
+    elif not all(
+        isinstance(value, str) and _vitest_termination_is_sha256(value)
+        for value in wheel_values.values()
+    ):
+        raise ValueError("installed-wheel Vitest Stage A evidence is incomplete")
+    return VitestStageAEvidenceConfig(
+        output=output,
+        **values,
+        **wheel_values,
+    )
+
+
 def _vitest_termination_telemetry(
     result: subprocess.CompletedProcess[str],
 ) -> CgroupResourceTelemetry | None:
@@ -6206,7 +6368,7 @@ def _write_vitest_no_result_observation(
     ):
         return None
     try:
-        observed_result, observed_progress = _parse_vitest_transport(
+        observed_result, observed_progress, _native_failure_reasons = _parse_vitest_transport(
             b"".join(_vitest_progress_frame(stage) for stage in progress)
         )
     except ValueError:
@@ -6255,6 +6417,150 @@ def _write_vitest_no_result_observation(
         })
     encoded = (
         json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("ascii")
+    destination, _parent = _vitest_termination_output_destination(
+        candidate_root, config.output
+    )
+    digest_destination = destination.with_name(destination.name + ".sha256")
+    _write_vitest_termination_file(
+        digest_destination, hashlib.sha256(encoded).hexdigest().encode("ascii") + b"\n"
+    )
+    _write_vitest_termination_file(destination, encoded)
+    return destination
+
+
+def _vitest_stage_a_classification(
+    progress: tuple[VitestProgressStage, ...],
+    native_failure_reasons: tuple[VitestNativeSealFailureReason, ...],
+) -> VitestStageAClassification | None:
+    """Accept only the exact reporter route carrying one native fixed enum."""
+    if (
+        len(native_failure_reasons) != 1
+        or not all(isinstance(stage, VitestProgressStage) for stage in progress)
+        or not all(
+            isinstance(reason, VitestNativeSealFailureReason)
+            for reason in native_failure_reasons
+        )
+        or VitestProgressStage.RESULT_PUBLISHED in progress
+    ):
+        return None
+    required = (
+        VitestProgressStage.POST_DROP_PROBES,
+        VitestProgressStage.CANDIDATE_EXEC,
+        VitestProgressStage.COORDINATOR_BOOTSTRAP,
+        VitestProgressStage.REPORTER_MODULE_START,
+        VitestProgressStage.REPORTER_ADDON_LOAD_START,
+        VitestProgressStage.REPORTER_ADDON_LOAD_SUCCEEDED,
+        VitestProgressStage.REPORTER_AUTHORITY_SEAL_START,
+        VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED,
+        VitestProgressStage.COORDINATOR_EXIT,
+    )
+    try:
+        positions = tuple(progress.index(stage) for stage in required)
+    except ValueError:
+        return None
+    allowed = set(required) | {
+        VitestProgressStage.COORDINATOR_UNCAUGHT_EXCEPTION,
+        VitestProgressStage.COORDINATOR_EXPLICIT_EXIT,
+        VitestProgressStage.COORDINATOR_BEFORE_EXIT,
+    }
+    if (
+        positions != tuple(sorted(positions))
+        or any(progress.count(stage) != 1 for stage in required)
+        or any(progress.count(stage) > 1 for stage in allowed)
+        or any(stage not in allowed for stage in progress)
+        or any(
+            not positions[-2] < progress.index(stage) < positions[-1]
+            for stage in allowed - set(required) if stage in progress
+        )
+    ):
+        return None
+    return VitestStageAClassification(native_failure_reasons[0])
+
+
+def _write_vitest_stage_a_evidence(
+    candidate_root: Path,
+    result: subprocess.CompletedProcess[str],
+    progress: tuple[VitestProgressStage, ...],
+    native_failure_reasons: tuple[VitestNativeSealFailureReason, ...],
+    *,
+    result_frame_present: bool,
+    diagnostic_config: VitestStageAEvidenceConfig | None = None,
+) -> Path | None:
+    """Write one native-enum Stage A artifact without changing runner behavior."""
+    config = diagnostic_config or _vitest_stage_a_evidence_config()
+    termination = getattr(result, "termination", None)
+    classification = _vitest_stage_a_classification(progress, native_failure_reasons)
+    telemetry = _vitest_termination_telemetry(result)
+    if (
+        config is None
+        or result_frame_present is not False
+        or classification is None
+        or telemetry is None
+        or not isinstance(termination, SupervisorTermination)
+        or termination.kind is not TerminationKind.EXIT
+        or type(termination.exit_code) is not int  # pylint: disable=unidiomatic-typecheck
+        or termination.exit_code != 0
+        or result.returncode != 0
+        or termination.exit_code != result.returncode
+    ):
+        return None
+    common: dict[str, object] = {
+        "schema": _STAGE_A_EVIDENCE_SCHEMA,
+        "failure_baseline_sha": config.failure_baseline_sha,
+        "protected_base_sha": config.protected_base_sha,
+        "trigger_head_sha": config.trigger_head_sha,
+        "checkout_head_sha": config.checkout_head_sha,
+        "reviewed_head_sha": config.reviewed_head_sha,
+        "review_evidence_sha256": config.review_evidence_sha256,
+        "producer_sha256": config.producer_sha256,
+        "termination_verifier_sha256": config.termination_verifier_sha256,
+        "observation_verifier_sha256": config.observation_verifier_sha256,
+        "stage_a_verifier_sha256": config.stage_a_verifier_sha256,
+        "native_addon_sha256": config.native_addon_sha256,
+        "package_verifier_sha256": config.package_verifier_sha256,
+        "package_provenance_sha256": config.package_provenance_sha256,
+        "runner_image": config.runner_image,
+        "runner_provisioner": config.runner_provisioner,
+        "python": config.python,
+        "node": config.node,
+        "vitest_package_sha256": config.vitest_package_sha256,
+        "vitest_lock_sha256": config.vitest_lock_sha256,
+        "test_node": config.test_node,
+        "lane": config.lane,
+        "runner_origin": config.runner_origin,
+        "supervisor_exit_code": termination.exit_code,
+        "result_frame_present": False,
+        "process_role": "vitest-coordinator",
+        "failure_stage": "reporter-authority-seal",
+        "native_failure_reason": classification.native_failure_reason.value,
+        "progress_frames": [stage.value for stage in progress],
+        "cgroup_memory_oom_delta": telemetry.memory_oom_delta,
+        "cgroup_memory_oom_kill_delta": telemetry.memory_oom_kill_delta,
+        "cgroup_pids_max_delta": telemetry.pids_max_delta,
+        "cause_red_status": "pending",
+    }
+    if config.lane == "source":
+        if any(value is not None for value in (
+            config.package_attestation_sha256, config.wheel_sha256,
+            config.installed_runner_sha256,
+        )):
+            return None
+    elif config.lane == "installed-wheel" and all(
+        _vitest_termination_is_sha256(value) for value in (
+            config.package_attestation_sha256, config.wheel_sha256,
+            config.installed_runner_sha256,
+        )
+    ):
+        common.update({
+            "package_attestation_sha256": config.package_attestation_sha256,
+            "wheel_sha256": config.wheel_sha256,
+            "installed_runner_sha256": config.installed_runner_sha256,
+        })
+    else:
+        return None
+    encoded = (
+        json.dumps(common, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode("ascii")
     destination, _parent = _vitest_termination_output_destination(
         candidate_root, config.output
@@ -6387,35 +6693,73 @@ def _vitest_result_frame(payload: bytes) -> bytes:
     return _VITEST_RESULT_PREFIX + payload + b"\n"
 
 
+def _vitest_native_seal_failure_frame(
+    reason: VitestNativeSealFailureReason,
+) -> bytes:
+    """Return one value-free fixed native seal failure transport record."""
+    if not isinstance(reason, VitestNativeSealFailureReason):
+        raise ValueError("Vitest native seal failure reason is invalid")
+    return _VITEST_NATIVE_SEAL_FAILURE_PREFIX + reason.value.encode("ascii") + b"\n"
+
+
 def _parse_vitest_transport(
     transport: bytes,
-) -> tuple[bytes, tuple[VitestProgressStage, ...]]:
+) -> tuple[
+    bytes,
+    tuple[VitestProgressStage, ...],
+    tuple[VitestNativeSealFailureReason, ...],
+]:
     """Validate bounded process-topology progress and terminal reporter JSON."""
     if not isinstance(transport, bytes):
         raise ValueError("Vitest progress transport is invalid")
     # Retain deterministic unit harness compatibility. Production standard-
     # anonymous execution always emits the post-drop record before Node exec.
     if transport.startswith(b"{"):
-        return transport, ()
+        return transport, (), ()
     if not transport:
-        return b"", ()
+        return b"", (), ()
     if not transport.endswith(b"\n"):
         raise ValueError("Vitest progress transport has a partial record")
     records = transport.splitlines()
     if len(records) > _VITEST_PROGRESS_MAX_RECORDS + 1:
         raise ValueError("Vitest progress transport exceeded its record bound")
     observed: list[VitestProgressStage] = []
+    native_failure_reasons: list[VitestNativeSealFailureReason] = []
     result = b""
     for record in records:
         if record.startswith(_VITEST_RESULT_PREFIX):
             if (
                 result
+                or (
+                    native_failure_reasons
+                    and VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED
+                    not in observed
+                )
                 or VitestProgressStage.RESULT_PUBLISHED not in observed
             ):
                 raise ValueError("Vitest progress transport result is out of order")
             result = record[len(_VITEST_RESULT_PREFIX):]
             if not result:
                 raise ValueError("Vitest progress transport result is invalid")
+            continue
+        if record.startswith(_VITEST_NATIVE_SEAL_FAILURE_PREFIX):
+            try:
+                reason = VitestNativeSealFailureReason(
+                    record[len(_VITEST_NATIVE_SEAL_FAILURE_PREFIX):].decode("ascii")
+                )
+            except (UnicodeError, ValueError) as exc:
+                raise ValueError(
+                    "Vitest native seal failure reason is invalid"
+                ) from exc
+            if (
+                result
+                or native_failure_reasons
+                or VitestProgressStage.REPORTER_AUTHORITY_SEAL_START not in observed
+                or VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED in observed
+                or VitestProgressStage.RESULT_PUBLISHED in observed
+            ):
+                raise ValueError("Vitest native seal failure reason is out of order")
+            native_failure_reasons.append(reason)
             continue
         if not record.startswith(_VITEST_PROGRESS_PREFIX):
             raise ValueError("Vitest progress transport record is invalid")
@@ -6425,6 +6769,12 @@ def _parse_vitest_transport(
             )
         except (UnicodeError, ValueError) as exc:
             raise ValueError("Vitest progress transport stage is invalid") from exc
+        if (
+            native_failure_reasons
+            and VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED not in observed
+            and stage is not VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED
+        ):
+            raise ValueError("Vitest native seal failure reason is out of order")
         seen = set(observed)
         terminal_after_result = {
             VitestProgressStage.COORDINATOR_BEFORE_EXIT,
@@ -6541,7 +6891,12 @@ def _parse_vitest_transport(
             raise ValueError("Vitest progress transport stage is duplicated")
         if stage not in seen:
             observed.append(stage)
-    return result, tuple(observed)
+    if (
+        native_failure_reasons
+        and VitestProgressStage.REPORTER_AUTHORITY_SEAL_FAILED not in observed
+    ):
+        raise ValueError("Vitest native seal failure reason is incomplete")
+    return result, tuple(observed), tuple(native_failure_reasons)
 
 
 def _vitest_coordinator_diagnostic_source(
@@ -6813,6 +7168,27 @@ def _vitest_diagnostic_reporter_source(
         "const progress = (stage) => writeAll(\n"
         "  'PDD-VITEST-PROGRESS-V1 ' + stage + '\\n'\n"
         ");\n"
+        "const NATIVE_SEAL_FAILURE_CODES = Object.freeze({\n"
+        "  PDD_VITEST_SEAL_INVALID_ARGUMENT: true,\n"
+        "  PDD_VITEST_SEAL_DESCRIPTOR_IDENTITY: true,\n"
+        "  PDD_VITEST_SEAL_PROCFS_SEAL: true,\n"
+        "  PDD_VITEST_SEAL_DESCRIPTOR_TABLE_OPEN: true,\n"
+        "  PDD_VITEST_SEAL_DESCRIPTOR_INSPECTION: true,\n"
+        "  PDD_VITEST_SEAL_CLOEXEC_SET: true,\n"
+        "  PDD_VITEST_SEAL_CLOEXEC_VERIFICATION: true,\n"
+        "  PDD_VITEST_SEAL_DESCRIPTOR_TABLE_READ: true,\n"
+        "  PDD_VITEST_SEAL_DESCRIPTOR_TABLE_CLOSE: true,\n"
+        "  PDD_VITEST_SEAL_ALIAS_NOT_FOUND: true,\n"
+        "  PDD_VITEST_SEAL_RESPONSE_CREATION: true,\n"
+        "});\n"
+        "const nativeSealFailure = (error) => {\n"
+        "  if (!error || (typeof error !== 'object' && typeof error !== 'function')) return;\n"
+        "  const descriptor = Object.getOwnPropertyDescriptor(error, 'code');\n"
+        "  const code = descriptor && descriptor.value;\n"
+        "  if (typeof code === 'string' && Object.hasOwn(NATIVE_SEAL_FAILURE_CODES, code)) {\n"
+        "    writeAll('PDD-VITEST-NATIVE-SEAL-FAILURE-V1 ' + code + '\\n');\n"
+        "  }\n"
+        "};\n"
         "progress('reporter-module-start');\n"
         "progress('reporter-addon-load-start');\n"
         "let authority;\n"
@@ -6828,6 +7204,7 @@ def _vitest_diagnostic_reporter_source(
         "try {\n"
         "  SEALED_DESCRIPTOR_COUNT = authority.sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE);\n"
         "} catch (error) {\n"
+        "  nativeSealFailure(error);\n"
         "  progress('reporter-authority-seal-failed');\n"
         "  throw error;\n"
         "}\n"
@@ -7104,6 +7481,12 @@ def _run_vitest(
         # A malformed Stage A0 opt-in must not alter the protected runner result.
         observation_config = None
     try:
+        stage_a_config = _vitest_stage_a_evidence_config()
+    except (OSError, ValueError):
+        # A malformed Stage A opt-in is diagnostic-ineligible, never behavioral.
+        stage_a_config = None
+    diagnostic_enabled = diagnostic_config is not None or stage_a_config is not None
+    try:
         descriptor = _load_vitest_toolchain_descriptor(tool_root, config)
         if phase_toolchain is None:
             phase_toolchain = _prepare_vitest_toolchain(root, descriptor)
@@ -7153,7 +7536,7 @@ def _run_vitest(
         reporter = temporary / f"reporter-{os.urandom(16).hex()}.mjs"
         coordinator_diagnostic = (
             temporary / "coordinator-diagnostic.mjs"
-            if diagnostic_config is not None else None
+            if diagnostic_enabled else None
         )
         read_fd, write_fd = os.pipe()
         os.set_blocking(read_fd, False)
@@ -7167,7 +7550,7 @@ def _run_vitest(
         reporter.write_text(
             _vitest_reporter_source(
                 result_fd, 0, 0, coordinator_addon.staged_path,
-                diagnostic=diagnostic_config is not None,
+                diagnostic=diagnostic_enabled,
             ),
             encoding="utf-8",
         )
@@ -7194,7 +7577,7 @@ def _run_vitest(
             reporter.write_text(
                 _vitest_reporter_source(
                     result_fd, device, inode, coordinator_addon.staged_path,
-                    diagnostic=diagnostic_config is not None,
+                    diagnostic=diagnostic_enabled,
                 ),
                 encoding="utf-8",
             )
@@ -7269,6 +7652,7 @@ def _run_vitest(
         os.close(read_fd)
         termination = getattr(result, "termination", None)
         progress: tuple[VitestProgressStage, ...] = ()
+        native_failure_reasons: tuple[VitestNativeSealFailureReason, ...] = ()
 
         def record_termination_evidence() -> None:
             """Attempt opt-in evidence without changing the existing result path."""
@@ -7293,6 +7677,18 @@ def _run_vitest(
             except (OSError, ValueError):
                 pass
 
+        def record_stage_a_evidence() -> None:
+            """Attempt native-enum evidence without promoting an outcome to RED."""
+            if stage_a_config is None:
+                return
+            try:
+                _write_vitest_stage_a_evidence(
+                    root, result, progress, native_failure_reasons,
+                    result_frame_present=False, diagnostic_config=stage_a_config,
+                )
+            except (OSError, ValueError):
+                pass
+
         if (
             isinstance(termination, SupervisorTermination)
             and termination.kind is TerminationKind.SANDBOX_ERROR
@@ -7303,11 +7699,12 @@ def _run_vitest(
                 and isinstance(drained.get("data", b""), bytes)
             ):
                 try:
-                    _payload, progress = _parse_vitest_transport(
+                    _payload, progress, native_failure_reasons = _parse_vitest_transport(
                         drained.get("data", b"")
                     )
                 except ValueError:
                     progress = ()
+                    native_failure_reasons = ()
             outcome, detail = _vitest_infrastructure_termination(
                 result, timeout_seconds, progress=progress,
             )
@@ -7321,7 +7718,7 @@ def _run_vitest(
                     EvidenceOutcome.ERROR, digest,
                     "Vitest result transport exceeded byte limit",
                 ), ()
-            output_data, progress = _parse_vitest_transport(
+            output_data, progress, native_failure_reasons = _parse_vitest_transport(
                 drained.get("data", b"")
             )
             output.write_bytes(output_data)
@@ -7355,8 +7752,10 @@ def _run_vitest(
                 result, timeout_seconds, progress=progress,
             )
             record_termination_evidence()
+            record_stage_a_evidence()
             return native_execution(outcome, digest, detail), ()
         if not output_data:
+            record_stage_a_evidence()
             record_no_result_observation()
             return native_execution(
                 EvidenceOutcome.COLLECTION_ERROR, digest,

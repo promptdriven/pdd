@@ -75,6 +75,31 @@
     }
   },
   {
+    "reason": "Verifies the fixed native sealResultAuthority enum collected by the source and installed-wheel Stage A diagnostic lanes.",
+    "description": "Fail-closed verifier for canonical checksummed native-enum Stage A evidence with exact review, toolchain, package, and lane provenance.",
+    "dependencies": [],
+    "priority": 220,
+    "filename": "verify_vitest_stage_a_evidence_python.prompt",
+    "filepath": "scripts/verify_vitest_stage_a_evidence.py",
+    "tags": [
+      "ci",
+      "verification",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "main",
+            "signature": "() -> int",
+            "returns": "int"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Computes story-regression metrics over the executable `-m story` suite and emits a machine-readable evidence artifact (#1704), reusing the #833 evidence-path conventions without owning them.",
     "description": "Deterministic (no-LLM) emitter that collects the executable @pytest.mark.story regression suite via pytest --collect-only, joins it with story->test traceability (#1699) and gate pass/stale verdicts (#1702), computes story count, story-backed test count, coverage %, and pass-rate with zero-story guards, and writes a schema-versioned JSON artifact under .pdd/evidence/stories/ (latest + per-run snapshot), degrading to status=not_applicable when upstream pieces are absent.",
     "dependencies": [

@@ -38,6 +38,7 @@ for required in \
   PDD_REVIEWED_FAILURE_BASELINE_SHA PDD_REVIEWED_PROTECTED_BASE_SHA \
   PDD_REVIEWED_PRODUCER_SHA256 PDD_REVIEWED_VERIFIER_SHA256 \
   PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256 \
+  PDD_REVIEWED_STAGE_A_VERIFIER_SHA256 PDD_REVIEWED_NATIVE_ADDON_SHA256 \
   PDD_REVIEWED_PACKAGE_VERIFIER_SHA256 \
   PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256 \
   PDD_REVIEW_EVIDENCE_B64 PDD_REVIEW_EVIDENCE_SHA256 \
@@ -63,6 +64,12 @@ actual_verifier_sha256="$(
 actual_observation_verifier_sha256="$(
   sha256sum scripts/verify_vitest_no_result_observation.py | awk '{print $1}'
 )" || fail "observation-verifier-sha256-read"
+actual_stage_a_verifier_sha256="$(
+  sha256sum scripts/verify_vitest_stage_a_evidence.py | awk '{print $1}'
+)" || fail "stage-a-verifier-sha256-read"
+actual_native_addon_sha256="$(
+  sha256sum pdd/sync_core/native/vitest_fd_cloexec.c | awk '{print $1}'
+)" || fail "native-addon-sha256-read"
 actual_package_verifier_sha256="$(
   sha256sum scripts/verify_vitest_package_attestation.py | awk '{print $1}'
 )" || fail "package-verifier-sha256-read"
@@ -76,6 +83,11 @@ check_equal "verifier-sha256" "$PDD_REVIEWED_VERIFIER_SHA256" \
 check_equal "observation-verifier-sha256" \
   "$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256" \
   "$actual_observation_verifier_sha256"
+check_equal "stage-a-verifier-sha256" \
+  "$PDD_REVIEWED_STAGE_A_VERIFIER_SHA256" \
+  "$actual_stage_a_verifier_sha256"
+check_equal "native-addon-sha256" "$PDD_REVIEWED_NATIVE_ADDON_SHA256" \
+  "$actual_native_addon_sha256"
 check_equal "package-verifier-sha256" \
   "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
   "$actual_package_verifier_sha256"
@@ -156,6 +168,8 @@ python scripts/verify_vitest_termination_evidence.py \
   --producer-sha256 "$actual_producer_sha256" \
   --verifier-sha256 "$actual_verifier_sha256" \
   --observation-verifier-sha256 "$actual_observation_verifier_sha256" \
+  --stage-a-verifier-sha256 "$actual_stage_a_verifier_sha256" \
+  --native-addon-sha256 "$actual_native_addon_sha256" \
   --package-verifier-sha256 "$actual_package_verifier_sha256" \
   --package-provenance-sha256 "$actual_package_provenance_sha256" \
   --runner-image "$actual_runner_image" \

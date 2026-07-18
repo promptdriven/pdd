@@ -73,9 +73,13 @@ def _fixture(
     observation_verifier = (
         repository / "scripts" / "verify_vitest_no_result_observation.py"
     )
+    stage_a_verifier = repository / "scripts" / "verify_vitest_stage_a_evidence.py"
+    native_addon = repository / "pdd/sync_core/native/vitest_fd_cloexec.c"
     observation_verifier_digest = hashlib.sha256(
         observation_verifier.read_bytes()
     ).hexdigest()
+    stage_a_verifier_digest = hashlib.sha256(stage_a_verifier.read_bytes()).hexdigest()
+    native_addon_digest = hashlib.sha256(native_addon.read_bytes()).hexdigest()
     payload: dict[str, object] = {
         "schema": "vitest-termination-v1",
         "failure_baseline_sha": _FAILURE_BASELINE_SHA,
@@ -108,6 +112,8 @@ def _fixture(
         "producer_sha256": producer_digest,
         "verifier_sha256": verifier_digest,
         "observation_verifier_sha256": observation_verifier_digest,
+        "stage_a_verifier_sha256": stage_a_verifier_digest,
+        "native_addon_sha256": native_addon_digest,
         "package_verifier_sha256": package_verifier_digest,
         "package_provenance_sha256": package_provenance_digest,
         "verdict": "APPROVE",
@@ -130,6 +136,8 @@ def _fixture(
         "--producer-sha256", producer_digest,
         "--verifier-sha256", verifier_digest,
         "--observation-verifier-sha256", observation_verifier_digest,
+        "--stage-a-verifier-sha256", stage_a_verifier_digest,
+        "--native-addon-sha256", native_addon_digest,
         "--package-verifier-sha256", package_verifier_digest,
         "--package-provenance-sha256", package_provenance_digest,
         "--runner-image", _RUNNER_IMAGE,
@@ -239,6 +247,8 @@ def test_verifier_rejects_malformed_or_unrelated_evidence(
         ("--producer-sha256", "3" * 64),
         ("--verifier-sha256", "4" * 64),
         ("--observation-verifier-sha256", "9" * 64),
+        ("--stage-a-verifier-sha256", "a" * 64),
+        ("--native-addon-sha256", "b" * 64),
         ("--package-verifier-sha256", "7" * 64),
         ("--package-provenance-sha256", "8" * 64),
         ("--runner-image", "untrusted-image"),
@@ -277,7 +287,8 @@ def test_verifier_rejects_paired_artifact_and_argument_identity_substitution(
     "mutation",
     (
         "extra", "verdict", "head", "producer", "verifier",
-        "observation-verifier", "package-verifier", "package-provenance", "missing-package-verifier",
+        "observation-verifier", "stage-a-verifier", "native-addon",
+        "package-verifier", "package-provenance", "missing-package-verifier",
         "digest",
     ),
 )
@@ -298,6 +309,10 @@ def test_verifier_rejects_untrusted_or_malformed_review_evidence(
         review["verifier_sha256"] = "c" * 64
     elif mutation == "observation-verifier":
         review["observation_verifier_sha256"] = "f" * 64
+    elif mutation == "stage-a-verifier":
+        review["stage_a_verifier_sha256"] = "a" * 64
+    elif mutation == "native-addon":
+        review["native_addon_sha256"] = "b" * 64
     elif mutation == "package-verifier":
         review["package_verifier_sha256"] = "d" * 64
     elif mutation == "package-provenance":
@@ -336,7 +351,9 @@ def test_verifier_rejects_actual_package_authority_byte_tampering(
     )
     for package_authority in (
         "pdd/sync_core/runner.py",
+        "pdd/sync_core/native/vitest_fd_cloexec.c",
         "scripts/verify_vitest_no_result_observation.py",
+        "scripts/verify_vitest_stage_a_evidence.py",
         "scripts/verify_vitest_package_attestation.py",
         "scripts/verify_vitest_package_provenance.sh",
     ):

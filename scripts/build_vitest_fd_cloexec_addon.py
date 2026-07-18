@@ -14,6 +14,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "pdd/sync_core/native/vitest_fd_cloexec.c"
+_SEAL_FAILURE_MACROS = {
+    "invalid-argument": "PDD_SEAL_FAILURE_INVALID_ARGUMENT",
+    "descriptor-identity": "PDD_SEAL_FAILURE_DESCRIPTOR_IDENTITY",
+    "procfs-seal": "PDD_SEAL_FAILURE_PROCFS_SEAL",
+    "descriptor-table-open": "PDD_SEAL_FAILURE_DESCRIPTOR_TABLE_OPEN",
+    "descriptor-inspection": "PDD_SEAL_FAILURE_DESCRIPTOR_INSPECTION",
+    "cloexec-set": "PDD_SEAL_FAILURE_CLOEXEC_SET",
+    "cloexec-verification": "PDD_SEAL_FAILURE_CLOEXEC_VERIFICATION",
+    "descriptor-table-read": "PDD_SEAL_FAILURE_DESCRIPTOR_TABLE_READ",
+    "descriptor-table-close": "PDD_SEAL_FAILURE_DESCRIPTOR_TABLE_CLOSE",
+    "alias-not-found": "PDD_SEAL_FAILURE_ALIAS_NOT_FOUND",
+    "response-creation": "PDD_SEAL_FAILURE_RESPONSE_CREATION",
+}
 
 
 def _test_headers(headers: Path) -> Path:
@@ -51,6 +64,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force-fcntl-error", action="store_true")
     parser.add_argument("--force-prctl-error", action="store_true")
+    parser.add_argument("--force-seal-failure", choices=sorted(_SEAL_FAILURE_MACROS))
     parser.add_argument("--exec-probe", action="store_true")
     args = parser.parse_args()
     if not SOURCE.is_file():
@@ -69,6 +83,11 @@ def main() -> None:
         command.append("-DPDD_TEST_FORCE_FCNTL_ERROR=1")
     if args.force_prctl_error:
         command.append("-DPDD_TEST_FORCE_PRCTL_ERROR=1")
+    if args.force_seal_failure:
+        command.append(
+            "-DPDD_TEST_FORCE_SEAL_FAILURE="
+            + _SEAL_FAILURE_MACROS[args.force_seal_failure]
+        )
     if args.exec_probe:
         command.append("-DPDD_TEST_EXEC_PROBE=1")
     temporary = output.with_suffix(output.suffix + ".tmp")

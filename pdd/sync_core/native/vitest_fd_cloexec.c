@@ -28,6 +28,60 @@ static napi_value pdd_error(napi_env env, const char *message) {
   return NULL;
 }
 
+/*
+ * Stage A transports only these fixed values.  Do not substitute errno,
+ * strerror(), N-API status text, or a caller-controlled string here: the
+ * reporter can authenticate an enum, but not diagnostic prose.
+ */
+typedef enum {
+  PDD_SEAL_FAILURE_INVALID_ARGUMENT,
+  PDD_SEAL_FAILURE_DESCRIPTOR_IDENTITY,
+  PDD_SEAL_FAILURE_PROCFS_SEAL,
+  PDD_SEAL_FAILURE_DESCRIPTOR_TABLE_OPEN,
+  PDD_SEAL_FAILURE_DESCRIPTOR_INSPECTION,
+  PDD_SEAL_FAILURE_CLOEXEC_SET,
+  PDD_SEAL_FAILURE_CLOEXEC_VERIFICATION,
+  PDD_SEAL_FAILURE_DESCRIPTOR_TABLE_READ,
+  PDD_SEAL_FAILURE_DESCRIPTOR_TABLE_CLOSE,
+  PDD_SEAL_FAILURE_ALIAS_NOT_FOUND,
+  PDD_SEAL_FAILURE_RESPONSE_CREATION,
+} pdd_seal_failure_reason;
+
+static const char *pdd_seal_failure_code(pdd_seal_failure_reason reason) {
+  switch (reason) {
+    case PDD_SEAL_FAILURE_INVALID_ARGUMENT:
+      return "PDD_VITEST_SEAL_INVALID_ARGUMENT";
+    case PDD_SEAL_FAILURE_DESCRIPTOR_IDENTITY:
+      return "PDD_VITEST_SEAL_DESCRIPTOR_IDENTITY";
+    case PDD_SEAL_FAILURE_PROCFS_SEAL:
+      return "PDD_VITEST_SEAL_PROCFS_SEAL";
+    case PDD_SEAL_FAILURE_DESCRIPTOR_TABLE_OPEN:
+      return "PDD_VITEST_SEAL_DESCRIPTOR_TABLE_OPEN";
+    case PDD_SEAL_FAILURE_DESCRIPTOR_INSPECTION:
+      return "PDD_VITEST_SEAL_DESCRIPTOR_INSPECTION";
+    case PDD_SEAL_FAILURE_CLOEXEC_SET:
+      return "PDD_VITEST_SEAL_CLOEXEC_SET";
+    case PDD_SEAL_FAILURE_CLOEXEC_VERIFICATION:
+      return "PDD_VITEST_SEAL_CLOEXEC_VERIFICATION";
+    case PDD_SEAL_FAILURE_DESCRIPTOR_TABLE_READ:
+      return "PDD_VITEST_SEAL_DESCRIPTOR_TABLE_READ";
+    case PDD_SEAL_FAILURE_DESCRIPTOR_TABLE_CLOSE:
+      return "PDD_VITEST_SEAL_DESCRIPTOR_TABLE_CLOSE";
+    case PDD_SEAL_FAILURE_ALIAS_NOT_FOUND:
+      return "PDD_VITEST_SEAL_ALIAS_NOT_FOUND";
+    case PDD_SEAL_FAILURE_RESPONSE_CREATION:
+      return "PDD_VITEST_SEAL_RESPONSE_CREATION";
+  }
+  return "PDD_VITEST_SEAL_INVALID_ARGUMENT";
+}
+
+static napi_value pdd_seal_error(
+    napi_env env, pdd_seal_failure_reason reason) {
+  const char *code = pdd_seal_failure_code(reason);
+  napi_throw_error(env, code, code);
+  return NULL;
+}
+
 static int pdd_set_cloexec(int descriptor) {
 #ifdef PDD_TEST_FORCE_FCNTL_ERROR
   (void)descriptor;
@@ -63,11 +117,10 @@ static int pdd_seal_coordinator_procfs(void) {
 }
 
 static int pdd_bigint_argument(
-    napi_env env, napi_value value, uint64_t *output, const char *name) {
+    napi_env env, napi_value value, uint64_t *output) {
   bool lossless = false;
   napi_status status = napi_get_value_bigint_uint64(env, value, output, &lossless);
   if (status != napi_ok || !lossless) {
-    napi_throw_type_error(env, NULL, name);
     return 0;
   }
   return 1;
@@ -86,29 +139,31 @@ static napi_value pdd_seal_result_authority(
   uint32_t sealed = 0;
   int verified_flags;
 
+#ifdef PDD_TEST_FORCE_SEAL_FAILURE
+  return pdd_seal_error(env, PDD_TEST_FORCE_SEAL_FAILURE);
+#endif
+
   if (napi_get_cb_info(env, info, &count, arguments, NULL, NULL) != napi_ok ||
       count != 3 ||
       napi_get_value_int32(env, arguments[0], &result_fd) != napi_ok ||
       result_fd < 0 ||
-      !pdd_bigint_argument(env, arguments[1], &expected_device,
-                           "expected result device must be a bigint") ||
-      !pdd_bigint_argument(env, arguments[2], &expected_inode,
-                           "expected result inode must be a bigint")) {
-    return pdd_error(env, "invalid trusted Vitest result authority arguments");
+      !pdd_bigint_argument(env, arguments[1], &expected_device) ||
+      !pdd_bigint_argument(env, arguments[2], &expected_inode)) {
+    return pdd_seal_error(env, PDD_SEAL_FAILURE_INVALID_ARGUMENT);
   }
 
   if (fstat(result_fd, &primary) != 0 || !S_ISFIFO(primary.st_mode) ||
       (uint64_t)primary.st_dev != expected_device ||
       (uint64_t)primary.st_ino != expected_inode) {
-    return pdd_error(env, "trusted Vitest result descriptor identity mismatch");
+    return pdd_seal_error(env, PDD_SEAL_FAILURE_DESCRIPTOR_IDENTITY);
   }
   if (pdd_seal_coordinator_procfs() != 0) {
-    return pdd_error(env, "trusted Vitest coordinator procfs seal failed");
+    return pdd_seal_error(env, PDD_SEAL_FAILURE_PROCFS_SEAL);
   }
 
   directory = opendir("/proc/self/fd");
   if (directory == NULL) {
-    return pdd_error(env, "trusted Vitest descriptor table is unavailable");
+    return pdd_seal_error(env, PDD_SEAL_FAILURE_DESCRIPTOR_TABLE_OPEN);
   }
   errno = 0;
   while ((entry = readdir(directory)) != NULL) {
@@ -124,10 +179,8 @@ static napi_value pdd_seal_result_authority(
     }
     descriptor = (int)parsed;
     if (fstat(descriptor, &observed) != 0) {
-      int failure = errno;
       closedir(directory);
-      errno = failure;
-      return pdd_error(env, "trusted Vitest descriptor inspection failed");
+      return pdd_seal_error(env, PDD_SEAL_FAILURE_DESCRIPTOR_INSPECTION);
     }
     if (!S_ISFIFO(observed.st_mode) ||
         (uint64_t)observed.st_dev != expected_device ||
@@ -135,34 +188,30 @@ static napi_value pdd_seal_result_authority(
       continue;
     }
     if (pdd_set_cloexec(descriptor) != 0) {
-      int failure = errno;
       closedir(directory);
-      errno = failure;
-      return pdd_error(env, "trusted Vitest result descriptor sealing failed");
+      return pdd_seal_error(env, PDD_SEAL_FAILURE_CLOEXEC_SET);
     }
     verified_flags = fcntl(descriptor, F_GETFD);
     if (verified_flags < 0 || (verified_flags & FD_CLOEXEC) == 0) {
       closedir(directory);
-      return pdd_error(env, "trusted Vitest result descriptor seal verification failed");
+      return pdd_seal_error(env, PDD_SEAL_FAILURE_CLOEXEC_VERIFICATION);
     }
     sealed++;
   }
   if (errno != 0) {
-    int failure = errno;
     closedir(directory);
-    errno = failure;
-    return pdd_error(env, "trusted Vitest descriptor table read failed");
+    return pdd_seal_error(env, PDD_SEAL_FAILURE_DESCRIPTOR_TABLE_READ);
   }
   if (closedir(directory) != 0) {
-    return pdd_error(env, "trusted Vitest descriptor table close failed");
+    return pdd_seal_error(env, PDD_SEAL_FAILURE_DESCRIPTOR_TABLE_CLOSE);
   }
   if (sealed == 0) {
-    return pdd_error(env, "trusted Vitest result descriptor alias was not found");
+    return pdd_seal_error(env, PDD_SEAL_FAILURE_ALIAS_NOT_FOUND);
   }
 
   napi_value result;
   if (napi_create_uint32(env, sealed, &result) != napi_ok) {
-    return pdd_error(env, "trusted Vitest result authority response failed");
+    return pdd_seal_error(env, PDD_SEAL_FAILURE_RESPONSE_CREATION);
   }
   return result;
 }
@@ -198,10 +247,8 @@ static napi_value pdd_probe_exec(napi_env env, napi_callback_info info) {
       executable_size == 0 ||
       napi_get_value_int32(env, arguments[1], &first_fd) != napi_ok ||
       napi_get_value_int32(env, arguments[2], &second_fd) != napi_ok ||
-      !pdd_bigint_argument(env, arguments[3], &expected_device,
-                           "expected result device must be a bigint") ||
-      !pdd_bigint_argument(env, arguments[4], &expected_inode,
-                           "expected result inode must be a bigint") ||
+      !pdd_bigint_argument(env, arguments[3], &expected_device) ||
+      !pdd_bigint_argument(env, arguments[4], &expected_inode) ||
       first_fd < 0 || second_fd < 0) {
     return pdd_error(env, "invalid trusted Vitest exec probe arguments");
   }

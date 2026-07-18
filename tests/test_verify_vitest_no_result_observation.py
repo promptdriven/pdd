@@ -42,6 +42,8 @@ def _fixture(
     repository = Path(__file__).resolve().parents[1]
     verifier = repository / "scripts/verify_vitest_no_result_observation.py"
     termination = repository / "scripts/verify_vitest_termination_evidence.py"
+    stage_a = repository / "scripts/verify_vitest_stage_a_evidence.py"
+    native_addon = repository / "pdd/sync_core/native/vitest_fd_cloexec.c"
     package = repository / "scripts/verify_vitest_package_attestation.py"
     provenance = repository / "scripts/verify_vitest_package_provenance.sh"
     head = subprocess.run(
@@ -53,6 +55,8 @@ def _fixture(
         "producer_sha256": hashlib.sha256(runner.read_bytes()).hexdigest(),
         "termination_verifier_sha256": hashlib.sha256(termination.read_bytes()).hexdigest(),
         "observation_verifier_sha256": hashlib.sha256(verifier.read_bytes()).hexdigest(),
+        "stage_a_verifier_sha256": hashlib.sha256(stage_a.read_bytes()).hexdigest(),
+        "native_addon_sha256": hashlib.sha256(native_addon.read_bytes()).hexdigest(),
         "package_verifier_sha256": hashlib.sha256(package.read_bytes()).hexdigest(),
         "package_provenance_sha256": hashlib.sha256(provenance.read_bytes()).hexdigest(),
     }
@@ -65,6 +69,8 @@ def _fixture(
         "producer_sha256": digests["producer_sha256"],
         "verifier_sha256": digests["termination_verifier_sha256"],
         "observation_verifier_sha256": digests["observation_verifier_sha256"],
+        "stage_a_verifier_sha256": digests["stage_a_verifier_sha256"],
+        "native_addon_sha256": digests["native_addon_sha256"],
         "package_verifier_sha256": digests["package_verifier_sha256"],
         "package_provenance_sha256": digests["package_provenance_sha256"],
         "verdict": "APPROVE",
@@ -108,6 +114,8 @@ def _fixture(
         "--producer-sha256", digests["producer_sha256"],
         "--termination-verifier-sha256", digests["termination_verifier_sha256"],
         "--observation-verifier-sha256", digests["observation_verifier_sha256"],
+        "--stage-a-verifier-sha256", digests["stage_a_verifier_sha256"],
+        "--native-addon-sha256", digests["native_addon_sha256"],
         "--package-verifier-sha256", digests["package_verifier_sha256"],
         "--package-provenance-sha256", digests["package_provenance_sha256"],
         "--runner-image", _RUNNER_IMAGE, "--runner-provisioner", _RUNNER_PROVISIONER,
@@ -268,6 +276,8 @@ def test_termination_verifier_rejects_each_observation_stably(
         "--producer-sha256", argument("--producer-sha256"),
         "--verifier-sha256", argument("--termination-verifier-sha256"),
         "--observation-verifier-sha256", argument("--observation-verifier-sha256"),
+        "--stage-a-verifier-sha256", argument("--stage-a-verifier-sha256"),
+        "--native-addon-sha256", argument("--native-addon-sha256"),
         "--package-verifier-sha256", argument("--package-verifier-sha256"),
         "--package-provenance-sha256", argument("--package-provenance-sha256"),
         "--runner-image", _RUNNER_IMAGE, "--runner-provisioner", _RUNNER_PROVISIONER,
