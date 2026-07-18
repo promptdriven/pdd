@@ -9,7 +9,7 @@ import pytest
 from pdd.sync_core import InventoryStatus, build_unit_manifest
 from pdd.sync_core.identity import initialize_repository_identity
 from pdd.sync_core.language import LanguageRegistry, LanguageSpec
-from pdd.sync_core.manifest import ManifestError
+from pdd.sync_core.manifest import ManifestError, _map_architecture_modules
 
 
 def _git(root: Path, *args: str) -> str:
@@ -437,6 +437,39 @@ def test_duplicate_architecture_output_is_invalid(tmp_path) -> None:
     commit = _commit(root, "duplicate output")
     manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
     assert any("duplicate output" in reason for reason in manifest.invalid_reasons)
+
+
+def test_external_context_template_is_not_a_generated_prompt_mapping() -> None:
+    """Context config entries remain real architecture dependencies, not units."""
+    external_context = {
+        "filename": "context/python_preamble.prompt",
+        "filepath": "context/python_preamble.prompt",
+        "tags": ["config", "context", "python", "template"],
+        "interface": {"type": "config", "config": {"keys": []}},
+    }
+    outputs, invalid = _map_architecture_modules(
+        "HEAD",
+        PurePosixPath("architecture.json"),
+        [external_context],
+        {},
+        {},
+    )
+    assert outputs == {}
+    assert invalid == []
+
+    # A near-match cannot suppress ordinary managed-prompt validation.
+    external_context["interface"] = {"type": "module"}
+    _outputs, invalid = _map_architecture_modules(
+        "HEAD",
+        PurePosixPath("architecture.json"),
+        [external_context],
+        {},
+        {},
+    )
+    assert invalid == [
+        "HEAD:architecture.json: prompt mapping for "
+        "'context/python_preamble.prompt' has 0 matches"
+    ]
 
 
 def test_alias_counterpart_collision_with_concrete_owner_is_invalid(tmp_path) -> None:
