@@ -320,9 +320,16 @@ steps:
             destination="$RUNNER_TEMP/step4-observation/$artifact_name"
             gh run download "$PDD_RUN_ID" --repo promptdriven/pdd --name "$artifact_name" --dir "$destination"
             observation="$destination/vitest-no-result-observation-v1.json"
+            observation_sidecar="$observation.sha256"
+            observation_parent="$(dirname "$observation")"
+            chmod 700 "$observation_parent"
+            chmod 600 "$observation" "$observation_sidecar"
+            test "$(stat -c '%a' "$observation_parent")" = 700
+            test "$(stat -c '%a' "$observation")" = 600
+            test "$(stat -c '%a' "$observation_sidecar")" = 600
             observation_sha256="$(sha256sum "$observation" | cut -d' ' -f1)"
-            test "$observation_sha256" = "$(tr -d '\n' < "$observation.sha256")"
-            chmod 600 "$observation"
+            test "$(wc -c < "$observation_sidecar")" -eq 65
+            printf '%s\n' "$observation_sha256" | cmp -s - "$observation_sidecar"
             lane_arguments=(
               --expected-lane "$expected_lane"
               --expected-runner-origin source-checkout
