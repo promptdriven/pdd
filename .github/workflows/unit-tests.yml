@@ -75,12 +75,198 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          test "$PDD_TRIGGER_EVENT_NAME" = "pull_request"
-          test -n "$PDD_TRIGGER_PR_HEAD_SHA"
-          test "$PDD_TRIGGER_PR_HEAD_SHA" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
-          checked_out_head="$(git rev-parse HEAD)"
-          test "$checked_out_head" = "$PDD_TRIGGER_PR_HEAD_SHA"
-          test "$checked_out_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          preflight_directory="$RUNNER_TEMP/pdd-vitest-preflight-evidence"
+          preflight_artifact="$preflight_directory/vitest-preflight-v1.json"
+          mkdir -p "$preflight_directory"
+          chmod 700 "$preflight_directory"
+          preflight_predicate="preflight-internal-command"
+          preflight_expected="exit=0"
+          preflight_actual="not-completed"
+          preflight_observation_path=""
+
+          write_preflight_failure() {
+            local failure_status="$1"
+            local command_status="$2"
+            local writer_status
+            trap - ERR
+            set +e
+            PDD_PREFLIGHT_ARTIFACT="$preflight_artifact" \
+            PDD_PREFLIGHT_PREDICATE="$preflight_predicate" \
+            PDD_PREFLIGHT_EXPECTED="$preflight_expected" \
+            PDD_PREFLIGHT_ACTUAL="$preflight_actual" \
+            PDD_PREFLIGHT_EXIT_CODE="$failure_status" \
+            PDD_PREFLIGHT_COMMAND_EXIT_CODE="$command_status" \
+            PDD_PREFLIGHT_OBSERVATION_PATH="$preflight_observation_path" \
+              python - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          import re
+          import secrets
+          from pathlib import Path
+
+          destination = Path(os.environ["PDD_PREFLIGHT_ARTIFACT"])
+          predicate = os.environ["PDD_PREFLIGHT_PREDICATE"]
+          expected = os.environ["PDD_PREFLIGHT_EXPECTED"]
+          actual = os.environ["PDD_PREFLIGHT_ACTUAL"]
+          if not re.fullmatch(r"[a-z0-9-]{1,128}", predicate):
+              raise SystemExit("invalid preflight predicate name")
+          if any(len(value) > 512 or "\x00" in value for value in (expected, actual)):
+              raise SystemExit("invalid preflight predicate value")
+          observation = bytearray()
+          observation_digest = hashlib.sha256()
+          observation_size = 0
+          observation_path = os.environ["PDD_PREFLIGHT_OBSERVATION_PATH"]
+          if observation_path:
+              with Path(observation_path).open("rb") as handle:
+                  while chunk := handle.read(4096):
+                      observation_digest.update(chunk)
+                      observation_size += len(chunk)
+                      if len(observation) < 4096:
+                          observation.extend(chunk[:4096 - len(observation)])
+          command_status = int(os.environ["PDD_PREFLIGHT_COMMAND_EXIT_CODE"])
+          payload = {
+              "schema": "vitest-preflight-v1",
+              "predicate": predicate,
+              "expected": expected,
+              "actual": actual,
+              "exit_code": int(os.environ["PDD_PREFLIGHT_EXIT_CODE"]),
+              "command_exit_code": None if command_status < 0 else command_status,
+              "observation_base64": base64.b64encode(observation).decode("ascii"),
+              "observation_sha256": observation_digest.hexdigest(),
+              "observation_truncated": observation_size > len(observation),
+          }
+          encoded = (
+              json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+          ).encode("ascii")
+
+          def atomic_write(path: Path, content: bytes) -> None:
+              temporary = path.with_name(
+                  f".{path.name}.{secrets.token_hex(16)}.tmp"
+              )
+              descriptor = os.open(
+                  temporary,
+                  os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                  | getattr(os, "O_NOFOLLOW", 0),
+                  0o600,
+              )
+              try:
+                  remaining = memoryview(content)
+                  while remaining:
+                      written = os.write(descriptor, remaining)
+                      if written <= 0:
+                          raise OSError("preflight evidence write did not advance")
+                      remaining = remaining[written:]
+                  os.fsync(descriptor)
+                  os.fchmod(descriptor, 0o600)
+              finally:
+                  os.close(descriptor)
+              os.replace(temporary, path)
+
+          atomic_write(destination, encoded)
+          atomic_write(
+              destination.with_name(destination.name + ".sha256"),
+              hashlib.sha256(encoded).hexdigest().encode("ascii") + b"\n",
+          )
+          PY
+            writer_status="$?"
+            set -e
+            if [[ "$writer_status" -ne 0 ]]; then
+              printf \
+                'Vitest preflight evidence write failed: predicate=%q writer_exit_code=%d\n' \
+                "$preflight_predicate" "$writer_status" >&2
+            fi
+            printf \
+              'Vitest preflight predicate failed: predicate=%q expected=%q actual=%q exit_code=%d\n' \
+              "$preflight_predicate" "$preflight_expected" \
+              "$preflight_actual" "$failure_status" >&2
+            exit "$failure_status"
+          }
+
+          preflight_fail() {
+            preflight_predicate="$1"
+            preflight_expected="$2"
+            preflight_actual="$3"
+            preflight_observation_path="${5:-}"
+            write_preflight_failure "${4:-1}" "${6:--1}"
+          }
+
+          unexpected_preflight_failure() {
+            local failure_status="$?"
+            preflight_actual="exit=$failure_status"
+            write_preflight_failure "$failure_status" "-1"
+          }
+          trap 'unexpected_preflight_failure' ERR
+
+          prepare_predicate() {
+            preflight_predicate="$1"
+            preflight_expected="$2"
+            preflight_actual="${3:-not-completed}"
+            preflight_observation_path="${4:-}"
+          }
+
+          check_equal() {
+            local predicate="$1"
+            local expected="$2"
+            local actual="$3"
+            if [[ "$actual" != "$expected" ]]; then
+              preflight_fail "$predicate" "$expected" "$actual"
+            fi
+          }
+
+          check_nonempty() {
+            local predicate="$1"
+            local actual="$2"
+            if [[ -z "$actual" ]]; then
+              preflight_fail "$predicate" "nonempty" "empty"
+            fi
+          }
+
+          capture_output() {
+            local destination_name="$1"
+            local predicate="$2"
+            shift 2
+            local output
+            local status
+            set +e
+            output="$("$@" 2>&1)"
+            status="$?"
+            set -e
+            if [[ "$status" -ne 0 ]]; then
+              preflight_fail "$predicate" "exit=0" "exit=$status" "$status" "" "$status"
+            fi
+            printf -v "$destination_name" '%s' "$output"
+          }
+
+          check_ancestor() {
+            local predicate="$1"
+            local older="$2"
+            local newer="$3"
+            local status
+            set +e
+            git merge-base --is-ancestor "$older" "$newer"
+            status="$?"
+            set -e
+            if [[ "$status" -ne 0 ]]; then
+              preflight_fail \
+                "$predicate" "ancestor" "not-ancestor(exit=$status)" \
+                "$status" "" "$status"
+            fi
+          }
+
+          check_equal "trigger-event" "pull_request" "$PDD_TRIGGER_EVENT_NAME"
+          check_nonempty "trigger-pr-head" "$PDD_TRIGGER_PR_HEAD_SHA"
+          check_equal \
+            "trigger-head-reviewed-head" \
+            "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" "$PDD_TRIGGER_PR_HEAD_SHA"
+          capture_output checked_out_head "checkout-head-read" git rev-parse HEAD
+          check_equal \
+            "checkout-head-trigger-head" "$PDD_TRIGGER_PR_HEAD_SHA" \
+            "$checked_out_head"
+          check_equal \
+            "checkout-head-reviewed-head" "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
+            "$checked_out_head"
           for required in \
             PDD_REVIEWED_FAILURE_BASELINE_SHA PDD_REVIEWED_PROTECTED_BASE_SHA \
             PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA PDD_REVIEWED_PRODUCER_SHA256 \
@@ -90,44 +276,115 @@ jobs:
             PDD_PINNED_NODE_VERSION PDD_PINNED_VITEST_PACKAGE_SHA256 \
             PDD_PINNED_VITEST_LOCK_SHA256
           do
-            test -n "${!required}"
+            required_predicate="protected-input-${required,,}"
+            check_nonempty "${required_predicate//_/-}" "${!required}"
           done
-          git merge-base --is-ancestor \
-            "$PDD_REVIEWED_FAILURE_BASELINE_SHA" \
+          check_ancestor \
+            "failure-baseline-ancestry" "$PDD_REVIEWED_FAILURE_BASELINE_SHA" \
             "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
-          git merge-base --is-ancestor \
-            "$PDD_REVIEWED_PROTECTED_BASE_SHA" \
+          check_ancestor \
+            "protected-base-ancestry" "$PDD_REVIEWED_PROTECTED_BASE_SHA" \
             "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
-          actual_producer_sha256="$(sha256sum pdd/sync_core/runner.py | awk '{print $1}')"
-          actual_verifier_sha256="$(sha256sum scripts/verify_vitest_termination_evidence.py | awk '{print $1}')"
-          test "$actual_producer_sha256" = "$PDD_REVIEWED_PRODUCER_SHA256"
-          test "$actual_verifier_sha256" = "$PDD_REVIEWED_VERIFIER_SHA256"
+          capture_output \
+            producer_hash_line "producer-sha256-read" \
+            sha256sum pdd/sync_core/runner.py
+          actual_producer_sha256="${producer_hash_line%% *}"
+          capture_output \
+            verifier_hash_line "verifier-sha256-read" \
+            sha256sum scripts/verify_vitest_termination_evidence.py
+          actual_verifier_sha256="${verifier_hash_line%% *}"
+          check_equal \
+            "producer-sha256" "$PDD_REVIEWED_PRODUCER_SHA256" \
+            "$actual_producer_sha256"
+          check_equal \
+            "verifier-sha256" "$PDD_REVIEWED_VERIFIER_SHA256" \
+            "$actual_verifier_sha256"
 
           review_directory="$RUNNER_TEMP/pdd-vitest-review-evidence"
           review_evidence="$review_directory/vitest-diagnostic-review-v1.json"
+          prepare_predicate "review-directory-create" "exit=0"
           mkdir -m 700 "$review_directory"
-          printf '%s' "$PDD_REVIEW_EVIDENCE_B64" | base64 --decode > "$review_evidence"
+          set +e
+          printf '%s' "$PDD_REVIEW_EVIDENCE_B64" \
+            | base64 --decode > "$review_evidence"
+          review_decode_status="$?"
+          set -e
+          if [[ "$review_decode_status" -ne 0 ]]; then
+            preflight_fail \
+              "review-evidence-decode" "exit=0" "exit=$review_decode_status" \
+              "$review_decode_status" "" "$review_decode_status"
+          fi
+          prepare_predicate "review-evidence-mode" "mode=0600"
           chmod 600 "$review_evidence"
-          actual_review_sha256="$(sha256sum "$review_evidence" | awk '{print $1}')"
-          test "$actual_review_sha256" = "$PDD_REVIEW_EVIDENCE_SHA256"
+          capture_output \
+            review_hash_line "review-evidence-sha256-read" \
+            sha256sum "$review_evidence"
+          actual_review_sha256="${review_hash_line%% *}"
+          check_equal \
+            "review-evidence-sha256" "$PDD_REVIEW_EVIDENCE_SHA256" \
+            "$actual_review_sha256"
 
-          test "${ImageOS:-}" = "ubuntu24"
-          test -n "${ImageVersion:-}"
+          check_equal "runner-image-os" "ubuntu24" "${ImageOS:-}"
+          check_nonempty "runner-image-version" "${ImageVersion:-}"
           actual_runner_image="ubuntu-24.04/${ImageVersion}"
-          provisioner_output="$(/opt/hca/hosted-compute-agent --version)"
-          actual_provisioner="$(printf '%s\n' "$provisioner_output" | sed -n 's/^Version: \([0-9][0-9.]*\)$/\1/p')"
-          test -n "$actual_provisioner"
-          test "$(printf '%s\n' "$actual_provisioner" | wc -l | tr -d ' ')" = 1
-          actual_python="$(python --version 2>&1)"
-          actual_node="$(node --version)"
-          actual_package_sha256="$(sha256sum .github/toolchains/vitest/package.json | awk '{print $1}')"
-          actual_lock_sha256="$(sha256sum .github/toolchains/vitest/package-lock.json | awk '{print $1}')"
-          test "$actual_runner_image" = "$PDD_PINNED_RUNNER_IMAGE"
-          test "$actual_provisioner" = "$PDD_PINNED_RUNNER_PROVISIONER"
-          test "$actual_python" = "Python $PDD_PINNED_PYTHON_VERSION"
-          test "$actual_node" = "v$PDD_PINNED_NODE_VERSION"
-          test "$actual_package_sha256" = "$PDD_PINNED_VITEST_PACKAGE_SHA256"
-          test "$actual_lock_sha256" = "$PDD_PINNED_VITEST_LOCK_SHA256"
+          provisioner_capture="$preflight_directory/.hosted-compute-agent-version"
+          prepare_predicate \
+            "runner-provisioner-command" "exit=0" "not-completed" \
+            "$provisioner_capture"
+          set +e
+          /opt/hca/hosted-compute-agent --version \
+            > "$provisioner_capture" 2>&1
+          provisioner_status="$?"
+          set -e
+          if [[ "$provisioner_status" -ne 0 ]]; then
+            preflight_fail \
+              "runner-provisioner-command" "exit=0" "exit=$provisioner_status" \
+              "$provisioner_status" "$provisioner_capture" "$provisioner_status"
+          fi
+          prepare_predicate \
+            "runner-provisioner-version-parse" "exit=0" "not-completed" \
+            "$provisioner_capture"
+          mapfile -t provisioner_versions < <(
+            sed -n 's/^Version: \([0-9][0-9.]*\)$/\1/p' "$provisioner_capture"
+          )
+          if [[ "${#provisioner_versions[@]}" -ne 1 ]]; then
+            preflight_fail \
+              "runner-provisioner-version-count" "1" \
+              "${#provisioner_versions[@]}" 1 "$provisioner_capture" 0
+          fi
+          actual_provisioner="${provisioner_versions[0]}"
+          capture_output actual_python "python-version-command" python --version
+          capture_output actual_node "node-version-command" node --version
+          capture_output \
+            package_hash_line "vitest-package-sha256-read" \
+            sha256sum .github/toolchains/vitest/package.json
+          actual_package_sha256="${package_hash_line%% *}"
+          capture_output \
+            lock_hash_line "vitest-lock-sha256-read" \
+            sha256sum .github/toolchains/vitest/package-lock.json
+          actual_lock_sha256="${lock_hash_line%% *}"
+          check_equal \
+            "runner-image" "$PDD_PINNED_RUNNER_IMAGE" "$actual_runner_image"
+          if [[ "$actual_provisioner" != "$PDD_PINNED_RUNNER_PROVISIONER" ]]; then
+            preflight_fail \
+              "runner-provisioner" "$PDD_PINNED_RUNNER_PROVISIONER" \
+              "$actual_provisioner" 1 "$provisioner_capture" 0
+          fi
+          check_equal \
+            "python-version" "Python $PDD_PINNED_PYTHON_VERSION" \
+            "$actual_python"
+          check_equal "node-version" "v$PDD_PINNED_NODE_VERSION" "$actual_node"
+          check_equal \
+            "vitest-package-sha256" "$PDD_PINNED_VITEST_PACKAGE_SHA256" \
+            "$actual_package_sha256"
+          check_equal \
+            "vitest-lock-sha256" "$PDD_PINNED_VITEST_LOCK_SHA256" \
+            "$actual_lock_sha256"
+          review_verifier_capture="$preflight_directory/.review-verifier-output"
+          prepare_predicate \
+            "review-verifier" "exit=0" "not-completed" \
+            "$review_verifier_capture"
+          set +e
           python scripts/verify_vitest_termination_evidence.py \
             --review-only \
             --review-evidence "$review_evidence" \
@@ -144,7 +401,19 @@ jobs:
             --node "${actual_node#v}" \
             --vitest-package-sha256 "$actual_package_sha256" \
             --vitest-lock-sha256 "$actual_lock_sha256" \
-            --test-node 'tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access'
+            --test-node 'tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access' \
+            > "$review_verifier_capture" 2>&1
+          review_verifier_status="$?"
+          set -e
+          if [[ "$review_verifier_status" -ne 0 ]]; then
+            preflight_fail \
+              "review-verifier" "exit=0" "exit=$review_verifier_status" \
+              "$review_verifier_status" "$review_verifier_capture" \
+              "$review_verifier_status"
+          fi
+          prepare_predicate "preflight-capture-cleanup" "exit=0"
+          rm -f -- "$provisioner_capture" "$review_verifier_capture"
+          prepare_predicate "github-environment-write" "exit=0"
           {
             echo "PDD_REVIEW_EVIDENCE_PATH=$review_evidence"
             echo "PDD_MEASURED_RUNNER_IMAGE=$actual_runner_image"
@@ -154,6 +423,7 @@ jobs:
             echo "PDD_MEASURED_VITEST_PACKAGE_SHA256=$actual_package_sha256"
             echo "PDD_MEASURED_VITEST_LOCK_SHA256=$actual_lock_sha256"
           } >> "$GITHUB_ENV"
+          trap - ERR
 
       - name: Provision identity-bound Vitest toolchain
         shell: bash
@@ -533,7 +803,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: vitest-termination-evidence-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/pdd-vitest-termination-evidence/
+          path: |
+            ${{ runner.temp }}/pdd-vitest-termination-evidence/
+            ${{ runner.temp }}/pdd-vitest-preflight-evidence/
+          include-hidden-files: false
           if-no-files-found: error
 
       - name: Run focused protected-runner tests

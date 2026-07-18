@@ -1,5 +1,6 @@
 """Contract tests for the fail-closed trusted Vitest adapter."""
 
+import base64
 import hashlib
 import json
 import os
@@ -19,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 import pytest
+import yaml
 
 import pdd.sync_core.runner as runner_module
 import pdd.sync_core.supervisor as supervisor_module
@@ -2743,11 +2745,19 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
     assert bulk_body.count(target_deselect) == 1
 
 
-def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence() -> None:
+def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence(
+    tmp_path: Path,
+) -> None:
     """Stage-1 uses protected identity/provenance and preserves Unit RED."""
     repository = Path(__file__).parents[1]
     workflow = (repository / ".github/workflows/unit-tests.yml").read_text(
         encoding="utf-8"
+    )
+    workflow_payload = yaml.safe_load(workflow)
+    provenance_script = next(
+        step["run"]
+        for step in workflow_payload["jobs"]["unit-tests"]["steps"]
+        if step.get("name") == "Verify reviewed identity and runner provenance"
     )
     dedicated_step = "- name: Verify real Vitest sandbox isolation"
     upload_step = "- name: Upload Vitest termination evidence"
@@ -2777,41 +2787,48 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence() -
         "PDD_TRIGGER_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}"
         in workflow
     )
-    assert 'test "$PDD_TRIGGER_EVENT_NAME" = "pull_request"' in provenance_body
+    assert (
+        'check_equal "trigger-event" "pull_request" "$PDD_TRIGGER_EVENT_NAME"'
+        in provenance_body
+    )
     assert "python-version: '3.12.13'" in workflow[
         :workflow.index(provision_step)
     ]
     assert (
-        'test "$PDD_TRIGGER_PR_HEAD_SHA" = '
-        '"$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"'
+        '"trigger-head-reviewed-head"'
         in provenance_body
     )
-    assert 'checked_out_head="$(git rev-parse HEAD)"' in provenance_body
+    assert 'capture_output checked_out_head "checkout-head-read"' in provenance_body
     assert (
-        'test "$checked_out_head" = "$PDD_TRIGGER_PR_HEAD_SHA"'
+        '"checkout-head-trigger-head"'
         in provenance_body
     )
     assert (
-        'test "$checked_out_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"'
+        '"checkout-head-reviewed-head"'
         in provenance_body
     )
-    event_guard = provenance_body[
-        provenance_body.index("          set -euo pipefail"):
-        provenance_body.index("for required in")
-    ]
+    event_guard = provenance_script[:provenance_script.index("for required in")]
     marker = "candidate-pytest-would-run"
-    for event_name, event_head, reviewed_head in (
-        ("pull_request", "a" * 40, "b" * 40),
-        ("push", "", "b" * 40),
+    for case_name, event_name, event_head, reviewed_head, predicate in (
+        (
+            "head-mismatch", "pull_request", "a" * 40, "b" * 40,
+            "trigger-head-reviewed-head",
+        ),
+        ("non-pr", "push", "", "b" * 40, "trigger-event"),
     ):
+        runner_temp = tmp_path / case_name
+        runner_temp.mkdir()
+        review_secret = "secret-review-evidence-must-not-appear"
         mismatch = subprocess.run(
             ["bash", "-c", event_guard + f"\nprintf '%s\\n' '{marker}'\n"],
             cwd=repository,
             env={
                 **os.environ,
+                "RUNNER_TEMP": str(runner_temp),
                 "PDD_TRIGGER_EVENT_NAME": event_name,
                 "PDD_TRIGGER_PR_HEAD_SHA": event_head,
                 "PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA": reviewed_head,
+                "PDD_REVIEW_EVIDENCE_B64": review_secret,
             },
             capture_output=True,
             text=True,
@@ -2819,24 +2836,89 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence() -
         )
         assert mismatch.returncode != 0
         assert marker not in mismatch.stdout
-    assert 'actual_python="$(python --version 2>&1)"' in provenance_body
-    assert 'actual_node="$(node --version)"' in provenance_body
+        assert f"predicate={predicate}" in mismatch.stderr
+        artifact = (
+            runner_temp / "pdd-vitest-preflight-evidence"
+            / "vitest-preflight-v1.json"
+        )
+        encoded = artifact.read_bytes()
+        payload = json.loads(encoded)
+        assert encoded == (
+            json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("ascii")
+        assert payload["schema"] == "vitest-preflight-v1"
+        assert payload["predicate"] == predicate
+        assert payload["observation_base64"] == ""
+        assert payload["observation_sha256"] == hashlib.sha256(b"").hexdigest()
+        assert payload["observation_truncated"] is False
+        assert review_secret not in encoded.decode("ascii")
+        assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
+        assert Path(str(artifact) + ".sha256").read_text(encoding="ascii") == (
+            hashlib.sha256(encoded).hexdigest() + "\n"
+        )
+    provisioner_temp = tmp_path / "provisioner-command"
+    provisioner_temp.mkdir()
+    provisioner_output = b"hosted-compute-agent rejected --version\n"
+    function_prefix = provenance_script[
+        :provenance_script.index('check_equal "trigger-event"')
+    ]
+    provisioner_failure = subprocess.run(
+        [
+            "bash", "-c", function_prefix + "\n"
+            'observation="$RUNNER_TEMP/provisioner-output"\n'
+            "printf '%s' 'hosted-compute-agent rejected --version\n' "
+            '> "$observation"\n'
+            "preflight_fail runner-provisioner-command exit=0 exit=64 "
+            '64 "$observation" 64\n',
+        ],
+        cwd=repository,
+        env={
+            **os.environ,
+            "RUNNER_TEMP": str(provisioner_temp),
+            "PDD_REVIEW_EVIDENCE_B64": "secret-review-evidence",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert provisioner_failure.returncode == 64
+    provisioner_artifact = (
+        provisioner_temp / "pdd-vitest-preflight-evidence"
+        / "vitest-preflight-v1.json"
+    )
+    provisioner_payload = json.loads(provisioner_artifact.read_bytes())
+    assert provisioner_payload["predicate"] == "runner-provisioner-command"
+    assert provisioner_payload["command_exit_code"] == 64
+    assert base64.b64decode(
+        provisioner_payload["observation_base64"], validate=True
+    ) == provisioner_output
+    assert provisioner_payload["observation_sha256"] == hashlib.sha256(
+        provisioner_output
+    ).hexdigest()
+    assert 'capture_output actual_python "python-version-command"' in provenance_body
+    assert 'capture_output actual_node "node-version-command"' in provenance_body
     assert (
-        'actual_package_sha256="$(sha256sum '
-        ".github/toolchains/vitest/package.json" in provenance_body
+        'package_hash_line "vitest-package-sha256-read"' in provenance_body
     )
     assert (
-        'actual_lock_sha256="$(sha256sum '
-        ".github/toolchains/vitest/package-lock.json" in provenance_body
+        'lock_hash_line "vitest-lock-sha256-read"' in provenance_body
     )
-    assert 'test "${ImageOS:-}" = "ubuntu24"' in provenance_body
+    assert 'check_equal "runner-image-os" "ubuntu24" "${ImageOS:-}"' in (
+        provenance_body
+    )
     assert (
         'actual_runner_image="ubuntu-24.04/${ImageVersion}"' in provenance_body
     )
     assert "/opt/hca/hosted-compute-agent --version" in provenance_body
+    assert '"runner-provisioner-command"' in provenance_body
+    assert '"$provisioner_capture"' in provenance_body
+    assert "observation_base64" in provenance_body
+    assert "PDD_REVIEW_EVIDENCE_B64" not in upload_body
     assert "python scripts/verify_vitest_termination_evidence.py" in provenance_body
     assert "--review-only" in provenance_body
-    assert provenance_body.index("actual_python=") < workflow.index(provision_step)
+    assert workflow.index(
+        'capture_output actual_python "python-version-command"'
+    ) < workflow.index(provision_step)
     for protected_name in (
         "PDD_REVIEWED_FAILURE_BASELINE_SHA",
         "PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA",
@@ -2884,6 +2966,8 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence() -
     assert "if: always()" in upload_body
     assert "actions/upload-artifact@v4" in upload_body
     assert "pdd-vitest-termination-evidence" in upload_body
+    assert "pdd-vitest-preflight-evidence" in upload_body
+    assert "include-hidden-files: false" in upload_body
     assert "if-no-files-found: error" in upload_body
 
 def test_vitest_uses_packaged_grammars_without_language_pack(
