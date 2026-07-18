@@ -40,8 +40,8 @@ ten-step sequence below remain the controlling global-resolution plan.
 | Verification boundary | #2164 exact head | #1995 exact diagnostic head | Current state |
 | --- | --- | --- | --- |
 | Locally validated | Exact proposed head [`5f6d747aa75a0629f33d0900489a613a3f1e2b8d`](https://github.com/promptdriven/pdd/commit/5f6d747aa75a0629f33d0900489a613a3f1e2b8d) contains protected `main` `03abdfa12`, remote FIFO identity, signed native-authority binding, protected-main-only ownership, and the exact #1989 historical transition pin. Combined gate: 75 passed, 8 platform skips; full rollout and verification-profile suites passed; exact Sol review approved. | [`24eaf18c9290f0f725835a3a737a2e2bfb90d4fb`](https://github.com/promptdriven/pdd/commit/24eaf18c9290f0f725835a3a737a2e2bfb90d4fb): pending integration and affected-suite validation | #2164 locally green/reviewed; #1995 pending |
-| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164) exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907): Unit, Package Preprocess Smoke, Story/Public CLI regressions, and Repo Bloat Docker E2E are in progress; exact-head CodeQL analyzers are also in progress | [PR #1995](https://github.com/promptdriven/pdd/pull/1995): Package and auxiliary checks passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29603684162/job/87961605651) failed | #2164 pending; #1995 failed diagnostic |
-| Merged to protected `main` | Not merged. The remote PR head is exact reviewed SHA `5f6d747aa`; GitHub reports it mergeable against protected `main` `03abdfa12` and blocked on checks. | Blocked until #2164 is merged and integrated | pending / blocked |
+| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164) exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907): Unit, Package Preprocess Smoke, Story/Public CLI regressions, Repo Bloat Docker E2E, CodeQL, and exact-head auto-heal all passed | [PR #1995](https://github.com/promptdriven/pdd/pull/1995): Package and auxiliary checks passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29603684162/job/87961605651) failed | #2164 green; #1995 failed diagnostic |
+| Merged to protected `main` | Merged at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e) on 2026-07-18. Exact reviewed head `5f6d747aa` and prior protected base `03abdfa12` are its two parents. | #1995 is now unblocked for fresh integration of `d91b07a90` | passed / next |
 | Released checker | No release is authorized by either PR | No release is authorized by either PR | pending |
 | Globally certified | This runner gate is not a global certificate | This diagnostic head is not a global certificate | blocked |
 
@@ -53,8 +53,12 @@ protected `main` `03abdfa12`. It preserves FIFO exec-probe identity, binds the
 native authority into canonical signed evidence, uses protected-main-only
 coordinator ownership, and pins the historical #1989 transition to its exact
 base and merge head. Local affected suites and exact-composite Sol review are
-green. RED `16eaf23a6` and GREEN evidence are posted on the PR. Hosted checks on
-this exact SHA are in progress, so it is not merge-authorized. #1995 is
+green. RED `16eaf23a6` and GREEN evidence are posted on the PR. All exact-head
+hosted checks passed, and `H2164` was merged with ancestry preserved as
+`M2164 = d91b07a9002be895556b38c5bafff18a420b256e`. The generic runbook's squash
+default was not used because it would violate the controlling machine predicate
+`is_ancestor(H2164, M2164)`; the merge still ran from the clean main clone with
+an exact-head match guard. #1995 is
 a diagnostic-only head: its four-process concurrent failure is attributed by the
 selector-labelled diagnostic to
 `test_real_vitest_repeated_processes_use_fresh_denied_authorities`; it must not
@@ -68,12 +72,10 @@ compiler, phase-attestation, timeout, or resource predicates.
 
 #### Strict dependency sequence
 
-1. Finish [#2164](https://github.com/promptdriven/pdd/pull/2164) at `H2164`, its
-   exact final reviewed proposed head. First produce a canonical integration
-   head that contains `03abdfa12`, `1904c4f23`, and the corrected signed-binding
-   work; require Unit green, Package green, all checks green, exact final Sol
-   HIGH approval, and a clean-tree/main/remote-head no-drift guard; then merge
-   `H2164` to `M2164`.
+1. **Passed:** [#2164](https://github.com/promptdriven/pdd/pull/2164) at
+   `H2164 = 5f6d747aa` passed Unit, Package, all hosted checks, exact Sol review,
+   and clean-tree/main/remote-head guards; ancestry-preserving merge result
+   `M2164 = d91b07a90` is on protected `main`.
 2. Fetch the updated protected `main` and integrate it into #1995 without force
    pushing or overwriting newer remote work. Require `M2164`, the protected-main
    merge result of `H2164`, as an ancestor, and preserve sealed coordinator
@@ -104,11 +106,12 @@ and sol_high_exact_composite_approval(H1995) == approved
 and merge_result(H1995) is on protected main
 ```
 
-For #2164, `H2164` is `5f6d747aa`. Exact Sol approval is true, current-main and
-remote ancestry guards passed at push time, and GitHub reports the PR mergeable.
-`required_checks(H2164)` remains false until the in-progress hosted Unit,
-Package, CodeQL, auto-heal, regression, and auxiliary checks all complete
-successfully.
+For #2164, the complete first half of the predicate is true: exact Sol approval
+and every hosted check passed on `H2164 = 5f6d747aa`, protected-main merge result
+`M2164 = d91b07a90` contains `H2164` as a parent, and protected `main` points to
+that merge. The single next critical-path gate is a fresh canonical #1995 head
+that contains `M2164`, preserves its four protected behaviors, passes local and
+hosted checks, and receives exact-composite Sol approval.
 This predicate closes only the
 runner prerequisite/current PR gate, not global certification. It forbids
 retries-as-pass, timeout or resource increases, preload or authority weakening,
