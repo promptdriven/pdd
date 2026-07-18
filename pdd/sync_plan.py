@@ -506,6 +506,8 @@ def validate_explicit_scope(plan: SyncPlan, scope: Mapping[str, Any]) -> tuple[s
     frozen = {candidate.module_id for candidate in plan.candidates}
     if not set(module_ids) <= frozen:
         raise SyncPlanError("explicit scope contains stale or extra module IDs")
+    if not set(module_ids) <= set(plan.selected_module_ids):
+        raise SyncPlanError("explicit scope is outside the primary executable selection")
     return tuple(module_ids)
 
 
@@ -558,6 +560,7 @@ def validate_explicit_scope_evidence(
         raise SyncPlanError("persisted SyncPlan has an unsupported schema")
     if plan.get("module_id_encoding") != MODULE_ID_ENCODING:
         raise SyncPlanError("persisted SyncPlan has an unsupported ID encoding")
+    _validate_serialized_plan(plan)
     if evidence["sync_plan_digest"] != plan_digest(plan):
         raise SyncPlanError("persisted SyncPlan digest mismatch")
     plan_selected = plan.get("selected_module_ids")
@@ -573,6 +576,48 @@ def validate_explicit_scope_evidence(
     if evidence["module_id_encoding"] != MODULE_ID_ENCODING:
         raise SyncPlanError("persisted scope evidence has an unsupported ID encoding")
     return plan, module_ids
+
+
+def _validate_serialized_plan(plan: Mapping[str, Any]) -> None:
+    """Validate the durable, path-free V1 plan before a fallback uses it."""
+    required = {"schema_version", "module_id_encoding", "candidates", "selected_module_ids", "dependency_order", "sccs"}
+    if set(plan) != required:
+        raise SyncPlanError("persisted SyncPlan has an invalid V1 shape")
+    candidates = plan["candidates"]
+    selected = plan["selected_module_ids"]
+    order = plan["dependency_order"]
+    sccs = plan["sccs"]
+    if not all(isinstance(value, list) for value in (candidates, selected, order, sccs)):
+        raise SyncPlanError("persisted SyncPlan has malformed graph fields")
+    candidate_ids: list[str] = []
+    dependency_map: dict[str, list[str]] = {}
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or not isinstance(candidate.get("module_id"), str):
+            raise SyncPlanError("persisted SyncPlan has malformed candidate IDs")
+        module_id = candidate["module_id"]
+        candidate_ids.append(module_id)
+        paths = (*candidate.get("prompt_paths", []), *candidate.get("output_paths", []))
+        if not all(isinstance(path, str) and not Path(path).is_absolute() and ".." not in Path(path).parts for path in paths):
+            raise SyncPlanError("persisted SyncPlan contains an escaping candidate path")
+        root = candidate.get("governing_root")
+        if not isinstance(root, str) or Path(root).is_absolute() or ".." in Path(root).parts:
+            raise SyncPlanError("persisted SyncPlan contains an escaping governing root")
+        deps = candidate.get("dependencies")
+        if not isinstance(deps, list) or any(not isinstance(dep, str) for dep in deps):
+            raise SyncPlanError("persisted SyncPlan has malformed dependencies")
+        dependency_map[module_id] = deps
+    _require_canonical_ids(candidate_ids, allow_empty=True, enforce_limit=False)
+    candidate_set = set(candidate_ids)
+    if any(not set(deps) <= candidate_set for deps in dependency_map.values()):
+        raise SyncPlanError("persisted SyncPlan dependency is absent from candidates")
+    _require_canonical_ids(selected, allow_empty=True)
+    if not set(selected) <= candidate_set or set(order) != set(selected) or len(order) != len(selected):
+        raise SyncPlanError("persisted SyncPlan selection/order is inconsistent")
+    if any(not isinstance(component, list) for component in sccs):
+        raise SyncPlanError("persisted SyncPlan has malformed SCCs")
+    flattened = [module_id for component in sccs for module_id in component]
+    if sorted(flattened) != sorted(selected) or any(component != sorted(component) for component in sccs):
+        raise SyncPlanError("persisted SyncPlan SCCs do not cover the selection")
 
 
 def _plan_view_from_evidence(plan: Mapping[str, Any], evidence: Mapping[str, Any]) -> SyncPlan:

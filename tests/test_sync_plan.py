@@ -134,7 +134,7 @@ def test_persisted_primary_evidence_binds_fallback_scope(tmp_path: Path) -> None
     evidence["sync_plan_digest"] = plan.sync_plan_digest
     evidence["sync_plan"]["selected_module_ids"] = []
     evidence["sync_plan_digest"] = plan_digest(evidence["sync_plan"])
-    with pytest.raises(SyncPlanError, match="selection disagrees"):
+    with pytest.raises(SyncPlanError, match="selection/order is inconsistent"):
         validate_explicit_scope_evidence(scope, evidence)
 
 
@@ -152,6 +152,14 @@ def test_dependency_closure_is_selected_and_missing_edges_fail(tmp_path: Path) -
     )
     with pytest.raises(SyncPlanError, match="missing dependency IDs"):
         build_sync_plan(tmp_path, [missing], ["frontend/missing"])
+
+
+def test_complete_candidate_inventory_is_not_limited_to_execution_bound(tmp_path: Path) -> None:
+    """Planning may inventory a large repository while execution stays bounded."""
+    candidates = [_candidate(tmp_path, f"pkg/module_{index:03d}") for index in range(65)]
+    plan = build_sync_plan(tmp_path, candidates, ["pkg/module_000"])
+    assert len(plan.candidates) == 65
+    assert plan.selected_module_ids == ("pkg/module_000",)
 
 
 def test_fallback_loader_rejects_ambient_diff_scope_before_runner(
