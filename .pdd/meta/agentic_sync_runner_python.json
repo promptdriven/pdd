@@ -8,7 +8,7 @@
   "test_hash": "daf57f3bb02e467053caf2fa5ac5b8d11cdad4db74016ee521d6e6f64c283621",
   "test_files": {
     "test_agentic_sync_runner.py": "daf57f3bb02e467053caf2fa5ac5b8d11cdad4db74016ee521d6e6f64c283621",
-    "test_sync_plan.py": "d7c2c451dd09b8780ae73619e37c1f9c90cb87179f9c5a5829fb6f852e297c39"
+    "test_sync_plan.py": "52516c433bf94b3e23abf842fee8d70c60df8a5dd4cf9649d53264d076582cc4"
   },
   "include_deps": {
     "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",
