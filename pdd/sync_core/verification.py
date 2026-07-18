@@ -358,16 +358,16 @@ _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS
 
 
-# #2077 retains the one dormant generate estimate transition. It is bound to
-# the exact profile composition after the current prompt-source transitions.
+# #2077 pre-authorized two dormant estimate transitions. Bind those exact
+# prompt changes to the final #1989 + #2052 profile composition.
 _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/commands/generate_python.prompt",
         "python",
         "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f",
         "503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403",
-        "f7df311558fb327cd21d8900ad1a9dc6d5a8145773a693fc3afd43a93a128c51",
-        "1f3b574c8e8d800a27444243affa6e8f7a2302a4cbd09d75b2aebcaa72c2986d",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/core/cli_python.prompt",
@@ -597,6 +597,94 @@ _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS = (
     ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS
+
+# Six replay-modified prompts already had historical bootstrap rows. Their
+# reviewed replacements, together with the 24 new replay rows above, are the
+# only bootstrap authority allowed to carry a changed profile policy.
+_REPLAY_REPLACED_PROMPT_PATHS = frozenset(
+    {
+        PurePosixPath("pdd/prompts/agentic_checkup_orchestrator_python.prompt"),
+        PurePosixPath("pdd/prompts/agentic_common_python.prompt"),
+        PurePosixPath("pdd/prompts/checkup_review_loop_python.prompt"),
+        PurePosixPath("pdd/prompts/ci_drift_heal_python.prompt"),
+        PurePosixPath("pdd/prompts/core/cli_python.prompt"),
+        PurePosixPath("pdd/prompts/evidence_manifest_python.prompt"),
+    }
+)
+_REPLAY_PROFILE_REQUIREMENT_TRANSITIONS = (
+    _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS
+    + tuple(
+        item
+        for item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
+        if item.prompt_path in _REPLAY_REPLACED_PROMPT_PATHS
+    )
+)
+_REPLAY_REPLACED_PROTECTED_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
+        "python",
+        "fc372c0369c895e42b4bb8f9277560facf086d999233d88bef8401766bccdf34",
+        "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/checkup_review_loop_python.prompt",
+        "python",
+        "c44fbaf6b0c1ceb5c52cf514684a72e866bdc08d4bf0b948d978dec65afb0719",
+        "a7fd72cadb0644d4d20d09868cc8e908e3122478e6127b3943de32b711d76c02",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/ci_drift_heal_python.prompt",
+        "python",
+        "e12dc6b48f34111182afb4a73b9ba66596617b9a6d8e393766d2cd6b847562ec",
+        "fc595464ceb1bac758864cd66a87fd1ba4f72bae79660a1dd334e060cbb861f7",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_common_python.prompt",
+        "python",
+        "86e47992102e2344fe59ee9a3ece4c6cf356025edaadf693c12acac63a5c7490",
+        "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/evidence_manifest_python.prompt",
+        "python",
+        "3b50a00e8deca49c70b127540a2e589aa3715a498b775ab4ddb482adb65eac6f",
+        "55f2de2533a461b1d26f4c7641edd6c2c7c05858dc98102ed6f9df04d552e24d",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/core/cli_python.prompt",
+        "python",
+        "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724",
+        "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18",
+    ),
+)
+_REPLAY_REQUIREMENT_REPLACEMENTS = frozenset(
+    (
+        protected,
+        next(
+            candidate
+            for candidate in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+            if candidate.prompt_path == protected.prompt_path
+            and candidate.language_id == protected.language_id
+        ),
+    )
+    for protected in _REPLAY_REPLACED_PROTECTED_TRANSITIONS
+)
+# The exact historical rows remain authority for the immutable #1989 replay
+# pair only; they are absent from the current candidate policy and retain the
+# legacy profile-byte guard for every other candidate.
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS += _REPLAY_REPLACED_PROTECTED_TRANSITIONS
 
 
 # One long-lived pre-schema-2 unit first becomes managed in pdd#1790. Bind its
@@ -1663,6 +1751,7 @@ def _validate_consumed_managed_prompt_bytes(
     approved_aliases: Mapping[PurePosixPath, PurePosixPath],
     authorizations: tuple[_RequirementTransitionAuthorization, ...],
     updates: Mapping[UnitId, _ProfileInput],
+    profile_addition_paths: set[PurePosixPath],
 ) -> None:
     """Limit Phase B prompt drift to exact protected rows consumed in this candidate."""
     consumed = {
@@ -1676,7 +1765,9 @@ def _validate_consumed_managed_prompt_bytes(
         in updates
     }
     unauthorized = (
-        _managed_prompt_byte_changes(root, manifest, approved_aliases) - consumed
+        _managed_prompt_byte_changes(root, manifest, approved_aliases)
+        - consumed
+        - profile_addition_paths
     )
     if unauthorized:
         raise VerificationProfileError(
@@ -1862,7 +1953,12 @@ def _load_requirement_transition_authorizations(
         == _LEGACY_PDD_1989_PROFILE_BYTES
     )
     retired_by_candidate = {item.obsolete for item in candidate_retirements}
-    new_authorizations = tuple(item for item in candidate if item not in protected)
+    new_authorizations = tuple(
+        item
+        for item in candidate
+        if item not in protected
+        and item not in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+    )
     if legacy_pdd1989_reconciliation:
         # The exact historical pair both installed and consumed its authority
         # before Phase-A isolation existed; validate it as consumption below.
@@ -1872,6 +1968,7 @@ def _load_requirement_transition_authorizations(
             if (
                 item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
                 and item not in protected
+                and item not in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
                 and policies[0] != policies[1]
                 and not legacy_pdd1989_reconciliation
             ):
@@ -1901,6 +1998,11 @@ def _load_requirement_transition_authorizations(
     candidate_authority = set(candidate_rows)
     for item in protected:
         if item in candidate_authority or legacy_pdd1989_reconciliation:
+            continue
+        if any(
+            protected == item and replacement in candidate_authority
+            for protected, replacement in _REPLAY_REQUIREMENT_REPLACEMENTS
+        ):
             continue
         if not _authorization_is_consumed_at_current_state(
             manifest, base, head, prompts[item.prompt_path], item
@@ -2374,6 +2476,10 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
             approved_aliases,
             requirement_authorizations,
             requirement_updates,
+            {
+                _canonical_prompt_path(unit_id.prompt_relpath, approved_aliases)
+                for unit_id in profile_additions
+            },
         )
     invalid.extend(requirement_invalid)
     requirement_updates = {**profile_additions, **requirement_updates}
