@@ -876,6 +876,8 @@ class TestDeterministicChangeJudges:
             "If retries are exhausted, the runner needs to raise the error.",
             "If retries are exhausted, the runner ought to raise the error.",
             "Keep retrying until all retries are exhausted; then raise the error.",
+            "Retry up to 3 times. Retry until all attempts are exhausted; then raise the error.",
+            "Retry up to 3 times. For safety, do not retry again; raise the error.",
         ),
     )
     def test_retry_fallback_judge_accepts_canonical_exhaustion_forms(
