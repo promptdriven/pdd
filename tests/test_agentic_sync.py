@@ -1787,15 +1787,17 @@ class TestRunAgenticSync:
         _mock_branch_diff,
         _mock_filter_synced,
         mock_runner_cls,
-        tmp_path,
         monkeypatch,
     ):
         """The non-Git issue-1714 style root remains a runner-compatible shim."""
+        # Keep this deliberately nonexistent and outside the checkout: pytest's
+        # TMPDIR may itself live beneath a Git worktree.
+        synthetic_root = Path("/tmp/fake")
         issue_data = {"title": "Test", "body": "Fix foo", "comments_url": ""}
         mock_gh_cmd.return_value = (True, json.dumps(issue_data))
         mock_load_arch.return_value = (
             [{"filename": "foo_python.prompt", "dependencies": []}],
-            tmp_path / "architecture.json",
+            synthetic_root / "architecture.json",
         )
         mock_agentic_task.return_value = (
             True,
@@ -1804,11 +1806,11 @@ class TestRunAgenticSync:
             "anthropic",
         )
         mock_dry_run.return_value = (
-            True, {"foo": tmp_path}, {"foo": "foo"}, [], 0.0
+            True, {"foo": synthetic_root}, {"foo": "foo"}, [], 0.0
         )
         mock_runner_cls.return_value.run.return_value = (True, "synced", 0.05)
         monkeypatch.setattr(
-            "pdd.agentic_sync._find_project_root", lambda _cwd: tmp_path
+            "pdd.agentic_sync._find_project_root", lambda _cwd: synthetic_root
         )
         monkeypatch.setattr(
             "pdd.agentic_sync._resolve_issue_protected_base", lambda _root: None
