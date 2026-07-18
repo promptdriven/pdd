@@ -131,22 +131,21 @@ def test_cli_templates_export_tracks_real_module_reload() -> None:
     # state instead of making reload correctness depend on test order.
     registry = cli.cli.commands
     snapshot = registry.copy()
+    before_registry = snapshot["templates"]
     registry.clear()
     registry.update(snapshot)
 
     cli.__dict__.pop("templates_group", None)
     templates_module = importlib.import_module("pdd.commands.templates")
-    before_export = cli.templates_group
-    before_registry = cli.cli.commands["templates"]
-    assert before_export is before_registry
-
     reloaded = importlib.reload(templates_module)
+    # This must be the first restored registry read. Reading before the reload
+    # would let lookup recover provenance and hide a broken update path.
     after_registry = cli.cli.commands["templates"]
     after_export = cli.templates_group
 
     assert after_export is reloaded.templates_group
     assert after_export is after_registry
-    assert after_export is not before_export
+    assert after_export is not before_registry
 
 
 EXPECTED_COMMANDS = {
@@ -323,6 +322,19 @@ def test_lazy_mapping_preserves_override_loaded_before_target(monkeypatch) -> No
     assert mapping["replaceable"] is plugin
     monkeypatch.setitem(sys.modules, module_name, SimpleNamespace(command=canonical))
     assert mapping["replaceable"] is plugin
+
+    loaded_plugin = LazyCommandMapping(
+        {"replaceable": (module_name, "command")},
+        {"replaceable": plugin},
+    )
+    assert loaded_plugin["replaceable"] is plugin
+
+    restored = LazyCommandMapping({"replaceable": (module_name, "command")})
+    restored["replaceable"] = canonical
+    replacement = click.Command("replacement")
+    sys.modules[module_name].command = replacement
+    assert restored["replaceable"] is replacement
+    assert loaded_plugin["replaceable"] is plugin
 
 
 def test_lazy_mapping_survives_module_sentinel_refresh(monkeypatch) -> None:
