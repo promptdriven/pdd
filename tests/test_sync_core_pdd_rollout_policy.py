@@ -142,6 +142,29 @@ CI_DETECT_REQUIREMENT_ROTATION = {
         "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
     ),
 }
+STORY_REGRESSION_DORMANT_ROTATION = {
+    "prompt_path": "pdd/prompts/story_regression_python.prompt",
+    "language_id": "python",
+    "from_requirement_id": (
+        "CONTRACT-SHA256:88ba7a932f444bb1b91e17429ca8c211742fadc8457b96d71b648b2529785d4f"
+    ),
+    "to_requirement_id": (
+        "CONTRACT-SHA256:fbd4c2c6592bcb6950868a6b57691a66c2c3cd16d0ffd4a39abf3081ba613931"
+    ),
+    "policy_path": ".pdd/verification-profiles.json",
+    "base_policy_sha256": (
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+    ),
+    "head_policy_sha256": (
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
+    ),
+    "base_prompt_sha256": (
+        "88ba7a932f444bb1b91e17429ca8c211742fadc8457b96d71b648b2529785d4f"
+    ),
+    "head_prompt_sha256": (
+        "fbd4c2c6592bcb6950868a6b57691a66c2c3cd16d0ffd4a39abf3081ba613931"
+    ),
+}
 LEGACY_SCHEMA_1_REQUIREMENT_ROTATION = {
     "prompt_path": "pdd/prompts/ci_detect_changed_modules_python.prompt",
     "language_id": "python",
@@ -302,6 +325,25 @@ def test_detector_contract_rotation_is_exact_and_consumed() -> None:
     assert profiles.coverage == 1.0
 
 
+def test_story_regression_transition_is_exact_and_dormant() -> None:
+    """Preauthorize #2200 bytes without changing the protected prompt/profile."""
+    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    rows = [
+        row
+        for row in policy["requirement_rotations"]
+        if row["prompt_path"] == STORY_REGRESSION_DORMANT_ROTATION["prompt_path"]
+    ]
+    assert rows == [STORY_REGRESSION_DORMANT_ROTATION]
+
+    prompt = ROOT / STORY_REGRESSION_DORMANT_ROTATION["prompt_path"]
+    prompt_digest = hashlib.sha256(prompt.read_bytes()).hexdigest()
+    profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
+    assert prompt_digest == STORY_REGRESSION_DORMANT_ROTATION["base_prompt_sha256"]
+    assert prompt_digest != STORY_REGRESSION_DORMANT_ROTATION["head_prompt_sha256"]
+    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
+    assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+
+
 def _requirement_authorization_row(authorization) -> dict[str, str]:
     """Render one in-code exact authorization in protected-policy form."""
     return {
@@ -317,8 +359,8 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
     }
 
 
-def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
-    """Only exact current-main or #1989 bootstrap bindings reach the policy."""
+def test_committed_rotations_equal_exact_protected_authority() -> None:
+    """Only exact consumed bootstrap or dormant #2200 bindings reach policy."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = policy["requirement_rotations"]
     bootstrap_rows = {
@@ -330,6 +372,9 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
     assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 23
+    story_identity = (STORY_REGRESSION_DORMANT_ROTATION["prompt_path"], "python")
+    assert bootstrap_rows[story_identity] != STORY_REGRESSION_DORMANT_ROTATION
+    bootstrap_rows[story_identity] = STORY_REGRESSION_DORMANT_ROTATION
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
@@ -367,7 +412,7 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
         if row["head_policy_sha256"]
         == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
     ]
-    assert len(pr1790_rows) == 8
+    assert len(pr1790_rows) == 7
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
     head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
     assert base_policy_digest == (
