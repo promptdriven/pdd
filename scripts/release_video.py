@@ -150,7 +150,7 @@ SHELL_DIRECT_TARGET_PATTERN = (
     r"(?:standard|current|command)\s+outputs?)"
 )
 SHELL_EVIDENCE_VERB_PATTERN = (
-    r"(?:is|has|with|hosts?|contains?|shows?|reads?|lists?|invokes?|displays?|"
+    r"(?:is|has|hosts?|contains?|shows?|reads?|lists?|invokes?|displays?|"
     r"displaying|presents?|presenting|renders?|rendering|prints?|writes?)"
 )
 SHELL_INPUT_VERB_PATTERN = (
@@ -159,11 +159,22 @@ SHELL_INPUT_VERB_PATTERN = (
 SHELL_SUBJECT_PREDICATE_PATTERN = (
     rf"(?:{SHELL_EVIDENCE_VERB_PATTERN}|{SHELL_INPUT_VERB_PATTERN})"
 )
+SHELL_OTHER_SUBJECT_PATTERN = (
+    r"(?:(?:he|she|they|we|this|that|these|those)\b|"
+    r"(?:(?:a|an|the|another|each|every|either|neither|some|any|many|"
+    r"several|few|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+"
+    r"(?:[a-z][\w-]*\s+){0,3}[a-z][\w-]*)\b|"
+    r"(?:[a-z][\w-]*\s+){0,2}[a-z][\w-]*s\b)"
+)
 SHELL_NEW_SUBJECT_BOUNDARY_PATTERN = (
     r"\b(?:and|but|while|whereas|yet|as)\b\s+"
-    rf"(?!(?:(?:it|its)\b|the\s+shell(?:s|-like)?\b|"
-    rf"{SHELL_SUBJECT_PREDICATE_PATTERN}\b))"
-    rf"(?=(?:(?![.!?;,]).){{0,50}}\b{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
+    r"(?!(?:(?:it|its)\b|the\s+shell(?:s|-like)?\b))"
+    rf"(?={SHELL_OTHER_SUBJECT_PATTERN}\s+"
+    rf"{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
+)
+SHELL_WITH_OTHER_SUBJECT_BOUNDARY_PATTERN = (
+    rf"\bwith\s+{SHELL_OTHER_SUBJECT_PATTERN}\s+"
+    rf"(?={SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
 )
 BASH_STRONG_SURFACE_RE = re.compile(
     r"\bbash\s+(?:history|windows?|"
@@ -198,13 +209,22 @@ SHELL_SUBJECT_CONTEXT_PATTERN = (
     r"(?:(?![.!?;]|\b(?:that|who|which)\b|"
     r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b|"
     r"(?:,|:)\s*(?:a|an|the|another)\b|"
+    rf"{SHELL_WITH_OTHER_SUBJECT_BOUNDARY_PATTERN}|"
     rf"{SHELL_NEW_SUBJECT_BOUNDARY_PATTERN}).){{0,100}}"
 )
 SHELL_TARGET_CONTEXT_PATTERN = (
     r"(?:(?![.!?;]|\b(?:that|who|which)\b|"
     r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b|"
     r"(?:,|:)\s*(?:a|an|the|another)\b|"
+    rf"{SHELL_WITH_OTHER_SUBJECT_BOUNDARY_PATTERN}|"
     rf"{SHELL_NEW_SUBJECT_BOUNDARY_PATTERN}).){{0,60}}"
+)
+SHELL_WITH_COMPUTING_RE = re.compile(
+    r"\bshell(?:s|-like)?(?:['’]s)?\b\s*,?\s+with\s+"
+    r"(?:a\s+|an\s+|the\s+|its\s+)?(?:blinking\s+)?"
+    rf"(?:{SHELL_DIRECT_TARGET_PATTERN}|"
+    r"(?:keyboard\s+|typed\s+|user\s+)?inputs?)\b",
+    flags=re.IGNORECASE | re.DOTALL,
 )
 SHELL_DIRECT_RELATIVE_COMPUTING_RE = re.compile(
     r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
@@ -3596,6 +3616,7 @@ def has_risky_shell_visual(cue: str) -> bool:
             COMMAND_SHELL_PATH_RE,
             NAMED_COMMAND_SHELL_RE,
             COMMAND_SHELL_EXECUTION_RE,
+            SHELL_WITH_COMPUTING_RE,
             SHELL_DIRECT_RELATIVE_COMPUTING_RE,
             SHELL_OWNED_COMPUTING_RE,
             SHELL_INPUT_INTERACTION_RE,
