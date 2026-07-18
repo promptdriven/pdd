@@ -503,6 +503,12 @@ def sync(
             compress=compress,
             compressed_context=effective_compressed_context,
         )
+        # ``sync_main`` deliberately aggregates per-language failures so it can
+        # print a complete report.  That structured failure is not a successful
+        # CLI result: make the Click boundary non-zero after the report is
+        # available, including a finalization failure caught by the aggregator.
+        if isinstance(result, Mapping) and not result.get("overall_success", True):
+            raise click.exceptions.Exit(1)
         if evidence:
             _write_sync_evidence_manifest(
                 basename=basename,

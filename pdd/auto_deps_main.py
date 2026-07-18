@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
@@ -18,8 +19,9 @@ from .operation_log import (
     resolve_fingerprint_paths,
     save_fingerprint,
     get_run_report_path,
+    get_fingerprint_path,
 )
-from .fingerprint_transaction import FingerprintFinalizeError
+from .fingerprint_transaction import AtomicStateUpdate, FingerprintFinalizeError
 
 
 def auto_deps_main(
@@ -76,12 +78,23 @@ def auto_deps_main(
 
         # Resolve CSV path with default fallback
         csv_path = output_file_paths.get("csv", "project_dependencies.csv")
+        output_path = Path(output_file_paths["output"])
+        unit_basename, unit_language = infer_module_identity(output_path)
+        outer_state = None
+        if unit_basename and unit_language:
+            outer_state = AtomicStateUpdate(
+                unit_basename,
+                unit_language,
+                directory=get_fingerprint_path(
+                    unit_basename, unit_language, paths={"prompt": output_path}
+                ).parent,
+            )
 
         # Acquire exclusive lock for the entire operation
         lock_path = Path(f"{csv_path}.lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock = filelock.FileLock(f"{csv_path}.lock")
-        with lock:
+        with outer_state if outer_state is not None else nullcontext(), lock:
             # Force-scan: delete existing CSV if requested
             if force_scan and Path(csv_path).exists():
                 if not quiet:
@@ -121,7 +134,6 @@ def auto_deps_main(
 
             # Sanitize prompt output before persisting (removes invalid <include>
             # selectors so a later `pdd sync` does not trip on them).
-            output_path = output_file_paths["output"]
             cleaned_prompt, invalid_includes = sanitize_prompt_output(
                 modified_prompt, output_path
             )
@@ -206,7 +218,7 @@ def auto_deps_main(
             if _skip_finalization:
                 return cleaned_prompt, total_cost, model_name
             try:
-                basename, language = infer_module_identity(Path(output_path))
+                basename, language = unit_basename, unit_language
                 if basename is None or language is None:
                     # Outputs outside PDD's managed prompt naming scheme have
                     # no canonical unit identity and therefore no fingerprint.

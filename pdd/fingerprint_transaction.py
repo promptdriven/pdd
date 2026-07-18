@@ -143,6 +143,27 @@ class AtomicStateUpdate:
             "fingerprint": directory / f"{name}_{self.language}.json",
         }
 
+    @classmethod
+    def _lock_path_for(cls, directory: Path) -> Path:
+        """Return a private, stable OS lock path without polluting metadata.
+
+        Keeping a flock inode in ``.pdd/meta`` makes an otherwise rolled-back
+        command leave an untracked directory behind.  Deleting that inode at
+        release is unsafe: a waiter could hold the old inode while a newcomer
+        creates and locks a new one.  A per-user private temp directory keeps
+        the inode stable for the life of the machine and out of project state.
+        """
+        root = Path(tempfile.gettempdir()) / f"pdd-state-locks-{os.getuid()}"
+        try:
+            root.mkdir(mode=0o700, exist_ok=True)
+            info = os.lstat(root)
+        except OSError as exc:
+            raise ValueError(f"cannot create state transaction lock directory: {root}") from exc
+        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != os.getuid():
+            raise ValueError(f"unsafe state transaction lock directory: {root}")
+        directory_key = hashlib.sha256(str(cls._absolute(directory)).encode("utf-8")).hexdigest()[:24]
+        return root / f"{directory_key}-{cls.__name__}.lock"
+
     @staticmethod
     def _assert_identity(path: Path, expected: tuple[int, int, int] | None) -> None:
         actual = AtomicStateUpdate._file_identity(path)
@@ -191,7 +212,9 @@ class AtomicStateUpdate:
     def recover(cls, basename: str, language: str, directory: Path) -> None:
         """Recover an interrupted transaction before a new command reads state."""
         directory = cls._absolute(directory)
-        if str(directory) in getattr(_LOCK_CONTEXT, "directories", set()):
+        probe = cls(basename, language, directory)
+        lock_key = (str(directory), probe._identity)
+        if lock_key in getattr(_LOCK_CONTEXT, "keys", set()):
             return
         state = cls(basename, language)
         try:
@@ -265,7 +288,8 @@ class AtomicStateUpdate:
             raise ValueError("state transaction lock directory differs from requested directory")
         self._directory = directory
         self._journal_path = directory / f".{self._identity}.state-txn.json"
-        lock_path = directory / f".{self._identity}.state-txn.lock"
+        lock_base = self._lock_path_for(directory)
+        lock_path = lock_base.with_name(f"{lock_base.stem}-{self._identity}.lock")
         self._file_identity(lock_path)
         flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(lock_path, flags, 0o600)
@@ -278,8 +302,12 @@ class AtomicStateUpdate:
             fcntl.flock(self._lock_handle.fileno(), fcntl.LOCK_EX)
         else:  # pragma: no cover - Windows only
             msvcrt.locking(self._lock_handle.fileno(), msvcrt.LK_LOCK, 1)
-        directories = getattr(_LOCK_CONTEXT, "directories", set())
-        _LOCK_CONTEXT.directories = {*directories, str(directory)}
+        keys = getattr(_LOCK_CONTEXT, "keys", set())
+        _LOCK_CONTEXT.keys = {*keys, (str(directory), self._identity)}
+        states = getattr(_LOCK_CONTEXT, "states", {})
+        _LOCK_CONTEXT.states = {
+            **states, (str(directory), self._identity): self,
+        }
         self._recover_locked()
 
     def _release_lock(self) -> None:
@@ -292,8 +320,14 @@ class AtomicStateUpdate:
                 msvcrt.locking(self._lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
         finally:
             if self._journal_path is not None:
-                directories = getattr(_LOCK_CONTEXT, "directories", set())
-                _LOCK_CONTEXT.directories = directories - {str(self._journal_path.parent)}
+                keys = getattr(_LOCK_CONTEXT, "keys", set())
+                _LOCK_CONTEXT.keys = keys - {
+                    (str(self._journal_path.parent), self._identity)
+                }
+                states = getattr(_LOCK_CONTEXT, "states", {})
+                states = dict(states)
+                states.pop((str(self._journal_path.parent), self._identity), None)
+                _LOCK_CONTEXT.states = states
             self._lock_handle.close()
             self._lock_handle = None
 
@@ -639,7 +673,9 @@ class AtomicStateUpdate:
                 # caller must never receive a publish failure beside split state.
                 if self._journal_path is None or not self._journal_path.exists():
                     for record in records:
-                        self._unlink_if_present(Path(record["staged"]))
+                        self._unlink_if_present(
+                            Path(record["staged"]) if record.get("staged") else None
+                        )
                         self._unlink_if_present(
                             Path(record["backup"]) if record["backup"] else None
                         )
@@ -923,7 +959,12 @@ class FingerprintTransaction:
 
     def commit(self) -> None:
         try:
-            if self.atomic_state is None:
+            active_state = getattr(_LOCK_CONTEXT, "states", {}).get(
+                (str(AtomicStateUpdate._absolute(self.fingerprint_path.parent)),
+                 AtomicStateUpdate(self.basename, self.language)._identity)
+            )
+            state_to_use = self.atomic_state or active_state
+            if state_to_use is None:
                 # Hashing, prior-state reads, recovery, and publication share
                 # one per-unit critical section so an older snapshot cannot win
                 # after a newer finalizer has already completed.
@@ -936,14 +977,14 @@ class FingerprintTransaction:
                 finally:
                     state._release_lock()
             else:
-                setter = getattr(self.atomic_state, "set_fingerprint", None)
+                setter = getattr(state_to_use, "set_fingerprint", None)
                 if not callable(setter):
                     raise TypeError("atomic_state does not provide set_fingerprint()")
                 # Paired sync/pin callers must hold this same lock while
                 # resolving, hashing, and buffering their fingerprint. The
                 # enclosing AtomicStateUpdate releases it only after paired
                 # publication, preventing stale last-writer-wins snapshots.
-                locker = getattr(self.atomic_state, "_lock_and_recover", None)
+                locker = getattr(state_to_use, "_lock_and_recover", None)
                 if not callable(locker):
                     raise TypeError("atomic_state does not provide transaction locking")
                 locker(self.fingerprint_path.parent)
@@ -971,6 +1012,20 @@ def finalize_fingerprint(
         basename, language, operation, paths, cost, model,
         atomic_state=atomic_state, include_deps_override=include_deps_override,
     )
+    active_state = getattr(_LOCK_CONTEXT, "states", {}).get(
+        (str(AtomicStateUpdate._absolute(transaction.fingerprint_path.parent)),
+         AtomicStateUpdate(basename, language)._identity)
+    )
+    if atomic_state is None and active_state is not None:
+        transaction.atomic_state = active_state
+        if remove_run_report:
+            active_state.remove_run_report(
+                transaction.fingerprint_path.with_name(
+                    f"{basename.replace('/', '_')}_{language.lower()}_run.json"
+                )
+            )
+        transaction.commit()
+        return
     if not remove_run_report:
         transaction.commit()
         return
