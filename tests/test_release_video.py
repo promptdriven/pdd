@@ -316,8 +316,17 @@ def test_release_video_visual_safety_allows_abstract_shell_cues(cue: str):
     [
         "A terminal shell appears in the foreground.",
         "A command shell appears in the foreground.",
+        "A Bash shell appears in the foreground.",
+        "A POSIX shell appears in the foreground.",
+        "A Unix shell appears in the foreground.",
+        "A Zsh shell appears in the foreground.",
         "A SHELL PROMPT appears in the foreground.",
+        "A shell's prompt appears in the foreground.",
+        "A shell’s prompt appears in the foreground.",
         "A shell-output window appears in the foreground.",
+        "A shell displaying output appears in the foreground.",
+        "A shell showing its prompt appears in the foreground.",
+        "A shell CLI appears in the foreground.",
     ],
 )
 def test_release_video_visual_safety_rejects_command_shell_surfaces(cue: str):
