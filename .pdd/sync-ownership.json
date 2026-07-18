@@ -6,7 +6,6 @@
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/ci_validation_python.json", "role": "human-maintained"},
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/cmd_test_main_python.json", "role": "human-maintained"},
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/cmd_test_main_python_run.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/code_generator_main_python_run.json", "role": "human-maintained"},
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/content_selector_python.json", "role": "human-maintained"},
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/content_selector_python_run.json", "role": "human-maintained"},
     {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/core_cli_python.json", "role": "human-maintained"},
