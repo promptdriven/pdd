@@ -1704,6 +1704,130 @@ class TestRunAgenticSync:
         assert sync_options["require_protected_base"] is True
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_git_probe_oserror_in_real_worktree_fails_before_runner(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_prompt,
+        _mock_build_graph,
+        mock_dry_run,
+        _mock_branch_diff,
+        _mock_filter_synced,
+        mock_runner_cls,
+        monkeypatch,
+    ):
+        """A real worktree cannot fall back to an unprotected child sync."""
+        issue_data = {"title": "Test", "body": "Fix foo", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [{"filename": "foo_python.prompt", "dependencies": []}],
+            Path("/tmp/architecture.json"),
+        )
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (
+            True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_sync._resolve_issue_protected_base", lambda _root: None
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_sync.subprocess.run",
+            MagicMock(side_effect=OSError("git unavailable")),
+        )
+
+        success, message, _cost, _provider = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is False
+        assert "cannot verify its Git worktree" in message
+        mock_runner_cls.assert_not_called()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_git_probe_oserror_in_synthetic_root_keeps_compatibility(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_prompt,
+        _mock_build_graph,
+        mock_dry_run,
+        _mock_branch_diff,
+        _mock_filter_synced,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """The non-Git issue-1714 style root remains a runner-compatible shim."""
+        issue_data = {"title": "Test", "body": "Fix foo", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [{"filename": "foo_python.prompt", "dependencies": []}],
+            tmp_path / "architecture.json",
+        )
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (
+            True, {"foo": tmp_path}, {"foo": "foo"}, [], 0.0
+        )
+        mock_runner_cls.return_value.run.return_value = (True, "synced", 0.05)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._find_project_root", lambda _cwd: tmp_path
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_sync._resolve_issue_protected_base", lambda _root: None
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_sync.subprocess.run",
+            MagicMock(side_effect=OSError("synthetic root")),
+        )
+
+        success, _message, _cost, _provider = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is True
+        sync_options = mock_runner_cls.call_args.kwargs["sync_options"]
+        assert sync_options["protected_base_ref"] is None
+        assert sync_options["require_protected_base"] is False
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync.DurableSyncRunner")
     @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
     @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
