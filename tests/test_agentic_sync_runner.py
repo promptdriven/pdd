@@ -32,6 +32,7 @@ from pdd.agentic_sync_runner import (
     _parse_public_surface_failure,
     _parse_test_churn_failure,
     _parse_cost_from_csv,
+    _StructuredSurfaceCapture,
     build_dep_graph_from_architecture,
     build_dep_graph_from_architecture_data,
 )
@@ -3903,6 +3904,46 @@ class TestBoundedSubprocessOutputCapture:
             quiet=True,
         )
 
+    @pytest.mark.parametrize(
+        "lines, reason",
+        [
+            ([
+                "Public surface regression for x:\n", "removed: <none>\n",
+                "removed: again\n",
+            ], "duplicate structured field"),
+            ([
+                "Public surface regression for x:\n", "signature_detail: {not-json}\n",
+            ], "malformed signature_detail field"),
+            ([
+                "Public surface regression for x:\n", "Public surface regression for y:\n",
+            ], "multiple public-surface diagnostic blocks"),
+        ],
+    )
+    def test_structured_surface_capture_rejects_malformed_or_duplicate_records(self, lines, reason):
+        """Marker-looking floods cannot become an unbounded repair payload."""
+        capture = _StructuredSurfaceCapture()
+        for line in lines:
+            capture.feed(line)
+        evidence, error = capture.materialize()
+        assert evidence == ""
+        assert error is not None and reason in error
+
+    def test_structured_surface_capture_bounds_marker_looking_flood(self):
+        """A valid header followed by too many detail fields fails closed."""
+        capture = _StructuredSurfaceCapture()
+        capture.feed("Public surface regression for x:\n")
+        capture.feed("removed: <none>\n")
+        capture.feed("signature_changed: f\n")
+        capture.feed("output: pdd/x.py\n")
+        capture.feed("pre_surface_size: 1\n")
+        capture.feed("post_surface_size: 1\n")
+        detail = 'signature_detail: {"symbol":"f","expected":"()","actual":"(x)","source":"pdd-interface"}\n'
+        for _ in range(65):
+            capture.feed(detail)
+        evidence, error = capture.materialize()
+        assert evidence == ""
+        assert error is not None and "too many signature_detail" in error
+
     @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
     @patch("pdd.agentic_sync_runner.subprocess.Popen")
     def test_stdout_capture_bounded_under_large_child_output(
@@ -4015,6 +4056,40 @@ class TestBoundedSubprocessOutputCapture:
 
         assert success, error
         assert mock_popen.call_count == 2
+
+    def test_real_child_surface_evidence_survives_tail_and_retries(self, monkeypatch):
+        """A real pipe preserves structured evidence after a >1 MiB flood."""
+        attempts = []
+        failure = (
+            "Public surface regression for foo_python.prompt:\n"
+            "removed: <none>\n"
+            "signature_changed: f\n"
+            "output: pdd/foo.py\n"
+            "pre_surface_size: 1\n"
+            "post_surface_size: 1\n"
+            "signature_detail: {\"symbol\": \"f\", \"expected\": \"(x)\", "
+            "\"actual\": \"(x, y=None)\", \"source\": \"pdd-interface\"}\n"
+        )
+
+        def command(_basename, in_flight_cost=0.0):
+            attempts.append(in_flight_cost)
+            if len(attempts) == 1:
+                script = (
+                    "import sys; "
+                    f"sys.stdout.write({failure!r}); "
+                    "[print('tail ' + ('é' * 180)) for _ in range(5250)]; "
+                    "sys.exit(1)"
+                )
+            else:
+                script = "print('Overall status: Success')"
+            return [sys.executable, "-c", script]
+
+        runner = self._make_runner()
+        monkeypatch.setattr(runner, "_build_command", command)
+        success, _cost, error = runner._sync_one_module("foo")
+
+        assert success, error
+        assert len(attempts) == 2
 
     @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
     @patch("pdd.agentic_sync_runner.subprocess.Popen")

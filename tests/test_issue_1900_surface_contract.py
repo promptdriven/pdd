@@ -25,12 +25,14 @@ plus one test that the ``signature_detail:`` lines propagate through
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
 from pdd.code_generator_main import (
     PromptInterfaceContractError,
     PublicSurfaceRegressionError,
+    _verify_declared_interface_exact,
     _verify_public_surface_regression,
 )
 
@@ -63,6 +65,93 @@ def _detail_line(symbol, expected, actual, source="pdd-interface"):
 
 
 class TestIssue1900SurfaceContract:
+    @pytest.mark.parametrize(
+        ("prompt_name", "code_path"),
+        [
+            ("resolved_sync_unit_python.prompt", "pdd/resolved_sync_unit.py"),
+            ("checkup_prompt_main_python.prompt", "pdd/checkup_prompt_main.py"),
+            ("git_porcelain_python.prompt", "pdd/git_porcelain.py"),
+            ("cli_status_python.prompt", "pdd/cli_status.py"),
+        ],
+    )
+    def test_real_synchronized_prompt_code_pairs_pass_exact_gate(self, prompt_name, code_path):
+        """Known synchronized repository units cover receiver/export boundaries."""
+        _verify_declared_interface_exact(
+            Path(code_path).read_text(encoding="utf-8"),
+            (Path("prompts") / prompt_name).read_text(encoding="utf-8"),
+            prompt_name,
+            code_path,
+            "python",
+        )
+
+    def test_logger_assignment_is_not_an_implicit_export(self):
+        """Ordinary module state is not an undeclared public callable export."""
+        prompt = _iface_prompt([("f", "()")])
+        code = "logger = object()\ndef f():\n    return 1\n"
+        _verify_public_surface_regression(code, code, PROMPT, OUT, "python", prompt)
+
+    def test_documented_class_constant_and_method_fields_are_enforced(self):
+        """Kinds, bindings, values and conflicting/unknown shapes fail closed."""
+        spec = {
+            "type": "module",
+            "module": {
+                "constants": [{"name": "VERSION", "type": "str", "value": "v1"}],
+                "classes": [{"name": "Record", "kind": "dataclass", "methods": [
+                    {"name": "build", "signature": "(self, x)", "binding": "instance"},
+                ]}],
+                "functions": [{"name": "f", "signature": "() -> str", "returns": "str"}],
+            },
+        }
+        prompt = f"<pdd-interface>{json.dumps(spec)}</pdd-interface>\n% engineer\n"
+        bad = (
+            "VERSION = 'v2'\n"
+            "class Record:\n"
+            "    @staticmethod\n"
+            "    def build(self, x):\n"
+            "        return x\n"
+            "def f() -> str:\n"
+            "    return 'ok'\n"
+        )
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(bad, bad, PROMPT, OUT, "python", prompt)
+        assert {"VERSION", "Record"}.issubset(exc.value.changed_signatures)
+
+        conflicting = _iface_prompt([("f", "() -> str")]).replace(
+            '"signature": "() -> str"',
+            '"signature": "() -> str", "returns": "int"',
+        )
+        unknown = _iface_prompt([("f", "()")]).replace(
+            '"signature": "()"', '"signature": "()", "mystery": true'
+        )
+        for invalid in (conflicting, unknown):
+            with pytest.raises(PromptInterfaceContractError):
+                _verify_public_surface_regression(
+                    "def f():\n    return 1\n", "def f():\n    return 1\n",
+                    PROMPT, OUT, "python", invalid,
+                )
+
+    def test_documented_enum_alias_and_model_fields_are_enforced(self):
+        """Repository schema variants are exact contracts, not ignored metadata."""
+        spec = {
+            "type": "module",
+            "module": {
+                "enums": [{"name": "Mode", "values": ["READY"]}],
+                "typeAliases": [{"name": "ModeName", "definition": "Literal['ready']"}],
+                "models": [{"name": "Report", "fields": [{"name": "mode", "type": "str"}]}],
+            },
+        }
+        prompt = f"<pdd-interface>{json.dumps(spec)}</pdd-interface>\n% engineer\n"
+        valid = (
+            "from enum import Enum\nfrom typing import Literal\n"
+            "class Mode(Enum):\n    READY = 'ready'\n"
+            "ModeName = Literal['ready']\n"
+            "class Report:\n    mode: str\n"
+        )
+        _verify_public_surface_regression(valid, valid, PROMPT, OUT, "python", prompt)
+        invalid = valid.replace("READY = 'ready'", "WAITING = 'waiting'")
+        with pytest.raises(PublicSurfaceRegressionError):
+            _verify_public_surface_regression(invalid, invalid, PROMPT, OUT, "python", prompt)
+
     def test_exact_contract_rejects_optional_annotation_and_unexpected_export(self):
         """Declared parameter/return annotations and symbol set are exact."""
         prompt = _iface_prompt([("f", "(x: int) -> str")])
