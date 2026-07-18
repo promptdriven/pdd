@@ -122,51 +122,31 @@ SHELL_VISUAL_RE = re.compile(
     r"\b(?:powershell|shell(?:s|['’]s|-like)?)\b",
     flags=re.IGNORECASE,
 )
-SHELL_CLAUSE_SPLIT_RE = re.compile(
-    r"[.;:]\s*|,\s*(?=(?:and|but|or|yet)\b)",
-    flags=re.IGNORECASE,
-)
-SHELL_EXPLICIT_TECHNICAL_RE = re.compile(
-    r"\b(?:bash|posix|unix|zsh|ksh|csh|tcsh|powershell|"
-    r"bourne(?:[-\s]+again)?|cli|commands?|terminals?|consoles?|prompts?|"
-    r"cursors?|carets?|keystrokes?|keyboards?|stdout|stderr|sessions?|screens?|"
-    r"(?:typed|keyboard|command[-\s]+line|user)\s+inputs?)\b",
-    flags=re.IGNORECASE,
-)
-SHELL_RELATION_VERB_PATTERN = (
-    r"(?:has|contains|shows|invokes|displays|presents|renders)"
-)
-SHELL_COMPUTING_HOMONYM_RE = re.compile(
-    r"\b(?:shell(?:s|-like)?|command|terminal|console|cli|application|browser|"
-    r"software|user)(?:['’]s)?[-\s]+(?:outputs?|windows?|interfaces?)\b|"
-    r"\b(?:current|command|terminal|console|cli|readable|text)[-\s]+outputs?\b|"
-    r"\bshell(?:s|-like)?(?:['’]s)?[-\s]+"
-    r"(?:technical|interactive|command[-\s]+line)[-\s]+surfaces?\b|"
-    rf"\b{SHELL_RELATION_VERB_PATTERN}\b"
-    rf"(?:(?![.;:]).){{0,40}}\boutputs?\b"
-    rf"(?!\s+as\s+(?:diffuse|soft)\s+light)",
-    flags=re.IGNORECASE | re.DOTALL,
-)
-TECHNICAL_SHELL_PREFIX_RE = re.compile(
+TECHNICAL_SHELL_VISUAL_RE = re.compile(
+    r"\bpowershell\b|"
     r"\b(?:bash|posix|unix|zsh|fish|ksh|csh|tcsh|dash|"
     r"bourne(?:[-\s]+again)?|root|system|windows?|default|os|terminal|console|"
     r"interactive|login|command(?:[-\s]+line)?)"
     r"(?:[\s,-]+(?:driven|based|style|styled|technical|interactive|login|"
     r"abstract|translucent|protective|geometric|outer|physical|luminous|"
     r"glowing|transparent|frosted|matte|ceramic|delicate|organic|glass)){0,3}"
-    r"[\s,-]+shell(?:s|-like)?\b",
-    flags=re.IGNORECASE,
-)
-SHELL_CLAUSE_REFERENCE_RE = re.compile(
-    r"^\s*(?:(?:and|but|or|yet)\s+)?"
-    r"(?:it\b|its\b|(?:inside|within|on|across)\s+(?:it|the\s+shell)\b)",
-    flags=re.IGNORECASE,
-)
-SHELL_CLAUSE_TECHNICAL_START_RE = re.compile(
-    r"^\s*(?:(?:and|but|or|yet)\s+)?(?:a\s+|an\s+|the\s+)?"
-    r"(?:blinking\s+|visible\s+|current\s+)?"
-    r"(?:prompts?|cursors?|carets?|keystrokes?|keyboards?|stdout|stderr|cli)\b",
-    flags=re.IGNORECASE,
+    r"[\s,-]+shell(?:s|-like)?\b|"
+    r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
+    r"(?:blinking\s+)?(?:prompts?|cli|windows?|screens?|interfaces?|sessions?|"
+    r"current\s+outputs?|technical\s+surfaces?)\b|"
+    r"\bshell(?:s|-like)?(?:['’]s)?\b"
+    r"(?:(?![.!?;]).){0,100}\b"
+    r"(?:has|contains|shows|invokes|displays|presents|renders|accepts|awaits|"
+    r"waits\s+for)\b(?:(?![.!?;]).){0,60}\b"
+    r"(?:bash|prompts?|blinking\s+(?:cursors?|carets?)|cli|keystrokes?|"
+    r"keyboard\s+inputs?|typed\s+inputs?|stdout|stderr|system\s+sessions?|"
+    r"current\s+outputs?|command\s+outputs?)\b|"
+    r"\b(?:a|an|the|its|shell(?:s|['’]s|-like)?)?\s*"
+    r"(?:blinking\s+)?prompts?\s+(?:appears?|blinks?|rests?|is\b)|"
+    r"\b(?:cursors?|carets?)\b|"
+    r"\b(?:typed|keyboard)\s+inputs?\b|"
+    r"\b(?:stdout|stderr|cli|keystrokes?|command\s+outputs?)\b",
+    flags=re.IGNORECASE | re.DOTALL,
 )
 SAFE_SHELL_MODIFIER_RE = re.compile(
     r"\b(?:(?:abstract|translucent|protective|geometric|outer|physical|"
@@ -3514,50 +3494,18 @@ def visual_safety_categories(cue: str) -> list[str]:
 
 
 def has_risky_shell_visual(cue: str) -> bool:
-    """Reject shell visuals unless every use has strong non-computing context."""
-    clauses = shell_visual_clauses(cue)
-    for index, clause in enumerate(clauses):
-        if not SHELL_VISUAL_RE.search(clause):
-            continue
-        context = clause
-        if index + 1 < len(clauses) and shell_clause_refers_back(clauses[index + 1]):
-            context = f"{clause} {clauses[index + 1]}"
-        if shell_clause_has_risky_visual(context):
-            return True
-    return False
-
-
-def shell_visual_clauses(cue: str) -> list[str]:
-    """Split a cue where a new sentence or coordinated subject can begin."""
-    return [part.strip() for part in SHELL_CLAUSE_SPLIT_RE.split(cue) if part.strip()]
-
-
-def shell_clause_refers_back(clause: str) -> bool:
-    """Return whether a following clause explicitly refers to the prior shell."""
-    return bool(
-        SHELL_CLAUSE_REFERENCE_RE.search(clause)
-        or SHELL_CLAUSE_TECHNICAL_START_RE.search(clause)
-    )
-
-
-def shell_clause_has_risky_visual(clause: str) -> bool:
-    """Classify shell occurrences inside one subject-bounded clause."""
-    shell_matches = list(SHELL_VISUAL_RE.finditer(clause))
-    if SHELL_EXPLICIT_TECHNICAL_RE.search(clause):
-        return True
-    if SHELL_COMPUTING_HOMONYM_RE.search(clause):
+    """Reject unknown shell imagery and unambiguous computing surfaces."""
+    if TECHNICAL_SHELL_VISUAL_RE.search(cue):
         return True
 
-    technical_spans = shell_context_spans(clause, TECHNICAL_SHELL_PREFIX_RE)
+    shell_matches = list(SHELL_VISUAL_RE.finditer(cue))
     safe_spans = shell_context_spans(
-        clause,
+        cue,
         SAFE_SHELL_MODIFIER_RE,
         SAFE_SHELL_MATERIAL_RE,
     )
     for shell in shell_matches:
         if shell.group(0).lower() == "powershell":
-            return True
-        if span_contains_offset(technical_spans, shell.start()):
             return True
         if not span_contains_offset(safe_spans, shell.start()):
             return True
