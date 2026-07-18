@@ -6211,7 +6211,7 @@ def _run_vitest(
     except (OSError, ValueError) as exc:
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-config", str(exc)), ()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-vitest-") as directory:
-        temporary = Path(directory)
+        temporary = Path(directory).resolve(strict=True)
         try:
             _verify_vitest_phase_toolchain(phase_toolchain)
             coordinator_addon = _load_vitest_coordinator_addon(
@@ -8093,7 +8093,7 @@ def _collect_vitest_at_base(
         with tempfile.TemporaryDirectory(
             prefix="pdd-vitest-protected-base-"
         ) as directory:
-            clone = Path(directory) / "repository"
+            clone = Path(directory).resolve(strict=True) / "repository"
             cloned = subprocess.run(
                 ["git", "clone", "-q", "--no-local", "--no-checkout",
                  str(root), str(clone)],
@@ -8131,7 +8131,7 @@ def _run_vitest_at_commit(
     try:
         descriptor = _load_vitest_toolchain_descriptor(root, config)
         with tempfile.TemporaryDirectory(prefix="pdd-vitest-checked-head-") as directory:
-            clone = Path(directory) / "repository"
+            clone = Path(directory).resolve(strict=True) / "repository"
             cloned = subprocess.run(
                 ["git", "clone", "-q", "--no-local", "--no-checkout",
                  str(root), str(clone)],
@@ -8576,7 +8576,7 @@ def _vitest_signing_addon(root: Path, config: RunnerConfig, required: bool):
         return
     descriptor = _load_vitest_toolchain_descriptor(root, config)
     with tempfile.TemporaryDirectory(prefix="pdd-vitest-signing-binding-") as directory:
-        signing_root = Path(directory)
+        signing_root = Path(directory).resolve(strict=True)
         phase_root = signing_root / "phase"
         phase_root.mkdir(mode=0o700)
         phase = _prepare_vitest_toolchain(phase_root, descriptor)

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import time
 import tomllib
 import zipfile
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -3674,6 +3674,57 @@ def test_vitest_passing_collected_test_is_pass(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
     _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
     assert executions[0].outcome is EvidenceOutcome.PASS
+
+
+def test_vitest_phase_canonicalizes_trusted_temporary_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Platform temp aliases are resolved before trusted Vitest staging."""
+    temporary_directory = runner_module.tempfile.TemporaryDirectory
+    aliased_prefixes = {
+        "pdd-vitest-protected-base-",
+        "pdd-vitest-checked-head-",
+        "pdd-trusted-vitest-",
+        "pdd-vitest-signing-binding-",
+    }
+    aliases_created = 0
+
+    @contextmanager
+    def aliased_temporary_directory(*args, **kwargs):
+        nonlocal aliases_created
+        with temporary_directory(*args, **kwargs) as directory:
+            prefix = kwargs.get("prefix", args[0] if args else None)
+            if prefix not in aliased_prefixes:
+                yield directory
+                return
+            alias = tmp_path / f"temporary-alias-{aliases_created}"
+            aliases_created += 1
+            alias.symlink_to(directory, target_is_directory=True)
+            try:
+                yield str(alias)
+            finally:
+                alias.unlink()
+
+    monkeypatch.setattr(
+        runner_module.tempfile, "TemporaryDirectory", aliased_temporary_directory
+    )
+    load_addon = runner_module._load_vitest_coordinator_addon
+
+    def load_addon_from_canonical_staging(staging_directory: Path, *args, **kwargs):
+        assert not staging_directory.is_symlink()
+        return load_addon(staging_directory, *args, **kwargs)
+
+    monkeypatch.setattr(
+        runner_module,
+        "_load_vitest_coordinator_addon",
+        load_addon_from_canonical_staging,
+    )
+    root, commit = _repository(tmp_path)
+
+    _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
+
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert aliases_created == 5
 
 
 def test_vitest_native_authority_identity_changes_signed_binding(
