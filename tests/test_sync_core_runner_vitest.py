@@ -527,7 +527,16 @@ def test_vitest_authority_wheel_is_source_only(tmp_path: Path) -> None:
     )
     output = tmp_path / "dist"
     completed = subprocess.run(
-        [sys.executable, "-m", "build", "--no-isolation", "--wheel", "--outdir", str(output)],
+        [
+            sys.executable,
+            "-m",
+            "build",
+            "--no-isolation",
+            "--skip-dependency-check",
+            "--wheel",
+            "--outdir",
+            str(output),
+        ],
         cwd=source,
         check=False,
         env=os.environ
