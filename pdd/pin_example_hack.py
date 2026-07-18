@@ -1156,7 +1156,11 @@ def sync_orchestration(
                     op_start_time = time.time()
 
                     # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
-                    with AtomicStateUpdate(basename, language) as atomic_state:
+                    from .operation_log import get_fingerprint_path
+                    with AtomicStateUpdate(
+                        basename, language,
+                        directory=get_fingerprint_path(basename, language, paths=pdd_files).parent,
+                    ) as atomic_state:
 
                         # --- Execute Operation ---
                         try:

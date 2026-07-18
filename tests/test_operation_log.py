@@ -935,10 +935,9 @@ def test_save_fingerprint_path_resolution_failure_is_typed_and_preserves_state_i
     assert json.loads(path.read_text(encoding="utf-8")) == {"old": True}
 
 
-def test_log_operation_decorator_fails_when_clear_silently_fails(temp_pdd_env):
+def test_log_operation_defers_run_report_removal_to_shared_finalizer(temp_pdd_env):
     """
-    A stale report that survives clearing is an explicit finalization failure;
-    returning a command success before this check would be a false green.
+    The decorator must not unlink prior evidence before the shared transaction.
     """
     operation_log.save_run_report("demo", "python", {"success": True})
     run_report_path = operation_log.get_run_report_path("demo", "python")
@@ -955,15 +954,11 @@ def test_log_operation_decorator_fails_when_clear_silently_fails(temp_pdd_env):
     prompt = temp_pdd_env.parent.parent / "prompts" / "demo_python.prompt"
     prompt.parent.mkdir(parents=True)
     prompt.write_text("% Goal\nDemo\n", encoding="utf-8")
-    with patch("pdd.operation_log.os.remove", lambda _path: None), patch(
-        "pdd.operation_log.save_fingerprint"
-    ) as mock_save_fingerprint:
-        from pdd.fingerprint_transaction import FingerprintFinalizeError
-        with pytest.raises(FingerprintFinalizeError, match="stale run report"):
-            successful_command(prompt_file=str(prompt))
+    with patch("pdd.operation_log.save_fingerprint") as mock_save_fingerprint:
+        successful_command(prompt_file=str(prompt))
 
     assert run_report_path.exists()
-    mock_save_fingerprint.assert_not_called()
+    assert mock_save_fingerprint.call_args.kwargs["remove_run_report"] is True
 
 
 def test_log_operation_finalization_failure_is_nonzero_for_click(temp_pdd_env):
@@ -981,11 +976,14 @@ def test_log_operation_finalization_failure_is_nonzero_for_click(temp_pdd_env):
     def command(prompt_file):
         return "ok", False, 0.0, "model"
 
-    with patch("pdd.operation_log.os.remove", lambda _path: None):
+    from pdd.fingerprint_transaction import FingerprintFinalizeError
+    with patch("pdd.operation_log.save_fingerprint", side_effect=FingerprintFinalizeError(
+        "generate", operation_log.get_fingerprint_path("cli", "python"), "disk full"
+    )):
         result = CliRunner().invoke(command, ["--prompt-file", str(prompt)])
 
     assert result.exit_code != 0
-    assert "stale run report" in str(result.exception)
+    assert "disk full" in str(result.exception)
 
 
 def test_log_operation_restores_prior_run_report_when_fingerprint_fails(temp_pdd_env):
