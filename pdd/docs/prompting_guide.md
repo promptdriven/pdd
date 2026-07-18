@@ -295,7 +295,7 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
     "type": "module",
     "module": {{
       "functions": [
-        {"name": "llm_invoke", "signature": "(prompt, strength, ...)", "returns": "Dict"}
+        {"name": "llm_invoke", "signature": "(...)", "returns": "Dict"}
       ]
     }}
   }}

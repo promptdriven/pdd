@@ -84,11 +84,36 @@ class TestIssue1900SurfaceContract:
         assert len(candidates) == 110
         assert prose_only == ["architecture_include_validation_python.prompt"]
         assert len(contracts) == 109
+        strict_failures = []
+        production_failures = []
         for prompt_path, code_path, text in contracts:
-            _verify_declared_interface_exact(
-                code_path.read_text(encoding="utf-8"), text, prompt_path.name,
-                str(code_path), "python",
-            )
+            source = code_path.read_text(encoding="utf-8")
+            try:
+                _verify_declared_interface_exact(
+                    source, text, prompt_path.name, str(code_path), "python",
+                    allow_legacy_extensions=False,
+                )
+            except PublicSurfaceRegressionError:
+                strict_failures.append(prompt_path.name)
+            # Use the real production gate with a synthetic output path so this
+            # corpus assertion does not repeatedly scan unrelated sibling tests
+            # for patch targets.  The declaration/snapshot/legacy boundary is
+            # identical, and targeted tests cover real output-path discovery.
+            try:
+                _verify_public_surface_regression(
+                    source, source, prompt_path.name,
+                    f".pdd/contract-audit/{code_path.name}", "python", text,
+                )
+            except PublicSurfaceRegressionError:
+                production_failures.append(prompt_path.name)
+        assert len(strict_failures) == 53
+        assert len(contracts) - len(strict_failures) == 56
+        assert production_failures == []
+        # Every strict legacy mismatch must be accepted only because its
+        # existing candidate unit is AST-equivalent, never via a permissive
+        # declaration verifier.
+        grandfathered_unchanged_legacy_units = len(strict_failures) - len(production_failures)
+        assert grandfathered_unchanged_legacy_units == 53
 
     def test_returns_can_supply_missing_signature_annotation_but_conflicts_fail(self):
         """``returns`` is authoritative when a legacy signature omits ``->``."""
@@ -116,6 +141,90 @@ class TestIssue1900SurfaceContract:
         malformed = "<pdd-interface>\n{\"type\": \"module\"}\n"
         with pytest.raises(PromptInterfaceContractError, match="unterminated"):
             _verify_public_surface_regression("def f():\n    pass\n", "def f():\n    pass\n", PROMPT, OUT, "python", malformed)
+
+    @pytest.mark.parametrize(
+        ("actual_signature",),
+        [
+            ("(x: str = 1) -> str",),
+            ("(x: int = 2) -> str",),
+            ("(x: str = 2) -> str",),
+        ],
+    )
+    def test_strict_parameter_annotation_and_default_drift_rejects_new_and_changed_modules(
+        self, actual_signature,
+    ):
+        """Strict declaration matching checks both annotation and default in-loop."""
+        prompt = _iface_prompt([("f", "(x: int = 1) -> str")])
+        actual = f"def f{actual_signature}:\n    return str(x)\n"
+        with pytest.raises(PublicSurfaceRegressionError):
+            _verify_declared_interface_exact(
+                actual, prompt, PROMPT, OUT, "python", allow_legacy_extensions=False,
+            )
+        with pytest.raises(PublicSurfaceRegressionError):
+            _verify_public_surface_regression("", actual, PROMPT, OUT, "python", prompt)
+        with pytest.raises(PublicSurfaceRegressionError):
+            _verify_public_surface_regression(
+                "def f(x: int = 1) -> str:\n    return str(x)\n",
+                actual, PROMPT, OUT, "python", prompt,
+            )
+
+    def test_unchanged_legacy_signature_mismatch_is_the_only_grandfathered_callable_case(self):
+        """A pre-existing mismatch may remain only when its code is unchanged."""
+        prompt = _iface_prompt([("f", "(x: int = 1) -> str")])
+        legacy = "def f(x: str = 2) -> str:\n    return x\n"
+        with pytest.raises(PublicSurfaceRegressionError):
+            _verify_declared_interface_exact(
+                legacy, prompt, PROMPT, OUT, "python", allow_legacy_extensions=False,
+            )
+        _verify_public_surface_regression(legacy, legacy, PROMPT, OUT, "python", prompt)
+        with pytest.raises(PublicSurfaceRegressionError):
+            _verify_public_surface_regression(
+                legacy, "def f(x: str = 3) -> str:\n    return x\n", PROMPT, OUT, "python", prompt,
+            )
+
+    @pytest.mark.parametrize("binding", ["property", None])
+    def test_property_receiver_is_stripped_for_declared_and_inferred_binding(self, binding):
+        """A property has an implicit receiver just like an instance method."""
+        method = {"name": "value", "signature": "() -> int"}
+        if binding is not None:
+            method["binding"] = binding
+        prompt = "<pdd-interface>" + json.dumps({
+            "type": "module", "module": {"classes": [{"name": "C", "methods": [method]}]},
+        }) + "</pdd-interface>"
+        code = "class C:\n    @property\n    def value(self) -> int:\n        return 1\n"
+        _verify_declared_interface_exact(
+            code, prompt, PROMPT, OUT, "python", allow_legacy_extensions=False,
+        )
+        _verify_public_surface_regression("", code, PROMPT, OUT, "python", prompt)
+        _verify_public_surface_regression(code, code, PROMPT, OUT, "python", prompt)
+
+    def test_ellipsis_inside_type_annotations_remains_strict(self):
+        """Type-level ellipses are not the documented whole-signature placeholder."""
+        prompt = _iface_prompt([
+            ("tuple_values", "(values: tuple[int, ...]) -> int"),
+            ("callback", "(fn: Callable[..., int]) -> int"),
+        ])
+        valid = (
+            "from typing import Callable\n"
+            "def tuple_values(values: tuple[int, ...]) -> int:\n    return len(values)\n"
+            "def callback(fn: Callable[..., int]) -> int:\n    return fn()\n"
+        )
+        _verify_public_surface_regression("", valid, PROMPT, OUT, "python", prompt)
+        invalid = valid.replace("tuple[int, ...]", "str").replace("Callable[..., int]", "str")
+        with pytest.raises(PublicSurfaceRegressionError):
+            _verify_public_surface_regression("", invalid, PROMPT, OUT, "python", prompt)
+
+    def test_empty_and_duplicate_module_contracts_fail_closed(self):
+        """An empty declaration owns zero exports and duplicate blocks are ambiguous."""
+        empty = '<pdd-interface>{"type":"module","module":{}}</pdd-interface>'
+        _verify_public_surface_regression("", "_private = 1\n", PROMPT, OUT, "python", empty)
+        with pytest.raises(PublicSurfaceRegressionError, match="empty pdd-interface"):
+            _verify_public_surface_regression(
+                "", "def public():\n    return 1\n", PROMPT, OUT, "python", empty,
+            )
+        duplicate = empty + "\n" + empty
+        with pytest.raises(PromptInterfaceContractError, match="multiple standalone"):
+            _verify_public_surface_regression("", "", PROMPT, OUT, "python", duplicate)
 
     def test_unknown_interface_root_field_fails_closed(self):
         """The contract root has the same closed-schema treatment as members."""
@@ -182,7 +291,7 @@ class TestIssue1900SurfaceContract:
             "    return 'ok'\n"
         )
         with pytest.raises(PublicSurfaceRegressionError) as exc:
-            _verify_public_surface_regression(bad, bad, PROMPT, OUT, "python", prompt)
+            _verify_public_surface_regression("", bad, PROMPT, OUT, "python", prompt)
         assert {"VERSION", "Record"}.issubset(exc.value.changed_signatures)
 
         conflicting = _iface_prompt([("f", "() -> str")]).replace(
@@ -219,7 +328,7 @@ class TestIssue1900SurfaceContract:
         _verify_public_surface_regression(valid, valid, PROMPT, OUT, "python", prompt)
         invalid = valid.replace("READY = 'ready'", "WAITING = 'waiting'")
         with pytest.raises(PublicSurfaceRegressionError):
-            _verify_public_surface_regression(invalid, invalid, PROMPT, OUT, "python", prompt)
+            _verify_public_surface_regression("", invalid, PROMPT, OUT, "python", prompt)
 
     def test_exact_contract_rejects_optional_annotation(self):
         """A new optional parameter still violates the declared signature."""
@@ -849,7 +958,7 @@ class TestIssue1900SurfaceContract:
         code = "f = lambda: x\n"
         prompt = _iface_prompt([("f", "()")])
         with pytest.raises(PublicSurfaceRegressionError):
-            _verify_public_surface_regression(code, code, PROMPT, OUT, "python", prompt)
+            _verify_public_surface_regression("", code, PROMPT, OUT, "python", prompt)
 
     def test_callable_to_noncallable_raises_even_with_breaking_change(self):
         """Codex round-8 finding 1: ``BREAKING-CHANGE: change signature`` authorizes
@@ -880,7 +989,7 @@ class TestIssue1900SurfaceContract:
             body="% engineer\nBREAKING-CHANGE: change signature f\n",
         )
         with pytest.raises(PublicSurfaceRegressionError):
-            _verify_public_surface_regression(code, code, PROMPT, OUT, "python", prompt)
+            _verify_public_surface_regression("", code, PROMPT, OUT, "python", prompt)
 
     def test_declared_underscore_class_ctor_drift_raises(self):
         """Codex round-8 finding 3: a declared UNDERSCORE class constructor is a

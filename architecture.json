@@ -9418,7 +9418,7 @@
         "functions": [
           {
             "name": "Job",
-            "signature": "dataclass Job(id: str, command: str, args: Dict[str, Any], options: Dict[str, Any], status: JobStatus, result: Optional[Any], error: Optional[str], cost: float, created_at: datetime, started_at: Optional[datetime], completed_at: Optional[datetime], live_stdout: str, live_stderr: str)",
+            "signature": "(...) -> Job",
             "returns": "Job"
           },
           {
@@ -9774,17 +9774,17 @@
           },
           {
             "name": "run_user_story_tests",
-            "signature": "(story_dir=None, prompt_dir=None, ..., contract_files: Optional[Mapping[Path, Path]] = None) -> Tuple[bool, List[Dict], float, str]",
+            "signature": "(...) -> Tuple[bool, List[Dict], float, str]",
             "returns": "Tuple[bool, List[Dict], float, str]"
           },
           {
             "name": "run_user_story_fix",
-            "signature": "(story_file, ...) -> Tuple[bool, str, float, str, List[str]]",
+            "signature": "(...) -> Tuple[bool, str, float, str, List[str]]",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
             "name": "generate_user_story",
-            "signature": "(prompt_files, issue, ...) -> Tuple[bool, str, float, str, str, List[str]]",
+            "signature": "(...) -> Tuple[bool, str, float, str, str, List[str]]",
             "returns": "Tuple[bool, str, float, str, str, List[str]]"
           },
           {

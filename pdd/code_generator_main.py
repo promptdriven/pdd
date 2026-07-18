@@ -2387,7 +2387,14 @@ def _parse_declared_module_interface(
     # Only a standalone metadata tag starts a contract.  Prompt prose often
     # mentions ``<pdd-interface>`` literally; routing that prose through the
     # XML recovery parser fabricated an empty/invalid contract.
-    opening = re.search(r"(?m)^[ \t]*<pdd-interface(?:\s[^>]*)?>", prompt_content)
+    openings = list(re.finditer(r"(?m)^[ \t]*<pdd-interface(?:\s[^>]*)?>", prompt_content))
+    if len(openings) > 1:
+        raise PromptInterfaceContractError(
+            prompt_name,
+            output_path,
+            "multiple standalone <pdd-interface> contract blocks are ambiguous",
+        )
+    opening = openings[0] if openings else None
     if opening is None:
         return None
     closing = re.search(r"</pdd-interface\s*>", prompt_content[opening.end():])
@@ -2484,7 +2491,7 @@ def _parse_declared_module_interface(
                 f"functions[{index}] has unsupported field(s): {', '.join(unknown)}",
             )
         signature = item.get("signature")
-        if isinstance(signature, str) and "..." in signature:
+        if _is_presence_only_signature(signature):
             signature = None
         returns = item.get("returns")
         if returns is not None and not isinstance(returns, str):
@@ -2604,7 +2611,7 @@ def _parse_declared_module_interface(
                 )
             return_annotation = None
             method_signature = method.get("signature")
-            if isinstance(method_signature, str) and "..." in method_signature:
+            if _is_presence_only_signature(method_signature):
                 method_signature = None
             if isinstance(method_signature, str):
                 try:
@@ -2979,6 +2986,20 @@ def _declared_annotation_matches(expected: str, actual: str) -> bool:
     return bool(expected_type is not None and actual_type is not None and allows(expected_type, actual_type))
 
 
+def _is_presence_only_signature(signature: Any) -> bool:
+    """Recognize only the documented whole-parameter-list placeholder.
+
+    ``...`` in a type expression is valid Python (for example,
+    ``Callable[..., R]`` and ``tuple[T, ...]``) and must remain part of the
+    strict callable contract.  The prompting guide documents ``(...)`` as the
+    sole legacy presence-only callable form.
+    """
+    return isinstance(signature, str) and bool(re.match(
+        r"^\s*(?:(?:async\s+)?def\s+[A-Za-z_]\w*\s*)?\(\s*\.\.\.\s*\)(?:\s*->\s*[^:]+)?\s*$",
+        signature,
+    ))
+
+
 def _exact_callable_matches(
     expected: ast.AST, actual: ast.AST, symbols: Dict[str, Any], *, strip_receiver: bool = False,
     expected_return_override: Optional[str] = None, allow_legacy_extensions: bool = False,
@@ -3029,8 +3050,6 @@ def _exact_callable_matches(
             not allow_legacy_extensions and expected_name != actual_name
         ):
             return False
-    if allow_legacy_extensions and any(default is None for _kind, _name, _ann, default in actual_params[actual_index:]):
-        return False
         # A declaration can deliberately leave a parameter unannotated.  That
         # documents no *minimum* type constraint, not a prohibition on a
         # generated implementation carrying a more useful annotation.
@@ -3038,12 +3057,17 @@ def _exact_callable_matches(
             actual_ann is None or not _declared_annotation_matches(expected_ann, actual_ann)
         ):
             return False
-        if expected_default is not None and (
-            actual_default is None or compare_default_sources(
+        if not allow_legacy_extensions and (
+            (expected_default is None) != (actual_default is None)
+            or (expected_default is not None and compare_default_sources(
                 expected_default, actual_default, symbols
-            ) is not DefaultCompatibility.COMPATIBLE
+            ) is not DefaultCompatibility.COMPATIBLE)
         ):
             return False
+    if allow_legacy_extensions and any(
+        default is None for _kind, _name, _ann, default in actual_params[actual_index:]
+    ):
+        return False
     expected_return = expected_return_override or _annotation_source(expected.returns)
     actual_return = _annotation_source(actual.returns)
     return allow_legacy_extensions or expected_return is None or (
@@ -3082,6 +3106,24 @@ def _method_binding(node: ast.AST) -> Optional[str]:
     if "property" in names or any(name in {"setter", "deleter"} for name in names):
         return "property"
     return "instance"
+
+
+_RECEIVER_BINDINGS = frozenset({"instance", "classmethod", "property", "constructor"})
+
+
+def _should_strip_declared_receiver(
+    actual_binding: Optional[str],
+    expected_params: List[Tuple[str, str, Optional[str], Optional[str]]],
+) -> bool:
+    """Strip only implicit receivers for the binding kinds that own one.
+
+    This single table covers direct and nested instance/class/property methods
+    plus constructors.  Static methods intentionally retain every parameter.
+    """
+    return (
+        actual_binding in _RECEIVER_BINDINGS
+        and not (expected_params and expected_params[0][1] in {"self", "cls"})
+    )
 
 
 def _class_kind_matches(node: ast.ClassDef, expected_kind: str) -> bool:
@@ -3195,6 +3237,32 @@ def _verify_declared_interface_exact(
     missing: List[str] = []
     changed: List[str] = []
     details: List[Tuple[str, str, str, str]] = []
+    if not declared:
+        explicit_all = _explicit_all_exports(tree)
+        has_all = any(
+            any(isinstance(target, ast.Name) and target.id == "__all__" for target in (
+                node.targets if isinstance(node, ast.Assign)
+                else [node.target] if isinstance(node, ast.AnnAssign) else []
+            ))
+            for node in tree.body
+        )
+        unexpected = sorted(_declared_api_exports(tree) | (explicit_all or set()))
+        if has_all and explicit_all is None:
+            unexpected.append("__all__ (dynamic)")
+        if unexpected:
+            raise PublicSurfaceRegressionError(
+                prompt_name=prompt_name,
+                output_path=output_path or "",
+                removed_symbols=[],
+                changed_signatures=unexpected,
+                pre_surface_size=0,
+                post_surface_size=len(unexpected),
+                signature_details=[
+                    (symbol, "<empty pdd-interface>", "undeclared public export", "pdd-interface")
+                    for symbol in unexpected
+                ],
+            )
+        return
     for name, (kind, signature, metadata) in declared.items():
         actual = _declared_symbol_node(tree, name)
         if actual is None:
@@ -3321,9 +3389,9 @@ def _verify_declared_interface_exact(
         except ValueError as exc:
             raise PromptInterfaceContractError(prompt_name, output_path or "", f"{name}: {exc}") from exc
         expected_params = _exact_parameter_shape(expected) or []
-        strip_receiver = (
-            ("." in name or class_constructor) and actual_binding in {"instance", "classmethod"}
-            and not (expected_params and expected_params[0][1] in {"self", "cls"})
+        receiver_binding = "constructor" if class_constructor else actual_binding
+        strip_receiver = ("." in name or class_constructor) and _should_strip_declared_receiver(
+            receiver_binding, expected_params,
         )
         if not _exact_callable_matches(
             expected, actual, symbols, strip_receiver=strip_receiver,
@@ -3369,16 +3437,19 @@ def _verify_public_surface_regression(
     declared_contract = _parse_declared_module_interface(
         prompt_content, prompt_name, output_path or ""
     )
+    grandfathered_symbols: Set[str] = set()
     try:
         _verify_declared_interface_exact(
             generated_code, prompt_content, prompt_name, output_path, language,
             allow_legacy_extensions=False,
         )
     except PublicSurfaceRegressionError as strict_error:
-        # Existing prompts predate full type/default capture in many modules.
-        # Keep an unchanged legacy callable signature, but never grandfather a
-        # changed callable, explicit binding contract, class/constant shape, or
-        # a new symbol (those remain hard errors below).
+        # Existing prompts predate complete callable and data-shape capture in
+        # many modules.  Keep only an AST-equivalent legacy unit: a candidate
+        # that changes even its implementation syntax is not grandfathered.
+        # This deliberately applies to every declared shape, rather than
+        # accidentally treating constants/classes as permanently impossible to
+        # synchronize while treating only functions as legacy.
         if not declared_contract:
             raise
         try:
@@ -3392,30 +3463,16 @@ def _verify_public_surface_regression(
             if declaration is None:
                 legacy_only = False
                 break
-            kind, signature, metadata = declaration
-            if kind not in {"function", "method"} or signature is None:
-                legacy_only = False
-                break
             old_node = _declared_symbol_node(old_tree, symbol)
             new_node = _declared_symbol_node(new_tree, symbol)
-            if not isinstance(old_node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not isinstance(
-                new_node, (ast.FunctionDef, ast.AsyncFunctionDef)
-            ):
-                legacy_only = False
-                break
-            if metadata.get("binding") is not None:
-                legacy_only = False
-                break
-            expected = _declared_callable_ast(symbol, signature)
-            params = _exact_parameter_shape(expected) or []
-            if "." in symbol and params and params[0][1] in {"self", "cls"}:
-                legacy_only = False
-                break
-            if _compact_callable_signature(old_node) != _compact_callable_signature(new_node):
+            if old_node is None or new_node is None or ast.dump(
+                old_node, include_attributes=False
+            ) != ast.dump(new_node, include_attributes=False):
                 legacy_only = False
                 break
         if not legacy_only:
             raise
+        grandfathered_symbols.update(strict_error.changed_signatures)
 
     # Older documented dotted-method declarations omit an explicit ``binding``
     # field.  Their receiver convention is enough to validate a generated
@@ -3486,7 +3543,10 @@ def _verify_public_surface_regression(
     # ``<pdd-interface>`` (also on a JSON parse error — the conformance gate owns
     # that warning), so undeclared modules behave exactly as before.
     declared = _collect_declared_surface(prompt_content, prompt_name)
-    declared_names = set(declared)
+    # Strictly non-conforming historical callables are permitted only when the
+    # candidate is byte-for-byte API-equivalent to that established code.  They
+    # remain on the old-code snapshot path below, never on the declaration path.
+    declared_names = set(declared) - grandfathered_symbols
 
     patch_targets = _effective_patch_targets(
         existing_code, language or "python", output_path
