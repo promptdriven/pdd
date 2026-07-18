@@ -4,11 +4,40 @@ tracking_issue: "https://github.com/promptdriven/pdd/issues/1932"
 controlling_plan: "docs/global_sync_resolution_plan.md"
 status_vocabulary: [pending, in-progress, passed]
 pass_rule: "A step may be passed only when every required_predicate field is proven by an exact-SHA artifact URL produced by the listed validation commands."
+current_critical_path:
+  status: in-progress
+  next_gate: "Observable fail-closed PR #1995 preflight on an exact reviewed head containing current protected main"
+  owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
+  reviewed_diagnostic_head_sha: "daa67f2044c55edea30420e5f4f31674e7141296"
+  current_protected_main_sha: "c81e5d21ab59f45d30f3ed4f0916dc3ec9d4986d"
+  current_main_is_ancestor_of_reviewed_head: false
+  first_hosted_attempt:
+    run_url: "https://github.com/promptdriven/pdd/actions/runs/29635743590"
+    unit_job_url: "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642167"
+    exact_head_sha: "daa67f2044c55edea30420e5f4f31674e7141296"
+    result: failed
+    failed_step: "Verify reviewed identity and runner provenance"
+    candidate_executed: false
+    preflight_failure_predicate_known: false
+    preflight_artifact_uploaded: false
+    vitest_cause_collected: false
+    cause_red_status: pending
+  unblock_actions:
+    - "Name every preflight predicate and write nonsecret expected/actual measurements to a machine-readable artifact before exit."
+    - "Preserve all trigger-head, checkout-head, ancestry, digest, review, runtime, and toolchain checks."
+    - "Obtain exact Sol review, integrate protected main without overwriting remote work, and obtain exact-composite approval."
+    - "Rotate reviewed head/digest/review pins, guarded-push the exact head, and collect Stage A hosted cause evidence."
+    - "Create a cause-specific RED and bounded correction only after Stage A identifies a trusted fixed-enum cause."
+  plan_pr:
+    url: "https://github.com/promptdriven/pdd/pull/2199"
+    last_hosted_green_sha: "2ee7424eed23e6df3e6c6d5d239bc33efba4e8ca"
+    last_hosted_green: true
+    current_update_hosted: false
 steps:
   - order: 1
     name: "Reviewable implementation foundations"
     status: in-progress
-    exact_repository_sha: "b09b6bef2c8c4bee762965be463527cd0b050154"
+    exact_repository_sha: "daa67f2044c55edea30420e5f4f31674e7141296"
     validation_commands:
       - "test -z \"$(git status --porcelain=v1 --untracked-files=all)\""
       - "git merge-base --is-ancestor \"$PDD_PROTECTED_BASE_SHA\" \"$PDD_SHA\""
@@ -56,8 +85,9 @@ steps:
     artifact_check_urls:
       - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345745"
       - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345757"
-    predicate_result: "Local affected suites pass, but exact-head source and installed-wheel Vitest jobs fail; required source/wheel agreement is red."
-    blocker: "Pinned Vitest cause-evidence gate is not yet passed."
+      - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642167"
+    predicate_result: "Exact diagnostic head is locally validated and reviewed, but the first exact-head hosted Unit job failed in silent preflight before source or installed-wheel Vitest evidence was produced."
+    blocker: "Preflight observability, current-main integration, and exact-head hosted source/wheel agreement are not yet passed."
     owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 2
     name: "Protected reviewed checker release and pinned wheel digest"
@@ -104,34 +134,49 @@ steps:
   - order: 4
     name: "Complete protected runner adapters"
     status: in-progress
-    exact_repository_sha: "b09b6bef2c8c4bee762965be463527cd0b050154"
+    exact_repository_sha: "daa67f2044c55edea30420e5f4f31674e7141296"
     failure_baseline_sha: "b09b6bef2c8c4bee762965be463527cd0b050154"
-    diagnostic_head_sha: null
+    diagnostic_head_sha: "daa67f2044c55edea30420e5f4f31674e7141296"
+    current_stage: "stage-a-preflight-correction"
+    cause_red_status: pending
     validation_commands:
       - "pytest -q tests/test_sync_core_runner_pytest.py tests/test_sync_core_runner_vitest.py tests/test_sync_core_supervisor.py"
       - |
           set -euo pipefail
           failure_baseline=b09b6bef2c8c4bee762965be463527cd0b050154
           diagnostic_head="$(git rev-parse HEAD)"
-          test "$diagnostic_head" = "$GITHUB_SHA"
-          test "$diagnostic_head" = "$PDD_DIAGNOSTIC_HEAD_SHA"
+          test "$diagnostic_head" = "$PDD_TRIGGER_PR_HEAD_SHA"
+          test "$diagnostic_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
           git merge-base --is-ancestor "$failure_baseline" "$diagnostic_head"
           producer_sha256="$(sha256sum pdd/sync_core/runner.py | cut -d' ' -f1)"
           verifier_sha256="$(sha256sum scripts/verify_vitest_termination_evidence.py | cut -d' ' -f1)"
-          test "$producer_sha256" = "$PDD_DIAGNOSTIC_PRODUCER_SHA256"
-          test "$verifier_sha256" = "$PDD_DIAGNOSTIC_VERIFIER_SHA256"
-          jq -e --arg baseline "$failure_baseline" --arg head "$diagnostic_head" --arg producer "$producer_sha256" --arg verifier "$verifier_sha256" '(.verdict == "APPROVE") and (.behavioral_verdict == "NO_BEHAVIORAL_FIX") and (.failure_baseline_sha == $baseline) and (.diagnostic_head_sha == $head) and (.producer_sha256 == $producer) and (.verifier_sha256 == $verifier)' "$PDD_DIAGNOSTIC_REVIEW_EVIDENCE"
+          test "$producer_sha256" = "$PDD_REVIEWED_PRODUCER_SHA256"
+          test "$verifier_sha256" = "$PDD_REVIEWED_VERIFIER_SHA256"
+          jq -e --arg baseline "$failure_baseline" --arg head "$diagnostic_head" --arg producer "$producer_sha256" --arg verifier "$verifier_sha256" '(.verdict == "APPROVE") and (.behavioral_verdict == "NO_BEHAVIORAL_FIX") and (.failure_baseline_sha == $baseline) and (.diagnostic_head_sha == $head) and (.producer_sha256 == $producer) and (.verifier_sha256 == $verifier)' "$PDD_REVIEW_EVIDENCE_PATH"
           set +e
           PDD_VITEST_DIAGNOSTIC_OUTPUT="$RUNNER_TEMP/vitest-termination-v1.json" pytest -q tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access --timeout=180
           test_status=$?
-          pytest -q "$PDD_VITEST_CAUSE_RED_TEST_NODE" --timeout=180
-          red_status=$?
           set -e
           test "$test_status" -eq 1
-          test "$red_status" -eq 1
-          python scripts/verify_vitest_termination_evidence.py --evidence "$RUNNER_TEMP/vitest-termination-v1.json" --failure-baseline-sha "$failure_baseline" --diagnostic-head-sha "$diagnostic_head" --producer-sha256 "$producer_sha256" --verifier-sha256 "$verifier_sha256" --runner-image ubuntu-24.04/20260714.240.1 --python 3.12.13 --node 22.23.1 --vitest-lock-sha256 bfc69a55d08997f553a0901c2ec0b7830cb01d6c6cc81257d150dcc79d20783c --test-node tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access --cause-red-test-node "$PDD_VITEST_CAUSE_RED_TEST_NODE"
+          python scripts/verify_vitest_termination_evidence.py --evidence "$RUNNER_TEMP/vitest-termination-v1.json" --failure-baseline-sha "$failure_baseline" --diagnostic-head-sha "$diagnostic_head" --producer-sha256 "$producer_sha256" --verifier-sha256 "$verifier_sha256" --runner-image ubuntu-24.04/20260714.240.1 --python 3.12.13 --node 22.23.1 --vitest-lock-sha256 bfc69a55d08997f553a0901c2ec0b7830cb01d6c6cc81257d150dcc79d20783c --test-node tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
       - "gh run view \"$PDD_RUN_ID\" --repo promptdriven/pdd --json headSha,jobs"
+    stage_a_required_predicate:
+      preflight_artifact_uploaded: true
+      preflight_failed_predicates: 0
+      candidate_executed: true
+      protected_cause_artifact_uploaded: true
+      vitest_process_role_is_known: true
+      vitest_failure_stage_is_known: true
+      vitest_cause_code_is_known: true
+      cause_red_status: pending
+    stage_b_required_predicate:
+      cause_specific_red_test_fails_before_fix: true
+      cause_specific_red_test_exercises_observed_baseline_behavior: true
+      same_reviewer_finding_verification: approved
+      source_hosted_vitest_exit_code: 0
+      installed_wheel_hosted_vitest_exit_code: 0
     required_predicate:
+      stage_a_passed_before_stage_b_started: true
       pytest_expected_collected_and_executed_node_ids_equal: true
       bound_config_plugins_and_support_modules: true
       removed_or_skipped_or_xfailed_or_deselected_cases_fail_closed: true
@@ -157,8 +202,19 @@ steps:
       - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345745"
       - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345757"
       - "https://github.com/promptdriven/pdd/pull/1995#issuecomment-5009900976"
-    predicate_result: "All seven installed-wheel Playwright variants pass. Source and wheel Vitest terminate after candidate-exec with unknown cause, so the adapter gate remains red."
-    blocker: "The protected cause-evidence artifact and its cause-specific RED test do not exist."
+      - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642167"
+      - "https://github.com/promptdriven/pdd/pull/1995#issuecomment-5010407866"
+    observed_evidence:
+      reviewed_diagnostic_head_exact: true
+      review_verdict_approve: true
+      behavioral_verdict_no_behavioral_fix: true
+      runner_image_and_provisioner_header_match_pins: true
+      hosted_preflight_passed: false
+      hosted_candidate_executed: false
+      hosted_cause_artifact_verified: false
+      cause_specific_red_exists: false
+    predicate_result: "All seven historical installed-wheel Playwright variants pass. The exact reviewed diagnostic head failed closed in hosted preflight before candidate execution, so no protected Vitest cause or cause-specific RED exists."
+    blocker: "A named preflight predicate artifact and a passing preflight on a current-main exact reviewed head are required before Stage A cause collection."
     owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 5
     name: "Canonical production routing"

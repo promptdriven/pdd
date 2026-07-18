@@ -34,74 +34,26 @@ itself, prove that those bytes express the same intent.
 ### Current critical-path unblock (2026-07-18)
 
 This immediate runner prerequisite is a PR gate only. It does not authorize a
-release, merge #1995, or claim global certification; the historical audit and
-ten-step sequence below remain the controlling global-resolution plan.
+release, merge #1995, or claim global certification; the ten-step sequence below
+remains controlling.
 
-| Verification boundary | #2164 exact head | #1995 integration | Current state |
-| --- | --- | --- | --- |
-| Locally validated | Exact proposed head [`5f6d747aa75a0629f33d0900489a613a3f1e2b8d`](https://github.com/promptdriven/pdd/commit/5f6d747aa75a0629f33d0900489a613a3f1e2b8d) contains protected `main` `03abdfa12`, remote FIFO identity, signed native-authority binding, protected-main-only ownership, and the exact #1989 historical transition pin. Combined gate: 75 passed, 8 platform skips; full rollout and verification-profile suites passed; exact Sol review approved. | Corrected candidate [`b09b6bef2c8c4bee762965be463527cd0b050154`](https://github.com/promptdriven/pdd/commit/b09b6bef2c8c4bee762965be463527cd0b050154) integrates protected `main` `cc97ef23a`; RED `0c88b5df5` reproduces the sealed worker-preload `EBADF`; full Vitest and focused supervisor suites pass; exact Sol critical review approved. | #2164 merged; #1995 locally green and reviewed |
-| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164) exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907): Unit, Package Preprocess Smoke, Story/Public CLI regressions, Repo Bloat Docker E2E, CodeQL, and exact-head auto-heal all passed. | On exact `b09b6bef2`, [run 29630254929](https://github.com/promptdriven/pdd/actions/runs/29630254929) has green Story/Public CLI regressions and Docker E2E; [CodeQL run 29630253798](https://github.com/promptdriven/pdd/actions/runs/29630253798) and auto-heal are green. [Unit job 88042345745](https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345745) failed standalone real Vitest isolation. [Package job 88042345757](https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345757) passed all seven installed-wheel Playwright variants, then failed the same installed-wheel Vitest boundary. | #2164 green; #1995 Unit/Package red on Vitest only |
-| Merged to protected `main` | Merged at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e) on 2026-07-18. Exact reviewed head `5f6d747aa` and prior protected base `03abdfa12` are its two parents. | Not merged. Remote PR head is the exact reviewed candidate `b09b6bef2`, which contains protected `main` `cc97ef23a`; hosted Unit is red. | passed / hosted red |
-| Released checker | No release is authorized by either PR | No release is authorized by either PR | pending |
-| Globally certified | This runner gate is not a global certificate | This diagnostic head is not a global certificate | blocked |
+| Verification boundary | Exact evidence | State |
+| --- | --- | --- |
+| Locally validated | PR #2164 exact reviewed head `5f6d747aa75a0629f33d0900489a613a3f1e2b8d` passed its affected suites. PR #1995 diagnostic head [`daa67f2044c55edea30420e5f4f31674e7141296`](https://github.com/promptdriven/pdd/commit/daa67f2044c55edea30420e5f4f31674e7141296) passed 32 focused workflow/verifier tests after integrating protected base `f22d10013`; the full correction evidence also records 263 Vitest passes, 36 platform skips, 15 supervisor passes, valid YAML/shell, and pylint 10/10. | local evidence green for the diagnostic-only change |
+| Independently reviewed | Sol approved exact head `daa67f2044`, producer digest `990ba130c76a7acf506dfd76366a888814a26c470c9eb7fae39fc2fcd8e172c7`, verifier digest `da2e423eb66ae75a24e1cf05bfd750d20135e228076ab5dc88fe6324a76fcc74`, and verdict `NO_BEHAVIORAL_FIX`. | approved for the first hosted diagnostic attempt |
+| Hosted green | #2164 exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907) passed all required checks. On #1995 exact head `daa67f2044`, [run 29635743590](https://github.com/promptdriven/pdd/actions/runs/29635743590) has green CodeQL, Story/Public CLI regressions, and Docker E2E, but [Unit job 88057642167](https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642167) failed closed in `Verify reviewed identity and runner provenance` before candidate execution. The runner header exactly matched the pinned image and provisioner; the silent preflight did not identify the failing predicate and uploaded no artifact. | #1995 hosted red; no Vitest cause was collected |
+| Merged to protected `main` | #2164 merged with ancestry preserved at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e). #1995 is not merged. Protected `main` has advanced to `c81e5d21ab59f45d30f3ed4f0916dc3ec9d4986d`, which is not an ancestor of `daa67f2044`. | main drift must be integrated before the next exact-head review/push |
+| Plan and ledger | [PR #2199](https://github.com/promptdriven/pdd/pull/2199) exact head `2ee7424eed23e6df3e6c6d5d239bc33efba4e8ca` passed every hosted check. It is behind current protected `main` and this update is not yet hosted. | locally being refreshed; not merged |
+| Released checker | No protected reviewed checker release or pinned wheel digest exists. | pending |
+| Globally certified | No protected merge-group certificate or seven-night streak exists. | pending |
 
-The latest phase-attestation commit on #2164 postdates earlier review evidence.
-Let `H2164` denote the exact final reviewed proposed #2164 head. It is currently
-[`5f6d747aa75a0629f33d0900489a613a3f1e2b8d`](https://github.com/promptdriven/pdd/commit/5f6d747aa75a0629f33d0900489a613a3f1e2b8d).
-This SHA is a fast-forward descendant of remote predecessor `1904c4f23` and
-protected `main` `03abdfa12`. It preserves FIFO exec-probe identity, binds the
-native authority into canonical signed evidence, uses protected-main-only
-coordinator ownership, and pins the historical #1989 transition to its exact
-base and merge head. Local affected suites and exact-composite Sol review are
-green. RED `16eaf23a6` and GREEN evidence are posted on the PR. All exact-head
-hosted checks passed, and `H2164` was merged with ancestry preserved as
-`M2164 = d91b07a9002be895556b38c5bafff18a420b256e`. The generic runbook's squash
-default was not used because it would violate the controlling machine predicate
-`is_ancestor(H2164, M2164)`; the merge still ran from the clean main clone with
-an exact-head match guard. The remote #1995 head `24eaf18c9` remains the
-diagnostic-only four-process attribution SHA. Local canonical head `a89cedc3f`
-merges that exact remote history with protected `main` `67696f0f3`, including
-`M2164`; it preserves the sealed coordinator authority, worker Wasm guard,
-authenticated relay identity, and typed setup-error behavior. Local suites are
-green. Exact critical review rejected `a89cedc3f` because the Package smoke's
-first Vitest authority manifest omitted the required `headers` role. RED
-`c654f3ef2` and corrected head `51dcee3ef` add exact header derivation, four
-regular N-API-header checks, and `roles.headers`; same-reviewer verification
-approved. On exact corrected SHA `51dcee3ef`, hosted Unit then failed
-`test_real_vitest_runs_copied_entrypoint_without_candidate_result_access` after
-`post-drop-probes,candidate-exec`: reporter missing, exit code 1, zero OOM,
-OOM-kill, and pids-max deltas, diagnostic
-`5b415b0c472801a2a05322f05641c8e9c5720f30a28986e34a1b765d56ed4c8f`.
-This is distinct from the corrected Package manifest and the prior four-process
-diagnostic. Package provisioning, wheel build, universal-wheel assertion,
-offline install, and the corrected manifest all passed; its real installed-wheel
-Playwright protocol then timed out all seven config-suffix variants at 90
-seconds, with the result-drain thread waiting in `runner._drain_result_pipe`.
-After this exact run, protected `main` advanced from hosted base `67696f0f3` to
-`cc97ef23a` via PR #2184. Merge `90551212a` integrates that commit without
-overwriting the remote PR. Deterministic RED `0c88b5df5` proves the standalone
-Vitest exit: the coordinator correctly marks its result FIFO `CLOEXEC`, so the
-worker preload starts without `RESULT_FD` and its unconditional `fstatSync`
-terminates with `EBADF`. Candidate `b09b6bef2` accepts only `EBADF`/`ENOENT` for
-that primary slot while retaining exact FIFO type/device/inode validation when
-present and scanning/closing all matching inherited descriptors. Exact critical
-review approved this change and the exact reviewed head was pushed without
-overwriting remote work. Hosted Unit still fails the same public test at the
-same progress boundary with reporter missing, exit code 1, zero OOM,
-OOM-kill, and pids-max deltas, and a new diagnostic
-`dd31b479f1bbd288812af6c7fbd768914dbea12d04438ee8f6dc88681bd2ae86`.
-The local CLOEXEC defect was real, but correcting it did not close the hosted
-gate. Package passed all seven installed-wheel Playwright variants in 385.57
-seconds, closing the prior Playwright timeout signature, then failed the same
-Vitest test with diagnostic
-`fdf58c2c3237551b999eb66210f4f7b32849c23458dd0bbe508cce29f2b3cd96`.
-Both required jobs now identify one Vitest critical-path blocker.
-
-The old `13a851fd5` #2164 hosted Unit job failed four rollout-inventory tests
-because three new tracked paths lack protected ownership, six native-addon
-build/test-fixture cases, and one phase-attestation tamper test. The correction
-cycle must close all 11 exact failures without weakening inventory, authority,
-compiler, phase-attestation, timeout, or resource predicates.
+The first exact hosted diagnostic attempt was useful negative evidence: trigger
+head, checkout head, reviewed head, Python, Node, runner image, runner
+provisioner, ancestry, and reviewed file/package digests were all bound, and the
+job failed before it could create candidate evidence. It is not evidence of the
+remaining Vitest cause. The immediate defect is preflight observability: a
+silent shell predicate can terminate the job without naming the predicate or
+writing a machine-readable failure artifact.
 
 #### Strict dependency sequence
 
@@ -109,20 +61,31 @@ compiler, phase-attestation, timeout, or resource predicates.
    `H2164 = 5f6d747aa` passed Unit, Package, all hosted checks, exact Sol review,
    and clean-tree/main/remote-head guards; ancestry-preserving merge result
    `M2164 = d91b07a90` is on protected `main`.
-2. **Locally passed and reviewed; hosted red:** candidate `b09b6bef2` integrates
-   protected `main` `cc97ef23a` into #1995 without overwriting remote work.
-   `M2164` is an ancestor, local affected suites pass, and exact Sol critical
-   review approved. The remote PR head exactly matches this reviewed SHA.
-3. **Next bounded gate:** run the single pinned cause-evidence protocol below.
-   It must classify the terminating process, stage, and fixed-enum cause through
-   the sealed coordinator transport. Raw stderr and candidate-supplied strings
-   are never accepted as evidence. A behavioral correction is allowed only after
-   this protocol emits a verified artifact and one cause-specific RED test fails
-   on `b09b6bef2`. The exact Package evidence closes the prior Playwright timeout
-   signature and reproduces the remaining Vitest blocker from an isolated wheel.
-4. Merge #1995 only from a `main` clone after a clean-tree/no-drift guard.
-5. Only after #1995 merges, refresh the execution ledger and create or update the
-   machine-readable 10-step evidence ledger before proceeding to checker release.
+2. **Diagnostic implementation reviewed; first hosted attempt red:** exact head
+   `daa67f2044` is on the remote PR and has exact Sol approval, but hosted Unit
+   stopped in preflight before candidate execution. It produced neither a
+   trusted cause artifact nor a cause-specific RED.
+3. **Immediate bounded correction:** give every preflight predicate a stable
+   name, record nonsecret expected/actual measurements, and always upload a
+   machine-readable preflight artifact. Preserve every identity, ancestry,
+   digest, review, runtime, and toolchain check. Do not change candidate behavior.
+4. **Rebind the exact head:** obtain Sol review for the correction, integrate
+   current protected `main` `c81e5d21a` without overwriting remote work, then
+   obtain exact-composite approval and rotate protected head/digest/review pins.
+5. **Collect cause evidence:** guarded-push only the exact reviewed head and run
+   the source and installed-wheel diagnostic lanes. Stage A passes only when the
+   protected coordinator artifact identifies fixed-enum process role, failure
+   stage, and cause on that exact SHA. A preflight failure leaves Stage A red.
+6. **Only then specify behavior:** add one cause-specific RED that fails against
+   the collected baseline behavior, implement at most one bounded correction,
+   and have the same reviewer verify the finding and affected behavior.
+7. Require Unit, Package Preprocess Smoke, CodeQL, auto-heal, and every other
+   required hosted check to pass on one exact reviewed SHA. Merge #1995 only from
+   the main clone after clean-tree, remote-head, ancestry, and no-main-drift
+   guards.
+8. After #1995 merges, update the ledger with its merge SHA and begin the
+   protected checker release gate. Do not substitute narrative status for the
+   machine-readable evidence fields.
 
 The immediate non-human predicate is strict:
 
@@ -142,19 +105,14 @@ and sol_high_exact_composite_approval(H1995) == approved
 and merge_result(H1995) is on protected main
 ```
 
-For #2164, the complete first half of the predicate is true: exact Sol approval
-and every hosted check passed on `H2164 = 5f6d747aa`, protected-main merge result
-`M2164 = d91b07a90` contains `H2164` as a parent, and protected `main` points to
-that merge. Exact-composite review and corrected-finding verification approved
-the prior `H1995 = 51dcee3ef`, and exact critical review approved current
-`H1995 = b09b6bef2`; hosted Unit remains red. The completed bounded cycle proved
-and corrected one real CLOEXEC defect, but exact-head hosted evidence shows an
-additional termination with the same public signature. The single next gate is
-therefore cause-bearing evidence from the hosted-equivalent Vitest path, not a
-retry or speculative second patch. Installed-wheel Playwright is green on the
-same SHA; no independent Playwright correction cycle is currently justified.
-All required hosted checks must eventually pass on one corrected exact SHA
-before merge.
+For #2164, the complete first half of the predicate is true. For #1995,
+`H1995 = daa67f2044` was reviewed and pushed, but hosted Unit failed before the
+candidate ran, protected `main` subsequently advanced, and no merge result
+exists. Therefore the #1995 predicate remains false. The single next gate is an
+observable, fail-closed preflight on a current-main exact head; it is not a
+retry, a behavioral fix, or a relaxation of the certificate predicate. All
+required hosted checks must eventually pass on one corrected exact SHA before
+merge.
 This predicate closes only the
 runner prerequisite/current PR gate, not global certification. It forbids
 retries-as-pass, timeout or resource increases, preload or authority weakening,
@@ -162,16 +120,17 @@ waivers, local-for-hosted substitution, and merging diagnostic-only heads.
 
 #### Pinned Vitest cause-evidence gate
 
-The next cycle has one permitted diagnostic path. The known failing behavior and
+The next cycle has two ordered stages. Stage A collects the protected hosted
+cause. Stage B specifies and corrects that cause. The known failing behavior and
 the evidence-producing code are separate identities. The protected workflow
 pins both before execution:
 
 ```yaml
 failure_baseline_sha: b09b6bef2c8c4bee762965be463527cd0b050154
 protected_base_sha: cc97ef23a478fa123a7b9ffc5d7450b4d55b70e7
-diagnostic_head_sha: $PDD_DIAGNOSTIC_HEAD_SHA
-diagnostic_producer_sha256: $PDD_DIAGNOSTIC_PRODUCER_SHA256
-diagnostic_verifier_sha256: $PDD_DIAGNOSTIC_VERIFIER_SHA256
+diagnostic_head_sha: $PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA
+diagnostic_producer_sha256: $PDD_REVIEWED_PRODUCER_SHA256
+diagnostic_verifier_sha256: $PDD_REVIEWED_VERIFIER_SHA256
 runner_image: ubuntu-24.04/20260714.240.1
 runner_provisioner: 20260707.563
 python: 3.12.13
@@ -181,18 +140,20 @@ vitest_lock_sha256: bfc69a55d08997f553a0901c2ec0b7830cb01d6c6cc81257d150dcc79d20
 test_node: tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
 ```
 
-The protected workflow must run exactly:
+Stage A must first prove preflight and then run the pinned failing node. Every
+preflight result is written to an uploaded machine-readable artifact before a
+nonzero exit. The cause artifact must not claim a cause-specific RED:
 
 ```bash
 failure_baseline=b09b6bef2c8c4bee762965be463527cd0b050154
 diagnostic_head="$(git rev-parse HEAD)"
-test "$diagnostic_head" = "$GITHUB_SHA"
-test "$diagnostic_head" = "$PDD_DIAGNOSTIC_HEAD_SHA"
+test "$diagnostic_head" = "$PDD_TRIGGER_PR_HEAD_SHA"
+test "$diagnostic_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
 git merge-base --is-ancestor "$failure_baseline" "$diagnostic_head"
 producer_sha256="$(sha256sum pdd/sync_core/runner.py | cut -d' ' -f1)"
 verifier_sha256="$(sha256sum scripts/verify_vitest_termination_evidence.py | cut -d' ' -f1)"
-test "$producer_sha256" = "$PDD_DIAGNOSTIC_PRODUCER_SHA256"
-test "$verifier_sha256" = "$PDD_DIAGNOSTIC_VERIFIER_SHA256"
+test "$producer_sha256" = "$PDD_REVIEWED_PRODUCER_SHA256"
+test "$verifier_sha256" = "$PDD_REVIEWED_VERIFIER_SHA256"
 jq -e \
   --arg baseline "$failure_baseline" \
   --arg head "$diagnostic_head" \
@@ -204,16 +165,13 @@ jq -e \
    (.diagnostic_head_sha == $head) and
    (.producer_sha256 == $producer) and
    (.verifier_sha256 == $verifier)' \
-  "$PDD_DIAGNOSTIC_REVIEW_EVIDENCE"
+  "$PDD_REVIEW_EVIDENCE_PATH"
 set +e
 PDD_VITEST_DIAGNOSTIC_OUTPUT="$RUNNER_TEMP/vitest-termination-v1.json" \
 pytest -q tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access --timeout=180
 test_status=$?
-pytest -q "$PDD_VITEST_CAUSE_RED_TEST_NODE" --timeout=180
-red_status=$?
 set -e
 test "$test_status" -eq 1
-test "$red_status" -eq 1
 python scripts/verify_vitest_termination_evidence.py \
   --evidence "$RUNNER_TEMP/vitest-termination-v1.json" \
   --failure-baseline-sha "$failure_baseline" \
@@ -223,27 +181,26 @@ python scripts/verify_vitest_termination_evidence.py \
   --runner-image ubuntu-24.04/20260714.240.1 \
   --python 3.12.13 --node 22.23.1 \
   --vitest-lock-sha256 bfc69a55d08997f553a0901c2ec0b7830cb01d6c6cc81257d150dcc79d20783c \
-  --test-node tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access \
-  --cause-red-test-node "$PDD_VITEST_CAUSE_RED_TEST_NODE"
+  --test-node tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
 ```
 
 `vitest-termination-v1.json` is written only by the protected coordinator from
 fixed-enum frames received over its authenticated FIFO. Schema version 1 must
 contain the exact pinned fields above plus `process_role`, `failure_stage`,
-`cause_code`, `exit_code`, all three cgroup deltas, `diagnostic_sha256`, and a
-`red_test` object containing its exact node ID, outcome, failure-baseline SHA,
-and diagnostic-head SHA. The diagnostic head must be an exact reviewed,
+`cause_code`, `exit_code`, all three cgroup deltas, and `diagnostic_sha256`.
+Stage A records `cause_red_status: pending`; it must not invent a RED node from
+an unobserved cause. The diagnostic head must be an exact reviewed,
 evidence-only descendant of `failure_baseline_sha`; its review evidence binds
 the permitted diff, producer digest, verifier digest, and `NO_BEHAVIORAL_FIX`
 verdict. The verifier exits zero only when both SHAs and both digests match the
 protected pins, `process_role`, `failure_stage`, and `cause_code` are known enum
-values other than `UNKNOWN`, the cgroup deltas are nonnegative integers, and the
-cause-specific RED node fails on the diagnostic head while exercising the
-baseline behavior. The artifact and its SHA-256 must be uploaded by the
-protected job and linked in the ledger. No behavioral fix, rerun-as-pass, or PR
-merge is allowed before this predicate is true. After one bounded correction,
-the same RED test and both source and installed-wheel hosted Vitest checks must
-pass on one exact reviewed head.
+values other than `UNKNOWN`, and the cgroup deltas are nonnegative integers. The
+artifact and its SHA-256 must be uploaded by the protected job and linked in the
+ledger. Stage B starts only after Stage A passes: it adds a distinct RED bound to
+the observed fixed-enum cause, proves that RED fails before the fix, and then
+requires the RED plus source and installed-wheel hosted Vitest checks to pass on
+one exact reviewed correction head. No behavioral fix, rerun-as-pass, or PR
+merge is allowed before these ordered predicates are true.
 
 This plan is based on an audit of `origin/main` at `c255f3bf` and the open global
 sync branches as of 2026-07-09.
