@@ -1305,8 +1305,10 @@ class AsyncSyncRunner:
         }
         if len(candidate_by_id) != len(candidates) or not set(selected) <= set(candidate_by_id):
             raise ValueError("sync_plan selected IDs are not frozen candidates")
-        canonical_order = [module_id for module_id in plan["dependency_order"] if module_id in selected]
-        if order is not None and order != canonical_order:
+        frozen_execution_order = [
+            module_id for module_id in plan["execution_order"] if module_id in selected
+        ]
+        if order is not None and order != frozen_execution_order:
             raise ValueError("caller execution order differs from the frozen SyncPlan")
         # A fallback may execute only failed primary modules. Dependencies outside
         # that exact retry selection are intentionally external successes; never
@@ -1314,7 +1316,7 @@ class AsyncSyncRunner:
         # scheduling graph.
         plan_graph = {
             module_id: [dependency for dependency in candidate_by_id[module_id]["dependencies"] if dependency in selected]
-            for module_id in canonical_order
+            for module_id in frozen_execution_order
         }
         supplied_selection_digest = self.sync_options.get("selection_digest")
         if supplied_selection_digest != selection_digest(selected):
@@ -1323,7 +1325,7 @@ class AsyncSyncRunner:
         # individually dry-run. Reconstruct their exact frozen identity before
         # scheduler state is created; a child must never fall back to ambient
         # root/target resolution for a closed-plan dependency.
-        for module_id in canonical_order:
+        for module_id in frozen_execution_order:
             candidate = candidate_by_id[module_id]
             root_label = candidate["governing_root"]
             target = candidate["target_basename"]
@@ -1346,12 +1348,13 @@ class AsyncSyncRunner:
                     requested_context=self.module_contexts[module_id],
                 )
         # Do not retain caller-selected scheduler data after a plan is frozen.
-        self.basenames = canonical_order
+        self.basenames = frozen_execution_order
         self.dep_graph = plan_graph
         return {
             "schema_version": "pdd.sync.scope-evidence.v1",
             "module_id_encoding": plan.get("module_id_encoding"),
             "selected_module_ids": list(selected),
+            "execution_order": list(frozen_execution_order),
             "sync_plan_digest": supplied_plan_digest,
             "selection_digest": supplied_selection_digest,
             "sync_plan": plan,
@@ -1413,6 +1416,7 @@ class AsyncSyncRunner:
             "schema_version": "pdd.sync.execution-selection.v1",
             "module_id_encoding": plan.get("module_id_encoding"),
             "selected_module_ids": self._scope_evidence["selected_module_ids"],
+            "execution_order": list(self.basenames),
             "sync_plan_digest": digest,
             "selection_digest": self._scope_evidence["selection_digest"],
         }

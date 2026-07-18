@@ -219,6 +219,7 @@ class SyncPlan:
     candidates: tuple[SyncPlanCandidate, ...]
     selected_module_ids: tuple[str, ...]
     dependency_order: tuple[str, ...]
+    execution_order: tuple[str, ...]
     sccs: tuple[tuple[str, ...], ...]
     sync_plan_digest: str
     selection_digest: str
@@ -251,6 +252,11 @@ class SyncPlan:
             ],
             "selected_module_ids": list(self.selected_module_ids),
             "dependency_order": list(self.dependency_order),
+            # This is the requested execution authority after dependency-safe
+            # ordering.  It intentionally differs from the canonical graph
+            # order when an authoritative selector supplied independent IDs in
+            # a meaningful order.
+            "execution_order": list(self.execution_order),
             "sccs": [list(component) for component in self.sccs],
         }
 
@@ -276,6 +282,14 @@ class SyncPlan:
             raise SyncPlanError("selected module is absent from frozen candidates")
         if set(self.dependency_order) != selected or len(self.dependency_order) != len(selected):
             raise SyncPlanError("dependency order does not exactly cover selected modules")
+        if set(self.execution_order) != selected or len(self.execution_order) != len(selected):
+            raise SyncPlanError("execution order does not exactly cover selected modules")
+        execution_index = {module_id: index for index, module_id in enumerate(self.execution_order)}
+        scc_by_id = {
+            module_id: index
+            for index, component in enumerate(self.sccs)
+            for module_id in component
+        }
         for module_id, candidate in candidates.items():
             derived_id = canonical_module_id(self.root, candidate.unit)
             if module_id != derived_id:
@@ -295,6 +309,13 @@ class SyncPlan:
                 if not isinstance(path, Path):
                     raise SyncPlanError("candidate paths must be pathlib paths")
                 _root_relative(self.root, path)
+            if candidate.module_id in selected and any(
+                execution_index[dependency] > execution_index[candidate.module_id]
+                for dependency in candidate.dependencies
+                if dependency in selected
+                and scc_by_id[dependency] != scc_by_id[candidate.module_id]
+            ):
+                raise SyncPlanError("execution order schedules a dependent before its dependency")
         expected_plan_digest = plan_digest(self.to_dict())
         if self.sync_plan_digest != expected_plan_digest:
             raise SyncPlanError("frozen SyncPlan digest mismatch")
@@ -366,10 +387,55 @@ def _dependency_order(
     return tuple(ordered)
 
 
+def _execution_order(
+    selected: Sequence[str],
+    dependencies: Mapping[str, Sequence[str]],
+    requested: Sequence[str],
+) -> tuple[str, ...]:
+    """Return a dependency-safe order that preserves requested priorities.
+
+    The graph's canonical order remains lexical and is retained separately for
+    deterministic evidence.  This queue only gives independent ready modules
+    the caller's explicitly supplied priority; dependency closure always wins.
+    """
+    selected_set = set(selected)
+    requested_rank = {
+        module_id: index for index, module_id in enumerate(requested)
+        if module_id in selected_set
+    }
+    remaining = {
+        module_id: set(dependencies.get(module_id, ())) & selected_set
+        for module_id in selected
+    }
+    fallback_rank = len(requested_rank)
+    ordered: list[str] = []
+    while remaining:
+        ready = [module_id for module_id, deps in remaining.items() if not deps]
+        if not ready:
+            # Keep the SCC convention deterministic.  A member of a cycle can
+            # start only after all dependencies outside that cycle are ready.
+            ready = [min(remaining, key=lambda module_id: (
+                requested_rank.get(module_id, fallback_rank), module_id
+            ))]
+        ready.sort(key=lambda module_id: (
+            requested_rank.get(module_id, fallback_rank), module_id
+        ))
+        for module_id in ready:
+            if module_id not in remaining:
+                continue
+            ordered.append(module_id)
+            remaining.pop(module_id)
+            for deps in remaining.values():
+                deps.discard(module_id)
+    return tuple(ordered)
+
+
 def build_sync_plan(
     root: Path,
     candidates: Iterable[SyncPlanCandidate],
     selected_module_ids: Iterable[str],
+    *,
+    execution_order: Iterable[str] | None = None,
 ) -> SyncPlan:
     """Build and freeze a deterministic plan without running an LLM or writing.
 
@@ -385,7 +451,10 @@ def build_sync_plan(
     # A repository can have more than 64 candidates.  The V1 bound applies to
     # an executable/result selection, never to read-only planning inventory.
     _require_canonical_ids(candidate_ids, allow_empty=True, enforce_limit=False)
-    selected = tuple(sorted(set(selected_module_ids)))
+    selected_input = list(selected_module_ids)
+    if any(not isinstance(module_id, str) for module_id in selected_input):
+        raise SyncPlanError("selected module IDs must be strings")
+    selected = tuple(sorted(set(selected_input)))
     _require_canonical_ids(selected, allow_empty=True)
     candidate_by_id = {candidate.module_id: candidate for candidate in candidate_tuple}
     if not set(selected) <= set(candidate_by_id):
@@ -414,14 +483,22 @@ def build_sync_plan(
                 pending.append(dependency)
     selected = tuple(sorted(selected_set))
     _require_canonical_ids(selected, allow_empty=True)
+    requested_input = list(execution_order) if execution_order is not None else list(selected_input)
+    if any(not isinstance(module_id, str) for module_id in requested_input):
+        raise SyncPlanError("execution order module IDs must be strings")
+    if len(requested_input) != len(set(requested_input)):
+        raise SyncPlanError("execution order module IDs must be unique")
+    if not set(requested_input) <= set(selected):
+        raise SyncPlanError("execution order contains a module outside the frozen selection")
     order = _dependency_order(selected, dependency_graph)
+    runnable_order = _execution_order(selected, dependency_graph, requested_input)
     sccs = _stable_scc_order(selected, dependency_graph)
     provisional = SyncPlan(
-        root, candidate_tuple, selected, order, sccs, "", selection_digest(selected)
+        root, candidate_tuple, selected, order, runnable_order, sccs, "", selection_digest(selected)
     )
     digest = plan_digest(provisional.to_dict())
     plan = SyncPlan(
-        root, candidate_tuple, selected, order, sccs, digest,
+        root, candidate_tuple, selected, order, runnable_order, sccs, digest,
         provisional.selection_digest,
     )
     plan.validate_for_execution()
@@ -457,7 +534,14 @@ def resolve_selection_aliases(
     return tuple(sorted(set(resolved)))
 
 
-def ambiguity_request(plan: SyncPlan, unresolved_ids: Iterable[str]) -> dict[str, object]:
+def ambiguity_request(
+    plan: SyncPlan,
+    unresolved_ids: Iterable[str],
+    *,
+    issue_number: int | None = None,
+    issue_title: str = "",
+    issue_body: str = "",
+) -> dict[str, object]:
     """Build the bounded protocol sent to a module-identification agent."""
     raw_unresolved = list(unresolved_ids)
     if any(not isinstance(module_id, str) for module_id in raw_unresolved):
@@ -466,6 +550,25 @@ def ambiguity_request(plan: SyncPlan, unresolved_ids: Iterable[str]) -> dict[str
     _require_canonical_ids(unresolved, allow_empty=True)
     if len(unresolved) > MAX_AMBIGUITY_CANDIDATES:
         raise SyncPlanError("ambiguity candidate set exceeds the V1 bound")
+    if issue_number is not None and (not isinstance(issue_number, int) or issue_number < 1):
+        raise SyncPlanError("ambiguity issue number must be a positive integer")
+    # Issue text is untrusted data, never instructions.  Keep a small,
+    # deterministic head/tail excerpt so an injection or an enormous body
+    # cannot crowd out the closed candidate protocol.
+    def bounded(value: object, limit: int) -> str:
+        value = value if isinstance(value, str) else ""
+        if len(value) <= limit:
+            return value
+        marker = "\n...[truncated]...\n"
+        kept = max(0, limit - len(marker))
+        return value[:kept // 2] + marker + value[-(kept - kept // 2):]
+
+    issue_signal = {
+        "untrusted": True,
+        "number": issue_number,
+        "title": bounded(issue_title, 256),
+        "body_excerpt": bounded(issue_body, 2048),
+    }
     return {
         "schema_version": "pdd.sync.ambiguity.v1",
         "candidate_ids": list(unresolved),
@@ -473,6 +576,7 @@ def ambiguity_request(plan: SyncPlan, unresolved_ids: Iterable[str]) -> dict[str
             plan.candidate(module_id).compact_metadata(plan.root)
             for module_id in unresolved
         ],
+        "issue_signal": issue_signal,
         "instruction": "Select only candidate_ids; do not invent modules, paths, or commands.",
     }
 
@@ -625,14 +729,15 @@ def validate_serialized_sync_plan(plan: Mapping[str, Any]) -> None:
     """Validate the durable, path-free V1 plan before a fallback uses it."""
     if not isinstance(plan, Mapping):
         raise SyncPlanError("persisted SyncPlan must be an object")
-    required = {"schema_version", "module_id_encoding", "candidates", "selected_module_ids", "dependency_order", "sccs"}
+    required = {"schema_version", "module_id_encoding", "candidates", "selected_module_ids", "dependency_order", "execution_order", "sccs"}
     if set(plan) != required:
         raise SyncPlanError("persisted SyncPlan has an invalid V1 shape")
     candidates = plan["candidates"]
     selected = plan["selected_module_ids"]
     order = plan["dependency_order"]
+    execution_order = plan["execution_order"]
     sccs = plan["sccs"]
-    if not all(isinstance(value, list) for value in (candidates, selected, order, sccs)):
+    if not all(isinstance(value, list) for value in (candidates, selected, order, execution_order, sccs)):
         raise SyncPlanError("persisted SyncPlan has malformed graph fields")
     candidate_ids: list[str] = []
     dependency_map: dict[str, list[str]] = {}
@@ -727,6 +832,21 @@ def validate_serialized_sync_plan(plan: Mapping[str, Any]) -> None:
     expected_sccs = _stable_scc_order(selected, dependency_map)
     if tuple(order) != expected_order or tuple(tuple(component) for component in sccs) != expected_sccs:
         raise SyncPlanError("persisted SyncPlan graph order or SCCs are inconsistent")
+    if set(execution_order) != set(selected) or len(execution_order) != len(selected):
+        raise SyncPlanError("persisted SyncPlan execution order is inconsistent")
+    execution_index = {module_id: index for index, module_id in enumerate(execution_order)}
+    scc_by_id = {
+        module_id: index
+        for index, component in enumerate(expected_sccs)
+        for module_id in component
+    }
+    if any(
+        execution_index[dependency] > execution_index[module_id]
+        for module_id in selected
+        for dependency in dependency_map[module_id]
+        if scc_by_id[dependency] != scc_by_id[module_id]
+    ):
+        raise SyncPlanError("persisted SyncPlan execution order violates dependencies")
     order_index = {module_id: index for index, module_id in enumerate(expected_order)}
     scc_index = {module_id: index for index, component in enumerate(expected_sccs) for module_id in component}
     for candidate in candidates:
@@ -773,6 +893,7 @@ def _plan_view_from_evidence(plan: Mapping[str, Any], evidence: Mapping[str, Any
         candidates=synthetic,
         selected_module_ids=selected_tuple,
         dependency_order=selected_tuple,
+        execution_order=selected_tuple,
         sccs=tuple((module_id,) for module_id in selected_tuple),
         sync_plan_digest=str(evidence["sync_plan_digest"]),
         selection_digest=str(evidence["selection_digest"]),

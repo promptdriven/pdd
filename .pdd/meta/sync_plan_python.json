@@ -1,13 +1,16 @@
 {
   "pdd_version": "0.0.304.dev0",
-  "timestamp": "2026-07-17T21:42:00+00:00",
+  "timestamp": "2026-07-18T13:10:00+00:00",
   "command": "fix",
-  "prompt_hash": "14cb5b34f9a1dc8e8c8a2d2fdde5b155f280887014f7bf6b14a804749cdb8592",
-  "code_hash": "b7c339d6072acf900e735fed62b811ce36604bb974517919e6e749082d2e165a",
+  "prompt_hash": "8040e1674aef45436e4edd64c8178e8f5b502992e4cd6d04830294b036abe656",
+  "code_hash": "bb32e1e3d5396af0df05cc15da1028ee53e019ab0bcc332e0edd0d3d5e79544b",
   "example_hash": null,
-  "test_hash": "1b77b98ade8f177a1c16117aecc0bd33fdd167e08252bf1fe505f0e162eca06d",
+  "test_hash": "81961a58126ecfef6841d61fc906ea87ed5285e955f181c8001e7a3e58866fac",
   "test_files": {
-    "test_sync_plan.py": "1b77b98ade8f177a1c16117aecc0bd33fdd167e08252bf1fe505f0e162eca06d"
+    "test_sync_plan.py": "81961a58126ecfef6841d61fc906ea87ed5285e955f181c8001e7a3e58866fac"
   },
-  "include_deps": {}
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/prompts/resolved_sync_unit_python.prompt": "73c3f0159fd6f4e5c22bbc4d3c339b96ae6e7035f81020f6da20ffb053e02fa3"
+  }
 }

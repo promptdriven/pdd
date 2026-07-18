@@ -4,7 +4,10 @@
 child runner permission to generate files. Module IDs are canonical,
 slash-qualified paths. A legacy basename is accepted only where it maps to one
 candidate; an ambiguous basename is rejected with its path-qualified choices.
-The runner consumes the frozen selected IDs and dependency order as its schedule.
+The runner consumes frozen selected IDs, canonical dependency evidence, and a
+separate dependency-safe execution order as its schedule. The latter retains an
+authoritative caller order only for independent ready targets or members of the
+same SCC; prerequisite SCCs always remain earlier.
 It writes immutable full-primary `pdd.sync.scope-evidence.v1` plan evidence
 under `.pdd/evidence/sync-plans/<plan-digest>.json` and a separate bounded
 execution-selection artifact under `.pdd/evidence/sync-executions/`. A fallback
@@ -22,19 +25,23 @@ Selection precedence is deterministic:
 2. `PDD_CHANGED_MODULES` supplies authoritative ordered normal selection, but
    never creates candidates. Every parsed alias must resolve against the
    architecture-backed inventory before dry-run: an unknown entry, runtime-only
-   template, or ambiguous bare leaf rejects the entire selection without an LLM
-   call. A path-qualified alias for a unique declared leaf remains supported;
-   requested targets retain caller order while transitive dependencies remain
-   frozen in canonical graph order.
+   template, ambiguous bare leaf, or unowned path prefix rejects the entire
+   selection without an LLM call. A path-qualified alias must be proven by a
+   declared filepath, scoped origin, governing context, or frozen candidate;
+   requested targets retain caller order only where dependency-safe while
+   transitive dependencies remain frozen in canonical graph order.
 3. Changed prompt paths from the branch diff supply path-aware candidates.
 4. Architecture entries supply prompt/output paths and dependency edges.
 5. When architecture is absent, discovery is limited to `prompts/` under the
    governing `.pddrc` root; it records lower-confidence provenance and never
    scans arbitrary repository content.
 6. Only unresolved choices may be sent to an ambiguity agent. Its compact
-   protocol contains at most 64 candidate IDs and compact metadata. The sole
-   accepted response field is a sorted, unique `selected_module_ids` subset;
-   commands, paths, prose, dependency edits, and invented IDs fail closed.
+   protocol contains at most 64 candidate IDs, compact metadata, and an
+   explicitly untrusted size-bounded issue number/title/body excerpt. It never
+   includes comments, repository content, architecture, commands, or unbounded
+   issue text. The sole accepted response field is a sorted, unique
+   `selected_module_ids` subset; commands, paths, prose, dependency edits, and
+   invented IDs fail closed.
 
 The plan records governing root/context, prompt and output paths, reason,
 operation, dependency/SCC order, confidence, and provenance. Required
