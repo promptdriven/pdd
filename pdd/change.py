@@ -2,6 +2,7 @@
 This module provides functionality to modify a prompt according to specified changes.
 It takes an input prompt, input code, and change instructions to generate a modified prompt.
 """
+from contextvars import ContextVar
 from typing import Tuple
 from rich.console import Console
 from rich.markdown import Markdown
@@ -17,6 +18,13 @@ console = Console()
 # Delimiters for modified prompt extraction
 MODIFIED_PROMPT_START = "<<<MODIFIED_PROMPT>>>"
 MODIFIED_PROMPT_END = "<<<END_MODIFIED_PROMPT>>>"
+LLM_INVOKE_OVERRIDE = ContextVar("LLM_INVOKE_OVERRIDE", default=None)
+
+
+def _invoke_llm(**kwargs):
+    """Invoke the task-local provider override when prompt repair supervises calls."""
+    override = LLM_INVOKE_OVERRIDE.get()
+    return (override or llm_invoke)(**kwargs)
 
 
 def extract_between_delimiters(text: str) -> str | None:
@@ -92,7 +100,7 @@ def change(  # pylint: disable=too-many-arguments, too-many-locals
         if verbose:
             console.print(Panel("Running change prompt through LLM...", style="blue"))
 
-        change_response = llm_invoke(
+        change_response = _invoke_llm(
             prompt=processed_change_llm_template,
             input_json={
                 "input_prompt": input_prompt,
@@ -130,7 +138,7 @@ def change(  # pylint: disable=too-many-arguments, too-many-locals
                     style="blue"
                 ))
 
-            extract_response = llm_invoke(
+            extract_response = _invoke_llm(
                 prompt=extract_prompt_template,
                 input_json={"llm_output": change_response["result"]},
                 strength=EXTRACTION_STRENGTH,
