@@ -34,7 +34,13 @@ PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 469
-REPLAY_PROTECTED_BASE = "385ada4770e89fa3ea51a7314a56545b956da213"
+# #1989's dormant-bootstrap assertions retain their original immutable base;
+# the replay audit intentionally binds to the current main that it was rebased
+# onto.
+PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
+PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
+PDD_1989_EXPECTED_MANAGED_UNITS = 468
+REPLAY_PROTECTED_BASE = "03abdfa12e105a3939e57df601161862600413cd"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -320,23 +326,52 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
 
 
 def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
-    """Only exact current-main or #1989 bootstrap bindings reach the policy."""
+    """Keep protected history verbatim before exact replay authorizations."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = policy["requirement_rotations"]
-    bootstrap_rows = {
-        (row["prompt_path"], row["language_id"]): row
-        for row in map(
+    protected_policy = json.loads(
+        subprocess.check_output(
+            [
+                "git",
+                "show",
+                f"{REPLAY_PROTECTED_BASE}:.pdd/verification-profile-rotations.json",
+            ],
+            cwd=ROOT,
+            text=True,
+        )
+    )
+    protected_rows = protected_policy["requirement_rotations"]
+    bootstrap_rows = list(
+        map(
             _requirement_authorization_row,
             verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS,  # pylint: disable=protected-access
         )
-    }
-    policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 47
-    assert policy_rows == bootstrap_rows
+    )
+    candidate_bootstrap_rows = [row for row in bootstrap_rows if row in rows]
+    surviving_rows = [
+        row for row in protected_rows if row in candidate_bootstrap_rows
+    ]
+    candidate_rows = [
+        row for row in candidate_bootstrap_rows if row not in surviving_rows
+    ]
+    assert len(protected_rows) == 23
+    assert len(bootstrap_rows) == 53
+    assert len(candidate_bootstrap_rows) == 47
+    assert all(
+        _requirement_authorization_row(item) not in rows
+        for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
+    )
+    assert len(surviving_rows) == 17
+    assert rows[: len(surviving_rows)] == surviving_rows
+    assert rows[len(surviving_rows) :] == candidate_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
     assert profile_digest == "f7df311558fb327cd21d8900ad1a9dc6d5a8145773a693fc3afd43a93a128c51"
-    current_rows = [row for row in rows if row["head_policy_sha256"] == profile_digest]
+    current_rows = [
+        row
+        for row in candidate_rows
+        if row["head_policy_sha256"] == profile_digest
+    ]
     replay_prompt_changes = set(
         subprocess.check_output(
             [
@@ -354,6 +389,10 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
     # The mock-contract prompt is a new unit, authorized by the separate exact
     # profile-addition tuple. Every modified protected prompt needs a transition.
     replay_prompt_changes.remove("pdd/prompts/mock_contract_validation_python.prompt")
+    assert {
+        item.prompt_path.as_posix()
+        for item in verification._REPLAY_PROFILE_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+    } == replay_prompt_changes
     assert {row["prompt_path"] for row in current_rows} == replay_prompt_changes
     for row in current_rows:
         prompt = ROOT / row["prompt_path"]
@@ -452,6 +491,43 @@ def test_exact_bootstrap_row_rejects_profile_byte_mutation(
         verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
             ROOT, manifest
         )
+
+
+def test_exact_replay_row_can_bind_changed_profile_bytes(monkeypatch) -> None:
+    """Only the reviewed replay tuple may carry its exact profile transition."""
+    authorization = verification._REPLAY_PROMPT_REQUIREMENT_TRANSITIONS[
+        0
+    ]  # pylint: disable=protected-access
+    candidate = json.dumps(
+        {
+            "schema_version": 2,
+            "rotations": [],
+            "requirement_rotations": [_requirement_authorization_row(authorization)],
+        }
+    ).encode()
+
+    def protected_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
+        if path == verification.ROTATION_POLICY_PATH:
+            return None if ref == "protected" else candidate
+        if path == PROFILE_REL_PATH:
+            return b"{}" if ref == "protected" else b'{"profiles": []}'
+        return None
+
+    monkeypatch.setattr(verification, "read_git_blob", protected_read)
+    manifest = SimpleNamespace(
+        repository_id=REPOSITORY_ID,
+        base_ref="protected",
+        head_ref="candidate",
+    )
+
+    authorizations, _prompts, additions = (
+        verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
+            ROOT, manifest
+        )
+    )
+
+    assert authorizations == (authorization,)
+    assert additions == ()
 
 
 @pytest.mark.parametrize(
@@ -626,13 +702,17 @@ def test_bootstrap_install_cannot_change_active_rotation_authority(
 
 def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     """The #1989 transition table must load a complete exact-base profile set."""
-    manifest = build_unit_manifest(ROOT, base_ref=PDD_1989_ACTUAL_BASE, head_ref="HEAD")
+    manifest = build_unit_manifest(
+        ROOT,
+        base_ref=PDD_1989_ACTUAL_BASE,
+        head_ref=PDD_1989_ACTUAL_HEAD,
+    )
 
     profiles = load_verification_profiles(ROOT, manifest)
 
-    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+    assert len(manifest.expected_managed) == PDD_1989_EXPECTED_MANAGED_UNITS
     assert not manifest.invalid_reasons
-    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert len(profiles.profiles) == PDD_1989_EXPECTED_MANAGED_UNITS
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
 
