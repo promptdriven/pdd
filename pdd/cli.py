@@ -95,7 +95,10 @@ def __getattr__(name: str):
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     module_name, attribute = target
     value = getattr(_import_module(f".{module_name}", __package__), attribute)
-    globals()[name] = value
+    # Command modules may be reloaded by embedders and test isolation. Keep the
+    # compatibility export aligned with the registry's current Click object.
+    if name != "templates_group":
+        globals()[name] = value
     return value
 
 

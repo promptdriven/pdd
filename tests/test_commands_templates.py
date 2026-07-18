@@ -121,6 +121,25 @@ def test_cli_templates_group_registered():
     assert cli.cli.commands["templates"] is cli.templates_group
 
 
+def test_cli_templates_export_tracks_real_module_reload() -> None:
+    """A cached compatibility read must not retain a pre-reload Click group."""
+    import importlib
+
+    cli.__dict__.pop("templates_group", None)
+    templates_module = importlib.import_module("pdd.commands.templates")
+    before_export = cli.templates_group
+    before_registry = cli.cli.commands["templates"]
+    assert before_export is before_registry
+
+    reloaded = importlib.reload(templates_module)
+    after_registry = cli.cli.commands["templates"]
+    after_export = cli.templates_group
+
+    assert after_export is reloaded.templates_group
+    assert after_export is after_registry
+    assert after_export is not before_export
+
+
 EXPECTED_COMMANDS = {
     "auth", "auto-deps", "baseline", "bug", "certify", "change", "checkup",
     "conflicts", "connect", "context", "contracts", "crash", "detect",
@@ -314,6 +333,8 @@ def test_lazy_mapping_survives_module_sentinel_refresh(monkeypatch) -> None:
     assert imports == []
     assert group.get_command(click.Context(group), "reload-safe") is expected
     assert imports == ["fake.module"]
+    mapping._resolved_keys.clear()
+    assert group.get_command(click.Context(group), "reload-safe") is expected
     resolved.command = replacement
     assert commands_module.reload_safe is replacement
     assert group.get_command(click.Context(group), "reload-safe") is replacement
