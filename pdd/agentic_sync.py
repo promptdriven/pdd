@@ -3193,6 +3193,13 @@ def run_agentic_sync(
                 stall_timeout=IDENTIFY_MODULES_STALL_SECONDS, reasoning_time=reasoning_time,
                 background_safe=True,
             )
+            if not isinstance(llm_result, tuple) or len(llm_result) != 4:
+                return (
+                    False,
+                    "Ambiguity selection returned an invalid task result",
+                    0.0,
+                    "",
+                )
             llm_success, llm_output, llm_cost, provider = llm_result
             if not llm_success:
                 return False, f"Ambiguity selection failed: {llm_output}", llm_cost, provider
