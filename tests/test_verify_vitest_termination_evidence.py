@@ -27,15 +27,6 @@ _TEST_NODE = (
     "tests/test_sync_core_runner_vitest.py::"
     "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
 )
-_CAUSE_RED_TEST_NODE = _TEST_NODE
-
-
-def _repository_head(repository: Path) -> str:
-    """Read the exact test checkout head without accepting ambient values."""
-    return subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repository,
-        capture_output=True, text=True, check=True,
-    ).stdout.strip()
 
 
 def _canonical(payload: dict[str, object]) -> bytes:
@@ -45,20 +36,34 @@ def _canonical(payload: dict[str, object]) -> bytes:
     ).encode("ascii")
 
 
-def _fixture(tmp_path: Path) -> tuple[Path, dict[str, object], list[str]]:
-    """Create exact evidence and independent protected command-line pins."""
+def _write_canonical(path: Path, payload: dict[str, object]) -> str:
+    """Write one protected canonical record and return its digest."""
+    encoded = _canonical(payload)
+    path.write_bytes(encoded)
+    path.chmod(0o600)
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _fixture(
+    tmp_path: Path,
+) -> tuple[Path, dict[str, object], Path, dict[str, object], list[str]]:
+    """Create stage-1 evidence plus independently supplied review evidence."""
     repository = Path(__file__).resolve().parents[1]
     verifier = repository / "scripts" / "verify_vitest_termination_evidence.py"
-    assert verifier.is_file()
     producer = repository / "pdd" / "sync_core" / "runner.py"
-    head = _repository_head(repository)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repository,
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    producer_digest = hashlib.sha256(producer.read_bytes()).hexdigest()
+    verifier_digest = hashlib.sha256(verifier.read_bytes()).hexdigest()
     payload: dict[str, object] = {
         "schema": "vitest-termination-v1",
         "failure_baseline_sha": _FAILURE_BASELINE_SHA,
         "protected_base_sha": _PROTECTED_BASE_SHA,
         "diagnostic_head_sha": head,
-        "producer_sha256": hashlib.sha256(producer.read_bytes()).hexdigest(),
-        "verifier_sha256": hashlib.sha256(verifier.read_bytes()).hexdigest(),
+        "producer_sha256": producer_digest,
+        "verifier_sha256": verifier_digest,
         "runner_image": _RUNNER_IMAGE,
         "runner_provisioner": _RUNNER_PROVISIONER,
         "python": _PYTHON_VERSION,
@@ -67,35 +72,40 @@ def _fixture(tmp_path: Path) -> tuple[Path, dict[str, object], list[str]]:
         "vitest_lock_sha256": _VITEST_LOCK_SHA256,
         "test_node": _TEST_NODE,
         "process_role": "vitest-coordinator",
-        "failure_stage": "coordinator-termination",
-        "cause_code": "coordinator-explicit-exit",
+        "failure_stage": "reporter-addon-load",
+        "cause_code": "reporter-addon-load-failed",
         "exit_code": 1,
         "cgroup_memory_oom_delta": 0,
         "cgroup_memory_oom_kill_delta": 0,
         "cgroup_pids_max_delta": 0,
         "diagnostic_sha256": "d" * 64,
-        "red_test": {
-            "node_id": _CAUSE_RED_TEST_NODE,
-            "outcome": "fail",
-            "failure_baseline_sha": _FAILURE_BASELINE_SHA,
-            "diagnostic_head_sha": head,
-        },
+        "cause_red_status": "pending",
+    }
+    review: dict[str, object] = {
+        "schema": "vitest-diagnostic-review-v1",
+        "failure_baseline_sha": _FAILURE_BASELINE_SHA,
+        "protected_base_sha": _PROTECTED_BASE_SHA,
+        "diagnostic_head_sha": head,
+        "producer_sha256": producer_digest,
+        "verifier_sha256": verifier_digest,
+        "review_verdict": "NO_BEHAVIORAL_FIX",
     }
     evidence = tmp_path / "vitest-termination-v1.json"
-    encoded = _canonical(payload)
-    evidence.write_bytes(encoded)
-    evidence.chmod(0o600)
+    review_evidence = tmp_path / "vitest-diagnostic-review-v1.json"
+    evidence_digest = _write_canonical(evidence, payload)
+    review_digest = _write_canonical(review_evidence, review)
     arguments = [
-        sys.executable,
-        str(verifier),
+        sys.executable, str(verifier),
         "--evidence", str(evidence),
-        "--evidence-sha256", hashlib.sha256(encoded).hexdigest(),
+        "--evidence-sha256", evidence_digest,
+        "--review-evidence", str(review_evidence),
+        "--review-evidence-sha256", review_digest,
         "--repository", str(repository),
         "--failure-baseline-sha", _FAILURE_BASELINE_SHA,
         "--protected-base-sha", _PROTECTED_BASE_SHA,
         "--diagnostic-head-sha", head,
-        "--producer-sha256", str(payload["producer_sha256"]),
-        "--verifier-sha256", str(payload["verifier_sha256"]),
+        "--producer-sha256", producer_digest,
+        "--verifier-sha256", verifier_digest,
         "--runner-image", _RUNNER_IMAGE,
         "--runner-provisioner", _RUNNER_PROVISIONER,
         "--python", _PYTHON_VERSION,
@@ -103,22 +113,15 @@ def _fixture(tmp_path: Path) -> tuple[Path, dict[str, object], list[str]]:
         "--vitest-package-sha256", _VITEST_PACKAGE_SHA256,
         "--vitest-lock-sha256", _VITEST_LOCK_SHA256,
         "--test-node", _TEST_NODE,
-        "--cause-red-test-node", _CAUSE_RED_TEST_NODE,
-        "--cause-red-outcome", "fail",
     ]
-    return evidence, payload, arguments
+    return evidence, payload, review_evidence, review, arguments
 
 
 def _rewrite(
-    evidence: Path, payload: dict[str, object], arguments: list[str],
+    path: Path, payload: dict[str, object], arguments: list[str], option: str,
 ) -> None:
-    """Apply one canonical artifact mutation while retaining strict file mode."""
-    encoded = _canonical(payload)
-    evidence.write_bytes(encoded)
-    evidence.chmod(0o600)
-    arguments[arguments.index("--evidence-sha256") + 1] = hashlib.sha256(
-        encoded
-    ).hexdigest()
+    """Rewrite one canonical input and update only its declared digest."""
+    arguments[arguments.index(option) + 1] = _write_canonical(path, payload)
 
 
 def _verify(arguments: list[str]) -> subprocess.CompletedProcess[str]:
@@ -126,23 +129,24 @@ def _verify(arguments: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(arguments, capture_output=True, text=True, check=False)
 
 
-def test_verifier_accepts_exact_canonical_evidence(tmp_path: Path) -> None:
-    """One independently pinned, canonical v1 artifact is accepted."""
-    _evidence, _payload, arguments = _fixture(tmp_path)
+def test_verifier_accepts_exact_stage_one_evidence(tmp_path: Path) -> None:
+    """A reviewed stage-1 artifact is accepted without claiming cause RED."""
+    _evidence, _payload, _review_path, _review, arguments = _fixture(tmp_path)
 
     completed = _verify(arguments)
 
     assert completed.returncode == 0, completed.stderr
+    assert "cause-specific RED pending" in completed.stdout
 
 
 @pytest.mark.parametrize("field", ("process_role", "failure_stage", "cause_code"))
 def test_verifier_rejects_unknown_classification(
     tmp_path: Path, field: str,
 ) -> None:
-    """UNKNOWN cannot stand in for a concrete protected failure."""
-    evidence, payload, arguments = _fixture(tmp_path)
+    """UNKNOWN cannot stand in for a concrete protected operation failure."""
+    evidence, payload, _review_path, _review, arguments = _fixture(tmp_path)
     payload[field] = "UNKNOWN"
-    _rewrite(evidence, payload, arguments)
+    _rewrite(evidence, payload, arguments, "--evidence-sha256")
 
     assert _verify(arguments).returncode != 0
 
@@ -150,49 +154,32 @@ def test_verifier_rejects_unknown_classification(
 @pytest.mark.parametrize(
     "mutation",
     (
-        "unknown-field",
-        "missing-field",
-        "boolean-exit",
-        "negative-cgroup",
-        "noncanonical",
-        "wrong-mode",
-        "red-mismatch",
-        "invalid-cause-combination",
+        "unknown-field", "missing-field", "boolean-exit", "negative-cgroup",
+        "wrong-red-status", "invalid-cause-combination", "wrong-mode",
     ),
 )
 def test_verifier_rejects_malformed_or_unrelated_evidence(
     tmp_path: Path, mutation: str,
 ) -> None:
-    """The schema, nested RED metadata, and cause mapping all fail closed."""
-    evidence, payload, arguments = _fixture(tmp_path)
+    """The exact schema and fixed operation/cause mapping fail closed."""
+    evidence, payload, _review_path, _review, arguments = _fixture(tmp_path)
     if mutation == "unknown-field":
         payload["candidate_detail"] = "candidate-controlled-secret"
-        _rewrite(evidence, payload, arguments)
     elif mutation == "missing-field":
         del payload["diagnostic_sha256"]
-        _rewrite(evidence, payload, arguments)
     elif mutation == "boolean-exit":
         payload["exit_code"] = True
-        _rewrite(evidence, payload, arguments)
     elif mutation == "negative-cgroup":
         payload["cgroup_pids_max_delta"] = -1
-        _rewrite(evidence, payload, arguments)
-    elif mutation == "noncanonical":
-        evidence.write_text(json.dumps(payload), encoding="ascii")
-        evidence.chmod(0o600)
-        arguments[arguments.index("--evidence-sha256") + 1] = hashlib.sha256(
-            evidence.read_bytes()
-        ).hexdigest()
-    elif mutation == "wrong-mode":
-        evidence.chmod(0o644)
-    elif mutation == "red-mismatch":
-        red_test = payload["red_test"]
-        assert isinstance(red_test, dict)
-        red_test["diagnostic_head_sha"] = _FAILURE_BASELINE_SHA
-        _rewrite(evidence, payload, arguments)
+    elif mutation == "wrong-red-status":
+        payload["cause_red_status"] = "fail"
+    elif mutation == "invalid-cause-combination":
+        payload["failure_stage"] = "reporter-constructor"
     else:
-        payload["cause_code"] = "reporter-addon-load-failed"
-        _rewrite(evidence, payload, arguments)
+        evidence.chmod(0o644)
+        assert _verify(arguments).returncode != 0
+        return
+    _rewrite(evidence, payload, arguments, "--evidence-sha256")
 
     completed = _verify(arguments)
 
@@ -215,49 +202,53 @@ def test_verifier_rejects_malformed_or_unrelated_evidence(
         ("--vitest-package-sha256", "5" * 64),
         ("--vitest-lock-sha256", "6" * 64),
         ("--test-node", "candidate::node"),
-        ("--cause-red-test-node", "candidate::red"),
-        ("--cause-red-outcome", "pass"),
     ),
 )
 def test_verifier_rejects_every_protected_pin_mismatch(
     tmp_path: Path, option: str, replacement: str,
 ) -> None:
-    """Every workflow-provided identity must equal the artifact exactly."""
-    _evidence, _payload, arguments = _fixture(tmp_path)
+    """Every protected argument must equal artifact and review inputs."""
+    _evidence, _payload, _review_path, _review, arguments = _fixture(tmp_path)
     arguments[arguments.index(option) + 1] = replacement
 
     assert _verify(arguments).returncode != 0
 
 
-def test_verifier_rejects_uploaded_artifact_digest_mismatch(tmp_path: Path) -> None:
-    """The upload digest is independently checked rather than trusted in-band."""
-    _evidence, _payload, arguments = _fixture(tmp_path)
-    arguments[arguments.index("--evidence-sha256") + 1] = "f" * 64
+def test_verifier_rejects_paired_artifact_and_argument_identity_substitution(
+    tmp_path: Path,
+) -> None:
+    """In-band agreement cannot replace the independently reviewed identity."""
+    evidence, payload, _review_path, _review, arguments = _fixture(tmp_path)
+    replacement = "a" * 40
+    payload["diagnostic_head_sha"] = replacement
+    _rewrite(evidence, payload, arguments, "--evidence-sha256")
+    arguments[arguments.index("--diagnostic-head-sha") + 1] = replacement
 
     assert _verify(arguments).returncode != 0
 
 
 @pytest.mark.parametrize(
-    ("field", "option", "replacement"),
-    (
-        ("failure_baseline_sha", "--failure-baseline-sha", "0" * 40),
-        ("protected_base_sha", "--protected-base-sha", "1" * 40),
-        ("runner_image", "--runner-image", "untrusted-image"),
-        ("runner_provisioner", "--runner-provisioner", "untrusted-provisioner"),
-        ("python", "--python", "0.0.0"),
-        ("node", "--node", "0.0.0"),
-        ("vitest_package_sha256", "--vitest-package-sha256", "2" * 64),
-        ("vitest_lock_sha256", "--vitest-lock-sha256", "3" * 64),
-        ("test_node", "--test-node", "tests/untrusted.py::node"),
-    ),
+    "mutation", ("extra", "verdict", "head", "producer", "verifier", "digest"),
 )
-def test_verifier_rejects_substituted_static_pin_when_inputs_agree(
-    tmp_path: Path, field: str, option: str, replacement: str,
+def test_verifier_rejects_untrusted_or_malformed_review_evidence(
+    tmp_path: Path, mutation: str,
 ) -> None:
-    """Workflow arguments cannot replace an evidence protocol's fixed pins."""
-    evidence, payload, arguments = _fixture(tmp_path)
-    payload[field] = replacement
-    _rewrite(evidence, payload, arguments)
-    arguments[arguments.index(option) + 1] = replacement
+    """Review evidence is independently digested, exact, and identity binding."""
+    _evidence, _payload, review_path, review, arguments = _fixture(tmp_path)
+    if mutation == "extra":
+        review["comment"] = "not protected"
+    elif mutation == "verdict":
+        review["review_verdict"] = "APPROVED"
+    elif mutation == "head":
+        review["diagnostic_head_sha"] = "a" * 40
+    elif mutation == "producer":
+        review["producer_sha256"] = "b" * 64
+    elif mutation == "verifier":
+        review["verifier_sha256"] = "c" * 64
+    else:
+        arguments[arguments.index("--review-evidence-sha256") + 1] = "f" * 64
+        assert _verify(arguments).returncode != 0
+        return
+    _rewrite(review_path, review, arguments, "--review-evidence-sha256")
 
     assert _verify(arguments).returncode != 0

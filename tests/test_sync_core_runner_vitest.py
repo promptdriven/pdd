@@ -77,9 +77,6 @@ _VITEST_DIAGNOSTIC_TEST_NODE = (
     "tests/test_sync_core_runner_vitest.py::"
     "test_real_vitest_runs_copied_entrypoint_without_candidate_result_access"
 )
-_VITEST_CAUSE_RED_TEST_NODE = _VITEST_DIAGNOSTIC_TEST_NODE
-
-
 def _repository_head() -> str:
     """Return the exact test checkout HEAD used by ancestry verification."""
     repository = Path(__file__).resolve().parents[1]
@@ -117,12 +114,32 @@ def _configure_vitest_diagnostic(
         "PDD_VITEST_PACKAGE_SHA256": _VITEST_PACKAGE_SHA256,
         "PDD_VITEST_LOCK_SHA256": _VITEST_LOCK_SHA256,
         "PDD_VITEST_TEST_NODE": _VITEST_DIAGNOSTIC_TEST_NODE,
-        "PDD_VITEST_CAUSE_RED_TEST_NODE": _VITEST_CAUSE_RED_TEST_NODE,
-        "PDD_VITEST_CAUSE_RED_OUTCOME": "fail",
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
     return values
+
+
+def _write_vitest_review_evidence(
+    path: Path, configured: dict[str, str],
+) -> str:
+    """Write independently supplied review evidence for verifier integration."""
+    verifier = Path(__file__).parents[1] / "scripts/verify_vitest_termination_evidence.py"
+    payload = {
+        "schema": "vitest-diagnostic-review-v1",
+        "failure_baseline_sha": _VITEST_FAILURE_BASELINE_SHA,
+        "protected_base_sha": _VITEST_PROTECTED_BASE_SHA,
+        "diagnostic_head_sha": configured["PDD_VITEST_DIAGNOSTIC_HEAD_SHA"],
+        "producer_sha256": configured["PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256"],
+        "verifier_sha256": hashlib.sha256(verifier.read_bytes()).hexdigest(),
+        "review_verdict": "NO_BEHAVIORAL_FIX",
+    }
+    encoded = (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("ascii")
+    path.write_bytes(encoded)
+    path.chmod(0o600)
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _diagnostic_exit_result(diagnostic: str) -> SupervisedCompletedProcess:
@@ -143,7 +160,9 @@ def _diagnostic_progress() -> tuple[runner_module.VitestProgressStage, ...]:
         runner_module.VitestProgressStage.POST_DROP_PROBES,
         runner_module.VitestProgressStage.CANDIDATE_EXEC,
         runner_module.VitestProgressStage.COORDINATOR_BOOTSTRAP,
-        runner_module.VitestProgressStage.COORDINATOR_EXPLICIT_EXIT,
+        runner_module.VitestProgressStage.REPORTER_MODULE_START,
+        runner_module.VitestProgressStage.REPORTER_ADDON_LOAD_START,
+        runner_module.VitestProgressStage.REPORTER_ADDON_LOAD_FAILED,
         runner_module.VitestProgressStage.COORDINATOR_EXIT,
     )
 
@@ -221,7 +240,7 @@ def test_vitest_termination_diagnostic_writes_canonical_protected_evidence(
         "cgroup_memory_oom_kill_delta",
         "cgroup_pids_max_delta",
         "diagnostic_sha256",
-        "red_test",
+        "cause_red_status",
     }
     assert payload == {
         "schema": "vitest-termination-v1",
@@ -242,21 +261,14 @@ def test_vitest_termination_diagnostic_writes_canonical_protected_evidence(
         "vitest_lock_sha256": _VITEST_LOCK_SHA256,
         "test_node": _VITEST_DIAGNOSTIC_TEST_NODE,
         "process_role": "vitest-coordinator",
-        "failure_stage": "coordinator-termination",
-        "cause_code": "coordinator-explicit-exit",
+        "failure_stage": "reporter-addon-load",
+        "cause_code": "reporter-addon-load-failed",
         "exit_code": 1,
         "cgroup_memory_oom_delta": 0,
         "cgroup_memory_oom_kill_delta": 0,
         "cgroup_pids_max_delta": 0,
         "diagnostic_sha256": hashlib.sha256(diagnostic.encode()).hexdigest(),
-        "red_test": {
-            "node_id": _VITEST_CAUSE_RED_TEST_NODE,
-            "outcome": "fail",
-            "failure_baseline_sha": _VITEST_FAILURE_BASELINE_SHA,
-            "diagnostic_head_sha": configured[
-                "PDD_VITEST_DIAGNOSTIC_HEAD_SHA"
-            ],
-        },
+        "cause_red_status": "pending",
     }
     assert diagnostic not in encoded.decode("ascii")
     assert str(root) not in encoded.decode("ascii")
@@ -278,6 +290,8 @@ def test_vitest_termination_diagnostic_verifies_against_current_producer(
     repository = Path(__file__).parents[1]
     verifier = repository / "scripts" / "verify_vitest_termination_evidence.py"
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
+    review_evidence = tmp_path / "vitest-diagnostic-review-v1.json"
+    review_digest = _write_vitest_review_evidence(review_evidence, configured)
 
     completed = subprocess.run(
         [
@@ -297,8 +311,8 @@ def test_vitest_termination_diagnostic_verifies_against_current_producer(
             "--vitest-package-sha256", _VITEST_PACKAGE_SHA256,
             "--vitest-lock-sha256", _VITEST_LOCK_SHA256,
             "--test-node", _VITEST_DIAGNOSTIC_TEST_NODE,
-            "--cause-red-test-node", _VITEST_CAUSE_RED_TEST_NODE,
-            "--cause-red-outcome", "fail",
+            "--review-evidence", str(review_evidence),
+            "--review-evidence-sha256", review_digest,
         ],
         capture_output=True,
         text=True,
@@ -308,10 +322,10 @@ def test_vitest_termination_diagnostic_verifies_against_current_producer(
     assert completed.returncode == 0, completed.stderr
 
 
-def test_vitest_termination_diagnostic_classifies_natural_coordinator_exit(
+def test_vitest_termination_diagnostic_rejects_natural_coordinator_exit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A natural coordinator shutdown has a distinct fixed protected cause."""
+    """A natural coordinator shutdown is a symptom, not a protected cause."""
     root = tmp_path / "candidate"
     root.mkdir()
     output = tmp_path / "protected" / "vitest-termination-v1.json"
@@ -323,12 +337,41 @@ def test_vitest_termination_diagnostic_classifies_natural_coordinator_exit(
         _diagnostic_before_exit_progress(),
     )
 
-    assert observed == output
-    payload = json.loads(output.read_text(encoding="ascii"))
-    assert payload["failure_stage"] == "coordinator-termination"
-    assert payload["cause_code"] == (
-        "coordinator-event-loop-drained-before-reporter"
+    assert observed is None
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "generic_stage",
+    (
+        runner_module.VitestProgressStage.COORDINATOR_UNCAUGHT_EXCEPTION,
+        runner_module.VitestProgressStage.COORDINATOR_EXPLICIT_EXIT,
+    ),
+)
+def test_vitest_termination_diagnostic_rejects_generic_lifecycle_symptoms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    generic_stage: runner_module.VitestProgressStage,
+) -> None:
+    """Generic uncaught and explicit-exit events remain cause-ineligible."""
+    root = tmp_path / "candidate"
+    root.mkdir()
+    output = tmp_path / "protected" / "vitest-termination-v1.json"
+    output.parent.mkdir(mode=0o700)
+    _configure_vitest_diagnostic(monkeypatch, output)
+    progress = (
+        runner_module.VitestProgressStage.POST_DROP_PROBES,
+        runner_module.VitestProgressStage.CANDIDATE_EXEC,
+        runner_module.VitestProgressStage.COORDINATOR_BOOTSTRAP,
+        generic_stage,
+        runner_module.VitestProgressStage.COORDINATOR_EXIT,
     )
+
+    observed = runner_module._write_vitest_termination_evidence(
+        root, _diagnostic_exit_result("diagnostic"), progress,
+    )
+
+    assert observed is None
+    assert not output.exists()
 
 
 def test_vitest_termination_diagnostic_rejects_broad_no_reporter_signature(
@@ -398,22 +441,87 @@ def test_vitest_diagnostic_sources_emit_only_fixed_coordinator_boundaries(
     assert "process.env" not in coordinator
     for stage in (
         "reporter-module-start",
+        "reporter-addon-load-start",
         "reporter-addon-load-failed",
-        "reporter-addon-loaded",
+        "reporter-addon-load-succeeded",
+        "reporter-authority-seal-start",
         "reporter-authority-seal-failed",
-        "reporter-authority-sealed",
-        "reporter-constructor-enter",
+        "reporter-authority-seal-succeeded",
+        "reporter-constructor-start",
+        "reporter-constructor-failed",
+        "reporter-constructor-succeeded",
     ):
         assert stage in reporter
     assert reporter.index("reporter-module-start") < reporter.index(
-        "reporter-addon-loaded"
-    ) < reporter.index("reporter-authority-sealed") < reporter.index(
-        "reporter-constructor-enter"
-    ) < reporter.index(
+        "reporter-addon-load-start"
+    ) < reporter.index("reporter-addon-load-succeeded") < reporter.index(
+        "reporter-authority-seal-start"
+    ) < reporter.index("reporter-authority-seal-succeeded") < reporter.index(
+        "reporter-constructor-start"
+    ) < reporter.index("reporter-constructor-succeeded") < reporter.index(
         "coordinator-start"
     )
     assert "error.message" not in reporter
     assert "error.stack" not in reporter
+
+
+def test_generated_diagnostic_reporter_attributes_real_addon_load_failure(
+    tmp_path: Path,
+) -> None:
+    """Real generated source emits an authenticated concrete operation failure."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    read_fd, write_fd = os.pipe()
+    identity = os.fstat(write_fd)
+    invalid_addon = tmp_path / "trusted-addon.node"
+    invalid_addon.write_bytes(b"not a native addon")
+    reporter = tmp_path / "diagnostic-reporter.mjs"
+    reporter.write_text(
+        runner_module._vitest_reporter_source(
+            write_fd, identity.st_dev, identity.st_ino, invalid_addon,
+            diagnostic=True,
+        ),
+        encoding="utf-8",
+    )
+    try:
+        completed = subprocess.run(
+            [node, str(reporter)], pass_fds=(write_fd,), capture_output=True,
+            text=True, timeout=2, check=False,
+        )
+    finally:
+        os.close(write_fd)
+    try:
+        emitted = bytearray()
+        while chunk := os.read(read_fd, 4096):
+            emitted.extend(chunk)
+    finally:
+        os.close(read_fd)
+    transport = b"".join((
+        runner_module._vitest_progress_frame(
+            runner_module.VitestProgressStage.POST_DROP_PROBES
+        ),
+        runner_module._vitest_progress_frame(
+            runner_module.VitestProgressStage.CANDIDATE_EXEC
+        ),
+        runner_module._vitest_progress_frame(
+            runner_module.VitestProgressStage.COORDINATOR_BOOTSTRAP
+        ),
+        bytes(emitted),
+        runner_module._vitest_progress_frame(
+            runner_module.VitestProgressStage.COORDINATOR_EXIT
+        ),
+    ))
+    _result, progress = runner_module._parse_vitest_transport(transport)
+
+    classification = runner_module._vitest_termination_classification(
+        _diagnostic_exit_result("diagnostic"), progress,
+    )
+
+    assert completed.returncode != 0
+    assert classification is not None
+    assert classification.failure_stage.value == "reporter-addon-load"
+    assert classification.cause_code.value == "reporter-addon-load-failed"
 
 
 def test_vitest_diagnostic_launch_binds_coordinator_source_and_artifact(
@@ -466,7 +574,7 @@ def test_vitest_diagnostic_launch_binds_coordinator_source_and_artifact(
     assert isinstance(environment, dict)
     assert "PDD_VITEST_DIAGNOSTIC_OUTPUT" not in environment
     payload = json.loads(output.read_text(encoding="ascii"))
-    assert payload["cause_code"] == "coordinator-explicit-exit"
+    assert payload["cause_code"] == "reporter-addon-load-failed"
     assert payload["diagnostic_sha256"] == hashlib.sha256(
         b"coordinator diagnostic"
     ).hexdigest()
@@ -2632,7 +2740,7 @@ def test_real_vitest_workflow_uses_checked_in_locked_toolchain() -> None:
 
 
 def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence() -> None:
-    """The protected diagnostic probe verifies evidence but remains a failure."""
+    """Stage-1 uses protected identity/provenance and preserves Unit RED."""
     repository = Path(__file__).parents[1]
     workflow = (repository / ".github/workflows/unit-tests.yml").read_text(
         encoding="utf-8"
@@ -2647,8 +2755,36 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence() -
         workflow.index(upload_step):workflow.index(focused_step)
     ]
 
-    assert 'diagnostic_head="$GITHUB_SHA"' in dedicated_body
-    assert 'test "$diagnostic_head" = "$(git rev-parse HEAD)"' in dedicated_body
+    checkout_body = workflow[
+        workflow.index("- name: Checkout"):workflow.index("- name: Set up Python")
+    ]
+    provenance_step = "- name: Verify reviewed identity and runner provenance"
+    provision_step = "- name: Provision identity-bound Vitest toolchain"
+    provenance_body = workflow[
+        workflow.index(provenance_step):workflow.index(provision_step)
+    ]
+    assert "runs-on: ubuntu-24.04" in workflow[:workflow.index("steps:")]
+    assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in checkout_body
+    assert "persist-credentials: false" in checkout_body
+    assert "python-version: '3.12.13'" in workflow[:workflow.index(provision_step)]
+    assert 'test "$(git rev-parse HEAD)" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"' in provenance_body
+    assert 'actual_python="$(python --version 2>&1)"' in provenance_body
+    assert 'actual_node="$(node --version)"' in provenance_body
+    assert 'actual_package_sha256="$(sha256sum .github/toolchains/vitest/package.json' in provenance_body
+    assert 'actual_lock_sha256="$(sha256sum .github/toolchains/vitest/package-lock.json' in provenance_body
+    assert 'actual_runner_image="${ImageOS}/${ImageVersion}"' in provenance_body
+    assert "/opt/hca/hosted-compute-agent --version" in provenance_body
+    assert provenance_body.index("actual_python=") < workflow.index(provision_step)
+    for protected_name in (
+        "PDD_REVIEWED_FAILURE_BASELINE_SHA",
+        "PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA",
+        "PDD_REVIEWED_PRODUCER_SHA256",
+        "PDD_REVIEWED_VERIFIER_SHA256",
+        "PDD_REVIEW_EVIDENCE_B64",
+        "PDD_REVIEW_EVIDENCE_SHA256",
+    ):
+        assert f"vars.{protected_name}" in workflow
+    assert 'diagnostic_head="$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"' in dedicated_body
     for name in (
         "PDD_VITEST_DIAGNOSTIC_OUTPUT",
         "PDD_VITEST_FAILURE_BASELINE_SHA",
@@ -2663,14 +2799,16 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence() -
         "PDD_VITEST_PACKAGE_SHA256",
         "PDD_VITEST_LOCK_SHA256",
         "PDD_VITEST_TEST_NODE",
-        "PDD_VITEST_CAUSE_RED_TEST_NODE",
-        "PDD_VITEST_CAUSE_RED_OUTCOME",
     ):
         assert f"export {name}=" in dedicated_body
+    assert "PDD_VITEST_CAUSE_RED" not in dedicated_body
+    assert "cause_red_test_node" not in dedicated_body
     assert 'artifact_sha256="$(sha256sum "$artifact"' in dedicated_body
     assert '"$artifact.sha256"' in dedicated_body
     assert "python scripts/verify_vitest_termination_evidence.py" in dedicated_body
     assert "--evidence-sha256 \"$artifact_sha256\"" in dedicated_body
+    assert "--review-evidence \"$PDD_REVIEW_EVIDENCE_PATH\"" in dedicated_body
+    assert "--review-evidence-sha256 \"$PDD_REVIEW_EVIDENCE_SHA256\"" in dedicated_body
     assert "set +e" in dedicated_body
     assert "test_status=$?" in dedicated_body
     assert dedicated_body.rindex("exit \"$test_status\"") > dedicated_body.index(
