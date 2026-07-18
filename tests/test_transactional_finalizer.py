@@ -13,7 +13,12 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from pdd.fingerprint_transaction import FingerprintFinalizeError, finalize_fingerprint
+from pdd.fingerprint_transaction import (
+    AtomicStateUpdate,
+    FingerprintFinalizeError,
+    FingerprintTransaction,
+    finalize_fingerprint,
+)
 
 
 def _paths(tmp_path: Path) -> tuple[dict[str, Path], Path]:
@@ -118,6 +123,64 @@ def test_atomic_state_rolls_back_when_later_state_write_fails(tmp_path: Path) ->
     assert json.loads(fingerprint.read_text(encoding="utf-8")) == {"old": "fingerprint"}
 
 
+def test_cleanup_after_durable_commit_is_success_not_a_repeat_signal(tmp_path: Path) -> None:
+    """The committed journal state is the API commit point, not cleanup."""
+    meta = tmp_path / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    report = meta / "sample_python_run.json"
+    fingerprint = meta / "sample_python.json"
+    state = AtomicStateUpdate("sample", "python")
+    original_cleanup = state._cleanup_records
+    calls = 0
+
+    def fail_once(records):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("cleanup unavailable")
+        original_cleanup(records)
+
+    state._cleanup_records = fail_once
+    with state:
+        state.set_run_report({"version": "new"}, report)
+        state.set_fingerprint({"version": "new"}, fingerprint)
+
+    assert json.loads(report.read_text()) == {"version": "new"}
+    assert json.loads(fingerprint.read_text()) == {"version": "new"}
+    assert calls == 2
+    assert not list(meta.glob("*.state-txn.json"))
+
+
+def test_paired_finalizer_locks_before_canonicalization_and_hashing(tmp_path: Path) -> None:
+    """A paired sync finalizer cannot snapshot files before its outer lock."""
+    paths, root = _paths(tmp_path)
+    events: list[str] = []
+    state = AtomicStateUpdate("sample", "python")
+    original_lock = state._lock_and_recover
+
+    def record_lock(directory: Path) -> None:
+        events.append("lock")
+        original_lock(directory)
+
+    original_hashes = __import__(
+        "pdd.fingerprint_transaction", fromlist=["calculate_current_hashes"]
+    ).calculate_current_hashes
+
+    def record_hashes(*args, **kwargs):
+        events.append("hash")
+        return original_hashes(*args, **kwargs)
+
+    state._lock_and_recover = record_lock
+    with patch("pdd.fingerprint_transaction.calculate_current_hashes", side_effect=record_hashes):
+        with state:
+            state.set_run_report({"version": "one"}, root / ".pdd" / "meta" / "sample_python_run.json")
+            FingerprintTransaction(
+                "sample", "python", "sync", paths, atomic_state=state
+            ).commit()
+
+    assert events.index("lock") < events.index("hash")
+
+
 def test_second_publish_failure_recovers_before_raising(tmp_path: Path) -> None:
     """A caller never receives a failure while the held lock exposes a split pair."""
     from pdd.fingerprint_transaction import AtomicStateUpdate
@@ -185,6 +248,16 @@ def test_explicit_null_hints_do_not_erase_discovered_artifacts(tmp_path: Path) -
     assert payload["example_hash"] and payload["test_files"][test.name]
 
 
+def test_explicit_artifact_outside_prompt_project_is_rejected(tmp_path: Path) -> None:
+    """Real explicit paths cannot redirect hashing outside the owning project."""
+    paths, _root = _paths(tmp_path)
+    outside = tmp_path / "outside" / "sample_example.py"
+    outside.parent.mkdir()
+    outside.write_text("VALUE = 1\n", encoding="utf-8")
+    with pytest.raises(FingerprintFinalizeError, match="escapes owning project root"):
+        finalize_fingerprint("sample", "python", "fix", {**paths, "example": outside})
+
+
 def test_restart_recovers_after_process_death_between_state_publications(tmp_path: Path) -> None:
     """A durable journal restores the old pair after a real SIGKILL transition."""
     meta = tmp_path / ".pdd" / "meta"
@@ -220,6 +293,63 @@ with state:
     AtomicStateUpdate.recover("sample", "python", meta)
     assert json.loads(report.read_text(encoding="utf-8"))["version"] == "old-report"
     assert json.loads(fingerprint.read_text(encoding="utf-8"))["version"] == "old-fingerprint"
+    assert not list(meta.glob("*.state-txn.json"))
+
+
+def test_fresh_authoritative_reader_recovers_killed_pair(tmp_path: Path) -> None:
+    """A new process repairs the journal through read_fingerprint, not a test hook."""
+    paths, root = _paths(tmp_path)
+    meta = root / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    report = meta / "sample_python_run.json"
+    fingerprint = meta / "sample_python.json"
+    report.write_text(
+        json.dumps({"timestamp": "old", "exit_code": 0, "tests_passed": 1,
+                    "tests_failed": 0, "coverage": 1.0}), encoding="utf-8"
+    )
+    fingerprint.write_text(
+        json.dumps({"pdd_version": "old", "timestamp": "old", "command": "old"}),
+        encoding="utf-8",
+    )
+    writer = """
+import os
+from pathlib import Path
+from pdd.fingerprint_transaction import AtomicStateUpdate
+meta = Path(os.environ['STATE_META'])
+state = AtomicStateUpdate('sample', 'python')
+write_journal = state._write_journal
+def stop_after_first_publish(phase, records):
+    write_journal(phase, records)
+    if phase == 'report_published':
+        os.kill(os.getpid(), 9)
+state._write_journal = stop_after_first_publish
+with state:
+    state.set_run_report({'timestamp': 'new', 'exit_code': 0, 'tests_passed': 2, 'tests_failed': 0, 'coverage': 1.0}, meta / 'sample_python_run.json')
+    state.set_fingerprint({'pdd_version': 'new', 'timestamp': 'new', 'command': 'new'}, meta / 'sample_python.json')
+"""
+    environment = dict(os.environ, STATE_META=str(meta), PYTHONPATH=str(Path.cwd()))
+    result = subprocess.run([sys.executable, "-c", writer], env=environment, check=False)
+    assert result.returncode == -signal.SIGKILL
+
+    reader = """
+import os
+from pathlib import Path
+from pdd.sync_determine_operation import read_fingerprint, read_run_report
+prompt = Path(os.environ['STATE_PROMPT'])
+paths = {'prompt': prompt}
+fingerprint = read_fingerprint('sample', 'python', paths=paths)
+report = read_run_report('sample', 'python', paths=paths)
+assert fingerprint is not None and fingerprint.command == 'old'
+assert report is not None and report.tests_passed == 1
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", reader],
+        env=dict(environment, STATE_PROMPT=str(paths["prompt"])),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
     assert not list(meta.glob("*.state-txn.json"))
 
 

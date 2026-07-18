@@ -419,6 +419,23 @@ def resolve_fingerprint_paths(
         )
         if not isinstance(discovered.get("prompt"), Path) or not discovered["prompt"].exists():
             return explicit
+        # Discovery occurs in a process whose CWD can be a parent checkout.
+        # Keep only artifacts owned by the touched prompt's project; otherwise
+        # a default output path from that parent would become an apparently
+        # explicit cross-project artifact at the finalization boundary.
+        discovered_prompt = Path(discovered["prompt"])
+        prompt_root = _detect_project_root(discovered_prompt) or _prompts_root_for_fingerprint(
+            discovered_prompt
+        ).parent
+        for key, value in tuple(discovered.items()):
+            if key == "prompt" or value is None:
+                continue
+            values = value if key == "test_files" else [value]
+            try:
+                for item in values:
+                    Path(item).resolve().relative_to(prompt_root.resolve())
+            except (TypeError, ValueError):
+                discovered[key] = [] if key == "test_files" else None
         discovered.update(explicit)
         return discovered
     except (ImportError, OSError, ValueError) as exc:
@@ -792,6 +809,10 @@ def log_operation(
                     append_log_entry(basename, language, entry, paths=log_paths)
                     if success:
                         fingerprint_allowed = True
+                        prior_run_report: bytes | None = None
+                        run_report_path = get_run_report_path(
+                            basename, language, paths=log_paths
+                        )
                         # Clear the stale run report only after the command
                         # succeeds, so a failed run cannot erase existing
                         # runtime verification state that still describes the
@@ -800,6 +821,8 @@ def log_operation(
                         # coexists with a stale per-module run report
                         # (issue #1057).
                         if clears_run_report:
+                            if run_report_path.exists():
+                                prior_run_report = run_report_path.read_bytes()
                             fingerprint_allowed = _clear_run_report_before_fingerprint(
                                 basename, language, paths=log_paths
                             )
@@ -829,17 +852,26 @@ def log_operation(
                             # resolution fails, so anchoring still works. The
                             # #983 contract is preserved: the caller resolves the
                             # paths, so save_fingerprint does not.
-                            fingerprint_paths = resolve_fingerprint_paths(
-                                basename, language, Path(prompt_file), paths=log_paths
-                            )
-                            save_fingerprint(
-                                basename,
-                                language,
-                                operation=operation,
-                                paths=fingerprint_paths,
-                                cost=cost,
-                                model=model,
-                            )
+                            try:
+                                fingerprint_paths = resolve_fingerprint_paths(
+                                    basename, language, Path(prompt_file), paths=log_paths
+                                )
+                                save_fingerprint(
+                                    basename,
+                                    language,
+                                    operation=operation,
+                                    paths=fingerprint_paths,
+                                    cost=cost,
+                                    model=model,
+                                )
+                            except Exception:
+                                if prior_run_report is not None:
+                                    from .json_atomic import atomic_write_text
+                                    atomic_write_text(
+                                        run_report_path,
+                                        prior_run_report.decode("utf-8"),
+                                    )
+                                raise
                         if updates_run_report and isinstance(result, dict):
                             save_run_report(basename, language, result, paths=log_paths)
         return wrapper

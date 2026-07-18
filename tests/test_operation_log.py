@@ -988,6 +988,31 @@ def test_log_operation_finalization_failure_is_nonzero_for_click(temp_pdd_env):
     assert "stale run report" in str(result.exception)
 
 
+def test_log_operation_restores_prior_run_report_when_fingerprint_fails(temp_pdd_env):
+    """A real post-mutation finalization error cannot erase prior evidence."""
+    operation_log.save_run_report("restore", "python", {"previous": True})
+    report_path = operation_log.get_run_report_path("restore", "python")
+    prior = report_path.read_bytes()
+    prompt = temp_pdd_env.parent.parent / "prompts" / "restore_python.prompt"
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text("% Goal\nRestore\n", encoding="utf-8")
+
+    @operation_log.log_operation(
+        operation="generate", clears_run_report=True, updates_fingerprint=True
+    )
+    def command(prompt_file):
+        return "ok", False, 0.0, "model"
+
+    from pdd.fingerprint_transaction import FingerprintFinalizeError
+    with patch("pdd.operation_log.save_fingerprint", side_effect=FingerprintFinalizeError(
+        "generate", report_path, "disk full",
+    )):
+        with pytest.raises(FingerprintFinalizeError, match="disk full"):
+            command(prompt_file=str(prompt))
+
+    assert report_path.read_bytes() == prior
+
+
 # --------------------------------------------------------------------------------
 # REGRESSION TESTS: Issue #1305 - @log_operation must write REAL (non-null)
 # fingerprint hashes for example/generate so CI auto-heal converges.

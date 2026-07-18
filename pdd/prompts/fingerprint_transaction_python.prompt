@@ -17,9 +17,15 @@
 Implement `pdd.fingerprint_transaction` with one public thin API:
 
 - `finalize_fingerprint(basename, language, operation, paths=None, cost=0.0, model="unknown", *, atomic_state=None, include_deps_override=None)`.
-- Resolve the complete canonical artifact set once from the explicit prompt path,
-  preserving its subproject root. Thin callers may supply prompt/code hints, but
-  existing example/test/test_files artifacts must never be omitted from hashes.
+- Determine the owning root from the explicit prompt path and reject every real
+  explicit code/example/test artifact that resolves outside it (including
+  traversal and symlink escape). Optional null/empty hints do not erase
+  discovered artifacts; discard invalid advisory discovery rather than hashing
+  an unrelated parent-checkout default. Reject duplicate test filenames.
+- Acquire the per-unit metadata lock before canonical path completion,
+  recovery, previous-fingerprint reads, and hashing in both direct and paired
+  callers. A paired `AtomicStateUpdate` retains that lock through publication,
+  so an older snapshot cannot overwrite a newer mutation.
 - Build the persisted `Fingerprint` only here, using current hashes and prior include dependencies.
 - Reject a null prompt hash and a null hash for any existing code/example/test artifact with `FingerprintFinalizeError`.
 - Persist direct writes only through `json_atomic.atomic_write_json`, whose temporary file is in the destination directory and is replaced with `os.replace` after fsync.
@@ -28,6 +34,10 @@ Implement `pdd.fingerprint_transaction` with one public thin API:
   journal, backups, and an exclusive lock. Restart recovery restores a prepared
   or partially-published pair before a new writer proceeds; it never suppresses
   recovery errors or claims that two renames are one atomic operation.
+- The durable `committed` journal state is the API commit point. A cleanup
+  failure after that point is restartable bookkeeping: return success (after a
+  bounded retry) and leave recovery authority intact, never tell a command to
+  repeat an already published mutation.
 - Treat journals as untrusted project data: bind a closed versioned schema to a
   hashed unit identity, validate every role/name/path under the metadata
   directory, and never follow traversal or symlink artifacts. Readers recover

@@ -7427,7 +7427,7 @@
   },
   {
     "reason": "Provides sync operation logging, fingerprints, run reports, and compression metadata storage.",
-    "description": "Decorator-based operation logging that tracks PDD command executions. Manages fingerprints, run reports, and event logs. Works with Click commands to extract module identity from prompt_file parameter.",
+    "description": "Decorator-based operation logging that tracks PDD command executions. Manages fingerprints, run reports, and event logs, restoring prior run-report evidence if post-mutation finalization fails. Works with Click commands to extract module identity from prompt_file parameter.",
     "dependencies": [],
     "priority": 210,
     "filename": "operation_log_python.prompt",
@@ -11663,7 +11663,7 @@
   },
   {
     "reason": "Finalizes complete PDD artifact fingerprints and coupled runtime state durably.",
-    "description": "Canonical transactional persistence boundary for legacy fingerprints. Resolves the prompt-rooted complete artifact set, rejects null hashes, and provides journaled, fsync-backed, lock-serialized recovery for coupled run-report/fingerprint publication.",
+    "description": "Canonical transactional persistence boundary for legacy fingerprints. Resolves and validates prompt-rooted artifacts under the per-unit lock, rejects null or cross-project hashes, and provides journaled, fsync-backed, lock-serialized recovery for coupled run-report/fingerprint publication.",
     "dependencies": [
       "sync_determine_operation_python.prompt"
     ],

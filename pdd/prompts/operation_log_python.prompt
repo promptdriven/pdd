@@ -18,6 +18,11 @@
 % Role & Scope
 A shared logging infrastructure module for tracking all PDD operations. Provides functions for log file I/O, module identity inference, state file management, and a `@log_operation` decorator for CLI commands.
 
+When a successful decorated mutation clears an existing run report before
+fingerprint finalization, preserve its exact prior bytes and restore them if
+canonical path resolution or fingerprint finalization fails. A failed command
+must not erase authoritative prior runtime evidence.
+
 % Requirements
 - The file must start with `from __future__ import annotations`.
 - All functions must be fully type-hinted.
