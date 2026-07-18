@@ -180,11 +180,13 @@ trap trap_handler EXIT
 # ── Extract source code ───────────────────────────────────────────────────
 SETUP_START=$(date +%s)
 echo "=== Task ${TASK_INDEX}: verifying exact candidate source ==="
+unset PDD_CLOUD_SOURCE_IDENTITY_MODE
 if ! python3 /source-identity.py verify --work-dir "${WORK_DIR}"; then
     echo "FATAL: candidate source identity verification failed"
     write_result "error" "0" "preflight" "candidate source identity mismatch"
     exit 78
 fi
+export PDD_CLOUD_SOURCE_IDENTITY_MODE="candidate-tree-v1"
 cd "${WORK_DIR}"
 
 # Tarball excludes .git; submit.sh derives this value from exact candidate HEAD.

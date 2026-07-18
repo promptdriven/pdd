@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 from dataclasses import replace
@@ -33,6 +34,7 @@ REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 468
 PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
 PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
+CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -199,18 +201,45 @@ def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
 
 
 def _skip_if_required_git_history_missing(root: Path, *refs: str) -> None:
-    """Skip exact-base assertions only when the checkout is not a Git repo."""
-    git_dir = subprocess.run(
-        ["git", "rev-parse", "--git-dir"],
+    """Skip absent history only in an identity-bound candidate-only checkout."""
+    missing_refs = [
+        ref
+        for ref in refs
+        if subprocess.run(
+            ["git", "cat-file", "-e", f"{ref}^{{commit}}"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        ).returncode
+        != 0
+    ]
+    if not missing_refs:
+        return
+    if os.getenv("PDD_CLOUD_SOURCE_IDENTITY_MODE") != CANDIDATE_ONLY_SOURCE_MODE:
+        return
+
+    candidate_sha = os.getenv("PDD_CANDIDATE_SHA", "")
+    candidate_tree = os.getenv("PDD_CANDIDATE_TREE", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", candidate_sha) or not re.fullmatch(
+        r"[0-9a-f]{40}", candidate_tree
+    ):
+        return
+
+    actual_identity = subprocess.run(
+        ["git", "rev-parse", "HEAD^{commit}", "HEAD^{tree}"],
         cwd=root,
         check=False,
         capture_output=True,
         text=True,
     )
-    if git_dir.returncode != 0:
+    if actual_identity.returncode != 0:
+        return
+    actual_parts = actual_identity.stdout.splitlines()
+    if actual_parts == [candidate_sha, candidate_tree]:
         pytest.skip(
             "requires local git history for #1989 exact-base verification: "
-            + ", ".join(refs)
+            + ", ".join(missing_refs)
         )
 
 
@@ -686,40 +715,107 @@ def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     assert profiles.coverage == 1.0
 
 
-def test_pdd1989_history_guard_skips_without_required_git_objects(
-    tmp_path: Path,
+def _candidate_only_repo(tmp_path: Path) -> tuple[Path, str, str]:
+    repo = tmp_path / "candidate-only"
+    repo.mkdir()
+    _git(repo, "init")
+    (repo / "tracked.txt").write_text("candidate\n", encoding="utf-8")
+    candidate_sha = _commit(repo, "candidate")
+    candidate_tree = subprocess.check_output(
+        ["git", "rev-parse", "HEAD^{tree}"], cwd=repo, text=True
+    ).strip()
+    return repo, candidate_sha, candidate_tree
+
+
+def _set_candidate_only_identity(
+    monkeypatch, candidate_sha: str, candidate_tree: str
 ) -> None:
-    """Cloud tarballs have no .git history, so the exact-base test must skip."""
+    monkeypatch.setenv("PDD_CLOUD_SOURCE_IDENTITY_MODE", "candidate-tree-v1")
+    monkeypatch.setenv("PDD_CANDIDATE_SHA", candidate_sha)
+    monkeypatch.setenv("PDD_CANDIDATE_TREE", candidate_tree)
+
+
+def test_pdd1989_history_guard_skips_verified_candidate_only_repo(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A verified candidate-only Git checkout intentionally lacks ancestors."""
+    repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
+    _set_candidate_only_identity(monkeypatch, candidate_sha, candidate_tree)
+
     with pytest.raises(
         pytest.skip.Exception,
         match="requires local git history for #1989 exact-base verification",
     ):
         _skip_if_required_git_history_missing(
-            tmp_path,
+            repo,
             PDD_1989_ACTUAL_BASE,
             PDD_1989_ACTUAL_HEAD,
         )
 
 
-def test_pdd1989_history_guard_does_not_skip_in_valid_repo_with_missing_refs(
-    tmp_path: Path,
+def test_pdd1989_history_guard_does_not_skip_without_verified_marker(
+    tmp_path: Path, monkeypatch
 ) -> None:
-    """A real Git checkout must keep the exact-base assertion live."""
-    _git(tmp_path, "init")
-    (tmp_path / "tracked.txt").write_text("tracked\n", encoding="utf-8")
-    _commit(tmp_path, "initial commit")
+    """Ordinary shallow checkouts keep the exact-base assertion fail-closed."""
+    repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
+    monkeypatch.setenv("PDD_CANDIDATE_SHA", candidate_sha)
+    monkeypatch.setenv("PDD_CANDIDATE_TREE", candidate_tree)
 
-    try:
-        _skip_if_required_git_history_missing(
-            tmp_path,
-            PDD_1989_ACTUAL_BASE,
-            PDD_1989_ACTUAL_HEAD,
-        )
-    except pytest.skip.Exception as exc:  # pragma: no cover - red-path contract
-        raise AssertionError(
-            "valid Git repositories must not skip #1989 exact-base checks "
-            "just because pinned refs are absent"
-        ) from exc
+    _skip_if_required_git_history_missing(
+        repo,
+        PDD_1989_ACTUAL_BASE,
+        PDD_1989_ACTUAL_HEAD,
+    )
+
+
+@pytest.mark.parametrize("mismatch", ("sha", "tree"))
+def test_pdd1989_history_guard_does_not_skip_mismatched_candidate_identity(
+    tmp_path: Path, monkeypatch, mismatch: str
+) -> None:
+    """A forged or stale candidate identity cannot authorize a history skip."""
+    repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
+    if mismatch == "sha":
+        candidate_sha = "0" * 40
+    else:
+        candidate_tree = "0" * 40
+    _set_candidate_only_identity(monkeypatch, candidate_sha, candidate_tree)
+
+    _skip_if_required_git_history_missing(
+        repo,
+        PDD_1989_ACTUAL_BASE,
+        PDD_1989_ACTUAL_HEAD,
+    )
+
+
+@pytest.mark.parametrize("missing", ("PDD_CANDIDATE_SHA", "PDD_CANDIDATE_TREE"))
+def test_pdd1989_history_guard_does_not_skip_missing_candidate_identity(
+    tmp_path: Path, monkeypatch, missing: str
+) -> None:
+    """The trusted mode marker alone cannot authorize a history skip."""
+    repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
+    _set_candidate_only_identity(monkeypatch, candidate_sha, candidate_tree)
+    monkeypatch.delenv(missing)
+
+    _skip_if_required_git_history_missing(
+        repo,
+        PDD_1989_ACTUAL_BASE,
+        PDD_1989_ACTUAL_HEAD,
+    )
+
+
+def test_pdd1989_history_guard_does_not_hide_missing_repository_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Available refs still require the protected repository identity blob."""
+    repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
+    _set_candidate_only_identity(monkeypatch, candidate_sha, candidate_tree)
+
+    _skip_if_required_git_history_missing(repo, candidate_sha, candidate_sha)
+    with pytest.raises(
+        manifest_module.ManifestError,
+        match=r"base and head must contain \.pdd/repository-id",
+    ):
+        build_unit_manifest(repo, base_ref=candidate_sha, head_ref=candidate_sha)
 
 
 def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> None:

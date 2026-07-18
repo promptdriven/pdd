@@ -292,6 +292,32 @@ def test_cloud_batch_entrypoint_verifies_exact_git_candidate_before_install():
     )
 
 
+def test_cloud_batch_entrypoint_marks_candidate_only_mode_after_verification():
+    """Historical tests may trust the mode only after source verification."""
+    entrypoint_text = (
+        REPO_ROOT / "ci" / "cloud-batch" / "entrypoint.sh"
+    ).read_text(encoding="utf-8")
+    verify = 'python3 /source-identity.py verify --work-dir "${WORK_DIR}"'
+    unset_marker = "unset PDD_CLOUD_SOURCE_IDENTITY_MODE"
+    marker = 'export PDD_CLOUD_SOURCE_IDENTITY_MODE="candidate-tree-v1"'
+
+    assert unset_marker in entrypoint_text
+    assert marker in entrypoint_text
+    assert entrypoint_text.index(unset_marker) < entrypoint_text.index(verify)
+    assert entrypoint_text.index(verify) < entrypoint_text.index(marker)
+    assert entrypoint_text.index(marker) < entrypoint_text.index('cd "${WORK_DIR}"')
+    for template_name in (
+        "job-template.json",
+        "job-template-standard.json",
+        "job-template-pytest.json",
+        "job-template-cloud-regression.json",
+    ):
+        template = REPO_ROOT / "ci" / "cloud-batch" / template_name
+        assert "PDD_CLOUD_SOURCE_IDENTITY_MODE" not in template.read_text(
+            encoding="utf-8"
+        )
+
+
 def test_cloud_batch_uploaded_pyproject_registers_story_marker():
     pyproject = tomllib.loads(
         (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
