@@ -14,10 +14,15 @@ current_critical_path:
   first_hosted_attempt:
     run_url: "https://github.com/promptdriven/pdd/actions/runs/29635743590"
     unit_job_url: "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642167"
+    package_job_url: "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642157"
     exact_head_sha: "daa67f2044c55edea30420e5f4f31674e7141296"
     result: failed
-    failed_step: "Verify reviewed identity and runner provenance"
-    candidate_executed: false
+    unit_failed_step: "Verify reviewed identity and runner provenance"
+    unit_candidate_executed: false
+    package_failed_step: "Run real protected Vitest installed-wheel descriptor boundary"
+    installed_wheel_candidate_executed: true
+    installed_wheel_playwright_variants_passed: 7
+    installed_wheel_vitest_diagnostic_sha256: "340afd630c05209f62419c312abe3aeb7464262e3c5d8367e8d28fec22428471"
     preflight_failure_predicate_known: false
     preflight_artifact_uploaded: false
     vitest_cause_collected: false
@@ -86,6 +91,7 @@ steps:
       - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345745"
       - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345757"
       - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642167"
+      - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642157"
     predicate_result: "Exact diagnostic head is locally validated and reviewed, but the first exact-head hosted Unit job failed in silent preflight before source or installed-wheel Vitest evidence was produced."
     blocker: "Preflight observability, current-main integration, and exact-head hosted source/wheel agreement are not yet passed."
     owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
@@ -203,6 +209,7 @@ steps:
       - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345757"
       - "https://github.com/promptdriven/pdd/pull/1995#issuecomment-5009900976"
       - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642167"
+      - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642157"
       - "https://github.com/promptdriven/pdd/pull/1995#issuecomment-5010407866"
     observed_evidence:
       reviewed_diagnostic_head_exact: true
@@ -210,7 +217,9 @@ steps:
       behavioral_verdict_no_behavioral_fix: true
       runner_image_and_provisioner_header_match_pins: true
       hosted_preflight_passed: false
-      hosted_candidate_executed: false
+      hosted_unit_candidate_executed: false
+      hosted_installed_wheel_candidate_executed: true
+      hosted_installed_wheel_vitest_diagnostic_sha256: "340afd630c05209f62419c312abe3aeb7464262e3c5d8367e8d28fec22428471"
       hosted_cause_artifact_verified: false
       cause_specific_red_exists: false
     predicate_result: "All seven historical installed-wheel Playwright variants pass. The exact reviewed diagnostic head failed closed in hosted preflight before candidate execution, so no protected Vitest cause or cause-specific RED exists."
