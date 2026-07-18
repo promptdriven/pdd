@@ -70,7 +70,7 @@ def get_meta_dir(project_root=None, paths=None):
     try:
         from .operation_log import _resolve_meta_dir
     except ImportError:  # direct (non-package) import path
-        from operation_log import _resolve_meta_dir  # type: ignore
+        from pdd.operation_log import _resolve_meta_dir
     return _resolve_meta_dir(project_root=None, paths=paths)
 
 def get_locks_dir():
