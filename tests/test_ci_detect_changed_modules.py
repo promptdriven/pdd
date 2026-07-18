@@ -529,6 +529,24 @@ def test_detect_combines_nested_direct_and_reverse_dependencies(monkeypatch):
 
 
 @pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
+def test_detect_resolves_architecture_step13_transitive_include(
+    load_module, monkeypatch
+):
+    """Step 13's generated prompt is canonical architecture-owned auto-heal work."""
+    module = load_module()
+    monkeypatch.chdir(_repo_root())
+    monkeypatch.setattr(
+        module,
+        "_git_changed_files",
+        lambda _diff_base: [
+            "pdd/templates/architecture/pdd_path_construction_guide.prompt"
+        ],
+    )
+
+    assert "agentic_arch_step13_fix" in module.detect("origin/main...HEAD")
+
+
+@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
 def test_detect_preserves_canonical_ownership_for_colliding_cli_and_flat_tests(
     load_module, monkeypatch
 ):
