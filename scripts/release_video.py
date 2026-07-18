@@ -126,7 +126,10 @@ COMMAND_SHELL_NAME_PATTERN = (
     r"(?:bash|zsh|xonsh|korn|ksh|csh|tcsh|bourne(?:[-\s]+again)?|powershell)"
 )
 BASH_STRONG_SURFACE_RE = re.compile(
-    r"\bbash\s+(?:history|scripts?|windows?|panes?)\b",
+    r"\bbash\s+(?:history|scripts?|windows?|panes?|transcripts?|"
+    r"directory\s+listings?)\b|"
+    r"\bbash\s+(?:prompts?|cursors?|carets?)\b"
+    r"(?![-\s]+(?:shaped|like)\b)",
     flags=re.IGNORECASE,
 )
 BASH_SESSION_RE = re.compile(
@@ -156,15 +159,31 @@ COMMAND_SHELL_EXECUTION_RE = re.compile(
 SHELL_SUBJECT_CONTEXT_PATTERN = (
     r"(?:(?![.!?;]|\b(?:that|who|which)\b|"
     r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b|"
+    r"(?:,|:)\s*(?:a|an|the|another)\b|"
     r",?\s*(?:and|but|while|whereas|yet|as)\s+"
     r"(?:a|an|the|another)\b).){0,100}"
 )
+SHELL_TARGET_CONTEXT_PATTERN = (
+    r"(?:(?![.!?;]|\b(?:that|who|which)\b|"
+    r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b|"
+    r"(?:,|:)\s*(?:a|an|the|another)\b|"
+    r",?\s*(?:and|but|while|whereas|yet|as)\s+"
+    r"(?:a|an|the|another)\b).){0,60}"
+)
 SHELL_DIRECT_RELATIVE_COMPUTING_RE = re.compile(
     r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
-    r"(?:shows?|displays?|presents?)\s+(?:a\s+|an\s+|the\s+|its\s+)?"
-    r"(?:prompts?|outputs?|directory\s+listings?|file\s+listings?|filenames?)\b|"
+    r"(?:shows?|displays?|presents?|renders?)\s+"
+    r"(?:a\s+|an\s+|the\s+|its\s+)?"
+    r"(?:prompts?\b(?![-\s]+(?:shaped|like)\b)|"
+    r"(?:(?:diagnostic|build|command|standard|current)\s+)?outputs?|"
+    r"directory\s+listings?|file\s+listings?|file\s+names?|files?)\b|"
     r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
-    r"(?:accepts?|receives?|takes?)\s+(?:keyboard\s+|typed\s+|user\s+)?inputs?\b|"
+    r"lists?\s+(?:a\s+|an\s+|the\s+|its\s+)?"
+    r"(?:directory|directory\s+listings?|file\s+listings?|"
+    r"file\s+names?|files?)\b|"
+    r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
+    r"(?:accepts?|awaits?|receives?|takes?|waits\s+for)\s+"
+    r"(?:keyboard\s+|typed\s+|user\s+)?inputs?\b|"
     r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
     r"(?:prints?|writes?)\s+(?:(?:diagnostic|build|command|standard|current)\s+)?"
     r"outputs?\b",
@@ -173,7 +192,8 @@ SHELL_DIRECT_RELATIVE_COMPUTING_RE = re.compile(
 SHELL_OWNED_COMPUTING_RE = re.compile(
     r"\bshell[-\s]+outputs?\s+windows?\b|"
     r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
-    r"(?:scripts?|prompts?|cli|screens?|sessions?|panes?|transcripts?|"
+    r"(?:scripts?|prompts?\b(?![-\s]+(?:shaped|like)\b)|cli|"
+    r"screens?|sessions?|panes?|transcripts?|"
     r"working\s+director(?:y|ies)|standard\s+outputs?|current\s+outputs?|"
     r"command\s+outputs?|technical\s+surfaces?)\b|"
     r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
@@ -184,8 +204,9 @@ SHELL_OWNED_COMPUTING_RE = re.compile(
     rf"{SHELL_SUBJECT_CONTEXT_PATTERN}\b"
     r"(?:is|has|with|hosts?|contains?|shows?|reads?|lists?|invokes?|displays?|"
     r"displaying|presents?|presenting|renders?|rendering|prints?|writes?)\b"
-    r"(?:(?![.!?;]).){0,60}\b"
-    rf"(?:{COMMAND_SHELL_NAME_PATTERN}\s+sessions?|prompts?|"
+    rf"{SHELL_TARGET_CONTEXT_PATTERN}\b"
+    rf"(?:{COMMAND_SHELL_NAME_PATTERN}\s+sessions?|"
+    r"prompts?\b(?![-\s]+(?:shaped|like)\b)|"
     r"(?:blinking\s+)?(?:cursors?|carets?)(?![-\s]+(?:shaped|like)\b)|"
     r"cli|keystrokes?|"
     r"stdout|stderr|system\s+sessions?|login\s+sessions?|stdin|"
