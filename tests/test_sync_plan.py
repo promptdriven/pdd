@@ -167,7 +167,37 @@ def test_execution_order_allows_cycle_members_but_orders_scc_dependencies(tmp_pa
     validate_serialized_sync_plan(document)
 
     document["execution_order"] = ["after", "pre", "cycle/b", "cycle/a"]
-    with pytest.raises(SyncPlanError, match="execution order violates dependencies"):
+    with pytest.raises(SyncPlanError, match="execution order"):
+        validate_serialized_sync_plan(document)
+
+
+@pytest.mark.parametrize(
+    "requested",
+    [("c", "cycle/a", "cycle/b"), ("cycle/a", "c", "cycle/b")],
+)
+def test_execution_order_schedules_condensed_scc_dag_without_interleaving(
+    tmp_path: Path, requested: tuple[str, ...]
+) -> None:
+    """A dependent C cannot split or precede the selected A<->B component."""
+    plan = build_sync_plan(
+        tmp_path,
+        [
+            _candidate(tmp_path, "cycle/a", dependencies=("cycle/b",)),
+            _candidate(tmp_path, "cycle/b", dependencies=("cycle/a",)),
+            _candidate(tmp_path, "c", dependencies=("cycle/a",)),
+        ],
+        ["cycle/a", "cycle/b", "c"], execution_order=requested,
+    )
+    assert plan.execution_order[:2] == ("cycle/a", "cycle/b")
+    assert plan.execution_order[-1] == "c"
+    document = plan.to_dict()
+    validate_serialized_sync_plan(document)
+
+    document["execution_order"] = ["c", "cycle/a", "cycle/b"]
+    with pytest.raises(SyncPlanError, match="execution order"):
+        validate_serialized_sync_plan(document)
+    document["execution_order"] = ["cycle/a", "c", "cycle/b"]
+    with pytest.raises(SyncPlanError, match="execution order"):
         validate_serialized_sync_plan(document)
 
 

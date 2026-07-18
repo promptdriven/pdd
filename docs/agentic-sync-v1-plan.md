@@ -7,7 +7,8 @@ candidate; an ambiguous basename is rejected with its path-qualified choices.
 The runner consumes frozen selected IDs, canonical dependency evidence, and a
 separate dependency-safe execution order as its schedule. The latter retains an
 authoritative caller order only for independent ready targets or members of the
-same SCC; prerequisite SCCs always remain earlier.
+same SCC. Scheduling operates on the condensed SCC DAG, so a component remains
+contiguous and every prerequisite component completes before its dependents.
 It writes immutable full-primary `pdd.sync.scope-evidence.v1` plan evidence
 under `.pdd/evidence/sync-plans/<plan-digest>.json` and a separate bounded
 execution-selection artifact under `.pdd/evidence/sync-executions/`. A fallback

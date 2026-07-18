@@ -282,14 +282,6 @@ class SyncPlan:
             raise SyncPlanError("selected module is absent from frozen candidates")
         if set(self.dependency_order) != selected or len(self.dependency_order) != len(selected):
             raise SyncPlanError("dependency order does not exactly cover selected modules")
-        if set(self.execution_order) != selected or len(self.execution_order) != len(selected):
-            raise SyncPlanError("execution order does not exactly cover selected modules")
-        execution_index = {module_id: index for index, module_id in enumerate(self.execution_order)}
-        scc_by_id = {
-            module_id: index
-            for index, component in enumerate(self.sccs)
-            for module_id in component
-        }
         for module_id, candidate in candidates.items():
             derived_id = canonical_module_id(self.root, candidate.unit)
             if module_id != derived_id:
@@ -309,13 +301,12 @@ class SyncPlan:
                 if not isinstance(path, Path):
                     raise SyncPlanError("candidate paths must be pathlib paths")
                 _root_relative(self.root, path)
-            if candidate.module_id in selected and any(
-                execution_index[dependency] > execution_index[candidate.module_id]
-                for dependency in candidate.dependencies
-                if dependency in selected
-                and scc_by_id[dependency] != scc_by_id[candidate.module_id]
-            ):
-                raise SyncPlanError("execution order schedules a dependent before its dependency")
+        _validate_execution_order(
+            self.selected_module_ids,
+            {module_id: candidate.dependencies for module_id, candidate in candidates.items()},
+            self.sccs,
+            self.execution_order,
+        )
         expected_plan_digest = plan_digest(self.to_dict())
         if self.sync_plan_digest != expected_plan_digest:
             raise SyncPlanError("frozen SyncPlan digest mismatch")
@@ -392,42 +383,96 @@ def _execution_order(
     dependencies: Mapping[str, Sequence[str]],
     requested: Sequence[str],
 ) -> tuple[str, ...]:
-    """Return a dependency-safe order that preserves requested priorities.
+    """Schedule the condensed SCC DAG with requested priority at each level.
 
-    The graph's canonical order remains lexical and is retained separately for
-    deterministic evidence.  This queue only gives independent ready modules
-    the caller's explicitly supplied priority; dependency closure always wins.
+    The canonical graph order stays separate.  This execution order treats an
+    SCC as one atomic ready node: all external predecessor components finish
+    before it starts, its requested/lexical members remain contiguous, and an
+    outside dependent can never interleave the cycle.
     """
     selected_set = set(selected)
     requested_rank = {
         module_id: index for index, module_id in enumerate(requested)
         if module_id in selected_set
     }
-    remaining = {
-        module_id: set(dependencies.get(module_id, ())) & selected_set
-        for module_id in selected
+    components = _stable_scc_order(selected, dependencies)
+    component_of = {
+        module_id: index
+        for index, component in enumerate(components)
+        for module_id in component
     }
-    fallback_rank = len(requested_rank)
+    component_dependencies = {
+        index: {
+            component_of[dependency]
+            for module_id in component
+            for dependency in dependencies.get(module_id, ())
+            if dependency in selected_set
+            and component_of[dependency] != index
+        }
+        for index, component in enumerate(components)
+    }
+    fallback_rank = len(requested_rank) + len(selected)
+
+    def component_priority(index: int) -> tuple[int, str]:
+        component = components[index]
+        return (
+            min(
+                (requested_rank.get(module_id, fallback_rank) for module_id in component),
+                default=fallback_rank,
+            ),
+            component[0],
+        )
+
+    remaining = dict(component_dependencies)
     ordered: list[str] = []
     while remaining:
-        ready = [module_id for module_id, deps in remaining.items() if not deps]
+        ready = [index for index, deps in remaining.items() if not deps]
         if not ready:
-            # Keep the SCC convention deterministic.  A member of a cycle can
-            # start only after all dependencies outside that cycle are ready.
-            ready = [min(remaining, key=lambda module_id: (
-                requested_rank.get(module_id, fallback_rank), module_id
-            ))]
-        ready.sort(key=lambda module_id: (
-            requested_rank.get(module_id, fallback_rank), module_id
-        ))
-        for module_id in ready:
-            if module_id not in remaining:
+            raise SyncPlanError("condensed dependency graph contains a cycle")
+        for index in sorted(ready, key=component_priority):
+            if index not in remaining:
                 continue
-            ordered.append(module_id)
-            remaining.pop(module_id)
+            ordered.extend(sorted(
+                components[index],
+                key=lambda module_id: (requested_rank.get(module_id, fallback_rank), module_id),
+            ))
+            remaining.pop(index)
             for deps in remaining.values():
-                deps.discard(module_id)
+                deps.discard(index)
     return tuple(ordered)
+
+
+def _validate_execution_order(
+    selected: Sequence[str],
+    dependencies: Mapping[str, Sequence[str]],
+    sccs: Sequence[Sequence[str]],
+    execution_order: Sequence[str],
+) -> None:
+    """Reject interleaved SCCs or component edges reversed in an execution plan."""
+    if set(execution_order) != set(selected) or len(execution_order) != len(selected):
+        raise SyncPlanError("execution order does not exactly cover selected modules")
+    execution_index = {module_id: index for index, module_id in enumerate(execution_order)}
+    scc_by_id = {
+        module_id: index
+        for index, component in enumerate(sccs)
+        for module_id in component
+    }
+    positions_by_scc = {
+        index: sorted(execution_index[module_id] for module_id in component)
+        for index, component in enumerate(sccs)
+    }
+    for positions in positions_by_scc.values():
+        if positions != list(range(positions[0], positions[-1] + 1)):
+            raise SyncPlanError("execution order interleaves SCC members")
+    for module_id in selected:
+        module_scc = scc_by_id[module_id]
+        for dependency in dependencies.get(module_id, ()):
+            dependency_scc = scc_by_id[dependency]
+            if dependency_scc != module_scc and (
+                positions_by_scc[dependency_scc][-1]
+                > positions_by_scc[module_scc][0]
+            ):
+                raise SyncPlanError("execution order violates SCC dependencies")
 
 
 def build_sync_plan(
@@ -832,21 +877,12 @@ def validate_serialized_sync_plan(plan: Mapping[str, Any]) -> None:
     expected_sccs = _stable_scc_order(selected, dependency_map)
     if tuple(order) != expected_order or tuple(tuple(component) for component in sccs) != expected_sccs:
         raise SyncPlanError("persisted SyncPlan graph order or SCCs are inconsistent")
-    if set(execution_order) != set(selected) or len(execution_order) != len(selected):
-        raise SyncPlanError("persisted SyncPlan execution order is inconsistent")
-    execution_index = {module_id: index for index, module_id in enumerate(execution_order)}
-    scc_by_id = {
-        module_id: index
-        for index, component in enumerate(expected_sccs)
-        for module_id in component
-    }
-    if any(
-        execution_index[dependency] > execution_index[module_id]
-        for module_id in selected
-        for dependency in dependency_map[module_id]
-        if scc_by_id[dependency] != scc_by_id[module_id]
-    ):
-        raise SyncPlanError("persisted SyncPlan execution order violates dependencies")
+    try:
+        _validate_execution_order(selected, dependency_map, expected_sccs, execution_order)
+    except SyncPlanError as exc:
+        raise SyncPlanError(
+            "persisted SyncPlan " + str(exc)
+        ) from exc
     order_index = {module_id: index for index, module_id in enumerate(expected_order)}
     scc_index = {module_id: index for index, component in enumerate(expected_sccs) for module_id in component}
     for candidate in candidates:

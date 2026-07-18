@@ -8,7 +8,7 @@
   "test_hash": "e5521177486b349bcafea75341c613611754c63c64f122006217c7924f0fa6c2",
   "test_files": {
     "test_agentic_sync.py": "e5521177486b349bcafea75341c613611754c63c64f122006217c7924f0fa6c2",
-    "test_sync_plan.py": "81961a58126ecfef6841d61fc906ea87ed5285e955f181c8001e7a3e58866fac"
+    "test_sync_plan.py": "44b905ac086916d70cffcab60b80e7d82544564963375d7b41f099e0327cff10"
   },
   "include_deps": {
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
