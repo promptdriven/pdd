@@ -538,6 +538,9 @@ def test_release_video_visual_safety_allows_local_physical_shell_materials(
         "A physical shell is translucent as each nearby lantern displays output as blue light.",
         "A Bash prompt-shaped ornament rests beside the orb.",
         "A Bash prompt-like glow surrounds a matte cube.",
+        "A physical shell with nearby lamps displaying output as colored light.",
+        "A physical shell with two lanterns presenting output as a diffuse glow.",
+        "A physical shell, with nearby lamps displaying output as colored light, surrounds an orb.",
     ],
 )
 def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_homonyms(
@@ -624,6 +627,13 @@ def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_ho
         "A shell that displays its working directory appears.",
         "A shell which has a transcript appears.",
         "A shell that reads files appears.",
+        "A shell rests and then displays output.",
+        "A shell pauses but eventually displays output.",
+        "A shell sits still, yet later shows files.",
+        "A shell glows while softly displaying output.",
+        "A shell is translucent and prominently displays its working directory.",
+        "A shell rests and after a moment displays a file listing.",
+        "A shell with a blinking prompt appears.",
     ],
 )
 def test_release_video_visual_safety_rejects_technical_surface_after_punctuation(
