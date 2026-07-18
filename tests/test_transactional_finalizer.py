@@ -37,6 +37,31 @@ def test_finalizer_is_atomic_and_preserves_previous_fingerprint_on_replace_failu
     assert json.loads(destination.read_text(encoding="utf-8")) == {"old": True}
 
 
+@pytest.mark.parametrize(
+    ("target", "error"),
+    (
+        ("pdd.json_atomic.json.dump", OSError("temp write failed")),
+        ("pdd.json_atomic.os.replace", OSError("replace failed")),
+    ),
+)
+def test_real_atomic_writer_preserves_previous_state_on_failure(
+    tmp_path: Path, target: str, error: OSError,
+) -> None:
+    """Both temp-file writes and replacement fail without exposing partial JSON."""
+    paths, root = _paths(tmp_path)
+    destination = root / ".pdd" / "meta" / "sample_python.json"
+    destination.parent.mkdir(parents=True)
+    previous = b'{"old": "fingerprint"}\n'
+    destination.write_bytes(previous)
+
+    with patch(target, side_effect=error):
+        with pytest.raises(FingerprintFinalizeError, match=str(error)):
+            finalize_fingerprint("sample", "python", "generate", paths)
+
+    assert destination.read_bytes() == previous
+    assert not list(destination.parent.glob(".sample_python.json.*.tmp"))
+
+
 def test_finalizer_rejects_null_hash_and_parent_cwd_uses_subproject_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

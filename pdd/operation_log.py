@@ -620,17 +620,9 @@ def save_fingerprint(
     in sync_determine_operation.py. This ensures manual commands (generate, example)
     don't break sync's fingerprint tracking.
     """
-    # Issue #983: when the caller provides `paths`, use them directly — do
-    # NOT call get_pdd_file_paths. Issue #1211: at the same time, use those
-    # caller-supplied paths to detect the subproject root so the meta dir
-    # anchors at the .pddrc rather than the run CWD.
-    if not paths:
-        from .sync_determine_operation import get_pdd_file_paths
-        try:
-            paths = get_pdd_file_paths(basename, language)
-        except (ImportError, OSError, ValueError) as e:
-            logger.warning("Could not resolve paths for %s/%s: %s", basename, language, e)
-            paths = {}
+    # Explicit paths remain authoritative.  When omitted, the shared
+    # finalizer performs exactly one discovery attempt and turns failure into a
+    # typed command failure instead of writing a null-hash fingerprint.
 
     from .sync_core.finalize import finalize_legacy_paths
 
