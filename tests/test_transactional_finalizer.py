@@ -553,4 +553,3 @@ def test_finalizer_completes_thin_metadata_paths_before_hashing(tmp_path: Path) 
     assert payload["example_hash"]
     assert payload["test_hash"]
     assert payload["test_files"][test.name]
-
