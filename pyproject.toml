@@ -117,6 +117,9 @@ packages = ["pdd", "pdd.commands", "pdd.core", "pdd.server", "pdd.server.routes"
 
 [project.optional-dependencies]
 dev = [
+    "setuptools>=64",
+    "setuptools-scm>=8",
+    "wheel",
     "pytest-cov",
     "pytest-testmon",
     "pytest-xdist",
