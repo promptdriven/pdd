@@ -33,6 +33,7 @@ from .git_update import git_update
 from .agentic_common import get_available_agents
 from .agentic_update import run_agentic_update
 from .sync_determine_operation import calculate_sha256, extract_include_deps, read_fingerprint
+from .fingerprint_transaction import FingerprintFinalizeError
 from .validate_prompt_includes import sanitize_prompt_output
 from . import DEFAULT_TIME
 
@@ -1177,12 +1178,10 @@ def _finalize_single_file_fingerprint(
             basename, language, paths=update_paths
         )
     except Exception as exc:
-        from .fingerprint_transaction import FingerprintFinalizeError
         raise FingerprintFinalizeError(
             "update", Path(".pdd/meta"), f"run report clear failed: {exc}"
         ) from exc
     if not fingerprint_allowed:
-        from .fingerprint_transaction import FingerprintFinalizeError
         raise FingerprintFinalizeError(
             "update", Path(".pdd/meta"), "stale run report could not be cleared"
         )
@@ -1196,9 +1195,12 @@ def _finalize_single_file_fingerprint(
             cost=cost,
             model=model,
         )
-    except Exception:
-        # A prompt mutation is not successful until its fingerprint is durable.
+    except FingerprintFinalizeError:
         raise
+    except Exception as exc:
+        raise FingerprintFinalizeError(
+            "update", Path(".pdd/meta"), f"fingerprint write failed: {exc}",
+        ) from exc
 
 
 def update_main(
@@ -1435,8 +1437,12 @@ def update_main(
                             )
                             try:
                                 clear_run_report(basename, language, paths=_update_paths)
-                            except Exception:
-                                raise
+                            except Exception as exc:
+                                raise FingerprintFinalizeError(
+                                    "update",
+                                    _stale_report_path or Path(".pdd/meta"),
+                                    f"run report clear failed: {exc}",
+                                ) from exc
                             # Defensive: clear_run_report() in pdd.operation_log
                             # silently swallows OSError on the actual unlink
                             # (see pdd/operation_log.py:317-320), so if the
@@ -1464,7 +1470,6 @@ def update_main(
                                             f"[/warning]"
                                         )
                             if _stale_remains:
-                                from .fingerprint_transaction import FingerprintFinalizeError
                                 raise FingerprintFinalizeError(
                                     "update", _stale_report_path or Path(".pdd/meta"),
                                     "stale run report could not be cleared",
@@ -1733,12 +1738,6 @@ def update_main(
                     with open(prompt_path, 'r') as f:
                         generated_prompt = f.read()
 
-                    if not quiet:
-                        rprint("[bold green]Prompt generated successfully (agentic).[/bold green]")
-                        rprint(f"[bold]Provider:[/bold] {provider}")
-                        rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
-                        rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
-
                     if sync_metadata:
                         if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
                             # Surface as a non-zero CLI exit, not a soft None
@@ -1757,6 +1756,12 @@ def update_main(
                         cost=agentic_cost,
                         model=provider,
                     )
+
+                    if not quiet:
+                        rprint("[bold green]Prompt generated successfully (agentic).[/bold green]")
+                        rprint(f"[bold]Provider:[/bold] {provider}")
+                        rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
+                        rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
 
                     return generated_prompt, agentic_cost, provider
 
@@ -1820,12 +1825,6 @@ def update_main(
                     )
                 f.write(modified_prompt)
 
-            if not quiet:
-                rprint("[bold green]Prompt generated successfully.[/bold green]")
-                rprint(f"[bold]Model used:[/bold] {model_name}")
-                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-                rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
-
             if sync_metadata:
                 if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
                     raise click.exceptions.Exit(1)
@@ -1839,6 +1838,12 @@ def update_main(
                 cost=total_cost,
                 model=model_name,
             )
+
+            if not quiet:
+                rprint("[bold green]Prompt generated successfully.[/bold green]")
+                rprint(f"[bold]Model used:[/bold] {model_name}")
+                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+                rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
 
             return modified_prompt, total_cost, model_name
 
@@ -1876,12 +1881,6 @@ def update_main(
                     with open(agentic_prompt_file, 'r') as f:
                         updated_prompt = f.read()
 
-                    if not quiet:
-                        rprint("[bold green]Prompt updated successfully (agentic).[/bold green]")
-                        rprint(f"[bold]Provider:[/bold] {provider}")
-                        rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
-                        rprint(f"[bold]Updated prompt saved to:[/bold] {final_output_path}")
-
                     if sync_metadata:
                         if _is_output_redirected(
                             Path(agentic_prompt_file),
@@ -1905,6 +1904,12 @@ def update_main(
                         model=provider,
                         source_prompt_path=Path(actual_input_prompt_file),
                     )
+
+                    if not quiet:
+                        rprint("[bold green]Prompt updated successfully (agentic).[/bold green]")
+                        rprint(f"[bold]Provider:[/bold] {provider}")
+                        rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
+                        rprint(f"[bold]Updated prompt saved to:[/bold] {final_output_path}")
 
                     return updated_prompt, agentic_cost, provider
 
@@ -2003,12 +2008,6 @@ def update_main(
                     )
                 f.write(modified_prompt)
 
-            if not quiet:
-                rprint("[bold green]Prompt updated successfully.[/bold green]")
-                rprint(f"[bold]Model used:[/bold] {model_name}")
-                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-                rprint(f"[bold]Updated prompt saved to:[/bold] {output_file_paths['output']}")
-
             if sync_metadata:
                 if _is_output_redirected(
                     Path(output_file_paths["output"]),
@@ -2033,6 +2032,12 @@ def update_main(
                 source_prompt_path=Path(actual_input_prompt_file),
             )
 
+            if not quiet:
+                rprint("[bold green]Prompt updated successfully.[/bold green]")
+                rprint(f"[bold]Model used:[/bold] {model_name}")
+                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+                rprint(f"[bold]Updated prompt saved to:[/bold] {output_file_paths['output']}")
+
             return modified_prompt, total_cost, model_name
 
     except (ValueError, git.InvalidGitRepositoryError) as e:
@@ -2049,6 +2054,8 @@ def update_main(
         # auto-heal subprocess does not mark a half-synced update as healed
         # (#871). Letting the bare `except Exception` below swallow this would
         # silently convert it to exit 0.
+        raise
+    except FingerprintFinalizeError:
         raise
     except Exception as e:
         if not quiet:

@@ -427,14 +427,15 @@ def test_update_main_regeneration_mode(
     mock_resolve_pair.return_value = ("modified_code_python.prompt", "modified_code.py")
     
     # Act
-    result = update_main(
-        ctx=mock_ctx,
-        input_prompt_file=None,
-        modified_code_file="modified_code.py",
-        input_code_file=None,
-        output=None,
-        use_git=False
-    )
+    with patch("pdd.operation_log.save_fingerprint"):
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=None,
+            modified_code_file="modified_code.py",
+            input_code_file=None,
+            output=None,
+            use_git=False
+        )
 
     # Assert
     # 1. It should resolve the pair to find/create the prompt file
@@ -772,7 +773,8 @@ def test_update_main_repo_mode_orchestration(mock_pddrc, mock_update_file_pair, 
     ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
 
     # Run update_main in repo mode
-    result = update_main(ctx=ctx, input_prompt_file=None, modified_code_file=None, input_code_file=None, output=None, use_git=False, repo=True)
+    with patch("pdd.operation_log.save_fingerprint"):
+        result = update_main(ctx=ctx, input_prompt_file=None, modified_code_file=None, input_code_file=None, output=None, use_git=False, repo=True)
 
     # Assert that the update function was called for each pair (all 3 marked as changed)
     assert mock_update_file_pair.call_count == 3
@@ -821,16 +823,17 @@ def test_update_main_repo_mode_honors_budget_cap(mock_pddrc, mock_update_file_pa
     ctx = click.Context(click.Command('update'))
     ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
 
-    result = update_main(
-        ctx=ctx,
-        input_prompt_file=None,
-        modified_code_file=None,
-        input_code_file=None,
-        output=None,
-        use_git=False,
-        repo=True,
-        budget=1.0,
-    )
+    with patch("pdd.operation_log.save_fingerprint"):
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            budget=1.0,
+        )
 
     # First two updates run (0.6 + 0.6), then cap is reached and third is skipped.
     assert mock_update_file_pair.call_count == 2
@@ -3300,15 +3303,17 @@ def test_finalize_single_file_fingerprint_skips_save_when_run_report_survives_cl
     import pdd.operation_log as ol
     monkeypatch.setattr(ol.os, "remove", lambda *a, **kw: None)
 
-    _finalize_single_file_fingerprint(
-        prompt_path=prompt_path,
-        code_path=code_path,
-        sync_metadata=False,
-        dry_run=False,
-        quiet=False,
-        cost=0.0,
-        model="test-model",
-    )
+    from pdd.fingerprint_transaction import FingerprintFinalizeError
+    with pytest.raises(FingerprintFinalizeError, match="stale run report"):
+        _finalize_single_file_fingerprint(
+            prompt_path=prompt_path,
+            code_path=code_path,
+            sync_metadata=False,
+            dry_run=False,
+            quiet=False,
+            cost=0.0,
+            model="test-model",
+        )
 
     # Acceptance criteria:
     # - The stale run report still exists (because os.remove was nulled).
@@ -3366,15 +3371,17 @@ def test_finalize_single_file_fingerprint_warns_about_stale_run_report_even_when
     import pdd.operation_log as ol
     monkeypatch.setattr(ol.os, "remove", lambda *a, **kw: None)
 
-    _finalize_single_file_fingerprint(
-        prompt_path=prompt_path,
-        code_path=code_path,
-        sync_metadata=False,
-        dry_run=False,
-        quiet=True,  # explicit: warning must surface anyway
-        cost=0.0,
-        model="test-model",
-    )
+    from pdd.fingerprint_transaction import FingerprintFinalizeError
+    with pytest.raises(FingerprintFinalizeError, match="stale run report"):
+        _finalize_single_file_fingerprint(
+            prompt_path=prompt_path,
+            code_path=code_path,
+            sync_metadata=False,
+            dry_run=False,
+            quiet=True,  # explicit: warning must surface anyway
+            cost=0.0,
+            model="test-model",
+        )
 
     assert not (meta_dir / "foo_python.json").exists()
     # Rich's Console wraps long lines on narrow terminals; normalize
@@ -3490,30 +3497,29 @@ def test_default_single_file_update_skips_fingerprint_when_identity_unknown(
     mock_save_fp.assert_not_called()
 
 
-def test_default_single_file_update_swallows_fingerprint_save_failure(
+def test_default_single_file_update_propagates_fingerprint_save_failure(
     mock_ctx,
     minimal_input_files,
     mock_construct_paths,
     mock_update_prompt,
     mock_open_file,
 ):
-    # A save_fingerprint exception must not break the success return — the
-    # update tuple is the contract; fingerprint write is best-effort. Use the
-    # canonical input path so the output-redirected guard does not skip
-    # save_fingerprint before the OSError can be raised.
+    # #1926 makes fingerprint persistence part of update success. A typed
+    # failure must reach the command boundary instead of returning a success
+    # tuple after the prompt mutation has already been announced.
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
          patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")), \
          patch("pdd.operation_log.save_fingerprint", side_effect=OSError("disk full")):
-        result = update_main(
-            ctx=mock_ctx,
-            input_prompt_file="updated_prompt.prompt",
-            modified_code_file=minimal_input_files["modified_code_file"],
-            input_code_file=minimal_input_files["input_code_file"],
-            output="updated_prompt.prompt",
-            use_git=False,
-        )
-
-    assert result == ("updated prompt text", 0.123456, "test-model")
+        from pdd.fingerprint_transaction import FingerprintFinalizeError
+        with pytest.raises(FingerprintFinalizeError, match="disk full"):
+            update_main(
+                ctx=mock_ctx,
+                input_prompt_file="updated_prompt.prompt",
+                modified_code_file=minimal_input_files["modified_code_file"],
+                input_code_file=minimal_input_files["input_code_file"],
+                output="updated_prompt.prompt",
+                use_git=False,
+            )
 
 
 def test_default_single_file_update_skips_fingerprint_when_output_redirected(
@@ -3901,10 +3907,8 @@ def test_repo_mode_clear_run_report_failure_warns_and_continues(
     temp_git_repo,
     capsys,
 ):
-    # Regression for issue #1057: when clear_run_report raises in repo-mode
-    # legacy fingerprinting, we must surface a non-fatal warning (when not
-    # quiet) and still proceed to save_fingerprint, so the user is told that
-    # runtime verification state may still describe the pre-mutation files.
+    # #1926 replaces the old warning-and-success behavior: a failed clear
+    # makes the batch finalization fail before any fresh fingerprint is saved.
     def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
         return {
             "prompt_file": prompt_file,
@@ -3928,28 +3932,22 @@ def test_repo_mode_clear_run_report_failure_warns_and_continues(
         # quiet=False so the warning is emitted
         ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
 
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=None,
-            modified_code_file=None,
-            input_code_file=None,
-            output=None,
-            use_git=False,
-            repo=True,
-            sync_metadata=False,
-        )
+        from pdd.fingerprint_transaction import FingerprintFinalizeError
+        with pytest.raises(FingerprintFinalizeError, match="disk full"):
+            update_main(
+                ctx=ctx,
+                input_prompt_file=None,
+                modified_code_file=None,
+                input_code_file=None,
+                output=None,
+                use_git=False,
+                repo=True,
+                sync_metadata=False,
+            )
 
-    assert result is not None
     assert mock_sync.call_count == 0
-    # clear_run_report attempted for each successful pair
-    assert mock_clear_rr.call_count == mock_update_file_pair.call_count
-    # save_fingerprint still called per pair despite clear failure
-    assert mock_save_fp.call_count == mock_update_file_pair.call_count
-    assert mock_save_fp.call_count >= 1
-    # Warning surfaced to the user
-    out = capsys.readouterr().out
-    assert "Run report clear failed" in out
-    assert "disk full" in out
+    assert mock_clear_rr.call_count == 1
+    mock_save_fp.assert_not_called()
 
 
 @patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
@@ -4004,22 +4002,22 @@ def test_repo_mode_clear_run_report_silent_unlink_failure_warns(
         # quiet=False so the defensive warning is emitted
         ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
 
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=None,
-            modified_code_file=None,
-            input_code_file=None,
-            output=None,
-            use_git=False,
-            repo=True,
-            sync_metadata=False,
-        )
-
-    assert result is not None
+        from pdd.fingerprint_transaction import FingerprintFinalizeError
+        with pytest.raises(FingerprintFinalizeError, match="stale run report"):
+            update_main(
+                ctx=ctx,
+                input_prompt_file=None,
+                modified_code_file=None,
+                input_code_file=None,
+                output=None,
+                use_git=False,
+                repo=True,
+                sync_metadata=False,
+            )
     assert mock_sync.call_count == 0
     # clear_run_report attempted for each successful pair, but it silently
     # did nothing (no exception raised, no file removed).
-    assert mock_clear_rr.call_count == mock_update_file_pair.call_count
+    assert mock_clear_rr.call_count == 1
     # save_fingerprint must be SKIPPED when the stale run report remains,
     # so we don't claim finalized metadata while runtime verification still
     # describes the pre-update files (issue #1057).
@@ -4509,7 +4507,8 @@ def test_prd_sync_updated(
     """
     repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
     mock_agentic.return_value = (True, "<updated-prd>new PRD content</updated-prd>", 0.12, "agent_model")
-    result = _run_prd_sync_update(repo_root, ctx)
+    with patch("pdd.operation_log.save_fingerprint"):
+        result = _run_prd_sync_update(repo_root, ctx)
     assert "new PRD content" in prd_file.read_text(), "PRD file was not updated."
     assert result is not None
     assert result[1] == pytest.approx(0.17), f"Cost should be 0.17, got {result[1]}"
@@ -4541,7 +4540,8 @@ def test_prd_sync_no_update_needed(
     """
     repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
     mock_agentic.return_value = (True, "NO_UPDATE_NEEDED", 0.05, "agent_model")
-    result = _run_prd_sync_update(repo_root, ctx)
+    with patch("pdd.operation_log.save_fingerprint"):
+        result = _run_prd_sync_update(repo_root, ctx)
     assert "old PRD content" in prd_file.read_text(), "PRD file should remain unchanged."
     assert result is not None
     assert result[1] == pytest.approx(0.10), f"Cost should be 0.10, got {result[1]}"
@@ -4573,7 +4573,8 @@ def test_prd_sync_failure(
     """
     repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
     mock_agentic.return_value = (False, "API Limit reached", 0.0, "agent_model")
-    _run_prd_sync_update(repo_root, ctx)
+    with patch("pdd.operation_log.save_fingerprint"):
+        _run_prd_sync_update(repo_root, ctx)
     out = capsys.readouterr().out
     assert "old PRD content" in prd_file.read_text(), "PRD file should remain unchanged on failure."
     assert "API Limit reached" in out, "Failure reason should be in the output."

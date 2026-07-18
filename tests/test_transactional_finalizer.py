@@ -3,9 +3,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import os
+import signal
+import subprocess
+import sys
+import threading
 from unittest.mock import patch
 
 import pytest
+from click.testing import CliRunner
 
 from pdd.fingerprint_transaction import FingerprintFinalizeError, finalize_fingerprint
 
@@ -110,3 +116,120 @@ def test_atomic_state_rolls_back_when_later_state_write_fails(tmp_path: Path) ->
 
     assert json.loads(report.read_text(encoding="utf-8")) == {"old": "report"}
     assert json.loads(fingerprint.read_text(encoding="utf-8")) == {"old": "fingerprint"}
+
+
+def test_restart_recovers_after_process_death_between_state_publications(tmp_path: Path) -> None:
+    """A durable journal restores the old pair after a real SIGKILL transition."""
+    meta = tmp_path / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    report = meta / "sample_python_run.json"
+    fingerprint = meta / "sample_python.json"
+    report.write_text('{"version": "old-report"}\n', encoding="utf-8")
+    fingerprint.write_text('{"version": "old-fingerprint"}\n', encoding="utf-8")
+    script = """
+import os
+from pathlib import Path
+from pdd.fingerprint_transaction import AtomicStateUpdate
+meta = Path(os.environ['STATE_META'])
+state = AtomicStateUpdate('sample', 'python')
+original = state._write_journal
+def kill_after_report(phase, records):
+    original(phase, records)
+    if phase == 'report_published':
+        os.kill(os.getpid(), 9)
+state._write_journal = kill_after_report
+with state:
+    state.set_run_report({'version': 'new-report'}, meta / 'sample_python_run.json')
+    state.set_fingerprint({'version': 'new-fingerprint'}, meta / 'sample_python.json')
+"""
+    environment = dict(os.environ, STATE_META=str(meta), PYTHONPATH=str(Path.cwd()))
+    result = subprocess.run([sys.executable, "-c", script], env=environment, check=False)
+    assert result.returncode == -signal.SIGKILL
+    assert json.loads(report.read_text(encoding="utf-8"))["version"] == "new-report"
+    assert json.loads(fingerprint.read_text(encoding="utf-8"))["version"] == "old-fingerprint"
+
+    from pdd.fingerprint_transaction import AtomicStateUpdate
+
+    AtomicStateUpdate.recover("sample", "python", meta)
+    assert json.loads(report.read_text(encoding="utf-8"))["version"] == "old-report"
+    assert json.loads(fingerprint.read_text(encoding="utf-8"))["version"] == "old-fingerprint"
+    assert not list(meta.glob("*.state-txn.json"))
+
+
+def test_concurrent_state_finalizers_publish_only_complete_pairs(tmp_path: Path) -> None:
+    """The metadata lock serializes concurrent writers and leaves no split pair."""
+    from pdd.fingerprint_transaction import AtomicStateUpdate
+
+    meta = tmp_path / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    report = meta / "sample_python_run.json"
+    fingerprint = meta / "sample_python.json"
+    barrier = threading.Barrier(2)
+    failures: list[BaseException] = []
+
+    def publish(version: int) -> None:
+        try:
+            barrier.wait()
+            with AtomicStateUpdate("sample", "python") as state:
+                state.set_run_report({"version": version}, report)
+                state.set_fingerprint({"version": version}, fingerprint)
+        except BaseException as exc:  # Assert thread failures in the parent.
+            failures.append(exc)
+
+    threads = [threading.Thread(target=publish, args=(version,)) for version in (1, 2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not failures
+    assert json.loads(report.read_text(encoding="utf-8"))["version"] == json.loads(
+        fingerprint.read_text(encoding="utf-8")
+    )["version"]
+
+
+def test_finalizer_completes_thin_metadata_paths_before_hashing(tmp_path: Path) -> None:
+    """Prompt/code callers cannot omit existing example and test hashes."""
+    paths, root = _paths(tmp_path)
+    example = root / "examples" / "sample_example.py"
+    test = root / "tests" / "test_sample.py"
+    example.parent.mkdir()
+    test.parent.mkdir()
+    example.write_text("VALUE = 1\n", encoding="utf-8")
+    test.write_text("def test_value(): assert True\n", encoding="utf-8")
+    complete = {**paths, "example": example, "test": test, "test_files": [test]}
+
+    with patch("pdd.fingerprint_transaction.get_pdd_file_paths", return_value=complete):
+        finalize_fingerprint("sample", "python", "fix", paths)
+
+    payload = json.loads((root / ".pdd" / "meta" / "sample_python.json").read_text())
+    assert payload["example_hash"]
+    assert payload["test_hash"]
+    assert payload["test_files"][test.name]
+
+
+@pytest.mark.parametrize("command_name", ("auto_deps", "update"))
+def test_real_click_commands_do_not_convert_finalization_failure_to_success(
+    tmp_path: Path, command_name: str,
+) -> None:
+    """Maintenance and modify Click boundaries preserve typed finalizer failure."""
+    failure = FingerprintFinalizeError("test", tmp_path / "fingerprint.json", "disk full")
+    runner = CliRunner()
+    prompt = tmp_path / "sample_python.prompt"
+    prompt.write_text("% Goal\nSample\n", encoding="utf-8")
+    if command_name == "auto_deps":
+        from pdd.commands.maintenance import auto_deps
+
+        with patch("pdd.commands.maintenance.auto_deps_main", side_effect=failure):
+            result = runner.invoke(auto_deps, [str(prompt), str(tmp_path)], obj={"quiet": True})
+    else:
+        from pdd.commands.modify import update
+
+        code = tmp_path / "sample.py"
+        code.write_text("VALUE = 1\n", encoding="utf-8")
+        with patch("pdd.commands.modify.update_main", side_effect=failure):
+            result = runner.invoke(update, [str(code)], obj={"quiet": True})
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, FingerprintFinalizeError)
+    assert "Success" not in result.output
