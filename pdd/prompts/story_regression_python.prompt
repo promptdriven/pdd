@@ -41,7 +41,12 @@ public `story_id` helper so both systems share one identity space.
    e.g. `pytest.main(["--collect-only", "-q", str(tests_dir)], plugins=[collector])`
    with a `pytest_collection_modifyitems` hook that records `item.nodeid` against
    the story ids read from `item.iter_markers(name="story")`. Scope collection to
-   the `tests/` tree. Treat every nested `pytest.main` call as an isolated module
+   the `tests/` tree. An absent tests path, or a literally empty directory,
+   yields an empty map without invoking nested pytest. Keep this shortcut
+   conservative: a direct test-file input and every nonempty entry, including a
+   symlink or plugin candidate, must remain under pytest's discovery authority
+   so project configuration and plugins are honored. Treat every nested
+   `pytest.main` call as an isolated module
    namespace: temporarily remove pre-existing `sys.modules` entries whose module
    leaf collides with a file in the requested tests tree, snapshot the remaining
    module mapping, and in a `finally` block remove modules imported from that tree,
