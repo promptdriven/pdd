@@ -5865,6 +5865,44 @@ class TestPddChangedModulesFastPath:
         result["mock_agentic_task"].assert_not_called()
         result["mock_dry_run"].assert_not_called()
 
+    def test_path_qualified_env_entries_preserve_order_and_deduplicate(
+        self, monkeypatch, tmp_path
+    ):
+        selected = ["apps/b/page", "apps/a/page"]
+        result = self._run_with_env(
+            monkeypatch,
+            tmp_path,
+            env_value="apps/b/page, apps/a/page, apps/b/page",
+            architecture=[
+                {"filename": "page_python.prompt", "filepath": "apps/a/page.py", "dependencies": []},
+                {"filename": "page_python.prompt", "filepath": "apps/b/page.py", "dependencies": []},
+            ],
+            filter_synced=selected,
+        )
+
+        assert result["result"][0] is True
+        result["mock_agentic_task"].assert_not_called()
+        assert result["mock_dry_run"].call_args.kwargs["modules"] == selected
+
+    def test_ambiguous_bare_env_leaf_fails_before_dry_run(self, monkeypatch, tmp_path):
+        result = self._run_with_env(
+            monkeypatch,
+            tmp_path,
+            env_value="page",
+            architecture=[
+                {"filename": "page_python.prompt", "filepath": "apps/a/page.py", "dependencies": []},
+                {"filename": "page_python.prompt", "filepath": "apps/b/page.py", "dependencies": []},
+            ],
+            filter_synced=["page"],
+        )
+
+        assert result["result"][:2] == (
+            False,
+            "PDD_CHANGED_MODULES contained unresolved module targets: ['page']",
+        )
+        result["mock_agentic_task"].assert_not_called()
+        result["mock_dry_run"].assert_not_called()
+
     def test_env_fast_path_prints_selected_modules(self, monkeypatch, tmp_path, capsys):
         result = self._run_with_env(
             monkeypatch,
