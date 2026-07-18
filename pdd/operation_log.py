@@ -391,6 +391,41 @@ def _prompts_root_for_fingerprint(prompt_file: Union[str, Path]) -> Path:
     return prompt_path.parent
 
 
+def resolve_fingerprint_paths(
+    basename: str,
+    language: str,
+    prompt_file: Union[str, Path],
+    *,
+    paths: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Resolve sibling artifacts from the touched prompt's owning project.
+
+    Explicit paths always win.  This prevents parent-CWD invocations from
+    recording null hashes or writing metadata outside a nested subproject.
+    """
+    explicit: Dict[str, Any] = dict(paths or {})
+    prompt_path = Path(prompt_file)
+    # A decorator receives the user-facing relative argument; only let it
+    # override discovery when it is an actual path, not a display hint.
+    if prompt_path.exists():
+        explicit["prompt"] = prompt_path
+    else:
+        explicit.pop("prompt", None)
+    try:
+        from .sync_determine_operation import get_pdd_file_paths
+
+        discovered = get_pdd_file_paths(
+            basename, language, prompts_dir=str(_prompts_root_for_fingerprint(prompt_file))
+        )
+        if not isinstance(discovered.get("prompt"), Path) or not discovered["prompt"].exists():
+            return explicit
+        discovered.update(explicit)
+        return discovered
+    except (ImportError, OSError, ValueError) as exc:
+        logger.warning("Could not resolve complete fingerprint paths for %s/%s: %s", basename, language, exc)
+        return explicit
+
+
 def load_operation_log(
     basename: str,
     language: str,
@@ -585,11 +620,6 @@ def save_fingerprint(
     in sync_determine_operation.py. This ensures manual commands (generate, example)
     don't break sync's fingerprint tracking.
     """
-    from dataclasses import asdict
-    from datetime import timezone
-    from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
-    from . import __version__
-
     # Issue #983: when the caller provides `paths`, use them directly — do
     # NOT call get_pdd_file_paths. Issue #1211: at the same time, use those
     # caller-supplied paths to detect the subproject root so the meta dir
@@ -607,32 +637,9 @@ def save_fingerprint(
     if finalize_legacy_paths(paths):
         return
 
-    path = get_fingerprint_path(basename, language, paths=paths)
+    from .fingerprint_transaction import finalize_fingerprint
 
-    # Issue #522: Pass stored include deps for prompt hash calculation
-    prev_fp = read_fingerprint(basename, language, paths=paths)
-    stored_deps = prev_fp.include_deps if prev_fp else None
-    current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps) if paths else {}
-
-    # Create Fingerprint with same format as _save_fingerprint_atomic
-    fingerprint = Fingerprint(
-        pdd_version=__version__,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        command=operation,
-        prompt_hash=current_hashes.get('prompt_hash'),
-        code_hash=current_hashes.get('code_hash'),
-        example_hash=current_hashes.get('example_hash'),
-        test_hash=current_hashes.get('test_hash'),
-        test_files=current_hashes.get('test_files'),
-        include_deps=current_hashes.get('include_deps'),  # Issue #522
-    )
-
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(asdict(fingerprint), f, indent=2)
-    except Exception as e:
-        console = Console()
-        console.print(f"[yellow]Warning: Failed to save fingerprint to {path}: {e}[/yellow]")
+    finalize_fingerprint(basename, language, operation, paths, cost, model)
 
 
 def save_run_report(
@@ -804,6 +811,13 @@ def log_operation(
                             fingerprint_allowed = _clear_run_report_before_fingerprint(
                                 basename, language, paths=log_paths
                             )
+                        if updates_fingerprint and not fingerprint_allowed:
+                            from .fingerprint_transaction import FingerprintFinalizeError
+                            raise FingerprintFinalizeError(
+                                operation,
+                                get_fingerprint_path(basename, language, paths=log_paths),
+                                "stale run report could not be cleared",
+                            )
                         if updates_fingerprint and fingerprint_allowed:
                             # Issue #1305 + #1211: save_fingerprint hashes only
                             # Path values, so a bare {"prompt": <str>} hint
@@ -823,35 +837,9 @@ def log_operation(
                             # resolution fails, so anchoring still works. The
                             # #983 contract is preserved: the caller resolves the
                             # paths, so save_fingerprint does not.
-                            from .sync_determine_operation import get_pdd_file_paths
-                            try:
-                                prompts_root = _prompts_root_for_fingerprint(
-                                    prompt_file
-                                )
-                                fingerprint_paths: Dict[str, Any] = get_pdd_file_paths(
-                                    basename, language, prompts_dir=str(prompts_root)
-                                )
-                                # Existence-gate the resolution: if it silently
-                                # resolved the prompt to a path that is not on
-                                # disk (a mis-resolution that did not raise), the
-                                # other paths are wrong too, so the fingerprint
-                                # would be null and mis-anchored. Fall back to the
-                                # real prompt path so prompt_hash is real and the
-                                # write still anchors at the subproject.
-                                resolved_prompt = fingerprint_paths.get("prompt")
-                                if not (
-                                    isinstance(resolved_prompt, Path)
-                                    and resolved_prompt.exists()
-                                ):
-                                    fingerprint_paths = {"prompt": Path(prompt_file)}
-                            except (ImportError, OSError, ValueError) as e:
-                                logger.warning(
-                                    "Could not resolve paths for %s/%s: %s",
-                                    basename,
-                                    language,
-                                    e,
-                                )
-                                fingerprint_paths = {"prompt": Path(prompt_file)}
+                            fingerprint_paths = resolve_fingerprint_paths(
+                                basename, language, Path(prompt_file), paths=log_paths
+                            )
                             save_fingerprint(
                                 basename,
                                 language,

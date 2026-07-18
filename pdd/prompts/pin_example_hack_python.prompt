@@ -66,7 +66,7 @@ At function start, coerce `None` for `target_coverage`, `budget`, `max_attempts`
 Implement:
 - `load_sync_log`, `create_sync_log_entry`, `update_sync_log_entry`, `append_sync_log`, `log_sync_event`
 - `save_run_report(report, basename, language, atomic_state=None)` writing `META_DIR / "{safe_basename}_{language.lower()}_run.json"`
-- `_save_operation_fingerprint(..., atomic_state=None)` using `calculate_current_hashes` + `Fingerprint`, writing `META_DIR / "{safe_basename}_{language.lower()}.json"`
+- `_save_operation_fingerprint(..., atomic_state=None)` as a thin delegate to the shared `FingerprintTransaction`; it must not construct or write a second fingerprint payload.
 - `_python_cov_target_for_code_file`, `_python_cov_target_for_test_and_code`
 - `_parse_test_output` for Python, JS/TS, Go, Rust, plus fallback
 - `_detect_example_errors` (traceback + ERROR-log patterns only)

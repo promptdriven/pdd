@@ -1,0 +1,13 @@
+<pdd-reason>Single transactional finalizer for legacy PDD fingerprints.</pdd-reason>
+
+Implement `pdd.fingerprint_transaction` with one public thin API:
+
+- `finalize_fingerprint(basename, language, operation, paths=None, cost=0.0, model="unknown", *, atomic_state=None, include_deps_override=None)`.
+- Resolve explicit `paths` once, preserving their subproject root; only fall back to `get_pdd_file_paths` when callers supplied none.
+- Build the persisted `Fingerprint` only here, using current hashes and prior include dependencies.
+- Reject a null prompt hash and a null hash for any existing code/example/test artifact with `FingerprintFinalizeError`.
+- Persist direct writes only through `json_atomic.atomic_write_json`, whose temporary file is in the destination directory and is replaced with `os.replace` after fsync.
+- When given an atomic-state buffer, submit the identical payload via `set_fingerprint`; never duplicate payload construction in callers.
+- Wrap path/hash/write failures in `FingerprintFinalizeError` containing the operation and destination. A mutating caller must propagate this failure instead of reporting success.
+
+The implementation must not add a second fingerprint file format or alter the durable `Fingerprint` schema.
