@@ -1,7 +1,7 @@
 # Global Sync Resolution Plan
 
 Status: implementation in progress; acceptance gates remain red
-Last updated: 2026-07-17
+Last updated: 2026-07-18
 Tracking epic: [promptdriven/pdd#1932](https://github.com/promptdriven/pdd/issues/1932)
 Primary consumer: `promptdriven/pdd_cloud`
 
@@ -31,7 +31,7 @@ itself, prove that those bytes express the same intent.
 
 ## 2. Evidence and current state
 
-### Current critical-path unblock (2026-07-17)
+### Current critical-path unblock (2026-07-18)
 
 This immediate runner prerequisite is a PR gate only. It does not authorize a
 release, merge #1995, or claim global certification; the historical audit and
@@ -39,9 +39,9 @@ ten-step sequence below remain the controlling global-resolution plan.
 
 | Verification boundary | #2164 exact head | #1995 integration | Current state |
 | --- | --- | --- | --- |
-| Locally validated | Exact proposed head [`5f6d747aa75a0629f33d0900489a613a3f1e2b8d`](https://github.com/promptdriven/pdd/commit/5f6d747aa75a0629f33d0900489a613a3f1e2b8d) contains protected `main` `03abdfa12`, remote FIFO identity, signed native-authority binding, protected-main-only ownership, and the exact #1989 historical transition pin. Combined gate: 75 passed, 8 platform skips; full rollout and verification-profile suites passed; exact Sol review approved. | Local corrected candidate [`b09b6bef2c8c4bee762965be463527cd0b050154`](https://github.com/promptdriven/pdd/commit/b09b6bef2c8c4bee762965be463527cd0b050154) integrates protected `main` `cc97ef23a`; RED `0c88b5df5` reproduces the sealed worker-preload `EBADF`, and full Vitest/focused supervisor tests pass after the fix | #2164 merged; #1995 Unit fix review pending |
-| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164) exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907): Unit, Package Preprocess Smoke, Story/Public CLI regressions, Repo Bloat Docker E2E, CodeQL, and exact-head auto-heal all passed | [PR #1995](https://github.com/promptdriven/pdd/pull/1995) exact-head [run 29628409903](https://github.com/promptdriven/pdd/actions/runs/29628409903): CodeQL, auto-heal, Story/Public CLI regressions, and Docker E2E passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29628409903/job/88037288569) failed standalone real Vitest copied-entrypoint isolation; [Package](https://github.com/promptdriven/pdd/actions/runs/29628409903/job/88037288574) timed out all seven installed-wheel Playwright config variants | #2164 green; #1995 Unit/Package red |
-| Merged to protected `main` | Merged at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e) on 2026-07-18. Exact reviewed head `5f6d747aa` and prior protected base `03abdfa12` are its two parents. | Not merged. Remote PR head remains `51dcee3ef`; local candidate `b09b6bef2` integrates latest protected `main` `cc97ef23a` and remains unpushed pending exact review. | passed / review pending |
+| Locally validated | Exact proposed head [`5f6d747aa75a0629f33d0900489a613a3f1e2b8d`](https://github.com/promptdriven/pdd/commit/5f6d747aa75a0629f33d0900489a613a3f1e2b8d) contains protected `main` `03abdfa12`, remote FIFO identity, signed native-authority binding, protected-main-only ownership, and the exact #1989 historical transition pin. Combined gate: 75 passed, 8 platform skips; full rollout and verification-profile suites passed; exact Sol review approved. | Corrected candidate [`b09b6bef2c8c4bee762965be463527cd0b050154`](https://github.com/promptdriven/pdd/commit/b09b6bef2c8c4bee762965be463527cd0b050154) integrates protected `main` `cc97ef23a`; RED `0c88b5df5` reproduces the sealed worker-preload `EBADF`; full Vitest and focused supervisor suites pass; exact Sol critical review approved. | #2164 merged; #1995 locally green and reviewed |
+| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164) exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907): Unit, Package Preprocess Smoke, Story/Public CLI regressions, Repo Bloat Docker E2E, CodeQL, and exact-head auto-heal all passed. | On exact `b09b6bef2`, [run 29630254929](https://github.com/promptdriven/pdd/actions/runs/29630254929) has green Story/Public CLI regressions and Docker E2E; [CodeQL run 29630253798](https://github.com/promptdriven/pdd/actions/runs/29630253798) and auto-heal are green. [Unit job 88042345745](https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345745) failed standalone real Vitest isolation. [Package job 88042345757](https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345757) passed all seven installed-wheel Playwright variants, then failed the same installed-wheel Vitest boundary. | #2164 green; #1995 Unit/Package red on Vitest only |
+| Merged to protected `main` | Merged at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e) on 2026-07-18. Exact reviewed head `5f6d747aa` and prior protected base `03abdfa12` are its two parents. | Not merged. Remote PR head is the exact reviewed candidate `b09b6bef2`, which contains protected `main` `cc97ef23a`; hosted Unit is red. | passed / hosted red |
 | Released checker | No release is authorized by either PR | No release is authorized by either PR | pending |
 | Globally certified | This runner gate is not a global certificate | This diagnostic head is not a global certificate | blocked |
 
@@ -85,8 +85,17 @@ worker preload starts without `RESULT_FD` and its unconditional `fstatSync`
 terminates with `EBADF`. Candidate `b09b6bef2` accepts only `EBADF`/`ENOENT` for
 that primary slot while retaining exact FIFO type/device/inode validation when
 present and scanning/closing all matching inherited descriptors. Exact critical
-review is in progress. The installed-wheel Playwright timeout remains a separate
-unresolved gate.
+review approved this change and the exact reviewed head was pushed without
+overwriting remote work. Hosted Unit still fails the same public test at the
+same progress boundary with reporter missing, exit code 1, zero OOM,
+OOM-kill, and pids-max deltas, and a new diagnostic
+`dd31b479f1bbd288812af6c7fbd768914dbea12d04438ee8f6dc88681bd2ae86`.
+The local CLOEXEC defect was real, but correcting it did not close the hosted
+gate. Package passed all seven installed-wheel Playwright variants in 385.57
+seconds, closing the prior Playwright timeout signature, then failed the same
+Vitest test with diagnostic
+`fdf58c2c3237551b999eb66210f4f7b32849c23458dd0bbe508cce29f2b3cd96`.
+Both required jobs now identify one Vitest critical-path blocker.
 
 The old `13a851fd5` #2164 hosted Unit job failed four rollout-inventory tests
 because three new tracked paths lack protected ownership, six native-addon
@@ -100,14 +109,17 @@ compiler, phase-attestation, timeout, or resource predicates.
    `H2164 = 5f6d747aa` passed Unit, Package, all hosted checks, exact Sol review,
    and clean-tree/main/remote-head guards; ancestry-preserving merge result
    `M2164 = d91b07a90` is on protected `main`.
-2. **Locally corrected; review pending:** candidate `b09b6bef2` integrates protected
-   `main` `cc97ef23a` into #1995 without overwriting remote work. `M2164` is an
-   ancestor, and local tests cover sealed coordinator authority, the fork-pool
-   worker Wasm guard, authenticated relay identity, and typed setup-error
-   behavior.
-3. **Hosted Unit failed:** on exact integrated #1995 SHA `51dcee3ef`, require local affected suites plus hosted
-   Unit, Package, CodeQL, auto-heal, and every required check; then require an
-   exact-composite Sol HIGH approval.
+2. **Locally passed and reviewed; hosted red:** candidate `b09b6bef2` integrates
+   protected `main` `cc97ef23a` into #1995 without overwriting remote work.
+   `M2164` is an ancestor, local affected suites pass, and exact Sol critical
+   review approved. The remote PR head exactly matches this reviewed SHA.
+3. **Next bounded gate:** run the single pinned cause-evidence protocol below.
+   It must classify the terminating process, stage, and fixed-enum cause through
+   the sealed coordinator transport. Raw stderr and candidate-supplied strings
+   are never accepted as evidence. A behavioral correction is allowed only after
+   this protocol emits a verified artifact and one cause-specific RED test fails
+   on `b09b6bef2`. The exact Package evidence closes the prior Playwright timeout
+   signature and reproduces the remaining Vitest blocker from an isolated wheel.
 4. Merge #1995 only from a `main` clone after a clean-tree/no-drift guard.
 5. Only after #1995 merges, refresh the execution ledger and create or update the
    machine-readable 10-step evidence ledger before proceeding to checker release.
@@ -134,17 +146,104 @@ For #2164, the complete first half of the predicate is true: exact Sol approval
 and every hosted check passed on `H2164 = 5f6d747aa`, protected-main merge result
 `M2164 = d91b07a90` contains `H2164` as a parent, and protected `main` points to
 that merge. Exact-composite review and corrected-finding verification approved
-`H1995 = 51dcee3ef`, but hosted Unit and Package are red. The current bounded
-cycle proved and corrected the Unit cause at `b09b6bef2`; the single next gate is
-exact Sol approval of that FD-authority change, followed by guarded RED/GREEN
-push and hosted Unit evidence. The installed-wheel Playwright result-drain
-timeout remains a separate bounded cycle and may not be hidden by retries,
-timeouts, resource changes, or skips. All required hosted checks must eventually
-pass on one corrected exact SHA before merge.
+the prior `H1995 = 51dcee3ef`, and exact critical review approved current
+`H1995 = b09b6bef2`; hosted Unit remains red. The completed bounded cycle proved
+and corrected one real CLOEXEC defect, but exact-head hosted evidence shows an
+additional termination with the same public signature. The single next gate is
+therefore cause-bearing evidence from the hosted-equivalent Vitest path, not a
+retry or speculative second patch. Installed-wheel Playwright is green on the
+same SHA; no independent Playwright correction cycle is currently justified.
+All required hosted checks must eventually pass on one corrected exact SHA
+before merge.
 This predicate closes only the
 runner prerequisite/current PR gate, not global certification. It forbids
 retries-as-pass, timeout or resource increases, preload or authority weakening,
 waivers, local-for-hosted substitution, and merging diagnostic-only heads.
+
+#### Pinned Vitest cause-evidence gate
+
+The next cycle has one permitted diagnostic path. The known failing behavior and
+the evidence-producing code are separate identities. The protected workflow
+pins both before execution:
+
+```yaml
+failure_baseline_sha: b09b6bef2c8c4bee762965be463527cd0b050154
+protected_base_sha: cc97ef23a478fa123a7b9ffc5d7450b4d55b70e7
+diagnostic_head_sha: $PDD_DIAGNOSTIC_HEAD_SHA
+diagnostic_producer_sha256: $PDD_DIAGNOSTIC_PRODUCER_SHA256
+diagnostic_verifier_sha256: $PDD_DIAGNOSTIC_VERIFIER_SHA256
+runner_image: ubuntu-24.04/20260714.240.1
+runner_provisioner: 20260707.563
+python: 3.12.13
+node: 22.23.1
+vitest_package_sha256: 63b0ce64263ea3acaed934e5fb5fbbb98d7fcd7673acd40e164dea2a648f2da5
+vitest_lock_sha256: bfc69a55d08997f553a0901c2ec0b7830cb01d6c6cc81257d150dcc79d20783c
+test_node: tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access
+```
+
+The protected workflow must run exactly:
+
+```bash
+failure_baseline=b09b6bef2c8c4bee762965be463527cd0b050154
+diagnostic_head="$(git rev-parse HEAD)"
+test "$diagnostic_head" = "$GITHUB_SHA"
+test "$diagnostic_head" = "$PDD_DIAGNOSTIC_HEAD_SHA"
+git merge-base --is-ancestor "$failure_baseline" "$diagnostic_head"
+producer_sha256="$(sha256sum pdd/sync_core/runner.py | cut -d' ' -f1)"
+verifier_sha256="$(sha256sum scripts/verify_vitest_termination_evidence.py | cut -d' ' -f1)"
+test "$producer_sha256" = "$PDD_DIAGNOSTIC_PRODUCER_SHA256"
+test "$verifier_sha256" = "$PDD_DIAGNOSTIC_VERIFIER_SHA256"
+jq -e \
+  --arg baseline "$failure_baseline" \
+  --arg head "$diagnostic_head" \
+  --arg producer "$producer_sha256" \
+  --arg verifier "$verifier_sha256" \
+  '(.verdict == "APPROVE") and
+   (.behavioral_verdict == "NO_BEHAVIORAL_FIX") and
+   (.failure_baseline_sha == $baseline) and
+   (.diagnostic_head_sha == $head) and
+   (.producer_sha256 == $producer) and
+   (.verifier_sha256 == $verifier)' \
+  "$PDD_DIAGNOSTIC_REVIEW_EVIDENCE"
+set +e
+PDD_VITEST_DIAGNOSTIC_OUTPUT="$RUNNER_TEMP/vitest-termination-v1.json" \
+pytest -q tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access --timeout=180
+test_status=$?
+pytest -q "$PDD_VITEST_CAUSE_RED_TEST_NODE" --timeout=180
+red_status=$?
+set -e
+test "$test_status" -eq 1
+test "$red_status" -eq 1
+python scripts/verify_vitest_termination_evidence.py \
+  --evidence "$RUNNER_TEMP/vitest-termination-v1.json" \
+  --failure-baseline-sha "$failure_baseline" \
+  --diagnostic-head-sha "$diagnostic_head" \
+  --producer-sha256 "$producer_sha256" \
+  --verifier-sha256 "$verifier_sha256" \
+  --runner-image ubuntu-24.04/20260714.240.1 \
+  --python 3.12.13 --node 22.23.1 \
+  --vitest-lock-sha256 bfc69a55d08997f553a0901c2ec0b7830cb01d6c6cc81257d150dcc79d20783c \
+  --test-node tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access \
+  --cause-red-test-node "$PDD_VITEST_CAUSE_RED_TEST_NODE"
+```
+
+`vitest-termination-v1.json` is written only by the protected coordinator from
+fixed-enum frames received over its authenticated FIFO. Schema version 1 must
+contain the exact pinned fields above plus `process_role`, `failure_stage`,
+`cause_code`, `exit_code`, all three cgroup deltas, `diagnostic_sha256`, and a
+`red_test` object containing its exact node ID, outcome, failure-baseline SHA,
+and diagnostic-head SHA. The diagnostic head must be an exact reviewed,
+evidence-only descendant of `failure_baseline_sha`; its review evidence binds
+the permitted diff, producer digest, verifier digest, and `NO_BEHAVIORAL_FIX`
+verdict. The verifier exits zero only when both SHAs and both digests match the
+protected pins, `process_role`, `failure_stage`, and `cause_code` are known enum
+values other than `UNKNOWN`, the cgroup deltas are nonnegative integers, and the
+cause-specific RED node fails on the diagnostic head while exercising the
+baseline behavior. The artifact and its SHA-256 must be uploaded by the
+protected job and linked in the ledger. No behavioral fix, rerun-as-pass, or PR
+merge is allowed before this predicate is true. After one bounded correction,
+the same RED test and both source and installed-wheel hosted Vitest checks must
+pass on one exact reviewed head.
 
 This plan is based on an audit of `origin/main` at `c255f3bf` and the open global
 sync branches as of 2026-07-09.
@@ -205,8 +304,13 @@ it without candidate-controlled inputs.
 
 The final certificate cannot be unblocked by weakening its predicate. Work must
 proceed in this dependency order, with each exit check retained as evidence for
-the next stage. The 2026-07-17 current PR gate above is a prerequisite to this
+the next stage. The 2026-07-18 current PR gate above is a prerequisite to this
 sequence and does not alter any of its ten steps.
+
+The machine-readable source of truth for step status and exact evidence is
+[`docs/global_sync_evidence_ledger.yaml`](global_sync_evidence_ledger.yaml).
+This narrative summarizes that ledger; it does not override missing or red
+machine evidence.
 
 | Order | Unblock | Required exit evidence |
 | --- | --- | --- |
@@ -219,7 +323,7 @@ sequence and does not alter any of its ten steps.
 | 7 | Pin that release in pdd_cloud, remove `metadata_finalize.py` and all other vendored sync semantics, resolve the duplicate output conflict, then migrate profiles, fingerprints, and evidence by bounded subtree PRs. | Independent semantic ownership audit and exact-tree scan both report zero consumer-owned sync semantics; pdd_cloud has 100% profiles/evidence and no red units or waivers. |
 | 8 | Enable the protected merge-group lifecycle lane using clean clones and the pinned checker. Run every required injected scenario, including the real pdd_cloud canary, without required skips. | One fresh signed scan certificate has `scan_ok: true`, lifecycle failures/skips/errors/timeouts zero, and both no-write counters zero. |
 | 9 | Start the temporal gate only after steps 1-8 are stable. Store signed immutable nightly rows outside either candidate checkout and run complete scans even after ledger/cursor deletion. | Seven consecutive UTC-date certificates preserve repository identity/SHA lineage; normal nights are no-op and injected drift is detected, resolved or blocked, then rerun with zero writes. |
-| 10 | Run the documented final command and a fresh xhigh adversarial review. | Command exits 0; an independent verifier accepts the signed exact-SHA certificate; reviewer returns `APPROVE`. |
+| 10 | Run the documented final command and a fresh Sol HIGH adversarial review. | Command exits 0; an independent verifier accepts the signed exact-SHA certificate; the review records the exact certificate and repository SHAs and returns `APPROVE`. |
 
 Steps 1-7 are engineering work. Step 8 requires protected CI/release configuration.
 Step 9 additionally requires seven elapsed nightly windows and therefore cannot
