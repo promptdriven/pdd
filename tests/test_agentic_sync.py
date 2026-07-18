@@ -5535,13 +5535,20 @@ class TestIdentifyModulesPromptSize:
 
         # Candidate selection is intentionally delegated when the declared
         # path-qualified identities do not exactly match the issue's bare
-        # token.  The bounded, explicitly-untrusted issue signal must remain
-        # available to that closed ambiguity protocol.
+        # token. The prompt remains a bounded, closed protocol rather than
+        # reintroducing full architecture/interface text.
         mock_agentic_task.assert_called_once()
         prompt = mock_agentic_task.call_args.kwargs["instruction"]
         assert len(build_agentic_task_instruction(prompt)) <= _IDENTIFY_MODULES_MAX_CHARS
-        assert '"issue_signal"' in prompt
-        assert '"title":"Fix foo"' in prompt
+        payload = json.loads(prompt.partition("\n")[2])
+        assert set(payload) == {
+            "candidate_ids", "candidates", "instruction", "issue_signal", "schema_version"
+        }
+        assert payload["candidate_ids"] == [candidate["module_id"] for candidate in payload["candidates"]]
+        assert payload["issue_signal"] == {
+            "body_excerpt": "do it", "number": 1, "title": "Fix foo", "untrusted": True
+        }
+        assert all("interface" not in candidate for candidate in payload["candidates"])
         assert "INTERFACE_TEXT" not in prompt
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
@@ -5596,7 +5603,7 @@ class TestIdentifyModulesPromptSize:
         issue_data = {"title": "WRAPPER_TITLE_TOKEN", "body": body, "comments_url": ""}
         mock_gh_cmd.return_value = (True, json.dumps(issue_data))
         mock_load_arch.return_value = (architecture, Path("/tmp/architecture.json"))
-        mock_agentic_task.return_value = (True, '{"selected_module_ids":["foo"]}', 0.0, "anthropic")
+        mock_agentic_task.return_value = (True, '{"selected_module_ids":["pdd/foo"]}', 0.0, "anthropic")
         mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
         mock_runner_cls.return_value.run.return_value = (True, "synced", 0.0)
 
@@ -5604,10 +5611,18 @@ class TestIdentifyModulesPromptSize:
 
         mock_agentic_task.assert_called_once()
         prompt = mock_agentic_task.call_args.kwargs["instruction"]
+        payload = json.loads(prompt.partition("\n")[2])
+        issue_signal = payload["issue_signal"]
         assert len(build_agentic_task_instruction(prompt)) <= _IDENTIFY_MODULES_MAX_CHARS
-        assert '"candidate_ids":["pdd/foo"]' in prompt
-        assert "WRAPPER_TITLE_TOKEN" in prompt
+        assert payload["candidate_ids"] == ["pdd/foo"]
+        assert issue_signal["untrusted"] is True
+        assert issue_signal["title"] == "WRAPPER_TITLE_TOKEN"
+        assert len(issue_signal["body_excerpt"]) <= 2048
+        assert "[truncated]" in issue_signal["body_excerpt"]
+        assert issue_signal["body_excerpt"].startswith("B")
+        assert issue_signal["body_excerpt"].endswith("B")
         assert body not in prompt
+        assert json.loads(mock_agentic_task.return_value[1]) == {"selected_module_ids": ["pdd/foo"]}
 
     @_identify_fallback_patches
     def test_pathological_arch_hard_fails_with_input_too_large(
@@ -5690,7 +5705,7 @@ class TestIdentifyModulesPromptSize:
             [{"filename": "foo_Python.prompt", "filepath": "pdd/foo", "origin": "code", "dependencies": []}],
             Path("/tmp/architecture.json"),
         )
-        mock_agentic_task.return_value = (True, '{"selected_module_ids":["foo"]}', 0.0, "anthropic")
+        mock_agentic_task.return_value = (True, '{"selected_module_ids":["pdd/foo"]}', 0.0, "anthropic")
         mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
         mock_runner_cls.return_value.run.return_value = (True, "synced", 0.0)
 
@@ -5698,11 +5713,17 @@ class TestIdentifyModulesPromptSize:
 
         mock_agentic_task.assert_called_once()
         prompt = mock_agentic_task.call_args.kwargs["instruction"]
+        payload = json.loads(prompt.partition("\n")[2])
         assert len(prompt) < _IDENTIFY_MODULES_MAX_CHARS
-        # The title (signal) survives even though comments were trimmed.
-        assert "UNIQUE_TITLE_TOKEN" in prompt
+        # The title/body signal survives, but comments never enter the closed
+        # ambiguity protocol, regardless of their size.
+        assert payload["issue_signal"] == {
+            "body_excerpt": "small body", "number": 1,
+            "title": "UNIQUE_TITLE_TOKEN", "untrusted": True,
+        }
         assert huge_comment_body not in prompt
-        assert '"candidate_ids":["pdd/foo"]' in prompt
+        assert payload["candidate_ids"] == ["pdd/foo"]
+        assert json.loads(mock_agentic_task.return_value[1]) == {"selected_module_ids": ["pdd/foo"]}
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync._filter_already_synced", return_value=[])
@@ -5827,6 +5848,18 @@ class TestPddChangedModulesFastPath:
 
     def test_env_fast_path_bypasses_identify_modules_llm(self, monkeypatch, tmp_path):
         observed_modules = ["src/services/foo", "frontend/app/dashboard/page"]
+        architecture = [
+            {
+                "filename": "foo_python.prompt",
+                "filepath": "src/services/foo",
+                "dependencies": [],
+            },
+            {
+                "filename": "page_python.prompt",
+                "filepath": "frontend/app/dashboard/page",
+                "dependencies": [],
+            },
+        ]
         result = self._run_with_env(
             monkeypatch,
             tmp_path,
@@ -5834,18 +5867,7 @@ class TestPddChangedModulesFastPath:
                 " src/services/foo, frontend/app/dashboard/page, "
                 "src/services/foo,, "
             ),
-            architecture=[
-                {
-                    "filename": "foo_python.prompt",
-                    "filepath": "src/services/foo",
-                    "dependencies": [],
-                },
-                {
-                    "filename": "page_python.prompt",
-                    "filepath": "frontend/app/dashboard/page",
-                    "dependencies": [],
-                },
-            ],
+            architecture=architecture,
             filter_synced=observed_modules,
         )
 
@@ -5861,6 +5883,12 @@ class TestPddChangedModulesFastPath:
         result["mock_agentic_task"].assert_not_called()
         result["mock_dry_run"].assert_called_once()
         assert result["mock_dry_run"].call_args.kwargs["modules"] == observed_modules
+        assert _validate_changed_modules_env_aliases(observed_modules, architecture, None) == (
+            observed_modules, []
+        )
+        assert _validate_changed_modules_env_aliases(
+            ["unowned/root/foo"], architecture, None
+        ) == ([], ["unowned/root/foo"])
 
     def test_stale_user_feedback_does_not_override_env_selection(self, monkeypatch, tmp_path):
         result = self._run_with_env(
@@ -5931,15 +5959,18 @@ class TestPddChangedModulesFastPath:
         result = self._run_with_env(
             monkeypatch,
             tmp_path,
-            env_value="foo",
+            env_value="pdd/foo",
             issue_body=huge_body,
             architecture=[architecture_entry],
-            filter_synced=["foo"],
+            filter_synced=["pdd/foo"],
         )
 
         success, msg, _cost, _model = result["result"]
         assert success is True
         assert "foo" in msg
+        assert _validate_changed_modules_env_aliases(
+            ["pdd/foo", "evil/path/foo"], [architecture_entry], None
+        ) == (["pdd/foo"], ["evil/path/foo"])
         result["mock_load_prompt"].assert_not_called()
         result["mock_agentic_task"].assert_not_called()
 
