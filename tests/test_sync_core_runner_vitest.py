@@ -609,6 +609,17 @@ def test_vitest_environment_rejects_ambient_coordinator_nondumpable_marker(
     assert "PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE" not in _vitest_environment(tmp_path)
 
 
+def test_dev_extra_covers_no_isolation_build_requirements() -> None:
+    """The CI dev environment can build the wheel without network isolation."""
+    repository = Path(__file__).resolve().parents[1]
+    pyproject = tomllib.loads((repository / "pyproject.toml").read_text(encoding="utf-8"))
+    build_requirements = set(pyproject["build-system"]["requires"])
+    dev_requirements = set(pyproject["project"]["optional-dependencies"]["dev"])
+
+    missing = build_requirements - dev_requirements
+    assert not missing, f"dev extra is missing build requirements: {sorted(missing)}"
+
+
 def test_vitest_authority_wheel_is_source_only(tmp_path: Path) -> None:
     """The universal checker wheel carries C source, never a host native addon."""
     repository = Path(__file__).resolve().parents[1]
@@ -622,19 +633,18 @@ def test_vitest_authority_wheel_is_source_only(tmp_path: Path) -> None:
         ),
     )
     output = tmp_path / "dist"
-    subprocess.run(
+    completed = subprocess.run(
         [
             sys.executable,
             "-m",
             "build",
             "--no-isolation",
-            "--skip-dependency-check",
             "--wheel",
             "--outdir",
             str(output),
         ],
         cwd=source,
-        check=True,
+        check=False,
         env=os.environ
         | {
             "PIP_NO_INDEX": "1",
@@ -642,6 +652,11 @@ def test_vitest_authority_wheel_is_source_only(tmp_path: Path) -> None:
         },
         capture_output=True,
         text=True,
+    )
+    assert completed.returncode == 0, (
+        f"source-only wheel build failed (exit {completed.returncode})\n"
+        f"stdout:\n{completed.stdout}\n"
+        f"stderr:\n{completed.stderr}"
     )
     wheels = tuple(output.glob("*.whl"))
     assert len(wheels) == 1
