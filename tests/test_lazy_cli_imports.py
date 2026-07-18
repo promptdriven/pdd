@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 import click
 
@@ -51,6 +52,61 @@ def test_lazy_command_registry_preserves_public_command_names() -> None:
 
     assert set(_COMMANDS) == EXPECTED_COMMANDS
     assert set(cli.list_commands(click.Context(cli))) == EXPECTED_COMMANDS
+    assert len(cli.commands) == len(EXPECTED_COMMANDS)
+    assert "sync" in cli.commands
+
+    sync_from_item = cli.commands["sync"]
+
+    assert cli.commands.get("sync") is sync_from_item
+    assert cli.get_command(click.Context(cli), "sync") is sync_from_item
+
+
+def test_commands_package_preserves_historical_exports_and_identity() -> None:
+    """Former eager package exports resolve to the Click registry objects."""
+    from pdd import commands
+    from pdd.cli import cli
+    from pdd.commands import contracts_cli, generate, sync_architecture
+
+    assert isinstance(generate, click.Command)
+    assert isinstance(sync_architecture, click.Command)
+    assert isinstance(contracts_cli, click.Command)
+    assert generate is cli.commands["generate"]
+    assert sync_architecture is cli.commands["sync-architecture"]
+    assert contracts_cli is cli.commands["contracts"]
+    assert set(commands.__all__) >= {
+        "generate", "sync_architecture", "contracts_cli", "story_cli",
+        "firecrawl_cache",
+    }
+
+    registered = list(cli.commands.values())
+    for export_name in commands._EXPORTS:
+        exported = getattr(commands, export_name)
+        assert isinstance(exported, click.Command), export_name
+        assert any(exported is command for command in registered), export_name
+
+
+def test_register_commands_supports_plain_click_group_dispatch() -> None:
+    """Registration remains usable outside the custom PDDCLI subclass."""
+    from click.testing import CliRunner
+    from pdd.commands import register_commands
+
+    group = click.Group("standalone")
+    register_commands(group)
+
+    assert len(group.commands) == len(EXPECTED_COMMANDS)
+    assert set(group.list_commands(click.Context(group))) == EXPECTED_COMMANDS
+    assert CliRunner().invoke(group, ["reconcile", "--help"]).exit_code == 0
+
+
+def test_lazy_command_resolution_is_thread_safe() -> None:
+    """Concurrent first access caches one shared Click command instance."""
+    from pdd.commands import LazyCommandMapping, _COMMANDS
+
+    mapping = LazyCommandMapping(_COMMANDS)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        commands = list(executor.map(lambda _: mapping["sync"], range(32)))
+
+    assert len({id(command) for command in commands}) == 1
 
 
 def test_package_lazy_export_resolves_and_caches_legacy_symbol() -> None:
