@@ -25,7 +25,11 @@ def _paths(tmp_path: Path) -> tuple[dict[str, Path], Path]:
     root = tmp_path / "subproject"
     (root / "prompts").mkdir(parents=True)
     (root / "src").mkdir()
-    (root / ".pddrc").write_text("contexts: {}\n", encoding="utf-8")
+    (root / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: ['**']\n    defaults:\n"
+        "      generate_output_path: 'src/'\n",
+        encoding="utf-8",
+    )
     prompt = root / "prompts" / "sample_python.prompt"
     code = root / "src" / "sample.py"
     prompt.write_text("% Goal\nSample\n", encoding="utf-8")
@@ -451,6 +455,133 @@ def test_missing_configured_target_does_not_authorize_same_name_override(
         finalize_fingerprint(
             "sample", "python", "generate", {"prompt": prompt, role: rogue},
         )
+
+
+def test_missing_root_default_target_rejects_same_name_rogue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The root-level fallback role is canonical even before it exists."""
+    root = tmp_path / "project"
+    (root / "prompts").mkdir(parents=True)
+    (root / "rogue").mkdir()
+    (root / ".pddrc").write_text("contexts: {}\n", encoding="utf-8")
+    prompt = root / "prompts" / "sample_python.prompt"
+    prompt.write_text("% sample\n", encoding="utf-8")
+    rogue = root / "rogue" / "sample.py"
+    rogue.write_text("VALUE = 1\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+
+    with pytest.raises(FingerprintFinalizeError, match="canonical unit identity"):
+        finalize_fingerprint(
+            "sample", "python", "generate", {"prompt": prompt, "code": rogue},
+        )
+
+
+def test_exact_root_custom_and_nested_configured_paths_are_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exact root, custom, and nested configured outputs remain legitimate."""
+    root = tmp_path / "root"
+    (root / "prompts").mkdir(parents=True)
+    (root / ".pddrc").write_text("contexts: {}\n", encoding="utf-8")
+    root_prompt = root / "prompts" / "root_python.prompt"
+    root_code = root / "root.py"
+    root_prompt.write_text("% root\n", encoding="utf-8")
+    root_code.write_text("VALUE = 1\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+    finalize_fingerprint("root", "python", "generate", {
+        "prompt": root_prompt, "code": root_code,
+    })
+
+    custom = tmp_path / "custom"
+    (custom / "prompts").mkdir(parents=True)
+    (custom / "generated").mkdir()
+    (custom / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: ['**']\n    defaults:\n"
+        "      generate_output_path: 'generated/'\n",
+        encoding="utf-8",
+    )
+    custom_prompt = custom / "prompts" / "custom_python.prompt"
+    custom_code = custom / "generated" / "custom.py"
+    custom_prompt.write_text("% custom\n", encoding="utf-8")
+    custom_code.write_text("VALUE = 2\n", encoding="utf-8")
+    monkeypatch.chdir(custom)
+    finalize_fingerprint("custom", "python", "generate", {
+        "prompt": custom_prompt, "code": custom_code,
+    })
+
+    nested = root / "nested"
+    (nested / "prompts").mkdir(parents=True)
+    (nested / "lib").mkdir()
+    (nested / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: ['**']\n    defaults:\n"
+        "      generate_output_path: 'lib/'\n",
+        encoding="utf-8",
+    )
+    nested_prompt = nested / "prompts" / "nested_python.prompt"
+    nested_code = nested / "lib" / "nested.py"
+    nested_prompt.write_text("% nested\n", encoding="utf-8")
+    nested_code.write_text("VALUE = 3\n", encoding="utf-8")
+    monkeypatch.chdir(nested)
+    finalize_fingerprint("nested", "python", "generate", {
+        "prompt": nested_prompt, "code": nested_code,
+    })
+
+
+def test_test_file_family_rejects_arbitrary_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test-family variants may vary by name, never by configured directory."""
+    root = tmp_path / "project"
+    (root / "prompts").mkdir(parents=True)
+    (root / "src").mkdir()
+    (root / "tests").mkdir()
+    (root / "rogue").mkdir()
+    (root / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: ['**']\n    defaults:\n"
+        "      generate_output_path: 'src/'\n"
+        "      test_output_path: 'tests/'\n",
+        encoding="utf-8",
+    )
+    prompt = root / "prompts" / "sample_python.prompt"
+    code = root / "src" / "sample.py"
+    rogue_test = root / "rogue" / "test_sample_extra.py"
+    prompt.write_text("% sample\n", encoding="utf-8")
+    code.write_text("VALUE = 1\n", encoding="utf-8")
+    rogue_test.write_text("def test_sample_extra(): pass\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+
+    with pytest.raises(FingerprintFinalizeError, match="canonical unit identity"):
+        finalize_fingerprint("sample", "python", "verify", {
+            "prompt": prompt, "code": code, "test_files": [rogue_test],
+        })
+
+
+def test_test_file_family_accepts_configured_directory_variant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A configured test directory may contain a same-family split test."""
+    root = tmp_path / "project"
+    (root / "prompts").mkdir(parents=True)
+    (root / "src").mkdir()
+    (root / "tests").mkdir()
+    (root / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: ['**']\n    defaults:\n"
+        "      generate_output_path: 'src/'\n"
+        "      test_output_path: 'tests/'\n",
+        encoding="utf-8",
+    )
+    prompt = root / "prompts" / "sample_python.prompt"
+    code = root / "src" / "sample.py"
+    split_test = root / "tests" / "test_sample_extra.py"
+    prompt.write_text("% sample\n", encoding="utf-8")
+    code.write_text("VALUE = 1\n", encoding="utf-8")
+    split_test.write_text("def test_sample_extra(): pass\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+
+    finalize_fingerprint("sample", "python", "verify", {
+        "prompt": prompt, "code": code, "test_files": [split_test],
+    })
 
 
 def test_failed_paired_finalizer_aborts_buffered_report_tombstone(tmp_path: Path) -> None:
