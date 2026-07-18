@@ -125,11 +125,49 @@ UNAMBIGUOUS_SHELL_IMPLEMENTATION_RE = re.compile(
 COMMAND_SHELL_NAME_PATTERN = (
     r"(?:bash|zsh|xonsh|korn|ksh|csh|tcsh|bourne(?:[-\s]+again)?|powershell)"
 )
+SHELL_PROMPT_TARGET_PATTERN = r"prompts?\b(?![-\s]+(?:shaped|like)\b)"
+SHELL_FILE_TARGET_PATTERN = (
+    r"(?:working\s+director(?:y|ies)|directory|directory\s+listings?|"
+    r"file\s+listings?|file\s+names?|filenames?|files?)"
+)
+SHELL_OUTPUT_TARGET_PATTERN = (
+    r"(?:(?:diagnostic|build|command|standard|current)\s+)?outputs?"
+)
+SHELL_SURFACE_TARGET_PATTERN = (
+    rf"(?:{SHELL_PROMPT_TARGET_PATTERN}|"
+    r"(?:blinking\s+)?(?:cursors?|carets?)(?![-\s]+(?:shaped|like)\b)|"
+    r"cli|scripts?|screens?|panes?|transcripts?|"
+    rf"{SHELL_FILE_TARGET_PATTERN}|"
+    r"keystrokes?|stdout|stderr|stdin|"
+    r"technical\s+surfaces?)"
+)
+SHELL_READABLE_TARGET_PATTERN = (
+    rf"(?:{SHELL_SURFACE_TARGET_PATTERN}|{SHELL_OUTPUT_TARGET_PATTERN}|"
+    r"system\s+sessions?|login\s+sessions?)"
+)
+SHELL_DIRECT_TARGET_PATTERN = (
+    rf"(?:{SHELL_SURFACE_TARGET_PATTERN}|sessions?|"
+    r"(?:standard|current|command)\s+outputs?)"
+)
+SHELL_EVIDENCE_VERB_PATTERN = (
+    r"(?:is|has|with|hosts?|contains?|shows?|reads?|lists?|invokes?|displays?|"
+    r"displaying|presents?|presenting|renders?|rendering|prints?|writes?)"
+)
+SHELL_INPUT_VERB_PATTERN = (
+    r"(?:accepts?|awaits?|receives?|takes?|waits\s+for)"
+)
+SHELL_SUBJECT_PREDICATE_PATTERN = (
+    rf"(?:{SHELL_EVIDENCE_VERB_PATTERN}|{SHELL_INPUT_VERB_PATTERN})"
+)
+SHELL_NEW_SUBJECT_BOUNDARY_PATTERN = (
+    r"\b(?:and|but|while|whereas|yet|as)\b\s+"
+    rf"(?!(?:(?:it|its)\b|the\s+shell(?:s|-like)?\b|"
+    rf"{SHELL_SUBJECT_PREDICATE_PATTERN}\b))"
+    rf"(?=(?:(?![.!?;,]).){{0,50}}\b{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
+)
 BASH_STRONG_SURFACE_RE = re.compile(
-    r"\bbash\s+(?:history|scripts?|windows?|panes?|transcripts?|"
-    r"directory\s+listings?)\b|"
-    r"\bbash\s+(?:prompts?|cursors?|carets?)\b"
-    r"(?![-\s]+(?:shaped|like)\b)",
+    r"\bbash\s+(?:history|windows?|"
+    rf"{SHELL_READABLE_TARGET_PATTERN})\b",
     flags=re.IGNORECASE,
 )
 BASH_SESSION_RE = re.compile(
@@ -141,7 +179,7 @@ COMMAND_SHELL_PATH_RE = re.compile(
 )
 NAMED_COMMAND_SHELL_RE = re.compile(
     rf"(?<!\w)(?:/bin/)?{COMMAND_SHELL_NAME_PATTERN}\s+"
-    r"(?:prompts?|outputs?|standard\s+outputs?)\b|"
+    rf"(?:{SHELL_PROMPT_TARGET_PATTERN}|{SHELL_OUTPUT_TARGET_PATTERN})\b|"
     rf"\b(?:{COMMAND_SHELL_NAME_PATTERN}|posix|unix)\s+shell(?:s|-like)?\b|"
     r"\b(?:root|system|windows?|default|os|terminal|console|interactive|login|"
     r"command(?:[-\s]+line)?)"
@@ -160,65 +198,44 @@ SHELL_SUBJECT_CONTEXT_PATTERN = (
     r"(?:(?![.!?;]|\b(?:that|who|which)\b|"
     r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b|"
     r"(?:,|:)\s*(?:a|an|the|another)\b|"
-    r",?\s*(?:and|but|while|whereas|yet|as)\s+"
-    r"(?:a|an|the|another)\b).){0,100}"
+    rf"{SHELL_NEW_SUBJECT_BOUNDARY_PATTERN}).){{0,100}}"
 )
 SHELL_TARGET_CONTEXT_PATTERN = (
     r"(?:(?![.!?;]|\b(?:that|who|which)\b|"
     r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b|"
     r"(?:,|:)\s*(?:a|an|the|another)\b|"
-    r",?\s*(?:and|but|while|whereas|yet|as)\s+"
-    r"(?:a|an|the|another)\b).){0,60}"
+    rf"{SHELL_NEW_SUBJECT_BOUNDARY_PATTERN}).){{0,60}}"
 )
 SHELL_DIRECT_RELATIVE_COMPUTING_RE = re.compile(
     r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
-    r"(?:shows?|displays?|presents?|renders?)\s+"
+    rf"{SHELL_EVIDENCE_VERB_PATTERN}\s+"
     r"(?:a\s+|an\s+|the\s+|its\s+)?"
-    r"(?:prompts?\b(?![-\s]+(?:shaped|like)\b)|"
-    r"(?:(?:diagnostic|build|command|standard|current)\s+)?outputs?|"
-    r"directory\s+listings?|file\s+listings?|file\s+names?|files?)\b|"
+    rf"{SHELL_READABLE_TARGET_PATTERN}\b|"
     r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
-    r"lists?\s+(?:a\s+|an\s+|the\s+|its\s+)?"
-    r"(?:directory|directory\s+listings?|file\s+listings?|"
-    r"file\s+names?|files?)\b|"
-    r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
-    r"(?:accepts?|awaits?|receives?|takes?|waits\s+for)\s+"
-    r"(?:keyboard\s+|typed\s+|user\s+)?inputs?\b|"
-    r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
-    r"(?:prints?|writes?)\s+(?:(?:diagnostic|build|command|standard|current)\s+)?"
-    r"outputs?\b",
+    rf"{SHELL_INPUT_VERB_PATTERN}\s+"
+    r"(?:keyboard\s+|typed\s+|user\s+)?inputs?\b",
     flags=re.IGNORECASE,
 )
 SHELL_OWNED_COMPUTING_RE = re.compile(
     r"\bshell[-\s]+outputs?\s+windows?\b|"
     r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
-    r"(?:scripts?|prompts?\b(?![-\s]+(?:shaped|like)\b)|cli|"
-    r"screens?|sessions?|panes?|transcripts?|"
-    r"working\s+director(?:y|ies)|standard\s+outputs?|current\s+outputs?|"
-    r"command\s+outputs?|technical\s+surfaces?)\b|"
+    rf"{SHELL_DIRECT_TARGET_PATTERN}\b|"
     r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
     r"windows?\b(?!\s+of\s+(?:light|glow))|"
     r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
     r"interfaces?\b(?!\s+between\b)|"
     r"\bshell(?:s|-like)?(?:['’]s)?\b"
     rf"{SHELL_SUBJECT_CONTEXT_PATTERN}\b"
-    r"(?:is|has|with|hosts?|contains?|shows?|reads?|lists?|invokes?|displays?|"
-    r"displaying|presents?|presenting|renders?|rendering|prints?|writes?)\b"
+    rf"{SHELL_EVIDENCE_VERB_PATTERN}\b"
     rf"{SHELL_TARGET_CONTEXT_PATTERN}\b"
     rf"(?:{COMMAND_SHELL_NAME_PATTERN}\s+sessions?|"
-    r"prompts?\b(?![-\s]+(?:shaped|like)\b)|"
-    r"(?:blinking\s+)?(?:cursors?|carets?)(?![-\s]+(?:shaped|like)\b)|"
-    r"cli|keystrokes?|"
-    r"stdout|stderr|system\s+sessions?|login\s+sessions?|stdin|"
-    r"working\s+director(?:y|ies)|directory\s+listings?|file\s+listings?|"
-    r"filenames?|files?|"
-    r"standard\s+outputs?|current\s+outputs?|command\s+outputs?|outputs?)\b",
+    rf"{SHELL_READABLE_TARGET_PATTERN})\b",
     flags=re.IGNORECASE | re.DOTALL,
 )
 SHELL_INPUT_INTERACTION_RE = re.compile(
     r"\bshell(?:s|-like)?(?:['’]s)?\b"
     rf"{SHELL_SUBJECT_CONTEXT_PATTERN}"
-    r"\b(?:accepts?|awaits?|receives?|takes?|waits\s+for)\b"
+    rf"\b{SHELL_INPUT_VERB_PATTERN}\b"
     r"(?:(?![.!?;]).){0,20}\b(?:keyboard\s+|typed\s+|user\s+)?inputs?\b",
     flags=re.IGNORECASE | re.DOTALL,
 )
