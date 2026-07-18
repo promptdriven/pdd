@@ -419,6 +419,17 @@ def test_reverse_dep_include_cycle_terminates_deterministically(tmp_path, monkey
     assert result == {"a", "b"}
 
 
+def test_reverse_dep_include_cycle_timeout_budget_is_generous():
+    timeout_mark = next(
+        mark
+        for mark in test_reverse_dep_include_cycle_terminates_deterministically.pytestmark
+        if mark.name == "timeout"
+    )
+
+    assert timeout_mark.args
+    assert timeout_mark.args[0] >= 5
+
+
 def test_reverse_dep_without_diff_base_keeps_conservative_matching(
     tmp_path, monkeypatch
 ):

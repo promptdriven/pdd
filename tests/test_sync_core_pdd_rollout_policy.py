@@ -665,6 +665,21 @@ def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     assert profiles.coverage == 1.0
 
 
+def test_pdd1989_history_guard_skips_without_required_git_objects(
+    tmp_path: Path,
+) -> None:
+    """Cloud tarballs have no .git history, so the exact-base test must skip."""
+    with pytest.raises(
+        pytest.skip.Exception,
+        match="requires local git history for #1989 exact-base verification",
+    ):
+        _skip_if_required_git_history_missing(  # type: ignore[name-defined]
+            tmp_path,
+            PDD_1989_ACTUAL_BASE,
+            PDD_1989_ACTUAL_HEAD,
+        )
+
+
 def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> None:
     """An adopted rotation must not leave profile requirements stale."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))

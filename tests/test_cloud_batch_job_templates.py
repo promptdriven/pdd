@@ -351,6 +351,25 @@ def test_cloud_batch_entrypoint_forces_pytest_shards_local_by_default():
     assert "unset PDD_JWT_TOKEN" in pytest_branch.group(0)
 
 
+def test_cloud_batch_entrypoint_clears_inherited_default_model_for_pytest_shards():
+    entrypoint_text = (
+        REPO_ROOT / "ci" / "cloud-batch" / "entrypoint.sh"
+    ).read_text(encoding="utf-8")
+    pytest_branch = re.search(
+        r'if \[ "\$\{TASK_INDEX\}" -ge "\$\{PYTEST_START\}" \].*?'
+        r'python -m pytest -vv',
+        entrypoint_text,
+        re.DOTALL,
+    )
+
+    assert pytest_branch, "entrypoint.sh must keep an explicit pytest shard branch"
+    assert (
+        'export PDD_MODEL_DEFAULT="vertex_ai/gemini-3-flash-preview"'
+        in entrypoint_text
+    )
+    assert "unset PDD_MODEL_DEFAULT" in pytest_branch.group(0)
+
+
 def test_cloud_batch_entrypoint_maps_skipped_and_offset_task_indexes():
     entrypoint_path = REPO_ROOT / "ci" / "cloud-batch" / "entrypoint.sh"
     entrypoint_text = entrypoint_path.read_text(encoding="utf-8")
