@@ -49,6 +49,34 @@ FOUNDATION_PROFILE = "pdd/prompts/durable_sync_runner_python.prompt"
 FOUNDATION_PROFILE_DIGEST = (
     "3fb63c651345467be6b2cb445b34edf979b35ffba1bb1ebb44a81f1313beb244"
 )
+PDD_1900_PROFILE_DIGEST = (
+    "b9bc5c4ecc112ce5bad2315c4d50ba1902cf066677c73983c0b9eb71f2923483"
+)
+PDD_1989_PROMPT_PATHS = {
+    "pdd/prompts/agentic_common_python.prompt",
+    "pdd/prompts/commands/checkup_python.prompt",
+    "pdd/prompts/generate_model_catalog_python.prompt",
+    "pdd/prompts/llm_invoke_python.prompt",
+    "pdd/prompts/prompt_repair_python.prompt",
+    "pdd/prompts/routing_policy_python.prompt",
+    "pdd/prompts/setup_tool_python.prompt",
+}
+PDD_1900_PROMPT_PATHS = {
+    "pdd/prompts/agentic_change_step10_architecture_update_LLM.prompt",
+    "pdd/prompts/agentic_checkup_python.prompt",
+    "pdd/prompts/agentic_sync_runner_python.prompt",
+    "pdd/prompts/checkup_interactive_session_python.prompt",
+    "pdd/prompts/checkup_planner_python.prompt",
+    "pdd/prompts/checkup_tools_python.prompt",
+    "pdd/prompts/cli_theme_python.prompt",
+    "pdd/prompts/code_generator_main_python.prompt",
+    "pdd/prompts/evidence_manifest_python.prompt",
+    "pdd/prompts/server/jobs_python.prompt",
+    "pdd/prompts/server/routes/extracts_python.prompt",
+    "pdd/prompts/split_validation_python.prompt",
+    "pdd/prompts/story_regression_python.prompt",
+    "pdd/prompts/user_story_tests_python.prompt",
+}
 FOUNDATION_OBLIGATIONS = {
     "pytest-descriptor-store": {
         "tests": (
@@ -115,6 +143,7 @@ PREAUTHORIZED_CHILD_PATHS = (
         "tests/test_sync_core_runner_playwright.py",
         "tests/test_cloud_global_dry_run.py",
         "tests/test_continuous_sync_path_policy.py",
+        "tests/test_issue_1900_surface_contract.py",
         "pdd/sync_core/human_attestation.py",
         "tests/test_sync_core_human_attestation.py",
         ".pdd/meta/ci_detect_changed_modules_python.json",
@@ -472,6 +501,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         assert row["base_policy_sha256"] == (
             "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"
         )
+        assert row["head_policy_sha256"] == profile_digest
         prompt = ROOT / row["prompt_path"]
         assert (
             hashlib.sha256(prompt.read_bytes()).hexdigest()
@@ -503,6 +533,21 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         )
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
+
+    pdd1900_rows = [
+        row for row in rows if row["prompt_path"] in PDD_1900_PROMPT_PATHS
+    ]
+    assert len(pdd1900_rows) == len(PDD_1900_PROMPT_PATHS) == 14
+    assert {row["prompt_path"] for row in pdd1900_rows} == PDD_1900_PROMPT_PATHS
+    for row in pdd1900_rows:
+        assert row["base_policy_sha256"] == (
+            "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"
+        )
+        assert row["head_policy_sha256"] == profile_digest
+        assert hashlib.sha256((ROOT / row["prompt_path"]).read_bytes()).hexdigest() == (
+            row["head_prompt_sha256"]
+        )
+        assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
 
 
 @pytest.mark.parametrize("protected_source", ("schema-1", "schema-1-old-row", "absent"))

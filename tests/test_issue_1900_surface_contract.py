@@ -66,6 +66,89 @@ def _detail_line(symbol, expected, actual, source="pdd-interface"):
 
 
 class TestIssue1900SurfaceContract:
+    def test_patch_target_cache_refreshes_when_a_test_file_changes(self, tmp_path, monkeypatch):
+        """An edited sibling test must replace, not reuse, cached patch targets."""
+        from pdd import split_validation
+
+        monkeypatch.setattr(split_validation, "_PATCH_TARGET_CACHE_VALIDATION_SECONDS", 0)
+        collect_patch_symbols_for_module = split_validation.collect_patch_symbols_for_module
+
+        module_path = tmp_path / "pdd" / "service.py"
+        test_path = tmp_path / "tests" / "test_service.py"
+        module_path.parent.mkdir()
+        test_path.parent.mkdir()
+        module_path.write_text("def service():\n    return None\n", encoding="utf-8")
+        test_path.write_text('from unittest.mock import patch\npatch("service._old")\n', encoding="utf-8")
+        assert collect_patch_symbols_for_module(module_path) == {"_old"}
+
+        # Use a different-size replacement so the filesystem change token is
+        # unambiguous even on a coarse-mtime test filesystem.
+        test_path.write_text('from unittest.mock import patch\npatch("service._replacement")\n', encoding="utf-8")
+        assert collect_patch_symbols_for_module(module_path) == {"_replacement"}
+
+    def test_patch_target_cache_refreshes_for_added_and_removed_test_files(self, tmp_path, monkeypatch):
+        """Sibling test creation and deletion rebuild the cached target index."""
+        from pdd import split_validation
+
+        monkeypatch.setattr(split_validation, "_PATCH_TARGET_CACHE_VALIDATION_SECONDS", 0)
+        module_path = tmp_path / "pdd" / "service.py"
+        tests_dir = tmp_path / "tests"
+        module_path.parent.mkdir()
+        tests_dir.mkdir()
+        module_path.write_text("def service():\n    return None\n", encoding="utf-8")
+        primary = tests_dir / "test_primary.py"
+        primary.write_text('from unittest.mock import patch\npatch("service._primary")\n', encoding="utf-8")
+        collect = split_validation.collect_patch_symbols_for_module
+        assert collect(module_path) == {"_primary"}
+
+        added = tests_dir / "test_added.py"
+        added.write_text('from unittest.mock import patch\npatch("service._added")\n', encoding="utf-8")
+        assert collect(module_path) == {"_primary", "_added"}
+
+        added.unlink()
+        assert collect(module_path) == {"_primary"}
+
+    @pytest.mark.parametrize(
+        "drifted",
+        [
+            "def endpoint(root: Path = Depends(get_root)) -> str:\n    return 'ok'\n",
+            "async def endpoint(root: Path = Depends(get_root)) -> int:\n    return 1\n",
+            "async def renamed_endpoint(root: Path = Depends(get_root)) -> str:\n    return 'ok'\n",
+        ],
+    )
+    def test_async_presence_parameters_reject_sync_return_and_name_drift(self, drifted):
+        """The documented ``(...)`` form omits only parameters; it retains the
+        declared symbol, asynchronous form, and return contract."""
+        prompt = _iface_prompt([("endpoint", "async def endpoint(...) -> str")])
+        code = (
+            "async def endpoint(root: Path = Depends(get_root)) -> str:\n"
+            "    return 'ok'\n"
+        )
+        _verify_public_surface_regression(code, code, PROMPT, OUT, "python", prompt)
+        with pytest.raises(PublicSurfaceRegressionError):
+            _verify_public_surface_regression(code, drifted, PROMPT, OUT, "python", prompt)
+
+    def test_patch_target_cache_is_scoped_to_each_repository_root(self, tmp_path):
+        """Identically named modules in two roots cannot share patch targets."""
+        from pdd.split_validation import collect_patch_symbols_for_module
+
+        first_root = tmp_path / "first"
+        second_root = tmp_path / "second"
+        first_module = first_root / "pdd" / "service.py"
+        second_module = second_root / "pdd" / "service.py"
+        for module_path, target in ((first_module, "_first"), (second_module, "_second")):
+            module_path.parent.mkdir(parents=True)
+            tests_dir = module_path.parent.parent / "tests"
+            tests_dir.mkdir()
+            module_path.write_text("def service():\n    return None\n", encoding="utf-8")
+            (tests_dir / "test_service.py").write_text(
+                f'from unittest.mock import patch\npatch("service.{target}")\n',
+                encoding="utf-8",
+            )
+
+        assert collect_patch_symbols_for_module(first_module) == {"_first"}
+        assert collect_patch_symbols_for_module(second_module) == {"_second"}
+
     def test_full_tracked_module_contract_corpus_manifest(self):
         """Audit every real recursive Python prompt/code contract in bounded time."""
         prompts = Path("pdd/prompts")
@@ -108,14 +191,15 @@ class TestIssue1900SurfaceContract:
                 )
             except PublicSurfaceRegressionError:
                 production_failures.append(prompt_path.name)
-        assert len(strict_failures) == 53
-        assert len(contracts) - len(strict_failures) == 73
+        # The original legacy inventory remains exact.  The repaired extracts
+        # declarations use the documented async ``(...)`` parameter form, so
+        # they are strict contracts for symbol/async/return without an
+        # unprovable Depends call.
+        strict_legacy_failures = set(strict_failures)
+        assert "extracts_python.prompt" not in strict_legacy_failures
+        assert len(strict_legacy_failures) == 53, sorted(strict_legacy_failures)
+        assert len(contracts) - len(strict_legacy_failures) == 73
         assert production_failures == []
-        # Every strict legacy mismatch must be accepted only because its
-        # existing candidate unit is AST-equivalent, never via a permissive
-        # declaration verifier.
-        grandfathered_unchanged_legacy_units = len(strict_failures) - len(production_failures)
-        assert grandfathered_unchanged_legacy_units == 53
         assert time.monotonic() - started < 45, "real-path contract corpus exceeded 45 seconds"
 
     def test_returns_can_supply_missing_signature_annotation_but_conflicts_fail(self):

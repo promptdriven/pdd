@@ -2,15 +2,17 @@
 
 <pdd-interface>
 {
-  "type": "module",
-  "module": {
-    "functions": [
-      {"name": "GET /api/v1/extracts", "signature": "(check_freshness: bool = true)", "returns": "ExtractListResponse"},
-      {"name": "GET /api/v1/extracts/{cache_key}", "signature": "(cache_key: str)", "returns": "ExtractContent"},
-      {"name": "GET /api/v1/extracts/for-prompt", "signature": "(prompt_path: str)", "returns": "list[PromptExtractInfo]"},
-      {"name": "POST /api/v1/extracts/prune", "signature": "(dry_run: bool = false)", "returns": "PruneResponse"}
-    ]
-  }
+    "type": "module",
+    "module": {
+      "functions": [
+      {"name": "get_project_root", "signature": "() -> Path", "returns": "Path"},
+      {"name": "set_project_root", "signature": "(root: Optional[Path]) -> None", "returns": "None"},
+      {"name": "list_extracts", "signature": "async def list_extracts(...) -> ExtractListResponse", "returns": "ExtractListResponse"},
+      {"name": "extracts_for_prompt", "signature": "async def extracts_for_prompt(...) -> list[PromptExtractInfo]", "returns": "list[PromptExtractInfo]"},
+      {"name": "prune_extracts", "signature": "async def prune_extracts(...) -> PruneResponse", "returns": "PruneResponse"},
+      {"name": "get_extract", "signature": "async def get_extract(...) -> ExtractContent", "returns": "ExtractContent"}
+      ]
+    }
 }
 </pdd-interface>
 

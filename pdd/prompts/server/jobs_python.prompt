@@ -4,10 +4,12 @@
 {
   "type": "module",
   "module": {
+    "classes": [
+      {"name": "Job"},
+      {"name": "JobCallbacks"},
+      {"name": "JobManager"}
+    ],
     "functions": [
-      {"name": "Job", "signature": "(...) -> Job", "returns": "Job"},
-      {"name": "JobCallbacks", "signature": "()", "returns": "JobCallbacks"},
-      {"name": "JobManager", "signature": "(max_concurrent: int = 1, executor=None, project_root=None)", "returns": "JobManager"},
       {"name": "JobManager.submit", "signature": "async def submit(command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None) -> Job", "returns": "Job"},
       {"name": "JobManager.cancel", "signature": "async def cancel(job_id: str) -> bool", "returns": "bool"},
       {"name": "JobManager.cleanup_old_jobs", "signature": "(max_age_seconds: float = 3600) -> int", "returns": "int"},
