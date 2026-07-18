@@ -66,9 +66,15 @@ _RETRY_BOUND_PATTERNS = [
 
 _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"\b(?:"
-    r"exhaust(?:ed|s|ion)?|"
-    r"after\s+all\s+(?:retry\s+)?attempts?|"
-    r"after\s+all\s+retries|"
+    r"(?:all\s+)?(?:retries|(?:retry\s+)?attempts?)\s+"
+    r"(?:(?:is|are|were|have\s+been|has\s+been)\s+)?exhausted|"
+    r"(?:retry|retries|attempts?)\s+exhaustion|"
+    r"after\s+all\s+(?:retry\s+)?attempts?"
+    r"(?:\s+(?:(?:have|has|are|were)\s+)?"
+    r"(?:fail(?:s|ed)?|exhausted))?|"
+    r"after\s+all\s+retries"
+    r"(?:\s+(?:(?:have|has|are|were)\s+)?"
+    r"(?:fail(?:s|ed)?|exhausted))?|"
     r"after\s+\d+\s+(?:failed\s+)?(?:retry\s+)?attempts?|"
     r"all\s+(?:retry\s+)?attempts?\s+"
     r"(?:(?:have|has|are|were)\s+)?fail(?:s|ed)?|"
@@ -90,11 +96,16 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"(?:is\s+|are\s+|has\s+been\s+)?(?:reached|exceeded|exhausted)|"
     r"(?:retry\s+)?limit\s+(?:is\s+|has\s+been\s+)?(?:reached|exceeded)|"
     r"(?:final|last)\s+(?:retry\s+)?attempt"
-    r"(?:\s+(?:(?:also|still)\s+)?"
-    r"(?:fail(?:s|ed)?|encounters?|raises?|has)\b.{0,80})?|"
+    r"(?:\s+(?:(?:also|still)\s+)?(?:"
+    r"fail(?:s|ed)?(?:\s+with\s+(?:(?:a|an|the)\s+)?"
+    r"(?:connection\s+)?(?:error|exception|failure))?|"
+    r"(?:encounters?|raises?|has)\s+(?:(?:a|an|the)\s+)?"
+    r"(?:connection\s+)?(?:error|exception|failure)))?|"
     r"if\s+(?:it\s+)?still\s+fail(?:s|ed)?|"
     r"when\s+(?:all\s+)?(?:retry\s+)?attempts?\s+fail|"
-    r"stop\s+retrying"
+    r"stop\s+retrying|"
+    r"(?:do\s+not|don['’]t|must\s+not|mustn['’]t)\s+"
+    r"(?:retry(?:\s+again)?|continue\s+retrying)"
     r")\b",
     re.IGNORECASE,
 )
@@ -135,7 +146,7 @@ _SUCCESS_RETURN_PATTERN = re.compile(
 )
 
 _CONNECTIVE_ONLY_PATTERN = re.compile(
-    r"^\s*(?:then|otherwise|as\s+(?:a|the)\s+fallback)?\s*$",
+    r"^\s*(?:then|otherwise|however|but|as\s+(?:a|the)\s+fallback)?\s*$",
     re.IGNORECASE,
 )
 
@@ -148,7 +159,7 @@ _ACTION_INTRO = (
 _DIRECT_ACTION_PATTERNS = tuple(
     re.compile(rf"^\s*{_ACTION_INTRO}{_ACTION_ADVERBS}{body}\s*$", re.IGNORECASE)
     for body in (
-        r"(?:re[- ]?)?raise\b.{0,96}",
+        r"(?:re[- ]?)?rais(?:e|ed)\b.{0,96}",
         r"(?:surface|propagate|abort|skip)\b.{0,96}",
         r"return\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
         r"log\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
@@ -159,19 +170,13 @@ _DIRECT_ACTION_PATTERNS = tuple(
         r"allow\b.{1,64}\bto\s+(?:surface|propagate|abort|skip)\b.{0,64}",
     )
 )
-_MODAL_ACTION_PATTERN = re.compile(
+_MODAL_PREFIX_PATTERN = re.compile(
     rf"^\s*{_ACTION_INTRO}(?:(?:the|a|an|this|that)\s+)?"
     rf"(?:[\w`.-]+\s+){{1,8}}"
     rf"(?:(?:must|should|shall|will|would|can|could|may|might)\s+"
     rf"{_ACTION_ADVERBS}(?:be\s+{_ACTION_ADVERBS})?|"
     rf"(?:has|have)\s+to\s+{_ACTION_ADVERBS}|(?:is|are)\s+{_ACTION_ADVERBS})"
-    r"(?:re[- ]?)?rais(?:e|ed)\b.{0,96}$|"
-    rf"^\s*{_ACTION_INTRO}(?:(?:the|a|an|this|that)\s+)?"
-    rf"(?:[\w`.-]+\s+){{1,8}}"
-    rf"(?:(?:must|should|shall|will|would|can|could|may|might)\s+"
-    rf"{_ACTION_ADVERBS}(?:be\s+{_ACTION_ADVERBS})?|"
-    rf"(?:has|have)\s+to\s+{_ACTION_ADVERBS}|(?:is|are)\s+{_ACTION_ADVERBS})"
-    r"(?:surface|propagate|abort|skip|return|log|use|fallback|fail)\b.{0,112}$",
+    r"(?P<action>.+?)\s*$",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -257,10 +262,14 @@ def _fallback_action_state(text: str) -> tuple[bool, bool]:
     coordinated = re.split(r"\band\b", text, flags=re.IGNORECASE)[-1].strip()
     if coordinated != text:
         candidates.append(coordinated)
+    for candidate in tuple(candidates):
+        modal = _MODAL_PREFIX_PATTERN.fullmatch(candidate)
+        if modal:
+            candidates.append(modal.group("action"))
     affirmative = any(
         pattern.fullmatch(candidate)
         for candidate in candidates
-        for pattern in (*_DIRECT_ACTION_PATTERNS, _MODAL_ACTION_PATTERN)
+        for pattern in _DIRECT_ACTION_PATTERNS
     )
     return affirmative, False
 
@@ -280,9 +289,14 @@ def _inverse_action_state(unit: str) -> tuple[bool, bool]:
 
 def _is_immediate_contradiction(units: tuple[str, ...], index: int) -> bool:
     """Return whether the unit immediately after an action contradicts it."""
-    if index + 1 >= len(units):
+    next_index = index + 1
+    while next_index < len(units) and _CONNECTIVE_ONLY_PATTERN.fullmatch(
+        units[next_index]
+    ):
+        next_index += 1
+    if next_index >= len(units):
         return False
-    _, rejected = _fallback_action_state(units[index + 1])
+    _, rejected = _fallback_action_state(units[next_index])
     return rejected
 
 
@@ -314,7 +328,7 @@ def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
             if rejected or suffix.strip():
                 continue
             action_index = index + 1
-            if action_index < len(units) and _CONNECTIVE_ONLY_PATTERN.fullmatch(
+            while action_index < len(units) and _CONNECTIVE_ONLY_PATTERN.fullmatch(
                 units[action_index]
             ):
                 action_index += 1
@@ -781,6 +795,43 @@ class TestDeterministicChangeJudges:
         judgment = _judge_retry_fallback(guidance)
 
         assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            "After all attempts fail, raise the final error.",
+            "After all retries fail, return an error.",
+            "If the final attempt still encounters a connection error re-raise the exception.",
+            "Do not retry again; raise the final error.",
+            "Do not continue retrying and raise the final error.",
+        ),
+    )
+    def test_retry_fallback_judge_accepts_canonical_exhaustion_forms(
+        self, guidance: str
+    ) -> None:
+        """Canonical stop conditions retain an explicit fallback action."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            "Retry 3 times. When the user is exhausted, return an error.",
+            "If retries are exhausted, the runner must log request metrics.",
+            "If retries are exhausted, the runner should use the normal result.",
+            "If retries are exhausted. Raise the error. Then, keep retrying.",
+            "If retries are exhausted. Raise the error. Otherwise, continue normally.",
+            "If retries are exhausted. Raise the error. However, keep retrying.",
+        ),
+    )
+    def test_retry_fallback_judge_rejects_unrelated_or_deferred_actions(
+        self, guidance: str
+    ) -> None:
+        """Unrelated subjects and connective-hidden contradictions are rejected."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed
 
     @pytest.mark.parametrize("action_before", (False, True))
     @pytest.mark.parametrize("same_clause", (False, True))
