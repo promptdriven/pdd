@@ -386,6 +386,26 @@ class TestGracefulDegradation:
         assert smap.story_to_tests == {}
         assert smap.test_to_stories == {}
 
+    def test_empty_existing_tests_dir_does_not_start_nested_pytest(
+        self, tmp_path: Path, monkeypatch
+    ):
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+
+        nested_pytest_calls = []
+
+        def _record_pytest_main(*args, **kwargs):
+            nested_pytest_calls.append((args, kwargs))
+            return 5
+
+        monkeypatch.setattr(story_regression.pytest, "main", _record_pytest_main)
+
+        smap = build_story_map(tests_dir)
+
+        assert smap.story_to_tests == {}
+        assert smap.test_to_stories == {}
+        assert nested_pytest_calls == [], "empty tests directory invoked pytest.main"
+
     def test_unparseable_module_is_skipped(self, tmp_path: Path):
         d = tmp_path / "tests"
         d.mkdir()
