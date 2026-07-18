@@ -39,25 +39,22 @@ ten-step sequence below remain the controlling global-resolution plan.
 
 | Verification boundary | #2164 exact head | #1995 exact diagnostic head | Current state |
 | --- | --- | --- | --- |
-| Locally validated | Canonical integration [`4903ccf2a2c80b8583be58e59bba5cfae20b97eb`](https://github.com/promptdriven/pdd/commit/4903ccf2a2c80b8583be58e59bba5cfae20b97eb) preserves remote FIFO identity, binds native authority into signed evidence, defers ownership to protected `main`, and pins the historical #1989 transition head. Combined local gate: 75 passed, 8 platform skips; exact Sol review approved. The subsequent no-drift guard rejected this SHA because protected `main` advanced. | [`24eaf18c9290f0f725835a3a737a2e2bfb90d4fb`](https://github.com/promptdriven/pdd/commit/24eaf18c9290f0f725835a3a737a2e2bfb90d4fb): pending integration and affected-suite validation | #2164 latest-main integration required; #1995 pending |
-| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164): CodeQL, auto-heal, regressions, [Package Preprocess Smoke](https://github.com/promptdriven/pdd/actions/runs/29614087280/job/87995195272), and Repo Bloat Docker E2E passed; [Run Unit Tests](https://github.com/promptdriven/pdd/actions/runs/29614087280/job/87995195301) failed 11 tests | [PR #1995](https://github.com/promptdriven/pdd/pull/1995): Package and auxiliary checks passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29603684162/job/87961605651) failed | both Unit gates failed |
-| Merged to protected `main` | Not merged. Protected `main` is [`03abdfa12e105a3939e57df601161862600413cd`](https://github.com/promptdriven/pdd/commit/03abdfa12e105a3939e57df601161862600413cd) after PR #2099; the remote #2164 head remains [`1904c4f23a10c729fbd561c0046f615f77216a85`](https://github.com/promptdriven/pdd/commit/1904c4f23a10c729fbd561c0046f615f77216a85). The reviewed local head contains the prior protected base `385ada477`, not `03abdfa12`, and was not pushed. | Blocked until #2164 is merged and integrated | pending / blocked |
+| Locally validated | Exact proposed head [`5f6d747aa75a0629f33d0900489a613a3f1e2b8d`](https://github.com/promptdriven/pdd/commit/5f6d747aa75a0629f33d0900489a613a3f1e2b8d) contains protected `main` `03abdfa12`, remote FIFO identity, signed native-authority binding, protected-main-only ownership, and the exact #1989 historical transition pin. Combined gate: 75 passed, 8 platform skips; full rollout and verification-profile suites passed; exact Sol review approved. | [`24eaf18c9290f0f725835a3a737a2e2bfb90d4fb`](https://github.com/promptdriven/pdd/commit/24eaf18c9290f0f725835a3a737a2e2bfb90d4fb): pending integration and affected-suite validation | #2164 locally green/reviewed; #1995 pending |
+| Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164) exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907): Unit, Package Preprocess Smoke, Story/Public CLI regressions, and Repo Bloat Docker E2E are in progress; exact-head CodeQL analyzers are also in progress | [PR #1995](https://github.com/promptdriven/pdd/pull/1995): Package and auxiliary checks passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29603684162/job/87961605651) failed | #2164 pending; #1995 failed diagnostic |
+| Merged to protected `main` | Not merged. The remote PR head is exact reviewed SHA `5f6d747aa`; GitHub reports it mergeable against protected `main` `03abdfa12` and blocked on checks. | Blocked until #2164 is merged and integrated | pending / blocked |
 | Released checker | No release is authorized by either PR | No release is authorized by either PR | pending |
 | Globally certified | This runner gate is not a global certificate | This diagnostic head is not a global certificate | blocked |
 
 The latest phase-attestation commit on #2164 postdates earlier review evidence.
-Let `H2164` denote the exact final reviewed proposed #2164 head. It is not yet
-assigned. The remote PR head is `1904c4f23`, and latest protected `main` is
-`03abdfa12`. The canonical local head `4903ccf2a` already contains the remote
-head, protected base `385ada477`, the corrected signed-binding work, protected-
-main-only coordinator ownership, and the exact #1989 historical transition
-head. Its combined local gate passed 75 tests with 8 expected platform skips,
-and exact critical Sol review returned `APPROVE`. The clean-tree/no-drift guard
-then detected PR #2099 on protected `main` and correctly stopped the push.
-Integrate exact `03abdfa12`, preserve its dormant requirement-preauthorization
-semantics and the pinned #1989 transition test, rerun the affected suites, and
-require exact-composite review on the resulting SHA. No existing remote commit
-may be overwritten. #1995 is
+Let `H2164` denote the exact final reviewed proposed #2164 head. It is currently
+[`5f6d747aa75a0629f33d0900489a613a3f1e2b8d`](https://github.com/promptdriven/pdd/commit/5f6d747aa75a0629f33d0900489a613a3f1e2b8d).
+This SHA is a fast-forward descendant of remote predecessor `1904c4f23` and
+protected `main` `03abdfa12`. It preserves FIFO exec-probe identity, binds the
+native authority into canonical signed evidence, uses protected-main-only
+coordinator ownership, and pins the historical #1989 transition to its exact
+base and merge head. Local affected suites and exact-composite Sol review are
+green. RED `16eaf23a6` and GREEN evidence are posted on the PR. Hosted checks on
+this exact SHA are in progress, so it is not merge-authorized. #1995 is
 a diagnostic-only head: its four-process concurrent failure is attributed by the
 selector-labelled diagnostic to
 `test_real_vitest_repeated_processes_use_fresh_denied_authorities`; it must not
@@ -107,12 +104,11 @@ and sol_high_exact_composite_approval(H1995) == approved
 and merge_result(H1995) is on protected main
 ```
 
-For #2164, `H2164` is currently unassigned. The previously reviewed local SHA
-`4903ccf2a` is locally green and Sol-approved but fails the current-main ancestry
-guard after `03abdfa12`; it was not pushed. Hosted checks have not run on a
-combined latest-main head. Therefore `required_checks(H2164)` and
-`sol_high_exact_composite_approval(H2164)` are both false for the as-yet
-unassigned final SHA.
+For #2164, `H2164` is `5f6d747aa`. Exact Sol approval is true, current-main and
+remote ancestry guards passed at push time, and GitHub reports the PR mergeable.
+`required_checks(H2164)` remains false until the in-progress hosted Unit,
+Package, CodeQL, auto-heal, regression, and auxiliary checks all complete
+successfully.
 This predicate closes only the
 runner prerequisite/current PR gate, not global certification. It forbids
 retries-as-pass, timeout or resource increases, preload or authority weakening,
