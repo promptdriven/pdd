@@ -526,7 +526,8 @@ def test_vitest_no_result_observation_writes_only_exact_cause_ineligible_lanes(
         "exit-mismatch",
         "malformed-progress",
         "excessive-progress",
-        "invalid-lane-origin",
+        "invalid-lane",
+        "invalid-origin",
     ),
 )
 def test_vitest_no_result_observation_never_writes_outside_exact_path(
@@ -557,8 +558,10 @@ def test_vitest_no_result_observation_never_writes_outside_exact_path(
         vitest_package_sha256=_VITEST_PACKAGE_SHA256,
         vitest_lock_sha256=_VITEST_LOCK_SHA256,
         test_node=_VITEST_DIAGNOSTIC_TEST_NODE,
-        lane="source",
-        runner_origin="installed-wheel" if case == "invalid-lane-origin" else "source-checkout",
+        lane="not-a-lane" if case == "invalid-lane" else "source",
+        runner_origin=(
+            "not-a-runner-origin" if case == "invalid-origin" else "source-checkout"
+        ),
     )
     result: subprocess.CompletedProcess[str] = SupervisedCompletedProcess(
         ["vitest"], 0, "", "",
