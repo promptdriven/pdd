@@ -789,6 +789,125 @@ def test_exact_replay_row_can_bind_changed_profile_bytes(monkeypatch) -> None:
     assert additions == ()
 
 
+def test_non_pdd_replay_row_remains_a_new_authorization(monkeypatch) -> None:
+    """A foreign repository cannot bypass managed-prompt isolation with replay data."""
+    authorization = verification._REPLAY_PROMPT_REQUIREMENT_TRANSITIONS[
+        0
+    ]  # pylint: disable=protected-access
+    protected = json.dumps(
+        {
+            "schema_version": 2,
+            "rotations": [],
+            "requirement_rotations": [],
+        }
+    ).encode()
+    candidate = json.dumps(
+        {
+            "schema_version": 2,
+            "rotations": [],
+            "requirement_rotations": [_requirement_authorization_row(authorization)],
+        }
+    ).encode()
+
+    def protected_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
+        if path == verification.ROTATION_POLICY_PATH:
+            return protected if ref == "protected" else candidate
+        return None
+
+    monkeypatch.setattr(verification, "read_git_blob", protected_read)
+    monkeypatch.setattr(
+        verification,
+        "_candidate_authorization_is_strictly_dormant",  # pylint: disable=protected-access
+        lambda *_args: True,
+    )
+    manifest = SimpleNamespace(
+        repository_id="foreign-repository",
+        base_ref="protected",
+        head_ref="candidate",
+    )
+
+    authorizations, _prompts, additions = (
+        verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
+            ROOT, manifest
+        )
+    )
+
+    assert authorizations == (authorization,)
+    assert additions == (authorization,)
+    monkeypatch.setattr(
+        verification,
+        "_managed_prompt_byte_changes",  # pylint: disable=protected-access
+        lambda *_args: {authorization.prompt_path},
+    )
+    with pytest.raises(
+        verification.VerificationProfileError,
+        match="authority-only change modifies managed prompt bytes",
+    ):
+        verification._validate_new_authorization_managed_prompt_bytes(  # pylint: disable=protected-access
+            ROOT, manifest, {}, set()
+        )
+
+
+def test_legacy_replay_history_exemption_is_repository_bound(monkeypatch) -> None:
+    """Only PDD may read the reviewed non-append-only #1989 history pair."""
+    first, second = verification._REPLAY_PROMPT_REQUIREMENT_TRANSITIONS[
+        :2
+    ]  # pylint: disable=protected-access
+    protected = json.dumps(
+        {
+            "schema_version": 2,
+            "rotations": [],
+            "requirement_rotations": [
+                _requirement_authorization_row(first),
+                _requirement_authorization_row(second),
+            ],
+        }
+    ).encode()
+    candidate = json.dumps(
+        {
+            "schema_version": 2,
+            "rotations": [],
+            "requirement_rotations": [
+                _requirement_authorization_row(second),
+                _requirement_authorization_row(first),
+            ],
+        }
+    ).encode()
+    protected_rows = verification._parse_requirement_transition_authorizations(  # pylint: disable=protected-access
+        protected, "protected"
+    )
+    candidate_rows = verification._parse_requirement_transition_authorizations(  # pylint: disable=protected-access
+        candidate, "candidate"
+    )
+
+    class _Digest:
+        def __init__(self, raw: bytes) -> None:
+            self._raw = raw
+
+        def hexdigest(self) -> str:
+            return verification._LEGACY_PDD_1989_SCHEMA_2_HISTORY[  # pylint: disable=protected-access
+                0 if self._raw == protected else 1
+            ]
+
+    monkeypatch.setattr(verification.hashlib, "sha256", _Digest)
+    pdd_manifest = SimpleNamespace(repository_id=REPOSITORY_ID)
+    verification._validate_schema_2_history_representation(  # pylint: disable=protected-access
+        pdd_manifest, protected, candidate, protected_rows, candidate_rows
+    )
+
+    with pytest.raises(
+        verification.VerificationProfileError,
+        match="schema-2 history rewrites protected representation",
+    ):
+        verification._validate_schema_2_history_representation(  # pylint: disable=protected-access
+            SimpleNamespace(repository_id="foreign-repository"),
+            protected,
+            candidate,
+            protected_rows,
+            candidate_rows,
+        )
+
+
 @pytest.mark.parametrize(
     "mutation", ("malformed-row", "non-list-rows", "extra-envelope-key")
 )
