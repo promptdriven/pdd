@@ -370,8 +370,6 @@ def test_release_video_visual_safety_allows_strong_physical_shell_contexts(
         "An OS shell appears.",
         "A PowerShell prompt appears.",
         "A shell-like technical surface presents command output.",
-        "A bare shell appears in the foreground.",
-        "A shell appears in the foreground.",
     ],
 )
 def test_release_video_visual_safety_rejects_command_shell_surfaces(cue: str):
@@ -492,6 +490,13 @@ def test_release_video_visual_safety_allows_local_physical_shell_materials(
         "A protective shell sits beside an unlabeled musical keyboard.",
         "A glowing shell appears at a celebratory bash.",
         "A physical shell rests near a caretaker who shows an unlabeled keyboard instrument.",
+        "A bare shell appears in the foreground.",
+        "A shell appears in the foreground.",
+        "A smooth shell surrounds a matte orb.",
+        "A thin shell encloses the package cube.",
+        "An iridescent shell floats in diffuse blue light.",
+        "A hollow shell cradles a simple sphere.",
+        "A metal shell surrounds the mechanism, with no text or labels.",
     ],
 )
 def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_homonyms(
@@ -511,6 +516,13 @@ def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_ho
         "A shell of light rests; there, its prompt blinks.",
         "A shell made of glass. In the foreground, it displays stdout.",
         "A protective shell rests. It glows. Its prompt blinks.",
+        "A translucent shell runs zsh.",
+        "A translucent shell executes Bash.",
+        "A physical shell is a Bash session.",
+        "A translucent shell hosts a login session.",
+        "A glowing shell opens into a REPL.",
+        "A translucent shell with a prompt waits in the foreground.",
+        "A matte shell shows environment variables.",
     ],
 )
 def test_release_video_visual_safety_rejects_technical_surface_after_punctuation(
