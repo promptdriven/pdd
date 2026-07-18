@@ -126,7 +126,7 @@ COMMAND_SHELL_NAME_PATTERN = (
     r"(?:bash|zsh|xonsh|korn|ksh|csh|tcsh|bourne(?:[-\s]+again)?|powershell)"
 )
 BASH_STRONG_SURFACE_RE = re.compile(
-    r"\bbash\s+(?:history|scripts?|windows?)\b",
+    r"\bbash\s+(?:history|scripts?|windows?|panes?)\b",
     flags=re.IGNORECASE,
 )
 BASH_SESSION_RE = re.compile(
@@ -156,12 +156,24 @@ COMMAND_SHELL_EXECUTION_RE = re.compile(
 SHELL_SUBJECT_CONTEXT_PATTERN = (
     r"(?:(?![.!?;]|\b(?:that|who|which)\b|"
     r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b|"
-    r",\s*(?:and|but|while|whereas|yet)\s+(?:a|an|the)\b).){0,100}"
+    r",?\s*(?:and|but|while|whereas|yet|as)\s+"
+    r"(?:a|an|the|another)\b).){0,100}"
+)
+SHELL_DIRECT_RELATIVE_COMPUTING_RE = re.compile(
+    r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
+    r"(?:shows?|displays?|presents?)\s+(?:a\s+|an\s+|the\s+|its\s+)?"
+    r"(?:prompts?|outputs?|directory\s+listings?|file\s+listings?|filenames?)\b|"
+    r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
+    r"(?:accepts?|receives?|takes?)\s+(?:keyboard\s+|typed\s+|user\s+)?inputs?\b|"
+    r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
+    r"(?:prints?|writes?)\s+(?:(?:diagnostic|build|command|standard|current)\s+)?"
+    r"outputs?\b",
+    flags=re.IGNORECASE,
 )
 SHELL_OWNED_COMPUTING_RE = re.compile(
     r"\bshell[-\s]+outputs?\s+windows?\b|"
     r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
-    r"(?:scripts?|prompts?|cli|screens?|sessions?|"
+    r"(?:scripts?|prompts?|cli|screens?|sessions?|panes?|transcripts?|"
     r"working\s+director(?:y|ies)|standard\s+outputs?|current\s+outputs?|"
     r"command\s+outputs?|technical\s+surfaces?)\b|"
     r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
@@ -170,14 +182,15 @@ SHELL_OWNED_COMPUTING_RE = re.compile(
     r"interfaces?\b(?!\s+between\b)|"
     r"\bshell(?:s|-like)?(?:['’]s)?\b"
     rf"{SHELL_SUBJECT_CONTEXT_PATTERN}\b"
-    r"(?:is|has|with|hosts?|contains?|shows?|reads?|invokes?|displays?|"
+    r"(?:is|has|with|hosts?|contains?|shows?|reads?|lists?|invokes?|displays?|"
     r"displaying|presents?|presenting|renders?|rendering|prints?|writes?)\b"
     r"(?:(?![.!?;]).){0,60}\b"
     rf"(?:{COMMAND_SHELL_NAME_PATTERN}\s+sessions?|prompts?|"
     r"(?:blinking\s+)?(?:cursors?|carets?)(?![-\s]+(?:shaped|like)\b)|"
     r"cli|keystrokes?|"
     r"stdout|stderr|system\s+sessions?|login\s+sessions?|stdin|"
-    r"working\s+director(?:y|ies)|"
+    r"working\s+director(?:y|ies)|directory\s+listings?|file\s+listings?|"
+    r"filenames?|files?|"
     r"standard\s+outputs?|current\s+outputs?|command\s+outputs?|outputs?)\b",
     flags=re.IGNORECASE | re.DOTALL,
 )
@@ -3545,6 +3558,7 @@ def has_risky_shell_visual(cue: str) -> bool:
             COMMAND_SHELL_PATH_RE,
             NAMED_COMMAND_SHELL_RE,
             COMMAND_SHELL_EXECUTION_RE,
+            SHELL_DIRECT_RELATIVE_COMPUTING_RE,
             SHELL_OWNED_COMPUTING_RE,
             SHELL_INPUT_INTERACTION_RE,
             UNAMBIGUOUS_COMPUTING_SURFACE_RE,
