@@ -13606,6 +13606,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "tests/test_verify_vitest_no_result_observation.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "tests/test_unit_tests_workflow.py",
       "preauthorize_absent": true,
       "role": "human-maintained"
