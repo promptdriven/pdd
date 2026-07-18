@@ -32,6 +32,7 @@ ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 468
 PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
+PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -372,7 +373,11 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
 
 def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     """The #1989 transition table must load a complete exact-base profile set."""
-    manifest = build_unit_manifest(ROOT, base_ref=PDD_1989_ACTUAL_BASE, head_ref="HEAD")
+    manifest = build_unit_manifest(
+        ROOT,
+        base_ref=PDD_1989_ACTUAL_BASE,
+        head_ref=PDD_1989_ACTUAL_HEAD,
+    )
     profiles = load_verification_profiles(ROOT, manifest)
 
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
