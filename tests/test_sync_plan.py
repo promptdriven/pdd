@@ -175,7 +175,10 @@ def test_fallback_loader_rejects_ambient_diff_scope_before_runner(
         "sync_plan_digest": plan.sync_plan_digest,
         "selection_digest": plan.selection_digest,
     }
-    monkeypatch.setenv("PDD_EXPLICIT_SYNC_SCOPE_V1", json.dumps(scope))
+    monkeypatch.setenv(
+        "PDD_EXPLICIT_SYNC_SCOPE_V1",
+        json.dumps(scope, sort_keys=True, separators=(",", ":")),
+    )
     loaded, selected, cwds, targets, _contexts, _raw = _load_fallback_scope_execution(tmp_path)
     assert loaded == plan.to_dict()
     assert selected == ("frontend/profile",)
@@ -212,7 +215,7 @@ def test_runner_uses_frozen_plan_for_order_env_and_evidence(
             "selection_digest": scope["selection_digest"],
             "execution_selected_module_ids": ["frontend/profile"],
             "execution_dependency_order": ["frontend/profile"],
-            "explicit_sync_scope": json.dumps(scope),
+            "explicit_sync_scope": json.dumps(scope, sort_keys=True, separators=(",", ":")),
         },
         github_info=None,
         quiet=True,
@@ -224,7 +227,14 @@ def test_runner_uses_frozen_plan_for_order_env_and_evidence(
     assert child_env["PDD_SYNC_SCOPE_SOURCE"] == "fallback_payload_v1"
     runner._persist_scope_evidence()
     evidence = tmp_path / ".pdd" / "evidence" / "sync-plans" / f"{plan.sync_plan_digest}.json"
-    assert json.loads(evidence.read_text(encoding="utf-8"))["selected_module_ids"] == [
+    assert json.loads(evidence.read_text(encoding="utf-8"))["selected_module_ids"] == list(
+        plan.selected_module_ids
+    )
+    execution = (
+        tmp_path / ".pdd" / "evidence" / "sync-executions"
+        / f"{plan.sync_plan_digest}-{scope['selection_digest']}.json"
+    )
+    assert json.loads(execution.read_text(encoding="utf-8"))["selected_module_ids"] == [
         "frontend/profile"
     ]
 

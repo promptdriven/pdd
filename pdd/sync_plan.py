@@ -70,12 +70,14 @@ def selection_digest(module_ids: Sequence[str]) -> str:
     return hashlib.sha256(SELECTION_DIGEST_PREFIX + _canonical_json(ids)).hexdigest()
 
 
-def _require_canonical_ids(module_ids: Sequence[str], *, allow_empty: bool) -> None:
+def _require_canonical_ids(
+    module_ids: Sequence[str], *, allow_empty: bool, enforce_limit: bool = True
+) -> None:
     if not allow_empty and not module_ids:
         raise SyncPlanError("module IDs must not be empty")
     if list(module_ids) != sorted(module_ids) or len(module_ids) != len(set(module_ids)):
         raise SyncPlanError("module IDs must be sorted and unique")
-    if len(module_ids) > MAX_SELECTED_MODULE_IDS:
+    if enforce_limit and len(module_ids) > MAX_SELECTED_MODULE_IDS:
         raise SyncPlanError(
             f"module ID list exceeds the V1 limit of {MAX_SELECTED_MODULE_IDS}"
         )
@@ -373,7 +375,9 @@ def build_sync_plan(
         sorted(candidates, key=lambda candidate: candidate.module_id)
     )
     candidate_ids = [candidate.module_id for candidate in candidate_tuple]
-    _require_canonical_ids(candidate_ids, allow_empty=True)
+    # A repository can have more than 64 candidates.  The V1 bound applies to
+    # an executable/result selection, never to read-only planning inventory.
+    _require_canonical_ids(candidate_ids, allow_empty=True, enforce_limit=False)
     selected = tuple(sorted(set(selected_module_ids)))
     _require_canonical_ids(selected, allow_empty=True)
     candidate_by_id = {candidate.module_id: candidate for candidate in candidate_tuple}
@@ -513,6 +517,8 @@ def parse_explicit_scope(raw_scope: str) -> dict[str, object]:
         raise SyncPlanError("PDD_EXPLICIT_SYNC_SCOPE_V1 must be valid JSON") from exc
     if not isinstance(scope, dict):
         raise SyncPlanError("PDD_EXPLICIT_SYNC_SCOPE_V1 must be a JSON object")
+    if raw_scope.encode("utf-8") != _canonical_json(scope):
+        raise SyncPlanError("PDD_EXPLICIT_SYNC_SCOPE_V1 must use canonical JSON")
     required = {
         "module_id_encoding", "module_ids", "sync_plan_digest", "selection_digest"
     }
@@ -524,6 +530,9 @@ def parse_explicit_scope(raw_scope: str) -> dict[str, object]:
         raise SyncPlanError("PDD_EXPLICIT_SYNC_SCOPE_V1 contains non-string metadata")
     if not isinstance(scope["module_ids"], list):
         raise SyncPlanError("PDD_EXPLICIT_SYNC_SCOPE_V1 module_ids must be a list")
+    for field in ("sync_plan_digest", "selection_digest"):
+        if re.fullmatch(r"[0-9a-f]{64}", scope[field]) is None:
+            raise SyncPlanError(f"PDD_EXPLICIT_SYNC_SCOPE_V1 {field} must be lowercase SHA-256")
     return scope
 
 
