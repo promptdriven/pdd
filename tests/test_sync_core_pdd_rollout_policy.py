@@ -87,6 +87,7 @@ ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS = {
     "scripts/build_vitest_fd_cloexec_addon.py",
     "setup.py",
 }
+ADAPTER_DEMAND_PREAUTHORIZED_PATHS = {"pdd/sync_core/adapter_demand_verifier.py"}
 PR_2017_ABSENT_METADATA_PATHS = {
     ".pdd/meta/agentic_langtest_python.json",
     ".pdd/meta/agentic_langtest_python_run.json",
@@ -98,6 +99,7 @@ PR_2017_ABSENT_METADATA_PATHS = {
 PREAUTHORIZED_CHILD_PATHS = (
     LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS
     | ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
+    | ADAPTER_DEMAND_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
     | {
         ".github/toolchains/playwright_manifest.py",
@@ -1480,6 +1482,27 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         )
     assert not manifest.unaccounted_tracked_paths
     assert len(manifest.expected_managed) == baseline_denominator
+
+
+def test_adapter_demand_verifier_is_exactly_preauthorized() -> None:
+    """Only the reviewed verifier path receives absent-path authority."""
+    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    rules = {row["pattern"]: row for row in ownership["rules"]}
+    assert ADAPTER_DEMAND_PREAUTHORIZED_PATHS == {
+        "pdd/sync_core/adapter_demand_verifier.py"
+    }
+    assert {
+        path: rules.get(path) for path in ADAPTER_DEMAND_PREAUTHORIZED_PATHS
+    } == {
+        path: {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
+        for path in ADAPTER_DEMAND_PREAUTHORIZED_PATHS
+    }
+    assert {
+        row["pattern"]
+        for row in ownership["rules"]
+        if row.get("preauthorize_absent", False)
+        and row["pattern"].startswith("pdd/sync_core/adapter_demand")
+    } == ADAPTER_DEMAND_PREAUTHORIZED_PATHS
 
 
 def test_pr2017_absent_metadata_authorization_is_exact_six_path_set() -> None:

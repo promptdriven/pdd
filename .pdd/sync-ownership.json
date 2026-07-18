@@ -5949,6 +5949,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "pdd/sync_core/adapter_demand_verifier.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "pdd/sync_core/alias_policy.py",
       "role": "human-maintained"
     },
