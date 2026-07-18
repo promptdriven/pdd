@@ -41,7 +41,7 @@ remains controlling.
 | --- | --- | --- |
 | Locally validated | PR #2164 exact reviewed head `5f6d747aa75a0629f33d0900489a613a3f1e2b8d` passed its affected suites. PR #1995 exact head [`84b19758fc078a2e3bbbe12de5fcef3ed8076371`](https://github.com/promptdriven/pdd/commit/84b19758fc078a2e3bbbe12de5fcef3ed8076371) contains protected base `c81e5d21a`; Terra reported 295 focused passes and 36 platform skips, correction contracts passed, and the final producer/verifier integration selection passed 35 tests. YAML, 41 embedded shell scripts, py_compile, and diff checks passed. | local evidence green for the diagnostic-only change |
 | Independently reviewed | Sol approved exact head `84b19758f`, producer digest `2b66fa5bf665686a631d32d293263390a6a4948519d477e1af42f6935085cf31`, verifier digest `69511d253d077ba3e37f5cbd4bc1fb6b9744b24b3b7dd87e17d4e44689112031`, protected base `c81e5d21a`, and verdict `NO_BEHAVIORAL_FIX`. | exact-composite approved |
-| Hosted green | #2164 exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907) passed all required checks. On #1995 prior head `daa67f2044`, [run 29635743590](https://github.com/promptdriven/pdd/actions/runs/29635743590) had green CodeQL, Story/Public CLI regressions, and Docker E2E, but [Unit job 88057642167](https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642167) failed closed in silent preflight. [Package job 88057642157](https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642157) passed all seven installed-wheel Playwright variants, then reproduced the installed-wheel Vitest exit after `post-drop-probes,candidate-exec` with untrusted diagnostic `340afd630c05209f62419c312abe3aeb7464262e3c5d8367e8d28fec22428471`. Exact head `84b19758f` is now running in [run 29637193871](https://github.com/promptdriven/pdd/actions/runs/29637193871); [Unit job 88061484993](https://github.com/promptdriven/pdd/actions/runs/29637193871/job/88061484993) and [Package job 88061484991](https://github.com/promptdriven/pdd/actions/runs/29637193871/job/88061484991) are in progress. | #1995 hosted Stage A in progress; not green |
+| Hosted green | #2164 exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907) passed all required checks. On #1995 prior head `daa67f2044`, [run 29635743590](https://github.com/promptdriven/pdd/actions/runs/29635743590) had green CodeQL, Story/Public CLI regressions, and Docker E2E, but Unit failed in silent preflight; Package passed all seven installed-wheel Playwright variants, then reproduced the installed-wheel Vitest exit with untrusted diagnostic `340afd630c05209f62419c312abe3aeb7464262e3c5d8367e8d28fec22428471`. On exact head `84b19758f`, [Unit job 88061484993](https://github.com/promptdriven/pdd/actions/runs/29637193871/job/88061484993) uploaded checksummed failure artifact `aec9faa5a2c27cfdaddfb0b82135493d7cafb594728ac22a897a738da0f8cbee`: predicate `runner-provisioner-version-count`, expected 1, actual 0, command exit 0, decoded observation `version=20260707.563`, full-output digest `1e40203d955c084de9ec279dbe867aa074eb9697c4549b763eb753e048536840`. The pinned version matches; the exact hosted output form was not accepted. | #1995 hosted red in named preflight parser; no Stage A cause yet |
 | Merged to protected `main` | #2164 merged with ancestry preserved at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e). #1995 is not merged. Remote PR head `84b19758f` contains current protected `main` `c81e5d21a`. | exact hosted checks and cause gates remain pending |
 | Plan and ledger | [PR #2199](https://github.com/promptdriven/pdd/pull/2199) exact head `2ee7424eed23e6df3e6c6d5d239bc33efba4e8ca` passed every hosted check. It is behind current protected `main` and this update is not yet hosted. | locally being refreshed; not merged |
 | Released checker | No protected reviewed checker release or pinned wheel digest exists. | pending |
@@ -61,24 +61,30 @@ writing a machine-readable failure artifact.
    `H2164 = 5f6d747aa` passed Unit, Package, all hosted checks, exact Sol review,
    and clean-tree/main/remote-head guards; ancestry-preserving merge result
    `M2164 = d91b07a90` is on protected `main`.
-2. **Passed locally and reviewed:** exact head `84b19758f` contains current
+2. **Passed locally and reviewed; hosted parser RED:** exact head `84b19758f` contains current
    protected main, has exact Sol approval, and is the remote PR head. Its
    preflight emits canonical checksummed PASS or named failure evidence without
-   changing candidate behavior.
-3. **Current gate, collect cause evidence:** run
+   changing candidate behavior. Hosted evidence proves the provisioner command
+   succeeds and emits the pinned version as exact machine form
+   `version=20260707.563`; the parser rejected that form.
+3. **Current bounded correction:** accept the exact hosted provisioner output
+   form while retaining strict cardinality, character set, version pin, named
+   evidence, and malformed/duplicate/mixed-row rejection. Obtain same-Sol
+   verification and rebind the resulting exact head/digests before push.
+4. **Then collect cause evidence:** run
    the source and installed-wheel diagnostic lanes. Stage A passes only when a
    checksummed source preflight PASS artifact exists and protected coordinator
    artifacts identify fixed-enum process role, failure stage, and cause for both
    lanes on that exact SHA. A preflight failure or an unclassified lane leaves
    Stage A red; the two lanes may report different trusted causes.
-4. **Only then specify behavior:** add one cause-specific RED that fails against
+5. **Only then specify behavior:** add one cause-specific RED that fails against
    the collected baseline behavior, implement at most one bounded correction,
    and have the same reviewer verify the finding and affected behavior.
-5. Require Unit, Package Preprocess Smoke, CodeQL, auto-heal, and every other
+6. Require Unit, Package Preprocess Smoke, CodeQL, auto-heal, and every other
    required hosted check to pass on one exact reviewed SHA. Merge #1995 only from
    the main clone after clean-tree, remote-head, ancestry, and no-main-drift
    guards.
-6. After #1995 merges, update the ledger with its merge SHA and begin the
+7. After #1995 merges, update the ledger with its merge SHA and begin the
    protected checker release gate. Do not substitute narrative status for the
    machine-readable evidence fields.
 

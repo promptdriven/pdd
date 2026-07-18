@@ -16,8 +16,18 @@ current_critical_path:
     unit_job_url: "https://github.com/promptdriven/pdd/actions/runs/29637193871/job/88061484993"
     package_job_url: "https://github.com/promptdriven/pdd/actions/runs/29637193871/job/88061484991"
     exact_head_sha: "84b19758fc078a2e3bbbe12de5fcef3ed8076371"
-    status: in-progress
+    status: failed
     preflight_pass_artifact_verified: false
+    preflight_failure_artifact_verified: true
+    preflight_failure_artifact_sha256: "aec9faa5a2c27cfdaddfb0b82135493d7cafb594728ac22a897a738da0f8cbee"
+    preflight_failure_predicate: "runner-provisioner-version-count"
+    preflight_failure_expected: "1"
+    preflight_failure_actual: "0"
+    preflight_command_exit_code: 0
+    preflight_observation: "version=20260707.563\n"
+    preflight_observation_sha256: "1e40203d955c084de9ec279dbe867aa074eb9697c4549b763eb753e048536840"
+    preflight_observation_truncated: false
+    artifact_url: "https://api.github.com/repos/promptdriven/pdd/actions/artifacts/8427472992/zip"
     source_cause_artifact_verified: false
     installed_wheel_cause_artifact_verified: false
   first_hosted_attempt:
@@ -152,7 +162,7 @@ steps:
     exact_repository_sha: "84b19758fc078a2e3bbbe12de5fcef3ed8076371"
     failure_baseline_sha: "b09b6bef2c8c4bee762965be463527cd0b050154"
     diagnostic_head_sha: "84b19758fc078a2e3bbbe12de5fcef3ed8076371"
-    current_stage: "stage-a-hosted-cause-collection"
+    current_stage: "stage-a-provisioner-parser-correction"
     cause_red_status: pending
     validation_commands:
       - "pytest -q tests/test_sync_core_runner_pytest.py tests/test_sync_core_runner_vitest.py tests/test_sync_core_supervisor.py"
@@ -265,6 +275,7 @@ steps:
       - "https://github.com/promptdriven/pdd/actions/runs/29637193871/job/88061484993"
       - "https://github.com/promptdriven/pdd/actions/runs/29637193871/job/88061484991"
       - "https://github.com/promptdriven/pdd/pull/1995#issuecomment-5010554408"
+      - "https://api.github.com/repos/promptdriven/pdd/actions/artifacts/8427472992/zip"
     observed_evidence:
       reviewed_diagnostic_head_exact: true
       review_verdict_approve: true
@@ -278,9 +289,11 @@ steps:
       cause_specific_red_exists: false
       current_exact_head_reviewed: true
       current_exact_head_contains_protected_main: true
-      current_exact_head_hosted_status: in-progress
+      current_exact_head_hosted_status: failed
+      named_preflight_failure_artifact_verified: true
+      named_preflight_failure_predicate: "runner-provisioner-version-count"
     predicate_result: "All seven historical installed-wheel Playwright variants pass. Hosted Unit stopped before source candidate execution; Package executed installed-wheel Vitest and produced an untrusted diagnostic. Neither lane produced a protected Stage A cause artifact, and no cause-specific RED exists."
-    blocker: "The running exact-head workflow must verify the preflight PASS artifact and trusted source and installed-wheel cause artifacts before Stage B."
+    blocker: "The exact hosted provisioner output form must pass the strict parser on a newly reviewed head before Stage A cause collection can run."
     owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 5
     name: "Canonical production routing"
