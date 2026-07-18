@@ -131,6 +131,12 @@ def test_persisted_primary_evidence_binds_fallback_scope(tmp_path: Path) -> None
     with pytest.raises(SyncPlanError, match="persisted SyncPlan digest mismatch"):
         validate_explicit_scope_evidence(scope, evidence)
 
+    evidence["sync_plan_digest"] = plan.sync_plan_digest
+    evidence["sync_plan"]["selected_module_ids"] = []
+    evidence["sync_plan_digest"] = plan_digest(evidence["sync_plan"])
+    with pytest.raises(SyncPlanError, match="selection disagrees"):
+        validate_explicit_scope_evidence(scope, evidence)
+
 
 def test_dependency_closure_is_selected_and_missing_edges_fail(tmp_path: Path) -> None:
     backend = _candidate(tmp_path, "backend/service")
