@@ -280,20 +280,28 @@ def test_lazy_mapping_failed_import_remains_retryable(monkeypatch) -> None:
 
 
 def test_lazy_mapping_survives_module_sentinel_refresh(monkeypatch) -> None:
-    """Re-registration after a package reload stays lazy and Click-safe."""
+    """Re-registration and reloaded exports retain one lazy identity."""
     import importlib
 
     commands_module = importlib.import_module("pdd.commands")
     expected = click.Command("reload-safe")
+    replacement = click.Command("replacement")
     imports: list[str] = []
+    resolved = SimpleNamespace(command=expected)
     targets = {"reload-safe": ("fake.module", "command")}
+    monkeypatch.setitem(sys.modules, "fake.module", resolved)
+    monkeypatch.setitem(
+        commands_module._EXPORTS,
+        "reload_safe",
+        ("fake.module", "command"),
+    )
     mapping = commands_module.LazyCommandMapping(targets)
 
     monkeypatch.setattr(commands_module, "_UNLOADED_COMMAND", object())
 
     def resolve(module_name: str):
         imports.append(module_name)
-        return SimpleNamespace(command=expected)
+        return resolved
 
     monkeypatch.setattr(
         commands_module,
@@ -306,6 +314,9 @@ def test_lazy_mapping_survives_module_sentinel_refresh(monkeypatch) -> None:
     assert imports == []
     assert group.get_command(click.Context(group), "reload-safe") is expected
     assert imports == ["fake.module"]
+    resolved.command = replacement
+    assert commands_module.reload_safe is replacement
+    assert group.get_command(click.Context(group), "reload-safe") is replacement
 
 
 def test_lazy_mapping_order_and_mutations_match_dict_behavior() -> None:

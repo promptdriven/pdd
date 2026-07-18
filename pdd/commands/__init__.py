@@ -113,6 +113,7 @@ class LazyCommandMapping(dict[str, click.Command]):
         # can retain an existing mapping created before the reload.
         self._unloaded_command = _UNLOADED_COMMAND
         self._targets = dict(getattr(existing, "_targets", {}))
+        self._resolved_keys = set(getattr(existing, "_resolved_keys", ()))
         self._lock = RLock()
         existing_marker = getattr(existing, "_unloaded_command", None)
         if isinstance(existing, dict) and existing_marker is not None:
@@ -138,6 +139,21 @@ class LazyCommandMapping(dict[str, click.Command]):
     def __getitem__(self, key: str) -> click.Command:
         value = dict.__getitem__(self, key)
         if value is not self._unloaded_command:
+            if key in self._resolved_keys:
+                module_name, attribute = self._targets[key]
+                module = sys.modules.get(module_name)
+                current = getattr(module, attribute, value) if module else value
+                if current is not value:
+                    with self._lock:
+                        value = dict.__getitem__(self, key)
+                        if key in self._resolved_keys:
+                            module = sys.modules.get(module_name)
+                            current = (
+                                getattr(module, attribute, value) if module else value
+                            )
+                            if current is not value:
+                                dict.__setitem__(self, key, current)
+                                value = current
             return value
         with self._lock:
             value = dict.__getitem__(self, key)
@@ -146,6 +162,7 @@ class LazyCommandMapping(dict[str, click.Command]):
             module_name, attribute = self._targets[key]
             command = getattr(import_module(module_name), attribute)
             dict.__setitem__(self, key, command)
+            self._resolved_keys.add(key)
             return command
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -199,11 +216,17 @@ class LazyCommandMapping(dict[str, click.Command]):
     def __delitem__(self, key: str) -> None:
         dict.__getitem__(self, key)
         self._targets.pop(key, None)
+        self._resolved_keys.discard(key)
         dict.__delitem__(self, key)
+
+    def __setitem__(self, key: str, value: click.Command) -> None:
+        self._resolved_keys.discard(key)
+        dict.__setitem__(self, key, value)
 
     def clear(self) -> None:
         dict.clear(self)
         self._targets.clear()
+        self._resolved_keys.clear()
 
     def pop(self, key: str, *default: Any) -> Any:
         if len(default) > 1:
