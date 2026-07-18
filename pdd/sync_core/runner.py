@@ -6064,14 +6064,23 @@ function matches(fd) {{
     throw error;
   }}
 }}
-const primary = fs.fstatSync(RESULT_FD, {{ bigint: true }});
-if (!primary.isFIFO()) {{
-  throw new Error('trusted Vitest result descriptor is not a pipe');
+let primary = null;
+try {{
+  primary = fs.fstatSync(RESULT_FD, {{ bigint: true }});
+}} catch (error) {{
+  // The coordinator marks this descriptor CLOEXEC before worker exec. Its
+  // absence therefore proves no worker-held result authority.
+  if (!error || !['EBADF', 'ENOENT'].includes(error.code)) throw error;
 }}
-if (primary.dev !== EXPECTED_DEVICE || primary.ino !== EXPECTED_INODE) {{
-  throw new Error('trusted Vitest result descriptor identity mismatch');
+if (primary !== null) {{
+  if (!primary.isFIFO()) {{
+    throw new Error('trusted Vitest result descriptor is not a pipe');
+  }}
+  if (primary.dev !== EXPECTED_DEVICE || primary.ino !== EXPECTED_INODE) {{
+    throw new Error('trusted Vitest result descriptor identity mismatch');
+  }}
+  fs.writeSync(RESULT_FD, 'PDD-VITEST-PROGRESS-V1 worker-start\\n');
 }}
-fs.writeSync(RESULT_FD, 'PDD-VITEST-PROGRESS-V1 worker-start\\n');
 for (const fd of new Set(descriptorTable())) {{
   if (!matches(fd)) continue;
   try {{ fs.closeSync(fd); }} catch (error) {{
