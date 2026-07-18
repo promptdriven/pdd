@@ -484,6 +484,48 @@ def test_release_video_visual_safety_allows_local_physical_shell_materials(
 @pytest.mark.parametrize(
     "cue",
     [
+        "A shell: of soft light surrounds a matte orb.",
+        "A shell:\nof diffuse glow surrounds a matte orb.",
+        "A shell: made of frosted glass surrounds a rounded cube.",
+        "A shell; made of matte ceramic encloses an orb.",
+        "A translucent shell rests during an unlabeled portrait session.",
+        "A protective shell sits beside an unlabeled musical keyboard.",
+        "A glowing shell appears at a celebratory bash.",
+        "A physical shell rests near a caretaker who shows an unlabeled keyboard instrument.",
+    ],
+)
+def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_homonyms(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" not in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A translucent shell rests: with a blinking cursor inside.",
+        "A shell of light rests; there, its prompt blinks.",
+        "A shell made of glass. In the foreground, it displays stdout.",
+        "A protective shell rests. It glows. Its prompt blinks.",
+    ],
+)
+def test_release_video_visual_safety_rejects_technical_surface_after_punctuation(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
         "A shell of light with a blinking cursor appears.",
         "A shell made of frosted glass with a blinking caret appears.",
         "A translucent shell has a prompt.",
