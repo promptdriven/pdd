@@ -35,6 +35,7 @@ def release_video_env(extra: dict | None = None) -> dict:
         "RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT",
         "RELEASE_VIDEO_FORCE_REGENERATE",
         "RELEASE_VIDEO_METADATA_CONFLICT",
+        "RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID",
         "RELEASE_VIDEO_PDS_CLAUDE_MODEL",
         "RELEASE_VIDEO_PDS_CREATE_TIMEOUT",
         "RELEASE_VIDEO_RELEASE_NOTES_PATH",
@@ -2140,6 +2141,118 @@ def test_release_video_env_can_force_regenerate(tmp_path: Path):
     assert "--force-regenerate" in pds_capture_argv(capture)
 
 
+def test_release_video_cli_forwards_veo_validation_recovery_job(tmp_path: Path):
+    _result, capture = run_release_video_with_existing_script(
+        tmp_path,
+        extra_args=[
+            "--project-id",
+            "pdd-v1-1-0-release",
+            "--veo-validation-recovery-job-id",
+            "job-veo-validation-only-1",
+        ],
+    )
+
+    pds_call = pds_capture_argv(capture)
+    assert pds_call[pds_call.index("--project") + 1] == "pdd-v1-1-0-release"
+    assert (
+        pds_call[pds_call.index("--veo-validation-recovery-job-id") + 1]
+        == "job-veo-validation-only-1"
+    )
+
+
+def test_release_video_env_forwards_veo_validation_recovery_job(tmp_path: Path):
+    _result, capture = run_release_video_with_existing_script(
+        tmp_path,
+        env_extra={
+            "RELEASE_VIDEO_PROJECT_ID": "pdd-v1-1-0-release",
+            "RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID": (
+                "job-veo-validation-only-env"
+            ),
+        },
+    )
+
+    pds_call = pds_capture_argv(capture)
+    assert (
+        pds_call[pds_call.index("--veo-validation-recovery-job-id") + 1]
+        == "job-veo-validation-only-env"
+    )
+
+
+def test_release_video_veo_validation_recovery_requires_selected_project(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--claude-cli",
+            str(tmp_path / "missing-claude"),
+            "--pds-cli",
+            str(pds_stub(tmp_path, {"ok": True})),
+            "--veo-validation-recovery-job-id",
+            "job-veo-validation-only-1",
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Veo validation recovery requires --project-id" in result.stderr
+    assert "Claude CLI" not in result.stderr
+    assert not capture.exists()
+
+
+def test_release_video_veo_validation_recovery_rejects_force_regenerate(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--claude-cli",
+            str(tmp_path / "missing-claude"),
+            "--pds-cli",
+            str(pds_stub(tmp_path, {"ok": True})),
+            "--project-id",
+            "pdd-v1-1-0-release",
+            "--veo-validation-recovery-job-id",
+            "job-veo-validation-only-1",
+            "--force-regenerate",
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Veo validation recovery cannot be combined with --force-regenerate" in (
+        result.stderr
+    )
+    assert "Claude CLI" not in result.stderr
+    assert not capture.exists()
+
+
 def test_release_video_cli_can_set_metadata_conflict_use_existing(tmp_path: Path):
     _result, capture = run_release_video_with_existing_script(
         tmp_path,
@@ -2220,6 +2333,7 @@ def test_release_video_recovery_flags_default_to_disabled(tmp_path: Path):
     assert "--bootstrap-selected-project" not in pds_call
     assert "--force-regenerate" not in pds_call
     assert "--metadata-conflict" not in pds_call
+    assert "--veo-validation-recovery-job-id" not in pds_call
 
 
 def test_release_video_empty_pds_claude_model_omits_downstream_override(
@@ -2261,6 +2375,7 @@ def test_release_video_makefile_passes_recovery_env_vars():
     assert "RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT ?= 0" in makefile_text
     assert "RELEASE_VIDEO_FORCE_REGENERATE ?= 0" in makefile_text
     assert "RELEASE_VIDEO_METADATA_CONFLICT ?=" in makefile_text
+    assert "RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID ?=" in makefile_text
     assert (
         'RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT="$(RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT)"'
         in makefile_text
@@ -2272,6 +2387,30 @@ def test_release_video_makefile_passes_recovery_env_vars():
     assert (
         'RELEASE_VIDEO_METADATA_CONFLICT="$(RELEASE_VIDEO_METADATA_CONFLICT)"'
         in makefile_text
+    )
+    assert (
+        'RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID='
+        '"$(RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID)"'
+        in makefile_text
+    )
+
+    release_video = subprocess.run(
+        [
+            "make",
+            "-n",
+            "release-video",
+            "RELEASE_TAG=v1.1.0",
+            "RELEASE_VIDEO_PROJECT_ID=pdd-v1-1-0-release",
+            "RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID=job-veo-validation-only-1",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert (
+        'RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID="job-veo-validation-only-1"'
+        in release_video.stdout
     )
 
 
@@ -2371,6 +2510,17 @@ def test_release_video_metadata_conflict_recovery_is_documented():
     assert "RELEASE_VIDEO_METADATA_CONFLICT=replace" in doc_text
     assert "RELEASE_VIDEO_FORCE_REGENERATE=1" in doc_text
     assert "--metadata-conflict replace --force-regenerate" in doc_text
+
+
+def test_release_video_veo_validation_recovery_is_documented():
+    doc_text = (
+        ROOT / "docs" / "contributors" / "pdd-cli-release-process.md"
+    ).read_text(encoding="utf8")
+
+    assert "RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID" in doc_text
+    assert "exact successful validation-only Veo job" in doc_text
+    assert "locally built PDS CLI from the exact deployed GVS commit" in doc_text
+    assert "does not run Veo generation" in doc_text
 
 
 def test_release_video_makefile_has_status_target():
