@@ -521,6 +521,10 @@ def test_release_video_visual_safety_allows_local_physical_shell_materials(
         "A shell-shaped sculpture rests near a plotter which writes a patterned output on paper.",
         "A visible cursor-like ornament rests beside the orb.",
         "A blinking caret-like accent rests on the sculpture.",
+        "A physical shell rests under a lantern, and another lamp presents its output as diffuse light.",
+        "A physical shell rests under a lantern, while another lamp presents its output as diffuse light.",
+        "A physical shell rests under a lantern as a nearby lamp presents its output as diffuse light.",
+        "A physical shell surrounds an orb and a nearby lantern displays its output as blue light.",
     ],
 )
 def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_homonyms(
@@ -579,6 +583,15 @@ def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_ho
         "/bin/sh appears in the foreground.",
         "/bin/dash appears in the foreground.",
         "/bin/fish appears in the foreground.",
+        "A shell that shows a prompt.",
+        "A shell which accepts user input.",
+        "A shell that prints diagnostic output.",
+        "A shell which writes build output.",
+        "A Bash pane appears.",
+        "A shell displays a directory listing.",
+        "A shell lists files.",
+        "A shell shows filenames.",
+        "A shell transcript appears.",
     ],
 )
 def test_release_video_visual_safety_rejects_technical_surface_after_punctuation(
