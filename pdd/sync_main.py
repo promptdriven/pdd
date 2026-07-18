@@ -1320,7 +1320,11 @@ def sync_main(
                 overall_success = False
 
             aggregated_results["results_by_language"][lang] = sync_result
-            transaction_completed = True
+            # A normal orchestration failure is not an exception, but it must
+            # abort the enclosing journal just as an exception would.  The
+            # active state may already contain a run-report tombstone and a
+            # replacement fingerprint from an earlier phase.
+            transaction_completed = bool(sync_result.get("success", False))
 
         except AmbiguousModuleError:
             # Issue #1677: an ambiguous bare basename is an actionable user error, not
