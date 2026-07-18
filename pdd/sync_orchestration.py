@@ -2534,20 +2534,37 @@ def sync_orchestration(
                         print(f"PDD_PHASE: skip:{operation}", flush=True)
                         update_log_entry(log_entry, success=True, cost=0.0, model='skipped', duration=0.0, error=None)
                         append_log_entry(basename, language, log_entry, paths=pdd_files)
-                        # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
-                        _save_fingerprint_atomic(basename, language, 'skip:crash', pdd_files, 0.0, 'skipped')
-                        # FIX: Create a synthetic run_report to prevent infinite loop when crash is skipped
-                        # Without this, sync_determine_operation keeps returning 'crash' because no run_report exists
-                        current_hashes = calculate_current_hashes(pdd_files)
-                        synthetic_report = RunReport(
-                            timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                            exit_code=0,  # Assume success since we're skipping validation
-                            tests_passed=0,
-                            tests_failed=0,
-                            coverage=0.0,
-                            test_hash=current_hashes.get('test_hash')
-                        )
-                        _save_run_report_atomic(asdict(synthetic_report), basename, language, paths=pdd_files)
+                        # The skip fingerprint and synthetic report are one
+                        # authority pair.  A crash between two direct saves
+                        # previously exposed a fresh skip fingerprint beside a
+                        # stale report with no recovery journal.
+                        with AtomicStateUpdate(
+                            basename,
+                            language,
+                            directory=get_fingerprint_path(
+                                basename, language, paths=pdd_files
+                            ).parent,
+                        ) as skipped_state:
+                            # The state lock also owns the report snapshot.
+                            # Hashing before it would let a concurrent writer
+                            # pair an old report hash with a new fingerprint.
+                            current_hashes = calculate_current_hashes(pdd_files)
+                            synthetic_report = RunReport(
+                                timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                exit_code=0,
+                                tests_passed=0,
+                                tests_failed=0,
+                                coverage=0.0,
+                                test_hash=current_hashes.get('test_hash'),
+                            )
+                            _save_run_report_atomic(
+                                asdict(synthetic_report), basename, language,
+                                atomic_state=skipped_state, paths=pdd_files,
+                            )
+                            _save_fingerprint_atomic(
+                                basename, language, 'skip:crash', pdd_files,
+                                0.0, 'skipped', atomic_state=skipped_state,
+                            )
                         consecutive_noop_fixes = 0
                         continue
 

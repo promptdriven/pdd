@@ -21,7 +21,10 @@ Implement `pdd.fingerprint_transaction` with one public thin API:
   explicit code/example/test artifact that resolves outside it (including
   traversal and symlink escape). Optional null/empty hints do not erase
   discovered artifacts; discard invalid advisory discovery rather than hashing
-  an unrelated parent-checkout default. Reject duplicate test filenames.
+  an unrelated parent-checkout default. A configured canonical role directory
+  remains authoritative even when its expected file is absent: do not accept a
+  same-named override from another directory without configuration or
+  architecture proof. Reject duplicate test filenames.
 - Acquire the per-unit metadata lock before canonical path completion,
   recovery, previous-fingerprint reads, and hashing in both direct and paired
   callers. A paired `AtomicStateUpdate` retains that lock through publication,
@@ -49,7 +52,11 @@ Implement `pdd.fingerprint_transaction` with one public thin API:
   making an authoritative decision. Use a supported Windows locking fallback
   rather than importing POSIX-only APIs unconditionally.
 - When given an atomic-state buffer, submit the identical payload via
-  `set_fingerprint`; never duplicate payload construction in callers.
+  `set_fingerprint`; never duplicate payload construction in callers. When an
+  operation also invalidates a run report, prepare the payload and both pending
+  mutations as one all-or-nothing owner update: a set/remove/path failure must
+  abort the active state so a caller that records a failed stage cannot later
+  commit either a fresh fingerprint or a tombstone alone.
 - Nested work for the same `(metadata directory, basename, language)` MUST join
   the active in-thread transaction in O(1): it shares pending records and never
   takes a second OS lock, commits, or releases the outer lock. Different units
