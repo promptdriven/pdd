@@ -4,9 +4,12 @@ import json
 import os
 import signal
 import shutil
+import stat
 import subprocess
 import sys
 import tomllib
+import zipfile
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -48,6 +51,199 @@ from pdd.sync_core.supervisor import SupervisorLimits
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
 IDENTITY = "tests/widget.test.ts::widget works"
+_REQUIRED_NAPI_HEADERS = (
+    "node_api.h",
+    "node_api_types.h",
+    "js_native_api.h",
+    "js_native_api_types.h",
+)
+
+# This is deliberately candidate-side code used only by the real Linux
+# lifecycle regression.  It never writes, replays, or opens the reporter
+# authority for writing: a successful observation is itself the failure.
+_SAFE_VITEST_AUTHORITY_PROBE = """const authorityFailure = (category) => {
+  throw new Error('PDD_VITEST_AUTHORITY_EXPOSURE=' + category);
+};
+const trustedDecimal = (value) => {
+  if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value)) {
+    authorityFailure('identity-environment');
+  }
+  return BigInt(value);
+};
+const expectedDevice = trustedDecimal(process.env.PDD_FRAMEWORK_OBSERVATION_DEVICE);
+const expectedInode = trustedDecimal(process.env.PDD_FRAMEWORK_OBSERVATION_INODE);
+const isTrustedObservation = (metadata) => (
+  metadata.isFIFO()
+  && metadata.dev === expectedDevice
+  && metadata.ino === expectedInode
+);
+const rejectTrustedObservation = (inspect, category) => {
+  try {
+    if (isTrustedObservation(inspect())) authorityFailure(category);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('PDD_VITEST_AUTHORITY_EXPOSURE=')) {
+      throw error;
+    }
+  }
+};
+rejectTrustedObservation(() => fs.fstatSync(198, { bigint: true }), 'direct-fd');
+for (const name of fs.readdirSync('/proc/self/fd')) {
+  const descriptor = Number(name);
+  if (Number.isSafeInteger(descriptor) && descriptor >= 3 && descriptor !== 198) {
+    rejectTrustedObservation(() => fs.fstatSync(descriptor, { bigint: true }), 'self-alias');
+  }
+}
+let parentDescriptor;
+try {
+  parentDescriptor = fs.openSync(
+    '/proc/' + process.ppid + '/fd/198', fs.constants.O_RDONLY | fs.constants.O_CLOEXEC,
+  );
+  if (isTrustedObservation(fs.fstatSync(parentDescriptor, { bigint: true }))) authorityFailure('parent-reopen');
+} catch (error) {
+  if (error instanceof Error && error.message.startsWith('PDD_VITEST_AUTHORITY_EXPOSURE=')) {
+    throw error;
+  }
+} finally {
+  if (typeof parentDescriptor === 'number') try { fs.closeSync(parentDescriptor); } catch (_) {}
+}
+"""
+
+
+def test_real_vitest_authority_probe_is_observation_only() -> None:
+    """Forge regression observes authority routes without corrupting framing."""
+    assert "writeSync" not in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "direct-fd" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "self-alias" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "parent-reopen" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "PDD_FRAMEWORK_OBSERVATION_DEVICE" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "PDD_FRAMEWORK_OBSERVATION_INODE" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "metadata.isFIFO()\n  && metadata.dev === expectedDevice" in (
+        _SAFE_VITEST_AUTHORITY_PROBE
+    )
+    assert "BigInt(metadata.dev)" not in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "BigInt(metadata.ino)" not in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "fs.fstatSync(198, { bigint: true })" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "fs.fstatSync(descriptor, { bigint: true })" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "fs.fstatSync(parentDescriptor, { bigint: true })" in _SAFE_VITEST_AUTHORITY_PROBE
+    assert "if (fs.fstatSync(descriptor).isFIFO())" not in _SAFE_VITEST_AUTHORITY_PROBE
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or shutil.which("node") is None,
+    reason="requires Linux /proc and Node.js",
+)
+@pytest.mark.parametrize("matches_expected", (False, True))
+def test_real_vitest_authority_probe_allows_unrelated_fifo_and_rejects_exact_identity(
+    matches_expected: bool,
+) -> None:
+    """Only the checker-measured FIFO identity is an authority exposure."""
+    node = shutil.which("node")
+    assert node is not None
+    authority_read, authority_write = os.pipe()
+    unrelated_read, unrelated_write = os.pipe()
+    saved_descriptor = None
+    try:
+        try:
+            saved_descriptor = os.dup(198)
+        except OSError:
+            pass
+        selected = authority_write if matches_expected else unrelated_write
+        os.dup2(selected, 198)
+        expected = os.fstat(authority_write)
+        script = (
+            "import fs from 'node:fs';\n"
+            "const openSync = fs.openSync.bind(fs);\n"
+            "fs.openSync = (path, ...arguments_) => {\n"
+            "  if (typeof path === 'string' && path.startsWith('/proc/')) {\n"
+            "    const error = new Error('nondumpable coordinator');\n"
+            "    error.code = 'EACCES'; throw error;\n"
+            "  }\n"
+            "  return openSync(path, ...arguments_);\n"
+            "};\n"
+            + _SAFE_VITEST_AUTHORITY_PROBE
+            + "\nconsole.log('probe-complete');\n"
+        )
+        completed = subprocess.run(
+            [node, "--input-type=module", "--eval", script],
+            pass_fds=(198,),
+            env=os.environ | {
+                "PDD_FRAMEWORK_OBSERVATION_DEVICE": str(expected.st_dev),
+                "PDD_FRAMEWORK_OBSERVATION_INODE": str(expected.st_ino),
+            },
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if matches_expected:
+            assert completed.returncode != 0
+            assert "PDD_VITEST_AUTHORITY_EXPOSURE=direct-fd" in completed.stderr
+        else:
+            assert completed.returncode == 0, completed.stderr
+            assert completed.stdout.strip() == "probe-complete"
+    finally:
+        if saved_descriptor is None:
+            try:
+                os.close(198)
+            except OSError:
+                pass
+        else:
+            os.dup2(saved_descriptor, 198)
+            os.close(saved_descriptor)
+        os.close(authority_read)
+        os.close(authority_write)
+        os.close(unrelated_read)
+        os.close(unrelated_write)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="requires Node.js")
+def test_real_vitest_authority_probe_uses_bigint_stat_for_high_value_identity() -> None:
+    """The identity comparison remains exact beyond JavaScript Number precision."""
+    node = shutil.which("node")
+    assert node is not None
+    script = (
+        "import fs from 'node:fs';\n"
+        "fs.fstatSync = (descriptor, options) => {\n"
+        "  if (descriptor !== 198 || options?.bigint !== true) {\n"
+        "    throw new Error('expected bigint direct observation');\n"
+        "  }\n"
+        "  return { isFIFO: () => true, dev: 9007199254740993n, ino: 9007199254740995n };\n"
+        "};\n"
+        + _SAFE_VITEST_AUTHORITY_PROBE
+    )
+    completed = subprocess.run(
+        [node, "--input-type=module", "--eval", script],
+        env=os.environ
+        | {
+            "PDD_FRAMEWORK_OBSERVATION_DEVICE": "9007199254740993",
+            "PDD_FRAMEWORK_OBSERVATION_INODE": "9007199254740995",
+        },
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "PDD_VITEST_AUTHORITY_EXPOSURE=direct-fd" in completed.stderr
+
+
+def test_packaged_vitest_authority_probe_uses_exact_observation_identity() -> None:
+    """The installed-wheel real-worker fixture uses the same exact binding."""
+    workflow = (Path(__file__).parents[1] / ".github/workflows/unit-tests.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "PDD_FRAMEWORK_OBSERVATION_DEVICE" in workflow
+    assert "PDD_FRAMEWORK_OBSERVATION_INODE" in workflow
+    assert "metadata.dev === expectedDevice" in workflow
+    assert "metadata.ino === expectedInode" in workflow
+    assert "BigInt(metadata.dev)" not in workflow
+    assert "BigInt(metadata.ino)" not in workflow
+    assert "fs.fstatSync(198, { bigint: true })" in workflow
+    assert "fs.fstatSync(descriptor, { bigint: true })" in workflow
+    assert "fs.fstatSync(parentDescriptor, { bigint: true })" in workflow
+    assert "if (fs.fstatSync(descriptor).isFIFO())" not in workflow
 
 
 @pytest.fixture(autouse=True)
@@ -55,8 +251,51 @@ def _controlled_supervisor(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
     """Exercise adapter logic portably without weakening production policy."""
-    if request.node.name.startswith("test_real_vitest_runs_copied_entrypoint"):
+    test_name = request.node.originalname
+    if test_name is None:
+        test_name = request.node.name.split("[", 1)[0]
+    if test_name.startswith("test_real_vitest_runs_copied_entrypoint"):
         return
+
+    native_authority_tests = (
+        "test_vitest_reporter_exits_after_publishing_terminal_result",
+        "test_vitest_reporter_completes_partial_result_writes",
+        "test_vitest_reporter_rejects_result_write_without_progress",
+        "test_vitest_coordinator_addon_staging_identity_is_rechecked",
+        "test_vitest_coordinator_addon_failures_publish_no_result",
+        "test_vitest_coordinator_addon_rejects_unsupported_platform",
+        "test_vitest_coordinator_precompile_rejects_candidate_header_aliases",
+        "test_vitest_coordinator_precompile_requires_phase_bound_header_attestation",
+        "test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash",
+    )
+    if test_name not in native_authority_tests:
+        # The production authority deliberately rejects unsupported platforms
+        # and requires a real Node distribution. Most adapter contracts use a
+        # fake launcher and replace the supervisor, so give only those tests a
+        # checker-only inert stand-in rather than weakening production policy.
+        def portable_test_addon(
+            staging_directory: Path,
+            _selected_node: Path,
+            _candidate_root=None,
+            **_ignored,
+        ) -> runner_module.VitestCoordinatorAddon:
+            source = Path(runner_module.__file__).resolve().parent / "native/vitest_fd_cloexec.c"
+            staged = staging_directory / runner_module.COORDINATOR_ADDON_NAME
+            staged.write_bytes(b"portable test authority")
+            staged.chmod(0o555)
+            source_member = runner_module._capture_vitest_member(
+                source, "coordinator_addon", PurePosixPath(".")
+            )
+            staged_member = runner_module._capture_vitest_member(
+                staged, "coordinator_addon", PurePosixPath(".")
+            )
+            return runner_module.VitestCoordinatorAddon(
+                source, staged, source_member, staged_member, "portable-test-authority"
+            )
+
+        monkeypatch.setattr(
+            runner_module, "_load_vitest_coordinator_addon", portable_test_addon
+        )
 
     def execute(
         command, *, cwd, timeout, env, result_fifo=None, result_fd=198, **_limits
@@ -97,7 +336,17 @@ def _run_trusted_reporter_source(
     read_fd, write_fd = os.pipe()
     reporter = tmp_path / "trusted-reporter.mjs"
     driver = tmp_path / "reporter-driver.mjs"
-    reporter.write_text(_vitest_reporter_source(write_fd), encoding="utf-8")
+    identity = os.fstat(write_fd)
+    phase = _prepared_vitest_phase(tmp_path, use_system_node_headers=True)
+    addon = runner_module._load_vitest_coordinator_addon(
+        tmp_path, phase.headers, phase_toolchain=phase
+    )
+    reporter.write_text(
+        _vitest_reporter_source(
+            write_fd, identity.st_dev, identity.st_ino, addon.staged_path
+        ),
+        encoding="utf-8",
+    )
     driver.write_text(driver_source, encoding="utf-8")
     try:
         try:
@@ -119,6 +368,142 @@ def _run_trusted_reporter_source(
     return completed, bytes(result)
 
 
+def _node_headers(node: Path) -> Path:
+    """Return the N-API include role paired with a resolved Node launcher."""
+    return node.resolve(strict=True).parents[1] / "include" / "node"
+
+
+def _prepared_vitest_phase(
+    tmp_path: Path, *, use_system_node_headers: bool = False,
+) -> runner_module.VitestPhaseToolchain:
+    """Materialize one phase-bound header attestation for native-addon tests."""
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    if use_system_node_headers:
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("requires Node.js")
+        manifest = config.vitest_toolchain_manifest
+        assert manifest is not None
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        launcher = Path(node).resolve(strict=True)
+        payload["roles"]["launcher"] = str(launcher)
+        payload["roles"]["headers"] = str(_node_headers(launcher))
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+        config = replace(
+            config, vitest_command=(str(launcher), str(runner.resolve()))
+        )
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "candidate", config)
+    phase_root = tmp_path / "phase-toolchain"
+    phase_root.mkdir()
+    return _prepare_vitest_toolchain(phase_root, descriptor)
+
+
+def _test_compiler_closure(
+    compiler: Path, *_args,
+) -> tuple[runner_module.VitestCompilerMember, ...]:
+    """Return a path-independent compiler record for mocked precompile tests."""
+    return (
+        runner_module.VitestCompilerMember(
+            "compiler",
+            compiler,
+            stat.S_IMODE(compiler.stat().st_mode),
+            runner_module._member_content_digest(compiler),
+        ),
+    )
+
+
+def _write_test_elf(path: Path, *, dynamic: bool) -> None:
+    """Write one minimal ELF64 program table for closure-discovery tests."""
+    header = bytearray(64)
+    header[:7] = b"\x7fELF\x02\x01\x01"
+    header[16:18] = (2).to_bytes(2, "little")
+    header[32:40] = (64).to_bytes(8, "little")
+    header[52:54] = (64).to_bytes(2, "little")
+    header[54:56] = (56).to_bytes(2, "little")
+    header[56:58] = (1).to_bytes(2, "little")
+    program = bytearray(56)
+    program[:4] = (3 if dynamic else 1).to_bytes(4, "little")
+    path.write_bytes(header + program)
+    path.chmod(0o555)
+
+
+def test_vitest_compiler_plan_accepts_clang_integrated_topology(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Clang may use one driver/frontend/assembler binary plus one linker."""
+    compiler = tmp_path / "clang"
+    linker = tmp_path / "ld.lld"
+    for executable in (compiler, linker):
+        executable.write_bytes(b"tool")
+        executable.chmod(0o555)
+
+    def compiler_query(command, **_kwargs):
+        if "-###" in command:
+            return subprocess.CompletedProcess(
+                command, 0, "", f' "{compiler}" "-cc1" "source.c"\n'
+            )
+        assert command[-1] == "-print-prog-name=ld"
+        return subprocess.CompletedProcess(command, 0, f"{linker}\n", "")
+
+    monkeypatch.setattr(runner_module.subprocess, "run", compiler_query)
+
+    programs = runner_module._checker_compiler_programs(
+        compiler,
+        tmp_path / "source.c",
+        tmp_path / "headers",
+        tmp_path / "output.node",
+    )
+
+    assert programs == tuple(sorted((compiler.resolve(), linker.resolve())))
+
+
+def test_vitest_compiler_runtime_accepts_verified_static_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A structurally verified static ELF has no dynamic library closure."""
+    compiler = tmp_path / "static-compiler"
+    _write_test_elf(compiler, dynamic=False)
+    monkeypatch.setattr(
+        runner_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("ldd must not run for static ELF"),
+    )
+
+    assert runner_module._checker_compiler_libraries((compiler,)) == ()
+
+
+def test_vitest_compiler_runtime_allows_dynamic_tools_with_shared_libraries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each dynamic compiler program may have the same complete runtime closure."""
+    compiler = tmp_path / "compiler"
+    linker = tmp_path / "linker"
+    library = tmp_path / "libshared.so"
+    resolver = tmp_path / "ldd"
+    for path in (compiler, linker):
+        _write_test_elf(path, dynamic=True)
+    library.write_bytes(b"shared library")
+    resolver.write_bytes(b"resolver")
+    monkeypatch.setattr(runner_module, "_CHECKER_LDD", resolver)
+
+    def resolve_libraries(command, **_kwargs):
+        assert command[1] in {str(compiler), str(linker)}
+        return subprocess.CompletedProcess(
+            command, 0, f"libshared.so => {library} (0x00000000)\\n", ""
+        )
+
+    monkeypatch.setattr(runner_module.subprocess, "run", resolve_libraries)
+
+    assert runner_module._checker_compiler_libraries((compiler, linker)) == (
+        library.resolve(),
+    )
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="the production coordinator authority addon is Linux-only",
+)
 def test_vitest_reporter_exits_after_publishing_terminal_result(
     tmp_path: Path,
 ) -> None:
@@ -129,7 +514,9 @@ def test_vitest_reporter_exits_after_publishing_terminal_result(
 const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
 setInterval(() => {}, 1000);
 process.exitCode = 7;
-new Reporter().onTestRunEnd();
+const reporter = new Reporter();
+reporter.onTestRunStart();
+reporter.onTestRunEnd();
 """,
     )
 
@@ -137,6 +524,10 @@ new Reporter().onTestRunEnd();
     assert json.loads(result) == {"tests": []}
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="the production coordinator authority addon is Linux-only",
+)
 def test_vitest_reporter_completes_partial_result_writes(tmp_path: Path) -> None:
     """Short writes must not truncate the trusted terminal result."""
     completed, result = _run_trusted_reporter_source(
@@ -150,7 +541,9 @@ fs.writeSync = (fd, value, offset = 0, length) => {
   return originalWriteSync(fd, buffer, offset, Math.min(requested, 3));
 };
 const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
-new Reporter().onTestRunEnd();
+const reporter = new Reporter();
+reporter.onTestRunStart();
+reporter.onTestRunEnd();
 """,
     )
 
@@ -158,6 +551,10 @@ new Reporter().onTestRunEnd();
     assert json.loads(result) == {"tests": []}
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="the production coordinator authority addon is Linux-only",
+)
 def test_vitest_reporter_rejects_result_write_without_progress(
     tmp_path: Path,
 ) -> None:
@@ -168,12 +565,475 @@ def test_vitest_reporter_rejects_result_write_without_progress(
 import { pathToFileURL } from 'node:url';
 fs.writeSync = () => 0;
 const { default: Reporter } = await import(pathToFileURL(process.argv[2]).href);
-new Reporter().onTestRunEnd();
+const reporter = new Reporter();
+reporter.onTestRunStart();
+reporter.onTestRunEnd();
 """,
     )
 
     assert completed.returncode != 0
     assert result == b""
+
+
+def test_vitest_reporter_seals_checker_addon_before_worker_lifecycle(
+    tmp_path: Path,
+) -> None:
+    """The checker seals before Vitest can create a worker lifecycle."""
+    addon = tmp_path / "checker-authority.node"
+    addon.write_bytes(b"checker-owned test addon")
+    source = _vitest_reporter_source(198, 1, 2, addon)
+    seal_call = "sealResultAuthority(RESULT_FD, EXPECTED_DEVICE, EXPECTED_INODE)"
+    marker = "process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE = '1';"
+    valid_count = "if (!Number.isSafeInteger(SEALED_DESCRIPTOR_COUNT)"
+
+    assert "const SEALED_DESCRIPTOR_COUNT" in source
+    assert "onTestRunStart()" in source
+    assert seal_call in source
+    assert "onTestCaseResult" in source
+    assert source.index(seal_call) < source.index("export default class")
+    assert source.index(seal_call) < source.index(valid_count) < source.index(marker)
+    assert source.index(marker) < source.index("export default class")
+    assert source.count(seal_call) == 1
+    assert source.count(marker) == 1
+    assert "authoritySealed" not in source
+    assert "--require" not in source
+    assert "execArgv" not in source
+
+
+def test_vitest_environment_rejects_ambient_coordinator_nondumpable_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Candidate code cannot receive a pre-seal coordinator-policy marker."""
+    monkeypatch.setenv("PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE", "forged")
+
+    assert "PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE" not in _vitest_environment(tmp_path)
+
+
+def test_vitest_authority_wheel_is_source_only(tmp_path: Path) -> None:
+    """The universal checker wheel carries C source, never a host native addon."""
+    repository = Path(__file__).resolve().parents[1]
+    source = tmp_path / "source"
+    shutil.copytree(
+        repository,
+        source,
+        ignore=shutil.ignore_patterns(
+            ".git", ".pytest_cache", "__pycache__", "build", "dist",
+            "*.egg-info", "*.node",
+        ),
+    )
+    output = tmp_path / "dist"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "build",
+            "--no-isolation",
+            "--skip-dependency-check",
+            "--wheel",
+            "--outdir",
+            str(output),
+        ],
+        cwd=source,
+        check=True,
+        env=os.environ
+        | {
+            "PIP_NO_INDEX": "1",
+            "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI": "0.0.0",
+        },
+        capture_output=True,
+        text=True,
+    )
+    wheels = tuple(output.glob("*.whl"))
+    assert len(wheels) == 1
+    with zipfile.ZipFile(wheels[0]) as archive:
+        names = archive.namelist()
+    assert "pdd/sync_core/native/vitest_fd_cloexec.c" in names
+    assert not any(name.endswith(".node") for name in names)
+
+    installed = tmp_path / "installed"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--no-index",
+            "--target",
+            str(installed),
+            str(wheels[0]),
+        ],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    measured = subprocess.run(
+        [
+            sys.executable,
+            "-P",
+            "-c",
+            "import json; from pathlib import Path; "
+            "import pdd.sync_core.runner as runner; "
+            "native=Path(runner.__file__).resolve().parent/'native/vitest_fd_cloexec.c'; "
+            "print(json.dumps({'module': runner.__file__, "
+            "'native_sha256': runner._member_content_digest(native), "
+            "'checker_digest': runner._checker_artifact_digest()}))",
+        ],
+        cwd=tmp_path,
+        env=os.environ | {"PYTHONPATH": str(installed), "PDD_PATH": ""},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    installed_identity = json.loads(measured.stdout)
+    packaged_source = (
+        Path(runner_module.__file__).resolve().parent
+        / "native"
+        / runner_module.COORDINATOR_ADDON_SOURCE_NAME
+    )
+    assert Path(installed_identity["module"]).is_relative_to(installed)
+    assert installed_identity["native_sha256"] == runner_module._member_content_digest(
+        packaged_source
+    )
+    assert installed_identity["checker_digest"] == runner_module._checker_artifact_digest()
+
+
+def test_vitest_coordinator_addon_rejects_unsupported_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Linux-only source authority has no unsafe portable fallback."""
+    monkeypatch.setattr(runner_module.sys, "platform", "darwin")
+    phase = _prepared_vitest_phase(tmp_path)
+
+    with pytest.raises(
+        ValueError, match=r"Linux.*?/usr/bin/cc.*?matching regular Node headers"
+    ):
+        runner_module._load_vitest_coordinator_addon(
+            tmp_path, phase.headers, phase_toolchain=phase
+        )
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="the production coordinator authority addon is Linux-only",
+)
+def test_vitest_coordinator_addon_staging_identity_is_rechecked(
+    tmp_path: Path,
+) -> None:
+    """A substituted checker addon cannot be accepted after candidate execution."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    phase = _prepared_vitest_phase(tmp_path, use_system_node_headers=True)
+    addon = runner_module._load_vitest_coordinator_addon(
+        tmp_path, phase.headers, phase_toolchain=phase
+    )
+    addon.staged_path.chmod(0o755)
+    addon.staged_path.write_bytes(b"substituted authority")
+
+    with pytest.raises(ValueError, match="identity changed"):
+        runner_module._verify_vitest_coordinator_addon(addon)
+
+
+def test_vitest_native_binding_is_path_independent_and_complete(tmp_path: Path) -> None:
+    """Source, compiler, exact headers, and generated output define one digest."""
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    for root in (first_root, second_root):
+        (root / "source.c").write_bytes(b"int authority(void) { return 1; }\n")
+        (root / "source.c").chmod(0o444)
+        (root / "compiler").write_bytes(b"compiler")
+        (root / "compiler").chmod(0o555)
+        (root / "compiler-runtime").write_bytes(b"compiler runtime")
+        (root / "compiler-runtime").chmod(0o444)
+        (root / "addon.node").write_bytes(b"native addon")
+        (root / "addon.node").chmod(0o555)
+
+    source = runner_module._capture_vitest_member(
+        first_root / "source.c", "coordinator_addon", PurePosixPath(".")
+    )
+    output = runner_module._capture_vitest_member(
+        first_root / "addon.node", "coordinator_addon", PurePosixPath(".")
+    )
+    compiler = (
+        runner_module.VitestCompilerMember(
+            "compiler",
+            first_root / "compiler",
+            0o555,
+            runner_module._member_content_digest(first_root / "compiler"),
+        ),
+        runner_module.VitestCompilerMember(
+            "runtime/0",
+            first_root / "compiler-runtime",
+            0o444,
+            runner_module._member_content_digest(first_root / "compiler-runtime"),
+        ),
+    )
+    headers = (
+        runner_module.VitestToolchainMember(
+            "headers", PurePosixPath("."), "directory", 0o555
+        ),
+        runner_module.VitestToolchainMember(
+            "headers",
+            PurePosixPath("node_api.h"),
+            "file",
+            0o444,
+            content_digest="1" * 64,
+        ),
+    )
+    identity = runner_module._vitest_coordinator_identity(
+        source, compiler, headers, output
+    )
+    relocated = runner_module._vitest_coordinator_identity(
+        runner_module._capture_vitest_member(
+            second_root / "source.c", "coordinator_addon", PurePosixPath(".")
+        ),
+        tuple(
+            replace(
+                member,
+                path=second_root / (
+                    "compiler" if member.role == "compiler" else "compiler-runtime"
+                ),
+            )
+            for member in compiler
+        ),
+        headers,
+        runner_module._capture_vitest_member(
+            second_root / "addon.node", "coordinator_addon", PurePosixPath(".")
+        ),
+    )
+
+    assert relocated == identity
+    changed_bindings = (
+        (replace(source, content_digest="2" * 64), compiler, headers, output),
+        (
+            source,
+            (replace(compiler[0], content_digest="3" * 64), compiler[1]),
+            headers,
+            output,
+        ),
+        (
+            source,
+            (compiler[0], replace(compiler[1], content_digest="6" * 64)),
+            headers,
+            output,
+        ),
+        (
+            source,
+            (replace(compiler[0], mode=0o500), compiler[1]),
+            headers,
+            output,
+        ),
+        (
+            source,
+            compiler,
+            (headers[0], replace(headers[1], content_digest="4" * 64)),
+            output,
+        ),
+        (
+            source,
+            compiler,
+            (headers[0], replace(headers[1], mode=0o400)),
+            output,
+        ),
+        (source, compiler, headers, replace(output, content_digest="5" * 64)),
+        (replace(source, mode=0o400), compiler, headers, output),
+        (source, compiler, headers, replace(output, mode=0o500)),
+    )
+    assert all(
+        runner_module._vitest_coordinator_identity(*binding) != identity
+        for binding in changed_bindings
+    )
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="requires the Linux /proc descriptor table used by the production addon",
+)
+def test_vitest_coordinator_addon_seals_all_aliases_across_real_exec(
+    tmp_path: Path,
+) -> None:
+    """A real fork+exec loses fd198 and its alias while the parent can report."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    addon_path = tmp_path / "exec-probe.node"
+    subprocess.run(
+        [sys.executable, "scripts/build_vitest_fd_cloexec_addon.py",
+         "--output", str(addon_path), "--headers", str(_node_headers(Path(node))),
+         "--exec-probe"],
+        cwd=Path(__file__).parents[1], check=True,
+    )
+    read_fd, write_fd = os.pipe()
+    alias_fd = os.dup(write_fd)
+    saved_fd = None
+    try:
+        try:
+            saved_fd = os.dup(198)
+        except OSError:
+            saved_fd = None
+        os.dup2(write_fd, 198)
+        identity = os.fstat(198)
+        program = (
+            "const fs=require('node:fs');"
+            "const addon=require(process.argv[1]);"
+            "const fd=198, alias=Number(process.argv[2]);"
+            "addon.sealResultAuthority(fd,BigInt(process.argv[3]),BigInt(process.argv[4]));"
+            "const status=addon.probeExec(process.execPath,fd,alias,"
+            "BigInt(process.argv[3]),BigInt(process.argv[4]));"
+            "if(status!==0)throw new Error('fork+exec retained authority');"
+            "fs.writeSync(fd,Buffer.from('PDD-FRAME-V1 complete\\n'));"
+        )
+        completed = subprocess.run(
+            [node, "-e", program, str(addon_path), str(alias_fd),
+             str(identity.st_dev), str(identity.st_ino)],
+            pass_fds=(198, alias_fd), capture_output=True, text=True,
+            timeout=5, check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert os.read(read_fd, 4096) == b"PDD-FRAME-V1 complete\n"
+    finally:
+        if saved_fd is None:
+            try:
+                os.close(198)
+            except OSError:
+                pass
+        else:
+            os.dup2(saved_fd, 198)
+            os.close(saved_fd)
+        os.close(alias_fd)
+        os.close(write_fd)
+        os.close(read_fd)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="requires the Linux /proc descriptor table used by the production addon",
+)
+def test_vitest_coordinator_addon_denies_cross_process_reopen_after_seal(
+    tmp_path: Path,
+) -> None:
+    """A post-seal worker cannot reopen the coordinator's FIFO through procfs."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    addon_path = tmp_path / "cross-process-probe.node"
+    subprocess.run(
+        [sys.executable, "scripts/build_vitest_fd_cloexec_addon.py",
+         "--output", str(addon_path), "--headers", str(_node_headers(Path(node)))],
+        cwd=Path(__file__).parents[1], check=True,
+    )
+    read_fd, write_fd = os.pipe()
+    saved_fd = None
+    try:
+        try:
+            saved_fd = os.dup(198)
+        except OSError:
+            pass
+        os.dup2(write_fd, 198)
+        identity = os.fstat(198)
+        child_program = (
+            "const fs=require('node:fs');"
+            "let reopened;"
+            "try { reopened=fs.openSync('/proc/'+process.argv[1]+'/fd/'+process.argv[2],"
+            "fs.constants.O_RDONLY|fs.constants.O_CLOEXEC);"
+            "fs.closeSync(reopened); process.exit(process.argv[3]==='deny' ? 7 : 0); }"
+            "catch (error) { process.exit(process.argv[3]==='deny' && error && "
+            "(error.code==='EACCES'||error.code==='EPERM') ? 0 : 8); }"
+        )
+        program = (
+            "const fs=require('node:fs'); const {spawnSync}=require('node:child_process');"
+            "const addon=require(process.argv[1]); const fd=198;"
+            f"const probe={json.dumps(child_program)};"
+            "const before=spawnSync(process.execPath,['-e',probe,String(process.pid),String(fd),'allow']);"
+            "if(before.status!==0)throw new Error('pre-seal procfs reopen control failed');"
+            "addon.sealResultAuthority(fd,BigInt(process.argv[2]),BigInt(process.argv[3]));"
+            "const after=spawnSync(process.execPath,['-e',probe,String(process.pid),String(fd),'deny']);"
+            "if(after.status!==0)throw new Error("
+            "'cross-process procfs authority reopen was not denied');"
+            "fs.writeSync(fd,Buffer.from('PDD-FRAME-V1 complete\\n'));"
+        )
+        completed = subprocess.run(
+            [node, "-e", program, str(addon_path), str(identity.st_dev), str(identity.st_ino)],
+            pass_fds=(198,), capture_output=True, text=True,
+            timeout=5, check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert os.read(read_fd, 4096) == b"PDD-FRAME-V1 complete\n"
+    finally:
+        if saved_fd is None:
+            try:
+                os.close(198)
+            except OSError:
+                pass
+        else:
+            os.dup2(saved_fd, 198)
+            os.close(saved_fd)
+        os.close(write_fd)
+        os.close(read_fd)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="requires the Linux production addon",
+)
+@pytest.mark.parametrize(
+    "mode", ("wrong-identity", "non-fifo", "fcntl-error", "prctl-error"),
+)
+def test_vitest_coordinator_addon_failures_publish_no_result(
+    tmp_path: Path, mode: str
+) -> None:
+    """Identity/type/sealing failures fail before the reporter can publish."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    phase = _prepared_vitest_phase(tmp_path, use_system_node_headers=True)
+    addon = runner_module._load_vitest_coordinator_addon(
+        tmp_path, phase.headers, phase_toolchain=phase
+    )
+    if mode in {"fcntl-error", "prctl-error"}:
+        addon_path = tmp_path / f"forced-{mode}.node"
+        option = "--force-fcntl-error" if mode == "fcntl-error" else "--force-prctl-error"
+        subprocess.run(
+            [sys.executable, "scripts/build_vitest_fd_cloexec_addon.py",
+             "--output", str(addon_path), "--headers", str(_node_headers(Path(node))),
+             option],
+            cwd=Path(__file__).parents[1], check=True,
+        )
+    else:
+        addon_path = addon.staged_path
+    read_fd, write_fd = os.pipe()
+    descriptor = write_fd
+    regular = None
+    try:
+        if mode == "non-fifo":
+            regular = tmp_path / "not-a-fifo"
+            descriptor = os.open(regular, os.O_WRONLY | os.O_CREAT, 0o600)
+        identity = os.fstat(descriptor)
+        expected_inode = identity.st_ino + (1 if mode == "wrong-identity" else 0)
+        program = (
+            "const fs=require('node:fs'); const addon=require(process.argv[1]);"
+            "try { addon.sealResultAuthority(Number(process.argv[2]),BigInt(process.argv[3]),BigInt(process.argv[4])); }"
+            "catch (_) { process.exit(41); } process.exit(0);"
+        )
+        completed = subprocess.run(
+            [node, "-e", program, str(addon_path), str(descriptor),
+             str(identity.st_dev), str(expected_inode)],
+            pass_fds=(descriptor,), capture_output=True, text=True,
+            timeout=5, check=False,
+        )
+        assert completed.returncode == 41, completed.stderr
+        os.set_blocking(read_fd, False)
+        with pytest.raises(BlockingIOError):
+            os.read(read_fd, 1)
+    finally:
+        if descriptor != write_fd:
+            os.close(descriptor)
+        os.close(write_fd)
+        os.close(read_fd)
 
 
 @pytest.mark.parametrize(
@@ -696,9 +1556,13 @@ def test_vitest_environment_drops_protected_host_capabilities(
 ) -> None:
     monkeypatch.setenv("PDD_ATTESTATION_SIGNER_COMMAND", "steal-me")
     monkeypatch.setenv("AWS_PROFILE", "production")
+    monkeypatch.setenv("PDD_FRAMEWORK_OBSERVATION_DEVICE", "candidate-supplied")
+    monkeypatch.setenv("PDD_FRAMEWORK_OBSERVATION_INODE", "candidate-supplied")
     environment = _vitest_environment(tmp_path)
     assert "PDD_ATTESTATION_SIGNER_COMMAND" not in environment
     assert "AWS_PROFILE" not in environment
+    assert "PDD_FRAMEWORK_OBSERVATION_DEVICE" not in environment
+    assert "PDD_FRAMEWORK_OBSERVATION_INODE" not in environment
 
 
 def test_vitest_execution_uses_shared_supervisor(
@@ -796,6 +1660,8 @@ def test_vitest_toolchain_descriptor_is_complete_typed_and_matches_command(
     assert descriptor.entrypoint == runner.resolve()
     assert descriptor.dependencies.name == "node_modules"
     assert descriptor.native_runtime[0].name == "runtime.bin"
+    assert descriptor.headers.name == "node"
+    assert any(member.role == "headers" for member in descriptor.members)
 
     wrong = tmp_path / "wrong.py"
     wrong.write_text("pass\n", encoding="utf-8")
@@ -807,7 +1673,8 @@ def test_vitest_toolchain_descriptor_is_complete_typed_and_matches_command(
 
 
 @pytest.mark.parametrize("missing_role", [
-    "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile"
+    "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile",
+    "headers",
 ])
 def test_vitest_toolchain_descriptor_rejects_missing_roles(
     tmp_path: Path, missing_role: str
@@ -820,6 +1687,528 @@ def test_vitest_toolchain_descriptor_rejects_missing_roles(
 
     with pytest.raises(ValueError, match="roles"):
         _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+
+
+def test_vitest_toolchain_headers_are_attested_and_staged_checker_owned(
+    tmp_path: Path,
+) -> None:
+    """The C compiler receives only a copied, typed Node header closure."""
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+
+    assert phase.headers != descriptor.headers
+    assert phase.headers.parent == phase.controller
+    assert (phase.headers / "node_api.h").read_text(encoding="utf-8") == (
+        descriptor.headers / "node_api.h"
+    ).read_text(encoding="utf-8")
+    assert {path.name for path in phase.headers.iterdir()} == set(
+        _REQUIRED_NAPI_HEADERS
+    )
+    assert {member.relative_path.as_posix() for member in phase.header_members} == {
+        ".", *_REQUIRED_NAPI_HEADERS,
+    }
+    assert not phase.headers.is_symlink()
+    assert all(not path.is_symlink() for path in phase.headers.rglob("*"))
+    assert all(
+        stat.S_IMODE(path.lstat().st_mode) == (0o555 if path.is_dir() else 0o444)
+        for path in (phase.headers, *phase.headers.rglob("*"))
+    )
+
+
+def test_vitest_toolchain_hardens_only_required_group_writable_headers_in_staging(
+    tmp_path: Path,
+) -> None:
+    """External Node package modes do not weaken checker-owned staged input."""
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    source_headers = tmp_path / "trusted-toolchain/include/node"
+    source_headers.chmod(0o775)
+    for header in source_headers.iterdir():
+        header.chmod(0o664)
+    nested = source_headers / "nested"
+    nested.mkdir(mode=0o775)
+    (nested / "extra.h").write_text("#define EXTRA_HEADER 1\n", encoding="utf-8")
+    (nested / "extra.h").chmod(0o664)
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+
+    assert stat.S_IMODE((descriptor.headers / "node_api.h").lstat().st_mode) == 0o664
+    assert {path.name for path in phase.headers.iterdir()} == set(
+        _REQUIRED_NAPI_HEADERS
+    )
+    assert not (phase.headers / "nested").exists()
+    assert all(
+        stat.S_IMODE(path.lstat().st_mode) == (0o555 if path.is_dir() else 0o444)
+        for path in (phase.headers, *phase.headers.rglob("*"))
+    )
+    assert all(
+        path.lstat().st_uid == os.getuid()
+        for path in (phase.headers, *phase.headers.rglob("*"))
+    )
+
+
+@pytest.mark.parametrize("mutation", ("mode", "owner", "ancestor", "link", "extra"))
+def test_vitest_toolchain_rejects_staged_header_tampering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    """Post-stage header substitution cannot survive the pre-execution recheck."""
+    runner = _fake_vitest(tmp_path)
+    descriptor = _load_vitest_toolchain_descriptor(
+        tmp_path / "repo", _runner_config(tmp_path, runner)
+    )
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+    header = phase.headers / "node_api.h"
+    if mutation == "mode":
+        header.chmod(0o644)
+    elif mutation == "owner":
+        actual_owner = os.getuid()
+        monkeypatch.setattr(runner_module.os, "getuid", lambda: actual_owner + 1)
+    elif mutation == "ancestor":
+        phase.controller.chmod(0o720)
+    elif mutation == "link":
+        replacement = tmp_path / "replacement.h"
+        replacement.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
+        phase.headers.chmod(0o755)
+        header.unlink()
+        header.symlink_to(replacement)
+    else:
+        phase.headers.chmod(0o755)
+        added = phase.headers / "pdd-added.h"
+        added.write_text("#define PDD_ADDED 1\n", encoding="utf-8")
+        added.chmod(0o444)
+        phase.headers.chmod(0o555)
+
+    with pytest.raises(ValueError, match="header|Vitest.*identity|provenance"):
+        runner_module._verify_vitest_phase_toolchain(phase)
+
+
+# pylint: disable=protected-access
+@pytest.mark.skipif(sys.platform != "darwin", reason="uses the macOS /var resolver alias")
+def test_vitest_staged_headers_accept_only_the_system_resolver_alias(
+    tmp_path: Path,
+) -> None:
+    """A system resolver alias is valid only for the recorded controller inode."""
+    canonical_root = tmp_path.resolve()
+    private_root = Path("/private/var")
+    if not canonical_root.is_relative_to(private_root):
+        pytest.skip("pytest temporary directory is not behind the macOS /var alias")
+    phase_root = canonical_root / "phase"
+    runner = _fake_vitest(tmp_path)
+    descriptor = _load_vitest_toolchain_descriptor(
+        tmp_path / "repo", _runner_config(tmp_path, runner)
+    )
+    phase_root.mkdir()
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+    resolver_root = Path("/var") / phase_root.relative_to(private_root)
+    resolver_controller = resolver_root / ".pdd-vitest-toolchain"
+    resolver_headers = resolver_controller / "headers"
+
+    assert resolver_headers != phase.headers
+    assert resolver_headers.resolve() == phase.headers.resolve()
+    assert resolver_controller.resolve() == phase.controller.resolve()
+    runner_module._verify_staged_vitest_header_attestation(
+        resolver_headers,
+        resolver_controller,
+        phase.header_members,
+        phase.header_provenance,
+        phase.header_ancestors,
+    )
+
+
+# pylint: enable=protected-access
+# pylint: disable=too-many-locals,protected-access
+def test_vitest_coordinator_precompile_requires_phase_bound_header_attestation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only an immutable, exact phase header attestation may reach the compiler.
+
+    The public compiler boundary has one secure model: a caller supplies the
+    staged header directory with its phase record.  An otherwise valid external
+    Node include directory is deliberately insufficient, so no legacy bare
+    ``headers`` fallback can reintroduce an unbound compiler input.
+    """
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    runner = _fake_vitest(tmp_path)
+    descriptor = _load_vitest_toolchain_descriptor(
+        tmp_path / "repo", _runner_config(tmp_path, runner)
+    )
+    compiler = tmp_path / "trusted-cc"
+    compiler.write_text("checker compiler\n", encoding="utf-8")
+    compiler.chmod(0o555)
+    compiler_commands: list[tuple[str, ...]] = []
+
+    def compile_checker(command, **_kwargs):
+        compiler_commands.append(tuple(command))
+        output = Path(command[command.index("-o") + 1])
+        output.write_bytes(b"checker authority")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(runner_module, "_checker_c_compiler", lambda: compiler)
+    monkeypatch.setattr(
+        runner_module, "_checker_compiler_closure", _test_compiler_closure
+    )
+    monkeypatch.setattr(runner_module.subprocess, "run", compile_checker)
+
+    unbound_staging = tmp_path / "unbound-addon"
+    unbound_staging.mkdir()
+    with pytest.raises(ValueError, match="phase.*header.*attestation"):
+        runner_module._load_vitest_coordinator_addon(
+            unbound_staging, descriptor.headers, tmp_path / "candidate"
+        )
+    assert not compiler_commands
+
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+    candidate_headers = tmp_path / "candidate-headers"
+    candidate_headers.symlink_to(phase.headers, target_is_directory=True)
+    rejected_staging = tmp_path / "rejected-addon"
+    rejected_staging.mkdir()
+    with pytest.raises(ValueError, match="phase.*header.*attestation"):
+        runner_module._load_vitest_coordinator_addon(
+            rejected_staging,
+            candidate_headers,
+            phase_root,
+            phase_toolchain=phase,
+        )
+    assert not compiler_commands
+
+    bound_staging = tmp_path / "bound-addon"
+    bound_staging.mkdir()
+    addon = runner_module._load_vitest_coordinator_addon(
+        bound_staging,
+        phase.headers,
+        phase_root,
+        phase_toolchain=phase,
+    )
+
+    assert addon.staged_path.is_file()
+    assert len(compiler_commands) == 1
+    assert compiler_commands[0][compiler_commands[0].index("-I") + 1] == str(
+        phase.headers
+    )
+
+
+def test_vitest_coordinator_precompile_rejects_candidate_header_aliases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A candidate-controlled intermediate alias cannot select compiler input."""
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    runner = _fake_vitest(tmp_path)
+    descriptor = _load_vitest_toolchain_descriptor(
+        tmp_path / "repo", _runner_config(tmp_path, runner)
+    )
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
+    compiler = tmp_path / "trusted-cc"
+    compiler.write_text("checker compiler\n", encoding="utf-8")
+    compiler.chmod(0o555)
+    compiler_commands: list[tuple[str, ...]] = []
+
+    def compile_checker(command, **_kwargs):
+        compiler_commands.append(tuple(command))
+        output = Path(command[command.index("-o") + 1])
+        output.write_bytes(b"checker authority")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    candidate_alias = tmp_path / "candidate-alias"
+    candidate_alias.symlink_to(phase_root, target_is_directory=True)
+    aliased_headers = candidate_alias / ".pdd-vitest-toolchain" / "headers"
+    assert aliased_headers.resolve() == phase.headers.resolve()
+    staging = tmp_path / "alias-addon"
+    staging.mkdir()
+    monkeypatch.setattr(runner_module, "_checker_c_compiler", lambda: compiler)
+    monkeypatch.setattr(
+        runner_module, "_checker_compiler_closure", _test_compiler_closure
+    )
+    monkeypatch.setattr(runner_module.subprocess, "run", compile_checker)
+
+    with pytest.raises(ValueError, match="phase.*header.*attestation"):
+        runner_module._load_vitest_coordinator_addon(
+            staging,
+            aliased_headers,
+            phase_root,
+            phase_toolchain=phase,
+        )
+
+    assert not compiler_commands
+
+
+# pylint: enable=too-many-locals,protected-access
+# pylint: disable=too-many-locals,protected-access
+def test_vitest_coordinator_precompile_rechecks_phase_attestation_without_rehash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Precompile checks the staged phase identity without rereading its bytes.
+
+    The checker must carry the private phase attestation from staging to the
+    compiler boundary. It may make a fresh no-follow structural pass there,
+    but must not turn the four already-attested header bytes into another
+    content-hash operation.
+    """
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    runner = _fake_vitest(tmp_path)
+    descriptor = _load_vitest_toolchain_descriptor(
+        tmp_path / "repo", _runner_config(tmp_path, runner)
+    )
+    compiler = tmp_path / "trusted-cc"
+    compiler.write_text("checker compiler\n", encoding="utf-8")
+    compiler.chmod(0o555)
+    staged_headers: Path | None = None
+    compiler_commands: list[tuple[str, ...]] = []
+    capture_headers = runner_module._capture_vitest_headers
+
+    def reject_redundant_staged_header_capture(headers: Path):
+        if headers == staged_headers:
+            pytest.fail("precompile rehashed the already-attested staged headers")
+        return capture_headers(headers)
+
+    def compile_checker(command, **_kwargs):
+        compiler_commands.append(tuple(command))
+        output = Path(command[command.index("-o") + 1])
+        output.write_bytes(b"checker authority")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(runner_module, "_checker_c_compiler", lambda: compiler)
+    monkeypatch.setattr(
+        runner_module, "_checker_compiler_closure", _test_compiler_closure
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_capture_vitest_headers",
+        reject_redundant_staged_header_capture,
+    )
+    monkeypatch.setattr(runner_module.subprocess, "run", compile_checker)
+
+    mutations = (
+        "baseline", "added", "deleted", "mode", "owner", "ancestor",
+        "symlink", "inode",
+    )
+    for mutation in mutations:
+        phase_root = tmp_path / f"phase-{mutation}"
+        phase_root.mkdir()
+        phase = _prepare_vitest_toolchain(phase_root, descriptor)
+        staged_headers = phase.headers
+        assert {member.relative_path.as_posix() for member in phase.header_members} == {
+            ".", *_REQUIRED_NAPI_HEADERS,
+        }
+        staging = tmp_path / f"addon-{mutation}"
+        staging.mkdir()
+        compiler_calls_before = len(compiler_commands)
+        header = phase.headers / "node_api.h"
+
+        with monkeypatch.context():
+            if mutation == "added":
+                phase.headers.chmod(0o755)
+                added = phase.headers / "pdd-injected.h"
+                added.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
+                added.chmod(0o444)
+                phase.headers.chmod(0o555)
+            elif mutation == "deleted":
+                phase.headers.chmod(0o755)
+                header.unlink()
+                phase.headers.chmod(0o555)
+            elif mutation == "mode":
+                header.chmod(0o644)
+            elif mutation == "owner":
+                provenance = phase.header_provenance[0]
+                phase = replace(
+                    phase,
+                    header_provenance=(
+                        replace(provenance, owner=provenance.owner + 1),
+                        *phase.header_provenance[1:],
+                    ),
+                )
+            elif mutation == "ancestor":
+                phase.controller.chmod(0o720)
+            elif mutation == "symlink":
+                replacement = tmp_path / "replacement.h"
+                replacement.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
+                phase.headers.chmod(0o755)
+                header.unlink()
+                header.symlink_to(replacement)
+                phase.headers.chmod(0o555)
+            elif mutation == "inode":
+                original = header.read_bytes()
+                original_inode = header.stat().st_ino
+                phase.headers.chmod(0o755)
+                replacement = phase.headers / "node_api.replacement"
+                replacement.write_bytes(original)
+                replacement.chmod(0o444)
+                replacement_inode = replacement.stat().st_ino
+                assert replacement_inode != original_inode
+                os.replace(replacement, header)
+                assert header.stat().st_ino == replacement_inode
+                phase.headers.chmod(0o555)
+
+            if mutation == "baseline":
+                addon = runner_module._load_vitest_coordinator_addon(
+                    staging,
+                    phase.headers,
+                    phase_root,
+                    phase_toolchain=phase,
+                )
+                assert addon.staged_path.is_file()
+                assert len(compiler_commands) == compiler_calls_before + 1
+            else:
+                with pytest.raises(ValueError):
+                    runner_module._load_vitest_coordinator_addon(
+                        staging,
+                        phase.headers,
+                        phase_root,
+                        phase_toolchain=phase,
+                    )
+                assert len(compiler_commands) == compiler_calls_before
+
+
+# pylint: enable=too-many-locals,protected-access
+def test_vitest_execution_rechecks_minimal_staged_headers_without_generic_root_rehash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use the complete phase checks, not duplicate root hashing, for headers.
+
+    The checker attests only the N-API files included by its C source. The
+    phase verifier captures those files before and after execution, including
+    bytes, type, mode, ownership, and controller ancestry. The generic
+    protected-root digest must not traverse that independently checked scope.
+    """
+    root, _commit = _repository(tmp_path)
+    config = _runner_config(tmp_path, _fake_vitest(tmp_path))
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    unrelated_header = descriptor.headers / "nested" / "generated.h"
+    unrelated_header.parent.mkdir()
+    unrelated_header.write_text(
+        "#define PDD_HEADER_WALK_REGRESSION 1\n", encoding="utf-8"
+    )
+    # A normal Node distribution has a much larger unrelated header tree.
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    unrelated_header.write_text(
+        "#define PDD_HEADER_WALK_REGRESSION 2\n", encoding="utf-8"
+    )
+    assert _load_vitest_toolchain_descriptor(root, config).identity == descriptor.identity
+    phase = _prepare_vitest_toolchain(root, descriptor)
+    assert not (phase.headers / "nested").exists()
+    assert {member.relative_path.as_posix() for member in phase.header_members} == {
+        ".", *_REQUIRED_NAPI_HEADERS,
+    }
+
+    staged_phase_checks: list[Path] = []
+    generic_header_paths: list[Path] = []
+    originals = (
+        getattr(runner_module, "_capture_staged_vitest_headers"),
+        getattr(runner_module, "_update_validator_path_identity"),
+    )
+
+    def capture_phase_check(headers: Path, controller: Path):
+        staged_phase_checks.append(headers)
+        return originals[0](headers, controller)
+
+    def capture_generic_header_rehash(
+        digest,
+        path: Path,
+        logical: str,
+        active: set[Path],
+        excluded: frozenset[Path],
+    ) -> None:
+        if (
+            path.absolute() not in excluded
+            and (path == phase.headers or path.is_relative_to(phase.headers))
+        ):
+            generic_header_paths.append(path)
+        originals[1](digest, path, logical, active, excluded)
+
+    monkeypatch.setattr(
+        runner_module, "_capture_staged_vitest_headers", capture_phase_check
+    )
+    monkeypatch.setattr(
+        runner_module, "_update_validator_path_identity", capture_generic_header_rehash
+    )
+
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        2,
+        config,
+        phase_toolchain=phase,
+    )
+
+    assert execution.outcome is EvidenceOutcome.PASS
+    assert identities == (IDENTITY,)
+    # Exact no-follow N-API capture still protects both execution boundaries.
+    assert staged_phase_checks.count(phase.headers) >= 2
+    # The generic root digest is not allowed to rehash checker-owned headers.
+    assert not generic_header_paths
+
+
+@pytest.mark.parametrize("mutation", ("missing", "symlink"))
+@pytest.mark.parametrize("header_name", _REQUIRED_NAPI_HEADERS)
+def test_vitest_toolchain_requires_each_regular_napi_header(
+    tmp_path: Path, mutation: str, header_name: str,
+) -> None:
+    """Every compiler-input header is an exact no-link required member."""
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    header = tmp_path / "trusted-toolchain/include/node" / header_name
+    if mutation == "missing":
+        header.unlink()
+    else:
+        replacement = tmp_path / f"replacement-{header_name}"
+        replacement.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
+        header.unlink()
+        header.symlink_to(replacement)
+
+    with pytest.raises(ValueError, match=header_name):
+        _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+
+
+def test_vitest_toolchain_rejects_manifest_injected_header_path(tmp_path: Path) -> None:
+    """The candidate-facing manifest cannot select compiler include input."""
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    payload = json.loads(config.vitest_toolchain_manifest.read_text(encoding="utf-8"))
+    injected = tmp_path / "injected-headers"
+    injected.mkdir()
+    payload["roles"]["headers"] = str(injected)
+    config.vitest_toolchain_manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="headers.*selected Node launcher"):
+        _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+
+
+@pytest.mark.parametrize("mutation", ("header-bytes", "header-symlink", "ancestor-mode"))
+def test_vitest_toolchain_headers_fail_closed_when_provenance_changes(
+    tmp_path: Path, mutation: str,
+) -> None:
+    """A candidate cannot route checker C compilation through mutable headers."""
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+    header = descriptor.headers / "node_api.h"
+    if mutation == "header-bytes":
+        header.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
+    elif mutation == "header-symlink":
+        replacement = tmp_path / "replacement.h"
+        replacement.write_text("#define PDD_INJECTED 1\n", encoding="utf-8")
+        header.unlink()
+        header.symlink_to(replacement)
+    else:
+        descriptor.headers.chmod(0o775)
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+
+    with pytest.raises(ValueError, match="header|Vitest.*identity|provenance"):
+        _prepare_vitest_toolchain(phase_root, descriptor)
 
 
 def test_vitest_toolchain_identity_binds_all_roles_modes_symlinks_and_ignores_cache(
@@ -845,6 +2234,12 @@ def test_vitest_toolchain_identity_binds_all_roles_modes_symlinks_and_ignores_ca
     native.write_bytes(b"changed-native")
     assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity != baseline
     native.write_bytes(b"native")
+    baseline = _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity
+
+    header = descriptor.headers / "node_api.h"
+    header.write_text("#define PDD_CHANGED 1\n", encoding="utf-8")
+    assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity != baseline
+    header.write_text("#include <js_native_api.h>\n", encoding="utf-8")
     baseline = _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity
 
     descriptor.lockfile.write_text('{"changed":true}\n', encoding="utf-8")
@@ -1018,6 +2413,96 @@ def test_vitest_rechecks_exact_staged_descriptor_before_execution(
 
     assert execution.outcome is EvidenceOutcome.ERROR
     assert "identity" in execution.detail.lower() or "member" in execution.detail.lower()
+    assert not identities
+
+
+@pytest.mark.parametrize("mutation", ("changed", "deleted", "added"))
+def test_vitest_postrun_staged_header_mutation_fails_phase_recheck(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    """Header-tree exclusion from generic hashing still fails closed post-run."""
+    root, _commit = _repository(tmp_path)
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    phase = _prepare_vitest_toolchain(root, descriptor)
+    header = phase.headers / "node_api.h"
+
+    def mutate_after_run(command, *, result_fifo, **_kwargs):
+        if mutation == "changed":
+            header.chmod(0o644)
+            header.write_text("#define PDD_CHANGED 1\n", encoding="utf-8")
+            header.chmod(0o444)
+        elif mutation == "deleted":
+            phase.headers.chmod(0o755)
+            header.unlink()
+            phase.headers.chmod(0o555)
+        else:
+            phase.headers.chmod(0o755)
+            added = phase.headers / "pdd-added.h"
+            added.write_text("#define PDD_ADDED 1\n", encoding="utf-8")
+            added.chmod(0o444)
+            phase.headers.chmod(0o555)
+        writer = os.open(result_fifo, os.O_WRONLY)
+        try:
+            os.write(
+                writer,
+                json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode(),
+            )
+        finally:
+            os.close(writer)
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr("pdd.sync_core.runner.run_supervised", mutate_after_run)
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        2,
+        config,
+        phase_toolchain=phase,
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert execution.detail.startswith("Vitest toolchain recheck failed:")
+    assert not identities
+
+
+def test_vitest_postrun_candidate_mutation_stays_quarantined(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The header-only exemption cannot hide a candidate-tree modification."""
+    root, _commit = _repository(tmp_path)
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    phase = _prepare_vitest_toolchain(root, descriptor)
+
+    def mutate_after_run(command, *, result_fifo, **_kwargs):
+        (root / "tests/widget.test.ts").write_text("// replaced\n", encoding="utf-8")
+        writer = os.open(result_fifo, os.O_WRONLY)
+        try:
+            os.write(
+                writer,
+                json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}).encode(),
+            )
+        finally:
+            os.close(writer)
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr("pdd.sync_core.runner.run_supervised", mutate_after_run)
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        2,
+        config,
+        phase_toolchain=phase,
+    )
+
+    assert execution.outcome is EvidenceOutcome.QUARANTINED
+    assert execution.detail == "Vitest phase modified its protected execution tree"
     assert not identities
 
 
@@ -1235,6 +2720,18 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
         launcher.chmod(0o755)
     lockfile = toolchain / "package-lock.json"
     lockfile.write_text("{}\n", encoding="utf-8")
+    headers = toolchain / "include/node"
+    headers.mkdir(parents=True, exist_ok=True)
+    # The descriptor test double does not compile the authority, but it must
+    # still model the complete no-link N-API role required before compilation.
+    (headers / "node_api.h").write_text(
+        "#include <js_native_api.h>\n", encoding="utf-8"
+    )
+    (headers / "js_native_api.h").write_text(
+        "#include <js_native_api_types.h>\n", encoding="utf-8"
+    )
+    (headers / "js_native_api_types.h").write_text("\n", encoding="utf-8")
+    (headers / "node_api_types.h").write_text("\n", encoding="utf-8")
     manifest = toolchain / "vitest-toolchain.json"
     manifest.write_text(
         json.dumps(
@@ -1246,6 +2743,7 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
                     "dependencies": str((toolchain / "node_modules").resolve()),
                     "native_runtime": [str(native_file.resolve())],
                     "lockfile": str(lockfile.resolve()),
+                    "headers": str(headers.resolve()),
                 },
             }
         ),
@@ -1364,6 +2862,191 @@ def test_vitest_passing_collected_test_is_pass(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
     _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
     assert executions[0].outcome is EvidenceOutcome.PASS
+
+
+def test_vitest_native_authority_identity_changes_signed_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact native authority measured by a PASS must reach signed bytes."""
+    authority_identity = ["a" * 64]
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    profile = VerificationProfile(
+        UNIT,
+        (
+            VerificationObligation(
+                "vitest", "test", "vitest", "config", ("REQ-1",), paths
+            ),
+        ),
+        ("REQ-1",),
+        "profile-v1",
+    )
+    issuance = AttestationIssue(
+        AttestationSigner("trusted-ci", b"v" * 32),
+        "id",
+        "nonce",
+        datetime(2026, 7, 10, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_capture_adapter_identities",
+        lambda _root, _config: ((("vitest", "adapter"),), {}),
+    )
+    monkeypatch.setattr(
+        runner_module, "_verify_adapter_identities", lambda _root, _config: None
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "runner_identity_digest",
+        lambda *_args, **_kwargs: "runner-identity",
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "run_obligation",
+        lambda *_args, **_kwargs: runner_module.RunnerExecution(
+            "vitest",
+            EvidenceOutcome.PASS,
+            authority_identity[0],
+            "passed",
+            native_binding_digest=runner_module._vitest_protocol_native_digest(
+                authority_identity[0], authority_identity[0]
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_vitest_signing_addon",
+        lambda _root, _config, _required: nullcontext(
+            SimpleNamespace(identity=authority_identity[0])
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_verify_vitest_signing_addon",
+        lambda _root, _config, _addon: None,
+    )
+
+    first, first_executions = run_profile(
+        tmp_path,
+        profile,
+        RunBinding("snapshot-v1", "base", "head"),
+        issuance,
+        RunnerConfig(vitest_command=("trusted-vitest",)),
+    )
+    authority_identity[0] = "b" * 64
+    second, second_executions = run_profile(
+        tmp_path,
+        profile,
+        RunBinding("snapshot-v1", "base", "head"),
+        issuance,
+        RunnerConfig(vitest_command=("trusted-vitest",)),
+    )
+
+    assert first_executions[0].outcome is EvidenceOutcome.PASS
+    assert second_executions[0].outcome is EvidenceOutcome.PASS
+    assert first.binding.runner_digest == second.binding.runner_digest
+    assert first.payload() != second.payload()
+
+
+def test_vitest_native_authority_tampering_at_signing_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live addon mutation after execution cannot receive a PASS signature."""
+    source = tmp_path / "authority.c"
+    source.write_bytes(b"int authority(void) { return 1; }\n")
+    source.chmod(0o444)
+    staged = tmp_path / "authority.node"
+    staged.write_bytes(b"native authority")
+    staged.chmod(0o555)
+    source_member = runner_module._capture_vitest_member(
+        source, "coordinator_addon", PurePosixPath(".")
+    )
+    staged_member = runner_module._capture_vitest_member(
+        staged, "coordinator_addon", PurePosixPath(".")
+    )
+    addon = runner_module.VitestCoordinatorAddon(
+        source,
+        staged,
+        source_member,
+        staged_member,
+        runner_module._vitest_coordinator_identity(
+            source_member, (), (), staged_member
+        ),
+    )
+    native_binding = runner_module._vitest_protocol_native_digest(
+        addon.identity, addon.identity
+    )
+    profile = VerificationProfile(
+        UNIT,
+        (
+            VerificationObligation(
+                "vitest",
+                "test",
+                "vitest",
+                "config",
+                ("REQ-1",),
+                (PurePosixPath("tests/widget.test.ts"),),
+            ),
+        ),
+        ("REQ-1",),
+        "profile-v1",
+    )
+
+    class TamperingSigner(AttestationSigner):
+        def issue(self, request):
+            staged.chmod(0o755)
+            staged.write_bytes(b"substituted native authority")
+            return super().issue(request)
+
+    monkeypatch.setattr(
+        runner_module,
+        "_capture_adapter_identities",
+        lambda _root, _config: ((("vitest", "adapter"),), {}),
+    )
+    monkeypatch.setattr(
+        runner_module, "_verify_adapter_identities", lambda _root, _config: None
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "runner_identity_digest",
+        lambda *_args, **_kwargs: "runner-identity",
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "run_obligation",
+        lambda *_args, **_kwargs: runner_module.RunnerExecution(
+            "vitest",
+            EvidenceOutcome.PASS,
+            "command",
+            "passed",
+            native_binding_digest=native_binding,
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_vitest_signing_addon",
+        lambda _root, _config, _required: nullcontext(addon),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_verify_vitest_signing_addon",
+        lambda _root, _config, value: (
+            runner_module._verify_vitest_coordinator_addon(value)
+        ),
+    )
+
+    with pytest.raises(ValueError, match="identity changed"):
+        run_profile(
+            tmp_path,
+            profile,
+            RunBinding("snapshot-v1", "base", "head"),
+            AttestationIssue(
+                TamperingSigner("trusted-ci", b"v" * 32),
+                "id",
+                "nonce",
+                datetime(2026, 7, 10, tzinfo=timezone.utc),
+            ),
+            RunnerConfig(vitest_command=("trusted-vitest",)),
+        )
 
 
 @pytest.mark.parametrize(
@@ -1763,10 +3446,13 @@ def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
     _git(root, "config", "user.name", "Runner Test")
     (root / "tests").mkdir()
     (root / "tests/widget.test.ts").write_text(
+        "import fs from 'node:fs';\n"
         "import { expect, test } from 'vitest';\n"
-        "test('result channel is private', () => {\n"
+        "test('result authority resists worker forge attempts', () => {\n"
         "  expect(process.env.PDD_TRUSTED_VITEST_OUTPUT).toBeUndefined();\n"
-        "});\n",
+        "  expect(process.env.PDD_FRAMEWORK_COORDINATOR_NONDUMPABLE).toBe('1');\n"
+        + _SAFE_VITEST_AUTHORITY_PROBE
+        + "});\n",
         encoding="utf-8",
     )
     (root / "vitest.config.json").write_text('{"test":{}}\n', encoding="utf-8")
@@ -2115,8 +3801,15 @@ def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
     assert executions[0].outcome is outcome
 
 
+@pytest.mark.parametrize(
+    ("platform", "worker_wasm_guard"),
+    [("linux", "--execArgv=--disable-wasm-trap-handler"), ("darwin", None)],
+)
 def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    worker_wasm_guard: str | None,
 ) -> None:
     """Discredited worker caps must not weaken the protected Vitest boundary."""
     root, _commit = _repository(tmp_path)
@@ -2125,6 +3818,7 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
     observed_environments: list[dict[str, str]] = []
     observed_limits: list[SupervisorLimits] = []
     observed_timeouts: list[int] = []
+    observed_result_fds: list[int] = []
 
     def capture(
         command, *, result_fifo, result_fd, env, limits, timeout, **_kwargs
@@ -2133,6 +3827,9 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
         observed_limits.append(limits)
         observed_environments.append(env)
         observed_timeouts.append(timeout)
+        observed_result_fds.append(result_fd)
+        assert stat.S_ISFIFO(result_fifo.stat().st_mode)
+        assert str(result_fifo) not in command
         writer = os.open(result_fifo, os.O_WRONLY)
         try:
             os.write(
@@ -2144,27 +3841,42 @@ def test_vitest_omits_unproven_worker_caps_without_relaxing_limits(
         return subprocess.CompletedProcess(command, 0, "", ""), False
 
     monkeypatch.setenv("UV_THREADPOOL_SIZE", "64")
-    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+    monkeypatch.setattr(runner_module.sys, "platform", platform)
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", capture)
     execution, _identities = _run_vitest(
         root, (PurePosixPath("tests/widget.test.ts"),), 2, config
     )
 
     assert execution.outcome is EvidenceOutcome.PASS
+    assert "--pool=forks" in observed[0]
+    if worker_wasm_guard is None:
+        assert "--execArgv=--disable-wasm-trap-handler" not in observed[0]
+    else:
+        assert worker_wasm_guard in observed[0]
     assert not {
         name
         for name in vars(runner_module)
         if name.startswith("_VITEST_") and name != "_VITEST_SUPERVISOR_LIMITS"
     }
-    assert not any(value.startswith("--maxWorkers") for value in observed[0])
-    assert not any(value.startswith("--v8-pool-size") for value in observed[0])
-    assert "UV_THREADPOOL_SIZE" not in observed_environments[0]
-    assert observed[0][1] == "--disable-wasm-trap-handler"
-    assert any(value.startswith("--reporter=") for value in observed[0])
+    assert not any(
+        value.startswith(("--maxWorkers", "--retry", "--v8-pool-size"))
+        for command in observed
+        for value in command
+    )
+    assert all("UV_THREADPOOL_SIZE" not in environment for environment in observed_environments)
+    if platform == "linux":
+        assert observed[0][1] == "--disable-wasm-trap-handler"
+    assert not any(
+        value.startswith("--execArgv=--require=")
+        for command in observed
+        for value in command
+    )
+    assert all(any(value.startswith("--reporter=") for value in command) for command in observed)
     assert len(observed) == 1
+    assert observed_result_fds == [198]
     assert observed_timeouts == [2]
     assert observed_limits == [
-        SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024)
+        SupervisorLimits(max_memory_bytes=4 * 1024 * 1024 * 1024),
     ]
     assert observed_limits[0].max_memory_bytes == 4 * 1024 * 1024 * 1024
     assert observed_limits[0].max_processes == SupervisorLimits().max_processes

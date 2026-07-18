@@ -792,11 +792,21 @@ def test_validate_command_wires_protected_vitest_runner_config(
     external = toolchain / "node_modules/vitest/vitest.py"
     external.parent.mkdir(parents=True)
     external.write_text("print('trusted vitest')\n")
-    launcher = toolchain / "python"
+    launcher = toolchain / "bin/node"
+    launcher.parent.mkdir(parents=True)
     shutil.copy2(os.sys.executable, launcher)
     launcher.chmod(0o755)
     lockfile = toolchain / "package-lock.json"
     lockfile.write_text("{}\n", encoding="utf-8")
+    headers = toolchain / "include/node"
+    headers.mkdir(parents=True)
+    for name in (
+        "node_api.h",
+        "node_api_types.h",
+        "js_native_api.h",
+        "js_native_api_types.h",
+    ):
+        (headers / name).write_text("\n", encoding="utf-8")
     manifest = toolchain / "manifest.json"
     manifest.write_text(
         json.dumps(
@@ -808,6 +818,7 @@ def test_validate_command_wires_protected_vitest_runner_config(
                     "dependencies": str(toolchain / "node_modules"),
                     "native_runtime": [str(launcher)],
                     "lockfile": str(lockfile),
+                    "headers": str(headers),
                 },
             }
         ),

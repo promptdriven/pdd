@@ -80,13 +80,60 @@ def test_valid_attestation_produces_sealed_evidence() -> None:
     assert evidence.attestation_id == "attestation-1"
 
 
+def test_attestation_signer_revalidates_immediately_around_signing() -> None:
+    calls = []
+
+    def revalidate() -> None:
+        calls.append("checked")
+
+    envelope = SIGNER.issue(
+        AttestationRequest(
+            "revalidated",
+            _binding(native_runner_digest="native-binding"),
+            (ObligationEvidence("test", EvidenceOutcome.PASS),),
+            "revalidated-nonce",
+            NOW,
+            revalidate=revalidate,
+        )
+    )
+
+    assert envelope.binding.native_runner_digest == "native-binding"
+    assert calls == ["checked", "checked"]
+
+
+def test_attestation_signer_rejects_post_signing_binding_mutation() -> None:
+    calls = 0
+
+    def revalidate() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ValueError("native binding changed")
+
+    with pytest.raises(ValueError, match="native binding changed"):
+        SIGNER.issue(
+            AttestationRequest(
+                "revalidated",
+                _binding(native_runner_digest="native-binding"),
+                (ObligationEvidence("test", EvidenceOutcome.PASS),),
+                "revalidated-nonce",
+                NOW,
+                revalidate=revalidate,
+            )
+        )
+
+    assert calls == 2
+
+
 def test_remote_attestation_authority_signature_is_verified(monkeypatch) -> None:
+    revalidations = []
     request = AttestationRequest(
         "remote-attestation",
         _binding(),
         (ObligationEvidence("test", EvidenceOutcome.PASS),),
         "remote-nonce",
         NOW,
+        revalidate=lambda: revalidations.append("checked"),
     )
 
     def remote_sign(command, input, *, timeout):
@@ -108,6 +155,7 @@ def test_remote_attestation_authority_signature_is_verified(monkeypatch) -> None
         {SIGNER.issuer: SIGNER.public_key_bytes()}
     ).verify(envelope, request.binding, now=NOW)
     assert evidence.attestation_id == request.attestation_id
+    assert revalidations == ["checked", "checked"]
 
 
 def test_remote_attestation_signer_has_protected_timeout(monkeypatch) -> None:
@@ -358,6 +406,27 @@ def test_forged_signature_is_rejected() -> None:
     envelope = replace(_envelope(), binding=_binding(checked_sha="candidate-head"))
     with pytest.raises(AttestationError, match="signature"):
         _verify(AttestationTrustPolicy({"trusted-ci": PUBLIC_KEY}), envelope)
+
+
+def test_forged_native_runner_binding_is_rejected() -> None:
+    envelope = SIGNER.issue(
+        AttestationRequest(
+            "native-attestation",
+            _binding(native_runner_digest="native-v1"),
+            (ObligationEvidence("test", EvidenceOutcome.PASS),),
+            "native-nonce",
+            NOW,
+        )
+    )
+    forged = replace(
+        envelope,
+        binding=replace(envelope.binding, native_runner_digest="native-v2"),
+    )
+
+    with pytest.raises(AttestationError, match="signature"):
+        AttestationTrustPolicy({"trusted-ci": PUBLIC_KEY}).verify(
+            forged, forged.binding, now=NOW
+        )
 
 
 def test_unknown_issuer_is_rejected() -> None:

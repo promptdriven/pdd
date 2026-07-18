@@ -843,7 +843,8 @@ def _staged_bwrap(
         "payload=json.dumps({'returncode':status,'token':termination_token},"
         "sort_keys=True,separators=(',',':')).encode('ascii')",
         "record=termination_prefix+payload+b'\\n'",
-        "if len(record)>termination_header_bytes: raise RuntimeError('termination record too large')",
+        "if len(record)>termination_header_bytes: "
+        "raise RuntimeError('termination record too large')",
         "written=os.pwrite(2,record.ljust(termination_header_bytes,b' '),0)",
         "if written!=termination_header_bytes: raise RuntimeError('short termination record')",
         "os.fsync(2)",
@@ -863,13 +864,18 @@ def _staged_bwrap(
 def _private_result_command(
     command: list[str], result_fifo: Path, result_fd: int,
 ) -> list[str]:
-    """Open and unlink a checker FIFO before candidate code can execute."""
+    """Open, protect, and unlink a checker FIFO before candidate code executes."""
     script = (
-        "import os,sys;"
+        "import os,stat,sys;"
         "path=sys.argv[1];target=int(sys.argv[2]);"
         "source=os.open(path,os.O_WRONLY);os.unlink(path);"
         "os.dup2(source,target);"
         "os.close(source) if source!=target else None;"
+        "metadata=os.fstat(target);"
+        "stat.S_ISFIFO(metadata.st_mode) or (_ for _ in ()).throw("
+        "RuntimeError('trusted Vitest result channel is not a FIFO'));"
+        "os.environ['PDD_FRAMEWORK_OBSERVATION_DEVICE']=str(metadata.st_dev);"
+        "os.environ['PDD_FRAMEWORK_OBSERVATION_INODE']=str(metadata.st_ino);"
         "os.execvpe(sys.argv[3],sys.argv[3:],os.environ)"
     )
     return [str(_SUPERVISOR_EXECUTABLE), "-c", script,
