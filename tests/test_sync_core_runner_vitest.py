@@ -572,12 +572,17 @@ def test_vitest_authority_wheel_is_source_only(tmp_path: Path) -> None:
     assert not any(name.endswith(".node") for name in names)
 
 
-def test_vitest_authority_wheel_build_tooling_is_available_without_isolation() -> None:
-    """Keep the source-only wheel smoke test's build requirements explicit."""
+def test_vitest_authority_wheel_build_requirements_available_without_isolation() -> None:
+    """The dev environment supplies every declared no-isolation build requirement."""
     repository = Path(__file__).resolve().parents[1]
     project = tomllib.loads((repository / "pyproject.toml").read_text(encoding="utf-8"))
+    build_requirements = set(project["build-system"]["requires"])
+    dev_requirements = set(project["project"]["optional-dependencies"]["dev"])
 
-    assert "setuptools-scm>=8" in project["project"]["optional-dependencies"]["dev"]
+    assert build_requirements <= dev_requirements, (
+        "dev extra omits no-isolation build requirements: "
+        f"{sorted(build_requirements - dev_requirements)}"
+    )
 
 
 def test_vitest_coordinator_addon_rejects_unsupported_platform(
