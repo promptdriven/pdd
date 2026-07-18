@@ -599,7 +599,7 @@ _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS = (
         "pdd/prompts/architecture_sync_python.prompt",
         "python",
         "754f44ef1cab69a0a1fc70b321333ec68476e2b5432e5b5e6be3a3e382c32e29",
-        "b89bf862cf55d5227dc2155e2340e5822140789445dcd28b07ac450cd063e718",
+        "a5fd7095f26859503d4f2a2c30b49b1a0fe834b78d55536f69eae26006fb9fb7",
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
         "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
     ),
@@ -626,7 +626,7 @@ _REPLAY_BASE_PROFILE_SHA256 = (
     "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
 )
 _REPLAY_HEAD_PROFILE_SHA256 = (
-    "23381e01eb66593414270d0df1a51f6c74f51c5f8bbd2e8b3743dfdefa47c262"
+    "0c5f37e9178cb0f654b2dba79bd11a1f4eaf3e3c74ad81dcbbfba89d0ade40e4"
 )
 _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS = tuple(
     replace(
@@ -745,7 +745,7 @@ _BOOTSTRAP_PROFILE_ADDITIONS = (
         PurePosixPath("pdd/prompts/mock_contract_validation_python.prompt"),
         "python",
         "CONTRACT-SHA256:3b37fbfbf9545fd0ddd57fa5238ab89be9d4444541efeb8cf1b30578f0f4bf8d",
-        "23381e01eb66593414270d0df1a51f6c74f51c5f8bbd2e8b3743dfdefa47c262",
+        "0c5f37e9178cb0f654b2dba79bd11a1f4eaf3e3c74ad81dcbbfba89d0ade40e4",
         "3b37fbfbf9545fd0ddd57fa5238ab89be9d4444541efeb8cf1b30578f0f4bf8d",
     ),
 )
