@@ -5533,8 +5533,16 @@ class TestIdentifyModulesPromptSize:
 
         run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True)
 
-        # Exact issue mention makes this deterministic despite large metadata.
-        mock_agentic_task.assert_not_called()
+        # Candidate selection is intentionally delegated when the declared
+        # path-qualified identities do not exactly match the issue's bare
+        # token.  The bounded, explicitly-untrusted issue signal must remain
+        # available to that closed ambiguity protocol.
+        mock_agentic_task.assert_called_once()
+        prompt = mock_agentic_task.call_args.kwargs["instruction"]
+        assert len(build_agentic_task_instruction(prompt)) <= _IDENTIFY_MODULES_MAX_CHARS
+        assert '"issue_signal"' in prompt
+        assert '"title":"Fix foo"' in prompt
+        assert "INTERFACE_TEXT" not in prompt
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync._filter_already_synced", return_value=[])
@@ -5597,8 +5605,8 @@ class TestIdentifyModulesPromptSize:
         mock_agentic_task.assert_called_once()
         prompt = mock_agentic_task.call_args.kwargs["instruction"]
         assert len(build_agentic_task_instruction(prompt)) <= _IDENTIFY_MODULES_MAX_CHARS
-        assert '"candidate_ids":["foo"]' in prompt
-        assert "WRAPPER_TITLE_TOKEN" not in prompt
+        assert '"candidate_ids":["pdd/foo"]' in prompt
+        assert "WRAPPER_TITLE_TOKEN" in prompt
         assert body not in prompt
 
     @_identify_fallback_patches
@@ -5692,9 +5700,9 @@ class TestIdentifyModulesPromptSize:
         prompt = mock_agentic_task.call_args.kwargs["instruction"]
         assert len(prompt) < _IDENTIFY_MODULES_MAX_CHARS
         # The title (signal) survives even though comments were trimmed.
-        assert "UNIQUE_TITLE_TOKEN" not in prompt
+        assert "UNIQUE_TITLE_TOKEN" in prompt
         assert huge_comment_body not in prompt
-        assert '"candidate_ids":["foo"]' in prompt
+        assert '"candidate_ids":["pdd/foo"]' in prompt
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync._filter_already_synced", return_value=[])
@@ -5827,8 +5835,16 @@ class TestPddChangedModulesFastPath:
                 "src/services/foo,, "
             ),
             architecture=[
-                {"filename": "foo_python.prompt", "dependencies": []},
-                {"filename": "page_python.prompt", "dependencies": []},
+                {
+                    "filename": "foo_python.prompt",
+                    "filepath": "src/services/foo",
+                    "dependencies": [],
+                },
+                {
+                    "filename": "page_python.prompt",
+                    "filepath": "frontend/app/dashboard/page",
+                    "dependencies": [],
+                },
             ],
             filter_synced=observed_modules,
         )
@@ -5910,12 +5926,14 @@ class TestPddChangedModulesFastPath:
         self, monkeypatch, tmp_path
     ):
         huge_body = "{}" * (_IDENTIFY_MODULES_MAX_CHARS + 10_000)
+        architecture_entry = _big_interface_entry("foo_python.prompt")
+        architecture_entry["filepath"] = "pdd/foo"
         result = self._run_with_env(
             monkeypatch,
             tmp_path,
             env_value="foo",
             issue_body=huge_body,
-            architecture=[_big_interface_entry("foo_python.prompt")],
+            architecture=[architecture_entry],
             filter_synced=["foo"],
         )
 
