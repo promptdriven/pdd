@@ -1640,6 +1640,7 @@ def _validate_retirement_history_representation(
 
 
 def _validate_schema_2_history_representation(
+    manifest: UnitManifest,
     protected_raw: bytes | None,
     candidate_raw: bytes | None,
     protected_rows: tuple[_RequirementTransitionAuthorization, ...],
@@ -1647,7 +1648,8 @@ def _validate_schema_2_history_representation(
 ) -> None:
     """Keep surviving schema-2 row tokens exact and ahead of new rows."""
     if (
-        protected_raw is not None
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and protected_raw is not None
         and candidate_raw is not None
         and (
             hashlib.sha256(protected_raw).hexdigest(),
@@ -1797,6 +1799,7 @@ def _validate_candidate_retirements(
     candidate_schema = _policy_schema_version(candidate_policy, "candidate")
     if protected_schema == 2 and candidate_schema == 2:
         _validate_schema_2_history_representation(
+            manifest,
             protected_policy,
             candidate_policy,
             protected_rows,
@@ -1894,8 +1897,9 @@ def _load_requirement_transition_authorizations(
     candidate = _active_requirement_transition_authorizations(
         candidate_rows, candidate_retirements, "candidate"
     )
+    is_pdd_repository = manifest.repository_id == _PDD_REPOSITORY_ID
     authority = set(protected)
-    if manifest.repository_id == _PDD_REPOSITORY_ID:
+    if is_pdd_repository:
         authority.update(_BOOTSTRAP_REQUIREMENT_TRANSITIONS)
     policies = (
         read_git_blob(root, manifest.base_ref, PROFILE_PATH),
@@ -1937,7 +1941,8 @@ def _load_requirement_transition_authorizations(
         candidate_policy,
     )
     legacy_pdd1989_reconciliation = (
-        protected_policy is not None
+        is_pdd_repository
+        and protected_policy is not None
         and candidate_policy is not None
         and policies[0] is not None
         and policies[1] is not None
@@ -1957,7 +1962,10 @@ def _load_requirement_transition_authorizations(
         item
         for item in candidate
         if item not in protected
-        and item not in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+        and not (
+            is_pdd_repository
+            and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+        )
     )
     if legacy_pdd1989_reconciliation:
         # The exact historical pair both installed and consumed its authority
@@ -1968,7 +1976,10 @@ def _load_requirement_transition_authorizations(
             if (
                 item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
                 and item not in protected
-                and item not in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+                and not (
+                    is_pdd_repository
+                    and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+                )
                 and policies[0] != policies[1]
                 and not legacy_pdd1989_reconciliation
             ):
@@ -1999,7 +2010,7 @@ def _load_requirement_transition_authorizations(
     for item in protected:
         if item in candidate_authority or legacy_pdd1989_reconciliation:
             continue
-        if any(
+        if is_pdd_repository and any(
             protected == item and replacement in candidate_authority
             for protected, replacement in _REPLAY_REQUIREMENT_REPLACEMENTS
         ):
