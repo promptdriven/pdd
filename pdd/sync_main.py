@@ -1235,6 +1235,7 @@ def sync_main(
                                 basename, resolved_language, "fix",
                                 pdd_files, one_session_result.get("total_cost", 0.0),
                                 one_session_result.get("model_name", "unknown") or pre_model or "unknown",
+                                remove_run_report=True,
                             )
 
                         # Post-sync: auto-submit example to cloud on success

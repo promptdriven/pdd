@@ -45,6 +45,20 @@ _LOCK_CONTEXT = threading.local()
 _MAX_STATE_BYTES = 8 * 1024 * 1024
 _MAX_JOURNAL_BYTES = 64 * 1024
 _COPY_CHUNK_BYTES = 1024 * 1024
+_RUN_REPORT_INVALIDATING_OPERATIONS = frozenset({
+    "auto-deps", "crash", "example", "fix", "generate", "metadata_sync", "update",
+})
+
+
+def operation_invalidates_run_report(operation: str) -> bool:
+    """Return whether this completed operation changes artifact evidence.
+
+    Verification and test operations can create or retain an authoritative run
+    report; merely publishing a fingerprint for them must never tombstone that
+    evidence. Mutation callers opt in through this explicit policy rather than
+    relying on the buffered transaction's incidental pending state.
+    """
+    return operation.strip().lower() in _RUN_REPORT_INVALIDATING_OPERATIONS
 
 
 @dataclass
@@ -927,22 +941,6 @@ class FingerprintTransaction:
                 if not callable(locker):
                     raise TypeError("atomic_state does not provide transaction locking")
                 locker(self.fingerprint_path.parent)
-                # Sync/pin paired mutations that did not create a replacement
-                # report must tombstone any stale report in this same durable
-                # transaction. A queued fresh report remains authoritative.
-                pending = getattr(self.atomic_state, "pending", None)
-                if (
-                    pending is not None
-                    and getattr(pending, "run_report", None) is None
-                    and not getattr(pending, "remove_run_report", False)
-                ):
-                    remover = getattr(self.atomic_state, "remove_run_report", None)
-                    if callable(remover):
-                        remover(
-                            self.fingerprint_path.with_name(
-                                f"{self.basename.replace('/', '_')}_{self.language}_run.json"
-                            )
-                        )
                 payload = self.payload()
                 try:
                     setter(payload, self.fingerprint_path, operation=self.operation)

@@ -932,6 +932,7 @@ def _run_metadata_sync_safe(
                 paths=paths,
                 cost=0.0,
                 model="metadata_sync",
+                remove_run_report=True,
             )
             fingerprint = read_fingerprint(basename, language, paths=paths)
             if (
