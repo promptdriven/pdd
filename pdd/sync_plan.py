@@ -25,6 +25,7 @@ PLAN_DIGEST_PREFIX = b"pdd.sync.plan.v1\n"
 SELECTION_DIGEST_PREFIX = b"pdd.sync.selection.v1\n"
 MODULE_ID_ENCODING = "pdd.module-id-list.v1"
 MAX_AMBIGUITY_CANDIDATES = 64
+MAX_SELECTED_MODULE_IDS = 64
 
 
 class SyncPlanError(ValueError):
@@ -55,6 +56,13 @@ def _canonical_json(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def plan_digest(plan_document: Mapping[str, Any]) -> str:
+    """Return the Wave 0 digest of a complete serialized SyncPlan document."""
+    return hashlib.sha256(
+        PLAN_DIGEST_PREFIX + _canonical_json(dict(plan_document))
+    ).hexdigest()
+
+
 def selection_digest(module_ids: Sequence[str]) -> str:
     """Return the Wave 0 selection digest for sorted canonical module IDs."""
     ids = list(module_ids)
@@ -67,6 +75,10 @@ def _require_canonical_ids(module_ids: Sequence[str], *, allow_empty: bool) -> N
         raise SyncPlanError("module IDs must not be empty")
     if list(module_ids) != sorted(module_ids) or len(module_ids) != len(set(module_ids)):
         raise SyncPlanError("module IDs must be sorted and unique")
+    if len(module_ids) > MAX_SELECTED_MODULE_IDS:
+        raise SyncPlanError(
+            f"module ID list exceeds the V1 limit of {MAX_SELECTED_MODULE_IDS}"
+        )
     for module_id in module_ids:
         if not isinstance(module_id, str) or MODULE_ID_RE.fullmatch(module_id) is None:
             raise SyncPlanError(f"module ID is not canonical: {module_id!r}")
@@ -275,9 +287,7 @@ class SyncPlan:
             canonical_module_id(self.root, candidate.unit)
             for path in (*candidate.prompt_paths, *candidate.output_paths):
                 _root_relative(self.root, path)
-        expected_plan_digest = hashlib.sha256(
-            PLAN_DIGEST_PREFIX + _canonical_json(self.to_dict())
-        ).hexdigest()
+        expected_plan_digest = plan_digest(self.to_dict())
         if self.sync_plan_digest != expected_plan_digest:
             raise SyncPlanError("frozen SyncPlan digest mismatch")
         if self.selection_digest != selection_digest(self.selected_module_ids):
@@ -371,20 +381,35 @@ def build_sync_plan(
     if not set(selected) <= set(candidate_by_id):
         extras = sorted(set(selected) - set(candidate_by_id))
         raise SyncPlanError(f"selected targets are not frozen candidates: {extras}")
-    dependency_graph = {
-        candidate.module_id: tuple(
-            dependency for dependency in candidate.dependencies if dependency in candidate_by_id
-        )
-        for candidate in candidate_tuple
-    }
+    dependency_graph: dict[str, tuple[str, ...]] = {}
+    for candidate in candidate_tuple:
+        missing = sorted(set(candidate.dependencies) - set(candidate_by_id))
+        if missing:
+            raise SyncPlanError(
+                f"candidate '{candidate.module_id}' has missing dependency IDs: "
+                + ", ".join(missing)
+            )
+        dependency_graph[candidate.module_id] = tuple(sorted(candidate.dependencies))
+
+    # A selected module is not runnable without every declared dependency.
+    # Close transitively before deriving SCCs and ordering so the runner and
+    # evidence cannot silently disagree about an omitted edge.
+    selected_set = set(selected)
+    pending = list(selected)
+    while pending:
+        module_id = pending.pop()
+        for dependency in dependency_graph[module_id]:
+            if dependency not in selected_set:
+                selected_set.add(dependency)
+                pending.append(dependency)
+    selected = tuple(sorted(selected_set))
+    _require_canonical_ids(selected, allow_empty=True)
     order = _dependency_order(selected, dependency_graph)
     sccs = _stable_scc_order(selected, dependency_graph)
     provisional = SyncPlan(
         root, candidate_tuple, selected, order, sccs, "", selection_digest(selected)
     )
-    digest = hashlib.sha256(
-        PLAN_DIGEST_PREFIX + _canonical_json(provisional.to_dict())
-    ).hexdigest()
+    digest = plan_digest(provisional.to_dict())
     plan = SyncPlan(
         root, candidate_tuple, selected, order, sccs, digest,
         provisional.selection_digest,
@@ -479,3 +504,93 @@ def validate_explicit_scope(plan: SyncPlan, scope: Mapping[str, Any]) -> tuple[s
     if not set(module_ids) <= frozen:
         raise SyncPlanError("explicit scope contains stale or extra module IDs")
     return tuple(module_ids)
+
+
+def parse_explicit_scope(raw_scope: str) -> dict[str, object]:
+    """Parse the closed fallback JSON object before an execution write exists."""
+    try:
+        scope = json.loads(raw_scope)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise SyncPlanError("PDD_EXPLICIT_SYNC_SCOPE_V1 must be valid JSON") from exc
+    if not isinstance(scope, dict):
+        raise SyncPlanError("PDD_EXPLICIT_SYNC_SCOPE_V1 must be a JSON object")
+    required = {
+        "module_id_encoding", "module_ids", "sync_plan_digest", "selection_digest"
+    }
+    if set(scope) != required:
+        raise SyncPlanError("PDD_EXPLICIT_SYNC_SCOPE_V1 must contain exactly V1 fields")
+    if not all(isinstance(scope[field], str) for field in (
+        "module_id_encoding", "sync_plan_digest", "selection_digest"
+    )):
+        raise SyncPlanError("PDD_EXPLICIT_SYNC_SCOPE_V1 contains non-string metadata")
+    if not isinstance(scope["module_ids"], list):
+        raise SyncPlanError("PDD_EXPLICIT_SYNC_SCOPE_V1 module_ids must be a list")
+    return scope
+
+
+def validate_explicit_scope_evidence(
+    scope: Mapping[str, Any], evidence: Mapping[str, Any]
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Validate a fallback scope against persisted primary-plan evidence.
+
+    Unlike :func:`validate_explicit_scope`, this function deliberately consumes
+    the durable serialized primary plan.  A fallback checkout has no authority
+    to rediscover candidates from its diff or architecture state.
+    """
+    required_evidence = {
+        "schema_version", "module_id_encoding", "selected_module_ids",
+        "sync_plan_digest", "selection_digest", "sync_plan",
+    }
+    if set(evidence) != required_evidence:
+        raise SyncPlanError("frozen scope evidence has an invalid V1 shape")
+    plan = evidence["sync_plan"]
+    if not isinstance(plan, dict):
+        raise SyncPlanError("frozen scope evidence has no serialized SyncPlan")
+    if evidence["sync_plan_digest"] != plan_digest(plan):
+        raise SyncPlanError("persisted SyncPlan digest mismatch")
+    module_ids = validate_explicit_scope(
+        _plan_view_from_evidence(plan, evidence), scope
+    )
+    if evidence["module_id_encoding"] != MODULE_ID_ENCODING:
+        raise SyncPlanError("persisted scope evidence has an unsupported ID encoding")
+    return plan, module_ids
+
+
+def _plan_view_from_evidence(plan: Mapping[str, Any], evidence: Mapping[str, Any]) -> SyncPlan:
+    """Create a minimal immutable view used only by explicit-scope validation."""
+    candidates = plan.get("candidates")
+    if not isinstance(candidates, list):
+        raise SyncPlanError("persisted SyncPlan candidates are missing")
+    candidate_ids = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or not isinstance(candidate.get("module_id"), str):
+            raise SyncPlanError("persisted SyncPlan has malformed candidate IDs")
+        candidate_ids.append(candidate["module_id"])
+    _require_canonical_ids(sorted(candidate_ids), allow_empty=True)
+    # Explicit validation only calls candidate membership/digests; dummy units
+    # avoid rediscovery from a potentially changed fallback checkout.
+    root = Path.cwd()
+    synthetic = tuple(
+        SyncPlanCandidate(
+            module_id=module_id,
+            unit=ResolvedSyncUnit(
+                key=module_id, target_basename=module_id, cwd=root,
+                pddrc_path=None, context=None, prompts_dir=root,
+            ),
+        )
+        for module_id in sorted(candidate_ids)
+    )
+    selected = evidence.get("selected_module_ids")
+    if not isinstance(selected, list):
+        raise SyncPlanError("persisted scope evidence has no primary selection")
+    selected_tuple = tuple(selected)
+    _require_canonical_ids(selected_tuple, allow_empty=True)
+    return SyncPlan(
+        root=root,
+        candidates=synthetic,
+        selected_module_ids=selected_tuple,
+        dependency_order=selected_tuple,
+        sccs=tuple((module_id,) for module_id in selected_tuple),
+        sync_plan_digest=str(evidence["sync_plan_digest"]),
+        selection_digest=str(evidence["selection_digest"]),
+    )

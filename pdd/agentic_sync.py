@@ -71,6 +71,8 @@ from .sync_plan import (
     SyncPlanError,
     build_sync_plan,
     canonical_module_id,
+    parse_explicit_scope,
+    validate_explicit_scope_evidence,
 )
 from .sync_determine_operation import sync_determine_operation
 from .sync_main import _detect_languages_with_context
@@ -2404,6 +2406,17 @@ def _filter_already_synced(
     return needs_sync
 
 
+def _path_is_within_root(path: Optional[Path], root: Path) -> bool:
+    """Return whether a resolved advisory path is safely inside ``root``."""
+    if path is None:
+        return False
+    try:
+        Path(path).resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def _freeze_issue_sync_plan(
     project_root: Path,
     modules: List[str],
@@ -2449,6 +2462,15 @@ def _freeze_issue_sync_plan(
                 module_id=module_id,
                 unit=unit,
                 prompt_paths=prompt_paths,
+                output_paths=tuple(
+                    path
+                    for path in (
+                        unit.generate_output_path,
+                        unit.test_output_path,
+                        unit.meta_path,
+                    )
+                    if _path_is_within_root(path, project_root)
+                ),
                 details=SyncPlanDetails(
                     changed_reason="selected for issue sync",
                     expected_operation="generate",
@@ -2459,11 +2481,11 @@ def _freeze_issue_sync_plan(
         )
 
     candidates_with_deps: List[SyncPlanCandidate] = []
+    scheduler_key_by_id = {
+        module_id: key for key, module_id in ids_by_scheduler_key.items()
+    }
     for candidate in candidates:
-        scheduler_key = next(
-            key for key, module_id in ids_by_scheduler_key.items()
-            if module_id == candidate.module_id
-        )
+        scheduler_key = scheduler_key_by_id[candidate.module_id]
         dependencies = tuple(
             sorted(
                 ids_by_scheduler_key[dependency]
@@ -2486,6 +2508,165 @@ def _freeze_issue_sync_plan(
         candidates_with_deps,
         [ids_by_scheduler_key[key] for key in modules],
     )
+
+
+def _load_fallback_scope_execution(
+    project_root: Path,
+) -> tuple[dict[str, Any], tuple[str, ...], dict[str, Path], dict[str, str], dict[str, Optional[str]], str]:
+    """Load and verify the primary plan required by fallback_payload_v1 mode."""
+    if os.environ.get("PDD_CHANGED_MODULES"):
+        raise SyncPlanError(
+            "PDD_CHANGED_MODULES is forbidden with PDD_SYNC_SCOPE_SOURCE=fallback_payload_v1"
+        )
+    raw_scope = os.environ.get("PDD_EXPLICIT_SYNC_SCOPE_V1")
+    if not raw_scope:
+        raise SyncPlanError(
+            "PDD_EXPLICIT_SYNC_SCOPE_V1 is required for fallback_payload_v1"
+        )
+    scope = parse_explicit_scope(raw_scope)
+    digest = scope["sync_plan_digest"]
+    assert isinstance(digest, str)
+    evidence_path = project_root / ".pdd" / "evidence" / "sync-plans" / f"{digest}.json"
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SyncPlanError(
+            f"frozen primary SyncPlan evidence is unavailable for digest {digest}"
+        ) from exc
+    plan, selected = validate_explicit_scope_evidence(scope, evidence)
+    candidates = plan.get("candidates")
+    if not isinstance(candidates, list):
+        raise SyncPlanError("persisted primary SyncPlan has no candidates")
+    by_id = {
+        candidate.get("module_id"): candidate
+        for candidate in candidates
+        if isinstance(candidate, dict) and isinstance(candidate.get("module_id"), str)
+    }
+    module_cwds: dict[str, Path] = {}
+    module_targets: dict[str, str] = {}
+    module_contexts: dict[str, Optional[str]] = {}
+    for module_id in selected:
+        candidate = by_id.get(module_id)
+        if candidate is None:
+            raise SyncPlanError(f"fallback module {module_id!r} is not a frozen candidate")
+        root_label = candidate.get("governing_root")
+        target = candidate.get("target_basename")
+        if not isinstance(root_label, str) or not isinstance(target, str):
+            raise SyncPlanError(f"frozen candidate {module_id!r} lacks execution identity")
+        cwd = (project_root / root_label).resolve()
+        try:
+            cwd.relative_to(project_root.resolve())
+        except ValueError as exc:
+            raise SyncPlanError(f"frozen candidate {module_id!r} escapes project root") from exc
+        module_cwds[module_id] = cwd
+        module_targets[module_id] = target
+        context = candidate.get("context")
+        module_contexts[module_id] = context if isinstance(context, str) else None
+    return plan, selected, module_cwds, module_targets, module_contexts, raw_scope
+
+
+def _run_fallback_scope_sync(
+    *,
+    project_root: Path,
+    owner: str,
+    repo: str,
+    issue_number: int,
+    issue_url: str,
+    verbose: bool,
+    quiet: bool,
+    budget: Optional[float],
+    skip_verify: bool,
+    skip_tests: bool,
+    dry_run: bool,
+    agentic_mode: bool,
+    no_steer: bool,
+    max_attempts: Optional[int],
+    timeout_adder: float,
+    use_github_state: bool,
+    durable: bool,
+    durable_branch: Optional[str],
+    no_resume: bool,
+    durable_max_parallel: Optional[int],
+    strength: Optional[float],
+    temperature: Optional[float],
+    compressed_context: bool,
+    local: bool,
+) -> tuple[bool, str, float, str]:
+    """Run only the cryptographically bound failed-module fallback scope."""
+    try:
+        plan, selected, module_cwds, module_targets, module_contexts, raw_scope = (
+            _load_fallback_scope_execution(project_root)
+        )
+    except SyncPlanError as exc:
+        return False, f"Fallback SyncPlan validation failed before writes: {exc}", 0.0, ""
+    if dry_run:
+        return (
+            True,
+            f"Fallback dry run complete: {len(selected)} frozen module(s) would sync: "
+            + ", ".join(selected),
+            0.0,
+            "",
+        )
+    selected_set = set(selected)
+    candidate_by_id = {candidate["module_id"]: candidate for candidate in plan["candidates"]}
+    dep_graph = {
+        module_id: [
+            dependency for dependency in candidate_by_id[module_id].get("dependencies", [])
+            if dependency in selected_set
+        ]
+        for module_id in selected
+    }
+    order = [module_id for module_id in plan.get("dependency_order", []) if module_id in selected_set]
+    order.extend(module_id for module_id in selected if module_id not in order)
+    sync_options = {
+        "total_budget": budget,
+        "skip_verify": skip_verify,
+        "skip_tests": skip_tests,
+        "agentic": agentic_mode,
+        "no_steer": no_steer,
+        "max_attempts": max_attempts,
+        "timeout_adder": timeout_adder,
+        "strength": strength,
+        "temperature": temperature,
+        "compressed_context": compressed_context,
+        "local": local,
+        "sync_plan": plan,
+        "sync_plan_digest": plan and parse_explicit_scope(raw_scope)["sync_plan_digest"],
+        "selection_digest": parse_explicit_scope(raw_scope)["selection_digest"],
+        "execution_selected_module_ids": list(selected),
+        "execution_dependency_order": order,
+        "explicit_sync_scope": raw_scope,
+    }
+    github_info = {
+        "owner": owner, "repo": repo, "issue_number": issue_number,
+        "cwd": project_root,
+    } if use_github_state else None
+    runner_args = dict(
+        basenames=order,
+        dep_graph=dep_graph,
+        sync_options=sync_options,
+        github_info=github_info,
+        quiet=quiet,
+        verbose=verbose,
+        issue_url=issue_url,
+        module_cwds=module_cwds,
+        module_targets=module_targets,
+        module_contexts=module_contexts,
+        initial_cost=0.0,
+    )
+    if durable:
+        runner = DurableSyncRunner(
+            **runner_args,
+            issue_number=issue_number,
+            project_root=project_root,
+            durable_branch=durable_branch,
+            no_resume=no_resume,
+            durable_max_parallel=durable_max_parallel,
+        )
+    else:
+        runner = AsyncSyncRunner(**runner_args)
+    success, message, cost = runner.run()
+    return success, message, cost, ""
 
 
 def _parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict[str, Any]]]:
@@ -2889,15 +3070,54 @@ def run_agentic_sync(
         _build_identify_issue_content(title, body, filtered_comments)
     )
 
-    # 6. Find project root and load architecture.json
+    # 6. Resolve the fallback payload before any diff, architecture, or LLM
+    # scope source can run.  It is an exclusive, Cloud-bound retry scope.
     project_root = _find_project_root(Path.cwd())
+    scope_source = os.environ.get("PDD_SYNC_SCOPE_SOURCE")
+    if scope_source == "fallback_payload_v1":
+        return _run_fallback_scope_sync(
+            project_root=project_root,
+            owner=owner,
+            repo=repo,
+            issue_number=issue_number,
+            issue_url=issue_url,
+            verbose=verbose,
+            quiet=quiet,
+            budget=budget,
+            skip_verify=skip_verify,
+            skip_tests=skip_tests,
+            dry_run=dry_run,
+            agentic_mode=agentic_mode,
+            no_steer=no_steer,
+            max_attempts=max_attempts,
+            timeout_adder=timeout_adder,
+            use_github_state=use_github_state,
+            durable=durable,
+            durable_branch=durable_branch,
+            no_resume=no_resume,
+            durable_max_parallel=durable_max_parallel,
+            strength=strength,
+            temperature=temperature,
+            compressed_context=compressed_context,
+            local=local,
+        )
+    if scope_source:
+        return (
+            False,
+            f"Unsupported PDD_SYNC_SCOPE_SOURCE: {scope_source}",
+            0.0,
+            "",
+        )
+
+    # 7. Load architecture only for normal scope planning.
     architecture, arch_path = _load_architecture_json(project_root, issue_number=issue_number)
 
     if architecture is None:
         if not quiet:
             console.print("[yellow]No architecture.json found, falling back to include-based dependency graph[/yellow]")
 
-    # 7. Try git diff-based module detection first (deterministic, free)
+    # 8. Establish normal deterministic scope in precedence order.  An
+    # authoritative caller scope wins over local branch-diff heuristics.
     branch_modules = _detect_modules_from_branch_diff(project_root)
     llm_cost = 0.0
     provider = ""
@@ -2906,7 +3126,18 @@ def run_agentic_sync(
     changed_modules_env_used = False
     changed_modules_env_modules: List[str] = []
 
-    if branch_modules:
+    changed_modules_env_modules = _parse_changed_modules_env(
+        os.environ.get("PDD_CHANGED_MODULES", "")
+    )
+    if changed_modules_env_modules:
+        changed_modules_env_used = True
+        modules_to_sync = changed_modules_env_modules
+        if not quiet:
+            console.print(
+                "[green]Using PDD_CHANGED_MODULES for module identification: "
+                f"{modules_to_sync}[/green]"
+            )
+    elif branch_modules:
         if not quiet:
             console.print(f"[green]Detected modules from branch diff: {branch_modules}[/green]")
         modules_to_sync = branch_modules
@@ -2926,19 +3157,7 @@ def run_agentic_sync(
             console.print(f"[green]{msg}[/green]")
         return True, msg, llm_cost, provider
     else:
-        changed_modules_env_modules = _parse_changed_modules_env(
-            os.environ.get("PDD_CHANGED_MODULES", "")
-        )
-        if changed_modules_env_modules:
-            changed_modules_env_used = True
-            modules_to_sync = changed_modules_env_modules
-            if not quiet:
-                console.print(
-                    "[green]Using PDD_CHANGED_MODULES for module identification: "
-                    f"{modules_to_sync}[/green]"
-                )
-        else:
-            # 7b. Fall back to LLM-based module identification
+            # 8b. No deterministic source supplied a candidate set.
             prompt_template = load_prompt_template("agentic_sync_identify_modules_LLM")
             if not prompt_template:
                 return False, "Failed to load agentic_sync_identify_modules_LLM prompt template", 0.0, ""

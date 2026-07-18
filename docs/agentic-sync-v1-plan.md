@@ -4,12 +4,18 @@
 child runner permission to generate files. Module IDs are canonical,
 slash-qualified paths. A legacy basename is accepted only where it maps to one
 candidate; an ambiguous basename is rejected with its path-qualified choices.
+The runner consumes the frozen selected IDs and dependency order as its schedule
+and writes a narrow `pdd.sync.scope-evidence.v1` artifact under
+`.pdd/evidence/sync-plans/`. This is plan evidence for a later result-envelope
+builder; it is not itself a `pdd.sync.result.v1` result envelope.
 
 Selection precedence is deterministic:
 
-1. An explicit fallback scope (`PDD_EXPLICIT_SYNC_SCOPE_V1`) is checked against
-   the frozen primary candidate set and both Wave 0 digests.
-2. `PDD_CHANGED_MODULES` supplies explicit candidates, after canonical alias
+1. `PDD_SYNC_SCOPE_SOURCE=fallback_payload_v1` is exclusive. It requires the
+   closed `PDD_EXPLICIT_SYNC_SCOPE_V1` object and rejects a present
+   `PDD_CHANGED_MODULES`; PDD loads the primary evidence by plan digest and
+   never rediscovers fallback scope from a diff or architecture file.
+2. `PDD_CHANGED_MODULES` supplies authoritative normal candidates, after alias
    resolution.
 3. Changed prompt paths from the branch diff supply path-aware candidates.
 4. Architecture entries supply prompt/output paths and dependency edges.
@@ -21,6 +27,10 @@ Selection precedence is deterministic:
    select only those IDs.
 
 The plan records governing root/context, prompt and output paths, reason,
-operation, dependency/SCC order, confidence, and provenance. Its plan digest
-is SHA-256 of `pdd.sync.plan.v1\n` plus canonical JSON; its selection digest is
-SHA-256 of `pdd.sync.selection.v1\n` plus the canonical sorted module-ID array.
+operation, dependency/SCC order, confidence, and provenance. Required
+dependencies are retained transitively; a candidate edge outside the frozen set
+is an error, not an omitted scheduling hint. Both normal and fallback lists are
+limited to 64 IDs. Its plan digest is SHA-256 of `pdd.sync.plan.v1\n` plus
+canonical JSON; its selection digest is SHA-256 of `pdd.sync.selection.v1\n`
+plus the canonical sorted module-ID array. Fallback children receive only the
+validated explicit scope and do not inherit ambient changed-module selection.

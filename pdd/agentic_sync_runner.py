@@ -39,6 +39,7 @@ from .construct_paths import (
     _load_pddrc_config,
 )
 from .resolved_sync_unit import ResolvedSyncUnit
+from .json_atomic import atomic_write_json
 from .sync_order import compute_sccs
 
 console = Console()
@@ -1193,6 +1194,7 @@ class AsyncSyncRunner:
             b: list(dep_graph.get(b, [])) for b in self.basenames
         }
         self.sync_options: Dict[str, Any] = dict(sync_options or {})
+        self._scope_evidence = self._consume_frozen_scope()
         self.github_info = github_info
         self.quiet = quiet
         self.verbose = verbose
@@ -1257,6 +1259,65 @@ class AsyncSyncRunner:
         # Modules whose state was restored to "success" from disk
         self._resumed_modules: List[str] = []
         self._load_state()
+
+    def _consume_frozen_scope(self) -> Optional[Dict[str, Any]]:
+        """Make a frozen V1 plan authoritative for scheduling and child scope."""
+        plan = self.sync_options.get("sync_plan")
+        if plan is None:
+            return None
+        if not isinstance(plan, dict):
+            raise ValueError("sync_plan evidence must be a mapping")
+        selected = self.sync_options.get(
+            "execution_selected_module_ids", plan.get("selected_module_ids")
+        )
+        order = self.sync_options.get(
+            "execution_dependency_order", plan.get("dependency_order")
+        )
+        candidates = plan.get("candidates")
+        if not all(isinstance(value, list) for value in (selected, order, candidates)):
+            raise ValueError("sync_plan evidence is missing V1 selection/order/candidates")
+        if selected != sorted(selected) or len(selected) != len(set(selected)):
+            raise ValueError("sync_plan selected IDs must be sorted and unique")
+        if set(order) != set(selected) or len(order) != len(selected):
+            raise ValueError("sync_plan order must exactly cover selected IDs")
+        candidate_by_id = {
+            candidate.get("module_id"): candidate
+            for candidate in candidates
+            if isinstance(candidate, dict) and isinstance(candidate.get("module_id"), str)
+        }
+        if len(candidate_by_id) != len(candidates) or not set(selected) <= set(candidate_by_id):
+            raise ValueError("sync_plan selected IDs are not frozen candidates")
+        plan_graph = {
+            module_id: [
+                dependency
+                for dependency in candidate_by_id[module_id].get("dependencies", [])
+                if dependency in selected
+            ]
+            for module_id in order
+        }
+        if any(not set(deps) <= set(selected) for deps in plan_graph.values()):
+            raise ValueError("sync_plan runner graph contains a non-selected dependency")
+        # Do not retain caller-selected scheduler data after a plan is frozen.
+        self.basenames = list(order)
+        self.dep_graph = plan_graph
+        return {
+            "schema_version": "pdd.sync.scope-evidence.v1",
+            "module_id_encoding": plan.get("module_id_encoding"),
+            "selected_module_ids": list(selected),
+            "sync_plan_digest": self.sync_options.get("sync_plan_digest"),
+            "selection_digest": self.sync_options.get("selection_digest"),
+            "sync_plan": plan,
+        }
+
+    def _persist_scope_evidence(self) -> None:
+        """Persist only frozen plan evidence for the later result-envelope handoff."""
+        if self._scope_evidence is None:
+            return
+        digest = self._scope_evidence["sync_plan_digest"]
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise ValueError("frozen scope evidence has no V1 SyncPlan digest")
+        path = self.project_root / ".pdd" / "evidence" / "sync-plans" / f"{digest}.json"
+        atomic_write_json(path, self._scope_evidence)
 
     # ------------------------------------------------------------------
     # State persistence
@@ -1995,6 +2056,7 @@ class AsyncSyncRunner:
     # ------------------------------------------------------------------
     def run(self) -> Tuple[bool, str, float]:
         """Run all syncs respecting dependencies."""
+        self._persist_scope_evidence()
         if not self.basenames:
             return True, "No modules to sync", self.initial_cost
 
@@ -2401,6 +2463,15 @@ class AsyncSyncRunner:
         env["PDD_AUTO_UPDATE"] = "false"
         env["TERM"] = "dumb"
         env["PYTHONUNBUFFERED"] = "1"
+        explicit_scope = self.sync_options.get("explicit_sync_scope")
+        if explicit_scope is not None:
+            env.pop("PDD_CHANGED_MODULES", None)
+            env["PDD_SYNC_SCOPE_SOURCE"] = "fallback_payload_v1"
+            env["PDD_EXPLICIT_SYNC_SCOPE_V1"] = str(explicit_scope)
+        else:
+            # A normal child must not accidentally inherit a stale fallback scope.
+            env.pop("PDD_SYNC_SCOPE_SOURCE", None)
+            env.pop("PDD_EXPLICIT_SYNC_SCOPE_V1", None)
         if repair_directive:
             env["PDD_REPAIR_DIRECTIVE"] = repair_directive
         else:

@@ -7694,6 +7694,27 @@
     }
   },
   {
+    "reason": "Freezes the canonical Agentic Sync V1 candidate set, validates fallback payload scope, and produces deterministic plan/selection digests.",
+    "description": "Pure path-aware planning model for agentic sync. It records resolved prompt/output paths, governing context, operation/provenance, dependency closure and SCC order; limits V1 scope lists to 64 canonical IDs; validates closed fallback payload JSON against durable primary plan evidence; and never performs provider, subprocess, or filesystem writes.",
+    "dependencies": [
+      "resolved_sync_unit_python.prompt"
+    ],
+    "priority": 215,
+    "filename": "sync_plan_python.prompt",
+    "filepath": "pdd/sync_plan.py",
+    "tags": ["sync", "agentic", "evidence", "python"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {"name": "build_sync_plan", "signature": "(root: Path, candidates: Iterable[SyncPlanCandidate], selected_module_ids: Iterable[str]) -> SyncPlan", "returns": "SyncPlan"},
+          {"name": "validate_explicit_scope_evidence", "signature": "(scope: Mapping[str, Any], evidence: Mapping[str, Any]) -> tuple[dict[str, object], tuple[str, ...]]", "returns": "tuple[dict[str, object], tuple[str, ...]]"}
+        ]
+      }
+    },
+    "position": {"x": 15400, "y": 2300}
+  },
+  {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
     "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync consumes a cloud-owned provider-failure capability before children inherit it, transports trusted provider state through private token-authenticated channels from pinned PDD validation children, and never promotes marker-shaped stdout. It uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
     "dependencies": [
@@ -7701,7 +7722,8 @@
       "auto_deps_main_python.prompt",
       "agentic_sync_runner_python.prompt",
       "durable_sync_runner_python.prompt",
-      "resolved_sync_unit_python.prompt"
+      "resolved_sync_unit_python.prompt",
+      "sync_plan_python.prompt"
     ],
     "priority": 215,
     "filename": "agentic_sync_python.prompt",
@@ -7756,7 +7778,8 @@
       "agentic_langtest_python.prompt",
       "agentic_test_orchestrator_python.prompt",
       "sync_order_python.prompt",
-      "resolved_sync_unit_python.prompt"
+      "resolved_sync_unit_python.prompt",
+      "sync_plan_python.prompt"
     ],
     "priority": 216,
     "filename": "agentic_sync_runner_python.prompt",
