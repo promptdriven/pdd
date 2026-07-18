@@ -2204,12 +2204,14 @@ class TestIsCodeChanged:
         mock_fp.code_hash = current_hash
         mock_fp.include_deps = {}
 
-        with patch("pdd.update_main.read_fingerprint", return_value=mock_fp):
+        with patch("pdd.update_main.read_fingerprint", return_value=mock_fp), \
+             patch("pdd.update_main.calculate_sha256", wraps=calculate_sha256) as hash_fn:
             changed, reason = is_code_changed(
                 str(code_file), str(tmp_path), set()
             )
         assert changed is False
         assert "matches" in reason
+        hash_fn.assert_called_once_with(code_file, tmp_path)
 
     def test_fingerprint_code_hash_differs(self, tmp_path):
         """Fingerprint with different code hash -> changed=True."""
@@ -2242,12 +2244,17 @@ class TestIsCodeChanged:
         mock_fp.code_hash = current_hash
         mock_fp.include_deps = {str(dep_file): "old_hash_of_preamble"}
 
-        with patch("pdd.update_main.read_fingerprint", return_value=mock_fp):
+        with patch("pdd.update_main.read_fingerprint", return_value=mock_fp), \
+             patch("pdd.update_main.calculate_sha256", wraps=calculate_sha256) as hash_fn:
             changed, reason = is_code_changed(
                 str(code_file), str(tmp_path), set()
             )
         assert changed is True
         assert "include dependency changed" in reason
+        assert [hash_call.args for hash_call in hash_fn.call_args_list] == [
+            (code_file, tmp_path),
+            (dep_file, tmp_path),
+        ]
 
     def test_uses_prompt_file_path_for_identity(self, tmp_path):
         """When prompt_file_path is provided, uses infer_module_identity."""
