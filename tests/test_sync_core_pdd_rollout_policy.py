@@ -359,8 +359,8 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
     }
 
 
-def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
-    """Only exact current-main or #1989 bootstrap bindings reach the policy."""
+def test_committed_rotations_equal_exact_protected_authority() -> None:
+    """Only exact consumed bootstrap or dormant #2200 bindings reach policy."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = policy["requirement_rotations"]
     bootstrap_rows = {
@@ -372,6 +372,9 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
     assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 23
+    story_identity = (STORY_REGRESSION_DORMANT_ROTATION["prompt_path"], "python")
+    assert bootstrap_rows[story_identity] != STORY_REGRESSION_DORMANT_ROTATION
+    bootstrap_rows[story_identity] = STORY_REGRESSION_DORMANT_ROTATION
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
@@ -409,7 +412,7 @@ def test_committed_rotations_equal_exact_bootstrap_authority() -> None:
         if row["head_policy_sha256"]
         == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
     ]
-    assert len(pr1790_rows) == 8
+    assert len(pr1790_rows) == 7
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
     head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
     assert base_policy_digest == (
