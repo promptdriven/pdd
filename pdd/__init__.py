@@ -1,5 +1,6 @@
 """PDD - Prompt Driven Development"""
 
+from importlib import import_module as _import_module
 from importlib.metadata import PackageNotFoundError, version as _metadata_version
 import os
 import subprocess
@@ -107,26 +108,95 @@ def _setup_cloud_defaults() -> None:
         os.environ["GITHUB_CLIENT_ID"] = _DEFAULT_GITHUB_CLIENT_ID
 
 
-# Initialize cloud defaults on package import
+# Initialize cloud defaults on package import.
 _setup_cloud_defaults()
-from .agentic_common import get_agent_provider_preference, get_job_deadline, Pricing, get_available_agents, run_agentic_task, select_harness_for_task, TaskClass, TASK_CLASS_SINGLE_FILE, TASK_CLASS_MULTI_FILE, TASK_CLASS_REPO_SCALE, TASK_CLASS_HIGH_ISOLATION, github_save_state, github_load_state, github_clear_state, validate_cached_state, load_workflow_state, save_workflow_state, clear_workflow_state, post_step_comment, substitute_template_variables, post_pr_comment, post_final_comment, _extract_step_report, _sanitize_comment_body
-from .routing_policy import RoutingConfig, EscalationStep, RoutingPolicyRow, RoutingPolicy, RoutingRecord, default_policy, load_policy, select_config, escalate, resolve_model_for_tier, emit_routing_record
-from .agentic_test_orchestrator import run_agentic_test_orchestrator
-from .architecture_sync_helper import filepath_to_prompt_filename
-from .agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
-from .ci_validation import detect_ci_system, post_ci_failure_comment, run_ci_validation_loop
-from .agentic_e2e_fix import run_agentic_e2e_fix
-from .agentic_bug_orchestrator import run_agentic_bug_orchestrator
-from .agentic_update import run_agentic_update
-from .update_main import resolve_prompt_code_pair, find_and_resolve_all_pairs, get_git_changed_files, derive_basename_and_language, is_code_changed, update_file_pair, update_main
-from .ci_drift_heal import DriftInfo, HealResult, detect_drift, heal_module, commit_and_push, main
-from .agentic_change_orchestrator import run_agentic_change_orchestrator
-from .agentic_common_worktree import get_git_root, worktree_exists, branch_exists, remove_worktree, delete_branch, resolve_main_ref, setup_worktree, get_modified_and_untracked, check_target_file_unchanged, revert_out_of_scope_changes_with_dirs, extract_block_marker
-from .get_lint_commands import LintCommand, get_lint_commands
-from .split_main import split_main
-from .split_validation import ValidationFailure, ValidationResult, validate_extraction
-from .agentic_split_orchestrator import run_agentic_split_orchestrator, Diagnosis, ModuleInvestigation, TestOwnership, PromptMetadata, Child, ParentChanges, SplitPlan, SplitOption, OptionsConsidered, QualitativeAssessment
-from .agentic_split import run_agentic_split
-from .ci_detect_changed_modules import main
-from .agentic_architecture_orchestrator import load_workflow_state, save_workflow_state, clear_workflow_state, run_agentic_architecture_orchestrator
-from .agentic_multishot import run_multishot_candidates, MultishotResult, MultishotCandidateRecord
+
+# Keep the historical package-level API without importing the entire CLI and LLM
+# stack for every ``import pdd``.  This matters especially for short-lived CLI
+# subprocesses: Python imports the package before executing ``pdd.__main__``.
+_LAZY_EXPORTS = {
+    **{name: "agentic_common" for name in (
+        "get_agent_provider_preference", "get_job_deadline", "Pricing",
+        "get_available_agents", "run_agentic_task", "select_harness_for_task",
+        "TaskClass", "TASK_CLASS_SINGLE_FILE", "TASK_CLASS_MULTI_FILE",
+        "TASK_CLASS_REPO_SCALE", "TASK_CLASS_HIGH_ISOLATION", "github_save_state",
+        "github_load_state", "github_clear_state", "validate_cached_state",
+        "post_step_comment", "substitute_template_variables", "post_pr_comment",
+        "post_final_comment", "_extract_step_report", "_sanitize_comment_body",
+    )},
+    **{name: "routing_policy" for name in (
+        "RoutingConfig", "EscalationStep", "RoutingPolicyRow", "RoutingPolicy",
+        "RoutingRecord", "default_policy", "load_policy", "select_config",
+        "escalate", "resolve_model_for_tier", "emit_routing_record",
+    )},
+    "run_agentic_test_orchestrator": "agentic_test_orchestrator",
+    "filepath_to_prompt_filename": "architecture_sync_helper",
+    "run_agentic_e2e_fix_orchestrator": "agentic_e2e_fix_orchestrator",
+    **{name: "ci_validation" for name in (
+        "detect_ci_system", "post_ci_failure_comment", "run_ci_validation_loop",
+    )},
+    "run_agentic_e2e_fix": "agentic_e2e_fix",
+    "run_agentic_bug_orchestrator": "agentic_bug_orchestrator",
+    "run_agentic_update": "agentic_update",
+    **{name: "update_main" for name in (
+        "resolve_prompt_code_pair", "find_and_resolve_all_pairs",
+        "get_git_changed_files", "derive_basename_and_language", "is_code_changed",
+        "update_file_pair", "update_main",
+    )},
+    **{name: "ci_drift_heal" for name in (
+        "DriftInfo", "HealResult", "detect_drift", "heal_module", "commit_and_push",
+    )},
+    "run_agentic_change_orchestrator": "agentic_change_orchestrator",
+    **{name: "agentic_common_worktree" for name in (
+        "get_git_root", "worktree_exists", "branch_exists", "remove_worktree",
+        "delete_branch", "resolve_main_ref", "setup_worktree",
+        "get_modified_and_untracked", "check_target_file_unchanged",
+        "revert_out_of_scope_changes_with_dirs", "extract_block_marker",
+    )},
+    "LintCommand": "get_lint_commands",
+    "get_lint_commands": "get_lint_commands",
+    "split_main": "split_main",
+    **{name: "split_validation" for name in (
+        "ValidationFailure", "ValidationResult", "validate_extraction",
+    )},
+    **{name: "agentic_split_orchestrator" for name in (
+        "run_agentic_split_orchestrator", "Diagnosis", "ModuleInvestigation",
+        "TestOwnership", "PromptMetadata", "Child", "ParentChanges", "SplitPlan",
+        "SplitOption", "OptionsConsidered", "QualitativeAssessment",
+    )},
+    "run_agentic_split": "agentic_split",
+    # These names were overwritten by the later architecture/CI imports in the
+    # previous eager-import implementation; retain that exact public behavior.
+    "main": "ci_detect_changed_modules",
+    "load_workflow_state": "agentic_architecture_orchestrator",
+    "save_workflow_state": "agentic_architecture_orchestrator",
+    "clear_workflow_state": "agentic_architecture_orchestrator",
+    "run_agentic_architecture_orchestrator": "agentic_architecture_orchestrator",
+    **{name: "agentic_multishot" for name in (
+        "run_multishot_candidates", "MultishotResult", "MultishotCandidateRecord",
+    )},
+}
+
+# Preserve the names historically exposed by ``from pdd import *``.  Lazy
+# attributes are otherwise invisible to star-import because they are not in the
+# module dictionary until first access.
+__all__ = [
+    "PackageNotFoundError", "os", "subprocess", "Path", "get_version",
+    "EXTRACTION_STRENGTH", "DEFAULT_STRENGTH", "DEFAULT_TEMPERATURE",
+    "DEFAULT_TIME", *sorted(name for name in _LAZY_EXPORTS if not name.startswith("_")),
+]
+
+
+def __getattr__(name: str):
+    """Load legacy package-level exports only when callers request them."""
+    module_name = _LAZY_EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(_import_module(f".{module_name}", __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    """Include lazy public exports in interactive discovery."""
+    return sorted(set(globals()) | set(_LAZY_EXPORTS))
