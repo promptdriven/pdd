@@ -284,10 +284,15 @@ class AtomicStateUpdate:
             self._lock_handle = None
 
     @staticmethod
-    def _write_staged(directory: Path, target: Path, payload: dict[str, Any]) -> Path:
+    def _encoded_payload(payload: dict[str, Any]) -> bytes:
         encoded = (json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n").encode("utf-8")
         if len(encoded) > _MAX_STATE_BYTES:
             raise ValueError(f"new state payload exceeds {_MAX_STATE_BYTES} byte limit")
+        return encoded
+
+    @staticmethod
+    def _write_staged(directory: Path, target: Path, payload: dict[str, Any]) -> Path:
+        encoded = AtomicStateUpdate._encoded_payload(payload)
         fd, temporary = tempfile.mkstemp(
             dir=directory, prefix=f".{target.name}.", suffix=".state-new",
         )
@@ -409,6 +414,13 @@ class AtomicStateUpdate:
                 raise ValueError("transaction target escapes metadata directory")
             if staged is None and role != "run_report":
                 raise ValueError("only run reports may be removed transactionally")
+            if version == 3:
+                for key in ("target_hash", "staged_hash"):
+                    value = record[key]
+                    if value is not None and (
+                        not isinstance(value, str) or len(value) != 64
+                    ):
+                        raise ValueError("invalid state transaction digest")
             for candidate, suffix in ((staged, ".state-new"), (backup, ".state-old")):
                 if candidate is None:
                     continue
@@ -538,6 +550,15 @@ class AtomicStateUpdate:
             self._lock_and_recover(directory)
             records: list[dict[str, Any]] = []
             try:
+                total_payload = sum(
+                    len(self._encoded_payload(payload))
+                    for payload, _target in targets
+                    if payload is not None
+                )
+                if total_payload > _MAX_STATE_BYTES:
+                    raise ValueError(
+                        f"aggregate new state payload exceeds {_MAX_STATE_BYTES} byte limit"
+                    )
                 for payload, target in targets:
                     staged = self._atomic_write(payload, target) if payload is not None else None
                     role = next(

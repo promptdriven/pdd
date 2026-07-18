@@ -40,9 +40,14 @@ Implement `pdd.fingerprint_transaction` with one public thin API:
   repeat an already published mutation.
 - Treat journals as untrusted project data: bind a closed versioned schema to a
   hashed unit identity, validate every role/name/path under the metadata
-  directory, and never follow traversal or symlink artifacts. Readers recover
-  under the same lock before making an authoritative decision. Use a supported
-  Windows locking fallback rather than importing POSIX-only APIs unconditionally.
+  directory, never resolve a target through a symlink, and reject hard-link
+  aliases, replacement races, wrong target roles, and a held lock for a
+  different metadata directory. Bound encoded new payloads, old/restore copy
+  streams, aggregate journal data, and short writes before publishing. The
+  journal records old/new bounded digests so recovery refuses to overwrite a
+  target replaced by another writer. Readers recover under the same lock before
+  making an authoritative decision. Use a supported Windows locking fallback
+  rather than importing POSIX-only APIs unconditionally.
 - When given an atomic-state buffer, submit the identical payload via
   `set_fingerprint`; never duplicate payload construction in callers.
 - Wrap path/hash/write failures in `FingerprintFinalizeError` containing the operation and destination. A mutating caller must propagate this failure instead of reporting success.
