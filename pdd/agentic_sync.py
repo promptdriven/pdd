@@ -2457,20 +2457,26 @@ def _freeze_issue_sync_plan(
             )
         except Exception:
             prompt_paths = ()
+        output_paths = tuple(
+            path
+            for path in (
+                unit.generate_output_path,
+                unit.test_output_path,
+                unit.meta_path,
+            )
+            if path is not None
+        )
+        for output_path in output_paths:
+            if not _path_is_within_root(output_path, project_root):
+                raise SyncPlanError(
+                    f"output path escapes governing root for {key!r}: {output_path}"
+                )
         candidates.append(
             SyncPlanCandidate(
                 module_id=module_id,
                 unit=unit,
                 prompt_paths=prompt_paths,
-                output_paths=tuple(
-                    path
-                    for path in (
-                        unit.generate_output_path,
-                        unit.test_output_path,
-                        unit.meta_path,
-                    )
-                    if _path_is_within_root(path, project_root)
-                ),
+                output_paths=output_paths,
                 details=SyncPlanDetails(
                     changed_reason="selected for issue sync",
                     expected_operation="generate",
@@ -3173,6 +3179,11 @@ def run_agentic_sync(
         ]
         if not modules_to_sync:
             if not candidate_ids:
+                # A repository containing only runtime templates has no
+                # language-suffixed unit to generate.  This is a deliberate
+                # deterministic no-op, not an ambiguity-agent failure.
+                if architecture:
+                    return True, "All modules are already synced — nothing to do.", 0.0, ""
                 return False, "No deterministic sync candidates found", 0.0, ""
             if len(candidate_ids) > 64:
                 return False, "Unresolved sync candidates exceed the V1 ambiguity bound", 0.0, ""

@@ -1692,7 +1692,8 @@ class TestRunAgenticSync:
 
         assert success
         assert cost == pytest.approx(0.15)
-        assert model == "anthropic"
+        assert model == ""
+        mock_agentic_task.assert_not_called()
         mock_runner.run.assert_called_once()
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
@@ -1747,8 +1748,9 @@ class TestRunAgenticSync:
         assert success is True
         assert "Dry run complete" in msg
         assert "foo" in msg
-        assert cost == pytest.approx(0.05)
-        assert model == "anthropic"
+        assert cost == pytest.approx(0.0)
+        assert model == ""
+        mock_agentic_task.assert_not_called()
         mock_dry_run.assert_called_once()
         mock_filter_synced.assert_called_once()
         mock_runner_cls.assert_not_called()
@@ -1834,7 +1836,11 @@ class TestRunAgenticSync:
         mock_runner_cls,
     ):
         """LLM returns basenames with language suffix; they should be stripped."""
-        issue_data = {"title": "Test", "body": "Fix models", "comments_url": ""}
+        issue_data = {
+            "title": "Test",
+            "body": "Fix crm_models and api_orders",
+            "comments_url": "",
+        }
         mock_gh_cmd.return_value = (True, json.dumps(issue_data))
         mock_load_arch.return_value = (
             [
@@ -1842,13 +1848,6 @@ class TestRunAgenticSync:
                 {"filename": "api_orders_Python.prompt", "dependencies": ["crm_models_Python.prompt"]},
             ],
             Path("/tmp/architecture.json"),
-        )
-        # LLM returns basenames WITH language suffixes (as found in architecture.json filenames)
-        mock_agentic_task.return_value = (
-            True,
-            'MODULES_TO_SYNC: ["crm_models_Python", "api_orders_Python"]\nDEPS_VALID: true',
-            0.05,
-            "anthropic",
         )
         mock_build_graph.return_value = DepGraphFromArchitectureResult(
             {"crm_models": ["api_orders"], "api_orders": []}, []
@@ -1870,6 +1869,7 @@ class TestRunAgenticSync:
         # Verify stripped basenames were passed to AsyncSyncRunner
         runner_kwargs = mock_runner_cls.call_args[1]
         assert sorted(runner_kwargs["basenames"]) == ["api_orders", "crm_models"]
+        mock_agentic_task.assert_not_called()
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
@@ -1920,7 +1920,8 @@ class TestRunAgenticSync:
         # Verify initial_cost was passed to AsyncSyncRunner constructor
         runner_kwargs = mock_runner_cls.call_args[1]
         assert "initial_cost" in runner_kwargs
-        assert runner_kwargs["initial_cost"] == pytest.approx(0.07)
+        assert runner_kwargs["initial_cost"] == pytest.approx(0.0)
+        mock_agentic_task.assert_not_called()
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync.DurableSyncRunner")
@@ -1978,7 +1979,8 @@ class TestRunAgenticSync:
         assert success is True
         assert msg == "durable done"
         assert cost == pytest.approx(0.15)
-        assert model == "anthropic"
+        assert model == ""
+        mock_agentic_task.assert_not_called()
         mock_async_runner_cls.assert_not_called()
         runner_kwargs = mock_durable_runner_cls.call_args.kwargs
         assert runner_kwargs["issue_number"] == 1328
@@ -3321,21 +3323,15 @@ class TestBranchDiffSkipsLlm:
     def test_falls_back_to_llm_when_branch_diff_empty(
         self, mock_cli, mock_gh, mock_llm, mock_diff, mock_dry_run
     ):
-        """When branch diff returns empty, LLM identification should be used."""
+        """An exact issue mention is deterministic when branch diff is empty."""
         mock_diff.return_value = []
         mock_gh.return_value = (True, json.dumps({
-            "title": "test", "body": "test body", "comments_url": ""
+            "title": "test", "body": "ci_validation", "comments_url": ""
         }))
-        mock_llm.return_value = (
-            True,
-            'MODULES_TO_SYNC: ["ci_validation"]\nDEPS_VALID: true',
-            0.50,
-            "gpt-4",
-        )
         mock_dry_run.return_value = (True, {}, {}, [], 0.0)
 
         with patch("pdd.agentic_sync._find_project_root", return_value=Path("/fake")), \
-             patch("pdd.agentic_sync._load_architecture_json", return_value=([], Path("/fake/architecture.json"))), \
+             patch("pdd.agentic_sync._load_architecture_json", return_value=([{"filename": "ci_validation_python.prompt"}], Path("/fake/architecture.json"))), \
              patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}"), \
              patch("pdd.agentic_sync.AsyncSyncRunner") as mock_runner:
             mock_runner_inst = MagicMock()
@@ -3347,7 +3343,7 @@ class TestBranchDiffSkipsLlm:
                 quiet=True,
             )
 
-        mock_llm.assert_called_once()
+        mock_llm.assert_not_called()
 
 
 class TestRuntimeLlmTemplateNoop:
@@ -3386,19 +3382,13 @@ class TestRuntimeLlmTemplateNoop:
         mock_dry_run,
         mock_runner_cls,
     ):
-        """LLM returns only ``*_LLM`` basenames → success no-op, runner not called."""
+        """Runtime-only candidate evidence is a deterministic no-op."""
         issue_data = {"title": "Test", "body": "Touch runtime templates", "comments_url": ""}
         mock_gh_cmd.return_value = (True, json.dumps(issue_data))
         # Architecture only contains the runtime LLM template entry.
         mock_load_arch.return_value = (
             [{"filename": "agentic_sync_identify_modules_LLM.prompt", "dependencies": []}],
             Path("/tmp/architecture.json"),
-        )
-        mock_agentic_task.return_value = (
-            True,
-            'MODULES_TO_SYNC: ["agentic_sync_identify_modules_LLM"]\nDEPS_VALID: true',
-            0.04,
-            "anthropic",
         )
 
         success, msg, cost, model = run_agentic_sync(
@@ -3407,14 +3397,11 @@ class TestRuntimeLlmTemplateNoop:
 
         assert success is True
         assert "All modules are already synced" in msg
-        # The identify LLM was called (we got past branch diff), but no
-        # downstream work happened: dry-run and the runner are untouched.
-        mock_agentic_task.assert_called_once()
+        mock_agentic_task.assert_not_called()
         mock_dry_run.assert_not_called()
         mock_runner_cls.assert_not_called()
-        # Cost is just the LLM identify cost; runner cost is zero.
-        assert cost == pytest.approx(0.04)
-        assert model == "anthropic"
+        assert cost == pytest.approx(0.0)
+        assert model == ""
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync._run_dry_run_validation")
@@ -3452,11 +3439,10 @@ class TestRuntimeLlmTemplateNoop:
             ],
             Path("/tmp/architecture.json"),
         )
-        # LLM returns one runtime template basename (must be dropped) and one
-        # real module (must reach validation and the runner).
+        # The only ambiguity response is a closed selection of frozen IDs.
         mock_agentic_task.return_value = (
             True,
-            'MODULES_TO_SYNC: ["agentic_sync_identify_modules_LLM", "foo"]\nDEPS_VALID: true',
+            '{"selected_module_ids":["foo"]}',
             0.06,
             "anthropic",
         )
@@ -3483,6 +3469,10 @@ class TestRuntimeLlmTemplateNoop:
         runner_kwargs = mock_runner_cls.call_args[1]
         assert runner_kwargs["basenames"] == ["foo"]
         mock_runner.run.assert_called_once()
+        prompt = mock_agentic_task.call_args.kwargs["instruction"]
+        assert "candidate_ids" in prompt
+        assert "Mix" not in prompt
+        assert "agentic_sync_identify_modules_LLM" not in prompt
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync._run_dry_run_validation")
@@ -3546,26 +3536,16 @@ class TestRuntimeLlmTemplateNoop:
         mock_dry_run,
         mock_runner_cls,
     ):
-        """Empty ``MODULES_TO_SYNC`` from the LLM, when the diff is *not*
-        runtime-template-only, must be treated as a failure rather than a
-        silent no-op.
-
-        Regression for issue #1396 review feedback: previously any empty LLM
-        selection was a successful no-op, which could mask legitimate identify
-        failures (e.g. parsing drops the result, or the model fails to infer
-        modules for a normal issue).
-        """
+        """An explicit empty closed ambiguity selection is a no-op."""
         issue_data = {"title": "Test", "body": "Real change", "comments_url": ""}
         mock_gh_cmd.return_value = (True, json.dumps(issue_data))
         mock_load_arch.return_value = (
             [{"filename": "foo_python.prompt", "dependencies": []}],
             Path("/tmp/architecture.json"),
         )
-        # LLM returns empty MODULES_TO_SYNC, but the branch diff is *not*
-        # runtime-template-only (mock_branch_runtime_only returns False).
         mock_agentic_task.return_value = (
             True,
-            "MODULES_TO_SYNC: []\nDEPS_VALID: true",
+            '{"selected_module_ids":[]}',
             0.04,
             "anthropic",
         )
@@ -3574,11 +3554,36 @@ class TestRuntimeLlmTemplateNoop:
             "https://github.com/owner/repo/issues/1396", quiet=True
         )
 
-        assert success is False
-        assert "no modules to sync" in msg.lower()
-        # No dry-run, no runner — we failed before reaching them.
+        assert success is True
+        assert "already synced" in msg.lower()
         mock_dry_run.assert_not_called()
         mock_runner_cls.assert_not_called()
+
+
+class TestBoundedAmbiguityFailures:
+    """The ambiguity boundary rejects malformed selections before any write."""
+
+    def test_malformed_task_result_fails_without_traceback_or_runner(self):
+        issue = {"title": "Issue", "body": "unresolved", "comments_url": ""}
+        with patch("pdd.agentic_sync._check_gh_cli", return_value=True), \
+             patch("pdd.agentic_sync._run_gh_command", return_value=(True, json.dumps(issue))), \
+             patch("pdd.agentic_sync._find_project_root", return_value=Path("/fake")), \
+             patch("pdd.agentic_sync._load_architecture_json", return_value=([{"filename": "foo_python.prompt"}], Path("/fake/architecture.json"))), \
+             patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[]), \
+             patch("pdd.agentic_sync._branch_diff_is_runtime_llm_only", return_value=False), \
+             patch("pdd.agentic_sync.run_agentic_task", return_value="malformed"), \
+             patch("pdd.agentic_sync._run_dry_run_validation") as mock_dry_run, \
+             patch("pdd.agentic_sync.AsyncSyncRunner") as mock_runner:
+            success, message, cost, provider = run_agentic_sync(
+                "https://github.com/owner/repo/issues/1", quiet=True
+            )
+
+        assert success is False
+        assert message == "Ambiguity selection returned an invalid task result"
+        assert cost == 0.0
+        assert provider == ""
+        mock_dry_run.assert_not_called()
+        mock_runner.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -3812,10 +3817,8 @@ class TestIdentifyModulesPromptReceivesIssueNumber:
         mock_branch_diff,
         mock_runner_cls,
     ):
-        """run_agentic_sync must pass issue_number to .format() so the
-        rendered prompt contains the actual number (e.g., '746'), not a
-        raw '{issue_number}' placeholder."""
-        issue_data = {"title": "Test", "body": "Fix foo", "comments_url": ""}
+        """The ambiguity request excludes issue prose and broad templates."""
+        issue_data = {"title": "Test 746", "body": "ambiguous request", "comments_url": ""}
         mock_gh_cmd.return_value = (True, json.dumps(issue_data))
         mock_load_arch.return_value = (
             [{"filename": "foo_python.prompt", "dependencies": []}],
@@ -3823,7 +3826,7 @@ class TestIdentifyModulesPromptReceivesIssueNumber:
         )
         mock_agentic_task.return_value = (
             True,
-            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
+            '{"selected_module_ids":["foo"]}',
             0.05,
             "anthropic",
         )
@@ -3837,15 +3840,14 @@ class TestIdentifyModulesPromptReceivesIssueNumber:
             "https://github.com/owner/repo/issues/746", quiet=True
         )
 
-        # The prompt passed to run_agentic_task must contain "746"
+        # The bounded ambiguity request exposes canonical IDs only.
         prompt_arg = mock_agentic_task.call_args[1].get(
             "instruction", mock_agentic_task.call_args[0][0]
             if mock_agentic_task.call_args[0] else ""
         )
-        assert "Issue #746" in prompt_arg, (
-            "The rendered prompt must contain the issue number (746) so the LLM "
-            f"can match origin fields. Got prompt starting with: {prompt_arg[:200]}"
-        )
+        assert '"candidate_ids":["foo"]' in prompt_arg
+        assert "746" not in prompt_arg
+        assert "ambiguous request" not in prompt_arg
 
 
 # ---------------------------------------------------------------------------
@@ -5186,25 +5188,13 @@ class TestIdentifyModulesPromptSize:
             ],
             Path("/tmp/architecture.json"),
         )
-        mock_agentic_task.return_value = (
-            True,
-            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
-            0.0,
-            "anthropic",
-        )
         mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
         mock_runner_cls.return_value.run.return_value = (True, "synced", 0.0)
 
         run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True)
 
-        mock_agentic_task.assert_called_once()
-        prompt = mock_agentic_task.call_args.kwargs["instruction"]
-        assert "INTERFACE_TEXT" not in prompt
-        assert "DESCRIPTION_TEXT" not in prompt
-        assert "REASON_TEXT" not in prompt
-        # origin/dependency fields the LLM actually needs are still present.
-        assert "foo_Python.prompt" in prompt
-        assert len(prompt) < _IDENTIFY_MODULES_MAX_CHARS
+        # Exact issue mention makes this deterministic despite large metadata.
+        mock_agentic_task.assert_not_called()
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync._filter_already_synced", return_value=[])
@@ -5230,7 +5220,7 @@ class TestIdentifyModulesPromptSize:
         mock_runner_cls,
         monkeypatch,
     ):
-        """PDD_USER_FEEDBACK and the fixed provider suffix count toward budget."""
+        """Ambiguity requests remain compact even for huge issue bodies."""
         monkeypatch.setenv("PDD_USER_FEEDBACK", "abc")
         template = "ISSUE:\n{issue_content}\nARCH:\n{architecture_json}\nNUM:{issue_number}"
         mock_load_prompt.return_value = template
@@ -5258,12 +5248,7 @@ class TestIdentifyModulesPromptSize:
         issue_data = {"title": "WRAPPER_TITLE_TOKEN", "body": body, "comments_url": ""}
         mock_gh_cmd.return_value = (True, json.dumps(issue_data))
         mock_load_arch.return_value = (architecture, Path("/tmp/architecture.json"))
-        mock_agentic_task.return_value = (
-            True,
-            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
-            0.0,
-            "anthropic",
-        )
+        mock_agentic_task.return_value = (True, '{"selected_module_ids":["foo"]}', 0.0, "anthropic")
         mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
         mock_runner_cls.return_value.run.return_value = (True, "synced", 0.0)
 
@@ -5272,7 +5257,9 @@ class TestIdentifyModulesPromptSize:
         mock_agentic_task.assert_called_once()
         prompt = mock_agentic_task.call_args.kwargs["instruction"]
         assert len(build_agentic_task_instruction(prompt)) <= _IDENTIFY_MODULES_MAX_CHARS
-        assert "WRAPPER_TITLE_TOKEN" in prompt
+        assert '"candidate_ids":["foo"]' in prompt
+        assert "WRAPPER_TITLE_TOKEN" not in prompt
+        assert body not in prompt
 
     @_identify_fallback_patches
     def test_pathological_arch_hard_fails_with_input_too_large(
@@ -5288,17 +5275,16 @@ class TestIdentifyModulesPromptSize:
     ):
         issue_data = {"title": "Fix foo", "body": "do it", "comments_url": ""}
         mock_gh_cmd.return_value = (True, json.dumps(issue_data))
-        # Even compacted, the architecture alone blows the budget: each entry's
-        # filename/filepath is itself enormous so dropping interface won't help.
-        huge = "Z" * 50_000
+        # Candidate inventory is allowed to exceed the execution limit, but no
+        # more than 64 unresolved IDs may reach the ambiguity agent.
         pathological = [
             {
-                "filename": f"{huge}_{i}_Python.prompt",
-                "filepath": f"pdd/{huge}_{i}",
+                "filename": f"module_{i:03d}_Python.prompt",
+                "filepath": f"pdd/module_{i:03d}",
                 "origin": "code",
                 "dependencies": [],
             }
-            for i in range(40)
+            for i in range(65)
         ]
         mock_load_arch.return_value = (
             pathological,
@@ -5310,8 +5296,7 @@ class TestIdentifyModulesPromptSize:
         )
 
         assert success is False
-        assert "input_too_large" in msg
-        assert "no modules to sync" not in msg.lower()
+        assert "exceed the V1 ambiguity bound" in msg
         assert cost == pytest.approx(0.0)
         mock_agentic_task.assert_not_called()
 
@@ -5357,12 +5342,7 @@ class TestIdentifyModulesPromptSize:
             [{"filename": "foo_Python.prompt", "filepath": "pdd/foo", "origin": "code", "dependencies": []}],
             Path("/tmp/architecture.json"),
         )
-        mock_agentic_task.return_value = (
-            True,
-            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
-            0.0,
-            "anthropic",
-        )
+        mock_agentic_task.return_value = (True, '{"selected_module_ids":["foo"]}', 0.0, "anthropic")
         mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
         mock_runner_cls.return_value.run.return_value = (True, "synced", 0.0)
 
@@ -5372,9 +5352,9 @@ class TestIdentifyModulesPromptSize:
         prompt = mock_agentic_task.call_args.kwargs["instruction"]
         assert len(prompt) < _IDENTIFY_MODULES_MAX_CHARS
         # The title (signal) survives even though comments were trimmed.
-        assert "UNIQUE_TITLE_TOKEN" in prompt
-        # The giant comment body did not make it through verbatim.
+        assert "UNIQUE_TITLE_TOKEN" not in prompt
         assert huge_comment_body not in prompt
+        assert '"candidate_ids":["foo"]' in prompt
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync._filter_already_synced", return_value=[])
@@ -5415,12 +5395,7 @@ class TestIdentifyModulesPromptSize:
             [{"filename": "foo_Python.prompt", "filepath": "pdd/foo", "origin": "code", "dependencies": []}],
             Path("/tmp/architecture.json"),
         )
-        mock_agentic_task.return_value = (
-            True,
-            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
-            0.0,
-            "anthropic",
-        )
+        mock_agentic_task.return_value = (True, '{"selected_module_ids":["foo"]}', 0.0, "anthropic")
         mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
         mock_runner_cls.return_value.run.return_value = (True, "synced", 0.0)
 
@@ -5428,10 +5403,10 @@ class TestIdentifyModulesPromptSize:
 
         mock_agentic_task.assert_called_once()
         prompt = mock_agentic_task.call_args.kwargs["instruction"]
-        # Body was truncated enough that the brace-escaped prompt still fits.
+        # The issue body is not part of the ambiguity protocol at all.
         assert len(prompt) < _IDENTIFY_MODULES_MAX_CHARS
-        # The title (signal) survives the body truncation.
-        assert "TRUNCATE_TITLE_TOKEN" in prompt
+        assert "TRUNCATE_TITLE_TOKEN" not in prompt
+        assert brace_heavy_body not in prompt
 
 
 class TestPddChangedModulesFastPath:
@@ -5483,10 +5458,7 @@ class TestPddChangedModulesFastPath:
             patches[8] as mock_agentic_task, patches[9], patches[10] as mock_dry_run, \
             patches[11] as mock_filter_synced:
             mock_agentic_task.return_value = (
-                True,
-                'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
-                0.5,
-                "anthropic",
+                True, '{"selected_module_ids":["foo"]}', 0.5, "anthropic"
             )
             result = run_agentic_sync(
                 "https://github.com/owner/repo/issues/1",
@@ -5628,7 +5600,7 @@ class TestPddChangedModulesFastPath:
             assert "foo" in msg
             assert cost == pytest.approx(0.5)
             assert model == "anthropic"
-            result["mock_load_prompt"].assert_called_once()
+            result["mock_load_prompt"].assert_not_called()
             result["mock_agentic_task"].assert_called_once()
 
     def test_unresolvable_env_entries_have_specific_diagnostic(self, monkeypatch, tmp_path):
@@ -5681,16 +5653,15 @@ class TestPddChangedModulesFastPath:
     ):
         issue_data = {"title": "Fix foo", "body": "do it", "comments_url": ""}
         mock_gh_cmd.return_value = (True, json.dumps(issue_data))
-        # Compacted architecture alone exceeds the budget (see pathological test).
-        huge = "Z" * 50_000
+        # More than 64 unresolved candidates must fail before an agent call.
         pathological = [
             {
-                "filename": f"{huge}_{i}_Python.prompt",
-                "filepath": f"pdd/{huge}_{i}",
+                "filename": f"module_{i:03d}_Python.prompt",
+                "filepath": f"pdd/module_{i:03d}",
                 "origin": "code",
                 "dependencies": [],
             }
-            for i in range(40)
+            for i in range(65)
         ]
         mock_load_arch.return_value = (pathological, Path("/tmp/architecture.json"))
 
@@ -5699,9 +5670,6 @@ class TestPddChangedModulesFastPath:
         )
 
         assert success is False
-        assert "input_too_large" in msg
+        assert "exceed the V1 ambiguity bound" in msg
         mock_agentic_task.assert_not_called()
-        mock_post_error.assert_called_once()
-        # The posted comment carries the real oversize reason.
-        posted_msg = mock_post_error.call_args.args[3]
-        assert "input_too_large" in posted_msg
+        mock_post_error.assert_not_called()
