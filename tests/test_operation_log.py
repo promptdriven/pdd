@@ -1,5 +1,6 @@
 import os
 import json
+import inspect
 import pytest
 import time
 from pathlib import Path
@@ -280,6 +281,63 @@ def test_log_event(temp_pdd_env):
     assert entries[0]["type"] == "event"
     assert entries[0]["event_type"] == "lock_acquired"
     assert entries[0]["details"]["pid"] == 123
+    assert entries[0]["invocation_mode"] == "manual"
+
+
+def test_log_event_public_interface_matches_prompt_and_architecture():
+    """Keep lifecycle-event callers, prompt metadata, and architecture in lockstep."""
+    import ast
+    import re
+
+    runtime_signature = inspect.signature(operation_log.log_event)
+    runtime_names = list(runtime_signature.parameters)
+    assert runtime_names == [
+        "basename",
+        "language",
+        "event_type",
+        "details",
+        "invocation_mode",
+        "paths",
+        "compression",
+        "agentic_fallback",
+    ]
+    assert runtime_signature.parameters["details"].default is inspect.Parameter.empty
+    assert runtime_signature.parameters["invocation_mode"].default == "manual"
+    for parameter_name in ("paths", "compression", "agentic_fallback"):
+        assert runtime_signature.parameters[parameter_name].default is None
+
+    repo_root = Path(__file__).resolve().parents[1]
+    prompt_text = (repo_root / "pdd/prompts/operation_log_python.prompt").read_text()
+    interface_match = re.search(
+        r"<pdd-interface>\s*(\{.*?\})\s*</pdd-interface>",
+        prompt_text,
+        re.DOTALL,
+    )
+    assert interface_match is not None
+    interface = json.loads(interface_match.group(1))
+    log_event_interface = next(
+        function
+        for function in interface["module"]["functions"]
+        if function["name"] == "log_event"
+    )
+    interface_signature = log_event_interface["signature"]
+    interface_function = ast.parse(
+        f"def log_event{interface_signature}:\n    pass\n"
+    ).body[0]
+    assert [argument.arg for argument in interface_function.args.args] == runtime_names
+    assert "project_root" not in interface_signature
+    assert "event_type" in interface_signature
+    assert "details: Any" in interface_signature
+    assert interface_signature in prompt_text
+
+    architecture = json.loads((repo_root / "architecture.json").read_text())
+    entry = next(item for item in architecture if item.get("filepath") == "pdd/operation_log.py")
+    architecture_function = next(
+        function
+        for function in entry["interface"]["module"]["functions"]
+        if function["name"] == "log_event"
+    )
+    assert architecture_function["signature"] == interface_signature
 
 # --------------------------------------------------------------------------------
 # DECORATOR TESTS
