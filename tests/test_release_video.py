@@ -548,6 +548,10 @@ def test_release_video_visual_safety_allows_local_physical_shell_materials(
         "A physical shell with a glass pane surrounds a matte orb.",
         "A physical shell with a window pane of diffuse light surrounds a matte orb.",
         "A physical shell with a ceramic pane-like opening surrounds a matte orb.",
+        "A physical shell with a glass pane beside a lamp displaying output as diffuse light.",
+        "A physical shell with a window pane and a nearby lamp showing files as colored patterns.",
+        "A physical shell with a ceramic pane near machinery presenting output as a soft glow.",
+        "A physical shell with a glass pane alongside Maya displaying output as bands of light.",
     ],
 )
 def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_homonyms(
