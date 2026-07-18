@@ -159,22 +159,27 @@ SHELL_INPUT_VERB_PATTERN = (
 SHELL_SUBJECT_PREDICATE_PATTERN = (
     rf"(?:{SHELL_EVIDENCE_VERB_PATTERN}|{SHELL_INPUT_VERB_PATTERN})"
 )
-SHELL_OTHER_SUBJECT_PATTERN = (
-    r"(?:(?:he|she|they|we|this|that|these|those)\b|"
-    r"(?:(?:a|an|the|another|each|every|either|neither|some|any|many|"
-    r"several|few|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+"
-    r"(?:[a-z][\w-]*\s+){0,3}[a-z][\w-]*)\b|"
-    r"(?:[a-z][\w-]*\s+){0,2}[a-z][\w-]*s\b)"
+SHELL_SAME_SUBJECT_MODIFIER_PATTERN = (
+    r"(?:then|eventually|later|softly|prominently|always|sometimes|"
+    r"afterwards|subsequently|immediately|directly|visibly|clearly|quietly|"
+    r"briefly|gently|slowly|rapidly|continuously|still|again|soon|"
+    r"after\s+(?:(?:a|the|one)\s+)?(?:brief\s+)?"
+    r"(?:moment|pause|beat|delay|interval))"
+)
+SHELL_SAME_SUBJECT_CONTINUATION_PATTERN = (
+    rf"(?:(?:(?:it|the\s+shell(?:s|-like)?)\s+)?"
+    rf"(?:{SHELL_SAME_SUBJECT_MODIFIER_PATTERN}\s+){{0,3}}"
+    rf"{SHELL_SUBJECT_PREDICATE_PATTERN}\b|"
+    rf"its\s+(?:[\w-]+\s+){{1,3}}{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
 )
 SHELL_NEW_SUBJECT_BOUNDARY_PATTERN = (
     r"\b(?:and|but|while|whereas|yet|as)\b\s+"
-    r"(?!(?:(?:it|its)\b|the\s+shell(?:s|-like)?\b))"
-    rf"(?={SHELL_OTHER_SUBJECT_PATTERN}\s+"
-    rf"{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
+    rf"(?!{SHELL_SAME_SUBJECT_CONTINUATION_PATTERN})"
+    rf"(?=(?:(?![.!?;,]).){{1,50}}\b{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
 )
 SHELL_WITH_OTHER_SUBJECT_BOUNDARY_PATTERN = (
-    rf"\bwith\s+{SHELL_OTHER_SUBJECT_PATTERN}\s+"
-    rf"(?={SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
+    r"\bwith\b"
+    rf"(?=(?:(?![.!?;,]).){{1,50}}\b{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
 )
 BASH_STRONG_SURFACE_RE = re.compile(
     r"\bbash\s+(?:history|windows?|"
