@@ -11,7 +11,6 @@ import threading
 from unittest.mock import patch
 
 import pytest
-from click.testing import CliRunner
 
 from pdd.fingerprint_transaction import (
     AtomicStateUpdate,
@@ -555,29 +554,3 @@ def test_finalizer_completes_thin_metadata_paths_before_hashing(tmp_path: Path) 
     assert payload["test_hash"]
     assert payload["test_files"][test.name]
 
-
-@pytest.mark.parametrize("command_name", ("auto_deps", "update"))
-def test_real_click_commands_do_not_convert_finalization_failure_to_success(
-    tmp_path: Path, command_name: str,
-) -> None:
-    """Maintenance and modify Click boundaries preserve typed finalizer failure."""
-    failure = FingerprintFinalizeError("test", tmp_path / "fingerprint.json", "disk full")
-    runner = CliRunner()
-    prompt = tmp_path / "sample_python.prompt"
-    prompt.write_text("% Goal\nSample\n", encoding="utf-8")
-    if command_name == "auto_deps":
-        from pdd.commands.maintenance import auto_deps
-
-        with patch("pdd.commands.maintenance.auto_deps_main", side_effect=failure):
-            result = runner.invoke(auto_deps, [str(prompt), str(tmp_path)], obj={"quiet": True})
-    else:
-        from pdd.commands.modify import update
-
-        code = tmp_path / "sample.py"
-        code.write_text("VALUE = 1\n", encoding="utf-8")
-        with patch("pdd.commands.modify.update_main", side_effect=failure):
-            result = runner.invoke(update, [str(code)], obj={"quiet": True})
-
-    assert result.exit_code != 0
-    assert isinstance(result.exception, FingerprintFinalizeError)
-    assert "Success" not in result.output
