@@ -248,7 +248,7 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
 
 
 # #1989 follows the schema-2 installation above. Each GPT-5.6 prompt/profile
-# replacement is bound to its actual merged base and exact candidate bytes.
+# replacement is bound to the actual merged base and exact candidate bytes.
 _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_common_python.prompt",
@@ -358,8 +358,8 @@ _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS
 
 
-# #2077 pre-authorized two dormant estimate transitions. PR #1971 transitions
-# its three reviewed prompts from the merged #1989 policy to its final profile.
+# #2077 pre-authorized two dormant estimate transitions. Bind those exact
+# prompt changes to the final #1989 + #2052 profile composition.
 _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/commands/generate_python.prompt",
@@ -376,30 +376,6 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
         "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37",
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
         "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18",
-    ),
-    _exact_bootstrap_requirement_transition(
-        "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
-        "llm",
-        "59f757132da8cb6037b74e009b6ce8e539e1c45eb28887d0ffbc55483052f8fd",
-        "b1b9392cc990120a8825626332bfc4017df78bb1a346ec4b7faeafb3b2cf2b4b",
-        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
-        "ece65f297b8e13556db1c734daf4a65635c311a441144415a9c9a4a74c145877",
-    ),
-    _exact_bootstrap_requirement_transition(
-        "pdd/prompts/sync_determine_operation_python.prompt",
-        "python",
-        "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
-        "1b9ebdb19e1794cf949b348a123c64e176af7c7023496f41b9668ac7363c31a3",
-        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
-        "ece65f297b8e13556db1c734daf4a65635c311a441144415a9c9a4a74c145877",
-    ),
-    _exact_bootstrap_requirement_transition(
-        "pdd/prompts/update_main_python.prompt",
-        "python",
-        "b1042be0dd594c9bbb197a4afe7e5c5a12aaad1574feadf7cb5b26f9bf85bccd",
-        "c5f4ea5b98008e230f1e987555cec5f503b24c1e14f392e0246e49fe5c12f5af",
-        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
-        "ece65f297b8e13556db1c734daf4a65635c311a441144415a9c9a4a74c145877",
     ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += (
