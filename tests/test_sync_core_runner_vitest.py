@@ -1099,6 +1099,31 @@ def test_generated_diagnostic_reporter_attributes_real_addon_load_failure(
     not sys.platform.startswith("linux"),
     reason="the production coordinator authority addon is Linux-only",
 )
+def test_vitest_coordinator_addon_builds_without_test_hooks(tmp_path: Path) -> None:
+    """The strict production compile must not retain unused test-only helpers."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("requires Node.js")
+    addon = tmp_path / "production-native-addon.node"
+    subprocess.run(
+        [
+            sys.executable, "scripts/build_vitest_fd_cloexec_addon.py",
+            "--output", str(addon), "--headers", str(_node_headers(Path(node))),
+        ],
+        cwd=Path(__file__).parents[1], check=True,
+    )
+    completed = subprocess.run(
+        [node, "-e", "require(process.argv[1]);", str(addon)],
+        capture_output=True, text=True, timeout=5, check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="the production coordinator authority addon is Linux-only",
+)
 def test_generated_diagnostic_reporter_transports_only_fixed_native_seal_enum(
     tmp_path: Path,
 ) -> None:
