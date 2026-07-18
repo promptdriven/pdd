@@ -641,7 +641,19 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         if row["head_policy_sha256"]
         == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
     ]
-    assert len(pr1790_rows) == 7
+    replaced_rows = {
+        json.dumps(_requirement_authorization_row(item), sort_keys=True)
+        for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
+    }
+    expected_pr1790_rows = [
+        row
+        for row in protected_rows
+        if row["head_policy_sha256"]
+        == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
+        and json.dumps(row, sort_keys=True) not in replaced_rows
+    ]
+    assert len(pr1790_rows) == 4
+    assert pr1790_rows == expected_pr1790_rows
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
     head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
     assert base_policy_digest == (
