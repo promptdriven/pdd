@@ -37,11 +37,11 @@ This immediate runner prerequisite is a PR gate only. It does not authorize a
 release, merge #1995, or claim global certification; the historical audit and
 ten-step sequence below remain the controlling global-resolution plan.
 
-| Verification boundary | #2164 exact head | #1995 exact diagnostic head | Current state |
+| Verification boundary | #2164 exact head | #1995 integration | Current state |
 | --- | --- | --- | --- |
-| Locally validated | Exact proposed head [`5f6d747aa75a0629f33d0900489a613a3f1e2b8d`](https://github.com/promptdriven/pdd/commit/5f6d747aa75a0629f33d0900489a613a3f1e2b8d) contains protected `main` `03abdfa12`, remote FIFO identity, signed native-authority binding, protected-main-only ownership, and the exact #1989 historical transition pin. Combined gate: 75 passed, 8 platform skips; full rollout and verification-profile suites passed; exact Sol review approved. | [`24eaf18c9290f0f725835a3a737a2e2bfb90d4fb`](https://github.com/promptdriven/pdd/commit/24eaf18c9290f0f725835a3a737a2e2bfb90d4fb): pending integration and affected-suite validation | #2164 locally green/reviewed; #1995 pending |
+| Locally validated | Exact proposed head [`5f6d747aa75a0629f33d0900489a613a3f1e2b8d`](https://github.com/promptdriven/pdd/commit/5f6d747aa75a0629f33d0900489a613a3f1e2b8d) contains protected `main` `03abdfa12`, remote FIFO identity, signed native-authority binding, protected-main-only ownership, and the exact #1989 historical transition pin. Combined gate: 75 passed, 8 platform skips; full rollout and verification-profile suites passed; exact Sol review approved. | Local canonical integration [`a89cedc3f720bf719d743a571adc433980856fb9`](https://github.com/promptdriven/pdd/commit/a89cedc3f720bf719d743a571adc433980856fb9) descends remote diagnostic `24eaf18c9` and protected `main` `67696f0f3`; primary 801/70, rollout/profile 140, trust/evidence/reporting 85/14, full Vitest 248/36, and focused authority 18/1 passed locally | #2164 merged; #1995 exact review pending |
 | Hosted green | [PR #2164](https://github.com/promptdriven/pdd/pull/2164) exact-head [run 29622818907](https://github.com/promptdriven/pdd/actions/runs/29622818907): Unit, Package Preprocess Smoke, Story/Public CLI regressions, Repo Bloat Docker E2E, CodeQL, and exact-head auto-heal all passed | [PR #1995](https://github.com/promptdriven/pdd/pull/1995): Package and auxiliary checks passed; [Unit](https://github.com/promptdriven/pdd/actions/runs/29603684162/job/87961605651) failed | #2164 green; #1995 failed diagnostic |
-| Merged to protected `main` | Merged at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e) on 2026-07-18. Exact reviewed head `5f6d747aa` and prior protected base `03abdfa12` are its two parents. | #1995 is now unblocked for fresh integration of `d91b07a90` | passed / next |
+| Merged to protected `main` | Merged at [`d91b07a9002be895556b38c5bafff18a420b256e`](https://github.com/promptdriven/pdd/commit/d91b07a9002be895556b38c5bafff18a420b256e) on 2026-07-18. Exact reviewed head `5f6d747aa` and prior protected base `03abdfa12` are its two parents. | Not merged. Local `a89cedc3f` contains `d91b07a90` and latest protected `main` `67696f0f3`, but remains unpushed pending review. | passed / review pending |
 | Released checker | No release is authorized by either PR | No release is authorized by either PR | pending |
 | Globally certified | This runner gate is not a global certificate | This diagnostic head is not a global certificate | blocked |
 
@@ -58,11 +58,12 @@ hosted checks passed, and `H2164` was merged with ancestry preserved as
 `M2164 = d91b07a9002be895556b38c5bafff18a420b256e`. The generic runbook's squash
 default was not used because it would violate the controlling machine predicate
 `is_ancestor(H2164, M2164)`; the merge still ran from the clean main clone with
-an exact-head match guard. #1995 is
-a diagnostic-only head: its four-process concurrent failure is attributed by the
-selector-labelled diagnostic to
-`test_real_vitest_repeated_processes_use_fresh_denied_authorities`; it must not
-merge before #2164 merges and is integrated.
+an exact-head match guard. The remote #1995 head `24eaf18c9` remains the
+diagnostic-only four-process attribution SHA. Local canonical head `a89cedc3f`
+merges that exact remote history with protected `main` `67696f0f3`, including
+`M2164`; it preserves the sealed coordinator authority, worker Wasm guard,
+authenticated relay identity, and typed setup-error behavior. Local suites are
+green, but exact critical review and hosted Linux checks remain pending.
 
 The old `13a851fd5` #2164 hosted Unit job failed four rollout-inventory tests
 because three new tracked paths lack protected ownership, six native-addon
@@ -76,11 +77,11 @@ compiler, phase-attestation, timeout, or resource predicates.
    `H2164 = 5f6d747aa` passed Unit, Package, all hosted checks, exact Sol review,
    and clean-tree/main/remote-head guards; ancestry-preserving merge result
    `M2164 = d91b07a90` is on protected `main`.
-2. Fetch the updated protected `main` and integrate it into #1995 without force
-   pushing or overwriting newer remote work. Require `M2164`, the protected-main
-   merge result of `H2164`, as an ancestor, and preserve sealed coordinator
-   authority, the fork-pool worker Wasm guard, authenticated relay identity, and
-   typed setup-error behavior.
+2. **Locally passed; review pending:** canonical `a89cedc3f` integrates protected
+   `main` `67696f0f3` into #1995 without overwriting remote work. `M2164` is an
+   ancestor, and local tests cover sealed coordinator authority, the fork-pool
+   worker Wasm guard, authenticated relay identity, and typed setup-error
+   behavior.
 3. On the exact integrated #1995 SHA, require local affected suites plus hosted
    Unit, Package, CodeQL, auto-heal, and every required check; then require an
    exact-composite Sol HIGH approval.
@@ -109,9 +110,10 @@ and merge_result(H1995) is on protected main
 For #2164, the complete first half of the predicate is true: exact Sol approval
 and every hosted check passed on `H2164 = 5f6d747aa`, protected-main merge result
 `M2164 = d91b07a90` contains `H2164` as a parent, and protected `main` points to
-that merge. The single next critical-path gate is a fresh canonical #1995 head
-that contains `M2164`, preserves its four protected behaviors, passes local and
-hosted checks, and receives exact-composite Sol approval.
+that merge. The single next critical-path gate is exact-composite Sol approval
+of `a89cedc3f`, including the Linux-only finalizer test classification. Only
+after approval may that exact SHA be pushed for hosted Unit, Package, CodeQL,
+auto-heal, regression, and auxiliary checks.
 This predicate closes only the
 runner prerequisite/current PR gate, not global certification. It forbids
 retries-as-pass, timeout or resource increases, preload or authority weakening,
