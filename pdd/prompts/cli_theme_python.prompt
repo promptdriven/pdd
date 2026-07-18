@@ -22,7 +22,7 @@
       {"name": "ANSI_FAINT", "type": "str"}
     ],
     "functions": [
-      {"name": "get_console", "signature": "(**kwargs) -> rich.console.Console"},
+      {"name": "get_console", "signature": "(**kwargs) -> Console"},
       {"name": "style", "signature": "(role: str, text: str) -> str"},
       {"name": "hex_to_ansi", "signature": "(hex_color: str) -> str"},
       {"name": "apply_global_color_preference", "signature": "(preference: Optional[bool]) -> Callable[[], None]"}
