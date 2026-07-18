@@ -325,8 +325,8 @@ def test_detector_contract_rotation_is_exact_and_consumed() -> None:
     assert profiles.coverage == 1.0
 
 
-def test_story_regression_transition_is_exact_and_dormant() -> None:
-    """Preauthorize #2200 bytes without changing the protected prompt/profile."""
+def test_story_regression_transition_is_exact_and_consumed() -> None:
+    """Consume only the exact #2204-protected prompt/profile transition."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = [
         row
@@ -338,10 +338,10 @@ def test_story_regression_transition_is_exact_and_dormant() -> None:
     prompt = ROOT / STORY_REGRESSION_DORMANT_ROTATION["prompt_path"]
     prompt_digest = hashlib.sha256(prompt.read_bytes()).hexdigest()
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert prompt_digest == STORY_REGRESSION_DORMANT_ROTATION["base_prompt_sha256"]
-    assert prompt_digest != STORY_REGRESSION_DORMANT_ROTATION["head_prompt_sha256"]
-    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
-    assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+    assert prompt_digest != STORY_REGRESSION_DORMANT_ROTATION["base_prompt_sha256"]
+    assert prompt_digest == STORY_REGRESSION_DORMANT_ROTATION["head_prompt_sha256"]
+    assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
+    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
 
 
 def _requirement_authorization_row(authorization) -> dict[str, str]:
@@ -360,7 +360,7 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
 
 
 def test_committed_rotations_equal_exact_protected_authority() -> None:
-    """Only exact consumed bootstrap or dormant #2200 bindings reach policy."""
+    """Only exact consumed bootstrap or protected #2204 bindings reach policy."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = policy["requirement_rotations"]
     bootstrap_rows = {
@@ -378,11 +378,12 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
     pdd1989_rows = [
         row
         for row in rows
-        if row["head_policy_sha256"] == profile_digest
+        if row["head_policy_sha256"]
+        == STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
     ]
     assert len(pdd1989_rows) == 7
     assert {
