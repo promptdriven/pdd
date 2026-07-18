@@ -136,6 +136,10 @@ def _write_vitest_review_evidence(
         Path(__file__).parents[1]
         / "scripts/verify_vitest_package_provenance.sh"
     )
+    observation_verifier = (
+        Path(__file__).parents[1]
+        / "scripts/verify_vitest_no_result_observation.py"
+    )
     payload = {
         "schema": "vitest-diagnostic-review-v1",
         "failure_baseline_sha": _VITEST_FAILURE_BASELINE_SHA,
@@ -143,6 +147,9 @@ def _write_vitest_review_evidence(
         "diagnostic_head_sha": configured["PDD_VITEST_DIAGNOSTIC_HEAD_SHA"],
         "producer_sha256": configured["PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256"],
         "verifier_sha256": hashlib.sha256(verifier.read_bytes()).hexdigest(),
+        "observation_verifier_sha256": hashlib.sha256(
+            observation_verifier.read_bytes()
+        ).hexdigest(),
         "package_verifier_sha256": hashlib.sha256(
             package_verifier.read_bytes()
         ).hexdigest(),
@@ -329,6 +336,9 @@ def test_vitest_termination_diagnostic_verifies_against_current_producer(
             "--diagnostic-head-sha", configured["PDD_VITEST_DIAGNOSTIC_HEAD_SHA"],
             "--producer-sha256", configured["PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256"],
             "--verifier-sha256", configured["PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256"],
+            "--observation-verifier-sha256", hashlib.sha256(
+                (repository / "scripts/verify_vitest_no_result_observation.py").read_bytes()
+            ).hexdigest(),
             "--package-verifier-sha256", hashlib.sha256(
                 package_verifier.read_bytes()
             ).hexdigest(),

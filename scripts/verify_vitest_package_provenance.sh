@@ -37,6 +37,7 @@ check_equal "checkout-head-reviewed-head" "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
 for required in \
   PDD_REVIEWED_FAILURE_BASELINE_SHA PDD_REVIEWED_PROTECTED_BASE_SHA \
   PDD_REVIEWED_PRODUCER_SHA256 PDD_REVIEWED_VERIFIER_SHA256 \
+  PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256 \
   PDD_REVIEWED_PACKAGE_VERIFIER_SHA256 \
   PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256 \
   PDD_REVIEW_EVIDENCE_B64 PDD_REVIEW_EVIDENCE_SHA256 \
@@ -59,6 +60,9 @@ actual_producer_sha256="$(sha256sum pdd/sync_core/runner.py | awk '{print $1}')"
 actual_verifier_sha256="$(
   sha256sum scripts/verify_vitest_termination_evidence.py | awk '{print $1}'
 )" || fail "verifier-sha256-read"
+actual_observation_verifier_sha256="$(
+  sha256sum scripts/verify_vitest_no_result_observation.py | awk '{print $1}'
+)" || fail "observation-verifier-sha256-read"
 actual_package_verifier_sha256="$(
   sha256sum scripts/verify_vitest_package_attestation.py | awk '{print $1}'
 )" || fail "package-verifier-sha256-read"
@@ -69,6 +73,9 @@ check_equal "producer-sha256" "$PDD_REVIEWED_PRODUCER_SHA256" \
   "$actual_producer_sha256"
 check_equal "verifier-sha256" "$PDD_REVIEWED_VERIFIER_SHA256" \
   "$actual_verifier_sha256"
+check_equal "observation-verifier-sha256" \
+  "$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256" \
+  "$actual_observation_verifier_sha256"
 check_equal "package-verifier-sha256" \
   "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
   "$actual_package_verifier_sha256"
@@ -148,6 +155,7 @@ python scripts/verify_vitest_termination_evidence.py \
   --diagnostic-head-sha "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
   --producer-sha256 "$actual_producer_sha256" \
   --verifier-sha256 "$actual_verifier_sha256" \
+  --observation-verifier-sha256 "$actual_observation_verifier_sha256" \
   --package-verifier-sha256 "$actual_package_verifier_sha256" \
   --package-provenance-sha256 "$actual_package_provenance_sha256" \
   --runner-image "$actual_runner_image" \

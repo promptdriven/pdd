@@ -215,6 +215,33 @@ _TERMINATION_EVIDENCE_CONFIG_VALUES = {
     "vitest_lock_sha256": _TERMINATION_EVIDENCE_LOCK_SHA256,
     "test_node": _TERMINATION_EVIDENCE_TEST_NODE,
 }
+_NO_RESULT_OBSERVATION_SCHEMA = "vitest-no-result-observation-v1"
+_NO_RESULT_OBSERVATION_ENVIRONMENT = {
+    "output": "PDD_VITEST_NO_RESULT_OBSERVATION_OUTPUT",
+    "failure_baseline_sha": "PDD_VITEST_FAILURE_BASELINE_SHA",
+    "protected_base_sha": "PDD_VITEST_PROTECTED_BASE_SHA",
+    "trigger_head_sha": "PDD_VITEST_TRIGGER_HEAD_SHA",
+    "checkout_head_sha": "PDD_VITEST_CHECKOUT_HEAD_SHA",
+    "reviewed_head_sha": "PDD_VITEST_DIAGNOSTIC_HEAD_SHA",
+    "review_evidence_sha256": "PDD_VITEST_REVIEW_EVIDENCE_SHA256",
+    "producer_sha256": "PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256",
+    "termination_verifier_sha256": "PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256",
+    "observation_verifier_sha256": "PDD_VITEST_OBSERVATION_VERIFIER_SHA256",
+    "runner_image": "PDD_VITEST_RUNNER_IMAGE",
+    "runner_provisioner": "PDD_VITEST_RUNNER_PROVISIONER",
+    "python": "PDD_VITEST_PYTHON_VERSION",
+    "node": "PDD_VITEST_NODE_VERSION",
+    "vitest_package_sha256": "PDD_VITEST_PACKAGE_SHA256",
+    "vitest_lock_sha256": "PDD_VITEST_LOCK_SHA256",
+    "test_node": "PDD_VITEST_TEST_NODE",
+    "lane": "PDD_VITEST_OBSERVATION_LANE",
+    "runner_origin": "PDD_VITEST_OBSERVATION_RUNNER_ORIGIN",
+}
+_NO_RESULT_OBSERVATION_WHEEL_ENVIRONMENT = {
+    "package_attestation_sha256": "PDD_VITEST_OBSERVATION_PACKAGE_ATTESTATION_SHA256",
+    "wheel_sha256": "PDD_VITEST_OBSERVATION_WHEEL_SHA256",
+    "installed_runner_sha256": "PDD_VITEST_OBSERVATION_INSTALLED_RUNNER_SHA256",
+}
 
 
 class VitestProgressStage(str, Enum):
@@ -284,6 +311,34 @@ class VitestTerminationDiagnosticConfig:  # pylint: disable=too-many-instance-at
     vitest_package_sha256: str
     vitest_lock_sha256: str
     test_node: str
+
+
+@dataclass(frozen=True)
+class VitestNoResultObservationConfig:  # pylint: disable=too-many-instance-attributes
+    """Protected bindings for one cause-ineligible exit-zero observation."""
+
+    output: Path
+    failure_baseline_sha: str
+    protected_base_sha: str
+    trigger_head_sha: str
+    checkout_head_sha: str
+    reviewed_head_sha: str
+    review_evidence_sha256: str
+    producer_sha256: str
+    termination_verifier_sha256: str
+    observation_verifier_sha256: str
+    runner_image: str
+    runner_provisioner: str
+    python: str
+    node: str
+    vitest_package_sha256: str
+    vitest_lock_sha256: str
+    test_node: str
+    lane: str
+    runner_origin: str
+    package_attestation_sha256: str | None = None
+    wheel_sha256: str | None = None
+    installed_runner_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -5827,6 +5882,69 @@ def _vitest_termination_diagnostic_config(
     )
 
 
+def _vitest_no_result_observation_config(
+) -> VitestNoResultObservationConfig | None:
+    """Read complete host-owned bindings for one Stage A0 observation."""
+    output_value = os.environ.get(_NO_RESULT_OBSERVATION_ENVIRONMENT["output"])
+    if output_value is None:
+        return None
+    values: dict[str, str] = {}
+    for field, environment_name in _NO_RESULT_OBSERVATION_ENVIRONMENT.items():
+        if field == "output":
+            continue
+        value = os.environ.get(environment_name)
+        if type(value) is not str or not value:  # pylint: disable=unidiomatic-typecheck
+            raise ValueError("Vitest no-result observation configuration is incomplete")
+        values[field] = value
+    output = Path(output_value)
+    if not output_value or not output.is_absolute():
+        raise ValueError("Vitest no-result observation output must be absolute")
+    if any(
+        values[field] != expected
+        for field, expected in _TERMINATION_EVIDENCE_CONFIG_VALUES.items()
+    ):
+        raise ValueError("Vitest no-result observation configuration does not match pins")
+    if not all(
+        _vitest_termination_is_sha(values[field])
+        for field in ("failure_baseline_sha", "protected_base_sha", "trigger_head_sha",
+                      "checkout_head_sha", "reviewed_head_sha")
+    ) or not all(
+        _vitest_termination_is_sha256(values[field])
+        for field in ("review_evidence_sha256", "producer_sha256",
+                      "termination_verifier_sha256", "observation_verifier_sha256")
+    ):
+        raise ValueError("Vitest no-result observation identity is invalid")
+    if not (
+        values["trigger_head_sha"] == values["checkout_head_sha"]
+        == values["reviewed_head_sha"]
+        and values["producer_sha256"] == hashlib.sha256(
+            Path(__file__).resolve(strict=True).read_bytes()
+        ).hexdigest()
+    ):
+        raise ValueError("Vitest no-result observation identity does not match")
+    lane = values["lane"]
+    expected_origin = "source-checkout" if lane == "source" else "installed-wheel"
+    if lane not in {"source", "installed-wheel"} or values["runner_origin"] != expected_origin:
+        raise ValueError("Vitest no-result observation lane is invalid")
+    wheel_values = {
+        field: os.environ.get(environment_name)
+        for field, environment_name in _NO_RESULT_OBSERVATION_WHEEL_ENVIRONMENT.items()
+    }
+    if lane == "source":
+        if any(value is not None for value in wheel_values.values()):
+            raise ValueError("source Vitest observation forbids wheel identity")
+    elif not all(
+        isinstance(value, str) and _vitest_termination_is_sha256(value)
+        for value in wheel_values.values()
+    ):
+        raise ValueError("installed-wheel Vitest observation is incomplete")
+    return VitestNoResultObservationConfig(
+        output=output,
+        **values,
+        **wheel_values,
+    )
+
+
 def _vitest_termination_telemetry(
     result: subprocess.CompletedProcess[str],
 ) -> CgroupResourceTelemetry | None:
@@ -6025,6 +6143,89 @@ def _write_vitest_termination_evidence(
         ).hexdigest(),
         "cause_red_status": "pending",
     }
+    encoded = (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("ascii")
+    destination, _parent = _vitest_termination_output_destination(
+        candidate_root, config.output
+    )
+    digest_destination = destination.with_name(destination.name + ".sha256")
+    _write_vitest_termination_file(
+        digest_destination, hashlib.sha256(encoded).hexdigest().encode("ascii") + b"\n"
+    )
+    _write_vitest_termination_file(destination, encoded)
+    return destination
+
+
+def _write_vitest_no_result_observation(
+    candidate_root: Path,
+    result: subprocess.CompletedProcess[str],
+    progress: tuple[VitestProgressStage, ...],
+    *,
+    result_frame_present: bool,
+    diagnostic_config: VitestNoResultObservationConfig | None = None,
+) -> Path | None:
+    # pylint: disable=unidiomatic-typecheck
+    """Write Stage A0 only for an authenticated supervisor exit-zero no-result path."""
+    config = diagnostic_config or _vitest_no_result_observation_config()
+    termination = getattr(result, "termination", None)
+    if (
+        config is None
+        or result_frame_present is not False
+        or not isinstance(termination, SupervisorTermination)
+        or termination.kind is not TerminationKind.EXIT
+        or type(termination.exit_code) is not int
+        or termination.exit_code != 0
+        or result.returncode != 0
+        or termination.exit_code != result.returncode
+        or len(progress) > _VITEST_PROGRESS_MAX_RECORDS
+        or not all(isinstance(stage, VitestProgressStage) for stage in progress)
+    ):
+        return None
+    try:
+        observed_result, observed_progress = _parse_vitest_transport(
+            b"".join(_vitest_progress_frame(stage) for stage in progress)
+        )
+    except ValueError:
+        return None
+    if observed_result or observed_progress != progress:
+        return None
+    payload: dict[str, object] = {
+        "schema": _NO_RESULT_OBSERVATION_SCHEMA,
+        "failure_baseline_sha": config.failure_baseline_sha,
+        "protected_base_sha": config.protected_base_sha,
+        "trigger_head_sha": config.trigger_head_sha,
+        "checkout_head_sha": config.checkout_head_sha,
+        "reviewed_head_sha": config.reviewed_head_sha,
+        "review_evidence_sha256": config.review_evidence_sha256,
+        "producer_sha256": config.producer_sha256,
+        "termination_verifier_sha256": config.termination_verifier_sha256,
+        "observation_verifier_sha256": config.observation_verifier_sha256,
+        "runner_image": config.runner_image,
+        "runner_provisioner": config.runner_provisioner,
+        "python": config.python,
+        "node": config.node,
+        "vitest_package_sha256": config.vitest_package_sha256,
+        "vitest_lock_sha256": config.vitest_lock_sha256,
+        "test_node": config.test_node,
+        "lane": config.lane,
+        "runner_origin": config.runner_origin,
+        "supervisor_exit_code": termination.exit_code,
+        "result_frame_present": False,
+        "progress_frames": [stage.value for stage in progress],
+        "cause_eligible": False,
+    }
+    if config.lane == "installed-wheel":
+        if not all(isinstance(value, str) for value in (
+            config.package_attestation_sha256, config.wheel_sha256,
+            config.installed_runner_sha256,
+        )):
+            return None
+        payload.update({
+            "package_attestation_sha256": config.package_attestation_sha256,
+            "wheel_sha256": config.wheel_sha256,
+            "installed_runner_sha256": config.installed_runner_sha256,
+        })
     encoded = (
         json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode("ascii")
@@ -6871,6 +7072,11 @@ def _run_vitest(
         # An invalid opt-in is evidence-ineligible, never a behavior-path change.
         diagnostic_config = None
     try:
+        observation_config = _vitest_no_result_observation_config()
+    except (OSError, ValueError):
+        # A malformed Stage A0 opt-in must not alter the protected runner result.
+        observation_config = None
+    try:
         descriptor = _load_vitest_toolchain_descriptor(tool_root, config)
         if phase_toolchain is None:
             phase_toolchain = _prepare_vitest_toolchain(root, descriptor)
@@ -7048,6 +7254,18 @@ def _run_vitest(
             except (OSError, ValueError):
                 pass
 
+        def record_no_result_observation() -> None:
+            """Attempt Stage A0 without treating no-result as a cause."""
+            if observation_config is None:
+                return
+            try:
+                _write_vitest_no_result_observation(
+                    root, result, progress, result_frame_present=False,
+                    diagnostic_config=observation_config,
+                )
+            except (OSError, ValueError):
+                pass
+
         if (
             isinstance(termination, SupervisorTermination)
             and termination.kind is TerminationKind.SANDBOX_ERROR
@@ -7112,7 +7330,7 @@ def _run_vitest(
             record_termination_evidence()
             return native_execution(outcome, digest, detail), ()
         if not output_data:
-            record_termination_evidence()
+            record_no_result_observation()
             return native_execution(
                 EvidenceOutcome.COLLECTION_ERROR, digest,
                 "Vitest reporter produced no result",

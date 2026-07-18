@@ -70,6 +70,12 @@ def _fixture(
     package_provenance_digest = hashlib.sha256(
         package_provenance.read_bytes()
     ).hexdigest()
+    observation_verifier = (
+        repository / "scripts" / "verify_vitest_no_result_observation.py"
+    )
+    observation_verifier_digest = hashlib.sha256(
+        observation_verifier.read_bytes()
+    ).hexdigest()
     payload: dict[str, object] = {
         "schema": "vitest-termination-v1",
         "failure_baseline_sha": _FAILURE_BASELINE_SHA,
@@ -101,6 +107,7 @@ def _fixture(
         "diagnostic_head_sha": head,
         "producer_sha256": producer_digest,
         "verifier_sha256": verifier_digest,
+        "observation_verifier_sha256": observation_verifier_digest,
         "package_verifier_sha256": package_verifier_digest,
         "package_provenance_sha256": package_provenance_digest,
         "verdict": "APPROVE",
@@ -122,6 +129,7 @@ def _fixture(
         "--diagnostic-head-sha", head,
         "--producer-sha256", producer_digest,
         "--verifier-sha256", verifier_digest,
+        "--observation-verifier-sha256", observation_verifier_digest,
         "--package-verifier-sha256", package_verifier_digest,
         "--package-provenance-sha256", package_provenance_digest,
         "--runner-image", _RUNNER_IMAGE,
@@ -230,6 +238,7 @@ def test_verifier_rejects_malformed_or_unrelated_evidence(
         ("--diagnostic-head-sha", "2" * 40),
         ("--producer-sha256", "3" * 64),
         ("--verifier-sha256", "4" * 64),
+        ("--observation-verifier-sha256", "9" * 64),
         ("--package-verifier-sha256", "7" * 64),
         ("--package-provenance-sha256", "8" * 64),
         ("--runner-image", "untrusted-image"),
@@ -268,7 +277,7 @@ def test_verifier_rejects_paired_artifact_and_argument_identity_substitution(
     "mutation",
     (
         "extra", "verdict", "head", "producer", "verifier",
-        "package-verifier", "package-provenance", "missing-package-verifier",
+        "observation-verifier", "package-verifier", "package-provenance", "missing-package-verifier",
         "digest",
     ),
 )
@@ -287,6 +296,8 @@ def test_verifier_rejects_untrusted_or_malformed_review_evidence(
         review["producer_sha256"] = "b" * 64
     elif mutation == "verifier":
         review["verifier_sha256"] = "c" * 64
+    elif mutation == "observation-verifier":
+        review["observation_verifier_sha256"] = "f" * 64
     elif mutation == "package-verifier":
         review["package_verifier_sha256"] = "d" * 64
     elif mutation == "package-provenance":
@@ -324,6 +335,8 @@ def test_verifier_rejects_actual_package_authority_byte_tampering(
         check=True,
     )
     for package_authority in (
+        "pdd/sync_core/runner.py",
+        "scripts/verify_vitest_no_result_observation.py",
         "scripts/verify_vitest_package_attestation.py",
         "scripts/verify_vitest_package_provenance.sh",
     ):

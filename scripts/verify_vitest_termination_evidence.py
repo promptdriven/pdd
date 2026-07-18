@@ -66,6 +66,7 @@ _REVIEW_FIELDS = frozenset({
     "diagnostic_head_sha",
     "producer_sha256",
     "verifier_sha256",
+    "observation_verifier_sha256",
     "package_verifier_sha256",
     "package_provenance_sha256",
     "verdict",
@@ -255,7 +256,8 @@ def _require_review_evidence(
         "producer_sha256", "verifier_sha256",
     )
     for field in artifact_identity_fields + (
-        "package_verifier_sha256", "package_provenance_sha256",
+        "observation_verifier_sha256", "package_verifier_sha256",
+        "package_provenance_sha256",
     ):
         expected = getattr(arguments, field)
         if review.get(field) != expected or (
@@ -350,15 +352,21 @@ def _verify_local_identities(arguments: argparse.Namespace) -> None:
         repository / "scripts" / "verify_vitest_package_provenance.sh"
     )
     package_provenance_metadata = package_provenance.lstat()
+    observation_verifier = (
+        repository / "scripts" / "verify_vitest_no_result_observation.py"
+    )
+    observation_verifier_metadata = observation_verifier.lstat()
     if (
         not stat.S_ISREG(producer_metadata.st_mode)
         or not stat.S_ISREG(verifier_metadata.st_mode)
         or not stat.S_ISREG(package_verifier_metadata.st_mode)
         or not stat.S_ISREG(package_provenance_metadata.st_mode)
+        or not stat.S_ISREG(observation_verifier_metadata.st_mode)
         or _sha256(producer) != arguments.producer_sha256
         or _sha256(verifier) != arguments.verifier_sha256
         or _sha256(package_verifier) != arguments.package_verifier_sha256
         or _sha256(package_provenance) != arguments.package_provenance_sha256
+        or _sha256(observation_verifier) != arguments.observation_verifier_sha256
     ):
         raise EvidenceError
 
@@ -377,6 +385,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--diagnostic-head-sha", required=True)
     parser.add_argument("--producer-sha256", required=True)
     parser.add_argument("--verifier-sha256", required=True)
+    parser.add_argument("--observation-verifier-sha256", required=True)
     parser.add_argument("--package-verifier-sha256", required=True)
     parser.add_argument("--package-provenance-sha256", required=True)
     parser.add_argument("--runner-image", required=True)
