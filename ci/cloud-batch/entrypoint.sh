@@ -494,7 +494,10 @@ run_test() {
 
 if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_END}" ]; then
     # ── Pytest chunk ──────────────────────────────────────────────────
-    if [ "${PDD_BATCH_ENABLE_PYTEST_CLOUD_E2E:-}" != "1" ]; then
+    if [ "${PDD_BATCH_ENABLE_PYTEST_CLOUD_E2E:-}" = "1" ]; then
+        unset PDD_FORCE_LOCAL
+        echo "=== Pytest shard cloud E2E: inherited PDD_FORCE_LOCAL cleared; PDD_MODEL_DEFAULT/PDD_JWT_TOKEN preserved ==="
+    else
         export PDD_FORCE_LOCAL=1
         # Unit-test shards must not inherit the release lane's provider-bound
         # default model; many tests intentionally load tiny mock catalogs that

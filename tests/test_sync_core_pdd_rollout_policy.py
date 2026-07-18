@@ -199,7 +199,7 @@ def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
 
 
 def _skip_if_required_git_history_missing(root: Path, *refs: str) -> None:
-    """Skip exact-base assertions when the checkout lacks the required commits."""
+    """Skip exact-base assertions only when the checkout is not a Git repo."""
     git_dir = subprocess.run(
         ["git", "rev-parse", "--git-dir"],
         cwd=root,
@@ -207,24 +207,10 @@ def _skip_if_required_git_history_missing(root: Path, *refs: str) -> None:
         capture_output=True,
         text=True,
     )
-    missing_refs = list(refs)
-    if git_dir.returncode == 0:
-        missing_refs = [
-            ref
-            for ref in refs
-            if subprocess.run(
-                ["git", "cat-file", "-e", f"{ref}^{{commit}}"],
-                cwd=root,
-                check=False,
-                capture_output=True,
-                text=True,
-            ).returncode
-            != 0
-        ]
-    if missing_refs:
+    if git_dir.returncode != 0:
         pytest.skip(
             "requires local git history for #1989 exact-base verification: "
-            + ", ".join(missing_refs)
+            + ", ".join(refs)
         )
 
 
@@ -708,11 +694,32 @@ def test_pdd1989_history_guard_skips_without_required_git_objects(
         pytest.skip.Exception,
         match="requires local git history for #1989 exact-base verification",
     ):
-        _skip_if_required_git_history_missing(  # type: ignore[name-defined]
+        _skip_if_required_git_history_missing(
             tmp_path,
             PDD_1989_ACTUAL_BASE,
             PDD_1989_ACTUAL_HEAD,
         )
+
+
+def test_pdd1989_history_guard_does_not_skip_in_valid_repo_with_missing_refs(
+    tmp_path: Path,
+) -> None:
+    """A real Git checkout must keep the exact-base assertion live."""
+    _git(tmp_path, "init")
+    (tmp_path / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+    _commit(tmp_path, "initial commit")
+
+    try:
+        _skip_if_required_git_history_missing(
+            tmp_path,
+            PDD_1989_ACTUAL_BASE,
+            PDD_1989_ACTUAL_HEAD,
+        )
+    except pytest.skip.Exception as exc:  # pragma: no cover - red-path contract
+        raise AssertionError(
+            "valid Git repositories must not skip #1989 exact-base checks "
+            "just because pinned refs are absent"
+        ) from exc
 
 
 def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> None:
