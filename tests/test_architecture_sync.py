@@ -286,6 +286,39 @@ def test_validate_architecture_modules_returns_route_shaped_result():
     }
 
 
+def test_agentic_architecture_primary_workflow_dependency_chain_is_registered():
+    """Every primary Step 1-13 prompt must satisfy architecture dependencies."""
+    architecture_path = Path(__file__).resolve().parents[1] / "architecture.json"
+    modules = json.loads(architecture_path.read_text(encoding="utf-8"))
+    filenames = [
+        "agentic_arch_step1_analyze_prd_LLM.prompt",
+        "agentic_arch_step2_analyze_LLM.prompt",
+        "agentic_arch_step3_research_LLM.prompt",
+        "agentic_arch_step4_data_model_LLM.prompt",
+        "agentic_arch_step5_design_LLM.prompt",
+        "agentic_arch_step6_research_deps_LLM.prompt",
+        "agentic_arch_step7_generate_LLM.prompt",
+        "agentic_arch_step8_pddrc_LLM.prompt",
+        "agentic_arch_step9_prompts_LLM.prompt",
+        "agentic_arch_step10_completeness_LLM.prompt",
+        "agentic_arch_step11_sync_LLM.prompt",
+        "agentic_arch_step12_deps_LLM.prompt",
+        "agentic_arch_step13_fix_LLM.prompt",
+    ]
+    workflow = {
+        module["filename"]: module
+        for module in modules
+        if module.get("filename") in filenames
+    }
+
+    assert set(workflow) == set(filenames)
+    assert validate_architecture_modules(list(workflow.values())) == {
+        "valid": True,
+        "errors": [],
+        "warnings": [],
+    }
+
+
 def test_sync_prompts_to_architecture_updates_selected_prompts_and_validates(tmp_path):
     """Single-prompt sync should normalize prompt paths, write changes, and validate."""
     prompts_dir = tmp_path / "prompts"

@@ -6018,6 +6018,285 @@
     }
   },
   {
+    "reason": "Designs core data entities, relationships, storage decisions, and schema/ORM recommendations informed by tech stack research.",
+    "description": "Step 4 of the agentic architecture workflow. Designs the core data model, including entities, relationships, storage decisions, and schema or ORM recommendations.",
+    "dependencies": [
+      "agentic_arch_step3_research_LLM.prompt"
+    ],
+    "priority": 157,
+    "filename": "agentic_arch_step4_data_model_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step4_data_model_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "design_data_model",
+            "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str)",
+            "returns": "str (data model with entities, relationships, storage decisions)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 1200
+    }
+  },
+  {
+    "reason": "Designs module breakdown with dependency graph, priority ordering, and interface specifications.",
+    "description": "Step 5 of the agentic architecture workflow. Designs the module decomposition, dependency graph, priority ordering, and module interfaces.",
+    "dependencies": [
+      "agentic_arch_step4_data_model_LLM.prompt"
+    ],
+    "priority": 158,
+    "filename": "agentic_arch_step5_design_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step5_design_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "design_modules",
+            "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str, step4_output: str)",
+            "returns": "str (module list with dependencies, priorities, interfaces)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 1600
+    }
+  },
+  {
+    "reason": "Finds relevant API docs and code examples per module to populate context_urls in architecture.json.",
+    "description": "Step 6 of the agentic architecture workflow. Researches API documentation and code examples for each designed module so architecture context URLs can be populated.",
+    "dependencies": [
+      "agentic_arch_step5_design_LLM.prompt"
+    ],
+    "priority": 159,
+    "filename": "agentic_arch_step6_research_deps_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step6_research_deps_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "research_deps",
+            "signature": "(issue_content: str, step5_output: str)",
+            "returns": "str (enriched module list with web resource URLs)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 2000
+    }
+  },
+  {
+    "reason": "Generates complete architecture.json with proper priority ordering, dependencies, and context_urls from prior analysis.",
+    "description": "Step 7 of the agentic architecture workflow. Generates the complete architecture JSON from the preceding analysis, design, and dependency research.",
+    "dependencies": [
+      "agentic_arch_step6_research_deps_LLM.prompt"
+    ],
+    "priority": 160,
+    "filename": "agentic_arch_step7_generate_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step7_generate_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_architecture",
+            "signature": "(issue_content: str, step1-6_outputs: str)",
+            "returns": "str (valid JSON array matching architecture schema)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 2400
+    }
+  },
+  {
+    "reason": "Generates and validates .pddrc configuration file based on architecture.json, ensuring proper context mapping and output path templates.",
+    "description": "Step 8 of the agentic architecture workflow. Generates and validates project configuration from architecture JSON, including context mapping and output templates.",
+    "dependencies": [
+      "agentic_arch_step7_generate_LLM.prompt"
+    ],
+    "priority": 161,
+    "filename": "agentic_arch_step8_pddrc_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step8_pddrc_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_pddrc",
+            "signature": "(architecture_json: str)",
+            "returns": "str (path to .pddrc file)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 2800
+    }
+  },
+  {
+    "reason": "Generates prompt files for all modules defined in architecture.json, placing them in the correct directories based on .pddrc configuration.",
+    "description": "Step 9 of the agentic architecture workflow. Generates prompt files for every architecture module in the directories selected by project configuration.",
+    "dependencies": [
+      "agentic_arch_step8_pddrc_LLM.prompt"
+    ],
+    "priority": 162,
+    "filename": "agentic_arch_step9_prompts_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step9_prompts_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_prompts",
+            "signature": "(architecture_json: str, pddrc_content: str)",
+            "returns": "str (list of generated prompt files)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 3200
+    }
+  },
+  {
+    "reason": "Validates prompt-level completeness: all modules have prompt files, prompts capture module specs, dependencies correct.",
+    "description": "Step 10 of the agentic architecture workflow. Validates that every module has a prompt capturing its specification and correct dependencies.",
+    "dependencies": [
+      "agentic_arch_step9_prompts_LLM.prompt"
+    ],
+    "priority": 163,
+    "filename": "agentic_arch_step10_completeness_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step10_completeness_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_completeness",
+            "signature": "(architecture_json: str, prd_summary: str, issue_content: str)",
+            "returns": "str ('VALID' or list of completeness errors)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 3600
+    }
+  },
+  {
+    "reason": "Validates .pddrc configuration using pdd sync --dry-run for each module.",
+    "description": "Step 11 of the agentic architecture workflow. Validates project configuration by dry-running synchronization for every module.",
+    "dependencies": [
+      "agentic_arch_step10_completeness_LLM.prompt"
+    ],
+    "priority": 164,
+    "filename": "agentic_arch_step11_sync_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step11_sync_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_sync",
+            "signature": "(architecture_json: str)",
+            "returns": "str ('VALID' or list of sync errors)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 4000
+    }
+  },
+  {
+    "reason": "Validates dependency graph: ensures priorities are correct so dependencies are generated before dependents.",
+    "description": "Step 12 of the agentic architecture workflow. Validates dependency ordering so every dependency is generated before its dependents.",
+    "dependencies": [
+      "agentic_arch_step11_sync_LLM.prompt"
+    ],
+    "priority": 165,
+    "filename": "agentic_arch_step12_deps_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step12_deps_LLM.prompt",
+    "tags": [
+      "llm",
+      "agentic",
+      "architecture"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_dependency_graph",
+            "signature": "()",
+            "returns": "str ('VALID' or list of dependency errors)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 20400,
+      "y": 4400
+    }
+  },
+  {
     "reason": "Fixes validation errors from a single failed validation step (completeness, sync, or dependencies).",
     "description": "Step 13 of the agentic architecture workflow. Fixes validation errors from a failed completeness, architecture-sync, or prompt-dependency validation step before validation is rerun.",
     "dependencies": [
