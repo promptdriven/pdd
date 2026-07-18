@@ -42,6 +42,8 @@ jobs:
       PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA: ${{ vars.PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA }}
       PDD_REVIEWED_PRODUCER_SHA256: ${{ vars.PDD_REVIEWED_PRODUCER_SHA256 }}
       PDD_REVIEWED_VERIFIER_SHA256: ${{ vars.PDD_REVIEWED_VERIFIER_SHA256 }}
+      PDD_REVIEWED_PACKAGE_VERIFIER_SHA256: ${{ vars.PDD_REVIEWED_PACKAGE_VERIFIER_SHA256 }}
+      PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256: ${{ vars.PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256 }}
       PDD_REVIEW_EVIDENCE_B64: ${{ vars.PDD_REVIEW_EVIDENCE_B64 }}
       PDD_REVIEW_EVIDENCE_SHA256: ${{ vars.PDD_REVIEW_EVIDENCE_SHA256 }}
       PDD_PINNED_RUNNER_IMAGE: ${{ vars.PDD_PINNED_RUNNER_IMAGE }}
@@ -452,7 +454,10 @@ jobs:
           for required in \
             PDD_REVIEWED_FAILURE_BASELINE_SHA PDD_REVIEWED_PROTECTED_BASE_SHA \
             PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA PDD_REVIEWED_PRODUCER_SHA256 \
-            PDD_REVIEWED_VERIFIER_SHA256 PDD_REVIEW_EVIDENCE_B64 \
+            PDD_REVIEWED_VERIFIER_SHA256 \
+            PDD_REVIEWED_PACKAGE_VERIFIER_SHA256 \
+            PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256 \
+            PDD_REVIEW_EVIDENCE_B64 \
             PDD_REVIEW_EVIDENCE_SHA256 PDD_PINNED_RUNNER_IMAGE \
             PDD_PINNED_RUNNER_PROVISIONER PDD_PINNED_PYTHON_VERSION \
             PDD_PINNED_NODE_VERSION PDD_PINNED_VITEST_PACKAGE_SHA256 \
@@ -475,12 +480,28 @@ jobs:
             verifier_hash_line "verifier-sha256-read" \
             sha256sum scripts/verify_vitest_termination_evidence.py
           actual_verifier_sha256="${verifier_hash_line%% *}"
+          capture_output \
+            package_verifier_hash_line "package-verifier-sha256-read" \
+            sha256sum scripts/verify_vitest_package_attestation.py
+          actual_package_verifier_sha256="${package_verifier_hash_line%% *}"
+          capture_output \
+            package_provenance_hash_line "package-provenance-sha256-read" \
+            sha256sum scripts/verify_vitest_package_provenance.sh
+          actual_package_provenance_sha256="${package_provenance_hash_line%% *}"
           check_equal \
             "producer-sha256" "$PDD_REVIEWED_PRODUCER_SHA256" \
             "$actual_producer_sha256"
           check_equal \
             "verifier-sha256" "$PDD_REVIEWED_VERIFIER_SHA256" \
             "$actual_verifier_sha256"
+          check_equal \
+            "package-verifier-sha256" \
+            "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
+            "$actual_package_verifier_sha256"
+          check_equal \
+            "package-provenance-sha256" \
+            "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
+            "$actual_package_provenance_sha256"
 
           review_directory="$RUNNER_TEMP/pdd-vitest-review-evidence"
           review_evidence="$review_directory/vitest-diagnostic-review-v1.json"
@@ -567,6 +588,8 @@ jobs:
             --diagnostic-head-sha "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
             --producer-sha256 "$actual_producer_sha256" \
             --verifier-sha256 "$actual_verifier_sha256" \
+            --package-verifier-sha256 "$actual_package_verifier_sha256" \
+            --package-provenance-sha256 "$actual_package_provenance_sha256" \
             --runner-image "$actual_runner_image" \
             --runner-provisioner "$actual_provisioner" \
             --python "${actual_python#Python }" \
@@ -959,6 +982,10 @@ jobs:
             --diagnostic-head-sha "$diagnostic_head" \
             --producer-sha256 "$producer_sha256" \
             --verifier-sha256 "$verifier_sha256" \
+            --package-verifier-sha256 \
+              "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
+            --package-provenance-sha256 \
+              "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
             --runner-image "$PDD_VITEST_RUNNER_IMAGE" \
             --runner-provisioner "$PDD_VITEST_RUNNER_PROVISIONER" \
             --python "$PDD_VITEST_PYTHON_VERSION" \
@@ -1152,6 +1179,8 @@ jobs:
       PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA: ${{ vars.PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA }}
       PDD_REVIEWED_PRODUCER_SHA256: ${{ vars.PDD_REVIEWED_PRODUCER_SHA256 }}
       PDD_REVIEWED_VERIFIER_SHA256: ${{ vars.PDD_REVIEWED_VERIFIER_SHA256 }}
+      PDD_REVIEWED_PACKAGE_VERIFIER_SHA256: ${{ vars.PDD_REVIEWED_PACKAGE_VERIFIER_SHA256 }}
+      PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256: ${{ vars.PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256 }}
       PDD_REVIEW_EVIDENCE_B64: ${{ vars.PDD_REVIEW_EVIDENCE_B64 }}
       PDD_REVIEW_EVIDENCE_SHA256: ${{ vars.PDD_REVIEW_EVIDENCE_SHA256 }}
       PDD_PINNED_RUNNER_IMAGE: ${{ vars.PDD_PINNED_RUNNER_IMAGE }}
@@ -1207,6 +1236,9 @@ jobs:
           checked_out_head="$(git rev-parse HEAD)"
           test "$checked_out_head" = "$PDD_TRIGGER_PR_HEAD_SHA"
           test "$checked_out_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          actual_package_provenance_sha256="$(sha256sum scripts/verify_vitest_package_provenance.sh | awk '{print $1}')"
+          test "$actual_package_provenance_sha256" = \
+            "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256"
           bash scripts/verify_vitest_package_provenance.sh
 
       - name: Provision identity-bound Vitest toolchain
@@ -1330,6 +1362,8 @@ jobs:
           mapfile -t wheels < <(find dist-smoke -maxdepth 1 -type f -name '*.whl' -print)
           test "${#wheels[@]}" -eq 1
           wheel="$(realpath "${wheels[0]}")"
+          test "$(sha256sum scripts/verify_vitest_package_attestation.py | awk '{print $1}')" = \
+            "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256"
           python scripts/verify_vitest_package_attestation.py create \
             --attestation "$attestation" \
             --wheel "$wheel" \
@@ -1339,6 +1373,8 @@ jobs:
             --producer-sha256 "$PDD_REVIEWED_PRODUCER_SHA256"
           attestation_sha256="$(sha256sum "$attestation" | awk '{print $1}')"
           test "$attestation_sha256" = "$(tr -d '\n' < "$attestation.sha256")"
+          test "$(sha256sum scripts/verify_vitest_package_attestation.py | awk '{print $1}')" = \
+            "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256"
           python scripts/verify_vitest_package_attestation.py verify \
             --attestation "$attestation" \
             --attestation-sha256 "$attestation_sha256" \
@@ -1391,6 +1427,8 @@ jobs:
           diagnostic_directory="${artifact%/*}"
           test -d "$diagnostic_directory"
           test "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" = "$(git rev-parse HEAD)"
+          test "$(sha256sum scripts/verify_vitest_package_attestation.py | awk '{print $1}')" = \
+            "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256"
           python scripts/verify_vitest_package_attestation.py verify \
             --attestation "$PDD_WHEEL_ATTESTATION_PATH" \
             --attestation-sha256 "$PDD_WHEEL_ATTESTATION_SHA256" \
@@ -1444,6 +1482,10 @@ jobs:
             --diagnostic-head-sha "$PDD_VITEST_DIAGNOSTIC_HEAD_SHA" \
             --producer-sha256 "$PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256" \
             --verifier-sha256 "$PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256" \
+            --package-verifier-sha256 \
+              "$PDD_REVIEWED_PACKAGE_VERIFIER_SHA256" \
+            --package-provenance-sha256 \
+              "$PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256" \
             --runner-image "$PDD_VITEST_RUNNER_IMAGE" \
             --runner-provisioner "$PDD_VITEST_RUNNER_PROVISIONER" \
             --python "$PDD_VITEST_PYTHON_VERSION" \
@@ -1462,7 +1504,7 @@ jobs:
           name: vitest-wheel-termination-evidence-${{ github.event.pull_request.head.sha }}
           path: ${{ runner.temp }}/pdd-vitest-wheel-termination-evidence/
           include-hidden-files: false
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Verify installed-wheel Vitest coordinator lifecycle
         run: |

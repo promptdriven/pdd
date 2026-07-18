@@ -1,9 +1,10 @@
 """Focused contract tests for the strict Vitest termination verifier."""
 
-# pylint: disable=duplicate-code
+# pylint: disable=duplicate-code,too-many-locals
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -51,12 +52,24 @@ def _fixture(
     repository = Path(__file__).resolve().parents[1]
     verifier = repository / "scripts" / "verify_vitest_termination_evidence.py"
     producer = repository / "pdd" / "sync_core" / "runner.py"
+    package_verifier = (
+        repository / "scripts" / "verify_vitest_package_attestation.py"
+    )
+    package_provenance = (
+        repository / "scripts" / "verify_vitest_package_provenance.sh"
+    )
     head = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repository,
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     producer_digest = hashlib.sha256(producer.read_bytes()).hexdigest()
     verifier_digest = hashlib.sha256(verifier.read_bytes()).hexdigest()
+    package_verifier_digest = hashlib.sha256(
+        package_verifier.read_bytes()
+    ).hexdigest()
+    package_provenance_digest = hashlib.sha256(
+        package_provenance.read_bytes()
+    ).hexdigest()
     payload: dict[str, object] = {
         "schema": "vitest-termination-v1",
         "failure_baseline_sha": _FAILURE_BASELINE_SHA,
@@ -88,6 +101,8 @@ def _fixture(
         "diagnostic_head_sha": head,
         "producer_sha256": producer_digest,
         "verifier_sha256": verifier_digest,
+        "package_verifier_sha256": package_verifier_digest,
+        "package_provenance_sha256": package_provenance_digest,
         "verdict": "APPROVE",
         "behavioral_verdict": "NO_BEHAVIORAL_FIX",
     }
@@ -107,6 +122,8 @@ def _fixture(
         "--diagnostic-head-sha", head,
         "--producer-sha256", producer_digest,
         "--verifier-sha256", verifier_digest,
+        "--package-verifier-sha256", package_verifier_digest,
+        "--package-provenance-sha256", package_provenance_digest,
         "--runner-image", _RUNNER_IMAGE,
         "--runner-provisioner", _RUNNER_PROVISIONER,
         "--python", _PYTHON_VERSION,
@@ -213,6 +230,8 @@ def test_verifier_rejects_malformed_or_unrelated_evidence(
         ("--diagnostic-head-sha", "2" * 40),
         ("--producer-sha256", "3" * 64),
         ("--verifier-sha256", "4" * 64),
+        ("--package-verifier-sha256", "7" * 64),
+        ("--package-provenance-sha256", "8" * 64),
         ("--runner-image", "untrusted-image"),
         ("--runner-provisioner", "untrusted-provisioner"),
         ("--python", "0.0.0"),
@@ -246,7 +265,12 @@ def test_verifier_rejects_paired_artifact_and_argument_identity_substitution(
 
 
 @pytest.mark.parametrize(
-    "mutation", ("extra", "verdict", "head", "producer", "verifier", "digest"),
+    "mutation",
+    (
+        "extra", "verdict", "head", "producer", "verifier",
+        "package-verifier", "package-provenance", "missing-package-verifier",
+        "digest",
+    ),
 )
 def test_verifier_rejects_untrusted_or_malformed_review_evidence(
     tmp_path: Path, mutation: str,
@@ -263,10 +287,54 @@ def test_verifier_rejects_untrusted_or_malformed_review_evidence(
         review["producer_sha256"] = "b" * 64
     elif mutation == "verifier":
         review["verifier_sha256"] = "c" * 64
+    elif mutation == "package-verifier":
+        review["package_verifier_sha256"] = "d" * 64
+    elif mutation == "package-provenance":
+        review["package_provenance_sha256"] = "e" * 64
+    elif mutation == "missing-package-verifier":
+        del review["package_verifier_sha256"]
     else:
         arguments[arguments.index("--review-evidence-sha256") + 1] = "f" * 64
         assert _verify(arguments).returncode != 0
         return
     _rewrite(review_path, review, arguments, "--review-evidence-sha256")
+
+    assert _verify(arguments).returncode != 0
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "scripts/verify_vitest_package_attestation.py",
+        "scripts/verify_vitest_package_provenance.sh",
+    ),
+)
+def test_verifier_rejects_actual_package_authority_byte_tampering(
+    tmp_path: Path, relative_path: str,
+) -> None:
+    """A byte change in either reviewed Package authority fails before use."""
+    _evidence, _payload, _review_path, _review, arguments = _fixture(tmp_path)
+    source_repository = Path(__file__).resolve().parents[1]
+    measured_repository = tmp_path / "measured-repository"
+    subprocess.run(
+        [
+            "git", "clone", "--quiet", "--no-hardlinks",
+            str(source_repository), str(measured_repository),
+        ],
+        check=True,
+    )
+    for package_authority in (
+        "scripts/verify_vitest_package_attestation.py",
+        "scripts/verify_vitest_package_provenance.sh",
+    ):
+        shutil.copy2(
+            source_repository / package_authority,
+            measured_repository / package_authority,
+        )
+    arguments[arguments.index("--repository") + 1] = str(measured_repository)
+    assert _verify(arguments).returncode == 0
+
+    target = measured_repository / relative_path
+    target.write_bytes(target.read_bytes() + b"# tampered\n")
 
     assert _verify(arguments).returncode != 0

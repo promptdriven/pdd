@@ -128,6 +128,14 @@ def _write_vitest_review_evidence(
 ) -> str:
     """Write independently supplied review evidence for verifier integration."""
     verifier = Path(__file__).parents[1] / "scripts/verify_vitest_termination_evidence.py"
+    package_verifier = (
+        Path(__file__).parents[1]
+        / "scripts/verify_vitest_package_attestation.py"
+    )
+    package_provenance = (
+        Path(__file__).parents[1]
+        / "scripts/verify_vitest_package_provenance.sh"
+    )
     payload = {
         "schema": "vitest-diagnostic-review-v1",
         "failure_baseline_sha": _VITEST_FAILURE_BASELINE_SHA,
@@ -135,6 +143,12 @@ def _write_vitest_review_evidence(
         "diagnostic_head_sha": configured["PDD_VITEST_DIAGNOSTIC_HEAD_SHA"],
         "producer_sha256": configured["PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256"],
         "verifier_sha256": hashlib.sha256(verifier.read_bytes()).hexdigest(),
+        "package_verifier_sha256": hashlib.sha256(
+            package_verifier.read_bytes()
+        ).hexdigest(),
+        "package_provenance_sha256": hashlib.sha256(
+            package_provenance.read_bytes()
+        ).hexdigest(),
         "verdict": "APPROVE",
         "behavioral_verdict": "NO_BEHAVIORAL_FIX",
     }
@@ -294,6 +308,12 @@ def test_vitest_termination_diagnostic_verifies_against_current_producer(
     assert observed == output
     repository = Path(__file__).parents[1]
     verifier = repository / "scripts" / "verify_vitest_termination_evidence.py"
+    package_verifier = (
+        repository / "scripts/verify_vitest_package_attestation.py"
+    )
+    package_provenance = (
+        repository / "scripts/verify_vitest_package_provenance.sh"
+    )
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
     review_evidence = tmp_path / "vitest-diagnostic-review-v1.json"
     review_digest = _write_vitest_review_evidence(review_evidence, configured)
@@ -309,6 +329,12 @@ def test_vitest_termination_diagnostic_verifies_against_current_producer(
             "--diagnostic-head-sha", configured["PDD_VITEST_DIAGNOSTIC_HEAD_SHA"],
             "--producer-sha256", configured["PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256"],
             "--verifier-sha256", configured["PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256"],
+            "--package-verifier-sha256", hashlib.sha256(
+                package_verifier.read_bytes()
+            ).hexdigest(),
+            "--package-provenance-sha256", hashlib.sha256(
+                package_provenance.read_bytes()
+            ).hexdigest(),
             "--runner-image", _VITEST_RUNNER_IMAGE,
             "--runner-provisioner", _VITEST_RUNNER_PROVISIONER,
             "--python", _VITEST_PYTHON_VERSION,
@@ -2927,6 +2953,8 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence(
         "PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA",
         "PDD_REVIEWED_PRODUCER_SHA256",
         "PDD_REVIEWED_VERIFIER_SHA256",
+        "PDD_REVIEWED_PACKAGE_VERIFIER_SHA256",
+        "PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256",
         "PDD_REVIEW_EVIDENCE_B64",
         "PDD_REVIEW_EVIDENCE_SHA256",
     ):
@@ -2956,6 +2984,10 @@ def test_vitest_diagnostic_workflow_preserves_red_probe_and_uploads_evidence(
     assert "--evidence-sha256 \"$artifact_sha256\"" in dedicated_body
     assert "--review-evidence \"$PDD_REVIEW_EVIDENCE_PATH\"" in dedicated_body
     assert "--review-evidence-sha256 \"$PDD_REVIEW_EVIDENCE_SHA256\"" in dedicated_body
+    assert "--package-verifier-sha256" in provenance_body
+    assert "--package-provenance-sha256" in provenance_body
+    assert "--package-verifier-sha256" in dedicated_body
+    assert "--package-provenance-sha256" in dedicated_body
     assert "set +e" in dedicated_body
     assert "test_status=$?" in dedicated_body
     assert dedicated_body.rindex("exit \"$test_status\"") > dedicated_body.index(
@@ -5595,7 +5627,9 @@ def test_vitest_hosted_workflow_pins_and_runs_the_installed_wheel() -> None:
     ) in workflow
 
 
-def test_package_vitest_diagnostic_binds_reviewed_installed_wheel_stage_a() -> None:
+def test_package_vitest_diagnostic_binds_reviewed_installed_wheel_stage_a(
+    tmp_path: Path,
+) -> None:
     """Package has a PR-only trusted installed-wheel RED and safe upload lane."""
     repository = Path(__file__).resolve().parents[1]
     workflow = yaml.safe_load(
@@ -5616,6 +5650,8 @@ def test_package_vitest_diagnostic_binds_reviewed_installed_wheel_stage_a() -> N
         "PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA",
         "PDD_REVIEWED_PRODUCER_SHA256",
         "PDD_REVIEWED_VERIFIER_SHA256",
+        "PDD_REVIEWED_PACKAGE_VERIFIER_SHA256",
+        "PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256",
         "PDD_REVIEW_EVIDENCE_B64",
         "PDD_REVIEW_EVIDENCE_SHA256",
         "PDD_PINNED_RUNNER_IMAGE",
@@ -5673,15 +5709,6 @@ def test_package_vitest_diagnostic_binds_reviewed_installed_wheel_stage_a() -> N
         "node-version"
     ] == "22.23.1"
 
-    provenance = (
-        by_name["Verify reviewed Package identity and provenance"]["run"]
-        + (repository / "scripts/verify_vitest_package_provenance.sh").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert steps.index(by_name["Verify reviewed Package identity and provenance"]) < (
-        steps.index(by_name["Provision identity-bound Vitest toolchain"])
-    )
     checked_out_head = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=repository,
@@ -5689,6 +5716,63 @@ def test_package_vitest_diagnostic_binds_reviewed_installed_wheel_stage_a() -> N
         capture_output=True,
         text=True,
     ).stdout.strip()
+    provenance = (
+        by_name["Verify reviewed Package identity and provenance"]["run"]
+        + (repository / "scripts/verify_vitest_package_provenance.sh").read_text(
+            encoding="utf-8"
+        )
+    )
+    provenance_step_body = by_name[
+        "Verify reviewed Package identity and provenance"
+    ]["run"]
+    provenance_guard = provenance_step_body.split(
+        "bash scripts/verify_vitest_package_provenance.sh", 1
+    )[0]
+    provenance_guard_repository = tmp_path / "provenance-guard-repository"
+    subprocess.run(
+        [
+            "git", "clone", "--quiet", "--no-hardlinks",
+            str(repository), str(provenance_guard_repository),
+        ],
+        check=True,
+    )
+    provenance_source = (
+        repository / "scripts/verify_vitest_package_provenance.sh"
+    )
+    provenance_target = (
+        provenance_guard_repository
+        / "scripts/verify_vitest_package_provenance.sh"
+    )
+    shutil.copy2(provenance_source, provenance_target)
+    expected_provenance_sha256 = hashlib.sha256(
+        provenance_source.read_bytes()
+    ).hexdigest()
+    provenance_target.write_bytes(provenance_target.read_bytes() + b"# tampered\n")
+    protected_provenance_rejection = subprocess.run(
+        [
+            "bash", "-c",
+            provenance_guard + "printf candidate-provenance-would-run\\n",
+        ],
+        cwd=provenance_guard_repository,
+        env={
+            **os.environ,
+            "PDD_TRIGGER_PR_HEAD_SHA": checked_out_head,
+            "PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA": checked_out_head,
+            "PDD_REVIEWED_PACKAGE_PROVENANCE_SHA256": (
+                expected_provenance_sha256
+            ),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert protected_provenance_rejection.returncode != 0
+    assert "candidate-provenance-would-run" not in (
+        protected_provenance_rejection.stdout
+    )
+    assert steps.index(by_name["Verify reviewed Package identity and provenance"]) < (
+        steps.index(by_name["Provision identity-bound Vitest toolchain"])
+    )
     checkout_guard = by_name[
         "Verify reviewed Package identity and provenance"
     ]["run"].split("bash scripts/verify_vitest_package_provenance.sh", 1)[0]
@@ -5724,6 +5808,8 @@ def test_package_vitest_diagnostic_binds_reviewed_installed_wheel_stage_a() -> N
         "--diagnostic-head-sha",
         "--producer-sha256",
         "--verifier-sha256",
+        "--package-verifier-sha256",
+        "--package-provenance-sha256",
         "--runner-image",
         "--runner-provisioner",
         "--python",
@@ -5744,6 +5830,52 @@ def test_package_vitest_diagnostic_binds_reviewed_installed_wheel_stage_a() -> N
     assert "--diagnostic-head-sha" in attestation_body
     assert "--producer-sha256" in attestation_body
     assert "--attestation-sha256" in attestation_body
+    assert '"$attestation.sha256"' in attestation_body
+    assert attestation_body.index(
+        "PDD_REVIEWED_PACKAGE_VERIFIER_SHA256"
+    ) < attestation_body.index("verify_vitest_package_attestation.py create")
+    attestation_guard_directory = tmp_path / "attestation-guard"
+    (attestation_guard_directory / "dist-smoke").mkdir(parents=True)
+    (attestation_guard_directory / "dist-smoke/candidate.whl").write_bytes(
+        b"wheel"
+    )
+    (attestation_guard_directory / "scripts").mkdir()
+    package_verifier_source = (
+        repository / "scripts/verify_vitest_package_attestation.py"
+    )
+    package_verifier_target = (
+        attestation_guard_directory
+        / "scripts/verify_vitest_package_attestation.py"
+    )
+    shutil.copy2(package_verifier_source, package_verifier_target)
+    expected_package_verifier_sha256 = hashlib.sha256(
+        package_verifier_source.read_bytes()
+    ).hexdigest()
+    package_verifier_target.write_bytes(
+        package_verifier_target.read_bytes() + b"# tampered\n"
+    )
+    attestation_guard = attestation_body.split(
+        "python scripts/verify_vitest_package_attestation.py create", 1
+    )[0]
+    package_verifier_rejection = subprocess.run(
+        [
+            "bash", "-c",
+            attestation_guard + "printf package-verifier-would-run\\n",
+        ],
+        cwd=attestation_guard_directory,
+        env={
+            **os.environ,
+            "RUNNER_TEMP": str(tmp_path / "runner-temp"),
+            "PDD_REVIEWED_PACKAGE_VERIFIER_SHA256": (
+                expected_package_verifier_sha256
+            ),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert package_verifier_rejection.returncode != 0
+    assert "package-verifier-would-run" not in package_verifier_rejection.stdout
     install_body = by_name["Install wheel in isolated no-network environment"][
         "run"
     ]
@@ -5784,17 +5916,22 @@ def test_package_vitest_diagnostic_binds_reviewed_installed_wheel_stage_a() -> N
     assert "test \"$test_status\" -eq 1" in diagnostic_body
     assert "verify_vitest_termination_evidence.py" in diagnostic_body
     assert "--review-evidence" in diagnostic_body
+    assert "--package-verifier-sha256" in diagnostic_body
+    assert "--package-provenance-sha256" in diagnostic_body
     assert diagnostic_body.rindex('exit "$test_status"') > (
         diagnostic_body.index("verify_vitest_termination_evidence.py")
     )
 
     upload = by_name["Upload installed-wheel Vitest termination evidence"]
+    assert steps.index(attestation) < steps.index(
+        by_name["Run real protected Playwright installed-wheel protocol"]
+    ) < steps.index(diagnostic) < steps.index(upload)
     assert upload["if"] == "always() && github.event_name == 'pull_request'"
     assert upload["uses"] == "actions/upload-artifact@v4"
     assert upload["with"]["path"] == (
         "${{ runner.temp }}/pdd-vitest-wheel-termination-evidence/"
     )
-    assert upload["with"]["if-no-files-found"] == "warn"
+    assert upload["with"]["if-no-files-found"] == "error"
     assert "PDD_REVIEW_EVIDENCE" not in json.dumps(upload)
 
     playwright = by_name["Run real protected Playwright installed-wheel protocol"]
