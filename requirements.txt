@@ -57,4 +57,6 @@ pytest-mock
 pytest-testmon
 pytest-timeout
 pytest-xdist
+setuptools-scm>=8
 twine
+wheel
