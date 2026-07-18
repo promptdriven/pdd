@@ -1140,28 +1140,74 @@ jobs:
   package-preprocess-smoke:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     name: Package Preprocess Smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       PDD_PATH: ''
       PYTHONPATH: ''
+      PDD_TRIGGER_EVENT_NAME: ${{ github.event_name }}
+      PDD_TRIGGER_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PDD_REVIEWED_FAILURE_BASELINE_SHA: ${{ vars.PDD_REVIEWED_FAILURE_BASELINE_SHA }}
+      PDD_REVIEWED_PROTECTED_BASE_SHA: ${{ vars.PDD_REVIEWED_PROTECTED_BASE_SHA }}
+      PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA: ${{ vars.PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA }}
+      PDD_REVIEWED_PRODUCER_SHA256: ${{ vars.PDD_REVIEWED_PRODUCER_SHA256 }}
+      PDD_REVIEWED_VERIFIER_SHA256: ${{ vars.PDD_REVIEWED_VERIFIER_SHA256 }}
+      PDD_REVIEW_EVIDENCE_B64: ${{ vars.PDD_REVIEW_EVIDENCE_B64 }}
+      PDD_REVIEW_EVIDENCE_SHA256: ${{ vars.PDD_REVIEW_EVIDENCE_SHA256 }}
+      PDD_PINNED_RUNNER_IMAGE: ${{ vars.PDD_PINNED_RUNNER_IMAGE }}
+      PDD_PINNED_RUNNER_PROVISIONER: ${{ vars.PDD_PINNED_RUNNER_PROVISIONER }}
+      PDD_PINNED_PYTHON_VERSION: ${{ vars.PDD_PINNED_PYTHON_VERSION }}
+      PDD_PINNED_NODE_VERSION: ${{ vars.PDD_PINNED_NODE_VERSION }}
+      PDD_PINNED_VITEST_PACKAGE_SHA256: ${{ vars.PDD_PINNED_VITEST_PACKAGE_SHA256 }}
+      PDD_PINNED_VITEST_LOCK_SHA256: ${{ vars.PDD_PINNED_VITEST_LOCK_SHA256 }}
 
     steps:
-      - name: Checkout
+      - name: Require reviewed Package PR identity
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PDD_TRIGGER_EVENT_NAME" = "pull_request"
+          test -n "$PDD_TRIGGER_PR_HEAD_SHA"
+          test -n "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          test "$PDD_TRIGGER_PR_HEAD_SHA" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+
+      - name: Checkout reviewed Package PR head
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@v6
         with:
+          ref: ${{ vars.PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout Package push head
+        if: github.event_name == 'push'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '3.12.13'
           cache: 'pip'
 
       - name: Set up Node for real Playwright wheel coverage
         uses: actions/setup-node@v6
         with:
           node-version: '22.23.1'
+
+      - name: Verify reviewed Package identity and provenance
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked_out_head="$(git rev-parse HEAD)"
+          test "$checked_out_head" = "$PDD_TRIGGER_PR_HEAD_SHA"
+          test "$checked_out_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          bash scripts/verify_vitest_package_provenance.sh
 
       - name: Provision identity-bound Vitest toolchain
         shell: bash
@@ -1269,7 +1315,43 @@ jobs:
           python -m venv "$RUNNER_TEMP/pdd-wheel-smoke"
           PIP_NO_INDEX=1 "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" -m pip install \
             --find-links "$RUNNER_TEMP/pdd-wheelhouse" \
-            pdd-cli pytest pytest-timeout
+            dist-smoke/*.whl pytest pytest-timeout
+
+      - name: Create and verify installed-wheel package attestation
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          evidence_directory="$RUNNER_TEMP/pdd-vitest-wheel-termination-evidence"
+          attestation="$evidence_directory/vitest-wheel-package-attestation-v1.json"
+          mkdir -p "$evidence_directory"
+          chmod 700 "$evidence_directory"
+          mapfile -t wheels < <(find dist-smoke -maxdepth 1 -type f -name '*.whl' -print)
+          test "${#wheels[@]}" -eq 1
+          wheel="$(realpath "${wheels[0]}")"
+          python scripts/verify_vitest_package_attestation.py create \
+            --attestation "$attestation" \
+            --wheel "$wheel" \
+            --installed-python "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" \
+            --repository "$GITHUB_WORKSPACE" \
+            --diagnostic-head-sha "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
+            --producer-sha256 "$PDD_REVIEWED_PRODUCER_SHA256"
+          attestation_sha256="$(sha256sum "$attestation" | awk '{print $1}')"
+          test "$attestation_sha256" = "$(tr -d '\n' < "$attestation.sha256")"
+          python scripts/verify_vitest_package_attestation.py verify \
+            --attestation "$attestation" \
+            --attestation-sha256 "$attestation_sha256" \
+            --wheel "$wheel" \
+            --installed-python "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" \
+            --repository "$GITHUB_WORKSPACE" \
+            --diagnostic-head-sha "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
+            --producer-sha256 "$PDD_REVIEWED_PRODUCER_SHA256"
+          {
+            echo "PDD_WHEEL_ATTESTATION_PATH=$attestation"
+            echo "PDD_WHEEL_ATTESTATION_SHA256=$attestation_sha256"
+            echo "PDD_WHEEL_PATH=$wheel"
+          } >> "$GITHUB_ENV"
 
       - name: Run real protected Playwright installed-wheel protocol
         env:
@@ -1284,7 +1366,8 @@ jobs:
             test_sync_core_runner_playwright.py::test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir \
             --timeout=90
 
-      - name: Run real protected Vitest installed-wheel descriptor boundary
+      - name: Run ordinary Vitest installed-wheel descriptor boundary
+        if: github.event_name == 'push'
         env:
           PDD_REQUIRE_INSTALLED_WHEEL: '1'
         run: |
@@ -1295,6 +1378,91 @@ jobs:
           "$RUNNER_TEMP/pdd-wheel-smoke/bin/pytest" -q \
             test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access \
             --timeout=120
+
+      - name: Run trusted Vitest installed-wheel diagnostic
+        if: github.event_name == 'pull_request'
+        env:
+          PDD_REQUIRE_INSTALLED_WHEEL: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          artifact="$RUNNER_TEMP/pdd-vitest-wheel-termination-evidence/vitest-wheel-termination-v1.json"
+          diagnostic_directory="${artifact%/*}"
+          test -d "$diagnostic_directory"
+          test "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" = "$(git rev-parse HEAD)"
+          python scripts/verify_vitest_package_attestation.py verify \
+            --attestation "$PDD_WHEEL_ATTESTATION_PATH" \
+            --attestation-sha256 "$PDD_WHEEL_ATTESTATION_SHA256" \
+            --wheel "$PDD_WHEEL_PATH" \
+            --installed-python "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" \
+            --repository "$GITHUB_WORKSPACE" \
+            --diagnostic-head-sha "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" \
+            --producer-sha256 "$PDD_REVIEWED_PRODUCER_SHA256"
+          export PDD_VITEST_DIAGNOSTIC_OUTPUT="$artifact"
+          export PDD_VITEST_FAILURE_BASELINE_SHA="$PDD_REVIEWED_FAILURE_BASELINE_SHA"
+          export PDD_VITEST_PROTECTED_BASE_SHA="$PDD_REVIEWED_PROTECTED_BASE_SHA"
+          export PDD_VITEST_DIAGNOSTIC_HEAD_SHA="$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
+          export PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256="$PDD_REVIEWED_PRODUCER_SHA256"
+          export PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256="$PDD_REVIEWED_VERIFIER_SHA256"
+          export PDD_VITEST_RUNNER_IMAGE="$PDD_WHEEL_MEASURED_RUNNER_IMAGE"
+          export PDD_VITEST_RUNNER_PROVISIONER="$PDD_WHEEL_MEASURED_RUNNER_PROVISIONER"
+          export PDD_VITEST_PYTHON_VERSION="$PDD_WHEEL_MEASURED_PYTHON_VERSION"
+          export PDD_VITEST_NODE_VERSION="$PDD_WHEEL_MEASURED_NODE_VERSION"
+          export PDD_VITEST_PACKAGE_SHA256="$PDD_WHEEL_MEASURED_VITEST_PACKAGE_SHA256"
+          export PDD_VITEST_LOCK_SHA256="$PDD_WHEEL_MEASURED_VITEST_LOCK_SHA256"
+          export PDD_VITEST_TEST_NODE='tests/test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access'
+          smoke_dir="$(mktemp -d)"
+          cp tests/test_sync_core_runner_vitest.py "$smoke_dir/"
+          cd "$smoke_dir"
+          set +e
+          "$RUNNER_TEMP/pdd-wheel-smoke/bin/pytest" -q \
+            test_sync_core_runner_vitest.py::test_real_vitest_runs_copied_entrypoint_without_candidate_result_access \
+            --timeout=120
+          test_status=$?
+          set -e
+          if [ "$test_status" -ne 1 ]; then
+            if [ "$test_status" -eq 0 ]; then
+              echo "installed-wheel diagnostic baseline unexpectedly passed"
+              exit 1
+            fi
+            exit "$test_status"
+          fi
+          test "$test_status" -eq 1
+          test -f "$artifact"
+          test -f "$artifact.sha256"
+          artifact_sha256="$(sha256sum "$artifact" | awk '{print $1}')"
+          test "$artifact_sha256" = "$(tr -d '\n' < "$artifact.sha256")"
+          python "$GITHUB_WORKSPACE/scripts/verify_vitest_termination_evidence.py" \
+            --evidence "$artifact" \
+            --evidence-sha256 "$artifact_sha256" \
+            --review-evidence "$PDD_WHEEL_REVIEW_EVIDENCE_PATH" \
+            --review-evidence-sha256 "$PDD_REVIEW_EVIDENCE_SHA256" \
+            --repository "$GITHUB_WORKSPACE" \
+            --failure-baseline-sha "$PDD_VITEST_FAILURE_BASELINE_SHA" \
+            --protected-base-sha "$PDD_VITEST_PROTECTED_BASE_SHA" \
+            --diagnostic-head-sha "$PDD_VITEST_DIAGNOSTIC_HEAD_SHA" \
+            --producer-sha256 "$PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256" \
+            --verifier-sha256 "$PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256" \
+            --runner-image "$PDD_VITEST_RUNNER_IMAGE" \
+            --runner-provisioner "$PDD_VITEST_RUNNER_PROVISIONER" \
+            --python "$PDD_VITEST_PYTHON_VERSION" \
+            --node "$PDD_VITEST_NODE_VERSION" \
+            --vitest-package-sha256 "$PDD_VITEST_PACKAGE_SHA256" \
+            --vitest-lock-sha256 "$PDD_VITEST_LOCK_SHA256" \
+            --test-node "$PDD_VITEST_TEST_NODE"
+          # Stage A preserves the installed-wheel diagnostic artifact while the
+          # distinct cause-specific RED remains pending hosted evidence.
+          exit "$test_status"
+
+      - name: Upload installed-wheel Vitest termination evidence
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-wheel-termination-evidence-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/pdd-vitest-wheel-termination-evidence/
+          include-hidden-files: false
+          if-no-files-found: warn
 
       - name: Verify installed-wheel Vitest coordinator lifecycle
         run: |

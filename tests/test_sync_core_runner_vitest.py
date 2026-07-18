@@ -5595,6 +5595,234 @@ def test_vitest_hosted_workflow_pins_and_runs_the_installed_wheel() -> None:
     ) in workflow
 
 
+def test_package_vitest_diagnostic_binds_reviewed_installed_wheel_stage_a() -> None:
+    """Package has a PR-only trusted installed-wheel RED and safe upload lane."""
+    repository = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load(
+        (repository / ".github/workflows/unit-tests.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    job = workflow["jobs"]["package-preprocess-smoke"]
+    steps = job["steps"]
+    by_name = {step["name"]: step for step in steps}
+
+    assert job["runs-on"] == "ubuntu-24.04"
+    for name in (
+        "PDD_TRIGGER_EVENT_NAME",
+        "PDD_TRIGGER_PR_HEAD_SHA",
+        "PDD_REVIEWED_FAILURE_BASELINE_SHA",
+        "PDD_REVIEWED_PROTECTED_BASE_SHA",
+        "PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA",
+        "PDD_REVIEWED_PRODUCER_SHA256",
+        "PDD_REVIEWED_VERIFIER_SHA256",
+        "PDD_REVIEW_EVIDENCE_B64",
+        "PDD_REVIEW_EVIDENCE_SHA256",
+        "PDD_PINNED_RUNNER_IMAGE",
+        "PDD_PINNED_RUNNER_PROVISIONER",
+        "PDD_PINNED_PYTHON_VERSION",
+        "PDD_PINNED_NODE_VERSION",
+        "PDD_PINNED_VITEST_PACKAGE_SHA256",
+        "PDD_PINNED_VITEST_LOCK_SHA256",
+    ):
+        assert name in job["env"]
+
+    identity = by_name["Require reviewed Package PR identity"]
+    reviewed_checkout = by_name["Checkout reviewed Package PR head"]
+    push_checkout = by_name["Checkout Package push head"]
+    assert identity["if"] == "github.event_name == 'pull_request'"
+    assert "PDD_TRIGGER_PR_HEAD_SHA" in identity["run"]
+    assert "PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" in identity["run"]
+    identity_match = subprocess.run(
+        ["bash", "-c", identity["run"]],
+        cwd=repository,
+        env={
+            **os.environ,
+            "PDD_TRIGGER_EVENT_NAME": "pull_request",
+            "PDD_TRIGGER_PR_HEAD_SHA": "a" * 40,
+            "PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA": "a" * 40,
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert identity_match.returncode == 0, identity_match.stderr
+    identity_mismatch = subprocess.run(
+        ["bash", "-c", identity["run"] + "\nprintf candidate-pytest-would-run\n"],
+        cwd=repository,
+        env={
+            **os.environ,
+            "PDD_TRIGGER_EVENT_NAME": "pull_request",
+            "PDD_TRIGGER_PR_HEAD_SHA": "a" * 40,
+            "PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA": "b" * 40,
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert identity_mismatch.returncode != 0
+    assert "candidate-pytest-would-run" not in identity_mismatch.stdout
+    assert reviewed_checkout["with"]["ref"] == (
+        "${{ vars.PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA }}"
+    )
+    assert reviewed_checkout["with"]["persist-credentials"] is False
+    assert push_checkout["if"] == "github.event_name == 'push'"
+    assert push_checkout["with"]["ref"] == "${{ github.sha }}"
+    assert by_name["Set up Python"]["with"]["python-version"] == "3.12.13"
+    assert by_name["Set up Node for real Playwright wheel coverage"]["with"][
+        "node-version"
+    ] == "22.23.1"
+
+    provenance = (
+        by_name["Verify reviewed Package identity and provenance"]["run"]
+        + (repository / "scripts/verify_vitest_package_provenance.sh").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert steps.index(by_name["Verify reviewed Package identity and provenance"]) < (
+        steps.index(by_name["Provision identity-bound Vitest toolchain"])
+    )
+    checked_out_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    checkout_guard = by_name[
+        "Verify reviewed Package identity and provenance"
+    ]["run"].split("bash scripts/verify_vitest_package_provenance.sh", 1)[0]
+    checkout_mismatch = subprocess.run(
+        ["bash", "-c", checkout_guard + "printf candidate-pytest-would-run\n"],
+        cwd=repository,
+        env={
+            **os.environ,
+            "PDD_TRIGGER_PR_HEAD_SHA": "0" * 40,
+            "PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA": checked_out_head,
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert checkout_mismatch.returncode != 0
+    assert "candidate-pytest-would-run" not in checkout_mismatch.stdout
+    for fragment in (
+        'test "$checked_out_head" = "$PDD_TRIGGER_PR_HEAD_SHA"',
+        'test "$checked_out_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"',
+        "git merge-base --is-ancestor",
+        "sha256sum pdd/sync_core/runner.py",
+        "sha256sum scripts/verify_vitest_termination_evidence.py",
+        "/opt/hca/hosted-compute-agent --version",
+        "s/^version=\\([0-9]\\{8\\}\\.[0-9]\\{3\\}\\)$/\\1/p",
+        "cmp -s --",
+        "python --version",
+        "node --version",
+        "--review-only",
+        "--review-evidence",
+        "--failure-baseline-sha",
+        "--protected-base-sha",
+        "--diagnostic-head-sha",
+        "--producer-sha256",
+        "--verifier-sha256",
+        "--runner-image",
+        "--runner-provisioner",
+        "--python",
+        "--node",
+        "--vitest-package-sha256",
+        "--vitest-lock-sha256",
+        "--test-node",
+    ):
+        assert fragment in provenance
+
+    attestation = by_name["Create and verify installed-wheel package attestation"]
+    attestation_body = attestation["run"]
+    assert attestation["if"] == "github.event_name == 'pull_request'"
+    assert "verify_vitest_package_attestation.py create" in attestation_body
+    assert "verify_vitest_package_attestation.py verify" in attestation_body
+    assert attestation_body.index(" create ") < attestation_body.index(" verify ")
+    assert "--wheel" in attestation_body
+    assert "--diagnostic-head-sha" in attestation_body
+    assert "--producer-sha256" in attestation_body
+    assert "--attestation-sha256" in attestation_body
+    install_body = by_name["Install wheel in isolated no-network environment"][
+        "run"
+    ]
+    assert "PIP_NO_INDEX=1" in install_body
+    assert "dist-smoke/*.whl pytest pytest-timeout" in install_body
+    assert "pdd-cli pytest pytest-timeout" not in install_body
+
+    push_probe = by_name["Run ordinary Vitest installed-wheel descriptor boundary"]
+    diagnostic = by_name["Run trusted Vitest installed-wheel diagnostic"]
+    diagnostic_body = diagnostic["run"]
+    assert push_probe["if"] == "github.event_name == 'push'"
+    assert diagnostic["if"] == "github.event_name == 'pull_request'"
+    assert diagnostic["env"]["PDD_REQUIRE_INSTALLED_WHEEL"] == "1"
+    assert diagnostic_body.index(
+        "verify_vitest_package_attestation.py verify"
+    ) < diagnostic_body.index("/bin/pytest")
+    assert (
+        "$RUNNER_TEMP/pdd-vitest-wheel-termination-evidence/"
+        "vitest-wheel-termination-v1.json"
+    ) in diagnostic_body
+    for name in (
+        "PDD_VITEST_DIAGNOSTIC_OUTPUT",
+        "PDD_VITEST_FAILURE_BASELINE_SHA",
+        "PDD_VITEST_PROTECTED_BASE_SHA",
+        "PDD_VITEST_DIAGNOSTIC_HEAD_SHA",
+        "PDD_VITEST_DIAGNOSTIC_PRODUCER_SHA256",
+        "PDD_VITEST_DIAGNOSTIC_VERIFIER_SHA256",
+        "PDD_VITEST_RUNNER_IMAGE",
+        "PDD_VITEST_RUNNER_PROVISIONER",
+        "PDD_VITEST_PYTHON_VERSION",
+        "PDD_VITEST_NODE_VERSION",
+        "PDD_VITEST_PACKAGE_SHA256",
+        "PDD_VITEST_LOCK_SHA256",
+        "PDD_VITEST_TEST_NODE",
+    ):
+        assert f"export {name}=" in diagnostic_body
+    assert "test_status=$?" in diagnostic_body
+    assert "test \"$test_status\" -eq 1" in diagnostic_body
+    assert "verify_vitest_termination_evidence.py" in diagnostic_body
+    assert "--review-evidence" in diagnostic_body
+    assert diagnostic_body.rindex('exit "$test_status"') > (
+        diagnostic_body.index("verify_vitest_termination_evidence.py")
+    )
+
+    upload = by_name["Upload installed-wheel Vitest termination evidence"]
+    assert upload["if"] == "always() && github.event_name == 'pull_request'"
+    assert upload["uses"] == "actions/upload-artifact@v4"
+    assert upload["with"]["path"] == (
+        "${{ runner.temp }}/pdd-vitest-wheel-termination-evidence/"
+    )
+    assert upload["with"]["if-no-files-found"] == "warn"
+    assert "PDD_REVIEW_EVIDENCE" not in json.dumps(upload)
+
+    playwright = by_name["Run real protected Playwright installed-wheel protocol"]
+    assert playwright["env"]["PDD_REQUIRE_INSTALLED_WHEEL"] == "1"
+    assert playwright["run"].count(
+        "test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir"
+    ) == 1
+    playwright_source = (
+        repository / "tests/test_sync_core_runner_playwright.py"
+    ).read_text(encoding="utf-8")
+    variants = playwright_source.split(
+        'def test_real_playwright_1_55_config_suffixes_collect_and_use_config_dir',
+        1,
+    )[0].rsplit("@pytest.mark.parametrize", 1)[1]
+    assert all(
+        variant in variants
+        for variant in (
+            '(".js", "commonjs")',
+            '(".js", "module")',
+            '(".cjs", None)',
+            '(".mjs", None)',
+            '(".ts", None)',
+            '(".cts", None)',
+            '(".mts", None)',
+        )
+    )
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux")
     or not shutil.which("bwrap")
