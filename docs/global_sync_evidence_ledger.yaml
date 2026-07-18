@@ -6,9 +6,9 @@ status_vocabulary: [pending, in-progress, passed]
 pass_rule: "A step may be passed only when every required_predicate field is proven by an exact-SHA artifact URL produced by the listed validation commands."
 current_critical_path:
   status: in-progress
-  next_gate: "Complete the bounded review-evidence sidecar correction; obtain exact Sol HIGH approval; rotate exact bindings; guarded-push the reviewed head; and recollect hosted Stage A0 in both lanes"
+  next_gate: "Add a separately reviewed trusted native fixed-enum reason for sealResultAuthority failure, then reconcile that exact reason across source and installed-wheel hosted Stage A evidence"
   owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
-  reviewed_diagnostic_head_sha: "af1b88f207432e8a01b403783d0484942f522a68"
+  reviewed_diagnostic_head_sha: "08cc80e0ab752414eb1527a1652181ef9b4e2679"
   reviewed_head_protected_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
   evidence_snapshot_main_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
   minimum_required_main_ancestor_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
@@ -19,22 +19,22 @@ current_critical_path:
     required_predicate: "git merge-base --is-ancestor $(git rev-parse origin/main) $PDD_SHA"
     resolved_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
   latest_hosted_stage_a0_attempt:
-    run_url: "https://github.com/promptdriven/pdd/actions/runs/29647249695"
-    exact_head_sha: "af1b88f207432e8a01b403783d0484942f522a68"
+    run_url: "https://github.com/promptdriven/pdd/actions/runs/29649405805"
+    exact_head_sha: "08cc80e0ab752414eb1527a1652181ef9b4e2679"
     protected_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
     status: failed
     non_diagnostic_checks_success: 10
-    source_job_url: "https://github.com/promptdriven/pdd/actions/runs/29647249695/job/88087445400"
-    source_artifact_url: "https://github.com/promptdriven/pdd/actions/runs/29647249695/artifacts/8430445556"
-    source_observation_sha256: "8246622c803ef713d5812b05d008305b29b0d22bb6fb157d502202cc50c7caa1"
-    source_preflight_sha256: "719b3d8ed5bbfda5c9adb42ae5277a50c8606a80c26a93a789983aeebec9c74c"
+    source_job_url: "https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035447"
+    source_artifact_url: "https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431053984"
+    source_observation_sha256: "daeb1f9e0d97888a0e2634378d73c4395b08f3b125139954ded4412bcdccb02f"
+    source_preflight_sha256: "30b072ba510f06a1075cf8b44bacf8e3572b57d264744a660c75628ae481db27"
     source_runner_origin: source-checkout
     source_package_fields_absent: true
-    installed_wheel_job_url: "https://github.com/promptdriven/pdd/actions/runs/29647249695/job/88087445406"
-    installed_wheel_artifact_url: "https://github.com/promptdriven/pdd/actions/runs/29647249695/artifacts/8430493136"
-    installed_wheel_observation_sha256: "e7f2c0a368f741c7a89383576a502776f72fdbc1f091bcd394694df30b7210a1"
-    installed_wheel_package_attestation_sha256: "5b25db96ade5e80d824e115323cc5652f0879c0b5da2d26b72b7395aa6490ac3"
-    installed_wheel_sha256: "ed34df67f8fec66c1d3b19636cd6c8e2d1c1a54660bbe128c5b5603c883f2250"
+    installed_wheel_job_url: "https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035441"
+    installed_wheel_artifact_url: "https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431093575"
+    installed_wheel_observation_sha256: "e69d0f124d2f23790659d22fac4dabe962c4c6ff654bf549e2973da0ec8f6c4e"
+    installed_wheel_package_attestation_sha256: "43187c6768a858bc1e6d05234ea82196fc65d8f4bc87bad98ca5f0dc1ecd179c"
+    installed_wheel_sha256: "1c4bfd9305a35b4772c7c880b03822bce3c702cb17456d709d6cdb2dfa7f775b"
     installed_runner_sha256: "fd02005eb5367c9990aae94d515041686f37f6cee5dc6e28e4b03cdd2eb1e51d"
     lane_progress_frames_match: true
     observed_progress_frames:
@@ -57,12 +57,13 @@ current_critical_path:
     source_termination_verifier_exit_code: 1
     installed_wheel_termination_verifier_exit_code: 1
     termination_verifier_output: "Vitest termination evidence rejected"
-    hosted_observation_verifier_result: failed
-    hosted_failure_predicate: review-evidence-sidecar-present
-    hosted_failure_expected: "adjacent canonical review JSON .sha256 containing exact digest plus newline, mode 0600"
-    hosted_failure_actual: "sidecar absent"
-    blocker: "The workflow writes the review JSON but not the adjacent sidecar required by the fail-closed observation verifier."
-    correction_scope: "Materialize and protect the exact sidecar and add ordering/mode/byte contract tests; do not change candidate behavior or verifier predicates."
+    hosted_observation_verifier_result: passed
+    hosted_termination_verifier_result: passed_exact_rejection_assertion
+    stage_a0_status: passed
+    hosted_job_exit_code: 1
+    hosted_job_exit_reason: "intentional candidate test baseline after verifier assertions"
+    blocker: "Stage A requires a trusted native fixed-enum reason for the reporter-authority-seal-failed boundary; current evidence is intentionally cause-ineligible."
+    correction_scope: "Instrument native sealResultAuthority failure paths with a fixed enum, preserve fail-closed behavior, and bind the reason into reviewed source and installed-wheel evidence."
   second_hosted_attempt:
     run_url: "https://github.com/promptdriven/pdd/actions/runs/29637193871"
     unit_job_url: "https://github.com/promptdriven/pdd/actions/runs/29637193871/job/88061484993"
@@ -147,11 +148,6 @@ current_critical_path:
     vitest_cause_collected: false
     cause_red_status: pending
   unblock_actions:
-    - "Materialize the adjacent canonical review-evidence sidecar with exact digest plus newline and mode 0600 in the existing protected review directory."
-    - "Add workflow contract tests proving sidecar bytes, mode, and creation ordering before both source and wheel observation verifier calls."
-    - "Obtain exact Sol HIGH review of the bounded correction; rotate reviewed head, digests, and canonical review evidence without weakening any predicate."
-    - "Guard the remote PR head, push only the exact reviewed commit, and recollect source and installed-wheel Stage A0 evidence."
-    - "Close Stage A0 only when both hosted observation verifiers accept and both termination verifiers reject the exact artifacts as cause proof."
     - "Add a separately reviewed trusted native fixed-enum reason for sealResultAuthority failure; do not parse JavaScript error text or infer cause from supervisor exit zero."
     - "Recollect Stage A in both lanes and reconcile exact fixed-enum native causes before creating any cause-specific RED."
     - "Create a cause-specific RED and one bounded behavioral correction only after Stage A passes."
@@ -184,7 +180,7 @@ steps:
   - order: 1
     name: "Reviewable implementation foundations"
     status: in-progress
-    exact_repository_sha: "af1b88f207432e8a01b403783d0484942f522a68"
+    exact_repository_sha: "08cc80e0ab752414eb1527a1652181ef9b4e2679"
     validation_commands:
       - "test -z \"$(git status --porcelain=v1 --untracked-files=all)\""
       - "git merge-base --is-ancestor \"$PDD_PROTECTED_BASE_SHA\" \"$PDD_SHA\""
@@ -234,8 +230,8 @@ steps:
       - "https://github.com/promptdriven/pdd/actions/runs/29630254929/job/88042345757"
       - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642167"
       - "https://github.com/promptdriven/pdd/actions/runs/29635743590/job/88057642157"
-    predicate_result: "Exact reviewed head af1b88f207432e8a01b403783d0484942f522a68 contains protected base 39776aa9bb027c638812a01b8dabbe03cab92f64, is locally green, and has Sol HIGH exact-composite approval. Hosted run 29647249695 produced both exact-lane cause-ineligible Stage A0 observations and passed 10 non-diagnostic checks. Hosted observation acceptance failed because the workflow omitted the verifier-required adjacent review-evidence sidecar."
-    blocker: "Complete the bounded review-sidecar correction, exact-head review and protected-binding rotation, then recollect both lanes. No Stage A cause or all-green hosted head exists."
+    predicate_result: "Exact reviewed head 08cc80e0ab752414eb1527a1652181ef9b4e2679 contains protected base 39776aa9bb027c638812a01b8dabbe03cab92f64, is locally green, and has Sol HIGH exact-composite approval. Hosted run 29649405805 passed 10 non-diagnostic checks; both exact-lane observation verifiers accepted cause_eligible:false and both termination-verifier rejection assertions passed before the intentional candidate exit. Stage A0 is closed, but no trusted native fixed-enum Stage A cause or all-green hosted head exists."
+    blocker: "Add and independently review a trusted native fixed-enum sealResultAuthority failure reason, then recollect and reconcile source and installed-wheel Stage A evidence."
     owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 2
     name: "Protected reviewed checker release and pinned wheel digest"
@@ -282,10 +278,10 @@ steps:
   - order: 4
     name: "Complete protected runner adapters"
     status: in-progress
-    exact_repository_sha: "af1b88f207432e8a01b403783d0484942f522a68"
+    exact_repository_sha: "08cc80e0ab752414eb1527a1652181ef9b4e2679"
     failure_baseline_sha: "b09b6bef2c8c4bee762965be463527cd0b050154"
-    diagnostic_head_sha: "af1b88f207432e8a01b403783d0484942f522a68"
-    current_stage: "stage-a0-review-sidecar-correction"
+    diagnostic_head_sha: "08cc80e0ab752414eb1527a1652181ef9b4e2679"
+    current_stage: "stage-a-native-fixed-enum-cause"
     cause_red_status: pending
     validation_commands:
       - "pytest -q tests/test_sync_core_runner_pytest.py tests/test_sync_core_runner_vitest.py tests/test_sync_core_supervisor.py"
@@ -609,22 +605,28 @@ steps:
       - "https://github.com/promptdriven/pdd/actions/runs/29647249695/artifacts/8430445556"
       - "https://github.com/promptdriven/pdd/actions/runs/29647249695/job/88087445406"
       - "https://github.com/promptdriven/pdd/actions/runs/29647249695/artifacts/8430493136"
+      - "https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035447"
+      - "https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431053984"
+      - "https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035441"
+      - "https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431093575"
     observed_evidence:
-      latest_exact_head_sha: "af1b88f207432e8a01b403783d0484942f522a68"
+      latest_exact_head_sha: "08cc80e0ab752414eb1527a1652181ef9b4e2679"
       latest_exact_head_protected_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
-      latest_hosted_run_url: "https://github.com/promptdriven/pdd/actions/runs/29647249695"
+      latest_hosted_run_url: "https://github.com/promptdriven/pdd/actions/runs/29649405805"
       latest_non_diagnostic_checks_success: 10
-      latest_source_observation_sha256: "8246622c803ef713d5812b05d008305b29b0d22bb6fb157d502202cc50c7caa1"
-      latest_installed_wheel_observation_sha256: "e7f2c0a368f741c7a89383576a502776f72fdbc1f091bcd394694df30b7210a1"
-      latest_installed_wheel_attestation_sha256: "5b25db96ade5e80d824e115323cc5652f0879c0b5da2d26b72b7395aa6490ac3"
+      latest_source_observation_sha256: "daeb1f9e0d97888a0e2634378d73c4395b08f3b125139954ded4412bcdccb02f"
+      latest_installed_wheel_observation_sha256: "e69d0f124d2f23790659d22fac4dabe962c4c6ff654bf549e2973da0ec8f6c4e"
+      latest_installed_wheel_attestation_sha256: "43187c6768a858bc1e6d05234ea82196fc65d8f4bc87bad98ca5f0dc1ecd179c"
       latest_observations_verify_locally: true
       latest_observations_cause_eligible: false
       latest_observations_rejected_as_stage_a_cause: true
       latest_authenticated_boundary: reporter-authority-seal-failed
       latest_supervisor_exit_code: 0
       latest_result_frame_present: false
-      latest_hosted_observation_verifier_accepted: false
-      latest_hosted_blocker: review-evidence-sidecar-present
+      latest_hosted_observation_verifier_accepted: true
+      latest_hosted_termination_rejection_asserted: true
+      stage_a0_passed: true
+      latest_hosted_blocker: native-fixed-enum-seal-failure-reason-absent
       reviewed_diagnostic_head_exact: true
       review_verdict_approve: true
       behavioral_verdict_no_behavioral_fix: true
@@ -657,8 +659,8 @@ steps:
       current_attempt_2_installed_wheel_detail: "Vitest reporter produced no result"
       current_attempt_2_installed_wheel_cause_artifact_present: false
       current_attempt_2_source_and_wheel_symptoms_match: true
-    predicate_result: "Exact reviewed head af1b88f207432e8a01b403783d0484942f522a68 produced source observation 8246622c803ef713d5812b05d008305b29b0d22bb6fb157d502202cc50c7caa1 and installed-wheel observation e7f2c0a368f741c7a89383576a502776f72fdbc1f091bcd394694df30b7210a1 in hosted run 29647249695. Both exact downloaded payloads verify locally as cause_eligible=false and both are rejected by the Stage A termination verifier. Their authenticated traces match and stop at reporter-authority-seal-failed with supervisor exit zero and no result frame. Hosted Stage A0 acceptance remains false because the workflow omitted the adjacent review-evidence sidecar required by the observation verifier. Stage A and Stage B remain pending."
-    blocker: "First close hosted Stage A0 with the bounded sidecar correction and exact review/binding/recollection cycle. Then collect a trusted native fixed-enum seal failure reason in both lanes before any cause-specific RED or behavioral correction."
+    predicate_result: "Exact reviewed head 08cc80e0ab752414eb1527a1652181ef9b4e2679 produced source observation daeb1f9e0d97888a0e2634378d73c4395b08f3b125139954ded4412bcdccb02f and installed-wheel observation e69d0f124d2f23790659d22fac4dabe962c4c6ff654bf549e2973da0ec8f6c4e in hosted run 29649405805. Both hosted observation verifiers accepted cause_eligible=false, both termination-verifier rejection assertions passed, and independent downloaded-byte replay reproduced those results. Their authenticated traces match and stop at reporter-authority-seal-failed with supervisor exit zero and no result frame. Stage A0 is passed; Stage A and Stage B remain pending."
+    blocker: "Collect a separately reviewed trusted native fixed-enum seal failure reason in both lanes before any cause-specific RED or behavioral correction."
     owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 5
     name: "Canonical production routing"

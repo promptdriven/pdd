@@ -45,40 +45,36 @@ release state.
 
 | Verification boundary | Exact evidence | State |
 | --- | --- | --- |
-| Locally validated | PR #1995 exact reviewed head [`af1b88f207432e8a01b403783d0484942f522a68`](https://github.com/promptdriven/pdd/commit/af1b88f207432e8a01b403783d0484942f522a68) contains protected base [`39776aa9bb027c638812a01b8dabbe03cab92f64`](https://github.com/promptdriven/pdd/commit/39776aa9bb027c638812a01b8dabbe03cab92f64). The full Vitest runner suite passed 277 tests with 36 platform skips; the focused verifier, package, workflow, and ownership suites passed 171 tests; the producer negative suite passed 10 tests. YAML, JSON, embedded shell, AST, Bash, pycompile, pylint, ownership, clean-tree, and ancestry checks passed. | local validation passed for the reviewed head |
-| Independently reviewed | Sol HIGH approved exact head `af1b88f207432e8a01b403783d0484942f522a68` with `NO_BEHAVIORAL_FIX`; review evidence digest `fd3e76e3570cc73f8f549dc97049cf90dc32996965e79b463ed71eb401d92af7` binds producer `fd02005eb5367c9990aae94d515041686f37f6cee5dc6e28e4b03cdd2eb1e51d`, termination verifier `fa20e7b2a8cb3d258154e1cc8d760c5e6906080458674e15f93461697aa5e681`, observation verifier `c129c0271e410faf2ee68930ef198b8a3075634b9c4752f6a0b16c55dfea479f`, Package verifier `b6e923061ea73ed46af4d03e497aa9ed4e538129f85b1c0eabc1bd47d45e177e`, and Package provenance `0c0304e13e370f42ae70ff92a4a05a69394abe92af99cc0ffb2e369b6bf63f15`. | exact-composite approved |
-| Hosted evidence collected | Exact-head [run 29647249695](https://github.com/promptdriven/pdd/actions/runs/29647249695) passed 10 non-diagnostic checks, including CodeQL, both auto-heal checks, Public CLI Regression, Story Regression, and Repo Bloat Docker E2E. Source [job 88087445400](https://github.com/promptdriven/pdd/actions/runs/29647249695/job/88087445400) and installed-wheel [job 88087445406](https://github.com/promptdriven/pdd/actions/runs/29647249695/job/88087445406) each uploaded a canonical Stage A0 artifact for the exact head. Source artifact `8430445556` has payload digest `8246622c803ef713d5812b05d008305b29b0d22bb6fb157d502202cc50c7caa1`; wheel artifact `8430493136` has payload digest `e7f2c0a368f741c7a89383576a502776f72fdbc1f091bcd394694df30b7210a1` and Package-attestation digest `5b25db96ade5e80d824e115323cc5652f0879c0b5da2d26b72b7395aa6490ac3`, binding wheel `ed34df67f8fec66c1d3b19636cd6c8e2d1c1a54660bbe128c5b5603c883f2250` to installed runner `fd02005eb5367c9990aae94d515041686f37f6cee5dc6e28e4b03cdd2eb1e51d`. | artifacts exist; hosted Stage A0 acceptance remains red |
-| Artifact predicates | After restoring archive-normalized mode `0600`, protected parent mode `0700`, and the required adjacent canonical review sidecar, both exact downloaded observations pass `verify_vitest_no_result_observation.py` with `cause_eligible: false`. Both produce exit `1` and exact text `Vitest termination evidence rejected` under `verify_vitest_termination_evidence.py`. Both traces are identical through `reporter-addon-load-succeeded`, `reporter-authority-seal-start`, `reporter-authority-seal-failed`, `coordinator-explicit-exit`, and `coordinator-exit`; supervisor exit is `0` and no result frame exists. | locally verified hosted bytes; not a substitute for hosted acceptance |
-| Hosted blocker | The workflow materialized the canonical review JSON but omitted its adjacent `.sha256` file. The fail-closed observation verifier requires that sidecar and therefore rejected both otherwise valid artifacts before the intentional candidate-failure exit. A bounded correction must write exact digest plus newline with mode `0600` in the existing mode-`0700` review directory, add workflow contract coverage, receive exact Sol review, rotate protected bindings, and recollect both lanes. | in progress; owned by PR #1995 |
-| Merged to protected `main` | [PR #2208](https://github.com/promptdriven/pdd/pull/2208) merged the prior plan update as [`39776aa9bb027c638812a01b8dabbe03cab92f64`](https://github.com/promptdriven/pdd/commit/39776aa9bb027c638812a01b8dabbe03cab92f64). That SHA is an ancestor of reviewed head `af1b88f207432e8a01b403783d0484942f522a68`. PR #1995 is not merged. | runner prerequisite remains unmerged |
+| Locally validated | PR #1995 exact reviewed head [`08cc80e0ab752414eb1527a1652181ef9b4e2679`](https://github.com/promptdriven/pdd/commit/08cc80e0ab752414eb1527a1652181ef9b4e2679) contains protected base [`39776aa9bb027c638812a01b8dabbe03cab92f64`](https://github.com/promptdriven/pdd/commit/39776aa9bb027c638812a01b8dabbe03cab92f64). Focused workflow, observation-verifier, and termination-verifier suites passed 170 tests. Exact source and installed-wheel artifact replays each passed the observation verifier with `cause_eligible: false` and each produced the required termination-verifier exit `1` with exact text `Vitest termination evidence rejected`. YAML, embedded Bash, sidecar mode/byte, clean-tree, remote-head, and ancestry checks passed before the guarded push. | local validation passed for the reviewed head and downloaded hosted bytes |
+| Independently reviewed | Sol HIGH approved exact head `08cc80e0ab752414eb1527a1652181ef9b4e2679` with `NO_BEHAVIORAL_FIX`; review evidence digest `85b804359bf0035f610002402ab47e442961d3eea9a5f114e7caac5c247ff0e4` binds producer `fd02005eb5367c9990aae94d515041686f37f6cee5dc6e28e4b03cdd2eb1e51d`, termination verifier `fa20e7b2a8cb3d258154e1cc8d760c5e6906080458674e15f93461697aa5e681`, observation verifier `c129c0271e410faf2ee68930ef198b8a3075634b9c4752f6a0b16c55dfea479f`, Package verifier `b6e923061ea73ed46af4d03e497aa9ed4e538129f85b1c0eabc1bd47d45e177e`, Package provenance `0c0304e13e370f42ae70ff92a4a05a69394abe92af99cc0ffb2e369b6bf63f15`, and protected base `39776aa9bb027c638812a01b8dabbe03cab92f64`. | exact-composite approved |
+| Hosted evidence collected | Exact-head [run 29649405805](https://github.com/promptdriven/pdd/actions/runs/29649405805) passed 10 non-diagnostic checks, including CodeQL, both auto-heal checks, Public CLI Regression, Story Regression, and Repo Bloat Docker E2E. Source [job 88093035447](https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035447) and installed-wheel [job 88093035441](https://github.com/promptdriven/pdd/actions/runs/29649405805/job/88093035441) each printed `Vitest no-result observation verified; cause_eligible: false`, asserted the exact termination-verifier rejection, uploaded the expected artifact, and only then exited `1` with the intentional candidate test status. Source artifact [`8431053984`](https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431053984) has payload digest `daeb1f9e0d97888a0e2634378d73c4395b08f3b125139954ded4412bcdccb02f`; installed-wheel artifact [`8431093575`](https://github.com/promptdriven/pdd/actions/runs/29649405805/artifacts/8431093575) has payload digest `e69d0f124d2f23790659d22fac4dabe962c4c6ff654bf549e2973da0ec8f6c4e` and Package-attestation digest `43187c6768a858bc1e6d05234ea82196fc65d8f4bc87bad98ca5f0dc1ecd179c`, binding wheel `1c4bfd9305a35b4772c7c880b03822bce3c702cb17456d709d6cdb2dfa7f775b` to installed runner `fd02005eb5367c9990aae94d515041686f37f6cee5dc6e28e4b03cdd2eb1e51d`. | hosted Stage A0 passed; overall diagnostic jobs remain intentionally red |
+| Artifact predicates | Both hosted observation verifiers accepted their exact-lane artifacts. Independent replay of the downloaded bytes, after restoring archive-normalized mode `0600` and protected parent mode `0700`, reproduced both accepts and both exact termination-verifier rejections. Both traces are identical through `reporter-addon-load-succeeded`, `reporter-authority-seal-start`, `reporter-authority-seal-failed`, `coordinator-explicit-exit`, and `coordinator-exit`; supervisor exit is `0` and no result frame exists. | Stage A0 closed; evidence is explicitly non-causal |
+| Hosted blocker | Stage A0's review-sidecar blocker is closed. The first unresolved boundary is now inside native `sealResultAuthority`: add a trusted fixed-enum failure reason that identifies the exact native operation without exposing raw error text or changing candidate behavior. Reconcile the same reason across source and installed-wheel hosted evidence before creating a cause-specific RED. | in progress; owned by PR #1995 |
+| Merged to protected `main` | [PR #2208](https://github.com/promptdriven/pdd/pull/2208) merged the prior plan update as [`39776aa9bb027c638812a01b8dabbe03cab92f64`](https://github.com/promptdriven/pdd/commit/39776aa9bb027c638812a01b8dabbe03cab92f64). That SHA is an ancestor of reviewed head `08cc80e0ab752414eb1527a1652181ef9b4e2679`. PR #1995 is not merged. | runner prerequisite remains unmerged |
 | Released checker | No protected reviewed checker release or pinned wheel digest exists. | pending |
 | Globally certified | No protected merge-group certificate or seven-night streak exists. | pending |
 
 #### Ordered unblock from current evidence
 
-1. Complete the bounded review-sidecar correction without changing candidate
-   behavior, verifier predicates, protected pins, or `cause_eligible` semantics.
-2. Obtain Sol HIGH exact-head review, rotate every head/digest/review binding,
-   guarded-push only that reviewed head, and rerun both protected lanes.
-3. Close Stage A0 only when both hosted observation verifiers accept their
-   exact-lane artifacts and both termination verifiers reject them as cause
-   proof. Overall Unit and Package may remain red from the intentionally failing
-   candidate; artifact upload alone is insufficient.
-4. Add a separately reviewed Stage A diagnostic that reports a trusted native
+1. Stage A0 is closed on exact reviewed head `08cc80e0ab752414eb1527a1652181ef9b4e2679`:
+   both hosted observation verifiers accepted and both termination verifiers
+   rejected the artifacts as cause proof. The overall Unit and Package failures
+   are the preserved candidate baseline and do not close Stage A.
+2. Add a separately reviewed Stage A diagnostic that reports a trusted native
    fixed-enum reason for `sealResultAuthority` failure. Do not parse
    `error.message`, infer cause from exit `0`, or treat the broad authority-seal
    boundary as the behavioral fix. The trusted native operation has multiple
    fail-closed paths, so the reason must distinguish at least argument/identity,
    procfs seal, descriptor-table open/read/inspection/close, descriptor
    `CLOEXEC` set/verification, alias-not-found, and response failures.
-5. Recollect source and installed-wheel Stage A evidence on one exact reviewed
+3. Recollect source and installed-wheel Stage A evidence on one exact reviewed
    SHA. Require exact head/base/toolchain/package bindings, authenticated
    fixed-enum reason, process role, failure stage, no result frame, and
    reconciliation of the two lanes before writing a cause-specific RED.
-6. Only after Stage A passes, add one RED that reproduces the collected native
+4. Only after Stage A passes, add one RED that reproduces the collected native
    reason, implement one bounded behavioral correction, and have the same Sol
    reviewer verify the finding and affected behavior.
-7. Require every hosted check to pass on that exact reviewed SHA, refetch main,
+5. Require every hosted check to pass on that exact reviewed SHA, refetch main,
    recheck remote-head and ancestry guards, and merge #1995 only from the main
    clone. Then advance to the released-checker gate. No downstream step may use
    the diagnostic branch as a released or certified implementation.
@@ -180,15 +176,18 @@ and merge_result(H1995) is on protected main
 ```
 
 For #2164, the complete first half of the predicate is true. For #1995,
-`H1995 = af1b88f207432e8a01b403783d0484942f522a68` is reviewed, pushed, and
+`H1995 = 08cc80e0ab752414eb1527a1652181ef9b4e2679` is reviewed, pushed, and
 contains protected-main ancestor `39776aa9bb027c638812a01b8dabbe03cab92f64`.
 Its 10 non-diagnostic hosted checks passed, but Unit and Package remain red and
 no Stage A cause artifact or merge result exists. Therefore the #1995 predicate
-remains false. The single next gate is the bounded review-sidecar correction,
-exact-head review and binding rotation, and hosted Stage A0 recollection. The
-observation remains ineligible as cause proof; it is not a retry, a behavioral
-fix, or a relaxation of the certificate predicate. All required hosted checks
-must eventually pass on one corrected exact SHA before merge.
+remains false. Stage A0 is closed because both hosted observation verifiers
+accepted and both termination-verifier rejection assertions passed. The single
+next gate is a separately reviewed native fixed-enum reason for the exact
+`sealResultAuthority` failure path, reconciled across source and installed-wheel
+hosted evidence. The current observation remains ineligible as cause proof; it
+is not a retry, a behavioral fix, or a relaxation of the certificate predicate.
+All required hosted checks must eventually pass on one corrected exact SHA
+before merge.
 This predicate closes only the
 runner prerequisite/current PR gate, not global certification. It forbids
 retries-as-pass, timeout or resource increases, preload or authority weakening,
