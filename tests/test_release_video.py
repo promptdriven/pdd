@@ -407,6 +407,83 @@ def test_release_video_visual_safety_technical_shell_evidence_overrides_safe_con
 @pytest.mark.parametrize(
     "cue",
     [
+        "A translucent shell with a blinking cursor appears.",
+        "A protective shell accepts keyboard input.",
+        "A glowing shell waits for typed input.",
+        "A luminous shell displays stdout and stderr.",
+        "A physical shell shows a blinking caret.",
+        "A translucent shell: blinking cursor appears.",
+        "A protective shell—after a brief pause—accepts typed input.",
+        "A geometric shell\ndisplays its current stdout.",
+        "A ceramic shell's blinking caret awaits keyboard input.",
+        "A command-driven translucent shell appears.",
+        "A protective fish shell presents a prompt.",
+        "A translucent shell in the foreground, softly lit and centered, "
+        "presents its current command output.",
+        "A translucent shell surrounds an orb; a command shell shows a prompt.",
+    ],
+)
+def test_release_video_visual_safety_rejects_local_shell_interaction_evidence(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A translucent shell rests beside a fish silhouette.",
+        "A protective shell surrounds an abstract root system.",
+        "A glowing shell carries a dash of blue.",
+        "A luminous shell frames a window of soft light.",
+        "A physical shell forms the interface between two ceramic layers.",
+        "A root system grows near a protective shell in diffuse light.",
+        "A fish silhouette rests near a translucent shell; both remain unlabeled.",
+        "A translucent shell rests in the foreground. Far behind it, a window "
+        "of light frames a ceramic sculpture.",
+        "A geometric shell—frosted and text-free—rests beside a dash of blue.",
+    ],
+)
+def test_release_video_visual_safety_ignores_unrelated_technical_homonyms(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" not in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A transparent glass shell surrounds a matte cube.",
+        "A matte ceramic shell rests in diffuse violet light.",
+        "A shell made of frosted glass surrounds a simple orb.",
+        "A shell formed of transparent glass encloses a package cube.",
+        "A delicate organic shell rests on a matte surface.",
+        "A protective, geometric shell surrounds an unlabeled orb.",
+        "A TRANSLUCENT GLASS SHELL; softly lit, surrounds a ceramic shape.",
+        "A shell\nmade of matte ceramic encloses a rounded cube.",
+    ],
+)
+def test_release_video_visual_safety_allows_local_physical_shell_materials(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" not in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
         "Optional particles may appear; the camera must push in toward the orb.",
         "The orb can be blue while the camera pushes in toward it.",
         "An optional camera drift may be used; the camera must tilt down afterward.",
