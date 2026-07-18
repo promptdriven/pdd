@@ -122,20 +122,54 @@ SHELL_VISUAL_RE = re.compile(
     r"\b(?:powershell|shell(?:s|['’]s|-like)?)\b",
     flags=re.IGNORECASE,
 )
-SHELL_TECHNICAL_EVIDENCE_RE = re.compile(
-    r"\b(?:bash|posix|unix|zsh|fish|ksh|csh|tcsh|dash|powershell|"
-    r"bourne(?:[-\s]+again)?|root|system|default|os|technical|"
-    r"terminal|console|interactive|login|command(?:[-\s]+line)?|cli|"
-    r"prompts?|outputs?|sessions?|screens?|interfaces?|windows?)\b",
+SHELL_TECHNICAL_SURFACE_PATTERN = (
+    r"(?:cli|prompts?|cursors?|carets?|stdout|stderr|keyboard(?:\s+input)?|"
+    r"typed\s+input|inputs?|outputs?|commands?|terminals?|consoles?|sessions?|"
+    r"screens?|interfaces?|windows?|surfaces?)"
+)
+TECHNICAL_SHELL_PREFIX_RE = re.compile(
+    r"\b(?:bash|posix|unix|zsh|fish|ksh|csh|tcsh|dash|"
+    r"bourne(?:[-\s]+again)?|root|system|windows?|default|os|terminal|console|"
+    r"interactive|login|command(?:[-\s]+line)?)"
+    r"(?:[\s,-]+(?:driven|based|style|styled|technical|interactive|login|"
+    r"abstract|translucent|protective|geometric|outer|physical|luminous|"
+    r"glowing|transparent|frosted|matte|ceramic|delicate|organic|glass)){0,3}"
+    r"[\s,-]+shell(?:s|-like)?\b",
     flags=re.IGNORECASE,
 )
+TECHNICAL_SHELL_DIRECT_RE = re.compile(
+    rf"\bshell(?:s|-like)?\b(?:['’]s)?\s*(?:[-:—]\s*)?"
+    rf"(?:(?:a|an|the|its|current|blinking|visible|technical|interactive|"
+    rf"command[-\s]+line)\s+){{0,4}}{SHELL_TECHNICAL_SURFACE_PATTERN}\b",
+    flags=re.IGNORECASE,
+)
+TECHNICAL_SHELL_WITH_RE = re.compile(
+    rf"\bshell(?:s|-like)?\b(?:['’]s)?\s+"
+    rf"(?:with|containing|featuring)\s+"
+    rf"(?:(?:a|an|the|its|current|blinking|visible|typed|keyboard)\s+){{0,4}}"
+    rf"{SHELL_TECHNICAL_SURFACE_PATTERN}\b",
+    flags=re.IGNORECASE,
+)
+TECHNICAL_SHELL_ACTION_RE = re.compile(
+    rf"\bshell(?:s|-like)?\b"
+    rf"(?:(?![.;]|\b(?:while|whereas|which|that)\b).){{0,120}}?"
+    rf"\b(?:accepts?|awaits?|displays?|shows?|presents?|renders?|emits?|"
+    rf"receives?|waits?\s+for)\b"
+    rf"(?:(?![.;]).){{0,60}}?{SHELL_TECHNICAL_SURFACE_PATTERN}\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
 SAFE_SHELL_MODIFIER_RE = re.compile(
-    r"\b(?:abstract|translucent|protective|geometric|outer|physical|luminous|"
-    r"glowing)(?:[\s,;:—-]+\w+){0,3}[\s,;:—-]+shells?\b",
+    r"\b(?:(?:abstract|translucent|protective|geometric|outer|physical|"
+    r"luminous|glowing|transparent|frosted|glass|matte|ceramic|delicate|organic)"
+    r"[\s,;:—-]+){1,4}shells?\b",
     flags=re.IGNORECASE,
 )
 SAFE_SHELL_MATERIAL_RE = re.compile(
-    r"\bshells?\b\s*(?:[—,:;-]\s*)?of\s+(?:\w+\s+){0,2}(?:light|glow)\b",
+    r"\bshells?\b\s*(?:[—,:;-]\s*)?"
+    r"(?:of\s+(?:(?:soft|faint|diffuse|radiant|translucent|transparent)\s+){0,2}"
+    r"(?:light|glow)|(?:made|formed|crafted)\s+of\s+"
+    r"(?:(?:transparent|translucent|frosted|matte|delicate)\s+){0,2}"
+    r"(?:glass|ceramic|organic\s+material))\b",
     flags=re.IGNORECASE,
 )
 EXACT_GEOMETRY_VISUAL_RE = re.compile(
@@ -3475,20 +3509,36 @@ def has_risky_shell_visual(cue: str) -> bool:
     if not shell_matches:
         return False
 
-    # Technical evidence wins over physical/art-direction modifiers. This keeps
-    # mixed cues such as "translucent shell with a prompt" fail-closed.
-    if SHELL_TECHNICAL_EVIDENCE_RE.search(cue):
-        return True
-
-    safe_spans = [
-        match.span()
-        for pattern in (SAFE_SHELL_MODIFIER_RE, SAFE_SHELL_MATERIAL_RE)
-        for match in pattern.finditer(cue)
-    ]
-    return any(
-        not any(start <= shell.start() < end for start, end in safe_spans)
-        for shell in shell_matches
+    technical_spans = shell_context_spans(
+        cue,
+        TECHNICAL_SHELL_PREFIX_RE,
+        TECHNICAL_SHELL_DIRECT_RE,
+        TECHNICAL_SHELL_WITH_RE,
+        TECHNICAL_SHELL_ACTION_RE,
     )
+    safe_spans = shell_context_spans(
+        cue,
+        SAFE_SHELL_MODIFIER_RE,
+        SAFE_SHELL_MATERIAL_RE,
+    )
+    for shell in shell_matches:
+        if shell.group(0).lower() == "powershell":
+            return True
+        if span_contains_offset(technical_spans, shell.start()):
+            return True
+        if not span_contains_offset(safe_spans, shell.start()):
+            return True
+    return False
+
+
+def shell_context_spans(cue: str, *patterns: re.Pattern[str]) -> list[tuple[int, int]]:
+    """Return phrase spans that grammatically relate context to a shell."""
+    return [match.span() for pattern in patterns for match in pattern.finditer(cue)]
+
+
+def span_contains_offset(spans: list[tuple[int, int]], offset: int) -> bool:
+    """Return whether an offset belongs to one of the supplied phrase spans."""
+    return any(start <= offset < end for start, end in spans)
 
 
 def has_unsafe_visual_motion(cue: str) -> bool:
