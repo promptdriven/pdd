@@ -19,8 +19,13 @@ Selection precedence is deterministic:
    closed `PDD_EXPLICIT_SYNC_SCOPE_V1` object and rejects a present
    `PDD_CHANGED_MODULES`; PDD loads the primary evidence by plan digest and
    never rediscovers fallback scope from a diff or architecture file.
-2. `PDD_CHANGED_MODULES` supplies authoritative normal candidates, after alias
-   resolution.
+2. `PDD_CHANGED_MODULES` supplies authoritative ordered normal selection, but
+   never creates candidates. Every parsed alias must resolve against the
+   architecture-backed inventory before dry-run: an unknown entry, runtime-only
+   template, or ambiguous bare leaf rejects the entire selection without an LLM
+   call. A path-qualified alias for a unique declared leaf remains supported;
+   requested targets retain caller order while transitive dependencies remain
+   frozen in canonical graph order.
 3. Changed prompt paths from the branch diff supply path-aware candidates.
 4. Architecture entries supply prompt/output paths and dependency edges.
 5. When architecture is absent, discovery is limited to `prompts/` under the
@@ -45,4 +50,8 @@ rejects a missing or changed current SHA before preparing a worktree and never
 rewrites this authority. Checkpoint trailers use `PDD-Sync-Checkpoint-V2` with
 the immutable attempt kind, plan digest, selection digest, ordered graph, and
 checkout identity; only an exact binding match may resume a module on a fresh
-clone.
+clone. Each child unit is relocated into its own worktree before it runs. Before
+checkpoint staging, durable mode examines tracked and untracked changes and
+permits only the selected candidate's frozen `output_paths` plus target-scoped
+`.pdd/meta/<target>_*.json`; an out-of-scope mutation fails rather than becoming
+an empty successful checkpoint.

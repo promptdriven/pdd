@@ -61,7 +61,8 @@ class EmptyDurableRunner(DurableSyncRunner):
 class MetadataDurableRunner(DurableSyncRunner):
     def _run_child_sync(self, basename: str):
         cwd = self.module_cwds[basename]
-        (cwd / "README.md").write_text("updated\n", encoding="utf-8")
+        target = self._module_target(basename).rsplit("/", 1)[-1]
+        (cwd / f"{target}.py").write_text("updated\n", encoding="utf-8")
         meta_dir = cwd / ".pdd" / "meta"
         meta_dir.mkdir(parents=True, exist_ok=True)
         (meta_dir / "foo_python.json").write_text(
@@ -76,10 +77,19 @@ class PushFailingMetadataRunner(MetadataDurableRunner):
         return False, "simulated push outage"
 
 
+class OutOfScopeDurableRunner(DurableSyncRunner):
+    def _run_child_sync(self, basename: str):
+        (self.module_cwds[basename] / "outside-contract.txt").write_text(
+            "must not checkpoint\n", encoding="utf-8"
+        )
+        return True, 0.0, ""
+
+
 class MultiModuleDurableRunner(DurableSyncRunner):
     def _run_child_sync(self, basename: str):
         cwd = self.module_cwds[basename]
-        (cwd / f"{basename}.txt").write_text(f"synced {basename}\n", encoding="utf-8")
+        target = self._module_target(basename).rsplit("/", 1)[-1]
+        (cwd / f"{target}.py").write_text(f"synced {basename}\n", encoding="utf-8")
         return True, 0.0, ""
 
 
@@ -101,16 +111,20 @@ def _runner(repo: Path, runner_cls=EmptyDurableRunner, **kwargs) -> DurableSyncR
     checkout_identity = kwargs.pop(
         "checkout_identity", _git(repo, "rev-parse", "HEAD").stdout.strip()
     )
+    supplied_cwds = kwargs.get("module_cwds", {})
     if not sync_options:
         candidates = []
         for basename in basenames:
             target = basename.rsplit("/", 1)[-1]
-            cwd = repo / Path(*basename.split("/")[:-1])
+            cwd = Path(supplied_cwds.get(
+                basename, repo / Path(*basename.split("/")[:-1])
+            ))
             cwd.mkdir(parents=True, exist_ok=True)
             candidates.append(
                 SyncPlanCandidate(
                     module_id=basename,
                     unit=resolve_sync_unit(basename, target, cwd),
+                    output_paths=(cwd / f"{target}.py",),
                     details=SyncPlanDetails(
                         changed_reason="durable test scope",
                         expected_operation="generate",
@@ -318,23 +332,36 @@ def test_module_metadata_is_force_added_even_when_pdd_dir_is_ignored(tmp_path: P
     assert success is True, message
     metadata = _git(repo, "show", "sync/issue-1328:.pdd/meta/foo_python.json").stdout
     assert json.loads(metadata) == {"module": "foo"}
-    readme = _git(repo, "show", "sync/issue-1328:README.md").stdout
-    assert readme == "updated\n"
+    output = _git(repo, "show", "sync/issue-1328:foo.py").stdout
+    assert output == "updated\n"
+
+
+def test_durable_runner_rejects_child_output_outside_frozen_plan(tmp_path: Path):
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(repo, runner_cls=OutOfScopeDurableRunner)
+
+    success, message, _ = runner.run()
+
+    assert success is False
+    assert "out-of-scope path(s): outside-contract.txt" in message
+    log = _git(repo, "log", "sync/issue-1328", "--format=%B").stdout
+    assert "PDD-Sync-Checkpoint-V2: issue=1328 module=foo" not in log
 
 
 def test_nested_module_metadata_is_force_added_for_module_cwd(tmp_path: Path):
     repo = _init_repo_with_remote(tmp_path)
     module_dir = repo / "packages" / "app"
     module_dir.mkdir(parents=True)
-    (module_dir / "README.md").write_text("initial\n", encoding="utf-8")
-    _git(repo, "add", "packages/app/README.md")
+    (module_dir / "foo.py").write_text("initial\n", encoding="utf-8")
+    _git(repo, "add", "packages/app/foo.py")
     _git(repo, "commit", "-m", "add nested module")
     _git(repo, "push", "origin", "main")
 
     runner = _runner(
         repo,
         runner_cls=MetadataDurableRunner,
-        module_cwds={"foo": module_dir},
+        basenames=["packages/app/foo"],
+        module_cwds={"packages/app/foo": module_dir},
     )
 
     success, message, _ = runner.run()
@@ -345,25 +372,30 @@ def test_nested_module_metadata_is_force_added_for_module_cwd(tmp_path: Path):
         "show",
         "sync/issue-1328:packages/app/.pdd/meta/foo_python.json",
     ).stdout
-    assert json.loads(metadata) == {"module": "foo"}
-    readme = _git(repo, "show", "sync/issue-1328:packages/app/README.md").stdout
-    assert readme == "updated\n"
+    assert json.loads(metadata) == {"module": "packages/app/foo"}
+    output = _git(repo, "show", "sync/issue-1328:packages/app/foo.py").stdout
+    assert output == "updated\n"
 
 
 def test_metadata_allowlist_rejects_nested_pdd_state_and_wrong_meta_scope(tmp_path: Path):
     repo = _init_repo_with_remote(tmp_path)
     module_dir = repo / "packages" / "app"
-    runner = _runner(repo, module_cwds={"foo": module_dir})
+    basename = "packages/app/foo"
+    runner = _runner(
+        repo,
+        basenames=[basename],
+        module_cwds={basename: module_dir},
+    )
 
     assert runner._unsafe_staged_paths(
-        "foo",
+        basename,
         [
             ".pdd/meta/foo_python.json",
             "packages/app/.pdd/meta/foo_typescript.json",
         ],
     ) == []
     assert runner._unsafe_staged_paths(
-        "foo",
+        basename,
         [
             "packages/app/.pdd/agentic_sync_state.json",
             "packages/other/.pdd/meta/foo_python.json",
@@ -450,7 +482,7 @@ def test_non_fast_forward_push_rejection_halts_run(tmp_path: Path):
     _git(intruder, "push", "origin", "sync/issue-1328")
 
     second_worktree = runner._create_module_worktree("foo")
-    (second_worktree / "second.txt").write_text("second local change\n", encoding="utf-8")
+    (second_worktree / "foo.py").write_text("second local change\n", encoding="utf-8")
     success, error = runner._checkpoint_module("foo", second_worktree)
 
     assert success is False
@@ -504,7 +536,7 @@ def test_fresh_clone_resumes_checkpointed_modules_after_partial_failure(
     _git(fresh, "fetch", "origin", "sync/issue-1328")
     final_log = _git(fresh, "log", "origin/sync/issue-1328", "--format=%B").stdout
     assert "PDD-Sync-Checkpoint-V2: issue=1328 module=c" in final_log
-    assert _git(fresh, "show", "origin/sync/issue-1328:c.txt").stdout == "synced c\n"
+    assert _git(fresh, "show", "origin/sync/issue-1328:c.py").stdout == "synced c\n"
 
 
 def test_halted_checkpoint_prevents_later_in_flight_module_checkpoint(tmp_path: Path):
@@ -538,7 +570,7 @@ import sys
 from pathlib import Path
 
 basename = sys.argv[sys.argv.index("sync") + 1]
-Path(f"{basename}.txt").write_text(f"synced {basename}\\n", encoding="utf-8")
+Path(f"{basename}.py").write_text(f"synced {basename}\\n", encoding="utf-8")
 meta_dir = Path(".pdd") / "meta"
 meta_dir.mkdir(parents=True, exist_ok=True)
 (meta_dir / f"{basename}_python.json").write_text('{"ok": true}\\n', encoding="utf-8")
@@ -558,7 +590,7 @@ print("Overall status: Success")
 
     assert success is True, message
     assert cost == pytest.approx(0.12)
-    assert _git(repo, "show", "sync/issue-1328:foo.txt").stdout == "synced foo\n"
+    assert _git(repo, "show", "sync/issue-1328:foo.py").stdout == "synced foo\n"
     metadata = _git(repo, "show", "sync/issue-1328:.pdd/meta/foo_python.json").stdout
     assert json.loads(metadata) == {"ok": True}
     assert "PDD_CHECKPOINT: issue=1328 module=foo" in capsys.readouterr().out
@@ -724,15 +756,12 @@ def test_real_subprocess_durable_max_workers_limits_concurrency(
             "0.01",
         ]
 
-    runner = DurableSyncRunner(
+    runner = _runner(
+        repo,
+        runner_cls=DurableSyncRunner,
         basenames=basenames,
         dep_graph={b: [] for b in basenames},
-        sync_options={},
-        github_info=None,
         issue_number=1565,
-        project_root=repo,
-        quiet=True,
-        issue_url="https://github.com/org/repo/issues/1565",
     )
     assert runner.max_workers == 2
 
