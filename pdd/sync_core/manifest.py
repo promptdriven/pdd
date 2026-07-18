@@ -638,6 +638,24 @@ def _architecture_modules(
     return modules, None
 
 
+def _is_external_context_template(item: dict[object, object]) -> bool:
+    """Return whether an architecture entry is a non-managed context artifact."""
+    filename = item.get("filename")
+    filepath = item.get("filepath")
+    tags = item.get("tags")
+    interface = item.get("interface")
+    return (
+        isinstance(filename, str)
+        and filename.startswith("context/")
+        and filename.endswith(".prompt")
+        and filepath == filename
+        and isinstance(tags, list)
+        and "context" in tags
+        and isinstance(interface, dict)
+        and interface.get("type") == "config"
+    )
+
+
 def _map_architecture_modules(
     ref: str,
     architecture_path: PurePosixPath,
@@ -656,6 +674,8 @@ def _map_architecture_modules(
         filename = item.get("filename")
         filepath = item.get("filepath")
         if not isinstance(filename, str) or not isinstance(filepath, str):
+            continue
+        if _is_external_context_template(item):
             continue
         if PurePosixPath(filename).suffix != ".prompt":
             continue
