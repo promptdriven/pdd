@@ -14,12 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pdd.sync_core import (
-    build_unit_manifest,
-    build_unit_snapshot,
-    load_verification_profiles,
-    verification,
-)
+from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
 from pdd.sync_core import manifest as manifest_module
 from pdd.sync_core.manifest import (
     ManifestRefs,
@@ -498,7 +493,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 28
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 25
     story_identity = (STORY_REGRESSION_DORMANT_ROTATION["prompt_path"], "python")
     assert bootstrap_rows[story_identity] != STORY_REGRESSION_DORMANT_ROTATION
     bootstrap_rows[story_identity] = STORY_REGRESSION_DORMANT_ROTATION
@@ -531,15 +526,16 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         == row["head_prompt_sha256"]
         for row in future_pr2017_rows
     )
-
     pdd1989_rows = [
         row
         for row in rows
         if row["head_policy_sha256"]
-        == "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+        == STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
     ]
     assert len(pdd1989_rows) == 7
-    assert {row["prompt_path"] for row in pdd1989_rows} == {
+    assert {
+        row["prompt_path"] for row in pdd1989_rows
+    } == {
         "pdd/prompts/agentic_common_python.prompt",
         "pdd/prompts/commands/checkup_python.prompt",
         "pdd/prompts/generate_model_catalog_python.prompt",
@@ -557,21 +553,6 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
             row["head_prompt_sha256"]
         )
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
-
-    pr1971_rows = [
-        row for row in rows if row["head_policy_sha256"] == profile_digest
-    ]
-    assert len(pr1971_rows) == 3
-    assert {row["prompt_path"] for row in pr1971_rows} == {
-        "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
-        "pdd/prompts/sync_determine_operation_python.prompt",
-        "pdd/prompts/update_main_python.prompt",
-    }
-    assert all(
-        row["base_policy_sha256"]
-        == "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
-        for row in pr1971_rows
-    )
 
     pr1790_rows = [
         row
@@ -1023,33 +1004,6 @@ def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> N
             if item["validator_id"] == "threshold-ed25519"
         )
         assert human["requirement_ids"] == [expected_requirement]
-
-
-def test_step13_snapshot_tracks_the_path_construction_guide(monkeypatch) -> None:
-    """Step 13's included path guide is part of its verified snapshot closure."""
-    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
-    profile_bytes = PROFILE_FILE.read_bytes()
-    protected_manifest = replace(
-        manifest, refs=ManifestRefs("protected-base", "candidate-head")
-    )
-    _profile_bytes_as_protected_base(monkeypatch, profile_bytes)
-    profiles = load_verification_profiles(ROOT, protected_manifest)
-    unit = next(
-        item
-        for item in manifest.managed_units
-        if item.unit_id.prompt_relpath.as_posix()
-        == "pdd/prompts/agentic_arch_step13_fix_LLM.prompt"
-    )
-    profile = profiles.for_unit(unit.unit_id)
-    assert profile is not None
-
-    snapshot = build_unit_snapshot(ROOT, manifest, unit, profile)
-    assert (
-        "include",
-        PurePosixPath("pdd/templates/architecture/pdd_path_construction_guide.prompt"),
-    ) in {(artifact.role, artifact.relpath) for artifact in snapshot.artifacts}
-
-
 @pytest.mark.parametrize(
     "field,replacement",
     (
