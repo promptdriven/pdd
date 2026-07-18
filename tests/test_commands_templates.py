@@ -122,8 +122,17 @@ def test_cli_templates_group_registered():
 
 
 def test_cli_templates_export_tracks_real_module_reload() -> None:
-    """A cached compatibility read must not retain a pre-reload Click group."""
+    """A restored registry must not retain a pre-reload Click group."""
     import importlib
+
+    # ``tests/core/test_cli.py`` snapshots the real commands, then restores
+    # them with this ordinary dict clear/update sequence after every test.
+    # Preserve the canonical-target provenance across that broader-suite
+    # state instead of making reload correctness depend on test order.
+    registry = cli.cli.commands
+    snapshot = registry.copy()
+    registry.clear()
+    registry.update(snapshot)
 
     cli.__dict__.pop("templates_group", None)
     templates_module = importlib.import_module("pdd.commands.templates")
@@ -296,6 +305,24 @@ def test_lazy_mapping_failed_import_remains_retryable(monkeypatch) -> None:
         mapping["retry"]
     assert dict.__getitem__(mapping, "retry") is _UNLOADED_COMMAND
     assert mapping["retry"] is expected
+
+
+def test_lazy_mapping_preserves_override_loaded_before_target(monkeypatch) -> None:
+    """An explicit plugin is not reclassified before its target is imported."""
+    from pdd.commands import LazyCommandMapping
+
+    module_name = "fake.late_command"
+    plugin = click.Command("plugin")
+    canonical = click.Command("canonical")
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+    mapping = LazyCommandMapping(
+        {"replaceable": (module_name, "command")},
+        {"replaceable": plugin},
+    )
+
+    assert mapping["replaceable"] is plugin
+    monkeypatch.setitem(sys.modules, module_name, SimpleNamespace(command=canonical))
+    assert mapping["replaceable"] is plugin
 
 
 def test_lazy_mapping_survives_module_sentinel_refresh(monkeypatch) -> None:
