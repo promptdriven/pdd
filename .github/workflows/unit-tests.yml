@@ -950,13 +950,17 @@ jobs:
           umask 077
           diagnostic_directory="$RUNNER_TEMP/pdd-vitest-no-result-observation"
           artifact="$diagnostic_directory/vitest-source-no-result-observation-v1.json"
+          diagnostic_artifact="$RUNNER_TEMP/pdd-vitest-termination-evidence/vitest-termination-v1.json"
           mkdir -p "$diagnostic_directory"
           chmod 700 "$diagnostic_directory"
+          mkdir -p "${diagnostic_artifact%/*}"
+          chmod 700 "${diagnostic_artifact%/*}"
           diagnostic_head="$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
           test "$diagnostic_head" = "$(git rev-parse HEAD)"
           producer_sha256="$PDD_REVIEWED_PRODUCER_SHA256"
           verifier_sha256="$PDD_REVIEWED_VERIFIER_SHA256"
           observation_verifier_sha256="$PDD_REVIEWED_OBSERVATION_VERIFIER_SHA256"
+          export PDD_VITEST_DIAGNOSTIC_OUTPUT="$diagnostic_artifact"
           export PDD_VITEST_NO_RESULT_OBSERVATION_OUTPUT="$artifact"
           export PDD_VITEST_FAILURE_BASELINE_SHA="$PDD_REVIEWED_FAILURE_BASELINE_SHA"
           export PDD_VITEST_PROTECTED_BASE_SHA="$PDD_REVIEWED_PROTECTED_BASE_SHA"
@@ -1470,6 +1474,7 @@ jobs:
           set -euo pipefail
           umask 077
           artifact="$RUNNER_TEMP/pdd-vitest-wheel-termination-evidence/vitest-wheel-no-result-observation-v1.json"
+          diagnostic_artifact="$RUNNER_TEMP/pdd-vitest-wheel-termination-evidence/vitest-wheel-termination-v1.json"
           diagnostic_directory="${artifact%/*}"
           test -d "$diagnostic_directory"
           test "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA" = "$(git rev-parse HEAD)"
@@ -1489,6 +1494,7 @@ jobs:
           print(json.load(open(sys.argv[1], encoding='ascii'))['installed_runner_sha256'])
           PY
           )"
+          export PDD_VITEST_DIAGNOSTIC_OUTPUT="$diagnostic_artifact"
           export PDD_VITEST_NO_RESULT_OBSERVATION_OUTPUT="$artifact"
           export PDD_VITEST_FAILURE_BASELINE_SHA="$PDD_REVIEWED_FAILURE_BASELINE_SHA"
           export PDD_VITEST_PROTECTED_BASE_SHA="$PDD_REVIEWED_PROTECTED_BASE_SHA"

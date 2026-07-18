@@ -20,7 +20,7 @@ _MAX_EVIDENCE_BYTES = 16 * 1024
 _MAX_PROGRESS_FRAMES = 256
 _STATIC_PINS = {
     "failure_baseline_sha": "b09b6bef2c8c4bee762965be463527cd0b050154",
-    "protected_base_sha": "0e22fe9f42f72a70fc85cb6f9c289fd8187df451",
+    "protected_base_sha": "39776aa9bb027c638812a01b8dabbe03cab92f64",
     "runner_image": "ubuntu-24.04/20260714.240.1",
     "runner_provisioner": "20260707.563",
     "python": "3.12.13",
@@ -65,6 +65,38 @@ _PROGRESS = frozenset({
     "reporter-constructor-failed", "reporter-constructor-succeeded",
     "coordinator-start", "worker-start", "collection-complete", "result-published",
 })
+_PROGRESS_PREDECESSORS = {
+    "post-drop-probes": frozenset(),
+    "candidate-exec": frozenset({"post-drop-probes"}),
+    "coordinator-bootstrap": frozenset({"candidate-exec"}),
+    "coordinator-uncaught-exception": frozenset({"coordinator-bootstrap"}),
+    "coordinator-explicit-exit": frozenset({"coordinator-bootstrap"}),
+    "coordinator-before-exit": frozenset({"coordinator-bootstrap"}),
+    "coordinator-exit": frozenset({"coordinator-bootstrap"}),
+    "reporter-module-start": frozenset({"coordinator-bootstrap"}),
+    "reporter-addon-load-start": frozenset({"reporter-module-start"}),
+    "reporter-addon-load-failed": frozenset({"reporter-addon-load-start"}),
+    "reporter-addon-load-succeeded": frozenset({"reporter-addon-load-start"}),
+    "reporter-authority-seal-start": frozenset({"reporter-addon-load-succeeded"}),
+    "reporter-authority-seal-failed": frozenset({"reporter-authority-seal-start"}),
+    "reporter-authority-seal-invalid": frozenset({"reporter-authority-seal-start"}),
+    "reporter-authority-seal-succeeded": frozenset({"reporter-authority-seal-start"}),
+    "reporter-constructor-start": frozenset({"reporter-authority-seal-succeeded"}),
+    "reporter-constructor-failed": frozenset({"reporter-constructor-start"}),
+    "reporter-constructor-succeeded": frozenset({"reporter-constructor-start"}),
+    "coordinator-start": frozenset({"candidate-exec"}),
+    "worker-start": frozenset({"candidate-exec"}),
+    "collection-complete": frozenset({"coordinator-start"}),
+    "result-published": frozenset({"coordinator-start"}),
+}
+_PROGRESS_OUTCOME_GROUPS = (
+    frozenset({"reporter-addon-load-failed", "reporter-addon-load-succeeded"}),
+    frozenset({
+        "reporter-authority-seal-failed", "reporter-authority-seal-invalid",
+        "reporter-authority-seal-succeeded",
+    }),
+    frozenset({"reporter-constructor-failed", "reporter-constructor-succeeded"}),
+)
 
 
 class ObservationError(ValueError):
@@ -146,16 +178,16 @@ def _require_progress(value: object) -> None:
         raise ObservationError
     seen: set[str] = set()
     for stage in value:
-        if type(stage) is not str or stage not in _PROGRESS:
-            raise ObservationError
-        if stage != "worker-start" and stage in seen:
-            raise ObservationError
-        required = {
-            "post-drop-probes": set(),
-            "candidate-exec": {"post-drop-probes"},
-            "coordinator-bootstrap": {"candidate-exec"},
-        }.get(stage, {"coordinator-bootstrap"})
-        if not required.issubset(seen):
+        if (
+            type(stage) is not str
+            or stage not in _PROGRESS
+            or stage == "result-published"
+            or stage in seen
+            or "coordinator-exit" in seen
+            or not _PROGRESS_PREDECESSORS[stage].issubset(seen)
+            or any(stage in group and seen.intersection(group)
+                   for group in _PROGRESS_OUTCOME_GROUPS)
+        ):
             raise ObservationError
         seen.add(stage)
 

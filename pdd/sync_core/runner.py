@@ -173,7 +173,7 @@ _TERMINATION_EVIDENCE_FAILURE_BASELINE_SHA = (
     "b09b6bef2c8c4bee762965be463527cd0b050154"
 )
 _TERMINATION_EVIDENCE_PROTECTED_BASE_SHA = (
-    "0e22fe9f42f72a70fc85cb6f9c289fd8187df451"
+    "39776aa9bb027c638812a01b8dabbe03cab92f64"
 )
 _TERMINATION_EVIDENCE_RUNNER_IMAGE = "ubuntu-24.04/20260714.240.1"
 _TERMINATION_EVIDENCE_RUNNER_PROVISIONER = "20260707.563"
@@ -6182,13 +6182,40 @@ def _write_vitest_no_result_observation(
         or not all(isinstance(stage, VitestProgressStage) for stage in progress)
     ):
         return None
+    if (
+        config.lane not in {"source", "installed-wheel"}
+        or config.runner_origin != (
+            "source-checkout" if config.lane == "source" else "installed-wheel"
+        )
+        or (
+            config.lane == "source"
+            and any(value is not None for value in (
+                config.package_attestation_sha256,
+                config.wheel_sha256,
+                config.installed_runner_sha256,
+            ))
+        )
+        or (
+            config.lane == "installed-wheel"
+            and not all(_vitest_termination_is_sha256(value) for value in (
+                config.package_attestation_sha256,
+                config.wheel_sha256,
+                config.installed_runner_sha256,
+            ))
+        )
+    ):
+        return None
     try:
         observed_result, observed_progress = _parse_vitest_transport(
             b"".join(_vitest_progress_frame(stage) for stage in progress)
         )
     except ValueError:
         return None
-    if observed_result or observed_progress != progress:
+    if (
+        observed_result
+        or VitestProgressStage.RESULT_PUBLISHED in observed_progress
+        or observed_progress != progress
+    ):
         return None
     payload: dict[str, object] = {
         "schema": _NO_RESULT_OBSERVATION_SCHEMA,

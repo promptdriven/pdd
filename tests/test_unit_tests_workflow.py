@@ -307,7 +307,7 @@ def test_stage_a0_plan_uses_integrated_live_main_protected_base() -> None:
         encoding="utf-8",
     )
     start = plan.index("#### Pinned Vitest cause-evidence gate")
-    end = plan.index("Stage A must first prove", start)
+    end = plan.index("This plan originated", start)
     stage_a0 = plan[start:end]
     assert "protected_base_sha: 39776aa9bb027c638812a01b8dabbe03cab92f64" in stage_a0
     assert "protected_base=39776aa9bb027c638812a01b8dabbe03cab92f64" in stage_a0

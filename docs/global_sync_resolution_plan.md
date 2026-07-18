@@ -152,7 +152,7 @@ both before execution:
 
 ```yaml
 failure_baseline_sha: b09b6bef2c8c4bee762965be463527cd0b050154
-protected_base_sha: 0e22fe9f42f72a70fc85cb6f9c289fd8187df451
+protected_base_sha: 39776aa9bb027c638812a01b8dabbe03cab92f64
 diagnostic_head_sha: $PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA
 diagnostic_producer_sha256: $PDD_REVIEWED_PRODUCER_SHA256
 diagnostic_verifier_sha256: $PDD_REVIEWED_VERIFIER_SHA256
@@ -197,7 +197,7 @@ claim a cause-specific RED:
 
 ```bash
 failure_baseline=b09b6bef2c8c4bee762965be463527cd0b050154
-protected_base=0e22fe9f42f72a70fc85cb6f9c289fd8187df451
+protected_base=39776aa9bb027c638812a01b8dabbe03cab92f64
 diagnostic_head="$(git rev-parse HEAD)"
 test "$diagnostic_head" = "$PDD_TRIGGER_PR_HEAD_SHA"
 test "$diagnostic_head" = "$PDD_REVIEWED_DIAGNOSTIC_HEAD_SHA"
