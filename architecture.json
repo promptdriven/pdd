@@ -5648,6 +5648,40 @@
     }
   },
   {
+    "reason": "LLM prompt template for repairing architecture validation failures.",
+    "description": "Step 13 of the agentic architecture workflow. Repairs validation failures by reconciling architecture.json, generated prompt filenames, and path-mirroring rules without flattening path-aware prompt layouts.",
+    "dependencies": [
+      "agentic_arch_step12_deps_LLM.prompt"
+    ],
+    "priority": 153,
+    "filename": "agentic_arch_step13_fix_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
+    "tags": [
+      "agentic",
+      "architecture",
+      "config",
+      "fix",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "fix_validation",
+            "signature": "(failed_step: str, failed_output: str)",
+            "returns": "str (list of fixes applied)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 21280,
+      "y": 220
+    }
+  },
+  {
     "reason": "Architecture registry: tracks per-issue generation provenance, merges entries, and resolves project root via tiered marker precedence.",
     "description": "Maintains .pdd/architecture_registry.json (provenance of which modules came from which GitHub issue), provides architecture-merging and topological priority renumbering, discovers nested architecture.json files, and resolves the project root: PDD markers (.pddrc/.pdd/ Tier A or sources/ + PRD/spec markdown Tier B) and .git (Tier C) are project boundaries, and the nearest boundary found while walking upward wins. It skips Path.home() and system temp roots (/tmp, TMPDIR, tempfile.gettempdir()) for PDD-marker checks so user-global or CI cache markers do not anchor unrelated projects. A self-contained pdd project nested inside an unrelated outer git repo is correctly identified as its own project root, while an outer PDD marker cannot override a nearer inner git repository.",
     "dependencies": [],

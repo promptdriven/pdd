@@ -66,9 +66,9 @@ Given basename "foo", PDD searches for prompts:
 3. Extracts language from filename suffix
 
 **IMPORTANT**: Prompt files must be in the directory matching `prompts_dir` from the matching context.
-- **Style 1 (per-module):** Under the default `prompts/` root at the path named by `architecture.json.filename`
-  - ✅ `prompts/app/page_TypeScriptReact.prompt` (for filename `app/page_TypeScriptReact.prompt`)
-  - ❌ `prompts/home_page_TypeScriptReact.prompt` (flattened; does not mirror `app/page.tsx`)
+- **Style 1 (per-module):** FLAT in `prompts/` (the default `prompts_dir`)
+  - ✅ `prompts/home_page_TypeScriptReact.prompt`
+  - ❌ `prompts/pages/home_page_TypeScriptReact.prompt`
 - **Style 2 (group contexts):** In the group context's `prompts_dir` subdirectory
   - ✅ `prompts/backend/crm_models_Python.prompt` (when `prompts_dir: "prompts/backend"`)
   - ❌ `prompts/crm_models_Python.prompt` (wrong — not in the group's subdirectory)
@@ -360,9 +360,9 @@ pdd sync home_page --dry-run
 % COMMON MISTAKES AND FIXES
 % ============================================================================
 
-1. **Flattening a path-aware filename**
-   - ❌ `api_tasks_route_TypeScript.prompt`
-   - ✅ `app/api/tasks/route_TypeScript.prompt` (mirrors `app/api/tasks/route.ts`)
+1. **Using slashes in filename**
+   - ❌ `app/api/tasks/route_TypeScript.prompt`
+   - ✅ `api_tasks_route_TypeScript.prompt`
 
 2. **Using framework names as language suffix**
    - ❌ `page_NextJS.prompt`
@@ -416,7 +416,7 @@ For deeper understanding, these are the key code files:
 Before finishing architecture.json and .pddrc generation:
 
 **Common checks (both styles):**
-□ Every filename mirrors its filepath structure; preserve slashes for path-aware modules
+□ Every filename uses underscores, NO slashes
 □ Every filename ends with valid PascalCase language suffix
 □ Every filepath matches framework/project conventions
 □ Verified paths using Python script or dry-run
@@ -426,7 +426,7 @@ Before finishing architecture.json and .pddrc generation:
 □ Each context's `paths:` pattern matches its basename
 □ Each context's `outputs.code.path` matches its filepath exactly
 □ `prompts_dir` appears ONLY in `default` context
-□ Prompt files live under `prompts/` at their `architecture.json.filename` paths, preserving nested directories when filenames contain slashes
+□ All prompt files are FLAT in `prompts/` directory
 
 **Style 2 checks (template-based group contexts — Python/Go/Rust):**
 □ Modules are grouped by output directory into group contexts
