@@ -105,7 +105,7 @@ VISUAL_SAFETY_CHECKS = {
     "brittle_mandatory_motion": "hasNoMandatoryMotionVisuals",
 }
 READABLE_VISUAL_RE = re.compile(
-    r"\b(?:workstation|laptops?|phones?|monitors?|screens?|terminal|console|shell|"
+    r"\b(?:workstation|laptops?|phones?|monitors?|screens?|terminal|console|"
     r"source\s+code|code(?:\s+snippet)?|commands?|makefile|browsers?|web\s+pages?|"
     r"user\s+interface|ui|dashboard|documents?|docs?|changelog|release\s+notes?|"
     r"github(?:\s+page)?|pull\s+requests?|issues?|json|ya?ml|configuration|config|"
@@ -116,6 +116,12 @@ READABLE_VISUAL_RE = re.compile(
     r"(?:data|rows?|columns?|cells?|values?|text)|column\s+headers?|"
     r"ui\s+controls?|(?:input|web|application)\s+forms?|"
     r"(?:graphical|software|application|app)\s+(?:user\s+)?interfaces?)\b",
+    flags=re.IGNORECASE,
+)
+COMMAND_SHELL_VISUAL_RE = re.compile(
+    r"\b(?:(?:terminal|interactive|login|command(?:[-\s]+line)?)"
+    r"[-\s]+shell|shell[-\s]+(?:prompt|commands?|output|session|terminal|"
+    r"console|windows?|screens?|interfaces?))\b",
     flags=re.IGNORECASE,
 )
 EXACT_GEOMETRY_VISUAL_RE = re.compile(
@@ -3438,7 +3444,9 @@ def visual_safety_categories(cue: str) -> list[str]:
     """Classify one visual cue using stable, machine-readable categories."""
     categories: list[str] = []
     readable_candidate = SAFE_TEXT_QUALIFIER_RE.sub("", cue)
-    if READABLE_VISUAL_RE.search(readable_candidate):
+    if READABLE_VISUAL_RE.search(readable_candidate) or COMMAND_SHELL_VISUAL_RE.search(
+        readable_candidate
+    ):
         categories.append("risky_readable_surface")
     if EXACT_GEOMETRY_VISUAL_RE.search(cue):
         categories.append("brittle_exact_geometry")
