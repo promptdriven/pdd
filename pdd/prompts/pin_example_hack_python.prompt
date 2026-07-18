@@ -23,10 +23,10 @@ MAX_TEST_EXTEND_ATTEMPTS = 2
 MAX_CONSECUTIVE_CRASHES = 3
 ```
 
-Implement `PendingStateUpdate` plus `AtomicStateUpdate` context manager:
-- Buffer run report + fingerprint writes.
-- Commit via temp file + `os.replace` atomic rename.
-- Roll back by deleting tracked temp files on exception.
+Import `AtomicStateUpdate` from `pdd.fingerprint_transaction`; do not implement
+`PendingStateUpdate`, a second writer, or exception-only rollback here. The
+shared implementation owns the journaled, fsync-backed, lock-serialized commit
+and restart recovery of the run-report/fingerprint pair.
 
 Implement `sync_orchestration()` with exactly:
 

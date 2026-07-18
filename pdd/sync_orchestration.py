@@ -448,15 +448,6 @@ def _use_agentic_path(language: str, agentic_mode: bool) -> bool:
 # --- Atomic State Update (Issue #159 Fix) ---
 
 @dataclass
-class PendingStateUpdate:
-    """Holds pending state updates for atomic commit."""
-    run_report: Optional[Dict[str, Any]] = None
-    fingerprint: Optional[Dict[str, Any]] = None
-    run_report_path: Optional[Path] = None
-    fingerprint_path: Optional[Path] = None
-
-
-@dataclass
 class FileRollbackSnapshot:
     """Snapshot of a single file before an operation mutates it."""
     path: Path
@@ -464,110 +455,7 @@ class FileRollbackSnapshot:
     content: Optional[bytes] = None
 
 
-class AtomicStateUpdate:
-    """
-    Context manager for atomic state updates.
-
-    Ensures run_report and fingerprint are both written or neither is written.
-    This fixes Issue #159 where non-atomic writes caused state desynchronization.
-
-    Usage:
-        with AtomicStateUpdate(basename, language) as state:
-            state.set_run_report(report_dict, report_path)
-            state.set_fingerprint(fingerprint_dict, fp_path)
-        # On successful exit, both files are written atomically
-        # On exception, neither file is written (rollback)
-    """
-
-    def __init__(self, basename: str, language: str):
-        self.basename = basename
-        self.language = language
-        self.pending = PendingStateUpdate()
-        self._temp_files: List[str] = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is None:
-            self._commit()
-        else:
-            self._rollback()
-        return False  # Don't suppress exceptions
-
-    def set_run_report(self, report: Dict[str, Any], path: Path):
-        """Buffer a run report for atomic write."""
-        self.pending.run_report = report
-        self.pending.run_report_path = path
-
-    def set_fingerprint(
-        self, fingerprint: Dict[str, Any], path: Path, *, operation: Optional[str] = None
-    ):
-        """Buffer a fingerprint for atomic write."""
-        self.pending.fingerprint = fingerprint
-        self.pending.fingerprint_path = path
-
-    def _atomic_write(self, data: Dict[str, Any], target_path: Path) -> None:
-        """Write data to file atomically using temp file + rename pattern."""
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write to temp file in same directory (required for atomic rename)
-        fd, temp_path = tempfile.mkstemp(
-            dir=target_path.parent,
-            prefix=f".{target_path.stem}_",
-            suffix=".tmp"
-        )
-        self._temp_files.append(temp_path)
-
-        try:
-            with os.fdopen(fd, 'w') as f:
-                json.dump(data, f, indent=2, default=str)
-
-            # Atomic rename - guaranteed atomic on POSIX systems
-            os.replace(temp_path, target_path)
-            self._temp_files.remove(temp_path)  # Successfully moved, stop tracking
-        except Exception:
-            # Leave temp file for rollback to clean up
-            raise
-
-    def _commit(self):
-        """Commit state without exposing a fresh fingerprint beside stale state."""
-        writes = []
-        if self.pending.run_report is not None and self.pending.run_report_path:
-            writes.append((self.pending.run_report, self.pending.run_report_path))
-        if self.pending.fingerprint is not None and self.pending.fingerprint_path:
-            writes.append((self.pending.fingerprint, self.pending.fingerprint_path))
-        originals = {
-            path: path.read_bytes() if path.exists() else None
-            for _data, path in writes
-        }
-        try:
-            for data, path in writes:
-                self._atomic_write(data, path)
-        except Exception as exc:
-            for path, original in originals.items():
-                try:
-                    if original is None:
-                        if path.exists():
-                            path.unlink()
-                    else:
-                        _atomic_write_bytes(path, original)
-                except OSError:
-                    pass
-            from .fingerprint_transaction import FingerprintFinalizeError
-            target = self.pending.fingerprint_path or self.pending.run_report_path
-            raise FingerprintFinalizeError("sync", target or Path(".pdd/meta"),
-                                           f"atomic state commit failed: {exc}") from exc
-
-    def _rollback(self):
-        """Clean up any temp files without committing changes."""
-        for temp_path in self._temp_files:
-            try:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-            except OSError:
-                pass  # Best effort cleanup
-        self._temp_files.clear()
+from .fingerprint_transaction import AtomicStateUpdate
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
