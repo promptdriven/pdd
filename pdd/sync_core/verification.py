@@ -575,7 +575,7 @@ _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS = (
         "pdd/prompts/sync_main_python.prompt",
         "python",
         "f112de7cfda339c31245f82a1670cf75ff1a1afddac0d8bbcd176f1929bfa7ba",
-        "5dd863bff75ca15b61764b524b6177d6fff78ba9860bb0beebc13caec6af4133",
+        "fd8ff15f34913e59c0e9a167739916021bf6b0406b651a8603614139f0bf282f",
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
         "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
     ),
@@ -583,7 +583,7 @@ _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS = (
         "pdd/prompts/sync_orchestration_python.prompt",
         "python",
         "ca4ad5eff6774715d7a65c73e17a12f79da66cb409c69fe90bf41ae097181266",
-        "efb635d393704cd2b4b1bbcc680400c9182469e60098c0df4da5a7892f2f60cc",
+        "7cfd6ea5b6a182e1de3ac97ac8554ade69c7c486a2127faafec644438762b78a",
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
         "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
     ),
@@ -626,7 +626,7 @@ _REPLAY_BASE_PROFILE_SHA256 = (
     "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
 )
 _REPLAY_HEAD_PROFILE_SHA256 = (
-    "0c5f37e9178cb0f654b2dba79bd11a1f4eaf3e3c74ad81dcbbfba89d0ade40e4"
+    "0ca806d390d34a07a59451ef11f4fa1b04a6a0a66bfbb12308315aa4fbf38c91"
 )
 _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS = tuple(
     replace(
@@ -744,9 +744,9 @@ _BOOTSTRAP_PROFILE_ADDITIONS = (
     (
         PurePosixPath("pdd/prompts/mock_contract_validation_python.prompt"),
         "python",
-        "CONTRACT-SHA256:3b37fbfbf9545fd0ddd57fa5238ab89be9d4444541efeb8cf1b30578f0f4bf8d",
-        "0c5f37e9178cb0f654b2dba79bd11a1f4eaf3e3c74ad81dcbbfba89d0ade40e4",
-        "3b37fbfbf9545fd0ddd57fa5238ab89be9d4444541efeb8cf1b30578f0f4bf8d",
+        "CONTRACT-SHA256:34624bde64048913f0c05a3ce2d7faab89997cf46c97f81e4ae27a603e5ed506",
+        "0ca806d390d34a07a59451ef11f4fa1b04a6a0a66bfbb12308315aa4fbf38c91",
+        "34624bde64048913f0c05a3ce2d7faab89997cf46c97f81e4ae27a603e5ed506",
     ),
 )
 
