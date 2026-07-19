@@ -3267,26 +3267,36 @@ def _checker_artifact_digest(include_vitest: bool = True) -> str:
     return digest.hexdigest()
 
 
-def _released_runtime_closure_paths(
-    include_vitest: bool = True,
-) -> tuple[tuple[str, Path], ...]:
-    """Return the runtime exposed to the profile's active protected adapters."""
+_VITEST_RUNTIME_SOURCE = "checker/pdd/sync_core/native/vitest_fd_cloexec.c"
+
+
+def _released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
+    """Return the complete runtime exposed to protected adapters."""
     paths = list(released_runtime_closure_paths())
     paths.extend((
         ("checker/pdd/sync_core/runner.py", Path(__file__)),
         ("checker/pdd/sync_core/pytest_probe.py", _CHECKER_PYTEST_PROBE),
-    ))
-    if include_vitest:
-        paths.append((
-            "checker/pdd/sync_core/native/vitest_fd_cloexec.c",
+        (
+            _VITEST_RUNTIME_SOURCE,
             Path(__file__).resolve().parent
             / "native"
             / COORDINATOR_ADDON_SOURCE_NAME,
-        ))
+        ),
+    ))
     return tuple(sorted(paths, key=lambda item: item[0]))
 
 
 _default_runtime_closure_paths = _released_runtime_closure_paths
+
+
+def _profiled_runtime_closure_paths(
+    include_vitest: bool,
+) -> tuple[tuple[str, Path], ...]:
+    """Project the complete installed runtime onto the active adapters."""
+    entries = _released_runtime_closure_paths()
+    if include_vitest:
+        return entries
+    return tuple(entry for entry in entries if entry[0] != _VITEST_RUNTIME_SOURCE)
 
 
 def _runtime_manifest(
@@ -3335,7 +3345,7 @@ def _released_runtime_closure_digest(include_vitest: bool = True) -> str:
         entries, cached_manifest, cached_digest = cached
         if _runtime_manifest(entries) == cached_manifest:
             return cached_digest
-    entries = _released_runtime_closure_paths(include_vitest)
+    entries = _profiled_runtime_closure_paths(include_vitest)
     manifest = _runtime_manifest(entries)
     worker_count = min(32, (os.cpu_count() or 1) + 4)
     with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:

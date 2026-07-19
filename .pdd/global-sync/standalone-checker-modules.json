@@ -2,6 +2,7 @@
   "dependencies": [
     "cryptography >=46,<50",
     "filelock >=3.12",
+    "packaging >=24,<26",
     "pytest ==9.0.3",
     "PyYAML ==6.0.3"
   ],

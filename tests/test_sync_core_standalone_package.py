@@ -42,6 +42,7 @@ def test_builder_is_reproducible_and_copies_only_closed_checker_modules(tmp_path
         )
         metadata = next(name for name in names if name.endswith(".dist-info/METADATA"))
         assert "Requires-Dist: z3-solver" not in wheel.read(metadata).decode("utf-8")
+        assert "Requires-Dist: packaging >=24,<26" in wheel.read(metadata).decode("utf-8")
         assert "Requires-Dist: pytest ==9.0.3" in wheel.read(metadata).decode("utf-8")
     validate_standalone_wheel(first, manifest)
 
