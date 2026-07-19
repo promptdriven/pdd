@@ -273,6 +273,20 @@ def test_report_rejects_impossible_semantic_and_counter_combinations() -> None:
             )
 
 
+def test_report_rejects_verified_unit_without_canonical_in_sync_state() -> None:
+    report = _report()
+    report["units"][0]["semantic"] = "VERIFIED"
+    report["counts"]["failed"] = 0
+
+    with pytest.raises(
+        ReleasedCheckerEvidenceError,
+        match="canonical in-sync predicate",
+    ):
+        build_intermediate_release_evidence(
+            _pin(), report, _profiles(), exit_code=1
+        )
+
+
 def test_profile_obligation_schema_and_profile_digest_are_enforced() -> None:
     evidence, report, profiles = _evidence()
     malformed = deepcopy(profiles)

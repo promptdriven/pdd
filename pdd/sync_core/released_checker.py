@@ -417,6 +417,41 @@ def _report_counts(report: Mapping[str, Any], denominator: int) -> dict[str, int
     return dict(counts)
 
 
+def _validated_report_unit(unit: object) -> Mapping[str, Any]:
+    """Validate one serialized SyncVerdict and its cross-field invariants."""
+    row = _require_closed_mapping(unit, _UNIT_KEYS, "report unit")
+    _require_string(row["subject"], "report unit subject")
+    if (
+        row["inventory"] not in _INVENTORY_VALUES
+        or row["baseline"] not in _BASELINE_VALUES
+    ):
+        raise ReleasedCheckerEvidenceError("report unit inventory or baseline is invalid")
+    if row["semantic"] not in _SEMANTIC_VALUES:
+        raise ReleasedCheckerEvidenceError("report unit semantic status is invalid")
+    if not isinstance(row["in_sync"], bool) or not isinstance(
+        row["evidence_complete"], bool
+    ):
+        raise ReleasedCheckerEvidenceError("report unit booleans are malformed")
+    is_verified = row["semantic"] == "VERIFIED"
+    expected_in_sync = (
+        row["inventory"] == "MANAGED"
+        and row["baseline"] == "CURRENT"
+        and is_verified
+        and row["evidence_complete"]
+    )
+    if (
+        row["evidence_complete"] != is_verified
+        or row["in_sync"] != expected_in_sync
+        or (is_verified and not expected_in_sync)
+    ):
+        raise ReleasedCheckerEvidenceError(
+            "report unit state contradicts the canonical in-sync predicate"
+        )
+    _string_list(row["changed_roles"], "report unit changed_roles")
+    _require_string(row["reason"], "report unit reason")
+    return row
+
+
 def _validate_report(report: object, pin: ReleasePin, denominator: int) -> tuple[str, ...]:
     """Close every report layer and bind its exact false result to the pin."""
     payload = _require_closed_mapping(report, _REPORT_KEYS, "released checker report")
@@ -453,20 +488,8 @@ def _validate_report(report: object, pin: ReleasePin, denominator: int) -> tuple
         "failed": 0,
     }
     for unit in units:
-        row = _require_closed_mapping(unit, _UNIT_KEYS, "report unit")
-        subject = _require_string(row["subject"], "report unit subject")
-        if (
-            row["inventory"] not in _INVENTORY_VALUES
-            or row["baseline"] not in _BASELINE_VALUES
-        ):
-            raise ReleasedCheckerEvidenceError("report unit inventory or baseline is invalid")
-        if row["semantic"] not in _SEMANTIC_VALUES:
-            raise ReleasedCheckerEvidenceError("report unit semantic status is invalid")
-        if not isinstance(row["in_sync"], bool) or not isinstance(row["evidence_complete"], bool):
-            raise ReleasedCheckerEvidenceError("report unit booleans are malformed")
-        _string_list(row["changed_roles"], "report unit changed_roles")
-        _require_string(row["reason"], "report unit reason")
-        subjects.append(subject)
+        row = _validated_report_unit(unit)
+        subjects.append(row["subject"])
         derived_counts["managed_units"] += row["inventory"] == "MANAGED"
         derived_counts["trusted_in_sync"] += row["in_sync"]
         derived_counts["trusted_current_evidence"] += row["evidence_complete"]
