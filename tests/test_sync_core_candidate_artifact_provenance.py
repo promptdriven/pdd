@@ -645,14 +645,32 @@ def test_target_runtime_workflow_is_offline_validated_before_artifact_upload() -
     assert "Certificate" not in workflow
     assert names[-1] == "Upload target runtime lock candidate"
     target_job = workflow[workflow.index("  target-runtime-lock:") :]
+    build_step = next(
+        step["run"]
+        for step in steps
+        if step["name"] == "Generate Linux CPython 3.12 candidate lock online"
+    )
+    synthetic_build = (
+        "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI=0.0.0 "
+        "python -m build --wheel --outdir /runtime/project"
+    )
+    assert target_job.count("SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI") == 1
+    assert synthetic_build in build_step
+    assert "export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI" not in build_step
+    assert not any(
+        line.strip().startswith(("git ", "apt-get ", "sudo apt-get "))
+        for line in target_job.splitlines()
+    )
     assert "PYTHONPATH" not in target_job
     assert target_job.count("-I -S -c") == 3
     removed_project_wheel = (
         'find /runtime/wheelhouse -maxdepth 1 -type f -name "pdd_cli-*.whl" -delete'
     )
     assert removed_project_wheel in target_job
-    assert target_job.index(removed_project_wheel) < target_job.index(
-        "generate --wheelhouse /runtime/wheelhouse"
+    assert (
+        target_job.index(synthetic_build)
+        < target_job.index(removed_project_wheel)
+        < target_job.index("generate --wheelhouse /runtime/wheelhouse")
     )
     assert "--find-links /runtime/wheelhouse --find-links /runtime/project" in target_job
     for step in steps:

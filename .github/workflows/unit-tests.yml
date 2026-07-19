@@ -595,7 +595,7 @@ jobs:
             -w /workspace "$image" bash -ceu '
               python -m pip install --disable-pip-version-check --upgrade pip==25.1.1 build==1.2.2.post1
               python -m pip download --disable-pip-version-check --only-binary=:all: --dest /runtime/tooling pip==25.1.1
-              python -m build --wheel --outdir /runtime/project
+              SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI=0.0.0 python -m build --wheel --outdir /runtime/project
               project_wheel=$(find /runtime/project -maxdepth 1 -type f -name "pdd_cli-*.whl" -print -quit)
               test -n "$project_wheel"
               python -m pip download --disable-pip-version-check --only-binary=:all: --dest /runtime/wheelhouse "$project_wheel"
