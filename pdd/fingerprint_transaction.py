@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import getpass
 import hashlib
 import json
 import os
@@ -155,13 +156,29 @@ class AtomicStateUpdate:
         creates and locks a new one.  A per-user private temp directory keeps
         the inode stable for the life of the machine and out of project state.
         """
-        root = Path(tempfile.gettempdir()) / f"pdd-state-locks-{os.getuid()}"
+        # ``os.getuid`` is POSIX-only.  The lock directory is still private on
+        # Windows because the temporary directory is scoped to the current
+        # user; include a stable, non-path fallback key rather than importing
+        # or calling a POSIX API there.
+        get_uid = getattr(os, "getuid", None)
+        owner_uid = get_uid() if callable(get_uid) else None
+        if owner_uid is None:
+            fallback = f"{getpass.getuser()}\0{tempfile.gettempdir()}"
+            fallback_hash = hashlib.sha256(fallback.encode("utf-8")).hexdigest()
+            owner_key = f"user-{fallback_hash[:24]}"
+        else:
+            owner_key = f"uid-{owner_uid}"
+        root = Path(tempfile.gettempdir()) / f"pdd-state-locks-{owner_key}"
         try:
             root.mkdir(mode=0o700, exist_ok=True)
             info = os.lstat(root)
         except OSError as exc:
             raise ValueError(f"cannot create state transaction lock directory: {root}") from exc
-        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != os.getuid():
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or stat.S_ISLNK(info.st_mode)
+            or (owner_uid is not None and info.st_uid != owner_uid)
+        ):
             raise ValueError(f"unsafe state transaction lock directory: {root}")
         directory_key = hashlib.sha256(str(cls._absolute(directory)).encode("utf-8")).hexdigest()[:24]
         return root / f"{directory_key}-{cls.__name__}.lock"
@@ -243,6 +260,11 @@ class AtomicStateUpdate:
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         if self._joined_state is not None:
+            # A helper may catch this exception after leaving its own nested
+            # context.  Mark the owner now so that catch cannot turn a
+            # partially-buffered publication into a successful outer commit.
+            if exc_type is not None:
+                self._joined_state.abort()
             return False
         try:
             if exc_type is None and not self._aborted:

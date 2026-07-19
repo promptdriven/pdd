@@ -38,6 +38,7 @@
 <pdd-dependency>agentic_update_python.prompt</pdd-dependency>
 <pdd-dependency>sync_determine_operation_python.prompt</pdd-dependency>
 <pdd-dependency>operation_log_python.prompt</pdd-dependency>
+<pdd-dependency>fingerprint_transaction_python.prompt</pdd-dependency>
 
 % Goal
 Write `pdd/update_main.py` — the CLI wrapper for updating prompts based on modified code, featuring repository-wide scanning, agentic routing, and post-update synchronization.
@@ -46,6 +47,11 @@ Write `pdd/update_main.py` — the CLI wrapper for updating prompts based on mod
 Supports three modes: true update, regeneration, and repository-wide updates. Routes to agentic or legacy update based on `simple` parameter and agent availability. In repo mode, detects changed files via fingerprint comparison (with git fallback) and performs post-update architecture/PRD sync.
 
 Every single update and each repository pair must acquire its recoverable per-unit transaction before reading or mutating the prompt, retain it through metadata/fingerprint publication, and let nested metadata synchronization join that active transaction rather than taking another same-unit OS lock.
+
+This includes true updates redirected with `--output`: lock the canonical
+source unit before the workflow reads or copies it, even though redirected
+output must not finalize the canonical fingerprint. Concurrent redirected
+updates for one canonical unit must serialize rather than both report success.
 
 % Requirements
 1. Preserve the public surface declared in `<pdd-interface>` exactly, including helper exports and default values. `repo=False`, `extensions=None`, and `directory=None` are compatibility-critical because `pdd sync` calls `update_main(..., use_git=True, strength=..., temperature=...)` without those arguments.

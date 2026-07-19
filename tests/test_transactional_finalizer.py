@@ -19,6 +19,7 @@ from pdd.fingerprint_transaction import (
     finalize_fingerprint,
     operation_invalidates_run_report,
 )
+from pdd.sync_determine_operation import calculate_sha256
 
 
 def _paths(tmp_path: Path) -> tuple[dict[str, Path], Path]:
@@ -233,6 +234,78 @@ def test_nested_same_unit_state_joins_outer_without_premature_commit(tmp_path: P
         assert not target.exists()
 
     assert json.loads(target.read_text(encoding="utf-8")) == {"state": "new"}
+
+
+def test_caught_nested_exception_aborts_owner_and_preserves_previous_pair(
+    tmp_path: Path,
+) -> None:
+    """A caught nested failure cannot let the outer owner commit half-state."""
+    meta = tmp_path / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    report = meta / "sample_python_run.json"
+    fingerprint = meta / "sample_python.json"
+    old_report = b'{"version": "old-report"}\n'
+    old_fingerprint = b'{"version": "old-fingerprint"}\n'
+    report.write_bytes(old_report)
+    fingerprint.write_bytes(old_fingerprint)
+
+    with AtomicStateUpdate("sample", "python", directory=meta) as owner:
+        try:
+            with AtomicStateUpdate("sample", "python", directory=meta) as nested:
+                nested.remove_run_report(report)
+                nested.set_fingerprint({"version": "new-fingerprint"}, fingerprint)
+                raise RuntimeError("nested helper failed")
+        except RuntimeError:
+            pass
+
+    assert report.read_bytes() == old_report
+    assert fingerprint.read_bytes() == old_fingerprint
+
+
+def test_lock_path_uses_portable_owner_fallback_without_getuid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows-style Python hosts can safely acquire and release a unit lock."""
+    meta = tmp_path / ".pdd" / "meta"
+    monkeypatch.delattr(os, "getuid", raising=False)
+
+    lock_path = AtomicStateUpdate._lock_path_for(meta)
+    assert lock_path.parent.name.startswith("pdd-state-locks-user-")
+    with AtomicStateUpdate("sample", "python", directory=meta) as state:
+        state.set_fingerprint({"version": "new"}, meta / "sample_python.json")
+
+    assert json.loads((meta / "sample_python.json").read_text(encoding="utf-8")) == {
+        "version": "new"
+    }
+
+
+@pytest.mark.parametrize(
+    "operation",
+    (
+        "auto-deps",
+        "generate",
+        "example",
+        "update",
+        "fix",
+        "metadata_sync",
+        "sync",
+        "pin",
+        "ci-heal",
+    ),
+)
+def test_each_mutating_command_family_publishes_a_fresh_fingerprint(
+    tmp_path: Path, operation: str,
+) -> None:
+    """Deterministic post-command freshness harness for every #1926 writer."""
+    paths, root = _paths(tmp_path)
+    finalize_fingerprint("sample", "python", operation, paths)
+
+    payload = json.loads(
+        (root / ".pdd" / "meta" / "sample_python.json").read_text(encoding="utf-8")
+    )
+    assert payload["command"] == operation
+    assert payload["prompt_hash"] == calculate_sha256(paths["prompt"])
+    assert payload["code_hash"] == calculate_sha256(paths["code"])
 
 
 @pytest.mark.parametrize(

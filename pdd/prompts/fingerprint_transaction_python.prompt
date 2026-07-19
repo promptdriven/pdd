@@ -65,6 +65,10 @@ Implement `pdd.fingerprint_transaction` with one public thin API:
   takes a second OS lock, commits, or releases the outer lock. Different units
   retain independent locks. A non-null exception at any nested depth aborts the
   outer publication rather than committing buffered state.
+- Derive the private lock-directory identity portably: POSIX may validate a
+  numeric `os.getuid()` owner, while hosts without that API (including Windows)
+  must use a stable current-user fallback and retain the same directory,
+  symlink, and type safety checks. Never call `os.getuid()` unconditionally.
 - A later same-path run-report intent supersedes an earlier one inside that
   transaction: post-mutation verification can replace a buffered stale-report
   tombstone, while a later invalidation can tombstone a buffered report. Reject

@@ -20,6 +20,7 @@
 <pdd-dependency>change_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_change_python.prompt</pdd-dependency>
 <pdd-dependency>update_main_python.prompt</pdd-dependency>
+<pdd-dependency>fingerprint_transaction_python.prompt</pdd-dependency>
 
 % Goal
 Write `pdd/commands/modify.py`.

@@ -13,6 +13,8 @@
 }
 </pdd-interface>
 
+<pdd-dependency>fingerprint_transaction_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Your goal is to write the `pdd/operation_log.py` module.
 
 % Role & Scope

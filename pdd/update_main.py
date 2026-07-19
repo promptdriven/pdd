@@ -2043,7 +2043,7 @@ def update_main(
         dry_run=dry_run,
         sync_metadata=sync_metadata,
     )
-    if repo or dry_run or output:
+    if repo or dry_run:
         return _update_main_locked(**arguments)
 
     prompt_path = input_prompt_file

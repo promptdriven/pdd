@@ -1479,6 +1479,16 @@ class TestOneSessionSyncOutputFromConfig:
         (mock_project_dir / "prompts" / "tinymod_python.prompt").write_text(
             "% generate a tiny module"
         )
+        # The one-session finalizer re-resolves the canonical unit under its
+        # lock.  Declare the same source layout as this fixture rather than
+        # relying on an implicit root default that points somewhere else.
+        (mock_project_dir / ".pddrc").write_text(
+            "contexts:\n  default:\n    paths: ['**']\n    defaults:\n"
+            "      generate_output_path: 'src/'\n"
+            "      example_output_path: 'examples/'\n"
+            "      test_output_path: 'tests/'\n",
+            encoding="utf-8",
+        )
 
         fake_decision = MagicMock()
         fake_decision.operation = "generate"

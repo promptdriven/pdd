@@ -1601,6 +1601,7 @@
       "insert_includes_python.prompt",
       "validate_prompt_includes_python.prompt",
       "operation_log_python.prompt",
+      "fingerprint_transaction_python.prompt",
       "auto_deps_architecture_python.prompt"
     ],
     "priority": 35,
@@ -2591,7 +2592,8 @@
       "agentic_common_python.prompt",
       "agentic_update_python.prompt",
       "sync_determine_operation_python.prompt",
-      "operation_log_python.prompt"
+      "operation_log_python.prompt",
+      "fingerprint_transaction_python.prompt"
     ],
     "priority": 62,
     "filename": "update_main_python.prompt",
@@ -3128,7 +3130,8 @@
     "dependencies": [
       "code_generator_main_python.prompt",
       "agentic_sync_runner_python.prompt",
-      "compressed_sync_context_python.prompt"
+      "compressed_sync_context_python.prompt",
+      "fingerprint_transaction_python.prompt"
     ],
     "priority": 70,
     "filename": "sync_orchestration_python.prompt",
@@ -5501,7 +5504,8 @@
       "core/cloud_python.prompt",
       "code_generator_main_python.prompt",
       "agentic_sync_runner_python.prompt",
-      "compressed_sync_context_python.prompt"
+      "compressed_sync_context_python.prompt",
+      "fingerprint_transaction_python.prompt"
     ],
     "priority": 148,
     "filename": "sync_main_python.prompt",
@@ -7428,7 +7432,9 @@
   {
     "reason": "Provides sync operation logging, fingerprints, run reports, and compression metadata storage.",
     "description": "Decorator-based operation logging that tracks PDD command executions. Manages fingerprints, run reports, and event logs, restoring prior run-report evidence if post-mutation finalization fails. Works with Click commands to extract module identity from prompt_file parameter.",
-    "dependencies": [],
+    "dependencies": [
+      "fingerprint_transaction_python.prompt"
+    ],
     "priority": 210,
     "filename": "operation_log_python.prompt",
     "filepath": "pdd/operation_log.py",
@@ -8386,7 +8392,8 @@
     "description": "Contains maintenance and setup commands for the PDD CLI, including single-module sync, no-argument project-wide sync, GitHub issue sync dispatch, prompt-to-architecture sync, auto-deps, and setup.",
     "dependencies": [
       "auto_deps_main_python.prompt",
-      "architecture_sync_python.prompt"
+      "architecture_sync_python.prompt",
+      "fingerprint_transaction_python.prompt"
     ],
     "priority": 70,
     "filename": "commands/maintenance_python.prompt",
@@ -8431,7 +8438,8 @@
       "agentic_split_python.prompt",
       "change_main_python.prompt",
       "agentic_change_python.prompt",
-      "update_main_python.prompt"
+      "update_main_python.prompt",
+      "fingerprint_transaction_python.prompt"
     ],
     "priority": 70,
     "filename": "commands/modify_python.prompt",

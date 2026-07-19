@@ -1,7 +1,9 @@
 import pytest
 import sys
 import os
+import importlib
 from pathlib import Path
+import threading
 from unittest.mock import patch, MagicMock, mock_open
 import click
 from click.testing import CliRunner
@@ -1095,6 +1097,77 @@ def test_agentic_update_does_not_modify_source_when_output_specified(tmp_path):
     # Function should return success
     assert result is not None
     assert result[0] == "agentic modified content\n"
+
+
+def test_explicit_output_update_serializes_canonical_unit_before_workflow(
+    tmp_path, monkeypatch,
+):
+    """Redirected updates take the source-unit lock before either workflow runs."""
+    root = tmp_path / "project"
+    prompt = root / "prompts" / "sample_python.prompt"
+    code = root / "src" / "sample.py"
+    meta = root / ".pdd" / "meta"
+    prompt.parent.mkdir(parents=True)
+    code.parent.mkdir()
+    meta.mkdir(parents=True)
+    prompt.write_text("% Goal\nSample\n", encoding="utf-8")
+    code.write_text("VALUE = 1\n", encoding="utf-8")
+    ctx = click.Context(click.Command("update"))
+    ctx.obj = {"quiet": True}
+
+    active = 0
+    max_active = 0
+    counter_lock = threading.Lock()
+    entered = threading.Event()
+    release = threading.Event()
+    results = []
+    failures = []
+
+    def blocked_workflow(**_arguments):
+        nonlocal active, max_active
+        with counter_lock:
+            active += 1
+            max_active = max(max_active, active)
+        entered.set()
+        assert release.wait(timeout=5)
+        with counter_lock:
+            active -= 1
+        return ("updated", 0.0, "test")
+
+    def invoke() -> None:
+        try:
+            results.append(update_main(
+                ctx=ctx,
+                input_prompt_file=str(prompt),
+                modified_code_file=str(code),
+                input_code_file=str(code),
+                output=str(root / "preview.prompt"),
+                use_git=False,
+            ))
+        except BaseException as exc:  # Surface thread failures in the parent.
+            failures.append(exc)
+
+    monkeypatch.setattr(
+        "pdd.operation_log.get_fingerprint_path",
+        lambda *_args, **_kwargs: meta / "sample_python.json",
+    )
+    update_module = importlib.import_module("pdd.update_main")
+    monkeypatch.setattr(update_module, "_update_main_locked", blocked_workflow)
+    first = threading.Thread(target=invoke)
+    second = threading.Thread(target=invoke)
+    first.start()
+    assert entered.wait(timeout=5)
+    second.start()
+    second.join(timeout=0.2)
+    assert max_active == 1
+    release.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert not failures
+    assert results == [("updated", 0.0, "test"), ("updated", 0.0, "test")]
 
 
 def test_agentic_update_failure_does_not_corrupt_source(tmp_path):
