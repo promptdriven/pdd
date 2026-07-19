@@ -3045,6 +3045,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "docs/global_sync_evidence_ledger_source.yaml",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "docs/global_sync_extraction_manifest.md",
       "preauthorize_absent": true,
       "role": "human-maintained"
@@ -6043,6 +6050,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "pdd/sync_core/git_io.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "pdd/sync_core/global_sync_ledger.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -12532,6 +12546,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_git_update.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_global_sync_ledger.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
