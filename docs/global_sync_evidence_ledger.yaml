@@ -50,24 +50,54 @@ promotion_bundles:
         exact_repository_sha: "63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee"
         reviewed_head_sha: "6301d6c613199604702c2c3242fc8b837960d586"
         merge_sha: "63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee"
-    validation_command: "gh api repos/promptdriven/pdd/pulls/2214 --jq '.head.sha, .merged, .merge_commit_sha'"
+    validation_command: "gh api repos/promptdriven/pdd/pulls/2214 --jq '.head.sha, .merged, .merge_commit_sha, .base.repo.full_name, .base.ref'"
     machine_predicate:
-      name: "gate-1-hosted-merge"
+      name: "Run Unit Tests"
       result: passed
+      binding_url: "https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086892"
     artifact_bindings:
       - kind: github_actions_job
         url: "https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086892"
+        expected:
+          job_name: "Run Unit Tests"
+          workflow_id: 232784606
+          workflow_name: "Unit Tests"
+          workflow_path: ".github/workflows/unit-tests.yml"
+          event: pull_request
       - kind: github_actions_job
         url: "https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086891"
+        expected:
+          job_name: "Package Preprocess Smoke"
+          workflow_id: 232784606
+          workflow_name: "Unit Tests"
+          workflow_path: ".github/workflows/unit-tests.yml"
+          event: pull_request
       - kind: github_actions_run
         url: "https://github.com/promptdriven/pdd/actions/runs/29674096680"
+        expected:
+          workflow_id: 221944217
+          workflow_name: "PR #2214"
+          workflow_path: "dynamic/github-code-scanning/codeql"
+          event: dynamic
       - kind: github_actions_run
         url: "https://github.com/promptdriven/pdd/actions/runs/29674097086"
+        expected:
+          workflow_id: 274484071
+          workflow_name: auto-heal
+          workflow_path: ".github/workflows/auto-heal.yml"
+          event: pull_request_target
       - kind: github_check_run
         url: "https://github.com/promptdriven/pdd/runs/88158092713"
+        expected:
+          check_name: auto-heal
+          app_id: 15368
+          app_slug: github-actions
+          app_owner: github
     protected_verification:
       mode: github-pr-checks
       pull_request: 2214
+      base_repository: promptdriven/pdd
+      base_ref: main
 governance:
   ratified_at: "2026-07-18"
   last_state_change_rule: "Every gate records the date its evidence_state or status last changed; the initial ratified baseline date is used until the next evidence-backed transition."

@@ -87,15 +87,34 @@ def _promotion_bundle() -> dict[str, object]:
                 "merge_sha": MERGE_SHA,
             },
         },
-        "validation_command": "gh api repos/promptdriven/pdd/pulls/2214",
-        "machine_predicate": {"name": "hosted-gate", "result": "passed"},
+        "validation_command": (
+            "gh api repos/promptdriven/pdd/pulls/2214 "
+            "--jq '.head.sha, .merged, .merge_commit_sha, .base.repo.full_name, .base.ref'"
+        ),
+        "machine_predicate": {
+            "name": "hosted-gate",
+            "result": "passed",
+            "binding_url": "https://github.com/promptdriven/pdd/actions/runs/123/job/456",
+        },
         "artifact_bindings": [
             {
                 "kind": "github_actions_job",
                 "url": "https://github.com/promptdriven/pdd/actions/runs/123/job/456",
+                "expected": {
+                    "job_name": "hosted-gate",
+                    "workflow_id": 1,
+                    "workflow_name": "Hosted Gate",
+                    "workflow_path": ".github/workflows/hosted-gate.yml",
+                    "event": "pull_request",
+                },
             }
         ],
-        "protected_verification": {"mode": "github-pr-checks", "pull_request": 2214},
+        "protected_verification": {
+            "mode": "github-pr-checks",
+            "pull_request": 2214,
+            "base_repository": "promptdriven/pdd",
+            "base_ref": "main",
+        },
     }
 
 
@@ -141,10 +160,15 @@ def _valid_github_responses() -> dict[str, dict[str, object]]:
     return {
         "/repos/promptdriven/pdd/pulls/2214": {
             "head": {"sha": HEAD_SHA},
+            "base": {"repo": {"full_name": "promptdriven/pdd"}, "ref": "main"},
             "merged": True,
             "merge_commit_sha": MERGE_SHA,
         },
         "/repos/promptdriven/pdd/actions/runs/123": {
+            "workflow_id": 1,
+            "name": "Hosted Gate",
+            "path": ".github/workflows/hosted-gate.yml",
+            "event": "pull_request",
             "head_sha": HEAD_SHA,
             "conclusion": "success",
         },
@@ -152,6 +176,64 @@ def _valid_github_responses() -> dict[str, dict[str, object]]:
             "conclusion": "success",
             "run_id": 123,
             "head_sha": HEAD_SHA,
+            "name": "hosted-gate",
+            "workflow_name": "Hosted Gate",
+        },
+    }
+
+
+def _current_gate_1_responses() -> dict[str, dict[str, object]]:
+    """Return the reviewed Gate 1 identities recorded in the source ledger."""
+    return {
+        "/repos/promptdriven/pdd/pulls/2214": {
+            "head": {"sha": "6301d6c613199604702c2c3242fc8b837960d586"},
+            "base": {"repo": {"full_name": "promptdriven/pdd"}, "ref": "main"},
+            "merged": True,
+            "merge_commit_sha": "63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee",
+        },
+        "/repos/promptdriven/pdd/actions/runs/29674097485": {
+            "workflow_id": 232784606,
+            "name": "Unit Tests",
+            "path": ".github/workflows/unit-tests.yml",
+            "event": "pull_request",
+            "head_sha": "6301d6c613199604702c2c3242fc8b837960d586",
+            "conclusion": "success",
+        },
+        "/repos/promptdriven/pdd/actions/jobs/88158086892": {
+            "conclusion": "success",
+            "run_id": 29674097485,
+            "head_sha": "6301d6c613199604702c2c3242fc8b837960d586",
+            "name": "Run Unit Tests",
+            "workflow_name": "Unit Tests",
+        },
+        "/repos/promptdriven/pdd/actions/jobs/88158086891": {
+            "conclusion": "success",
+            "run_id": 29674097485,
+            "head_sha": "6301d6c613199604702c2c3242fc8b837960d586",
+            "name": "Package Preprocess Smoke",
+            "workflow_name": "Unit Tests",
+        },
+        "/repos/promptdriven/pdd/actions/runs/29674096680": {
+            "workflow_id": 221944217,
+            "name": "PR #2214",
+            "path": "dynamic/github-code-scanning/codeql",
+            "event": "dynamic",
+            "head_sha": "6301d6c613199604702c2c3242fc8b837960d586",
+            "conclusion": "success",
+        },
+        "/repos/promptdriven/pdd/actions/runs/29674097086": {
+            "workflow_id": 274484071,
+            "name": "auto-heal",
+            "path": ".github/workflows/auto-heal.yml",
+            "event": "pull_request_target",
+            "head_sha": "6301d6c613199604702c2c3242fc8b837960d586",
+            "conclusion": "success",
+        },
+        "/repos/promptdriven/pdd/check-runs/88158092713": {
+            "conclusion": "success",
+            "head_sha": "6301d6c613199604702c2c3242fc8b837960d586",
+            "name": "auto-heal",
+            "app": {"id": 15368, "slug": "github-actions", "owner": {"login": "github"}},
         },
     }
 
@@ -233,6 +315,24 @@ def test_global_sync_ledger_rejects_all_passed_exploit(tmp_path: Path) -> None:
                 "artifact_bindings"
             ][0].update({"url": "https://example.invalid/fabricated"}),
             "GitHub artifact binding URL is malformed",
+        ),
+        (
+            lambda payload: payload["promotion_bundles"]["gate_1"].update(
+                {"validation_command": "gh api repos/attacker/scratch/pulls/1"}
+            ),
+            "validation command must target the protected PR",
+        ),
+        (
+            lambda payload: payload["promotion_bundles"]["gate_1"][
+                "protected_verification"
+            ].pop("base_ref"),
+            "protected verification is malformed",
+        ),
+        (
+            lambda payload: payload["promotion_bundles"]["gate_1"][
+                "machine_predicate"
+            ].update({"name": "unrelated-success"}),
+            "machine predicate is not bound to an artifact",
         ),
     ],
 )
@@ -549,6 +649,156 @@ def test_global_sync_ledger_rejects_job_not_bound_to_run_and_head(
         validate_ledger(
             load_unique_yaml(source), plan, source, verify_remote=True, promotion_verifier=verifier
         )
+
+
+def test_global_sync_ledger_rejects_signed_digest_for_hosted_green(tmp_path: Path) -> None:
+    """A candidate digest cannot substitute for remotely verifiable hosted evidence."""
+    payload = _payload()
+    _add_hosted_merge_claim(payload)
+    bundle = payload["promotion_bundles"]["gate_1"]
+    assert isinstance(bundle, dict)
+    bundle["artifact_bindings"] = [
+        {"kind": "signed_digest", "sha256": "a" * 64}
+    ]
+    plan, source, output = _write_fixture(tmp_path, payload=payload)
+
+    with pytest.raises(LedgerError, match="not remotely verifiable"):
+        run(plan, output, source)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {
+            "binding": {
+                "kind": "github_actions_job",
+                "url": "https://github.com/promptdriven/pdd/actions/runs/123/job/456",
+                "expected": {
+                    "job_name": "hosted-gate",
+                    "workflow_id": 1,
+                    "workflow_name": "Hosted Gate",
+                    "workflow_path": ".github/workflows/hosted-gate.yml",
+                    "event": "pull_request",
+                },
+            },
+            "response_path": "/repos/promptdriven/pdd/actions/jobs/456",
+            "response_update": {"name": "unrelated successful job"},
+            "expected_error": "action job identity does not match",
+        },
+        {
+            "binding": {
+                "kind": "github_actions_run",
+                "url": "https://github.com/promptdriven/pdd/actions/runs/123",
+                "expected": {
+                    "workflow_id": 1,
+                    "workflow_name": "Hosted Gate",
+                    "workflow_path": ".github/workflows/hosted-gate.yml",
+                    "event": "pull_request",
+                },
+            },
+            "response_path": "/repos/promptdriven/pdd/actions/runs/123",
+            "response_update": {"workflow_id": 99},
+            "expected_error": "action run identity does not match",
+        },
+        {
+            "binding": {
+                "kind": "github_check_run",
+                "url": "https://github.com/promptdriven/pdd/runs/789",
+                "expected": {
+                    "check_name": "Hosted Check",
+                    "app_id": 1,
+                    "app_slug": "hosted-app",
+                    "app_owner": "hosted-owner",
+                },
+            },
+            "response_path": "/repos/promptdriven/pdd/check-runs/789",
+            "response_update": {"name": "unrelated successful check"},
+            "expected_error": "check run identity does not match",
+        },
+    ],
+)
+def test_global_sync_ledger_rejects_unrelated_successful_remote_evidence(
+    tmp_path: Path,
+    monkeypatch,
+    case: dict[str, object],
+) -> None:
+    """Success and head SHA are insufficient without the reviewed remote identity."""
+    binding = case["binding"]
+    response_path = case["response_path"]
+    response_update = case["response_update"]
+    expected_error = case["expected_error"]
+    assert isinstance(binding, dict)
+    assert isinstance(response_path, str)
+    assert isinstance(response_update, dict)
+    assert isinstance(expected_error, str)
+    payload = _payload()
+    _add_hosted_merge_claim(payload)
+    bundle = payload["promotion_bundles"]["gate_1"]
+    assert isinstance(bundle, dict)
+    bundle["artifact_bindings"] = [binding]
+    bundle["machine_predicate"] = {
+        "name": (
+            binding["expected"]["job_name"]
+            if binding["kind"] == "github_actions_job"
+            else binding["expected"].get("workflow_name", binding["expected"].get("check_name"))
+        ),
+        "result": "passed",
+        "binding_url": binding["url"],
+    }
+    plan, source, _output = _write_fixture(tmp_path, payload=payload)
+    responses = _valid_github_responses()
+    if binding["kind"] == "github_check_run":
+        responses[response_path] = {
+            "conclusion": "success",
+            "head_sha": HEAD_SHA,
+            "name": "Hosted Check",
+            "app": {
+                "id": 1,
+                "slug": "hosted-app",
+                "owner": {"login": "hosted-owner"},
+            },
+        }
+    responses[response_path].update(response_update)
+    verifier = GitHubPromotionVerifier()
+    monkeypatch.setattr(verifier, "_get", responses.__getitem__)
+
+    with pytest.raises(LedgerError, match=expected_error):
+        validate_ledger(
+            load_unique_yaml(source), plan, source, verify_remote=True, promotion_verifier=verifier
+        )
+
+
+def test_global_sync_ledger_rejects_nonprotected_merge_target(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A merged PR into a scratch target cannot authorize the protected state."""
+    payload = _payload()
+    _add_hosted_merge_claim(payload)
+    plan, source, _output = _write_fixture(tmp_path, payload=payload)
+    responses = _valid_github_responses()
+    responses["/repos/promptdriven/pdd/pulls/2214"]["base"] = {
+        "repo": {"full_name": "attacker/scratch"},
+        "ref": "scratch",
+    }
+    verifier = GitHubPromotionVerifier()
+    monkeypatch.setattr(verifier, "_get", responses.__getitem__)
+
+    with pytest.raises(LedgerError, match="pull request base does not match"):
+        validate_ledger(
+            load_unique_yaml(source), plan, source, verify_remote=True, promotion_verifier=verifier
+        )
+
+
+def test_global_sync_ledger_accepts_current_gate_1_remote_identities(monkeypatch) -> None:
+    """The committed Gate 1 evidence binds to its reviewed protected identities."""
+    source = ROOT / "docs" / "global_sync_evidence_ledger_source.yaml"
+    plan = ROOT / "docs" / "global_sync_resolution_plan.md"
+    verifier = GitHubPromotionVerifier()
+    monkeypatch.setattr(verifier, "_get", _current_gate_1_responses().__getitem__)
+
+    validate_ledger(
+        load_unique_yaml(source), plan, source, verify_remote=True, promotion_verifier=verifier
+    )
 
 
 @pytest.mark.parametrize("failure", ["metadata-mismatch", "outage"])

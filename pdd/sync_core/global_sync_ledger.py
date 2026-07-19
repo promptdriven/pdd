@@ -48,6 +48,22 @@ SUBJECT_RECORD_GATE = "gate"
 PROTECTED_VERIFICATION_AUTHORIZATIONS = {
     "github-pr-checks": frozenset({"implemented", "hosted_green", "merged"}),
 }
+GITHUB_BINDING_EXPECTED_FIELDS = {
+    "github_actions_run": (
+        "workflow_id",
+        "workflow_name",
+        "workflow_path",
+        "event",
+    ),
+    "github_actions_job": (
+        "job_name",
+        "workflow_id",
+        "workflow_name",
+        "workflow_path",
+        "event",
+    ),
+    "github_check_run": ("check_name", "app_id", "app_slug", "app_owner"),
+}
 
 
 class LedgerError(ValueError):
@@ -111,6 +127,16 @@ class GitHubPromotionVerifier:  # pylint: disable=too-few-public-methods
             or pull.get("merge_commit_sha") != bundle["repository_sha"]
         ):
             raise LedgerError("protected GitHub merge SHA does not match")
+        base = pull.get("base")
+        expected_base_repository = verification["base_repository"]
+        expected_base_ref = verification["base_ref"]
+        if (
+            not isinstance(base, dict)
+            or not isinstance(base.get("repo"), dict)
+            or base["repo"].get("full_name") != expected_base_repository
+            or base.get("ref") != expected_base_ref
+        ):
+            raise LedgerError("protected GitHub pull request base does not match")
         for binding in bundle["artifact_bindings"]:
             self._verify_binding(repository, bundle["head_sha"], binding)
 
@@ -118,9 +144,8 @@ class GitHubPromotionVerifier:  # pylint: disable=too-few-public-methods
         self, repository: str, head_sha: str, binding: dict[str, Any]
     ) -> None:
         kind = binding["kind"]
-        if kind == "signed_digest":
-            return
         parsed = _parse_github_binding(binding)
+        expected = binding["expected"]
         if parsed["repository"] != repository:
             raise LedgerError("artifact binding repository does not match promotion claim")
         if kind == "github_actions_run":
@@ -128,22 +153,55 @@ class GitHubPromotionVerifier:  # pylint: disable=too-few-public-methods
             self._require_success(run_data, "actions run")
             if run_data.get("head_sha") != head_sha:
                 raise LedgerError("protected GitHub action run head SHA does not match")
+            self._verify_action_run_identity(run_data, expected)
         elif kind == "github_actions_job":
             run_data = self._get(f"/repos/{repository}/actions/runs/{parsed['run_id']}")
             self._require_success(run_data, "actions run")
             if run_data.get("head_sha") != head_sha:
                 raise LedgerError("protected GitHub action run head SHA does not match")
+            self._verify_action_run_identity(run_data, expected)
             job = self._get(f"/repos/{repository}/actions/jobs/{parsed['job_id']}")
             self._require_success(job, "actions job")
             if job.get("run_id") != int(parsed["run_id"]):
                 raise LedgerError("protected GitHub action job run ID does not match")
             if job.get("head_sha") != head_sha:
                 raise LedgerError("protected GitHub action job head SHA does not match")
+            if (
+                job.get("name") != expected["job_name"]
+                or job.get("workflow_name") != expected["workflow_name"]
+            ):
+                raise LedgerError("protected GitHub action job identity does not match")
         else:
             check = self._get(f"/repos/{repository}/check-runs/{parsed['check_id']}")
             self._require_success(check, "check run")
             if check.get("head_sha") != head_sha:
                 raise LedgerError("protected GitHub check run head SHA does not match")
+            app = check.get("app")
+            mismatches = (
+                check.get("name") != expected["check_name"],
+                not isinstance(app, dict),
+                isinstance(app, dict) and app.get("id") != expected["app_id"],
+                isinstance(app, dict) and app.get("slug") != expected["app_slug"],
+                isinstance(app, dict) and not isinstance(app.get("owner"), dict),
+                isinstance(app, dict)
+                and isinstance(app.get("owner"), dict)
+                and app["owner"].get("login") != expected["app_owner"],
+            )
+            if any(mismatches):
+                raise LedgerError("protected GitHub check run identity does not match")
+
+    @staticmethod
+    def _verify_action_run_identity(
+        run_data: dict[str, Any], expected: dict[str, Any]
+    ) -> None:
+        """Require stable workflow identity, never a successful run alone."""
+        if (
+            run_data.get("workflow_id") != expected["workflow_id"]
+            or run_data.get("name") != expected["workflow_name"]
+            or run_data.get("path") != expected["workflow_path"]
+            or run_data.get("event") != expected["event"]
+        ):
+            raise LedgerError("protected GitHub action run identity does not match")
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):  # pylint: disable=too-many-ancestors
@@ -269,6 +327,48 @@ def _parse_github_binding(binding: dict[str, Any]) -> dict[str, str]:
     return result
 
 
+def _validate_github_binding(binding: dict[str, Any], name: str) -> None:
+    """Validate one closed, independently verifiable GitHub artifact binding."""
+    kind = binding.get("kind")
+    expected_fields = GITHUB_BINDING_EXPECTED_FIELDS.get(kind)
+    if expected_fields is None:
+        raise LedgerError(
+            f"promotion bundle {name!r} artifact binding kind is not remotely verifiable"
+        )
+    if set(binding) != {"kind", "url", "expected"}:
+        raise LedgerError(f"promotion bundle {name!r} artifact binding is malformed")
+    _parse_github_binding(binding)
+    expected = binding.get("expected")
+    if not isinstance(expected, dict) or set(expected) != set(expected_fields):
+        raise LedgerError(f"promotion bundle {name!r} artifact identity is malformed")
+    for field in expected_fields:
+        value = expected[field]
+        if field in {"workflow_id", "app_id"}:
+            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                raise LedgerError(f"promotion bundle {name!r} artifact identity is malformed")
+        elif not isinstance(value, str) or not value.strip():
+            raise LedgerError(f"promotion bundle {name!r} artifact identity is malformed")
+
+
+def _binding_identity_name(binding: dict[str, Any]) -> str:
+    """Return the remotely verified identity used to name one machine predicate."""
+    expected = binding["expected"]
+    kind = binding["kind"]
+    if kind == "github_actions_job":
+        return expected["job_name"]
+    if kind == "github_actions_run":
+        return expected["workflow_name"]
+    return expected["check_name"]
+
+
+def _canonical_pull_validation_command(repository: str, pull_request: int) -> str:
+    """Return the closed PR query that the remote verifier independently repeats."""
+    return (
+        f"gh api repos/{repository}/pulls/{pull_request} "
+        "--jq '.head.sha, .merged, .merge_commit_sha, .base.repo.full_name, .base.ref'"
+    )
+
+
 def _validate_promotion_bundle(bundle: object, name: str) -> dict[str, Any]:
     if not isinstance(bundle, dict):
         raise LedgerError(f"promotion bundle {name!r} must be a mapping")
@@ -280,26 +380,39 @@ def _validate_promotion_bundle(bundle: object, name: str) -> dict[str, Any]:
     subject = _require_mapping(bundle, "subject")
     _validate_subject_shape(subject, name)
     _validate_protected_verification(bundle, subject, name)
+    verification = _require_mapping(bundle, "protected_verification")
     command = bundle.get("validation_command")
-    if not isinstance(command, str) or not command.strip():
-        raise LedgerError(f"promotion bundle {name!r} requires a validation command")
+    expected_command = _canonical_pull_validation_command(
+        bundle["repository"], verification["pull_request"]
+    )
+    if command != expected_command:
+        raise LedgerError(
+            f"promotion bundle {name!r} validation command must target the protected PR"
+        )
     predicate = _require_mapping(bundle, "machine_predicate")
-    if not isinstance(predicate.get("name"), str) or not predicate["name"].strip():
-        raise LedgerError(f"promotion bundle {name!r} machine predicate name is missing")
-    if predicate.get("result") != "passed":
-        raise LedgerError(f"promotion bundle {name!r} machine predicate must be passed")
     bindings = bundle.get("artifact_bindings")
     if not isinstance(bindings, list) or not bindings:
         raise LedgerError(f"promotion bundle {name!r} requires an artifact binding")
     for binding in bindings:
         if not isinstance(binding, dict):
             raise LedgerError(f"promotion bundle {name!r} artifact binding is malformed")
-        if binding.get("kind") == "signed_digest":
-            digest = binding.get("sha256")
-            if not isinstance(digest, str) or SHA256.fullmatch(digest) is None:
-                raise LedgerError(f"promotion bundle {name!r} signed digest is malformed")
-        else:
-            _parse_github_binding(binding)
+        _validate_github_binding(binding, name)
+    if set(predicate) != {"name", "result", "binding_url"}:
+        raise LedgerError(f"promotion bundle {name!r} machine predicate is malformed")
+    predicate_name = predicate.get("name")
+    binding_url = predicate.get("binding_url")
+    if not isinstance(predicate_name, str) or not predicate_name.strip():
+        raise LedgerError(f"promotion bundle {name!r} machine predicate name is missing")
+    if predicate.get("result") != "passed":
+        raise LedgerError(f"promotion bundle {name!r} machine predicate must be passed")
+    if not isinstance(binding_url, str) or not any(
+        binding["url"] == binding_url
+        and _binding_identity_name(binding) == predicate_name
+        for binding in bindings
+    ):
+        raise LedgerError(
+            f"promotion bundle {name!r} machine predicate is not bound to an artifact"
+        )
     return bundle
 
 
@@ -312,11 +425,23 @@ def _validate_protected_verification(
     allowed_states = PROTECTED_VERIFICATION_AUTHORIZATIONS.get(mode)
     if allowed_states is None:
         raise LedgerError(f"promotion bundle {name!r} protected verification mode is invalid")
-    if set(verification) != {"mode", "pull_request"}:
+    if set(verification) != {"mode", "pull_request", "base_repository", "base_ref"}:
         raise LedgerError(f"promotion bundle {name!r} protected verification is malformed")
     pull_request = verification.get("pull_request")
     if not isinstance(pull_request, int) or pull_request < 1:
         raise LedgerError(f"promotion bundle {name!r} requires a positive pull request")
+    base_repository = verification.get("base_repository")
+    if (
+        not isinstance(base_repository, str)
+        or base_repository.count("/") != 1
+        or base_repository != bundle["repository"]
+    ):
+        raise LedgerError(
+            f"promotion bundle {name!r} protected base repository is malformed"
+        )
+    base_ref = verification.get("base_ref")
+    if not isinstance(base_ref, str) or not base_ref.strip():
+        raise LedgerError(f"promotion bundle {name!r} protected base ref is malformed")
     states = subject["states"]
     if not isinstance(states, list):  # Validated by _validate_subject_shape above.
         raise LedgerError(f"promotion bundle {name!r} subject states are malformed")
