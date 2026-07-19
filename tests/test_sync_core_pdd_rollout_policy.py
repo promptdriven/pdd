@@ -407,7 +407,7 @@ def test_detector_contract_rotation_is_exact_and_consumed() -> None:
 
 
 def test_story_regression_transition_is_exact_and_consumed() -> None:
-    """Consume only the exact #2204-protected prompt/profile transition."""
+    """Retain the exact #2204 transition after a later profile composition."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = [
         row
@@ -421,8 +421,18 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
     assert prompt_digest != STORY_REGRESSION_DORMANT_ROTATION["base_prompt_sha256"]
     assert prompt_digest == STORY_REGRESSION_DORMANT_ROTATION["head_prompt_sha256"]
-    assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
-    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+    assert profile_digest == PR_1971_COMBINED_PROFILE_DIGEST
+    assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+    protected_profile = subprocess.check_output(
+        [
+            "git",
+            "show",
+            f"{PR_1971_COMBINED_BASE}:{PROFILE_FILE.relative_to(ROOT)}",
+        ]
+    )
+    assert hashlib.sha256(protected_profile).hexdigest() == (
+        STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+    )
 
 
 def _requirement_authorization_row(authorization) -> dict[str, str]:
