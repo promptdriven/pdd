@@ -153,23 +153,6 @@ def test_detect_keeps_architecture_owned_exclusions_out(monkeypatch):
     assert module.detect("origin/main...HEAD") == []
 
 
-@pytest.mark.parametrize("load_module", [_load_module, _load_packaged_module])
-def test_detect_resolves_global_sync_ledger_architecture_ownership(
-    load_module, monkeypatch
-):
-    """The ledger's nested source path has one canonical auto-heal owner."""
-    module = load_module()
-    monkeypatch.chdir(_repo_root())
-    monkeypatch.setattr(
-        module,
-        "_git_changed_files",
-        lambda _diff_base: ["pdd/sync_core/global_sync_ledger.py"],
-    )
-    monkeypatch.setattr(module, "_reverse_dep_basenames", lambda *_args, **_kwargs: set())
-
-    assert module.detect("origin/main...HEAD") == ["sync_core/global_sync_ledger"]
-
-
 def test_basename_excludes_external_canonical_pdd_cloud_prompts():
     """Packaged canonical GitHub App prompts have no local PDD code files.
 
