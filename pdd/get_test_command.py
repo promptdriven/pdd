@@ -609,9 +609,15 @@ def _ancestor_workspace_root(
                 )
                 for declaration in declarations
             ]
-            if any(memberships):
+            # Providers may be independently valid, but the request-wide
+            # matching budget is a shared ownership proof. A later provider
+            # can exhaust it after an earlier one matched; that uncertainty
+            # must not promote this ancestor or authorize a contained-looking
+            # runner-config symlink.
+            budget_exhausted = match_budget is not None and match_budget.exhausted
+            if any(memberships) and not budget_exhausted:
                 return ancestor.resolve()
-            if any(membership is None for membership in memberships):
+            if budget_exhausted or any(membership is None for membership in memberships):
                 return None
         # A lexical package marker is an ownership boundary. It may authorize
         # its direct descendants through a declaration above, but a package
