@@ -114,6 +114,9 @@ STANDALONE_CHECKER_PREAUTHORIZED_PATHS = {
     "tests/test_sync_core_standalone_package.py",
     "tests/test_sync_core_checker_cli.py",
 }
+STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS = {
+    ".pdd/global-sync/standalone-checker-modules.json",
+}
 FUTURE_STANDALONE_CHECKER_AUTHORITY_PREFIXES = (
     ".pdd/global-sync/standalone-checker-",
     ".pdd/global-sync/gate2-",
@@ -1711,7 +1714,14 @@ def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
         for row in ownership["rules"]
         if row.get("preauthorize_absent", False)
         and row["pattern"].startswith(".pdd/global-sync/")
-    } == GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
+    } == (
+        GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
+        | STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS
+    )
+    assert (
+        STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS
+        <= STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    )
 
     # Existing independently reviewed preauthorization families stay exact.
     assert GATE1_PREAUTHORIZED_PATHS == {
