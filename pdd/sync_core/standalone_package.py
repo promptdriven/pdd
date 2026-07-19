@@ -46,6 +46,16 @@ def _regular(path: Path, label: str) -> Path:
     return path
 
 
+def _repository_root(root: Path) -> Path:
+    """Return a lexical repository root only when no supplied path component is linked."""
+    repository = Path(root).expanduser().absolute()
+    if not repository.is_dir() or any(
+        component.is_symlink() for component in (repository, *repository.parents)
+    ):
+        raise _error("repository root is unsafe")
+    return repository
+
+
 def _parse_manifest(source: Path | bytes) -> dict[str, Any]:
     if isinstance(source, bytes):
         try:
@@ -98,10 +108,7 @@ def _parse_manifest(source: Path | bytes) -> dict[str, Any]:
 
 def load_standalone_manifest(root: Path) -> dict[str, Any]:
     """Load the one protected module/dependency authority from a safe checkout."""
-    repository = Path(root).resolve()
-    for component in (repository, *repository.parents):
-        if component.is_symlink():
-            raise _error("repository root is unsafe")
+    repository = _repository_root(root)
     return _parse_manifest(repository.joinpath(*_MANIFEST_PATH.parts))
 
 
@@ -215,7 +222,7 @@ def _zip_info(name: str) -> zipfile.ZipInfo:
 
 def build_standalone_wheel(root: Path, output: Path, *, version: str) -> Path:
     """Build one byte-reproducible standalone wheel from manifest-authorized bytes."""
-    repository = Path(root).resolve()
+    repository = _repository_root(root)
     manifest = load_standalone_manifest(repository)
     members = _wheel_members(repository, manifest, version)
     destination = Path(output)
