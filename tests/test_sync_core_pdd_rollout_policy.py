@@ -107,11 +107,31 @@ PR_2017_ABSENT_METADATA_PATHS = {
     ".pdd/meta/fix_error_loop_python_run.json",
     ".pdd/meta/get_test_command_python_run.json",
 }
+WAVE1_AGENTIC_SYNC_PREAUTHORIZED_PATHS = (
+    ".pdd/meta/auto_deps_main_python.json",
+    ".pdd/meta/commands_maintenance_python.json",
+    ".pdd/meta/fingerprint_transaction_python.json",
+    ".pdd/meta/operation_log_python.json",
+    ".pdd/meta/sync_main_python.json",
+    ".pdd/meta/sync_plan_python.json",
+    ".pdd/meta/sync_plan_python_run.json",
+    ".pdd/meta/update_main_python.json",
+    ".pdd/meta/update_main_python_run.json",
+    "context/fingerprint_transaction_example.py",
+    "docs/agentic-sync-v1-plan.md",
+    "docs/pdd_hand_owned_modules.md",
+    "docs/wave1_1926_artifact_matrix.md",
+    "tests/test_fingerprint_transaction.py",
+    "tests/test_issue_1900_surface_contract.py",
+    "tests/test_sync_plan.py",
+    "tests/test_transactional_finalizer.py",
+)
 PREAUTHORIZED_CHILD_PATHS = (
     LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS
     | ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
     | GATE1_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
+    | set(WAVE1_AGENTIC_SYNC_PREAUTHORIZED_PATHS)
     | {
         ".github/toolchains/playwright_manifest.py",
         ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
@@ -144,6 +164,38 @@ PREAUTHORIZED_CHILD_OWNERSHIP = {
     "owner": "pdd-maintainers",
     "preauthorize_absent": True,
 }
+PRIOR_BOOTSTRAP_PROFILE_ADDITIONS = (
+    (
+        PurePosixPath("pdd/prompts/checkup_agentic_artifact_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:dc4db042ae408dcd90c0dcfe4fb9607421e331f024f56de8e22ca1272d0df1f7",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
+        "dc4db042ae408dcd90c0dcfe4fb9607421e331f024f56de8e22ca1272d0df1f7",
+    ),
+    (
+        PurePosixPath("pdd/prompts/story_detection_result_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:dd66389e2ec13002ff56ae34625443f463164a4fcadf51af6a98982c49ae01c3",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+        "dd66389e2ec13002ff56ae34625443f463164a4fcadf51af6a98982c49ae01c3",
+    ),
+)
+WAVE1_BOOTSTRAP_PROFILE_ADDITIONS = (
+    (
+        PurePosixPath("pdd/prompts/fingerprint_transaction_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:45cbca4446a3d0a1cbccf66422dac13df17ab9e197ea4a1fe1042b654c3201f9",
+        "6e558bdd16e45c009173a85db65eaebbd2fd1ae12aecbf09325522fc785d3a37",
+        "45cbca4446a3d0a1cbccf66422dac13df17ab9e197ea4a1fe1042b654c3201f9",
+    ),
+    (
+        PurePosixPath("pdd/prompts/sync_plan_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:3b312560a11435f30e721e0832c4d11dcb8a7430ba219f15479eddf85f336e49",
+        "3e22d0bc72fa462e111682a326248bc64a89366185a1d19bd9817747a30cab8e",
+        "3b312560a11435f30e721e0832c4d11dcb8a7430ba219f15479eddf85f336e49",
+    ),
+)
 CI_DETECT_REQUIREMENT_ROTATION = {
     "prompt_path": "pdd/prompts/ci_detect_changed_modules_python.prompt",
     "language_id": "python",
@@ -1114,6 +1166,117 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     assert len(incomplete) == EXPECTED_MANAGED_UNITS
 
 
+def test_wave1_bootstrap_profile_additions_are_exact_and_append_only() -> None:
+    """Wave 1 adds only two unique roots after preserving prior authority."""
+    additions = (
+        verification._BOOTSTRAP_PROFILE_ADDITIONS  # pylint: disable=protected-access
+    )
+    assert additions == (
+        PRIOR_BOOTSTRAP_PROFILE_ADDITIONS + WAVE1_BOOTSTRAP_PROFILE_ADDITIONS
+    )
+    identities = [(row[0], row[1]) for row in additions]
+    assert len(identities) == len(set(identities)) == 4
+
+
+def _wave1_profile_addition_fixture(monkeypatch, addition):
+    """Bind one real Wave 1 tuple to deterministic synthetic candidate bytes."""
+    prompt_path, language_id, requirement_id, policy_digest, prompt_digest = addition
+    prompt_bytes = f"candidate:{prompt_path.as_posix()}\n".encode()
+    policy_bytes = f"policy:{prompt_path.as_posix()}\n".encode()
+    unit_id = UnitId(REPOSITORY_ID, prompt_path, language_id)
+    profile = verification._ProfileInput(  # pylint: disable=protected-access
+        (requirement_id,),
+        (
+            verification.VerificationObligation(
+                "threshold-human-attestation",
+                "human-attestation",
+                "threshold-ed25519",
+                "threshold-ed25519-v1",
+                (requirement_id,),
+                (prompt_path,),
+                True,
+            ),
+        ),
+    )
+    blobs = {
+        ("candidate", PROFILE_REL_PATH): policy_bytes,
+        ("candidate", prompt_path): prompt_bytes,
+    }
+    original_sha256 = verification._sha256  # pylint: disable=protected-access
+    original_requirements = (
+        verification._prompt_requirements  # pylint: disable=protected-access
+    )
+
+    def exact_sha256(raw: bytes) -> str:
+        if raw == policy_bytes:
+            return policy_digest
+        if raw == prompt_bytes:
+            return prompt_digest
+        return original_sha256(raw)
+
+    def exact_requirements(raw: bytes) -> tuple[str, ...]:
+        if raw == prompt_bytes:
+            return (requirement_id,)
+        return original_requirements(raw)
+
+    monkeypatch.setattr(verification, "_sha256", exact_sha256)
+    monkeypatch.setattr(verification, "_prompt_requirements", exact_requirements)
+    monkeypatch.setattr(
+        verification,
+        "read_git_blob",
+        lambda _root, ref, path: blobs.get((ref, path)),
+    )
+    manifest = SimpleNamespace(
+        repository_id=REPOSITORY_ID,
+        base_ref="protected",
+        head_ref="candidate",
+        expected_managed=(unit_id,),
+    )
+    return manifest, unit_id, profile, blobs
+
+
+@pytest.mark.parametrize(
+    "addition",
+    WAVE1_BOOTSTRAP_PROFILE_ADDITIONS,
+    ids=("fingerprint-transaction", "sync-plan"),
+)
+@pytest.mark.parametrize(
+    "mutation",
+    ("repository", "policy", "prompt", "requirement", "profile"),
+)
+def test_wave1_bootstrap_profile_additions_fail_closed(
+    monkeypatch, addition, mutation: str
+) -> None:
+    """Every security-bound input on each exact Wave 1 tuple is immutable."""
+    manifest, unit_id, profile, blobs = _wave1_profile_addition_fixture(
+        monkeypatch, addition
+    )
+    head = {unit_id: profile}
+    authorized = verification._authorized_profile_additions(  # pylint: disable=protected-access
+        ROOT, manifest, {}, head
+    )
+    assert authorized == {unit_id: profile}
+
+    if mutation == "repository":
+        manifest.repository_id = "00000000-0000-0000-0000-000000000000"
+    elif mutation == "policy":
+        blobs[("candidate", PROFILE_REL_PATH)] = b"mutated policy\n"
+    elif mutation == "prompt":
+        blobs[("candidate", unit_id.prompt_relpath)] = b"mutated prompt\n"
+    elif mutation == "requirement":
+        head[unit_id] = verification._ProfileInput(  # pylint: disable=protected-access
+            (f"CONTRACT-SHA256:{'0' * 64}",), profile.obligations
+        )
+    else:
+        head[unit_id] = verification._ProfileInput(  # pylint: disable=protected-access
+            profile.requirements, ()
+        )
+
+    assert not verification._authorized_profile_additions(  # pylint: disable=protected-access
+        ROOT, manifest, {}, head
+    )
+
+
 def _bootstrap_addition_fixture(monkeypatch):
     """Build one synthetic exact-byte candidate-only profile authorization."""
     prompt_path = PurePosixPath("prompts/bootstrap_python.prompt")
@@ -1491,6 +1654,22 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         )
     assert not manifest.unaccounted_tracked_paths
     assert len(manifest.expected_managed) == baseline_denominator
+
+
+def test_wave1_agentic_sync_paths_are_exactly_preauthorized() -> None:
+    """Wave 1 appends authority for only its 17 reviewed first-appearance paths."""
+    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    expected = [
+        {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
+        for path in WAVE1_AGENTIC_SYNC_PREAUTHORIZED_PATHS
+    ]
+    matching = [
+        row
+        for row in ownership["rules"]
+        if row["pattern"] in WAVE1_AGENTIC_SYNC_PREAUTHORIZED_PATHS
+    ]
+    assert matching == expected
+    assert ownership["rules"][-len(expected) :] == expected
 
 
 def test_gate1_paths_are_exactly_preauthorized() -> None:
