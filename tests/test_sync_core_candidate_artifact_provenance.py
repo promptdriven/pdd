@@ -1,24 +1,39 @@
 """Strict tests for protected candidate-wheel build provenance."""
-# pylint: disable=missing-function-docstring,line-too-long
+# pylint: disable=missing-function-docstring,line-too-long,too-many-arguments
 
+import base64
 import hashlib
 import json
+import subprocess
+import sys
 import threading
+import zipfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
+import yaml
 
 from pdd.sync_core import AttestationSigner
 from pdd.sync_core.artifact_provenance import (
     CandidateArtifactPolicy,
     CandidateArtifactProvenanceError,
+    TARGET_BASE_IMAGE,
+    TARGET_RESOLVER,
+    TARGET_RUNTIME,
+    TargetRuntimeLockError,
+    generate_target_runtime_lock,
     load_candidate_artifact_provenance,
+    parse_target_runtime_lock,
+    validate_installed_target_runtime,
+    validate_target_wheelhouse,
 )
 
 
 SOURCE_SHA = "a" * 40
 LOCK_SHA256 = "b" * 64
 WORKFLOW = "promptdriven/pdd/.github/workflows/candidate-wheel.yml@refs/heads/main"
+ROOT = Path(__file__).resolve().parents[1]
 TARGET = {
     "implementation": "CPython",
     "version": "3.12.3",
@@ -281,3 +296,272 @@ def test_durable_replay_ledger_rejects_symlink_lock(tmp_path) -> None:
             _policy_with_replay_ledger(authority, replay_ledger),
             expected_source_sha=SOURCE_SHA,
         )
+
+
+def _record_hash(content: bytes) -> str:
+    return base64.urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(b"=").decode()
+
+
+def _wheel(
+    root,
+    name: str,
+    version: str = "1.0",
+    *,
+    tags: str = "py3-none-any",
+    metadata_name: str | None = None,
+    extra: dict[str, bytes] | None = None,
+) -> Path:
+    """Make a minimal regular wheel with a valid, deterministic RECORD."""
+    filename = f"{name.replace('-', '_')}-{version}-{tags}.whl"
+    path = root / filename
+    distribution = f"{name.replace('-', '_')}-{version}.dist-info"
+    files = {
+        f"{name.replace('-', '_')}/__init__.py": b"VALUE = 1\n",
+        f"{distribution}/METADATA": (
+            f"Metadata-Version: 2.1\nName: {metadata_name or name}\nVersion: {version}\n"
+        ).encode(),
+        f"{distribution}/WHEEL": b"Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\n",
+    }
+    files.update(extra or {})
+    record = "".join(
+        f"{entry},sha256={_record_hash(content)},{len(content)}\n"
+        for entry, content in sorted(files.items())
+    ) + f"{distribution}/RECORD,,\n"
+    with zipfile.ZipFile(path, "w") as archive:
+        for entry, content in files.items():
+            archive.writestr(entry, content)
+        archive.writestr(f"{distribution}/RECORD", record)
+    return path
+
+
+def _install_wheel(wheel, target) -> None:
+    """Materialize the exact --target-style contents expected by the validator."""
+    with zipfile.ZipFile(wheel) as archive:
+        files = {
+            name: archive.read(name)
+            for name in archive.namelist()
+            if not name.endswith("/") and not name.endswith(".dist-info/RECORD")
+        }
+    dist_info_name = next(
+        Path(name).parent.name for name in files if name.endswith(".dist-info/METADATA")
+    )
+    for relative, content in files.items():
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+    rows = []
+    for relative, content in sorted(files.items()):
+        rows.append(f"{relative},sha256={_record_hash(content)},{len(content)}\n")
+    (target / dist_info_name / "RECORD").write_text(
+        "".join(rows) + f"{dist_info_name}/RECORD,,\n", encoding="utf-8"
+    )
+
+
+def _runtime_fixture(tmp_path):
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    dependency = _wheel(wheelhouse, "demo-dependency")
+    project = _wheel(tmp_path, "pdd-cli", "2.0")
+    lock = generate_target_runtime_lock(wheelhouse)
+    installed = tmp_path / "installed"
+    installed.mkdir()
+    _install_wheel(dependency, installed)
+    _install_wheel(project, installed)
+    return lock, wheelhouse, installed, project
+
+
+def test_target_lock_round_trip_has_fixed_target_bindings(tmp_path) -> None:
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    _wheel(wheelhouse, "zeta")
+    _wheel(wheelhouse, "alpha", "2.0")
+
+    lock = generate_target_runtime_lock(wheelhouse)
+
+    assert parse_target_runtime_lock(lock.bytes()) == lock
+    assert lock.bytes().decode().splitlines()[:4] == [
+        "# pdd-runtime-lock-format: 1",
+        f"# target: {TARGET_RUNTIME}",
+        f"# resolver: {TARGET_RESOLVER}",
+        f"# base-image: {TARGET_BASE_IMAGE}",
+    ]
+    assert [entry.name for entry in lock.entries] == ["alpha", "zeta"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        b"# pdd-runtime-lock-format: 1\n# target: linux_x86_64-cp312\n# resolver: pip==25.1.1\n# base-image: fake\n",
+        b"# pdd-runtime-lock-format: 1\n# target: linux_x86_64-cp312\n# resolver: pip==25.1.1\n# base-image: python:3.12.13-slim-bookworm@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d\n# comment\n",
+        b"# pdd-runtime-lock-format: 1\n# target: linux_x86_64-cp312\n# resolver: pip==25.1.1\n# base-image: python:3.12.13-slim-bookworm@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d\ndemo_dependency==1.0 --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        b"# pdd-runtime-lock-format: 1\n# target: linux_x86_64-cp312\n# resolver: pip==25.1.1\n# base-image: python:3.12.13-slim-bookworm@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d\npdd-cli==1.0 --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        b"# pdd-runtime-lock-format: 1\n# target: linux_x86_64-cp312\n# resolver: pip==25.1.1\n# base-image: python:3.12.13-slim-bookworm@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d\ndemo==1.0; python_version > '3' --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    ],
+)
+def test_target_lock_rejects_noncanonical_or_unsafe_rows(mutation) -> None:
+    with pytest.raises(TargetRuntimeLockError):
+        parse_target_runtime_lock(mutation)
+
+
+@pytest.mark.parametrize(
+    ("tags", "metadata_name"),
+    [
+        ("cp312-cp312-macosx_11_0_x86_64", None),
+        ("cp312-cp312-win_amd64", None),
+        ("cp312-cp312-manylinux_2_17_aarch64", None),
+        ("py3-none-any", "different"),
+    ],
+)
+def test_target_wheelhouse_rejects_incompatible_or_misidentified_wheel(
+    tmp_path, tags, metadata_name
+) -> None:
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    _wheel(wheelhouse, "demo", tags=tags, metadata_name=metadata_name)
+
+    with pytest.raises(TargetRuntimeLockError):
+        generate_target_runtime_lock(wheelhouse)
+
+
+def test_target_wheelhouse_requires_exact_bijection_and_regular_members(tmp_path) -> None:
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    _wheel(wheelhouse, "demo")
+    lock = generate_target_runtime_lock(wheelhouse)
+    _wheel(wheelhouse, "extra")
+    with pytest.raises(TargetRuntimeLockError, match="extra"):
+        validate_target_wheelhouse(lock, wheelhouse)
+
+    (wheelhouse / "README.txt").write_text("not a wheel", encoding="utf-8")
+    with pytest.raises(TargetRuntimeLockError, match="non-wheel"):
+        validate_target_wheelhouse(lock, wheelhouse)
+
+
+def test_target_wheelhouse_rejects_archive_escape_links_and_ambiguous_names(tmp_path) -> None:
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    malicious = _wheel(wheelhouse, "demo")
+    with zipfile.ZipFile(malicious, "a") as archive:
+        link = zipfile.ZipInfo("demo/link")
+        link.external_attr = 0o120777 << 16
+        archive.writestr(link, b"outside")
+    with pytest.raises(TargetRuntimeLockError, match="unsafe"):
+        generate_target_runtime_lock(wheelhouse)
+
+    malicious.unlink()
+    _wheel(wheelhouse, "demo", tags="py3-none-any")
+    _wheel(wheelhouse, "demo", tags="cp312-cp312-manylinux_2_17_x86_64")
+    with pytest.raises(TargetRuntimeLockError, match="duplicate"):
+        generate_target_runtime_lock(wheelhouse)
+
+
+@pytest.mark.parametrize("tamper", ["hash", "nohash", "extra", "overlap", "project", "base"])
+def test_installed_target_runtime_fails_closed_on_tampering(tmp_path, tamper) -> None:
+    lock, wheelhouse, installed, project = _runtime_fixture(tmp_path)
+    demo_record = next(installed.glob("demo_dependency-*.dist-info/RECORD"))
+    if tamper == "hash":
+        demo_record.write_text(
+            demo_record.read_text(encoding="utf-8").replace("sha256=", "sha256=x", 1),
+            encoding="utf-8",
+        )
+    elif tamper == "nohash":
+        demo_record.write_text(
+            demo_record.read_text(encoding="utf-8").replace("sha256=", "", 1),
+            encoding="utf-8",
+        )
+    elif tamper == "extra":
+        (installed / "unexpected.py").write_text("x = 1\n", encoding="utf-8")
+    elif tamper == "overlap":
+        project_record = next(installed.glob("pdd_cli-*.dist-info/RECORD"))
+        project_record.write_text(
+            project_record.read_text(encoding="utf-8")
+            + demo_record.read_text(encoding="utf-8").splitlines()[0]
+            + "\n",
+            encoding="utf-8",
+        )
+    elif tamper == "base":
+        base = installed / "base-1.0.dist-info"
+        base.mkdir()
+        (base / "METADATA").write_text(
+            "Metadata-Version: 2.1\nName: base\nVersion: 1.0\n", encoding="utf-8"
+        )
+        (base / "RECORD").write_text("base-1.0.dist-info/RECORD,,\n", encoding="utf-8")
+    else:
+        (installed / "pdd_cli/__init__.py").write_text("VALUE = 2\n", encoding="utf-8")
+    with pytest.raises(TargetRuntimeLockError):
+        validate_installed_target_runtime(lock, wheelhouse, installed, project)
+
+
+def test_installed_target_runtime_accepts_exact_wheel_closure(tmp_path) -> None:
+    lock, wheelhouse, installed, project = _runtime_fixture(tmp_path)
+
+    validate_installed_target_runtime(lock, wheelhouse, installed, project)
+
+
+def test_target_runtime_lock_cli_generates_and_validates(tmp_path) -> None:
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    _wheel(wheelhouse, "demo")
+    lock_path = tmp_path / "runtime.lock"
+    inventory = tmp_path / "inventory.json"
+    command = [sys.executable, "-m", "pdd.sync_core.artifact_provenance"]
+
+    subprocess.run(
+        command
+        + [
+            "generate",
+            "--wheelhouse",
+            str(wheelhouse),
+            "--output",
+            str(lock_path),
+            "--inventory",
+            str(inventory),
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+    subprocess.run(
+        command + ["validate-wheelhouse", "--lock", str(lock_path), "--wheelhouse", str(wheelhouse)],
+        cwd=ROOT,
+        check=True,
+    )
+    assert parse_target_runtime_lock(lock_path.read_bytes()).entries[0].name == "demo"
+    assert json.loads(inventory.read_text(encoding="ascii"))[0]["filename"].endswith(".whl")
+
+
+def test_target_runtime_workflow_is_offline_validated_before_artifact_upload() -> None:
+    workflow_path = ROOT / ".github/workflows/unit-tests.yml"
+    workflow = workflow_path.read_text(encoding="utf-8")
+    payload = yaml.safe_load(workflow)
+    job = payload["jobs"]["target-runtime-lock"]
+    steps = job["steps"]
+    names = [step["name"] for step in steps]
+    generation = workflow.index("Generate Linux CPython 3.12 candidate lock online")
+    validation = workflow.index("Validate candidate in fresh network-none container")
+    upload = workflow.index("Upload target runtime lock candidate")
+
+    assert job["runs-on"] == "ubuntu-latest"
+    assert job["timeout-minutes"] == 30
+    assert generation < validation < upload
+    assert "python:3.12.13-slim-bookworm@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d" in workflow
+    assert "docker run --rm --network bridge" in workflow
+    assert "docker run --rm --network none" in workflow
+    assert "--only-binary=:all:" in workflow
+    assert "--require-hashes" in workflow
+    assert "pip==25.1.1 build==1.2.2.post1" in workflow
+    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in workflow
+    assert "release.yml" not in workflow[workflow.index("  target-runtime-lock:") :]
+    assert "Gate 2" not in workflow
+    assert "Certificate" not in workflow
+    assert names[-1] == "Upload target runtime lock candidate"
+    for step in steps:
+        if "run" in step:
+            checked = subprocess.run(
+                ["bash", "-n"], input=step["run"], text=True, capture_output=True, check=False
+            )
+            assert checked.returncode == 0, checked.stderr
+    assert subprocess.run(
+        ["git", "diff", "--quiet", "HEAD", "--", ".github/workflows/release.yml"],
+        cwd=ROOT,
+        check=False,
+    ).returncode == 0

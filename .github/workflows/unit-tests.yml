@@ -567,3 +567,86 @@ jobs:
       - name: Stop hard-tier containers
         if: always()
         run: docker compose down -v
+
+  target-runtime-lock:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
+    name: Target Runtime Lock Candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Generate Linux CPython 3.12 candidate lock online
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='python:3.12.13-slim-bookworm@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d'
+          runtime="$RUNNER_TEMP/pdd-target-runtime"
+          mkdir -p "$runtime/project" "$runtime/wheelhouse" "$runtime/tooling" "$runtime/generator" "$runtime/candidate"
+          docker pull "$image"
+          test "$(docker image inspect --format '{{.Architecture}}' "$image")" = amd64
+          docker run --rm --network bridge \
+            -v "$GITHUB_WORKSPACE:/workspace:ro" \
+            -v "$runtime:/runtime" \
+            -w /workspace "$image" bash -ceu '
+              python -m pip install --disable-pip-version-check --upgrade pip==25.1.1 build==1.2.2.post1
+              python -m pip download --disable-pip-version-check --only-binary=:all: --dest /runtime/tooling pip==25.1.1
+              python -m build --wheel --outdir /runtime/project
+              project_wheel=$(find /runtime/project -maxdepth 1 -type f -name "pdd_cli-*.whl" -print -quit)
+              test -n "$project_wheel"
+              python -m pip download --disable-pip-version-check --only-binary=:all: --dest /runtime/wheelhouse "$project_wheel"
+              find /runtime/wheelhouse -maxdepth 1 -type f -name "pdd_cli-*.whl" -delete
+              PYTHONPATH=/runtime/generator python -m pip install --disable-pip-version-check --no-index --only-binary=:all: --find-links /runtime/wheelhouse --target /runtime/generator "$project_wheel"
+              cd /tmp
+              PYTHONPATH=/runtime/generator python -m pdd.sync_core.artifact_provenance generate --wheelhouse /runtime/wheelhouse --output /runtime/candidate/runtime-linux-x86_64-cp312.lock --inventory /runtime/candidate/wheel-inventory.json
+              PYTHONPATH=/runtime/generator python - <<"PY"
+              from pathlib import Path
+              from pdd.sync_core.artifact_provenance import _inspect_wheel
+
+              project = _inspect_wheel(next(Path("/runtime/project").glob("pdd_cli-*.whl")))
+              lock = Path("/runtime/candidate/runtime-linux-x86_64-cp312.lock").read_text(encoding="ascii")
+              requirement = f"pdd-cli=={project.version} --hash=sha256:{project.digest}\n"
+              Path("/runtime/requirements.lock").write_text(lock + requirement, encoding="ascii")
+              PY
+            '
+
+      - name: Validate candidate in fresh network-none container
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='python:3.12.13-slim-bookworm@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d'
+          runtime="$RUNNER_TEMP/pdd-target-runtime"
+          installed="$RUNNER_TEMP/pdd-target-runtime-installed"
+          mkdir -p "$installed"
+          docker run --rm --network none \
+            -v "$runtime:/runtime:ro" \
+            -v "$installed:/installed" \
+            -w /tmp "$image" bash -ceu '
+              python -m venv /tmp/target-runtime
+              /tmp/target-runtime/bin/python -m pip install --disable-pip-version-check --no-index --find-links /runtime/tooling --upgrade pip==25.1.1
+              /tmp/target-runtime/bin/python -m pip install --disable-pip-version-check --no-index --only-binary=:all: --require-hashes --find-links /runtime/wheelhouse --target /installed -r /runtime/requirements.lock
+              PYTHONPATH=/installed /tmp/target-runtime/bin/python -m pdd.sync_core.artifact_provenance validate-installed --lock /runtime/candidate/runtime-linux-x86_64-cp312.lock --wheelhouse /runtime/wheelhouse --site-packages /installed --project-wheel /runtime/project/$(basename /runtime/project/pdd_cli-*.whl)
+            '
+
+      - name: Compare committed target lock when present
+        shell: bash
+        run: |
+          set -euo pipefail
+          protected='.pdd/global-sync/runtime-linux-x86_64-cp312.lock'
+          candidate="$RUNNER_TEMP/pdd-target-runtime/candidate/runtime-linux-x86_64-cp312.lock"
+          if test -e "$protected"; then
+            cmp -- "$protected" "$candidate"
+          fi
+
+      - name: Upload target runtime lock candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: target-runtime-lock-linux-x86_64-cp312
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/pdd-target-runtime/candidate/runtime-linux-x86_64-cp312.lock
+            ${{ runner.temp }}/pdd-target-runtime/candidate/wheel-inventory.json
