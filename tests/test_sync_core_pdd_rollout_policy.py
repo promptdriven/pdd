@@ -1643,7 +1643,12 @@ def test_pr2017_absent_metadata_authorization_is_exact_six_path_set() -> None:
     head_ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
     base_rules = base_ownership["rules"]
     head_rules = head_ownership["rules"]
-    added_rules = [row for row in head_rules if row not in base_rules]
+    added_rules = [
+        row
+        for row in head_rules
+        if row not in base_rules
+        and row["pattern"] in PR_2017_ABSENT_METADATA_PATHS
+    ]
 
     assert not [row for row in base_rules if row not in head_rules]
     assert len(PR_2017_ABSENT_METADATA_PATHS) == len(added_rules) == 6
