@@ -5,10 +5,10 @@
   "prompt_hash": "8cdf7fb9490634472ec2871164ac6cd2cf2e71e23e9fbc228a3b66349bdbd712",
   "code_hash": "07d11c0495bc24ce0420ba94e5c0eb981ba5da44c8c611d1f59ee7a43db2294d",
   "example_hash": "4b66f24a1e2ac4195255738566b0cccdac0971523a245d3a8b78ad45d9e1a872",
-  "test_hash": "f9e7a79825f76973f12a2059425f94807aa3df7cf8005b41c3424b52358f02e5",
+  "test_hash": "d33168a4d6ecf29eb413446d3dfbda88390b1ceb0a63cddc7b10477664f9de32",
   "test_files": {
     "test_code_generator_main.py": "d33168a4d6ecf29eb413446d3dfbda88390b1ceb0a63cddc7b10477664f9de32",
-    "test_issue_1900_surface_contract.py": "f9e7a79825f76973f12a2059425f94807aa3df7cf8005b41c3424b52358f02e5"
+    "test_issue_1900_surface_contract.py": "e09f6e1d5ae8e907f55cd5eaa090c9b5db068f41c3c8eb9f496cd7f54918b424"
   },
   "include_deps": {
     "pdd/construct_paths.py": "8970fc0540a8fe14bef8572f73cd417feb013d682fa927948c6df0f6e5cf4f5f",

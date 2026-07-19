@@ -9526,6 +9526,60 @@
     }
   },
   {
+    "reason": "FastAPI route for browsing and inspecting the .pdd/extracts/ LLM extraction cache via the pdd connect web UI.",
+    "description": "Browses, inspects freshness for, and prunes cached include-query extraction artifacts without exposing paths outside the injected project root.",
+    "dependencies": [
+      "include_query_extractor_python.prompt",
+      "preprocess_python.prompt"
+    ],
+    "priority": 220.5,
+    "filename": "server/routes/extracts_python.prompt",
+    "filepath": "pdd/server/routes/extracts.py",
+    "tags": [
+      "module",
+      "python",
+      "server",
+      "routes"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_project_root",
+            "signature": "() -> Path",
+            "returns": "Path"
+          },
+          {
+            "name": "set_project_root",
+            "signature": "(root: Optional[Path]) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "list_extracts",
+            "signature": "async def list_extracts(...) -> ExtractListResponse",
+            "returns": "ExtractListResponse"
+          },
+          {
+            "name": "extracts_for_prompt",
+            "signature": "async def extracts_for_prompt(...) -> list[PromptExtractInfo]",
+            "returns": "list[PromptExtractInfo]"
+          },
+          {
+            "name": "prune_extracts",
+            "signature": "async def prune_extracts(...) -> PruneResponse",
+            "returns": "PruneResponse"
+          },
+          {
+            "name": "get_extract",
+            "signature": "async def get_extract(...) -> ExtractContent",
+            "returns": "ExtractContent"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Shared orchestrator that finalizes prompt metadata (tags, architecture, run report, fingerprint) in a fixed order so update/auto-heal/preflight workflows leave no half-synced state.",
     "description": "Shared orchestrator that finalizes prompt metadata stages (prompt, tags, architecture, run_report, fingerprint) in a fixed order so update/auto-heal/preflight workflows leave no half-synced state.",
     "dependencies": [

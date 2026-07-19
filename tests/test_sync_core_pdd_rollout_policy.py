@@ -144,7 +144,6 @@ PREAUTHORIZED_CHILD_PATHS = (
         "tests/test_sync_core_runner_playwright.py",
         "tests/test_cloud_global_dry_run.py",
         "tests/test_continuous_sync_path_policy.py",
-        "tests/test_issue_1900_surface_contract.py",
         "pdd/sync_core/human_attestation.py",
         "tests/test_sync_core_human_attestation.py",
         ".pdd/meta/ci_detect_changed_modules_python.json",

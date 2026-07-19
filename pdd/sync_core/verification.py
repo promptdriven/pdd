@@ -1748,12 +1748,13 @@ def _load_requirement_transition_authorizations(
         )
         == _LEGACY_PDD_1989_PROFILE_BYTES
     )
+    if legacy_pdd1989_reconciliation:
+        # The exact historical pair installed and consumed its authority before
+        # Phase-A isolation. Its complete policy/profile bytes are fixed above;
+        # use the rows below only to derive the exact profile replacements.
+        return candidate, prompts, ()
     retired_by_candidate = {item.obsolete for item in candidate_retirements}
     new_authorizations = tuple(item for item in candidate if item not in protected)
-    if legacy_pdd1989_reconciliation:
-        # The exact historical pair both installed and consumed its authority
-        # before Phase-A isolation existed; validate it as consumption below.
-        new_authorizations = ()
     for item in candidate:
         if item in authority:
             if (
