@@ -2,6 +2,23 @@
 
 Status: ratified extraction boundary for the first checker release.
 
+## 2026-07-19 #2225 Gate 2 architecture disposition
+
+This supersedes the Gate 2 release path below without reclassifying frozen #1995
+history. Protected main is `35e903cb5ed103980affbdf2a64ef7a80a66ca4a`.
+
+| Disposition | Evidence and extraction rule |
+| --- | --- |
+| `already-merged-prerequisite` | [#2223](https://github.com/promptdriven/pdd/pull/2223), reviewed at `0ca5eb173a31c2ed2b46d7db0feeb88c62645907` and squash-merged as `9c1dc6f2fb1b621ed5320f407f5ae6a2c5299214`, supplies the released-checker evidence wrapper only. [#2224](https://github.com/promptdriven/pdd/pull/2224), reviewed at `862f725d9d9f41b5509dbbcba61d7789f49ad74b` and squash-merged as protected main, only preauthorizes the absent target-lock path. Both had 12 green checks; neither is a release or pin. |
+| `release-required-delta` | Extract strict lock and wheel `RECORD` validation from #2225 into a fresh standalone checker distribution under a non-`pdd` top-level package, with checker-only dependencies. Correct compatible-wheel tag handling and add the exact `z3_solver-4.16.0.0-py3-none-manylinux_2_27_x86_64.whl` regression. Candidate `pdd-cli` is inspected input only; the checker must not import `pdd` or `pdd.__init__`. |
+| `excluded-diagnostic` | Keep #2225 workflow/bootstrap commits and hosted lanes as diagnostic evidence only: closed unmerged head `0bae19c2fb9575d8b8edccaeee3c5d9420e00e9f`; build-version failure [29698754085](https://github.com/promptdriven/pdd/actions/runs/29698754085); read-only build-source failure [29698879393](https://github.com/promptdriven/pdd/actions/runs/29698879393); and eager `pdd.__init__` → `update_main.py` → GitPython/no-git failure [29699017734/job 88224752678](https://github.com/promptdriven/pdd/actions/runs/29699017734/job/88224752678). No artifact upload or target lock completed, and `GIT_PYTHON_REFRESH=quiet` is rejected. |
+
+The standalone checker boundary is the one same-day, under-24-hour deliverable.
+It excludes `pdd/__init__` refactoring, OCI, release, certificates, and scenario
+expansion. A later sealed OCI layer supplies Git/system closure; a final protected
+pin-wiring layer binds released checker/OCI digests and prevents candidate control
+of checker, scenarios, PATH, wheelhouse, expectations, or verifier inputs.
+
 ## Fixed comparison and decision rule
 
 | Name | SHA |
