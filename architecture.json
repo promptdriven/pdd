@@ -1616,7 +1616,7 @@
         "functions": [
           {
             "name": "auto_deps_main",
-            "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1, _skip_finalization: bool = False)",
+            "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1, compress: bool = False, _skip_finalization: bool = False)",
             "returns": "Tuple[str, float, str]"
           }
         ]
@@ -2292,7 +2292,7 @@
   },
   {
     "reason": "Primary orchestration engine for transitioning .prompt files to source code, handling path resolution, incremental generation, and architectural conformance.",
-    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name (constructor accepts an optional repair_directive override for the <pdd-interface> signature check whose source of truth is the prompt, not architecture.json), and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions. Architecture conformance now also enforces the prompt's <pdd-interface> signature across module/cli/command interface types in three categories: (1) missing function/method — declared callables (including dotted methods like ContentSelector.select) absent from the generated code surface as bare names in missing_symbols; (2) missing parameter — declared parameter names absent from a matching function/method signature surface as dotted funcname.paramname entries; (3) signature drift — annotation drift is conservative (raises only when both sides specify and differ) while default drift is strict (raises when the prompt declares a default and the generated code drops or changes it, since callers omitting an optional kwarg would otherwise break with TypeError). Each category emits a distinct error sentence so the agentic_sync_runner repair loop can build a targeted directive (add missing function/method, add missing parameter, or update parameter to match the prompt's annotation/default). Issue #1012 adds two additional repair-loop gates: (a) PublicSurfaceRegressionError — for mature modules (pre-existing non-empty code file), snapshots top-level functions, classes, recursively-walked nested classes/methods (so a method on `Outer.Inner` is captured as `Outer.Inner.method`), and module-level public `ast.Assign` / bound `ast.AnnAssign` (only when `node.value is not None`; bare annotations like `PUBLIC_NAME: int` don't bind a runtime attribute and are ignored) targets plus `ast.Import`/`ast.ImportFrom` aliases (so removing a re-export like `import git` or a public constant like `PUBLIC_SETTING = ...` surfaces as a regression). When the module declares `__all__` as a clean list/tuple of string constants, that list is AUTHORITATIVE per Python semantics: a name is public iff it appears in `__all__`, even if underscore-prefixed; names NOT in `__all__` are NOT public. Classes listed in `__all__` ALSO contribute their recursively-walked members (methods, nested classes, methods on nested classes at every depth) regardless of underscore prefix — so `__all__ = [\"Service\"]` protects `Service.run`, `Service.Inner`, and `Service.Inner.method`. Computed `__all__` (`sorted(...)`, `X + Y`) or AugAssign extension (`__all__ += [...]`) falls back to the heuristic. Without `__all__`, underscore-prefixed names (including dunders) are excluded at every level; `from X import *` contributes no fixed name and is ignored. The same `__all__` precedence rule (including the class-member recursion) is applied to the parallel `_snapshot_public_signatures` so signature-drift detection sees the same public set. `_snapshot_public_signatures` entries carry a leading kind prefix (`[function]`/`[async_function]`/`[class]` at top level; `[instance]`/`[staticmethod]`/`[classmethod]`/`[property:<roles>]` inside classes; `[assignment]` for module-level rebindings; and `[import]`/`[import:<module>]`/`[import:from <module>]`/`[import:from <module>:<source>]` for re-exports) so a binding-kind flip (e.g. a re-exported `pathlib.Path` replaced by a same-named `def`) diffs even when the parameter list happens to match. For `@dataclass` classes without an explicit `__init__`, `_snapshot_public_signatures` synthesises the constructor signature from class-body `AnnAssign` fields in source order: `@dataclass(kw_only=True)` emits a leading `*` so every field is kw-only; an in-body `_: KW_ONLY` sentinel (`KW_ONLY` Name or `dataclasses.KW_ONLY` Attribute) splits positional vs kw-only fields and is recognised before the underscore-prefix skip; when both decorator and sentinel are present only ONE `*` is emitted (decorator wins); `InitVar[...]` fields ARE included (they are runtime constructor params even though not stored as instance attributes); `ClassVar[...]` fields and `field(init=False, ...)` defaults are excluded; an explicit `__init__` still wins over synthesis. Inherited dataclass fields are collected in REVERSE-MRO order (matching Python's `@dataclass`: `__dataclass_fields__` is populated by walking bases right-to-left so later bases overwrite earlier ones in dict-insertion order) — `class C(A, B)` synthesises `(b, a, c)`. A base decorated with `@dataclass(init=False)` STILL contributes its annotated fields to a derived `@dataclass`'s synth; `init=False` only suppresses the base's OWN `__init__` synthesis. Cross-module bases that resolve to imports rather than same-module `ClassDef`s are marked `[inherited_unresolved]`. When a derived class redeclares a base's field name, the derived annotation/default wins but the field's POSITION matches the base's original slot (insertion-order dict semantics). The gate raises when public symbols are removed/renamed or their callable signature changes unless the prompt body contains an anchored `BREAKING-CHANGE:` directive (regex `^\\s*BREAKING-CHANGE:\\s*` with `re.MULTILINE`) whose tail starts with a `remove`/`delete`/`drop`/`rename` action verb (followed by a comma-separated symbol list) for removals or a `change signature`/`change api`/`change contract` verb pair for signature drift. Buried mid-line marker mentions and bare `BREAKING-CHANGE:` markers do NOT disable the gate. First-time generation is exempt. (b) TestChurnError — when overwriting an existing non-empty test file through code_generator_main or cmd_test_main, computes the stdlib `difflib.unified_diff` churn ratio between pre and post test bodies and raises when the ratio exceeds `PDD_TEST_CHURN_THRESHOLD` (default 0.40, accepts both decimal `0.40` and percent `40%` strings; defensive fallback to default on unparseable values) without an anchored `BREAKING-CHANGE:` directive that pairs an opt-out verb (`rewrite`/`replace`/`regenerate`/`overwrite`/`churn`/`remove`/`drop`) with `tests` as the verb's direct object. PublicSurfaceRegressionError and TestChurnError share the existing PDD_REPAIR_DIRECTIVE plumbing so sync_main, sync_orchestration, and agentic_sync_runner route them through the same repair loop. Issue #1649 adds ProseOutputError before the architecture/public-surface/test-churn gates: when extracted generated content is empty or whitespace-only for a non-prompt target, code_generator_main raises a typed generation-output extraction failure containing provider/model, prompt, output path, extractor result, and raw-output excerpt, so sync retries once with an output-shape directive instead of misdiagnosing empty extraction as missing exports/churn. `PDD_ALLOW_EMPTY_GENERATION=1` is the explicit escape hatch for the rare intentional empty-output case.",
+    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name (constructor accepts an optional repair_directive override for the <pdd-interface> signature check whose source of truth is the prompt, not architecture.json), and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions. Architecture conformance now also enforces the prompt's <pdd-interface> signature across module/cli/command interface types in three categories: (1) missing function/method — declared callables (including dotted methods like ContentSelector.select) absent from the generated code surface as bare names in missing_symbols; (2) missing parameter — declared parameter names absent from a matching function/method signature surface as dotted funcname.paramname entries; (3) signature drift — annotation drift is conservative (raises only when both sides specify and differ) while default drift is strict (raises when the prompt declares a default and the generated code drops or changes it, since callers omitting an optional kwarg would otherwise break with TypeError). Each category emits a distinct error sentence so the agentic_sync_runner repair loop can build a targeted directive (add missing function/method, add missing parameter, or update parameter to match the prompt's annotation/default). Issue #1012 adds two additional repair-loop gates: (a) PublicSurfaceRegressionError — for mature modules (pre-existing non-empty code file), snapshots top-level functions, classes, recursively-walked nested classes/methods (so a method on `Outer.Inner` is captured as `Outer.Inner.method`), and module-level public `ast.Assign` / bound `ast.AnnAssign` (only when `node.value is not None`; bare annotations like `PUBLIC_NAME: int` don't bind a runtime attribute and are ignored) targets plus `ast.Import`/`ast.ImportFrom` aliases (so removing a re-export like `import git` or a public constant like `PUBLIC_SETTING = ...` surfaces as a regression). When the module declares `__all__` as a clean list/tuple of string constants, that list is AUTHORITATIVE per Python semantics: a name is public iff it appears in `__all__`, even if underscore-prefixed; names NOT in `__all__` are NOT public. Classes listed in `__all__` ALSO contribute their recursively-walked members (methods, nested classes, methods on nested classes at every depth) regardless of underscore prefix — so `__all__ = [\"Service\"]` protects `Service.run`, `Service.Inner`, and `Service.Inner.method`. Computed `__all__` (`sorted(...)`, `X + Y`) or AugAssign extension (`__all__ += [...]`) falls back to the heuristic. Without `__all__`, underscore-prefixed names (including dunders) are excluded at every level; `from X import *` contributes no fixed name and is ignored. The same `__all__` precedence rule (including the class-member recursion) is applied to the parallel `_snapshot_public_signatures` so signature-drift detection sees the same public set. `_snapshot_public_signatures` entries carry a leading kind prefix (`[function]`/`[async_function]`/`[class]` at top level; `[instance]`/`[staticmethod]`/`[classmethod]`/`[property:<roles>]` inside classes; `[assignment]` for module-level rebindings; and `[import]`/`[import:<module>]`/`[import:from <module>]`/`[import:from <module>:<source>]` for re-exports) so a binding-kind flip (e.g. a re-exported `pathlib.Path` replaced by a same-named `def`) diffs even when the parameter list happens to match. For `@dataclass` classes without an explicit `__init__`, `_snapshot_public_signatures` synthesises the constructor signature from class-body `AnnAssign` fields in source order: `@dataclass(kw_only=True)` emits a leading `*` so every field is kw-only; an in-body `_: KW_ONLY` sentinel (`KW_ONLY` Name or `dataclasses.KW_ONLY` Attribute) splits positional vs kw-only fields and is recognised before the underscore-prefix skip; when both decorator and sentinel are present only ONE `*` is emitted (decorator wins); `InitVar[...]` fields ARE included (they are runtime constructor params even though not stored as instance attributes); `ClassVar[...]` fields and `field(init=False, ...)` defaults are excluded; an explicit `__init__` still wins over synthesis. Inherited dataclass fields are collected in REVERSE-MRO order (matching Python's `@dataclass`: `__dataclass_fields__` is populated by walking bases right-to-left so later bases overwrite earlier ones in dict-insertion order) — `class C(A, B)` synthesises `(b, a, c)`. A base decorated with `@dataclass(init=False)` STILL contributes its annotated fields to a derived `@dataclass`'s synth; `init=False` only suppresses the base's OWN `__init__` synthesis. Cross-module bases that resolve to imports rather than same-module `ClassDef`s are marked `[inherited_unresolved]`. When a derived class redeclares a base's field name, the derived annotation/default wins but the field's POSITION matches the base's original slot (insertion-order dict semantics). The gate raises when public symbols are removed/renamed or their callable signature changes unless the prompt body contains an anchored `BREAKING-CHANGE:` directive (regex `^\\s*BREAKING-CHANGE:\\s*` with `re.MULTILINE`) whose tail starts with a `remove`/`delete`/`drop`/`rename` action verb (followed by a comma-separated symbol list) for removals or a `change signature`/`change api`/`change contract` verb pair for signature drift. Buried mid-line marker mentions and bare `BREAKING-CHANGE:` markers do NOT disable the gate. First-time generation is exempt. (b) TestChurnError — when overwriting an existing non-empty test file through code_generator_main or cmd_test_main, computes the stdlib `difflib.unified_diff` churn ratio between pre and post test bodies and raises when the ratio exceeds `PDD_TEST_CHURN_THRESHOLD` (default 0.40, accepts both decimal `0.40` and percent `40%` strings; defensive fallback to default on unparseable values) without an anchored `BREAKING-CHANGE:` directive that pairs an opt-out verb (`rewrite`/`replace`/`regenerate`/`overwrite`/`churn`/`remove`/`drop`) with `tests` as the verb's direct object. PublicSurfaceRegressionError and TestChurnError share the existing PDD_REPAIR_DIRECTIVE plumbing so sync_main, sync_orchestration, and agentic_sync_runner route them through the same repair loop. Issue #1649 adds ProseOutputError before the architecture/public-surface/test-churn gates: when extracted generated content is empty or whitespace-only for a non-prompt target, code_generator_main raises a typed generation-output extraction failure containing provider/model, prompt, output path, extractor result, and raw-output excerpt, so sync retries once with an output-shape directive instead of misdiagnosing empty extraction as missing exports/churn. `PDD_ALLOW_EMPTY_GENERATION=1` is the explicit escape hatch for the rare intentional empty-output case. Issue #1900 makes the prompt's `<pdd-interface>` (`type: module`) the stable surface contract for DECLARED symbols: declared top-level functions, dotted methods, and constructors (including underscore-prefixed helpers/classes, resolved via patch-target signature capture) are validated against the DECLARED signature — receiver-stripped to match the snapshot — instead of the previous generation, so editing the declaration authorizes an intended change with no `BREAKING-CHANGE:` permit, while a declared callable that becomes non-callable is still rejected even under `BREAKING-CHANGE: change signature` (which relaxes only binding-kind/async, never declared parameters). Violations carry JSON-encoded `signature_detail:` lines (declared expected-vs-actual) plus declaration-aware repair advice (edit the `<pdd-interface>` declaration, not `BREAKING-CHANGE`). Undeclared symbols keep the previous-generation baseline and its `BREAKING-CHANGE:` opt-out described above.",
     "dependencies": [
       "construct_paths_python.prompt",
       "preprocess_python.prompt",
@@ -2350,7 +2350,7 @@
           },
           {
             "name": "PublicSurfaceRegressionError",
-            "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)",
+            "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None, signature_details: Optional[List[Tuple[str, str, str, str]]] = None)",
             "returns": "PublicSurfaceRegressionError"
           },
           {
@@ -2581,7 +2581,7 @@
   },
   {
     "reason": "CLI wrapper for updating prompts from modified code with repo-wide scan, agentic routing, optional metadata sync, and fingerprint finalization.",
-    "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, formats output, and checks fingerprint include dependencies from the owning project root so parent or sibling working directories do not create false deletion drift.",
+    "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, and formats output.",
     "dependencies": [
       "auto_include_python.prompt",
       "metadata_sync_python.prompt",
@@ -2963,14 +2963,15 @@
   },
   {
     "reason": "CLI wrapper for unit-test repair with loop mode, cloud/local execution, and compressed repair context.",
-    "description": "Command-line interface for fix. Parses arguments, orchestrates loop and single-pass fix workflows, formats output, and preserves Issue #888 focused repair outside loop mode. In single-pass cloud and local modes, large code/test inputs are reduced through fix_focus.prepare_focused_inputs before the LLM call; focused calls force effective test protection, reconstruct full code with fix_focus.reconstruct_code before validation/writes, validate against the full original test file, and never write returned sliced test content. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
+    "description": "Command-line interface for fix. Parses arguments, orchestrates loop and single-pass fix workflows, formats output, and preserves Issue #888 focused repair outside loop mode. In single-pass cloud and local modes, large code/test inputs are reduced through fix_focus.prepare_focused_inputs before the LLM call; focused calls force effective test protection, reconstruct full code with fix_focus.reconstruct_code before validation/writes, validate against the full original test file, and never write returned sliced test content. Before persisting a passing fix, the Issue #1939 mock-contract gate compares prospective query/mock shapes with repository schema and sibling evidence and hard-fails real divergences. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
     "dependencies": [
       "fix_error_loop_python.prompt",
       "fix_focus_python.prompt",
       "agentic_langtest_python.prompt",
       "auth_service_python.prompt",
       "core/cloud_python.prompt",
-      "compressed_sync_context_python.prompt"
+      "compressed_sync_context_python.prompt",
+      "mock_contract_validation_python.prompt"
     ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
@@ -2999,7 +3000,7 @@
   },
   {
     "reason": "Determines the next sync operation, including isolated replay/repair decisions.",
-    "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed. Fingerprint include resolution is root-anchored and safely supports committed prompt aliases without allowing uncontained reads.",
+    "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed. Its issue-1903 path wrapper adopts one runner-collected co-located test only when the test-output location is not explicitly pinned; before replacing the generated-test write target, both adopted and derived paths pass through content_selector's component-sanitizing, symlink-aware project-root containment barrier, so caller-influenced paths never flow directly into filesystem resolution.",
     "dependencies": [
       "agentic_langtest_python.prompt"
     ],
@@ -3123,8 +3124,8 @@
     }
   },
   {
-    "reason": "Coordinates sync workflow steps and state management. Manages workflow state, determines next steps, tracks progress, and handles step dependencies. Persists fingerprints and run-report test hashes under the resolved PDD trusted root rather than process CWD.",
-    "description": "Manages workflow state, determines next steps, tracks progress, handles step dependencies, and persists fingerprints and run-report test hashes under the resolved PDD trusted root rather than process CWD. For generate operations, catches ArchitectureConformanceError, PublicSurfaceRegressionError, and TestChurnError (issue #1012), accumulates failed-attempt total_cost/model_name, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits on repeated failure signatures (missing-symbol set / removed-symbol set / (rounded churn ratio, pre_line_count)) and additionally caps TestChurnError retries at one attempt, reuses the already-resolved .pddrc context_override/strength/temperature/context_config across retries (no mid-loop .pddrc re-resolution), relies on code_generator_main reading the pre-generation code file from disk for the public-surface snapshot, restores the prior environment value, includes failed-attempt cost in success and exception logs, and emits the appropriate build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error diagnostic block before re-raising the final failure.",
+    "reason": "Coordinates sync workflow steps and state management. Manages workflow state, determines next steps, tracks progress, and handles step dependencies.",
+    "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies. For generate operations, catches ArchitectureConformanceError, PublicSurfaceRegressionError, and TestChurnError (issue #1012), accumulates failed-attempt total_cost/model_name, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits on repeated failure signatures (missing-symbol set / removed-symbol set / (rounded churn ratio, pre_line_count)) and additionally caps TestChurnError retries at one attempt, reuses the already-resolved .pddrc context_override/strength/temperature/context_config across retries (no mid-loop .pddrc re-resolution), relies on code_generator_main reading the pre-generation code file from disk for the public-surface snapshot, restores the prior environment value, includes failed-attempt cost in success and exception logs, and emits the appropriate build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error diagnostic block before re-raising the final failure.",
     "dependencies": [
       "code_generator_main_python.prompt",
       "agentic_sync_runner_python.prompt",
@@ -3144,7 +3145,7 @@
         "functions": [
           {
             "name": "sync_orchestration",
-            "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", examples_dir: str = \"examples\", tests_dir: str = \"tests\", max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, compress: bool = False, evidence: bool = False, snapshot_context: bool = False, compressed_context: bool = False) -> Dict[str, Any]",
+            "signature": "(basename: str, target_coverage: float = 90.0, language: str = 'python', prompts_dir: str = 'prompts', code_dir: str = 'src', examples_dir: str = 'examples', tests_dir: str = 'tests', max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, compress: bool = False, evidence: bool = False, snapshot_context: bool = False, compressed_context: bool = False, fresh: bool = False) -> Dict[str, Any]",
             "returns": "Dict[str, Any]"
           }
         ]
@@ -5517,7 +5518,7 @@
         "commands": [
           {
             "name": "sync_main",
-            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool, no_steer: bool = False, steer_timeout: Optional[float] = None, agentic_mode: bool = False, one_session: bool = False, compress: bool = False, evidence: bool = False, snapshot_context: bool = False, compressed_context: Optional[bool] = None) -> Tuple[Dict[str, Any], float, str]",
+            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool, no_steer: bool = False, steer_timeout: Optional[float] = None, agentic_mode: bool = False, one_session: bool = False, compress: bool = False, evidence: bool = False, snapshot_context: bool = False, compressed_context: bool = False, fresh: bool = False) -> Tuple[Dict[str, Any], float, str]",
             "returns": "Tuple[Dict[str, Any], float, str]"
           }
         ]
@@ -5645,40 +5646,6 @@
     "position": {
       "x": 21000,
       "y": 0
-    }
-  },
-  {
-    "reason": "Fixes validation errors from a single failed validation step (completeness, sync, or dependencies).",
-    "description": "Step 13 of the agentic architecture workflow. Repairs validation failures by reconciling architecture.json, generated prompt filenames, and path-mirroring rules without flattening path-aware prompt layouts.",
-    "dependencies": [
-      "agentic_arch_step12_deps_LLM.prompt"
-    ],
-    "priority": 153,
-    "filename": "agentic_arch_step13_fix_LLM.prompt",
-    "filepath": "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
-    "tags": [
-      "agentic",
-      "architecture",
-      "config",
-      "fix",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "fix_validation",
-            "signature": "(failed_step: str, failed_output: str)",
-            "returns": "str (list of fixes applied)"
-          }
-        ]
-      }
-    },
-    "position": {
-      "x": 21280,
-      "y": 220
     }
   },
   {
@@ -6877,11 +6844,12 @@
   },
   {
     "reason": "Orchestrates the 11-step agentic E2E fix workflow including post-push CI validation and code cleanup.",
-    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, CI validation, and a deterministic pre-checkup drift-sync gate.",
+    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, repository-backed mock-contract validation, CI validation, and a deterministic pre-checkup drift-sync gate.",
     "dependencies": [
       "agentic_bug_orchestrator_python.prompt",
       "ci_validation_python.prompt",
-      "pre_checkup_gate_python.prompt"
+      "pre_checkup_gate_python.prompt",
+      "mock_contract_validation_python.prompt"
     ],
     "priority": 183,
     "filename": "agentic_e2e_fix_orchestrator_python.prompt",
@@ -7787,7 +7755,7 @@
         "functions": [
           {
             "name": "log_operation",
-            "signature": "(updates_fingerprint: bool, updates_run_report: bool, clears_run_report: bool) -> Callable",
+            "signature": "(operation: str, updates_fingerprint: bool = False, updates_run_report: bool = False, clears_run_report: bool = False) -> Callable",
             "returns": "Callable"
           },
           {
@@ -7797,8 +7765,13 @@
           },
           {
             "name": "log_event",
-            "signature": "(basename: str, language: str, event_type: str, details: Any, invocation_mode: str = \"manual\", paths: Optional[Dict[str, Any]] = None, compression: Any = None, agentic_fallback: Any = None) -> None",
+            "signature": "(basename: str, language: str, event: str, details: Mapping[str, Any] | None = None, project_root=None, paths=None, compression=None, agentic_fallback=None) -> None",
             "returns": "None"
+          },
+          {
+            "name": "resolve_fingerprint_paths",
+            "signature": "(basename: str, language: str, prompt_file: Union[str, Path], *, paths: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
           }
         ]
       }
@@ -8093,8 +8066,8 @@
     }
   },
   {
-    "reason": "Parallel dependency-aware sync runner that forwards compressed-context sync settings.",
-    "description": "Manages pdd sync subprocesses using a ThreadPoolExecutor whose worker count is read by _read_sync_max_workers() from the PDD_SYNC_MAX_WORKERS env var at construction (default 4, non-integer falls back to 4, clamped to 1-4, forced to 1 when total_budget is set; MAX_WORKERS stays a backwards-compatible module constant), preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects four repairable generation failures from per-module sync subprocesses - architecture-conformance ('Architecture conformance error for ' line prefix, parsed by _parse_conformance_failure), public-surface regression ('Public surface regression for ' line prefix, parsed by _parse_public_surface_failure, issue #1012), test-churn ('Test churn threshold exceeded for ' line prefix, parsed by _parse_test_churn_failure, issue #1012), and prose-output ('Generation output extraction failure for ' line prefix, parsed by _parse_prose_output_failure, issue #1649, checked first and limited to 1 additional attempt) - and retries conformance/surface/churn failures up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact offending symbols / churn ratio and forbids editing architecture.json or rewriting unrelated tests. Every child/retry keeps the per-module resolved .pddrc context, --strength, and --temperature stable so a flaky regeneration cannot silently switch model or context between attempts. Stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the failure signature (sorted missing/removed symbols, ('prose',), or (rounded churn_ratio, pre_line_count)) repeats, and on hard failure records the matching structured block - '=== architecture conformance failure ===', '=== public surface regression ===', '=== test churn threshold exceeded ===', or '=== generation output extraction failure ===' with extractor_result/raw_output_excerpt fields (built by build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error / build_prose_output_hard_failure_from_error, all importable from pdd.agentic_sync_runner so sync_main and sync_orchestration reuse them verbatim) - plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits. Bounds per-attempt child stdout/stderr capture with a _BoundedTextCapture tail (capped by STDOUT_CAPTURE_LINE_LIMIT=5000 lines and STDOUT_CAPTURE_BYTE_LIMIT=1 MiB per stream, allocated fresh each attempt) so verbose repair retries cannot grow memory unbounded and trigger SIGKILL on Cloud Run; reads child pipes as bytes and decodes UTF-8 incrementally; tracks dropped line/byte counts surfaced via _log_dropped_output() and appended to failure/timeout summaries without injecting diagnostics into captured child output. The 'Overall status: ... Failed' verdict is recorded as the stdout line streams in (sticky), so a failure marker evicted from the bounded tail by trailing output still yields a failed verdict and a correct failure reason.",
+    "reason": "Parallel dependency-aware sync runner that forwards compressed-context sync settings and resolves each child's --context against its own module cwd's .pddrc.",
+    "description": "Manages pdd sync subprocesses using a ThreadPoolExecutor whose worker count is read by _read_sync_max_workers() from the PDD_SYNC_MAX_WORKERS env var at construction (default 4, non-integer falls back to 4, clamped to 1-4, forced to 1 when total_budget is set; MAX_WORKERS stays a backwards-compatible module constant), preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects four repairable generation failures from per-module sync subprocesses - architecture-conformance ('Architecture conformance error for ' line prefix, parsed by _parse_conformance_failure), public-surface regression ('Public surface regression for ' line prefix, parsed by _parse_public_surface_failure, issue #1012), test-churn ('Test churn threshold exceeded for ' line prefix, parsed by _parse_test_churn_failure, issue #1012), and prose-output ('Generation output extraction failure for ' line prefix, parsed by _parse_prose_output_failure, issue #1649, checked first and limited to 1 additional attempt) - and retries conformance/surface/churn failures up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact offending symbols / churn ratio and forbids editing architecture.json or rewriting unrelated tests. Every child/retry keeps the per-module resolved .pddrc context, --strength, and --temperature stable so a flaky regeneration cannot silently switch model or context between attempts. Stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the failure signature (sorted missing/removed symbols, ('prose',), or (rounded churn_ratio, pre_line_count)) repeats, and on hard failure records the matching structured block - '=== architecture conformance failure ===', '=== public surface regression ===', '=== test churn threshold exceeded ===', or '=== generation output extraction failure ===' with extractor_result/raw_output_excerpt fields (built by build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error / build_prose_output_hard_failure_from_error, all importable from pdd.agentic_sync_runner so sync_main and sync_orchestration reuse them verbatim) - plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits. Bounds per-attempt child stdout/stderr capture with a _BoundedTextCapture tail (capped by STDOUT_CAPTURE_LINE_LIMIT=5000 lines and STDOUT_CAPTURE_BYTE_LIMIT=1 MiB per stream, allocated fresh each attempt) so verbose repair retries cannot grow memory unbounded and trigger SIGKILL on Cloud Run; reads child pipes as bytes and decodes UTF-8 incrementally; tracks dropped line/byte counts surfaced via _log_dropped_output() and appended to failure/timeout summaries without injecting diagnostics into captured child output. The 'Overall status: ... Failed' verdict is recorded as the stdout line streams in (sticky), so a failure marker evicted from the bounded tail by trailing output still yields a failed verdict and a correct failure reason. Issue #1900: `_parse_public_surface_failure` also recovers JSON-encoded `signature_detail:` lines (via `_parse_signature_detail_lines`) and, for prompt-`<pdd-interface>`-declared violations, builds declaration-aware repair guidance (update the declaration / restore the declared signature) instead of the `BREAKING-CHANGE:` advice used for undeclared/removed symbols. Issue #1903 §B.4 test-churn never-block: on test-churn exhaustion the runner does NOT hard-fail when ALL THREE guards hold - the run is issue-driven (self.issue_url set; a project-wide sync with issue_url=None keeps the strict hard-fail), the child stamped structured adoption provenance adopted:true (adopted from an existing human co-located test, unpinned, decided at path resolution before generation; a pinned/greenfield/older-child test reads false), AND the churned path is an in-repo co-located shape (_is_adopted_collocated_test_path: a .test./.spec. file, under __test__/__tests__, or a Python sibling test_<stem>.py / <stem>_test.py outside the top-level tests/ shadow, in-root after canonical containment; a PDD-owned tests/ shadow, traversal, or out-of-root path keeps the hard-fail). When all hold it keeps the already-restored human test, emits a PDD_TEST_CHURN_NEEDS_REVIEW marker, sets ModuleState.needs_review (persisted across resume in _save_state/_load_state and rendered as 'Success (needs review)' plus a '### Needs review' section in the progress comment), and reports the module synced so the PR still opens with the test flagged for review.",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_langtest_python.prompt",
@@ -10729,6 +10702,11 @@
             "name": "resolve_generate_output_paths",
             "signature": "(prompt_file: str | Path, *, output: Optional[str] = None, context_override: Optional[str] = None, force: bool = True, quiet: bool = True) -> list[str]",
             "returns": "list[str]"
+          },
+          {
+            "name": "resolve_test_output_paths",
+            "signature": "(prompt_file: str | Path, code_file: str | Path, *, output: Optional[str] = None, language: Optional[str] = None, context_override: Optional[str] = None, force: bool = True, quiet: bool = True) -> list[str]",
+            "returns": "list[str]"
           }
         ]
       }
@@ -10815,8 +10793,9 @@
   },
   {
     "reason": "Provides precise extraction of file content based on criteria like lines, AST, and regex for selective includes.",
-    "description": "Deterministic content extraction from files based on line ranges, Python AST structures, Markdown sections, regex patterns, and JSON/YAML path traversal.",
+    "description": "Deterministic content extraction from files based on line ranges, Python AST structures, Markdown sections, regex patterns, and JSON/YAML path traversal. It also implements issue #1903 runner-aware test placement: it detects and adopts a single existing runner-collected co-located test, and for a greenfield JS/TS project (jest/vitest configured, no test yet) derives where the runner actually collects the first test via find_runner_collected_test_path — honoring JSON-readable testMatch/testRegex/roots/rootDir/testPathIgnorePatterns (deriving a path under a centralized roots/testMatch directory when the layout is not co-located, and conservatively refusing when an unparseable JS config customizes discovery) — so PDD never writes a runner-blind tests/ shadow or an uncollected test. Caller-influenced module/candidate paths are reduced to the trusted working-tree root and sanitized component-by-component with os.path.basename before any filesystem operation, then canonicalized and checked for symlink escape; traversal, outside absolute paths, and malformed paths safely produce no adoption.",
     "dependencies": [
+      "context/python_preamble.prompt",
       "pytest_slicer_python.prompt",
       "api_contract_slicer_python.prompt"
     ],
@@ -10833,7 +10812,7 @@
         "functions": [
           {
             "name": "ContentSelector.select",
-            "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\")",
+            "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\", expand_dependencies: bool = False)",
             "returns": "str"
           }
         ]
@@ -12023,6 +12002,67 @@
       "config": {
         "keys": []
       }
+    }
+  },
+  {
+    "reason": "Rejects green fixes whose generated mocks contradict repository-backed schema and interface evidence.",
+    "description": "Diff-aware AST and schema gate that extracts Python query fields and mock payload shapes, checks exact Markdown/JSON schema sections plus independent production readers/writers, and returns clean, inconclusive, or evidence-linked divergence results for manual and agentic fix workflows.",
+    "dependencies": [],
+    "priority": 5,
+    "filename": "mock_contract_validation_python.prompt",
+    "filepath": "pdd/mock_contract_validation.py",
+    "tags": [
+      "fix",
+      "gate",
+      "module",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "extract_query_fields",
+            "signature": "(source: str, source_path: str = '<memory>') -> tuple[QueryFieldUse, ...]",
+            "returns": "tuple[QueryFieldUse, ...]"
+          },
+          {
+            "name": "extract_mock_fields",
+            "signature": "(source: str, source_path: str = '<memory>', resources: Optional[set[str]] = None) -> tuple[MockFieldUse, ...]",
+            "returns": "tuple[MockFieldUse, ...]"
+          },
+          {
+            "name": "resolve_protected_schema_ref",
+            "signature": "(project_root: Path) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "validate_mock_contracts",
+            "signature": "(*, project_root: Path, production_sources: Mapping[str | Path, str], test_sources: Mapping[str | Path, str], baseline_production_sources: Optional[Mapping[str | Path, str]] = None, baseline_test_sources: Optional[Mapping[str | Path, str]] = None, protected_schema_ref: Optional[str] = None) -> MockContractReport",
+            "returns": "MockContractReport"
+          },
+          {
+            "name": "validate_changed_files",
+            "signature": "(*, project_root: Path, changed_files: Sequence[str], baseline_ref: Optional[str] = None) -> MockContractReport",
+            "returns": "MockContractReport"
+          },
+          {
+            "name": "format_mock_contract_report",
+            "signature": "(report: MockContractReport) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "enforce_mock_contracts",
+            "signature": "(report: MockContractReport) -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 11600,
+      "y": 2200
     }
   }
 ]

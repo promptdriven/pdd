@@ -1,6 +1,7 @@
 # tests/test_sync_orchestration.py
 
 import pytest
+import inspect
 import json
 import sys
 import threading
@@ -9653,3 +9654,18 @@ def test_sync_orchestration_skip_handler_for_fix(orchestration_fixture):
     orchestration_fixture['_save_fingerprint_atomic'].assert_any_call(
         "calculator", "python", "skip:fix", ANY, 0.0, "skipped"
     )
+
+
+def test_sync_orchestration_appends_fresh_after_legacy_positional_tail():
+    """Legacy positional evidence must not bind the later ``fresh`` option."""
+    legacy_evidence = object()
+    bound = inspect.signature(sync_orchestration).bind(
+        "calculator", 90.0, "python", "prompts", "src", "context", "tests",
+        3, 10.0, False, False, False, False, 1.0, 0.0, 0.25, False,
+        False, None, False, False, None, None, None, False, 5.0, False,
+        True, legacy_evidence, True, True,
+    )
+    bound.apply_defaults()
+
+    assert bound.arguments["evidence"] is legacy_evidence
+    assert bound.arguments["fresh"] is False
