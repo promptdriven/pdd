@@ -297,9 +297,9 @@ class TestIssue1900SurfaceContract:
                 prose_only.append(prompt_path.name)
                 continue
             contracts.append((prompt_path, code_path, text))
-        assert len(candidates) == 127
+        assert len(candidates) == 129
         assert prose_only == ["architecture_include_validation_python.prompt"]
-        assert len(contracts) == 126
+        assert len(contracts) == 128
         strict_failures = []
         production_failures = []
         for prompt_path, code_path, text in contracts:
@@ -325,8 +325,8 @@ class TestIssue1900SurfaceContract:
         # unprovable Depends call.
         strict_legacy_failures = set(strict_failures)
         assert "extracts_python.prompt" not in strict_legacy_failures
-        assert len(strict_legacy_failures) == 53, sorted(strict_legacy_failures)
-        assert len(contracts) - len(strict_legacy_failures) == 73
+        assert len(strict_legacy_failures) == 54, sorted(strict_legacy_failures)
+        assert len(contracts) - len(strict_legacy_failures) == 74
         assert production_failures == []
         assert time.monotonic() - started < 45, "real-path contract corpus exceeded 45 seconds"
 
