@@ -946,7 +946,7 @@ steps:
   - order: 2
     name: "Protected reviewed checker release and pinned wheel digest"
     status: pending
-    last_state_change: "2026-07-18"
+    last_state_change: "2026-07-19"
     evidence_state:
       implemented: in-progress
       local_green: in-progress
@@ -958,39 +958,23 @@ steps:
       certified: pending
     exact_repository_sha: null
     validation_commands:
-      - "gh release view \"$PDD_CHECKER_RELEASE_REF\" --repo promptdriven/pdd --json tagName,targetCommitish,isDraft,isPrerelease"
-      - "gh release download \"$PDD_CHECKER_RELEASE_REF\" --repo promptdriven/pdd --pattern '*.whl' --dir \"$RUNNER_TEMP/released-checker\""
-      - "sha256sum --check \"$PDD_CHECKER_WHEEL_SHA256_FILE\""
-      - "python -m pdd.sync_core.release_diff_verifier --repository . --base origin/main --release-sha \"$PDD_SHA\" --diagnostic-pr 1995 --require-fresh-main-extraction --require-complete-net-diff-review --output \"$RUNNER_TEMP/release-diff.json\""
-      - "pytest -q tests/test_sync_core_artifact_provenance.py tests/test_sync_core_lifecycle.py -k 'candidate or released or credential or environment'"
-      - "python -m pdd.sync_core.intermediate_certificate_verifier --certificate \"$PDD_INTERMEDIATE_CERTIFICATE\" --repository-sha \"$PDD_SHA\" --require-named-included-units --require-named-excluded-units --require-denominator --require-global-completion-false --forbid-gate-satisfaction 6,10"
+      - "pytest -q tests/test_sync_core_released_checker.py"
+      - "python -m pylint pdd/sync_core/released_checker.py"
     required_predicate:
       ledger_generator_and_protected_drift_check_pass: true
       diagnostic_pr_used_as_release_vehicle: false
-      release_changes_extracted_from_live_main: true
-      complete_release_net_diff_independently_reviewed: true
-      release_ref_protected_and_reviewed: true
-      release_target_is_exact_repository_sha: true
-      release_is_draft: false
-      release_is_prerelease: false
-      downloaded_wheel_sha256_matches_protected_pin: true
-      checker_owns_scenarios_metrics_predicate_and_signing: true
-      unconditional_pass_candidate_is_rejected: true
-      scenario_editing_candidate_is_rejected: true
-      environment_printing_candidate_is_rejected: true
-      candidate_children_have_credentials: false
-      intermediate_certificate_bound_to_exact_pdd_sha: true
-      intermediate_certificate_included_units_named: true
-      intermediate_certificate_excluded_units_named: true
-      intermediate_certificate_denominator_recorded: true
-      intermediate_certificate_denominator_equals_protected_expected_managed_units: true
-      intermediate_certificate_included_plus_excluded_equals_denominator: true
-      intermediate_certificate_global_completion: false
-      intermediate_certificate_satisfies_gate_6: false
-      intermediate_certificate_satisfies_gate_10: false
+      released_wrapper_merged: false
+      released_wrapper_published: false
+      hash_locked_runtime_closure_published: false
+      protected_base_pin_lane_added: false
+      intermediate_evidence_global_completion: false
+      intermediate_evidence_satisfies_gate_6: false
+      intermediate_evidence_satisfies_gate_10: false
+      certificate_a: false
+      certificate_b: false
     artifact_check_urls: []
-    predicate_result: "No protected checker release is authorized."
-    blocker: "Gate 2 is blocked on releasing the pytest-only checker from bounded fresh-main extraction layers and pinning its wheel digest. Ledger generation and the protected drift check are merged evidence; #1995 is frozen diagnostic evidence and must not merge as the release vehicle."
+    predicate_result: "Historical release v0.0.306 proved only prior checker publication and a fail-closed report. It cannot execute this new wrapper and does not contain a complete hash-locked runtime closure, so it is not the Gate 2 release vehicle and no pin, hosted evidence, or gate claim is recorded here."
+    blocker: "Merge and release this wrapper first, then publish and review a complete digest-pinned runtime closure before adding a protected-base pin lane. That future lane must prove the newly released wrapper from installed wheel bytes; Gate 2, both certificates, and the 0/10 scoreboard remain pending."
     prerequisite_blockers:
       ledger_generator: "passed through protected PR #2219 at exact head 06d976de23f6da45c9078fdd1a8f89dbf1aecd2c and merge fb344f1c66e807dc51cac0f5363e5484cc487de9"
       protected_drift_check: "passed on the exact #2219 reviewed head; regenerated ledger byte drift fails closed"
