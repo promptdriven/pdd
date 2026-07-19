@@ -399,10 +399,9 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS += (
 )
 
 
-# One long-lived pre-schema-2 unit first becomes managed in pdd#1790. Bind its
-# initial profile to the exact candidate policy and prompt bytes so the merged
-# protected checker can authorize that addition without granting a general
-# candidate-only profile escape hatch.
+# Bind each reviewed first profile to exact candidate policy and prompt bytes so
+# the protected checker can authorize only that repository-bound addition,
+# without granting a general candidate-only profile escape hatch.
 _BOOTSTRAP_PROFILE_ADDITIONS = (
     (
         PurePosixPath("pdd/prompts/checkup_agentic_artifact_python.prompt"),
@@ -417,6 +416,20 @@ _BOOTSTRAP_PROFILE_ADDITIONS = (
         "CONTRACT-SHA256:dd66389e2ec13002ff56ae34625443f463164a4fcadf51af6a98982c49ae01c3",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
         "dd66389e2ec13002ff56ae34625443f463164a4fcadf51af6a98982c49ae01c3",
+    ),
+    (
+        PurePosixPath("pdd/prompts/fingerprint_transaction_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:45cbca4446a3d0a1cbccf66422dac13df17ab9e197ea4a1fe1042b654c3201f9",
+        "6e558bdd16e45c009173a85db65eaebbd2fd1ae12aecbf09325522fc785d3a37",
+        "45cbca4446a3d0a1cbccf66422dac13df17ab9e197ea4a1fe1042b654c3201f9",
+    ),
+    (
+        PurePosixPath("pdd/prompts/sync_plan_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:3b312560a11435f30e721e0832c4d11dcb8a7430ba219f15479eddf85f336e49",
+        "3e22d0bc72fa462e111682a326248bc64a89366185a1d19bd9817747a30cab8e",
+        "3b312560a11435f30e721e0832c4d11dcb8a7430ba219f15479eddf85f336e49",
     ),
 )
 
@@ -1456,8 +1469,9 @@ def _validate_consumed_managed_prompt_bytes(
     approved_aliases: Mapping[PurePosixPath, PurePosixPath],
     authorizations: tuple[_RequirementTransitionAuthorization, ...],
     updates: Mapping[UnitId, _ProfileInput],
+    profile_additions: Mapping[UnitId, _ProfileInput],
 ) -> None:
-    """Limit Phase B prompt drift to exact protected rows consumed in this candidate."""
+    """Limit Phase B prompt drift to exact transitions and initial profiles."""
     consumed = {
         _canonical_prompt_path(authorization.prompt_path, approved_aliases)
         for authorization in authorizations
@@ -1468,6 +1482,10 @@ def _validate_consumed_managed_prompt_bytes(
         )
         in updates
     }
+    consumed.update(
+        _canonical_prompt_path(unit_id.prompt_relpath, approved_aliases)
+        for unit_id in profile_additions
+    )
     unauthorized = (
         _managed_prompt_byte_changes(root, manifest, approved_aliases) - consumed
     )
@@ -2167,6 +2185,7 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
             approved_aliases,
             requirement_authorizations,
             requirement_updates,
+            profile_additions,
         )
     invalid.extend(requirement_invalid)
     requirement_updates = {**profile_additions, **requirement_updates}
