@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 import zipfile
 
 import pytest
@@ -11,7 +13,9 @@ import pytest
 from pdd.sync_core.standalone_package import (
     StandalonePackageError,
     build_standalone_wheel,
+    installed_checker_runtime_lock,
     load_standalone_manifest,
+    validate_installed_checker_runtime_lock,
     validate_standalone_wheel,
     wheel_is_compatible_with_target,
 )
@@ -82,7 +86,8 @@ def test_builder_rejects_unclosed_or_unsafe_manifest_inputs(tmp_path, mutation: 
 def test_wheel_validation_rejects_record_and_member_tampering(tmp_path) -> None:
     wheel = build_standalone_wheel(ROOT, tmp_path / "wheel", version="1.0.0")
     manifest = load_standalone_manifest(ROOT)
-    tampered = tmp_path / "tampered.whl"
+    tampered = tmp_path / "tampered" / wheel.name
+    tampered.parent.mkdir()
     with zipfile.ZipFile(wheel) as source, zipfile.ZipFile(tampered, "w") as target:
         for entry in source.infolist():
             content = source.read(entry.filename)
@@ -92,6 +97,25 @@ def test_wheel_validation_rejects_record_and_member_tampering(tmp_path) -> None:
 
     with pytest.raises(StandalonePackageError, match="RECORD"):
         validate_standalone_wheel(tampered, manifest)
+
+
+def test_runtime_lock_is_generated_and_validated_from_installed_checker_bytes(tmp_path) -> None:
+    wheel = build_standalone_wheel(ROOT, tmp_path / "wheel", version="1.0.0")
+    installed = tmp_path / "installed"
+    subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--no-deps", "--target", str(installed), str(wheel)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    package = installed / "pdd_sync_checker" / "released_checker.py"
+
+    lock = installed_checker_runtime_lock(wheel, package)
+    validate_installed_checker_runtime_lock(lock, wheel, package)
+    package.write_bytes(package.read_bytes() + b"# tampered\n")
+
+    with pytest.raises(StandalonePackageError, match="installed"):
+        validate_installed_checker_runtime_lock(lock, wheel, package)
 
 
 def test_z3_manylinux_227_is_accepted_only_for_the_supported_glibc_target() -> None:
