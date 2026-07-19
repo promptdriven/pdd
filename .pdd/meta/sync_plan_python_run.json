@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-07-19T01:39:40+00:00",
+  "exit_code": 0,
+  "tests_passed": 29,
+  "tests_failed": 0,
+  "coverage": 82.11,
+  "test_hash": "07bacd9ae74ab74ba843eba74eeb24cc4b8f871d2ea4ef2a186c7e2abe1af0f2",
+  "test_files": {
+    "test_sync_plan.py": "07bacd9ae74ab74ba843eba74eeb24cc4b8f871d2ea4ef2a186c7e2abe1af0f2"
+  }
+}

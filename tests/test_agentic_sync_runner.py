@@ -2941,7 +2941,10 @@ class TestSyncOneModule:
 # ---------------------------------------------------------------------------
 
 class TestResumability:
-    def _make_runner(self, basenames, dep_graph=None, issue_url=None, tmp_path=None):
+    def _make_runner(
+        self, basenames, dep_graph=None, issue_url=None, tmp_path=None,
+        checkout_identity=None,
+    ):
         """Create a runner, optionally with a custom project_root."""
         runner = AsyncSyncRunner(
             basenames=basenames,
@@ -2950,6 +2953,7 @@ class TestResumability:
             github_info=None,
             quiet=True,
             issue_url=issue_url,
+            checkout_identity=checkout_identity,
         )
         if tmp_path:
             runner.project_root = tmp_path
@@ -2977,21 +2981,22 @@ class TestResumability:
         """A new runner loading state skips already-succeeded modules."""
         url = "https://github.com/o/r/issues/2"
 
-        # Write a state file with 'a' succeeded
-        state_dir = tmp_path / ".pdd"
-        state_dir.mkdir(parents=True)
-        state_file = state_dir / "agentic_sync_state.json"
-        state_file.write_text(json.dumps({
-            "issue_url": url,
-            "modules": {
-                "a": {"status": "success", "cost": 0.10},
-                "b": {"status": "pending", "cost": 0.0},
-            },
-            "total_cost": 0.10,
-            "comment_id": 999,
-        }))
+        # Persist a state using the exact same schedule identity.  Resume is
+        # intentionally not compatible with old issue-url-only state files.
+        checkout = "1" * 40
+        source = self._make_runner(
+            ["a", "b"], issue_url=url, tmp_path=tmp_path,
+            checkout_identity=checkout,
+        )
+        source.project_root = tmp_path
+        source._record_result("a", True, 0.10, "")
+        source.comment_id = 999
+        source._save_state()
 
-        runner = self._make_runner(["a", "b"], issue_url=url, tmp_path=tmp_path)
+        runner = self._make_runner(
+            ["a", "b"], issue_url=url, tmp_path=tmp_path,
+            checkout_identity=checkout,
+        )
         runner.project_root = tmp_path
         # Re-trigger load since project_root was set after init
         runner._load_state()
@@ -3037,7 +3042,7 @@ class TestResumability:
         assert runner.module_states["a"].status == "pending"
 
     def test_partial_resume_different_module_list(self, tmp_path):
-        """State file with different module list still resumes overlapping succeeded modules."""
+        """A changed schedule never resumes an overlapping prior module."""
         url = "https://github.com/o/r/issues/4"
         state_dir = tmp_path / ".pdd"
         state_dir.mkdir(parents=True)
@@ -3054,11 +3059,10 @@ class TestResumability:
         runner.project_root = tmp_path
         runner._load_state()
 
-        # 'a' was successful in saved state and is in current list — should be restored
-        assert runner.module_states["a"].status == "success"
-        assert runner.module_states["a"].cost == pytest.approx(0.10)
-        assert "a" in runner._resumed_modules
-        # 'b' is new — should remain pending
+        # The legacy state has no complete schedule binding, so even its
+        # overlapping successful module remains pending.
+        assert runner.module_states["a"].status == "pending"
+        assert "a" not in runner._resumed_modules
         assert runner.module_states["b"].status == "pending"
 
     @patch.object(AsyncSyncRunner, "_sync_one_module")
