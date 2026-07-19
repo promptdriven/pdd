@@ -94,8 +94,11 @@ GATE1_PREAUTHORIZED_PATHS = {
     "pdd/sync_core/adapter_demand_verifier.py",
     "tests/test_sync_core_adapter_demand_verifier.py",
 }
-GATE1_FIRST_COMMIT = "0907904172e0442bca37e9e77d593151159dc513"
-GATE1_LAST_COMMIT = "8bb83209354f2188ae6a0add756a5f425507f94b"
+GATE1_EXISTING_HUMAN_PATHS = {
+    "docs/global_sync_evidence_ledger.yaml",
+    "docs/global_sync_resolution_plan.md",
+}
+GATE1_CHANGED_PATHS = GATE1_PREAUTHORIZED_PATHS | GATE1_EXISTING_HUMAN_PATHS
 PR_2017_ABSENT_METADATA_PATHS = {
     ".pdd/meta/agentic_langtest_python.json",
     ".pdd/meta/agentic_langtest_python_run.json",
@@ -1515,31 +1518,81 @@ def test_gate1_paths_are_exactly_preauthorized() -> None:
     } == GATE1_PREAUTHORIZED_PATHS
 
 
-def test_gate1_range_composes_with_protected_preauthorization(tmp_path: Path) -> None:
-    """The exact Gate 1 range remains human-owned from protected preauth."""
+def test_gate1_paths_compose_with_protected_preauthorization(
+    tmp_path: Path,
+) -> None:
+    """A branch-only checkout composes Gate 1 paths from protected preauth."""
+    protected_source = tmp_path / "protected-preauth-source"
     root = tmp_path / "gate1-preauth-composition"
     subprocess.run(
-        ["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(root)],
+        ["git", "init", "-q", str(protected_source)],
         check=True,
         capture_output=True,
     )
-    for commit in (GATE1_FIRST_COMMIT, GATE1_LAST_COMMIT):
-        subprocess.run(
-            ["git", "cat-file", "-e", f"{commit}^{{commit}}"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-        )
+    _git(
+        protected_source,
+        "fetch",
+        "-q",
+        "--no-tags",
+        str(ROOT),
+        "HEAD:refs/heads/protected-preauth",
+    )
+    assert subprocess.check_output(
+        ["git", "for-each-ref", "--format=%(refname)"],
+        cwd=protected_source,
+        text=True,
+    ).splitlines() == ["refs/heads/protected-preauth"]
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "-q",
+            "--no-hardlinks",
+            "--single-branch",
+            "--branch",
+            "protected-preauth",
+            str(protected_source),
+            str(root),
+        ],
+        check=True,
+        capture_output=True,
+    )
     protected_base = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True
     ).strip()
     _git(root, "update-ref", "refs/remotes/origin/main", protected_base)
-    subprocess.run(
-        ["git", "cherry-pick", f"{GATE1_FIRST_COMMIT}^..{GATE1_LAST_COMMIT}"],
-        cwd=root,
-        check=True,
-        capture_output=True,
+    assert not any(
+        "global-sync-gate1" in ref
+        for ref in subprocess.check_output(
+            ["git", "for-each-ref", "--format=%(refname)"], cwd=root, text=True
+        ).splitlines()
     )
+
+    inert_paths = {
+        "docs/global_sync_extraction_manifest.md": b"# synthetic Gate 1 manifest\n",
+        "docs/global_sync_pdd_adapter_demand.json": b"{}\n",
+        "pdd/sync_core/adapter_demand_verifier.py": b'"""Synthetic Gate 1 verifier."""\n',
+        "tests/test_sync_core_adapter_demand_verifier.py": (
+            b'"""Synthetic Gate 1 verifier test."""\n'
+        ),
+    }
+    for path, content in inert_paths.items():
+        candidate = root / path
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_bytes(content)
+    for path in GATE1_EXISTING_HUMAN_PATHS:
+        candidate = root / path
+        candidate.write_bytes(candidate.read_bytes() + b"\n")
+    _commit(root, "compose synthetic Gate 1 path set")
+
+    changed_paths = set(
+        subprocess.check_output(
+            ["git", "diff", "--name-only", "origin/main...HEAD"],
+            cwd=root,
+            text=True,
+        ).splitlines()
+    )
+    assert changed_paths == GATE1_CHANGED_PATHS
     for detector in (
         "scripts/ci_detect_changed_modules.py",
         "pdd/ci_detect_changed_modules.py",
