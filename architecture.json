@@ -11660,5 +11660,13 @@
         "keys": []
       }
     }
+  },
+  {
+    "reason": "Owns the deterministic global-sync evidence ledger renderer and verifier.",
+    "description": "Renders and validates the reviewed global-sync evidence ledger with protected promotion verification.",
+    "dependencies": [],
+    "priority": 251,
+    "filename": "sync_core/global_sync_ledger_python.prompt",
+    "filepath": "pdd/sync_core/global_sync_ledger.py"
   }
 ]
