@@ -3267,7 +3267,7 @@ def _checker_artifact_digest(include_vitest: bool = True) -> str:
     return digest.hexdigest()
 
 
-_VITEST_RUNTIME_SOURCE = "checker/pdd/sync_core/native/vitest_fd_cloexec.c"
+_NATIVE_VITEST_RUNTIME_SOURCE = "checker/pdd/sync_core/native/vitest_fd_cloexec.c"
 
 
 def _released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
@@ -3277,7 +3277,7 @@ def _released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
         ("checker/pdd/sync_core/runner.py", Path(__file__)),
         ("checker/pdd/sync_core/pytest_probe.py", _CHECKER_PYTEST_PROBE),
         (
-            _VITEST_RUNTIME_SOURCE,
+            _NATIVE_VITEST_RUNTIME_SOURCE,
             Path(__file__).resolve().parent
             / "native"
             / COORDINATOR_ADDON_SOURCE_NAME,
@@ -3296,7 +3296,9 @@ def _profiled_runtime_closure_paths(
     entries = _released_runtime_closure_paths()
     if include_vitest:
         return entries
-    return tuple(entry for entry in entries if entry[0] != _VITEST_RUNTIME_SOURCE)
+    return tuple(
+        entry for entry in entries if entry[0] != _NATIVE_VITEST_RUNTIME_SOURCE
+    )
 
 
 def _runtime_manifest(
