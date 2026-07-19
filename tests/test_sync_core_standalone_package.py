@@ -46,7 +46,9 @@ def test_builder_is_reproducible_and_copies_only_closed_checker_modules(tmp_path
     validate_standalone_wheel(first, manifest)
 
 
-@pytest.mark.parametrize("mutation", ["absolute-import", "missing", "extra", "symlink"])
+@pytest.mark.parametrize(
+    "mutation", ["absolute-import", "missing", "extra", "symlink", "root-symlink"]
+)
 def test_builder_rejects_unclosed_or_unsafe_manifest_inputs(tmp_path, mutation: str) -> None:
     source = tmp_path / "source"
     source.mkdir()
@@ -60,6 +62,9 @@ def test_builder_rejects_unclosed_or_unsafe_manifest_inputs(tmp_path, mutation: 
         target = source / "pdd/sync_core" / module
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((ROOT / "pdd/sync_core" / module).read_bytes())
+    for data in manifest["data"]:
+        target = source / "pdd/sync_core" / data
+        target.write_bytes((ROOT / "pdd/sync_core" / data).read_bytes())
     (source / ".pdd/global-sync").mkdir(parents=True)
     manifest_path = source / ".pdd/global-sync/standalone-checker-modules.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -72,12 +77,16 @@ def test_builder_rejects_unclosed_or_unsafe_manifest_inputs(tmp_path, mutation: 
         (source / "pdd/sync_core/unlisted.py").write_text("VALUE = 1\n")
         manifest["modules"].append("unlisted.py")
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    else:
+    elif mutation == "symlink":
         target = source / "pdd/sync_core" / manifest["modules"][0]
         copied = source / "copied.py"
         copied.write_bytes(target.read_bytes())
         target.unlink()
         target.symlink_to(copied)
+    else:
+        linked_source = tmp_path / "linked-source"
+        linked_source.symlink_to(source, target_is_directory=True)
+        source = linked_source
 
     with pytest.raises(StandalonePackageError):
         build_standalone_wheel(source, tmp_path / "wheel", version="1.0.0")
