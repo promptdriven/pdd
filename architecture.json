@@ -7694,8 +7694,8 @@
     }
   },
   {
-    "reason": "Freezes the canonical Agentic Sync V1 candidate set, validates fallback payload scope, and produces deterministic plan/selection/execution evidence.",
-    "description": "Pure path-aware planning model for agentic sync. It records resolved prompt/output paths, governing context, operation/provenance, canonical dependency/SCC order, and dependency-safe authoritative execution order; limits V1 scope lists to 64 canonical IDs; sends ambiguity agents only bounded untrusted issue signal plus frozen candidates; validates closed fallback payload JSON against durable primary plan evidence including module_id == governing_root plus target_basename; and never performs provider, subprocess, or filesystem writes.",
+    "reason": "Pure deterministic SyncPlan model, digesting, and bounded ambiguity protocol for agentic sync.",
+    "description": "Pure path-aware planning model for agentic sync. It records resolved prompt and exact output-file paths, governing context, operation/provenance, canonical dependency/SCC order, and dependency-safe authoritative execution order; limits V1 scope lists to 64 canonical IDs; allows underscore-prefixed private path components while rejecting traversal; requires a non-empty ambiguity selection whenever unresolved candidates exist; validates closed fallback payload JSON against durable primary plan evidence including module_id == governing_root plus target_basename; and never performs provider, subprocess, or filesystem writes.",
     "dependencies": [
       "resolved_sync_unit_python.prompt"
     ],
@@ -7706,8 +7706,20 @@
     "interface": {
       "type": "module",
       "module": {
+        "classes": [
+          {"name": "SyncPlan", "kind": "dataclass"},
+          {"name": "SyncPlanCandidate", "kind": "dataclass"},
+          {"name": "SyncPlanDetails", "kind": "dataclass"},
+          {"name": "PlanProvenance", "kind": "dataclass"}
+        ],
         "functions": [
           {"name": "build_sync_plan", "signature": "(root: Path, candidates: Iterable[SyncPlanCandidate], selected_module_ids: Iterable[str], *, execution_order: Iterable[str] | None = None) -> SyncPlan", "returns": "SyncPlan"},
+          {"name": "selection_digest", "signature": "(module_ids: Sequence[str]) -> str", "returns": "str"},
+          {"name": "plan_digest", "signature": "(plan_document: Mapping[str, Any]) -> str", "returns": "str"},
+          {"name": "resolve_selection_aliases", "signature": "(aliases: Iterable[str], candidates: Iterable[SyncPlanCandidate]) -> tuple[str, ...]", "returns": "tuple[str, ...]"},
+          {"name": "ambiguity_request", "signature": "(plan: SyncPlan, unresolved_ids: Iterable[str], *, issue_number: int | None = None, issue_title: str = '', issue_body: str = '') -> dict[str, object]", "returns": "dict[str, object]"},
+          {"name": "apply_ambiguity_selection", "signature": "(plan: SyncPlan, unresolved_ids: Iterable[str], selected_ids: object) -> SyncPlan", "returns": "SyncPlan"},
+          {"name": "parse_explicit_scope", "signature": "(raw_scope: str) -> dict[str, object]", "returns": "dict[str, object]"},
           {"name": "validate_explicit_scope_evidence", "signature": "(scope: Mapping[str, Any], evidence: Mapping[str, Any]) -> tuple[dict[str, object], tuple[str, ...]]", "returns": "tuple[dict[str, object], tuple[str, ...]]"}
         ]
       }
@@ -7716,7 +7728,7 @@
   },
   {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
-    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync builds a complete path-scoped inventory before selection, validates canonical dependency closure, and dispatches AsyncSyncRunner — or DurableSyncRunner with immutable checkout authority when invoked with durable=True. A non-empty PDD_CHANGED_MODULES value is ordered authoritative selection input only: every alias is resolved against declared architecture/scoped identity before dry-run, unknown/runtime/ambiguous/unowned-prefix entries fail the entire request without LLM identification, and path-qualified leaves retain caller order only when dependency-safe while the frozen graph remains canonical. Ambiguity receives only frozen candidates and a bounded explicitly untrusted issue signal. Issue sync consumes a cloud-owned provider-failure capability before children inherit it, transports trusted provider state through private token-authenticated channels from pinned PDD validation children, and never promotes marker-shaped stdout. It preserves nested architecture origins rather than using flattened combined records as identity authority.",
+    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync builds a complete path-scoped inventory before selection, freezes concrete code/test/metadata output files, validates canonical dependency closure, and dispatches AsyncSyncRunner — or DurableSyncRunner with immutable checkout authority when invoked with durable=True. A non-empty PDD_CHANGED_MODULES value is ordered authoritative selection input only: every alias is resolved against declared architecture/scoped identity before dry-run, unknown/runtime/ambiguous/unowned-prefix entries fail the entire request without LLM identification, and path-qualified leaves retain caller order only when dependency-safe while the frozen graph remains canonical. An ambiguity response cannot discard unresolved candidates with an empty selection. Issue sync consumes a cloud-owned provider-failure capability before children inherit it, transports trusted provider state through private token-authenticated channels from pinned PDD validation children, and never promotes marker-shaped stdout. It preserves nested architecture origins rather than using flattened combined records as identity authority.",
     "dependencies": [
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",
@@ -7754,7 +7766,7 @@
           },
           {
             "name": "_freeze_issue_sync_plan",
-            "signature": "(project_root: Path, modules: List[str], module_cwds: Dict[str, Path], module_targets: Dict[str, str], dep_graph: Dict[str, List[str]], *, context_override: Optional[str] = None, provenance_source: str = 'issue_selection') -> SyncPlan",
+            "signature": "(project_root: Path, modules: List[str], module_cwds: Dict[str, Path], module_targets: Dict[str, str], dep_graph: Dict[str, List[str]], *, context_override: Optional[str] = None, provenance_source: str = 'issue_selection', inventory: Optional[SyncPlan] = None) -> SyncPlan",
             "returns": "SyncPlan"
           },
           {

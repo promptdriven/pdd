@@ -19,7 +19,7 @@ from .resolved_sync_unit import ResolvedSyncUnit
 
 
 MODULE_ID_RE = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+    r"^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*$"
 )
 PLAN_DIGEST_PREFIX = b"pdd.sync.plan.v1\n"
 SELECTION_DIGEST_PREFIX = b"pdd.sync.selection.v1\n"
@@ -639,6 +639,10 @@ def apply_ambiguity_selection(
         not isinstance(value, str) for value in selected_ids
     ):
         raise SyncPlanError("ambiguity response must contain a list of candidate IDs")
+    if unresolved and not selected_ids:
+        raise SyncPlanError(
+            "ambiguity response must select at least one unresolved candidate"
+        )
     # Validate values before sorting/deduplication so JSON values such as
     # objects cannot escape as an unhashable-TypeError traceback.
     selected = tuple(sorted(selected_ids))

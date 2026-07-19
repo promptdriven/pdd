@@ -40,11 +40,13 @@ Selection precedence is deterministic:
    protocol contains at most 64 candidate IDs, compact metadata, and an
    explicitly untrusted size-bounded issue number/title/body excerpt. It never
    includes comments, repository content, architecture, commands, or unbounded
-   issue text. The sole accepted response field is a sorted, unique
-   `selected_module_ids` subset; commands, paths, prose, dependency edits, and
-   invented IDs fail closed.
+   issue text. The sole accepted response field is a sorted, unique,
+   non-empty `selected_module_ids` subset whenever unresolved candidates were
+   presented; commands, paths, prose, dependency edits, invented IDs, and an
+   empty attempt to discard the unresolved set fail closed.
 
-The plan records governing root/context, prompt and output paths, reason,
+The plan records governing root/context, prompt and exact output file paths,
+reason,
 operation, dependency/SCC order, confidence, and provenance. Required
 dependencies are retained transitively; a candidate edge outside the frozen set
 is an error, not an omitted scheduling hint. Both normal and fallback lists are
@@ -60,6 +62,7 @@ the immutable attempt kind, plan digest, selection digest, ordered graph, and
 checkout identity; only an exact binding match may resume a module on a fresh
 clone. Each child unit is relocated into its own worktree before it runs. Before
 checkpoint staging, durable mode examines tracked and untracked changes and
-permits only the selected candidate's frozen `output_paths` plus target-scoped
+permits only the selected candidate's frozen concrete code/test/metadata
+`output_paths` plus target-scoped
 `.pdd/meta/<target>_*.json`; an out-of-scope mutation fails rather than becoming
 an empty successful checkpoint.

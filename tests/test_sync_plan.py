@@ -85,11 +85,22 @@ def test_ambiguity_agent_protocol_is_bounded_and_rejects_invention(tmp_path: Pat
 
     with pytest.raises(SyncPlanError, match="invented or invalid"):
         apply_ambiguity_selection(plan, ["api/page", "web/page"], ["outside/module"])
+    with pytest.raises(SyncPlanError, match="at least one unresolved candidate"):
+        apply_ambiguity_selection(plan, ["api/page", "web/page"], [])
     selected = apply_ambiguity_selection(plan, ["api/page", "web/page"], ["web/page"])
     assert selected.selected_module_ids == ("web/page",)
     for malformed in ([{}], [None], [1], [True], ["api/page", "api/page"]):
         with pytest.raises(SyncPlanError):
             apply_ambiguity_selection(plan, ["api/page", "web/page"], malformed)
+
+
+def test_canonical_module_ids_allow_underscore_prefixed_components(tmp_path: Path) -> None:
+    """Private helper modules are valid identities without permitting traversal."""
+    candidate = _candidate(tmp_path, "pdd/_keyring_timeout")
+
+    assert canonical_module_id(tmp_path, candidate.unit) == "pdd/_keyring_timeout"
+    with pytest.raises(SyncPlanError, match="not canonical"):
+        build_sync_plan(tmp_path, [_candidate(tmp_path, ".private")], [])
 
 
 def test_ambiguity_issue_signal_is_bounded_untrusted_and_issue_specific(tmp_path: Path) -> None:

@@ -201,6 +201,62 @@ def test_issue_inventory_reads_full_graph_before_selection_and_records_operation
     assert mock_operation.call_count == 65
 
 
+def test_issue_inventory_freezes_concrete_private_module_outputs(
+    tmp_path: Path,
+) -> None:
+    """The durable plan names child files, never their containing directories."""
+    (tmp_path / ".pddrc").write_text(
+        """version: \"1.0\"
+contexts:
+  default:
+    defaults:
+      generate_output_path: \"./\"
+      test_output_path: \"tests/\"
+      default_language: \"python\"
+  pdd_cli:
+    paths: [\"pdd/**\", \"*.py\", \"prompts/**\", \"tests/**\"]
+    defaults:
+      generate_output_path: \"pdd\"
+      test_output_path: \"tests\"
+      prompts_dir: \"prompts\"
+      default_language: \"python\"
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "pdd").mkdir()
+    (tmp_path / "tests").mkdir()
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "_keyring_timeout_python.prompt").write_text(
+        "prompt", encoding="utf-8"
+    )
+    architecture_path = tmp_path / "architecture.json"
+    entry = {
+        "filename": "_keyring_timeout_python.prompt",
+        "filepath": "pdd/_keyring_timeout.py",
+        "dependencies": [],
+    }
+    architecture_path.write_text(json.dumps([entry]), encoding="utf-8")
+    scoped = _global_module(
+        "_keyring_timeout", tmp_path, entry=entry
+    )
+
+    with patch(
+        "pdd.agentic_sync._run_readonly_sync_determine_in_cwd",
+        return_value=SimpleNamespace(operation="verify"),
+    ):
+        inventory = _build_issue_candidate_inventory(
+            tmp_path, [entry], architecture_path, scoped_modules=[scoped]
+        )
+
+    assert inventory.candidates[0].module_id == "_keyring_timeout"
+    assert inventory.candidates[0].output_paths == (
+        tmp_path / ".pdd" / "meta" / "_keyring_timeout_python.json",
+        tmp_path / "pdd" / "_keyring_timeout.py",
+        tmp_path / "tests" / "test__keyring_timeout.py",
+    )
+
+
 def test_issue_inventory_preserves_real_nested_architecture_origins(
     tmp_path: Path,
 ) -> None:
@@ -3849,7 +3905,7 @@ class TestRuntimeLlmTemplateNoop:
         mock_dry_run,
         mock_runner_cls,
     ):
-        """An explicit empty closed ambiguity selection is a no-op."""
+        """An empty selection cannot silently discard unresolved candidates."""
         issue_data = {"title": "Test", "body": "Real change", "comments_url": ""}
         mock_gh_cmd.return_value = (True, json.dumps(issue_data))
         mock_load_arch.return_value = (
@@ -3867,8 +3923,10 @@ class TestRuntimeLlmTemplateNoop:
             "https://github.com/owner/repo/issues/1396", quiet=True
         )
 
-        assert success is True
-        assert "already synced" in msg.lower()
+        assert success is False
+        assert msg == "Ambiguity selection must be a closed candidate-ID JSON response"
+        assert cost == pytest.approx(0.04)
+        assert model == "anthropic"
         mock_dry_run.assert_not_called()
         mock_runner_cls.assert_not_called()
 

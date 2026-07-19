@@ -55,6 +55,11 @@ excerpt; it must reject invented selections before writes.
    between SCCs, while members of one SCC retain deterministic/requested order
    and remain contiguous. Execution order is validated, digested, persisted,
    and used by normal/durable resume.
+7. Canonical module-ID path components may begin with `_` for private helper
+   modules, but must still reject dot-prefixed components, traversal, duplicate
+   separators, and non-canonical relative paths. When `unresolved_ids` is
+   non-empty, an ambiguity response with an empty `selected_module_ids` list is
+   invalid: it must fail closed before any dry-run or child execution.
 
 % Deliverables
 - Code: `pdd/sync_plan.py`

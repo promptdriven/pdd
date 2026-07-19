@@ -420,6 +420,49 @@ def test_metadata_allowlist_rejects_nested_pdd_state_and_wrong_meta_scope(tmp_pa
     ]
 
 
+def test_durable_allowlist_accepts_concrete_private_module_outputs_only(tmp_path: Path):
+    """A frozen production-shaped plan accepts code, test, and metadata files."""
+    repo = _init_repo_with_remote(tmp_path)
+    target = "_keyring_timeout"
+    candidate = SyncPlanCandidate(
+        module_id=target,
+        unit=resolve_sync_unit(target, target, repo),
+        output_paths=(
+            repo / "pdd" / "_keyring_timeout.py",
+            repo / "tests" / "test__keyring_timeout.py",
+            repo / ".pdd" / "meta" / "_keyring_timeout_python.json",
+        ),
+        details=SyncPlanDetails(
+            changed_reason="production inventory",
+            expected_operation="generate",
+            confidence="high",
+            provenance=(PlanProvenance("test", target),),
+        ),
+    )
+    plan = build_sync_plan(repo, [candidate], [target])
+    runner = _runner(
+        repo,
+        basenames=[target],
+        sync_options={
+            "sync_plan": plan.to_dict(),
+            "sync_plan_digest": plan.sync_plan_digest,
+            "selection_digest": plan.selection_digest,
+            "execution_selected_module_ids": [target],
+            "execution_dependency_order": [target],
+        },
+    )
+
+    assert runner._out_of_scope_output_paths(
+        target,
+        [
+            "pdd/_keyring_timeout.py",
+            "tests/test__keyring_timeout.py",
+            ".pdd/meta/_keyring_timeout_python.json",
+            "pdd/unrelated.py",
+        ],
+    ) == ["pdd/unrelated.py"]
+
+
 def test_unsafe_staged_paths_rejects_sensitive_artifacts(tmp_path: Path):
     repo = _init_repo_with_remote(tmp_path)
     runner = _runner(repo)

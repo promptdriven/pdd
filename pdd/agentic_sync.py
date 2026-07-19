@@ -61,7 +61,9 @@ from .construct_paths import (
     _find_pddrc_file,
     _load_pddrc_config,
 )
+from .generate_output_paths import generate_output_paths
 from .json_atomic import atomic_write_json
+from .language_extensions import bundled_extension
 from .load_prompt_template import load_prompt_template
 from .resolved_sync_unit import ResolvedSyncUnit, resolve_sync_unit
 from .sync_plan import (
@@ -2517,6 +2519,147 @@ def _path_is_within_root(path: Optional[Path], root: Path) -> bool:
         return False
 
 
+def _architecture_output_path(
+    entry: Optional[Mapping[str, Any]], architecture_path: Optional[Path],
+) -> Optional[Path]:
+    """Return an architecture-declared source output without guessing its root."""
+    if not isinstance(entry, Mapping) or architecture_path is None:
+        return None
+    filepath = entry.get("filepath")
+    if not isinstance(filepath, str) or not filepath.strip():
+        return None
+    output_path = Path(filepath)
+    return output_path if output_path.is_absolute() else architecture_path.parent / output_path
+
+
+def _output_context_defaults(
+    unit: ResolvedSyncUnit, code_output_path: Optional[Path],
+) -> tuple[dict[str, Any], Path]:
+    """Resolve sync output defaults from the same local config that owns a unit.
+
+    ``ResolvedSyncUnit`` intentionally leaves ``context`` unset for default
+    resolution.  A frozen output allowlist still needs the concrete context that
+    a child discovers from its declared source/prompt layout, so prefer the
+    architecture output path and then the canonical scheduler key before the
+    bare target.  This does not change child invocation context.
+    """
+    fallback = {
+        "generate_output_path": str(unit.cwd) + os.sep,
+        "test_output_path": str(unit.cwd) + os.sep,
+    }
+    if unit.pddrc_path is None:
+        return fallback, unit.cwd
+    try:
+        config = _load_pddrc_config(unit.pddrc_path)
+    except Exception:
+        return fallback, unit.cwd
+    contexts = config.get("contexts", {})
+    if not isinstance(contexts, dict):
+        return fallback, unit.cwd
+    candidates: list[str] = []
+    if unit.context:
+        candidates.append(unit.context)
+    if code_output_path is not None:
+        try:
+            candidates.append(
+                code_output_path.resolve().relative_to(
+                    unit.pddrc_path.parent.resolve()
+                ).as_posix()
+            )
+        except (OSError, ValueError):
+            pass
+    candidates.extend((unit.key, unit.target_basename))
+    context_name: Optional[str] = None
+    for candidate in candidates:
+        try:
+            detected = _detect_context_from_basename(
+                candidate, config, pddrc_path=unit.pddrc_path
+            )
+        except Exception:
+            detected = None
+        if detected in contexts:
+            context_name = detected
+            break
+    if context_name is None and "default" in contexts:
+        context_name = "default"
+    context = contexts.get(context_name or "", {})
+    defaults = context.get("defaults", {}) if isinstance(context, dict) else {}
+    return (
+        dict(defaults) if isinstance(defaults, dict) and defaults else fallback,
+        unit.pddrc_path.parent,
+    )
+
+
+def _concrete_sync_output_paths(
+    unit: ResolvedSyncUnit,
+    language_paths: Mapping[str, Path],
+    *,
+    code_output_path: Optional[Path] = None,
+) -> tuple[Path, ...]:
+    """Return the exact generated code, test, and metadata files for a unit.
+
+    Durable sync validates a frozen plan as an exact-file allowlist.  Directory
+    roots (``pdd/``, ``tests/``, and ``.pdd/meta/``) therefore cannot represent
+    the output contract: they both fail to authorize the real child outputs and
+    would over-authorize arbitrary siblings.  Architecture remains the source
+    of truth for code when it declares a filepath; context defaults determine
+    the matching test filename, and PDD's conventional per-language metadata is
+    listed explicitly.
+    """
+    defaults, config_base = _output_context_defaults(unit, code_output_path)
+    outputs: set[Path] = set()
+    safe_target = unit.target_basename.replace("/", "_").replace("\\", "_")
+    meta_path = unit.meta_path or unit.cwd / ".pdd" / "meta"
+    for language in sorted(language_paths):
+        extension = bundled_extension(language)
+        if extension is None:
+            raise SyncPlanError(
+                f"unable to determine output extension for {unit.key!r} language {language!r}"
+            )
+        generated = generate_output_paths(
+            "sync",
+            {},
+            unit.target_basename,
+            language,
+            extension,
+            context_config=defaults,
+            config_base_dir=str(config_base),
+            path_resolution_mode="config_base",
+        )
+        code_path = Path(generated["generate_output_path"])
+        if code_output_path is not None and (
+            not code_output_path.suffix or code_output_path.suffix == code_path.suffix
+        ):
+            code_path = code_output_path
+        outputs.update((
+            code_path,
+            Path(generated["test_output_path"]),
+            meta_path / f"{safe_target}_{language.lower()}.json",
+        ))
+    return tuple(sorted(outputs))
+
+
+def _candidate_architecture_output_path(
+    key: str,
+    entries: List[Dict[str, Any]],
+    architecture_path: Optional[Path],
+    scoped: Optional[GlobalSyncModule],
+) -> Optional[Path]:
+    """Find the declared code output associated with one inventory identity."""
+    if scoped is not None:
+        return _architecture_output_path(scoped.entry, scoped.architecture_path)
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        candidate_key = (
+            _basename_from_architecture_filepath(entry.get("filepath", ""))
+            or _basename_from_architecture_filename(entry.get("filename", ""))
+        )
+        if candidate_key == key:
+            return _architecture_output_path(entry, architecture_path)
+    return None
+
+
 def _validated_checkout_identity(project_root: Path) -> Optional[str]:
     """Return the exact checked-out SHA, or no resume authority at all."""
     try:
@@ -2661,9 +2804,13 @@ def _build_issue_candidate_inventory(
         if module_id in ids_by_key.values():
             raise SyncPlanError(f"duplicate canonical candidate ID: {module_id}")
         all_paths = tuple(sorted(Path(path) for path in language_paths.values()))
-        generated = tuple(path for path in (
-            unit.generate_output_path, unit.test_output_path, unit.meta_path,
-        ) if path is not None)
+        generated = _concrete_sync_output_paths(
+            unit,
+            language_paths,
+            code_output_path=_candidate_architecture_output_path(
+                key, entries, unit_architecture_path, scoped
+            ),
+        )
         for path in (*all_paths, *generated):
             if not _path_is_within_root(path, root):
                 raise SyncPlanError(f"candidate path escapes governing root for {key!r}: {path}")
@@ -2782,14 +2929,9 @@ def _freeze_issue_sync_plan(
         for prompt_path in prompt_paths:
             if not _path_is_within_root(prompt_path, project_root):
                 raise SyncPlanError(f"prompt path escapes governing root for {key!r}: {prompt_path}")
-        output_paths = tuple(
-            path
-            for path in (
-                unit.generate_output_path,
-                unit.test_output_path,
-                unit.meta_path,
-            )
-            if path is not None
+        output_paths = _concrete_sync_output_paths(
+            unit,
+            language_paths,
         )
         for output_path in output_paths:
             if not _path_is_within_root(output_path, project_root):
