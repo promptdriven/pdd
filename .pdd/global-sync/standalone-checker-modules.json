@@ -7,7 +7,14 @@
     "PyYAML ==6.0.3"
   ],
   "data": [
-    "pytest_probe.py"
+    {
+      "source": "pdd/data/language_format.csv",
+      "destination": "data/language_format.csv"
+    },
+    {
+      "source": "pdd/sync_core/pytest_probe.py",
+      "destination": "pytest_probe.py"
+    }
   ],
   "distribution": "pdd-sync-checker",
   "entry_point": "pdd_sync_checker.checker_cli:main",

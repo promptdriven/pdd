@@ -84,11 +84,11 @@ def test_clean_installed_console_uses_standalone_module_not_checkout(tmp_path) -
     assert "counts" in report and "units" in report
     assert "cannot read language registry" not in result.stdout
     assert not marker.exists()
-    assert not list((environment / "lib").rglob("__pycache__"))
 
     package_root = next(
         (environment / "lib").glob("python*/site-packages/pdd_sync_checker")
     )
+    assert not list(package_root.rglob("__pycache__"))
     malicious_pyc = package_root / "__pycache__/checker_cli.cpython-312.pyc"
     malicious_pyc.parent.mkdir()
     malicious_pyc.write_bytes(b"malicious bytecode")

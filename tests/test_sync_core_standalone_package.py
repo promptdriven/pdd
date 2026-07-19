@@ -62,7 +62,11 @@ def _rerecorded_mutation(
         manifest = next(
             name for name in contents if name.endswith("standalone-checker-modules.json")
         )
-        contents[manifest] += b" "
+        payload = json.loads(contents[manifest])
+        payload["entry_point"] = "attacker.checker:main"
+        contents[manifest] = (
+            json.dumps(payload, indent=2).encode("utf-8") + b"\n"
+        )
     elif mutation == "dist-info":
         original = record_name.split("/", 1)[0]
         replacement = "attacker-1.0.0.dist-info"
@@ -166,7 +170,9 @@ def test_builder_rejects_unclosed_or_unsafe_manifest_inputs(tmp_path, mutation: 
         target.write_bytes((ROOT / data_source).read_bytes())
     (source / ".pdd/global-sync").mkdir(parents=True)
     manifest_path = source / ".pdd/global-sync/standalone-checker-modules.json"
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
 
     if mutation == "absolute-import":
         (source / "pdd/sync_core/checker_cli.py").write_text("import pdd.cli\n")
@@ -175,7 +181,9 @@ def test_builder_rejects_unclosed_or_unsafe_manifest_inputs(tmp_path, mutation: 
     elif mutation == "extra":
         (source / "pdd/sync_core/unlisted.py").write_text("VALUE = 1\n")
         manifest["modules"].append("unlisted.py")
-        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
     elif mutation == "symlink":
         target = source / "pdd/sync_core" / manifest["modules"][0]
         copied = source / "copied.py"
@@ -275,7 +283,9 @@ def test_runtime_lock_is_generated_and_validated_from_installed_checker_bytes(tm
         validate_installed_checker_runtime_lock(lock, wheel, package)
 
 
-@pytest.mark.parametrize("mutation", ["pyc", "nonregular"])
+@pytest.mark.parametrize(
+    "mutation", ["pyc", "unlisted", "symlink", "nonregular"]
+)
 def test_runtime_lock_rejects_unlisted_installed_entry(
     tmp_path, mutation: str
 ) -> None:
@@ -302,6 +312,14 @@ def test_runtime_lock_rejects_unlisted_installed_entry(
         malicious = package_root / "__pycache__/checker_cli.cpython-312.pyc"
         malicious.parent.mkdir()
         malicious.write_bytes(b"malicious bytecode")
+    elif mutation == "unlisted":
+        (package_root / "malicious.txt").write_text(
+            "unlisted", encoding="utf-8"
+        )
+    elif mutation == "symlink":
+        (package_root / "malicious").symlink_to(
+            package_root / "checker_cli.py"
+        )
     else:
         os.mkfifo(package_root / "malicious")
 

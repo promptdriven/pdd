@@ -5,8 +5,13 @@ from __future__ import annotations
 
 import ast
 import base64
+import contextlib
+from email import policy
+from email.parser import BytesParser
 import hashlib
+import io
 import json
+import os
 import re
 import stat
 from pathlib import Path, PurePosixPath
@@ -30,43 +35,366 @@ _PACKAGE = "pdd_sync_checker"
 _DISTRIBUTION = "pdd-sync-checker"
 _ENTRY_POINT = "pdd_sync_checker.checker_cli:main"
 _EMBEDDED_MANIFEST = f"{_PACKAGE}/standalone-checker-modules.json"
+_INIT_BYTES = b'"""Standalone global-sync checker namespace."""\n'
+_WHEEL_BYTES = (
+    b"Wheel-Version: 1.0\nGenerator: pdd-standalone-checker\n"
+    b"Root-Is-Purelib: true\nTag: py3-none-any\n"
+)
+_DATA_MAPPINGS = (
+    {
+        "source": "pdd/data/language_format.csv",
+        "destination": "data/language_format.csv",
+    },
+    {
+        "source": "pdd/sync_core/pytest_probe.py",
+        "destination": "pytest_probe.py",
+    },
+)
+_DATA_KEYS = frozenset({"source", "destination"})
 _MODULE_NAME = re.compile(r"[a-z][a-z0-9_]*\.py")
+_DATA_PATH = re.compile(r"[a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)*")
 _DEPENDENCY = re.compile(r"[A-Za-z][A-Za-z0-9-]* (?:==|>=)[^ ]+(?:,<[0-9]+)?")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
+_DIRECTORY_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+)
+_FILE_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+_BOOTSTRAP_PYTHON = r"""import base64
+import hashlib
+import importlib
+import importlib.util
+import io
+import os
+import re
+import stat
+import sys
+import zipfile
+from pathlib import Path, PurePosixPath
+
+def fail(message):
+    raise RuntimeError("standalone checker bootstrap: " + message)
+
+def record_hash(content):
+    return base64.urlsafe_b64encode(
+        hashlib.sha256(content).digest()
+    ).rstrip(b"=").decode("ascii")
+
+def read_regular(path, label, directory=None):
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory,
+        )
+    except OSError as exc:
+        fail(label + " is unsafe: " + str(exc))
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            fail(label + " is not regular")
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        os.close(descriptor)
+
+def open_directory(parent, name):
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent,
+        )
+    except OSError as exc:
+        fail("installed package directory is unsafe: " + str(exc))
+    if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        fail("installed package directory is not a directory")
+    return descriptor
+
+launcher = Path(sys.argv[1])
+if not launcher.is_absolute():
+    fail("entrypoint path must be absolute")
+arguments = [str(launcher), *sys.argv[2:]]
+candidate_cwd = os.getcwd()
+venv = launcher.parent.parent
+os.chdir(venv)
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+sys.prefix = str(venv)
+sys.exec_prefix = str(venv)
+purelib = (
+    venv / "lib" / ("python%d.%d" % sys.version_info[:2]) / "site-packages"
+)
+package_root = purelib / "pdd_sync_checker"
+wheel_value = os.environ.get("PDD_RELEASED_CHECKER_WHEEL_PATH")
+expected_digest = os.environ.get("PDD_RELEASED_CHECKER_WHEEL_SHA256", "")
+if not wheel_value or re.fullmatch("[0-9a-f]{64}", expected_digest) is None:
+    fail("released wheel provenance is required")
+wheel_path = Path(wheel_value)
+if not wheel_path.is_absolute():
+    fail("released wheel path must be absolute")
+wheel_bytes = read_regular(wheel_path, "released wheel")
+if hashlib.sha256(wheel_bytes).hexdigest() != expected_digest:
+    fail("released wheel digest does not match")
+
+try:
+    with zipfile.ZipFile(io.BytesIO(wheel_bytes)) as archive:
+        infos = archive.infolist()
+        names = [item.filename for item in infos]
+        if len(names) != len(set(names)):
+            fail("released wheel contains duplicate members")
+        for item in infos:
+            path = PurePosixPath(item.filename)
+            mode = item.external_attr >> 16
+            if (
+                item.is_dir()
+                or not item.filename
+                or "\\" in item.filename
+                or path.is_absolute()
+                or ".." in path.parts
+                or not stat.S_ISREG(mode)
+            ):
+                fail("released wheel contains an unsafe member")
+        record_names = [
+            name for name in names if name.endswith(".dist-info/RECORD")
+        ]
+        if len(record_names) != 1:
+            fail("released wheel RECORD is invalid")
+        record_name = record_names[0]
+        rows = {}
+        for line in archive.read(record_name).decode("ascii").splitlines():
+            columns = line.split(",")
+            if len(columns) != 3 or not columns[0] or columns[0] in rows:
+                fail("released wheel RECORD is malformed")
+            rows[columns[0]] = (columns[1], columns[2])
+        if set(rows) != set(names):
+            fail("released wheel RECORD is not closed")
+        for name in names:
+            encoded, size = rows[name]
+            if name == record_name:
+                if encoded or size:
+                    fail("released wheel RECORD self-entry is invalid")
+            else:
+                content = archive.read(name)
+                if (
+                    encoded != "sha256=" + record_hash(content)
+                    or size != str(len(content))
+                ):
+                    fail("released wheel RECORD does not match bytes")
+        expected = {
+            PurePosixPath(name).relative_to("pdd_sync_checker").as_posix():
+            archive.read(name)
+            for name in names
+            if name.startswith("pdd_sync_checker/")
+        }
+        bootstrap_names = [
+            name
+            for name in names
+            if name.endswith(".data/scripts/pdd-sync-checker")
+        ]
+        if (
+            len(bootstrap_names) != 1
+            or read_regular(launcher, "installed bootstrap")
+            != archive.read(bootstrap_names[0])
+        ):
+            fail("installed bootstrap differs from released wheel")
+except (OSError, UnicodeDecodeError, zipfile.BadZipFile, KeyError) as exc:
+    fail("released wheel cannot be inspected: " + str(exc))
+if not expected:
+    fail("released wheel contains no checker package")
+
+root_fd = os.open(
+    venv,
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0),
+)
+opened = [root_fd]
+try:
+    for component in (
+        "lib",
+        "python%d.%d" % sys.version_info[:2],
+        "site-packages",
+        "pdd_sync_checker",
+    ):
+        opened.append(open_directory(opened[-1], component))
+    package_fd = opened[-1]
+    expected_directories = {
+        PurePosixPath(*PurePosixPath(name).parts[:index]).as_posix()
+        for name in expected
+        for index in range(1, len(PurePosixPath(name).parts))
+    }
+    actual = set()
+
+    def walk(descriptor, prefix=""):
+        with os.scandir(descriptor) as entries:
+            for entry in entries:
+                relative = prefix + entry.name
+                mode = entry.stat(follow_symlinks=False).st_mode
+                if stat.S_ISDIR(mode):
+                    if relative not in expected_directories:
+                        fail("installed checker has an unlisted directory: " + relative)
+                    child = open_directory(descriptor, entry.name)
+                    try:
+                        walk(child, relative + "/")
+                    finally:
+                        os.close(child)
+                elif stat.S_ISREG(mode):
+                    actual.add(relative)
+                    content = read_regular(
+                        entry.name,
+                        "installed checker member " + relative,
+                        descriptor,
+                    )
+                    if relative not in expected or content != expected[relative]:
+                        fail("installed checker closure differs from wheel")
+                else:
+                    fail("installed checker has a nonregular entry: " + relative)
+
+    walk(package_fd)
+    if actual != set(expected):
+        fail("installed checker closure differs from wheel")
+finally:
+    for descriptor in reversed(opened):
+        os.close(descriptor)
+
+stdlib_paths = [
+    value
+    for value in sys.path
+    if value and Path(value).resolve() not in {Path(candidate_cwd), launcher.parent}
+]
+sys.path[:] = [str(purelib), *stdlib_paths]
+init_path = package_root / "__init__.py"
+spec = importlib.util.spec_from_file_location(
+    "pdd_sync_checker",
+    init_path,
+    submodule_search_locations=[str(package_root)],
+)
+if spec is None or spec.loader is None:
+    fail("installed checker package cannot be loaded")
+package = importlib.util.module_from_spec(spec)
+sys.modules["pdd_sync_checker"] = package
+spec.loader.exec_module(package)
+checker = importlib.import_module("pdd_sync_checker.checker_cli")
+os.chdir(candidate_cwd)
+sys.argv = arguments
+raise SystemExit(checker.main(sys.argv[1:]))
+"""
+_BOOTSTRAP_SCRIPT = (
+    "#!/bin/sh\n"
+    "case \"$0\" in\n"
+    "  /*) ;;\n"
+    "  *) echo 'pdd-sync-checker requires an absolute executable path' >&2; exit 126 ;;\n"
+    "esac\n"
+    "exec \"${0%/*}/python\" -I -B -S - \"$0\" \"$@\" <<'PDD_SYNC_BOOTSTRAP'\n"
+    f"{_BOOTSTRAP_PYTHON}"
+    "PDD_SYNC_BOOTSTRAP\n"
+).encode("ascii")
 
 
 def _error(message: str) -> StandalonePackageError:
     return StandalonePackageError(f"standalone checker package: {message}")
 
 
-def _regular(path: Path, label: str) -> Path:
-    if path.is_symlink() or not path.is_file():
-        raise _error(f"{label} must be a regular file")
-    return path
+@contextlib.contextmanager
+def _open_directory_path(path: Path, label: str):
+    """Open every absolute directory component without following links."""
+    absolute = Path(path).expanduser().absolute()
+    descriptors: list[int] = []
+    try:
+        descriptor = os.open("/", _DIRECTORY_FLAGS)
+        descriptors.append(descriptor)
+        for component in absolute.parts[1:]:
+            descriptor = os.open(
+                component, _DIRECTORY_FLAGS, dir_fd=descriptor
+            )
+            descriptors.append(descriptor)
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise _error(f"{label} is not a directory")
+        yield descriptor
+    except OSError as exc:
+        raise _error(f"{label} contains an unsafe path component") from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _read_relative_regular(root: Path, relative: PurePosixPath, label: str) -> bytes:
+    """Read one regular descendant through stable no-follow descriptors."""
+    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+        raise _error(f"{label} path is unsafe")
+    descriptors: list[int] = []
+    file_descriptor: int | None = None
+    try:
+        with _open_directory_path(root, "repository root") as root_descriptor:
+            descriptor = os.dup(root_descriptor)
+            descriptors.append(descriptor)
+            for component in relative.parts[:-1]:
+                descriptor = os.open(
+                    component, _DIRECTORY_FLAGS, dir_fd=descriptor
+                )
+                descriptors.append(descriptor)
+            file_descriptor = os.open(
+                relative.parts[-1],
+                _FILE_FLAGS,
+                dir_fd=descriptor,
+            )
+            if not stat.S_ISREG(os.fstat(file_descriptor).st_mode):
+                raise _error(f"{label} must be a regular file")
+            with os.fdopen(file_descriptor, "rb") as handle:
+                file_descriptor = None
+                return handle.read()
+    except OSError as exc:
+        raise _error(f"{label} must be a regular file") from exc
+    finally:
+        if file_descriptor is not None:
+            os.close(file_descriptor)
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _read_regular_path(path: Path, label: str) -> bytes:
+    absolute = Path(path).expanduser().absolute()
+    return _read_relative_regular(
+        absolute.parent, PurePosixPath(absolute.name), label
+    )
 
 
 def _repository_root(root: Path) -> Path:
-    """Return a lexical repository root only when no supplied path component is linked."""
+    """Return a lexical repository root only when every component is a directory."""
     repository = Path(root).expanduser().absolute()
-    if not repository.is_dir() or any(
-        component.is_symlink() for component in (repository, *repository.parents)
-    ):
-        raise _error("repository root is unsafe")
+    with _open_directory_path(repository, "repository root"):
+        pass
     return repository
+
+
+def _manifest_bytes(manifest: Mapping[str, Any]) -> bytes:
+    return (
+        json.dumps(manifest, indent=2, ensure_ascii=True).encode("utf-8")
+        + b"\n"
+    )
 
 
 def _parse_manifest(source: Path | bytes) -> dict[str, Any]:
     if isinstance(source, bytes):
+        encoded = source
         try:
             payload = json.loads(source.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise _error("module manifest is malformed") from exc
     else:
-        _regular(source, "module manifest")
+        encoded = _read_regular_path(source, "module manifest")
         try:
-            payload = json.loads(source.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            payload = json.loads(encoded.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise _error("module manifest is malformed") from exc
     if not isinstance(payload, dict) or set(payload) != _MANIFEST_KEYS:
         raise _error("module manifest schema is closed and malformed")
@@ -90,7 +418,18 @@ def _parse_manifest(source: Path | bytes) -> dict[str, Any]:
         )
         or modules != sorted(modules)
         or len(modules) != len(set(modules))
-        or data != ["pytest_probe.py"]
+        or not isinstance(data, list)
+        or data != list(_DATA_MAPPINGS)
+        or any(
+            not isinstance(item, dict)
+            or set(item) != _DATA_KEYS
+            or any(
+                not isinstance(value, str)
+                or _DATA_PATH.fullmatch(value) is None
+                for value in item.values()
+            )
+            for item in data
+        )
         or not isinstance(dependencies, list)
         or any(
             not isinstance(item, str) or _DEPENDENCY.fullmatch(item) is None
@@ -103,19 +442,27 @@ def _parse_manifest(source: Path | bytes) -> dict[str, Any]:
         or target != {"platform": "linux_x86_64_cp312", "glibc": "2.36"}
     ):
         raise _error("module manifest closure is malformed")
+    if encoded != _manifest_bytes(payload):
+        raise _error("module manifest is not canonical")
     return payload
 
 
 def load_standalone_manifest(root: Path) -> dict[str, Any]:
     """Load the one protected module/dependency authority from a safe checkout."""
     repository = _repository_root(root)
-    return _parse_manifest(repository.joinpath(*_MANIFEST_PATH.parts))
+    return _parse_manifest(
+        _read_relative_regular(
+            repository, _MANIFEST_PATH, "module manifest"
+        )
+    )
 
 
-def _source_path(root: Path, module: str) -> Path:
-    path = root / "pdd" / "sync_core" / module
-    _regular(path, f"module {module}")
-    return path
+def _source_bytes(root: Path, module: str) -> bytes:
+    return _read_relative_regular(
+        root,
+        PurePosixPath("pdd", "sync_core", module),
+        f"module {module}",
+    )
 
 
 def _relative_imports(module: str, source: bytes) -> set[str]:
@@ -148,7 +495,7 @@ def _checked_module_bytes(root: Path, manifest: Mapping[str, Any]) -> dict[str, 
     required = {"checker_cli.py", "released_checker.py", "standalone_package.py"}
     if not required <= modules:
         raise _error("module manifest omits a required entrypoint module")
-    source = {module: _source_path(root, module).read_bytes() for module in modules}
+    source = {module: _source_bytes(root, module) for module in modules}
     closure = set(required)
     pending = list(required)
     while pending:
@@ -175,12 +522,8 @@ def _dist_info(version: str) -> str:
     return f"pdd_sync_checker-{version}.dist-info"
 
 
-def _wheel_members(root: Path, manifest: Mapping[str, Any], version: str) -> dict[str, bytes]:
-    modules = _checked_module_bytes(root, manifest)
-    data = {item: _source_path(root, item).read_bytes() for item in manifest["data"]}
-    manifest_bytes = (root / _MANIFEST_PATH).read_bytes()
-    dist_info = _dist_info(version)
-    metadata = "\n".join(
+def _metadata_bytes(manifest: Mapping[str, Any], version: str) -> bytes:
+    return "\n".join(
         (
             "Metadata-Version: 2.1",
             f"Name: {manifest['distribution']}",
@@ -190,19 +533,34 @@ def _wheel_members(root: Path, manifest: Mapping[str, Any], version: str) -> dic
             "",
         )
     ).encode("utf-8")
+
+
+def _bootstrap_member(version: str) -> str:
+    return f"pdd_sync_checker-{version}.data/scripts/pdd-sync-checker"
+
+
+def _wheel_members(root: Path, manifest: Mapping[str, Any], version: str) -> dict[str, bytes]:
+    modules = _checked_module_bytes(root, manifest)
+    data = {
+        item["destination"]: _read_relative_regular(
+            root,
+            PurePosixPath(item["source"]),
+            f"data source {item['source']}",
+        )
+        for item in manifest["data"]
+    }
+    manifest_bytes = _read_relative_regular(
+        root, _MANIFEST_PATH, "module manifest"
+    )
+    dist_info = _dist_info(version)
     members = {
-        f"{_PACKAGE}/__init__.py": b'"""Standalone global-sync checker namespace."""\n',
+        f"{_PACKAGE}/__init__.py": _INIT_BYTES,
         **{f"{_PACKAGE}/{module}": content for module, content in modules.items()},
         **{f"{_PACKAGE}/{item}": content for item, content in data.items()},
         _EMBEDDED_MANIFEST: manifest_bytes,
-        f"{dist_info}/METADATA": metadata,
-        f"{dist_info}/WHEEL": (
-            b"Wheel-Version: 1.0\nGenerator: pdd-standalone-checker\n"
-            b"Root-Is-Purelib: true\nTag: py3-none-any\n"
-        ),
-        f"{dist_info}/entry_points.txt": (
-            b"[console_scripts]\npdd-sync-checker = pdd_sync_checker.checker_cli:main\n"
-        ),
+        _bootstrap_member(version): _BOOTSTRAP_SCRIPT,
+        f"{dist_info}/METADATA": _metadata_bytes(manifest, version),
+        f"{dist_info}/WHEEL": _WHEEL_BYTES,
     }
     record = "".join(
         f"{name},sha256={_record_hash(content)},{len(content)}\n"
@@ -212,12 +570,42 @@ def _wheel_members(root: Path, manifest: Mapping[str, Any], version: str) -> dic
     return members
 
 
-def _zip_info(name: str) -> zipfile.ZipInfo:
+def _zip_info(name: str, *, executable: bool = False) -> zipfile.ZipInfo:
     info = zipfile.ZipInfo(name, date_time=_ZIP_TIMESTAMP)
     info.compress_type = zipfile.ZIP_STORED
-    info.external_attr = (stat.S_IFREG | 0o644) << 16
+    info.external_attr = (
+        stat.S_IFREG | (0o755 if executable else 0o644)
+    ) << 16
     info.create_system = 3
     return info
+
+
+@contextlib.contextmanager
+def _open_output_directory(path: Path):
+    """Create and open an output directory without following any component."""
+    destination = Path(path).expanduser().absolute()
+    descriptors: list[int] = []
+    try:
+        descriptor = os.open("/", _DIRECTORY_FLAGS)
+        descriptors.append(descriptor)
+        for component in destination.parts[1:]:
+            try:
+                next_descriptor = os.open(
+                    component, _DIRECTORY_FLAGS, dir_fd=descriptor
+                )
+            except FileNotFoundError:
+                os.mkdir(component, mode=0o755, dir_fd=descriptor)
+                next_descriptor = os.open(
+                    component, _DIRECTORY_FLAGS, dir_fd=descriptor
+                )
+            descriptor = next_descriptor
+            descriptors.append(descriptor)
+        yield destination, descriptor
+    except OSError as exc:
+        raise _error("wheel output directory is unsafe") from exc
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
 
 
 def build_standalone_wheel(root: Path, output: Path, *, version: str) -> Path:
@@ -225,18 +613,36 @@ def build_standalone_wheel(root: Path, output: Path, *, version: str) -> Path:
     repository = _repository_root(root)
     manifest = load_standalone_manifest(repository)
     members = _wheel_members(repository, manifest, version)
-    destination = Path(output)
-    if destination.exists() and (destination.is_symlink() or not destination.is_dir()):
-        raise _error("wheel output directory is unsafe")
-    destination.mkdir(parents=True, exist_ok=True)
-    wheel = destination / f"pdd_sync_checker-{version}-py3-none-any.whl"
-    if wheel.exists() or wheel.is_symlink():
-        raise _error("wheel output already exists")
-    with zipfile.ZipFile(
-        wheel, "w", compression=zipfile.ZIP_STORED, strict_timestamps=True
-    ) as archive:
-        for name, content in sorted(members.items()):
-            archive.writestr(_zip_info(name), content)
+    wheel_name = f"pdd_sync_checker-{version}-py3-none-any.whl"
+    with _open_output_directory(Path(output)) as (destination, directory):
+        wheel = destination / wheel_name
+        try:
+            descriptor = os.open(
+                wheel_name,
+                os.O_RDWR
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o644,
+                dir_fd=directory,
+            )
+        except OSError as exc:
+            raise _error("wheel output already exists or is unsafe") from exc
+        with os.fdopen(descriptor, "w+b") as handle:
+            with zipfile.ZipFile(
+                handle,
+                "w",
+                compression=zipfile.ZIP_STORED,
+                strict_timestamps=True,
+            ) as archive:
+                bootstrap = _bootstrap_member(version)
+                for name, content in sorted(members.items()):
+                    archive.writestr(
+                        _zip_info(name, executable=name == bootstrap),
+                        content,
+                    )
+            handle.flush()
+            os.fsync(handle.fileno())
     validate_standalone_wheel(wheel, manifest)
     return wheel
 
@@ -262,44 +668,108 @@ def _read_record(record: bytes) -> dict[str, tuple[str, str]]:
     return entries
 
 
-def validate_standalone_wheel(wheel_path: Path, manifest: Mapping[str, Any]) -> None:
-    """Fail closed unless the archive has exactly the manifest-authorized RECORD closure."""
-    wheel = _regular(Path(wheel_path), "wheel")
+def _canonical_wheel_files(
+    wheel_bytes: bytes, bootstrap: str
+) -> dict[str, bytes]:
+    """Return archive bytes only when every member has canonical attributes."""
     try:
-        _name, _version, _build, tags = parse_wheel_filename(wheel.name)
-    except InvalidWheelFilename as exc:
-        raise _error("wheel filename is malformed") from exc
-    if {str(tag) for tag in tags} != {"py3-none-any"}:
-        raise _error("wheel tags are not standalone checker tags")
-    expected_prefix = f"{manifest['package']}/"
-    try:
-        with zipfile.ZipFile(wheel) as archive:
+        with zipfile.ZipFile(io.BytesIO(wheel_bytes)) as archive:
             files: dict[str, bytes] = {}
             for member in archive.infolist():
                 path = _safe_member(member.filename)
                 mode = member.external_attr >> 16
-                if member.is_dir() or stat.S_ISLNK(mode) or path.as_posix() in files:
+                expected_mode = stat.S_IFREG | (
+                    0o755 if path.as_posix() == bootstrap else 0o644
+                )
+                if (
+                    member.is_dir()
+                    or mode != expected_mode
+                    or member.create_system != 3
+                    or member.compress_type != zipfile.ZIP_STORED
+                    or member.date_time != _ZIP_TIMESTAMP
+                    or path.as_posix() in files
+                ):
                     raise _error("wheel contains an unsafe member")
                 files[path.as_posix()] = archive.read(member)
     except (OSError, zipfile.BadZipFile) as exc:
         raise _error("wheel cannot be inspected") from exc
+    return files
+
+
+def _validate_metadata_authority(
+    metadata: bytes, manifest: Mapping[str, Any], version: str
+) -> None:
+    """Require parsed and byte-exact core metadata from protected authority."""
+    try:
+        parsed = BytesParser(policy=policy.default).parsebytes(metadata)
+    except (TypeError, ValueError) as exc:
+        raise _error("wheel METADATA is malformed") from exc
+    if (
+        parsed.defects
+        or parsed.get("Metadata-Version") != "2.1"
+        or parsed.get("Name") != manifest["distribution"]
+        or parsed.get("Version") != version
+        or parsed.get_all("Requires-Dist", []) != manifest["dependencies"]
+        or metadata != _metadata_bytes(manifest, version)
+    ):
+        raise _error("wheel METADATA differs from protected authority")
+
+
+def validate_standalone_wheel(wheel_path: Path, manifest: Mapping[str, Any]) -> None:
+    """Fail closed unless the archive has exactly the manifest-authorized RECORD closure."""
+    wheel = Path(wheel_path).expanduser().absolute()
+    wheel_bytes = _read_regular_path(wheel, "wheel")
+    try:
+        name, version_value, build, tags = parse_wheel_filename(wheel.name)
+    except InvalidWheelFilename as exc:
+        raise _error("wheel filename is malformed") from exc
+    version = str(version_value)
+    if (
+        name != manifest["distribution"]
+        or build
+        or wheel.name
+        != f"pdd_sync_checker-{version}-py3-none-any.whl"
+        or {str(tag) for tag in tags} != {"py3-none-any"}
+    ):
+        raise _error("wheel tags are not standalone checker tags")
+    expected_prefix = f"{manifest['package']}/"
+    bootstrap = _bootstrap_member(version)
+    files = _canonical_wheel_files(wheel_bytes, bootstrap)
     if any(name.startswith("pdd/") for name in files):
         raise _error("wheel contains the pdd package")
     expected_modules = {f"{expected_prefix}__init__.py", _EMBEDDED_MANIFEST} | {
         f"{expected_prefix}{module}" for module in manifest["modules"]
-    } | {f"{expected_prefix}{item}" for item in manifest["data"]}
-    dist_infos = {PurePosixPath(name).parts[0] for name in files if ".dist-info/" in name}
-    if len(dist_infos) != 1:
+    } | {
+        f"{expected_prefix}{item['destination']}"
+        for item in manifest["data"]
+    }
+    dist_info = _dist_info(version)
+    dist_infos = {
+        PurePosixPath(member_name).parts[0]
+        for member_name in files
+        if ".dist-info/" in member_name
+    }
+    if dist_infos != {dist_info}:
         raise _error("wheel dist-info closure is invalid")
-    dist_info = next(iter(dist_infos))
     expected = expected_modules | {
+        bootstrap,
         f"{dist_info}/METADATA",
         f"{dist_info}/WHEEL",
-        f"{dist_info}/entry_points.txt",
         f"{dist_info}/RECORD",
     }
     if set(files) != expected:
         raise _error("wheel member closure is invalid")
+    if files[f"{expected_prefix}__init__.py"] != _INIT_BYTES:
+        raise _error("wheel package initializer is invalid")
+    if files[_EMBEDDED_MANIFEST] != _manifest_bytes(manifest):
+        raise _error("wheel embedded module manifest differs from authority")
+    if files[f"{dist_info}/WHEEL"] != _WHEEL_BYTES:
+        raise _error("wheel metadata identity is invalid")
+    if files[bootstrap] != _BOOTSTRAP_SCRIPT:
+        raise _error("wheel bootstrap entrypoint is invalid")
+    _validate_metadata_authority(
+        files[f"{dist_info}/METADATA"], manifest, version
+    )
     record_name = f"{dist_info}/RECORD"
     records = _read_record(files[record_name])
     if set(records) != set(files):
@@ -316,14 +786,18 @@ def validate_standalone_wheel(wheel_path: Path, manifest: Mapping[str, Any]) -> 
 
 def _verified_archive_files(wheel_path: Path) -> dict[str, bytes]:
     """Read one standalone archive only after closing every member through RECORD."""
-    wheel = _regular(Path(wheel_path), "wheel")
+    wheel_bytes = _read_regular_path(Path(wheel_path), "wheel")
     try:
-        with zipfile.ZipFile(wheel) as archive:
+        with zipfile.ZipFile(io.BytesIO(wheel_bytes)) as archive:
             files: dict[str, bytes] = {}
             for member in archive.infolist():
                 path = _safe_member(member.filename)
                 mode = member.external_attr >> 16
-                if member.is_dir() or stat.S_ISLNK(mode) or path.as_posix() in files:
+                if (
+                    member.is_dir()
+                    or not stat.S_ISREG(mode)
+                    or path.as_posix() in files
+                ):
                     raise _error("wheel contains an unsafe member")
                 files[path.as_posix()] = archive.read(member)
     except (OSError, zipfile.BadZipFile) as exc:
@@ -344,6 +818,84 @@ def _verified_archive_files(wheel_path: Path) -> dict[str, bytes]:
     return files
 
 
+def _read_descriptor_regular(
+    directory: int, name: str, label: str
+) -> bytes:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(name, _FILE_FLAGS, dir_fd=directory)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise _error(f"{label} is not a regular file")
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = None
+            return handle.read()
+    except OSError as exc:
+        raise _error(f"{label} is unsafe") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _closed_installed_package(
+    package_root: Path, expected: Mapping[str, bytes]
+) -> None:
+    """Compare a no-follow installed tree to the exact wheel package closure."""
+    expected_directories = {
+        PurePosixPath(*PurePosixPath(name).parts[:index]).as_posix()
+        for name in expected
+        for index in range(1, len(PurePosixPath(name).parts))
+    }
+    actual: dict[str, bytes] = {}
+
+    def walk(directory: int, prefix: str = "") -> None:
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda entry: entry.name)
+        except OSError as exc:
+            raise _error("installed checker closure cannot be inspected") from exc
+        for entry in entries:
+            relative = f"{prefix}{entry.name}"
+            try:
+                mode = entry.stat(follow_symlinks=False).st_mode
+            except OSError as exc:
+                raise _error("installed checker closure cannot be inspected") from exc
+            if stat.S_ISDIR(mode):
+                if relative not in expected_directories:
+                    raise _error(
+                        f"installed checker contains unlisted directory {relative}"
+                    )
+                try:
+                    child = os.open(
+                        entry.name, _DIRECTORY_FLAGS, dir_fd=directory
+                    )
+                except OSError as exc:
+                    raise _error(
+                        f"installed checker directory is unsafe: {relative}"
+                    ) from exc
+                try:
+                    walk(child, f"{relative}/")
+                finally:
+                    os.close(child)
+            elif stat.S_ISREG(mode):
+                actual[relative] = _read_descriptor_regular(
+                    directory,
+                    entry.name,
+                    f"installed checker member {relative}",
+                )
+            else:
+                raise _error(
+                    f"installed checker contains nonregular entry {relative}"
+                )
+
+    with _open_directory_path(package_root, "installed checker package") as descriptor:
+        walk(descriptor)
+    if set(actual) != set(expected):
+        raise _error("installed checker closure differs from the wheel")
+    for relative, expected_bytes in expected.items():
+        if actual[relative] != expected_bytes:
+            raise _error("installed checker bytes differ from the wheel")
+
+
 def _installed_package_files(wheel: Path, installed_package: Path) -> dict[str, bytes]:
     """Return the closed checker module set only when installed bytes equal the wheel."""
     files = _verified_archive_files(wheel)
@@ -361,7 +913,7 @@ def _installed_package_files(wheel: Path, installed_package: Path) -> dict[str, 
     }
     if not expected:
         raise _error("wheel contains no standalone checker package")
-    path = _regular(Path(installed_package), "installed checker module")
+    path = Path(installed_package).expanduser().absolute()
     try:
         package_index = max(
             index for index, part in enumerate(path.parts) if part == _PACKAGE
@@ -369,22 +921,10 @@ def _installed_package_files(wheel: Path, installed_package: Path) -> dict[str, 
     except ValueError as exc:
         raise _error("installed checker module is outside its package") from exc
     package_root = Path(*path.parts[: package_index + 1])
-    for relative, expected_bytes in expected.items():
-        candidate = package_root / relative
-        if (
-            candidate.is_symlink()
-            or not candidate.is_file()
-            or candidate.read_bytes() != expected_bytes
-        ):
-            raise _error("installed checker bytes differ from the wheel")
-    for candidate in package_root.rglob("*"):
-        relative = candidate.relative_to(package_root)
-        if "__pycache__" in relative.parts:
-            continue
-        if candidate.is_symlink() or (
-            candidate.is_file() and relative.as_posix() not in expected
-        ):
-            raise _error("installed checker closure differs from the wheel")
+    installed_relative = path.relative_to(package_root).as_posix()
+    if installed_relative not in expected:
+        raise _error("installed checker module is outside the wheel closure")
+    _closed_installed_package(package_root, expected)
     return expected
 
 
@@ -411,7 +951,9 @@ def installed_checker_runtime_lock(wheel: Path, installed_package: Path) -> byte
         ],
         "package": _PACKAGE,
         "schema_version": 1,
-        "wheel_sha256": hashlib.sha256(_regular(wheel, "wheel").read_bytes()).hexdigest(),
+        "wheel_sha256": hashlib.sha256(
+            _read_regular_path(wheel, "wheel")
+        ).hexdigest(),
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
 

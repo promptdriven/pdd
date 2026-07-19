@@ -57,11 +57,11 @@ def _certify(arguments: Sequence[str]) -> int:
 def main(arguments: Sequence[str] | None = None) -> int:
     """Run only standalone checker commands after installed-wheel provenance passes."""
     values = tuple(sys.argv[1:] if arguments is None else arguments)
-    if values in (("--help",), ("-h",)):
-        print("usage: pdd-sync-checker {certify,release-pin-evidence} ...")
-        return 0
     try:
         _validated_runtime_identity()
+        if values in (("--help",), ("-h",)):
+            print("usage: pdd-sync-checker {certify,release-pin-evidence} ...")
+            return 0
         if not values or values[0] == "certify":
             return _certify(values[1:] if values else ())
         if values[0] == "release-pin-evidence":

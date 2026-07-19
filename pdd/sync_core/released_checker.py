@@ -685,17 +685,6 @@ def _verify_installed_package(  # pylint: disable=too-many-locals
         if installed.read_bytes() != expected:
             raise ReleasedCheckerError(f"installed checker member differs from wheel: {member}")
     if package_name == "pdd_sync_checker":
-        package_root = site_packages / package_name
-        expected_paths = {
-            PurePosixPath(member).relative_to(package_name).as_posix()
-            for member in wheel_members
-        }
-        for path in package_root.rglob("*"):
-            relative = path.relative_to(package_root)
-            if "__pycache__" in relative.parts:
-                continue
-            if path.is_symlink() or (path.is_file() and relative.as_posix() not in expected_paths):
-                raise ReleasedCheckerError("installed checker closure differs from wheel")
         from .standalone_package import installed_checker_runtime_lock  # pylint: disable=import-outside-toplevel
 
         installed_checker_runtime_lock(wheel, installed_package)
