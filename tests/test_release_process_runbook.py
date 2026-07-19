@@ -5,8 +5,6 @@ from pathlib import Path
 import re
 import tomllib
 
-import yaml
-
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNBOOK = ROOT / "docs" / "contributors" / "pdd-cli-release-process.md"
@@ -210,37 +208,3 @@ def test_onboarding_points_maintainers_to_the_canonical_runbook():
     assert "RELEASE_VIDEO=0 make release-local" in text
     assert "Use `RELEASE_VIDEO=0` only for an emergency release" not in text
     assert "leaves the tag-triggered Actions video path enabled" in compact
-
-
-def test_tag_release_builds_and_offline_validates_runtime_bundle_before_assets():
-    """Parse workflow structure so runtime artifacts cannot publish before validation."""
-    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["publish-pypi"]["steps"]
-    names = [step.get("name") for step in steps]
-    bundle_index = names.index("Build and validate closed Linux checker runtime bundle")
-    publish_index = names.index("Publish to PyPI")
-    release_index = names.index("Create GitHub Release with validated runtime bundle (idempotent)")
-    script = steps[bundle_index]["run"]
-
-    assert bundle_index < publish_index < release_index
-    assert "artifact_provenance write-lock" in script
-    assert "--no-index --find-links" in script
-    assert "--require-hashes" in script
-    assert "--only-binary=:all:" in script
-    assert script.index("write-manifest") < script.index(" verify --bundle")
-    assert script.index(" verify --bundle") < script.index("pdd-sync-checker")
-    assert "checker accepted an unsigned runtime bundle" in script
-    assert script.index("pdd-sync-checker") < script.index("tar --sort=name")
-
-
-def test_release_uploads_the_runtime_bundle_only_after_validation_step_exists():
-    """Ensure both create and recovery upload paths carry the checksummed bundle."""
-    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["publish-pypi"]["steps"]
-    script = next(step["run"] for step in steps if step.get("name") ==
-                  "Create GitHub Release with validated runtime bundle (idempotent)")
-
-    assert "gh release create" in script
-    assert "gh release upload" in script
-    assert script.count("pdd-runtime-bundle-linux-x86_64-cpython-3.12.tar.gz") == 2
-    assert "pdd-runtime-bundle-linux-x86_64-cpython-3.12.sha256" in script

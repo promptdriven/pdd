@@ -104,6 +104,9 @@ GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS = {
     "pdd/sync_core/global_sync_ledger.py",
     "tests/test_global_sync_ledger.py",
 }
+GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS = {
+    ".pdd/global-sync/runtime-linux-x86_64-cp312.lock",
+}
 PR_2017_ABSENT_METADATA_PATHS = {
     ".pdd/meta/agentic_langtest_python.json",
     ".pdd/meta/agentic_langtest_python_run.json",
@@ -117,6 +120,7 @@ PREAUTHORIZED_CHILD_PATHS = (
     | ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
     | GATE1_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS
+    | GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
     | {
         ".github/toolchains/playwright_manifest.py",
@@ -1652,6 +1656,87 @@ def test_global_sync_ledger_paths_are_exactly_preauthorized() -> None:
             or row["pattern"].startswith("tests/test_global_sync_ledger")
         )
     } == GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS
+
+
+def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
+    """Only the reviewed Linux CPython 3.12 target lock receives authority."""
+    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    rules = {row["pattern"]: row for row in ownership["rules"]}
+    assert {
+        path: rules.get(path)
+        for path in GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
+    } == {
+        path: {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
+        for path in GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
+    }
+    assert {
+        row["pattern"]
+        for row in ownership["rules"]
+        if row.get("preauthorize_absent", False)
+        and row["pattern"].startswith(".pdd/global-sync/")
+    } == GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
+
+    # Existing independently reviewed preauthorization families stay exact.
+    assert GATE1_PREAUTHORIZED_PATHS == {
+        "docs/global_sync_extraction_manifest.md",
+        "docs/global_sync_pdd_adapter_demand.json",
+        "pdd/sync_core/adapter_demand_verifier.py",
+        "tests/test_sync_core_adapter_demand_verifier.py",
+    }
+    assert GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS == {
+        "docs/global_sync_evidence_ledger_source.yaml",
+        "pdd/sync_core/global_sync_ledger.py",
+        "tests/test_global_sync_ledger.py",
+    }
+
+
+def test_global_sync_runtime_lock_composes_without_sibling_authority(
+    tmp_path: Path,
+) -> None:
+    """Protected preauthorization admits the exact lock and rejects a sibling."""
+    root = tmp_path / "runtime-lock-preauthorization"
+    subprocess.run(
+        ["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(root)],
+        check=True,
+        capture_output=True,
+    )
+    base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    exact = next(iter(GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS))
+    exact_path = root / exact
+    exact_path.parent.mkdir(parents=True, exist_ok=True)
+    exact_path.write_text("synthetic reviewed target lock\n", encoding="utf-8")
+    _git(root, "add", "-f", exact)
+    exact_head = _commit(root, "add exact synthetic runtime lock")
+
+    exact_manifest = build_unit_manifest(root, base_ref=base, head_ref=exact_head)
+    exact_record = next(
+        item
+        for item in exact_manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix() == exact
+    )
+    assert exact_record.inventory.value == "HUMAN_OWNED"
+    assert exact_record.candidate_id.role == "human-maintained"
+    assert exact_record.ownership_provenance == (
+        f"protected-ownership:pdd-maintainers:{exact}"
+    )
+    assert not exact_manifest.unaccounted_tracked_paths
+    assert not exact_manifest.invalid_reasons
+
+    sibling = ".pdd/global-sync/runtime-linux-aarch64-cp312.lock"
+    sibling_path = root / sibling
+    sibling_path.write_text("unauthorized sibling lock\n", encoding="utf-8")
+    _git(root, "add", "-f", sibling)
+    sibling_head = _commit(root, "attempt sibling runtime lock")
+    sibling_manifest = build_unit_manifest(
+        root, base_ref=exact_head, head_ref=sibling_head
+    )
+    assert Path(sibling) in sibling_manifest.unaccounted_tracked_paths
+    assert any(
+        reason == f"{sibling}: tracked path has no ownership rule"
+        for reason in sibling_manifest.invalid_reasons
+    )
 
 
 def test_global_sync_ledger_paths_compose_with_protected_preauthorization(

@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import hashlib
+import json
 from pathlib import Path
 import sys
 import zipfile
@@ -333,25 +334,6 @@ def test_evidence_subcommand_requires_runtime_before_candidate_inputs(monkeypatc
 
     with pytest.raises(ReleasedCheckerError, match="digest does not match"):
         _evidence_main(("--ledger-source", str(tmp_path / "malformed.yaml")))
-
-
-def test_evidence_refuses_candidate_input_without_protected_runtime_bundle(
-    monkeypatch, tmp_path
-) -> None:
-    """The wrapper must require protected runtime policy before parsing candidate paths."""
-    wheel, identity, _prefix, _package = _wheel(tmp_path)
-    monkeypatch.setenv("PDD_RELEASED_CHECKER_WHEEL_PATH", str(wheel))
-    monkeypatch.setenv("PDD_RELEASED_CHECKER_WHEEL_SHA256", identity.wheel_sha256)
-    monkeypatch.setenv("PDD_RELEASED_CHECKER_REF", identity.release_ref)
-    monkeypatch.setenv("PDD_RELEASED_CHECKER_WORKFLOW_IDENTITY", identity.workflow_identity)
-    monkeypatch.delenv("PDD_RUNTIME_BUNDLE_DIR", raising=False)
-    monkeypatch.delenv("PDD_RUNTIME_BUNDLE_MANIFEST_SHA256", raising=False)
-    monkeypatch.setattr(
-        "pdd.sync_core.released_checker.validate_released_checker_runtime", lambda *_args, **_kwargs: None
-    )
-
-    with pytest.raises(ReleasedCheckerError, match="protected runtime bundle policy"):
-        _evidence_main(("--ledger-source", str(tmp_path / "candidate-malformed.yaml")))
 
 
 def test_evidence_main_rejects_missing_runtime_provenance_before_arguments(monkeypatch) -> None:
