@@ -946,7 +946,7 @@ steps:
   - order: 2
     name: "Protected reviewed checker release and pinned wheel digest"
     status: pending
-    last_state_change: "2026-07-18"
+    last_state_change: "2026-07-19"
     evidence_state:
       implemented: in-progress
       local_green: in-progress
@@ -956,14 +956,25 @@ steps:
       released: pending
       deployed: pending
       certified: pending
-    exact_repository_sha: null
+    exact_repository_sha: "89218463d33baa58fdfeb37599e49a6e2cd13283"
+    release_pin:
+      schema_version: 1
+      repository: promptdriven/pdd
+      repository_id: "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
+      repository_sha: "89218463d33baa58fdfeb37599e49a6e2cd13283"
+      release_ref: refs/tags/v0.0.306
+      release_url: "https://github.com/promptdriven/pdd/releases/tag/v0.0.306"
+      wheel_url: "https://files.pythonhosted.org/packages/a6/66/562f6ae454c29ee6dcd064e1952f1029ca0a891cc379623ec5d22bff8aac/pdd_cli-0.0.306-py3-none-any.whl"
+      wheel_sha256: "e666ab38ce49413ff90c24f96fcbd9dbd01f73e4e38a3c6eb4391dd18369784d"
+      workflow_run_url: "https://github.com/promptdriven/pdd/actions/runs/29691352403"
+      workflow_run_conclusion: success
+      workflow_job_url: "https://github.com/promptdriven/pdd/actions/runs/29691352403/job/88204544350"
+      workflow_identity: "promptdriven/pdd/.github/workflows/release.yml@refs/tags/v0.0.306"
+      pypi_provenance_url: "https://pypi.org/integrity/pdd-cli/0.0.306/pdd_cli-0.0.306-py3-none-any.whl/provenance"
     validation_commands:
       - "gh release view \"$PDD_CHECKER_RELEASE_REF\" --repo promptdriven/pdd --json tagName,targetCommitish,isDraft,isPrerelease"
-      - "gh release download \"$PDD_CHECKER_RELEASE_REF\" --repo promptdriven/pdd --pattern '*.whl' --dir \"$RUNNER_TEMP/released-checker\""
-      - "sha256sum --check \"$PDD_CHECKER_WHEEL_SHA256_FILE\""
-      - "python -m pdd.sync_core.release_diff_verifier --repository . --base origin/main --release-sha \"$PDD_SHA\" --diagnostic-pr 1995 --require-fresh-main-extraction --require-complete-net-diff-review --output \"$RUNNER_TEMP/release-diff.json\""
-      - "pytest -q tests/test_sync_core_artifact_provenance.py tests/test_sync_core_lifecycle.py -k 'candidate or released or credential or environment'"
-      - "python -m pdd.sync_core.intermediate_certificate_verifier --certificate \"$PDD_INTERMEDIATE_CERTIFICATE\" --repository-sha \"$PDD_SHA\" --require-named-included-units --require-named-excluded-units --require-denominator --require-global-completion-false --forbid-gate-satisfaction 6,10"
+      - "curl --fail --location --output \"$RUNNER_TEMP/pdd_cli-0.0.306-py3-none-any.whl\" https://files.pythonhosted.org/packages/a6/66/562f6ae454c29ee6dcd064e1952f1029ca0a891cc379623ec5d22bff8aac/pdd_cli-0.0.306-py3-none-any.whl && printf '%s  %s\\n' e666ab38ce49413ff90c24f96fcbd9dbd01f73e4e38a3c6eb4391dd18369784d \"$RUNNER_TEMP/pdd_cli-0.0.306-py3-none-any.whl\" | sha256sum --check --strict"
+      - "python -m pdd.sync_core.released_checker release-pin-evidence --ledger-source docs/global_sync_evidence_ledger_source.yaml --report \"$RUNNER_TEMP/released-checker-report.json\" --profiles .pdd/verification-profiles.json --released-checker-exit-code 1 --output \"$RUNNER_TEMP/intermediate-release-evidence.json\""
     required_predicate:
       ledger_generator_and_protected_drift_check_pass: true
       diagnostic_pr_used_as_release_vehicle: false
@@ -988,9 +999,13 @@ steps:
       intermediate_certificate_global_completion: false
       intermediate_certificate_satisfies_gate_6: false
       intermediate_certificate_satisfies_gate_10: false
+      released_checker_pin_valid: true
+      released_checker_release_observed: true
+      released_checker_machine_verified: false
+      released_checker_is_sync_certificate: false
     artifact_check_urls: []
-    predicate_result: "No protected checker release is authorized."
-    blocker: "Gate 2 is blocked on releasing the pytest-only checker from bounded fresh-main extraction layers and pinning its wheel digest. Ledger generation and the protected drift check are merged evidence; #1995 is frozen diagnostic evidence and must not merge as the release vehicle."
+    predicate_result: "Release v0.0.306 is pinned to exact commit 89218463d33baa58fdfeb37599e49a6e2cd13283, its exact wheel digest, PyPI provenance URL, release run, and publish job. The released checker report is deliberately fail-closed (exit 1) and its wrapper labels the result intermediate-release-evidence, not machine_verified evidence or a Sync Certificate. No promotion bundle authorizes released, hosted_green, merged, deployment, certification, or a Gate 2 pass."
+    blocker: "The reviewed pin is executable locally and in the protected workflow, but protected hosted/merged promotion evidence for this implementation is absent. Gate 2, both certificates, and the 0/10 scoreboard remain pending."
     prerequisite_blockers:
       ledger_generator: "passed through protected PR #2219 at exact head 06d976de23f6da45c9078fdd1a8f89dbf1aecd2c and merge fb344f1c66e807dc51cac0f5363e5484cc487de9"
       protected_drift_check: "passed on the exact #2219 reviewed head; regenerated ledger byte drift fails closed"
