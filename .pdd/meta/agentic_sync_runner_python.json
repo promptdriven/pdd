@@ -2,13 +2,15 @@
   "pdd_version": "0.0.275.dev3",
   "timestamp": "2026-07-19T01:39:40+00:00",
   "command": "fix",
-  "prompt_hash": "52588c82ffdf507670e9f8f44f5c0c4b26e1cacb3c0bea043dcc5dadd52128c3",
-  "code_hash": "ebf9f829e9dfc48a36d8170adfdcaf2c2fb9c23df1e4a7699c2e6fe0600c3562",
+  "prompt_hash": "32d2c3be4398e7b54c4e0ed5518324df81561dfa01f54b61af19161898caf175",
+  "code_hash": "511bee7dd252c409fb3168462be0cf7865809b2021e74efabaebb0ef02b778b5",
   "example_hash": "fcb36209abb5ab882ad551754fb574d62509c968f8c564e18163be7f2b7ef35a",
-  "test_hash": "6a1504d075e53aca056100fb6eebaa5f18ff36c59e17cc9a36629e959d90df1a",
+  "test_hash": "b323925138244a6737795693785549cec608c5d90fdb3ce05d0066448898d862",
   "test_files": {
-    "test_agentic_sync_runner.py": "6a1504d075e53aca056100fb6eebaa5f18ff36c59e17cc9a36629e959d90df1a",
+    "test_agentic_sync_runner.py": "b323925138244a6737795693785549cec608c5d90fdb3ce05d0066448898d862",
+    "test_issue_1900_surface_contract.py": "e09f6e1d5ae8e907f55cd5eaa090c9b5db068f41c3c8eb9f496cd7f54918b424",
     "test_sync_plan.py": "07bacd9ae74ab74ba843eba74eeb24cc4b8f871d2ea4ef2a186c7e2abe1af0f2"
+  }
   },
   "include_deps": {
     "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",

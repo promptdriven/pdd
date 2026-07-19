@@ -3,9 +3,12 @@
   "exit_code": 0,
   "tests_passed": 199,
   "tests_failed": 0,
-  "coverage": 83.72,
-  "test_hash": "6a1504d075e53aca056100fb6eebaa5f18ff36c59e17cc9a36629e959d90df1a",
+  "coverage": 81.25,
+  "test_hash": "b323925138244a6737795693785549cec608c5d90fdb3ce05d0066448898d862",
   "test_files": {
-    "test_agentic_sync_runner.py": "6a1504d075e53aca056100fb6eebaa5f18ff36c59e17cc9a36629e959d90df1a"
+    "test_agentic_sync_runner.py": "b323925138244a6737795693785549cec608c5d90fdb3ce05d0066448898d862",
+    "test_issue_1900_surface_contract.py": "e09f6e1d5ae8e907f55cd5eaa090c9b5db068f41c3c8eb9f496cd7f54918b424",
+    "test_sync_plan.py": "07bacd9ae74ab74ba843eba74eeb24cc4b8f871d2ea4ef2a186c7e2abe1af0f2"
+  }
   }
 }
