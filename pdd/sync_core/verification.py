@@ -1469,8 +1469,9 @@ def _validate_consumed_managed_prompt_bytes(
     approved_aliases: Mapping[PurePosixPath, PurePosixPath],
     authorizations: tuple[_RequirementTransitionAuthorization, ...],
     updates: Mapping[UnitId, _ProfileInput],
+    profile_additions: Mapping[UnitId, _ProfileInput],
 ) -> None:
-    """Limit Phase B prompt drift to exact protected rows consumed in this candidate."""
+    """Limit Phase B prompt drift to exact transitions and initial profiles."""
     consumed = {
         _canonical_prompt_path(authorization.prompt_path, approved_aliases)
         for authorization in authorizations
@@ -1481,6 +1482,10 @@ def _validate_consumed_managed_prompt_bytes(
         )
         in updates
     }
+    consumed.update(
+        _canonical_prompt_path(unit_id.prompt_relpath, approved_aliases)
+        for unit_id in profile_additions
+    )
     unauthorized = (
         _managed_prompt_byte_changes(root, manifest, approved_aliases) - consumed
     )
@@ -2180,6 +2185,7 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
             approved_aliases,
             requirement_authorizations,
             requirement_updates,
+            profile_additions,
         )
     invalid.extend(requirement_invalid)
     requirement_updates = {**profile_additions, **requirement_updates}

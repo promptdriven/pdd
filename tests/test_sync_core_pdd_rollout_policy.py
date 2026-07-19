@@ -1185,6 +1185,53 @@ def test_wave1_bootstrap_profile_additions_are_exact_and_append_only() -> None:
     assert len(identities) == len(set(identities)) == 4
 
 
+def test_wave1_profile_addition_composes_with_consumed_transition(
+    monkeypatch,
+) -> None:
+    """An exact initial profile may accompany exact protected transitions."""
+    authorization = (
+        verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS[0]
+        # pylint: disable=protected-access
+    )
+    transition_unit = UnitId(
+        REPOSITORY_ID,
+        authorization.prompt_path,
+        authorization.language_id,
+    )
+    addition = WAVE1_BOOTSTRAP_PROFILE_ADDITIONS[0]
+    addition_unit = UnitId(REPOSITORY_ID, addition[0], addition[1])
+    profile = verification._ProfileInput((), ())  # pylint: disable=protected-access
+    manifest = SimpleNamespace(repository_id=REPOSITORY_ID)
+    changed = {authorization.prompt_path, addition[0]}
+    monkeypatch.setattr(
+        verification,
+        "_managed_prompt_byte_changes",
+        lambda *_args: set(changed),
+    )
+
+    verification._validate_consumed_managed_prompt_bytes(  # pylint: disable=protected-access
+        ROOT,
+        manifest,
+        {},
+        (authorization,),
+        {transition_unit: profile},
+        {addition_unit: profile},
+    )
+
+    with pytest.raises(
+        verification.VerificationProfileError,
+        match="changes unmanaged prompt bytes",
+    ):
+        verification._validate_consumed_managed_prompt_bytes(  # pylint: disable=protected-access
+            ROOT,
+            manifest,
+            {},
+            (authorization,),
+            {transition_unit: profile},
+            {},
+        )
+
+
 def _wave1_profile_addition_fixture(monkeypatch, addition):
     """Bind one real Wave 1 tuple to deterministic synthetic candidate bytes."""
     prompt_path, language_id, requirement_id, policy_digest, prompt_digest = addition
