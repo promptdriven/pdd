@@ -6,6 +6,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 import yaml
@@ -182,60 +183,108 @@ def _valid_github_responses() -> dict[str, dict[str, object]]:
     }
 
 
-def _current_gate_1_responses() -> dict[str, dict[str, object]]:
-    """Return the reviewed Gate 1 identities recorded in the source ledger."""
-    return {
-        "/repos/promptdriven/pdd/pulls/2214": {
-            "head": {"sha": "6301d6c613199604702c2c3242fc8b837960d586"},
-            "base": {"repo": {"full_name": "promptdriven/pdd"}, "ref": "main"},
-            "merged": True,
-            "merge_commit_sha": "63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee",
-        },
-        "/repos/promptdriven/pdd/actions/runs/29674097485": {
-            "workflow_id": 232784606,
-            "name": "Unit Tests",
-            "path": ".github/workflows/unit-tests.yml",
-            "event": "pull_request",
-            "head_sha": "6301d6c613199604702c2c3242fc8b837960d586",
+def _current_source_promotion_responses(  # pylint: disable=too-many-locals
+    payload: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    """Build exact GitHub API responses for every source promotion bundle."""
+    bundles = payload["promotion_bundles"]
+    assert isinstance(bundles, dict)
+    responses: dict[str, dict[str, object]] = {}
+
+    def add_response(path: str, response: dict[str, object]) -> None:
+        existing = responses.get(path)
+        assert existing is None or existing == response
+        responses[path] = response
+
+    def action_run_response(expected: dict[str, object], head_sha: str) -> dict[str, object]:
+        return {
+            "workflow_id": expected["workflow_id"],
+            "name": expected["workflow_name"],
+            "path": expected["workflow_path"],
+            "event": expected["event"],
+            "head_sha": head_sha,
             "conclusion": "success",
-        },
-        "/repos/promptdriven/pdd/actions/jobs/88158086892": {
-            "conclusion": "success",
-            "run_id": 29674097485,
-            "head_sha": "6301d6c613199604702c2c3242fc8b837960d586",
-            "name": "Run Unit Tests",
-            "workflow_name": "Unit Tests",
-        },
-        "/repos/promptdriven/pdd/actions/jobs/88158086891": {
-            "conclusion": "success",
-            "run_id": 29674097485,
-            "head_sha": "6301d6c613199604702c2c3242fc8b837960d586",
-            "name": "Package Preprocess Smoke",
-            "workflow_name": "Unit Tests",
-        },
-        "/repos/promptdriven/pdd/actions/runs/29674096680": {
-            "workflow_id": 221944217,
-            "name": "PR #2214",
-            "path": "dynamic/github-code-scanning/codeql",
-            "event": "dynamic",
-            "head_sha": "6301d6c613199604702c2c3242fc8b837960d586",
-            "conclusion": "success",
-        },
-        "/repos/promptdriven/pdd/actions/runs/29674097086": {
-            "workflow_id": 274484071,
-            "name": "auto-heal",
-            "path": ".github/workflows/auto-heal.yml",
-            "event": "pull_request_target",
-            "head_sha": "6301d6c613199604702c2c3242fc8b837960d586",
-            "conclusion": "success",
-        },
-        "/repos/promptdriven/pdd/check-runs/88158092713": {
-            "conclusion": "success",
-            "head_sha": "6301d6c613199604702c2c3242fc8b837960d586",
-            "name": "auto-heal",
-            "app": {"id": 15368, "slug": "github-actions", "owner": {"login": "github"}},
-        },
-    }
+        }
+
+    for bundle in bundles.values():
+        assert isinstance(bundle, dict)
+        repository = bundle["repository"]
+        head_sha = bundle["head_sha"]
+        repository_sha = bundle["repository_sha"]
+        verification = bundle["protected_verification"]
+        assert isinstance(repository, str)
+        assert isinstance(head_sha, str)
+        assert isinstance(repository_sha, str)
+        assert isinstance(verification, dict)
+        pull_request = verification["pull_request"]
+        base_repository = verification["base_repository"]
+        base_ref = verification["base_ref"]
+        assert isinstance(pull_request, int)
+        assert isinstance(base_repository, str)
+        assert isinstance(base_ref, str)
+        add_response(
+            f"/repos/{repository}/pulls/{pull_request}",
+            {
+                "head": {"sha": head_sha},
+                "base": {"repo": {"full_name": base_repository}, "ref": base_ref},
+                "merged": True,
+                "merge_commit_sha": repository_sha,
+            },
+        )
+
+        bindings = bundle["artifact_bindings"]
+        assert isinstance(bindings, list)
+        for binding in bindings:
+            assert isinstance(binding, dict)
+            kind = binding["kind"]
+            artifact_url = binding["url"]
+            expected = binding["expected"]
+            assert isinstance(kind, str)
+            assert isinstance(artifact_url, str)
+            assert isinstance(expected, dict)
+            path = urlparse(artifact_url).path
+            parts = path.strip("/").split("/")
+            assert "/".join(parts[:2]) == repository
+            if kind == "github_actions_run":
+                run_id = parts[-1]
+                add_response(
+                    f"/repos/{repository}/actions/runs/{run_id}",
+                    action_run_response(expected, head_sha),
+                )
+            elif kind == "github_actions_job":
+                run_id, job_id = parts[-3], parts[-1]
+                add_response(
+                    f"/repos/{repository}/actions/runs/{run_id}",
+                    action_run_response(expected, head_sha),
+                )
+                add_response(
+                    f"/repos/{repository}/actions/jobs/{job_id}",
+                    {
+                        "conclusion": "success",
+                        "run_id": int(run_id),
+                        "head_sha": head_sha,
+                        "name": expected["job_name"],
+                        "workflow_name": expected["workflow_name"],
+                    },
+                )
+            elif kind == "github_check_run":
+                check_id = parts[-1]
+                add_response(
+                    f"/repos/{repository}/check-runs/{check_id}",
+                    {
+                        "conclusion": "success",
+                        "head_sha": head_sha,
+                        "name": expected["check_name"],
+                        "app": {
+                            "id": expected["app_id"],
+                            "slug": expected["app_slug"],
+                            "owner": {"login": expected["app_owner"]},
+                        },
+                    },
+                )
+            else:
+                pytest.fail(f"unexpected source artifact binding kind: {kind}")
+    return responses
 
 
 def test_global_sync_ledger_generation_is_deterministic(tmp_path: Path) -> None:
@@ -789,16 +838,24 @@ def test_global_sync_ledger_rejects_nonprotected_merge_target(
         )
 
 
-def test_global_sync_ledger_accepts_current_gate_1_remote_identities(monkeypatch) -> None:
-    """The committed Gate 1 evidence binds to its reviewed protected identities."""
+def test_global_sync_ledger_accepts_current_source_promotion_identities(monkeypatch) -> None:
+    """Every committed promotion bundle binds to its reviewed GitHub identities."""
     source = ROOT / "docs" / "global_sync_evidence_ledger_source.yaml"
     plan = ROOT / "docs" / "global_sync_resolution_plan.md"
+    payload = load_unique_yaml(source)
+    responses = _current_source_promotion_responses(payload)
+    requested_paths: list[str] = []
     verifier = GitHubPromotionVerifier()
-    monkeypatch.setattr(verifier, "_get", _current_gate_1_responses().__getitem__)
 
-    validate_ledger(
-        load_unique_yaml(source), plan, source, verify_remote=True, promotion_verifier=verifier
-    )
+    def get_response(path: str) -> dict[str, object]:
+        requested_paths.append(path)
+        return responses[path]
+
+    monkeypatch.setattr(verifier, "_get", get_response)
+
+    validate_ledger(payload, plan, source, verify_remote=True, promotion_verifier=verifier)
+
+    assert set(requested_paths) == set(responses)
 
 
 @pytest.mark.parametrize("failure", ["metadata-mismatch", "outage"])
