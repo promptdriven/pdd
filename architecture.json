@@ -3145,7 +3145,7 @@
         "functions": [
           {
             "name": "sync_orchestration",
-            "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", examples_dir: str = \"examples\", tests_dir: str = \"tests\", max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, one_session: bool = False, compress: bool = False, fresh: bool = False, evidence: bool = False, snapshot_context: bool = False, compressed_context: bool = False) -> Dict[str, Any]",
+            "signature": "(basename: str, target_coverage: float = 90.0, language: str = 'python', prompts_dir: str = 'prompts', code_dir: str = 'src', examples_dir: str = 'examples', tests_dir: str = 'tests', max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, compress: bool = False, evidence: bool = False, snapshot_context: bool = False, compressed_context: bool = False, fresh: bool = False) -> Dict[str, Any]",
             "returns": "Dict[str, Any]"
           }
         ]
@@ -5518,7 +5518,7 @@
         "commands": [
           {
             "name": "sync_main",
-            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool, no_steer: bool = False, steer_timeout: Optional[float] = None, agentic_mode: bool = False, one_session: bool = False, compress: bool = False, fresh: bool = False, evidence: bool = False, snapshot_context: bool = False, compressed_context: Optional[bool] = None) -> Tuple[Dict[str, Any], float, str]",
+            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool, no_steer: bool = False, steer_timeout: Optional[float] = None, agentic_mode: bool = False, one_session: bool = False, compress: bool = False, evidence: bool = False, snapshot_context: bool = False, compressed_context: bool = False, fresh: bool = False) -> Tuple[Dict[str, Any], float, str]",
             "returns": "Tuple[Dict[str, Any], float, str]"
           }
         ]
