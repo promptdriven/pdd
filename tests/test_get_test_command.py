@@ -2277,6 +2277,44 @@ class TestRunnerBoundaryRegressions:
         assert budget.exhausted is True
         assert 0 < budget.spent <= budget.limit
 
+    def test_mixed_provider_budget_exhaustion_rejects_contained_symlink(
+        self, tmp_path
+    ):
+        """A later provider's exhausted budget revokes earlier root ownership."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        root_config = repo / "jest.config.js"
+        root_config.write_text("module.exports = {};\n")
+        costly_pattern = "?" * 900
+        (repo / "package.json").write_text(
+            json.dumps({"workspaces": [costly_pattern] * 21 + ["packages/*"]})
+        )
+        (repo / "lerna.json").write_text(
+            json.dumps({"packages": [costly_pattern]})
+        )
+        package = repo / "packages" / "app"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text("{}")
+        (package / "jest.config.js").symlink_to(root_config)
+        test_file = package / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {});\n")
+        budget = _WorkspaceMatchBudget(250_000)
+
+        with patch(
+            "pdd.get_test_command._WorkspaceMatchBudget", return_value=budget
+        ):
+            result = get_test_command_for_file(
+                str(test_file), language="typescript"
+            )
+
+        assert result is not None
+        assert "npx jest" not in result.command
+        assert result.cwd is None
+        assert budget.exhausted is True
+        assert budget.spent == 246_251
+
     def test_ordinary_deep_workspace_resolves_below_global_match_budget(
         self, tmp_path
     ):
