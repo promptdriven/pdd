@@ -221,7 +221,7 @@ live_rebaseline:
   pdd_profile_evidence_source_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
   pdd_profile_registry_sha256: "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
   pdd_profile_evidence_source_equivalent_to_current_protected_main: true
-  pdd_profile_source_current_equivalence_predicate: "git diff --quiet 2cacc91f90759ff45f1ad976da3b773e1a5f07a5..c712cbb7e08c157757a238cb8e49d65a9a3a2239 -- .pdd/verification-profiles.json && sha256sum .pdd/verification-profiles.json == 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
+  pdd_profile_source_current_equivalence_predicate: "git diff --quiet 2cacc91f90759ff45f1ad976da3b773e1a5f07a5..c712cbb7e08c157757a238cb8e49d65a9a3a2239 -- .pdd/verification-profiles.json && test \"$(git --no-replace-objects show 2cacc91f90759ff45f1ad976da3b773e1a5f07a5:.pdd/verification-profiles.json | sha256sum | cut -d' ' -f1)\" = \"56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6\""
   pdd_expected_managed_units: 468
   pdd_verification_profiles: 468
   pdd_machine_obligation_profiles: 1
@@ -271,7 +271,7 @@ current_critical_path:
   minimum_required_main_ancestor_sha: "c712cbb7e08c157757a238cb8e49d65a9a3a2239"
   immutable_profile_evidence_source_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
   immutable_profile_evidence_digest_sha256: "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
-  source_current_profile_equivalence_predicate: "git diff --quiet 2cacc91f90759ff45f1ad976da3b773e1a5f07a5..c712cbb7e08c157757a238cb8e49d65a9a3a2239 -- .pdd/verification-profiles.json && sha256sum .pdd/verification-profiles.json == 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
+  source_current_profile_equivalence_predicate: "git diff --quiet 2cacc91f90759ff45f1ad976da3b773e1a5f07a5..c712cbb7e08c157757a238cb8e49d65a9a3a2239 -- .pdd/verification-profiles.json && test \"$(git --no-replace-objects show 2cacc91f90759ff45f1ad976da3b773e1a5f07a5:.pdd/verification-profiles.json | sha256sum | cut -d' ' -f1)\" = \"56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6\""
   source_current_profile_equivalence: true
   reviewed_head_contains_minimum_main_ancestor: false
   next_cycle_live_main_gate:
@@ -660,7 +660,7 @@ steps:
       immutable_profile_evidence_source_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
       immutable_profile_evidence_digest_sha256: "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
       source_current_profile_equivalence: true
-      source_current_profile_equivalence_predicate: "git diff --quiet 2cacc91f90759ff45f1ad976da3b773e1a5f07a5..c712cbb7e08c157757a238cb8e49d65a9a3a2239 -- .pdd/verification-profiles.json"
+      source_current_profile_equivalence_predicate: "git diff --quiet 2cacc91f90759ff45f1ad976da3b773e1a5f07a5..c712cbb7e08c157757a238cb8e49d65a9a3a2239 -- .pdd/verification-profiles.json && test \"$(git --no-replace-objects show 2cacc91f90759ff45f1ad976da3b773e1a5f07a5:.pdd/verification-profiles.json | sha256sum | cut -d' ' -f1)\" = \"56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6\""
       complete_diagnostic_net_diff_accounted: true
       classification_values_exact: [already-merged-prerequisite, release-required-delta, excluded-diagnostic]
       every_changed_path_has_exactly_one_classification: true
@@ -1259,7 +1259,9 @@ steps:
       released: pending
       deployed: pending
       certified: pending
-    exact_repository_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
+    exact_repository_sha: "c712cbb7e08c157757a238cb8e49d65a9a3a2239"
+    immutable_profile_evidence_source_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
+    immutable_profile_evidence_digest_sha256: "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
     diagnostic_candidate_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
     validation_commands:
       - "pdd sync-core certify --base-ref \"$PDD_BASE_SHA\" --head-ref \"$PDD_HEAD_SHA\" --full-inventory --output \"$RUNNER_TEMP/pdd-scan.json\""
@@ -1277,7 +1279,7 @@ steps:
       red_baseline_states: 0
       waivers: 0
     artifact_check_urls: []
-    predicate_result: "Protected main 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 has 1 machine-obligation profile out of 468 expected managed units (0.213675%); 467 profiles are human-attestation-only. Frozen PR #1995 candidate d334266680881cbda59de4ecd4df967c92159fa7 has 1 out of 472 (0.211864%) and 471 human-only profiles. pdd_cloud protected main 78eced4ec36844950b7ff3751ca92af7d3541235 has no verification-profile registry. No exact-SHA protected registry has a clean-clone scan satisfying the full machine-only predicate."
+    predicate_result: "Protected main c712cbb7e08c157757a238cb8e49d65a9a3a2239 has 1 machine-obligation profile out of 468 expected managed units (0.213675%); 467 profiles are human-attestation-only. Its immutable profile-evidence source is 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 at digest 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6. Frozen PR #1995 candidate d334266680881cbda59de4ecd4df967c92159fa7 has 1 out of 472 (0.211864%) and 471 human-only profiles. pdd_cloud protected main 78eced4ec36844950b7ff3751ca92af7d3541235 has no verification-profile registry. No exact-SHA protected registry has a clean-clone scan satisfying the full machine-only predicate."
     blocker: "Create machine obligations and current trusted machine evidence for every remaining unit after canonical routing and the protected checker release are complete: 467 on protected main, or 471 if all PR #1995 candidate units remain expected."
     owning_pr: null
   - order: 7
