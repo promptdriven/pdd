@@ -117,6 +117,15 @@ STANDALONE_CHECKER_PREAUTHORIZED_PATHS = {
 STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/standalone-checker-modules.json",
 }
+RELEASE_SYNC_CHECKER_WORKFLOW_PREAUTHORIZED_PATHS = {
+    ".github/workflows/release-sync-checker.yml",
+}
+FUTURE_RELEASE_SYNC_CHECKER_UNAUTHORIZED_WORKFLOW_PATHS = {
+    ".github/workflows/certificate-a-checker.yml",
+    ".github/workflows/oci-checker-runtime.yml",
+    ".github/workflows/release-checker-pin.yml",
+    ".github/workflows/release-checker.yml",
+}
 FUTURE_STANDALONE_CHECKER_AUTHORITY_PREFIXES = (
     ".pdd/global-sync/standalone-checker-",
     ".pdd/global-sync/gate2-",
@@ -161,6 +170,7 @@ PREAUTHORIZED_CHILD_PATHS = (
     | GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
     | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    | RELEASE_SYNC_CHECKER_WORKFLOW_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
     | {
         ".github/toolchains/playwright_manifest.py",
@@ -278,6 +288,25 @@ def _commit(root: Path, message: str) -> str:
     return subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True
     ).strip()
+
+
+def _install_release_sync_checker_workflow_preauthorization(root: Path) -> str:
+    """Commit the reviewed workflow rule as a synthetic protected base."""
+    exact = ".github/workflows/release-sync-checker.yml"
+    source_policy = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    release_rule = next(
+        row for row in source_policy["rules"] if row["pattern"] == exact
+    )
+    policy_path = root / ".pdd" / "sync-ownership.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    release_index = next(
+        index
+        for index, row in enumerate(policy["rules"])
+        if row["pattern"] == ".github/workflows/release.yml"
+    )
+    policy["rules"].insert(release_index + 1, release_rule)
+    policy_path.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
+    return _commit(root, "protect checker release workflow")
 
 
 def _requirements(prompt_path: PurePosixPath) -> list[str]:
@@ -1822,6 +1851,158 @@ def test_standalone_checker_package_boundary_is_exactly_preauthorized() -> None:
         (ROOT / path).is_file() and not (ROOT / path).is_symlink()
         for path in sorted(STANDALONE_CHECKER_PREAUTHORIZED_PATHS)
     )
+
+
+def test_release_sync_checker_workflow_is_exactly_preauthorized() -> None:
+    """Only the reviewed checker release workflow may be added later."""
+    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    rules = {row["pattern"]: row for row in ownership["rules"]}
+    assert RELEASE_SYNC_CHECKER_WORKFLOW_PREAUTHORIZED_PATHS == {
+        ".github/workflows/release-sync-checker.yml",
+    }
+    assert {
+        path: rules.get(path)
+        for path in RELEASE_SYNC_CHECKER_WORKFLOW_PREAUTHORIZED_PATHS
+    } == {
+        path: {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
+        for path in RELEASE_SYNC_CHECKER_WORKFLOW_PREAUTHORIZED_PATHS
+    }
+    assert [
+        row["pattern"]
+        for row in ownership["rules"]
+        if row["pattern"]
+        in {
+            ".github/workflows/release.yml",
+            *RELEASE_SYNC_CHECKER_WORKFLOW_PREAUTHORIZED_PATHS,
+        }
+    ] == [
+        ".github/workflows/release.yml",
+        ".github/workflows/release-sync-checker.yml",
+    ]
+
+    preauthorized = {
+        row["pattern"]
+        for row in ownership["rules"]
+        if row.get("preauthorize_absent", False)
+    }
+    assert not preauthorized & FUTURE_RELEASE_SYNC_CHECKER_UNAUTHORIZED_WORKFLOW_PATHS
+    assert all(
+        rules.get(path) is None
+        for path in FUTURE_RELEASE_SYNC_CHECKER_UNAUTHORIZED_WORKFLOW_PATHS
+    )
+    assert all(
+        not (ROOT / path).exists()
+        for path in RELEASE_SYNC_CHECKER_WORKFLOW_PREAUTHORIZED_PATHS
+    )
+
+
+def test_release_sync_checker_workflow_composes_offline_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """An offline checkout admits only the exact future checker workflow."""
+    exact = ".github/workflows/release-sync-checker.yml"
+    protected_source = tmp_path / "protected-preauth-source"
+    root = tmp_path / "release-sync-checker-preauth-composition"
+    subprocess.run(
+        ["git", "init", "-q", str(protected_source)],
+        check=True,
+        capture_output=True,
+    )
+    _git(
+        protected_source,
+        "fetch",
+        "-q",
+        "--no-tags",
+        str(ROOT),
+        "HEAD:refs/heads/protected-preauth",
+    )
+    assert subprocess.check_output(
+        ["git", "for-each-ref", "--format=%(refname)"],
+        cwd=protected_source,
+        text=True,
+    ).splitlines() == ["refs/heads/protected-preauth"]
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "-q",
+            "--no-hardlinks",
+            "--single-branch",
+            "--branch",
+            "protected-preauth",
+            str(protected_source),
+            str(root),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    protected_base = _install_release_sync_checker_workflow_preauthorization(root)
+    _git(root, "update-ref", "refs/remotes/origin/main", protected_base)
+    assert not any(
+        "release-sync-checker" in ref
+        for ref in subprocess.check_output(
+            ["git", "for-each-ref", "--format=%(refname)"], cwd=root, text=True
+        ).splitlines()
+    )
+
+    (root / exact).parent.mkdir(parents=True, exist_ok=True)
+    (root / exact).write_text("name: Synthetic checker release\n", encoding="utf-8")
+    exact_head = _commit(root, "compose synthetic checker release workflow")
+
+    assert set(
+        subprocess.check_output(
+            ["git", "diff", "--name-only", "origin/main...HEAD"],
+            cwd=root,
+            text=True,
+        ).splitlines()
+    ) == RELEASE_SYNC_CHECKER_WORKFLOW_PREAUTHORIZED_PATHS
+    for detector in (
+        "scripts/ci_detect_changed_modules.py",
+        "pdd/ci_detect_changed_modules.py",
+    ):
+        result = subprocess.run(
+            [sys.executable, detector, "--diff-base", "origin/main...HEAD"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert not result.stdout.strip()
+
+    manifest = build_unit_manifest(root, base_ref="origin/main", head_ref="HEAD")
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix()
+        in RELEASE_SYNC_CHECKER_WORKFLOW_PREAUTHORIZED_PATHS
+    }
+    assert set(records) == RELEASE_SYNC_CHECKER_WORKFLOW_PREAUTHORIZED_PATHS
+    assert not manifest.unaccounted_tracked_paths
+    assert not manifest.invalid_reasons
+    record = records[exact]
+    assert record.inventory.value == "HUMAN_OWNED"
+    assert record.candidate_id.role == "human-maintained"
+    assert record.ownership_provenance == (
+        f"protected-ownership:pdd-maintainers:{exact}"
+    )
+
+    for path in FUTURE_RELEASE_SYNC_CHECKER_UNAUTHORIZED_WORKFLOW_PATHS:
+        candidate = root / path
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text("name: Unauthorized future workflow\n", encoding="utf-8")
+        _git(root, "add", path)
+    unauthorized_head = _commit(root, "attempt future checker workflow authority")
+    unauthorized_manifest = build_unit_manifest(
+        root, base_ref=exact_head, head_ref=unauthorized_head
+    )
+    assert {
+        Path(path) for path in FUTURE_RELEASE_SYNC_CHECKER_UNAUTHORIZED_WORKFLOW_PATHS
+    } <= set(unauthorized_manifest.unaccounted_tracked_paths)
+    assert {
+        f"{path}: tracked path has no ownership rule"
+        for path in FUTURE_RELEASE_SYNC_CHECKER_UNAUTHORIZED_WORKFLOW_PATHS
+    } <= set(unauthorized_manifest.invalid_reasons)
 
 
 def test_standalone_checker_package_boundary_composes_offline_and_fails_closed(
