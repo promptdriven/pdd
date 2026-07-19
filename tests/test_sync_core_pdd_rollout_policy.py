@@ -107,7 +107,7 @@ PR_2017_ABSENT_METADATA_PATHS = {
     ".pdd/meta/fix_error_loop_python_run.json",
     ".pdd/meta/get_test_command_python_run.json",
 }
-WAVE1_AGENTIC_SYNC_PREAUTHORIZED_PATHS = (
+WAVE1_AGENTIC_SYNC_APPENDED_PREAUTHORIZED_PATHS = (
     ".pdd/meta/auto_deps_main_python.json",
     ".pdd/meta/commands_maintenance_python.json",
     ".pdd/meta/fingerprint_transaction_python.json",
@@ -125,6 +125,13 @@ WAVE1_AGENTIC_SYNC_PREAUTHORIZED_PATHS = (
     "tests/test_issue_1900_surface_contract.py",
     "tests/test_sync_plan.py",
     "tests/test_transactional_finalizer.py",
+)
+WAVE1_AGENTIC_SYNC_STRENGTHENED_PREAUTHORIZED_PATH = (
+    ".pdd/meta/agentic_sync_python_run.json"
+)
+WAVE1_AGENTIC_SYNC_PREAUTHORIZED_PATHS = (
+    WAVE1_AGENTIC_SYNC_STRENGTHENED_PREAUTHORIZED_PATH,
+    *WAVE1_AGENTIC_SYNC_APPENDED_PREAUTHORIZED_PATHS,
 )
 PREAUTHORIZED_CHILD_PATHS = (
     LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS
@@ -1657,7 +1664,7 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
 
 
 def test_wave1_agentic_sync_paths_are_exactly_preauthorized() -> None:
-    """Wave 1 appends authority for only its 17 reviewed first-appearance paths."""
+    """Wave 1 preauthorizes only its 18 reviewed first-appearance paths."""
     ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
     expected = [
         {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
@@ -1669,7 +1676,11 @@ def test_wave1_agentic_sync_paths_are_exactly_preauthorized() -> None:
         if row["pattern"] in WAVE1_AGENTIC_SYNC_PREAUTHORIZED_PATHS
     ]
     assert matching == expected
-    assert ownership["rules"][-len(expected) :] == expected
+    appended = [
+        {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
+        for path in WAVE1_AGENTIC_SYNC_APPENDED_PREAUTHORIZED_PATHS
+    ]
+    assert ownership["rules"][-len(appended) :] == appended
 
 
 def test_gate1_paths_are_exactly_preauthorized() -> None:
@@ -1827,7 +1838,15 @@ def test_pr2017_absent_metadata_authorization_is_exact_six_path_set() -> None:
         and row["pattern"] in PR_2017_ABSENT_METADATA_PATHS
     ]
 
-    assert not [row for row in base_rules if row not in head_rules]
+    removed_rules = [row for row in base_rules if row not in head_rules]
+    assert removed_rules == [
+        {
+            "inventory": "HUMAN_OWNED",
+            "owner": "pdd-maintainers",
+            "pattern": WAVE1_AGENTIC_SYNC_STRENGTHENED_PREAUTHORIZED_PATH,
+            "role": "human-maintained",
+        }
+    ]
     assert len(PR_2017_ABSENT_METADATA_PATHS) == len(added_rules) == 6
     assert {row["pattern"] for row in added_rules} == PR_2017_ABSENT_METADATA_PATHS
     assert added_rules == sorted(added_rules, key=lambda row: row["pattern"])
