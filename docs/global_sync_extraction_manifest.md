@@ -8,7 +8,7 @@ Status: ratified extraction boundary for the first checker release.
 | --- | --- |
 | Diagnostic base | `39776aa9bb027c638812a01b8dabbe03cab92f64` |
 | Frozen diagnostic head | `d334266680881cbda59de4ecd4df967c92159fa7` |
-| Protected main | `e7735e0f35a0915707142bfd4c767df59f8c3b9e` |
+| Protected main | `c712cbb7e08c157757a238cb8e49d65a9a3a2239` |
 
 This is a three-way, hunk-level manifest, not a proposal to merge the frozen
 branch.  The only permitted classifications are:
@@ -30,7 +30,7 @@ Reproducible inventory and equivalence checks:
 ```bash
 base=39776aa9bb027c638812a01b8dabbe03cab92f64
 head=d334266680881cbda59de4ecd4df967c92159fa7
-main=e7735e0f35a0915707142bfd4c767df59f8c3b9e
+main=c712cbb7e08c157757a238cb8e49d65a9a3a2239
 git diff --name-only "$base" "$head" | sort -u | wc -l       # 48
 git diff --check "$base" "$head"                              # clean
 comm -12 \
@@ -50,10 +50,11 @@ git diff --unified=0 "$base" "$head" -- pdd/sync_core/finalize.py \
 ```
 
 `git merge-base "$head" "$main"` is the diagnostic base. Protected main now
-also contains `2c917fde4` and the docs-gate squash merge `e7735e0f3` after the
-previous `c887daba0` and `2cacc91f9` commits. The hunk-level comparison below,
-rather than commit-level `git cherry`, finds zero direct changed hunks with a
-patch-equivalent foundation already merged. The
+also contains `2c917fde4`, the docs-gate squash merge `e7735e0f3`, and the
+#2216 ownership-prerequisite squash merge `c712cbb7e`; the latter contributes
+exact absent-path preauthorizations for the four Gate 1 artifacts. The
+hunk-level comparison below, rather than commit-level `git cherry`, finds zero
+direct changed hunks with a patch-equivalent foundation already merged. The
 `already-merged-prerequisite` net is deliberately zero, rather than treating an
 overlapping filename or the common base as equivalence.
 
@@ -66,12 +67,12 @@ not just their enclosing filenames.
 
 | Path | Base to protected main | Base to frozen head | Resolution of frozen-head hunks |
 | --- | --- | --- | --- |
-| `.pdd/sync-ownership.json` | five additions at base lines 173, 277, 368, 374, and 393: six `.pdd/meta/*` PR #2017 absent-metadata rules | two additions at base lines 9821 and 13605: one Vitest provenance script and four Vitest verifier-test rules | operands and locations are disjoint; both frozen-head hunks are `excluded-diagnostic` |
+| `.pdd/sync-ownership.json` | eight additions at base lines 173, 277, 368, 374, 393, 3002, 5906, and 13325: six `.pdd/meta/*` PR #2017 absent-metadata rules plus four exact #2216 Gate 1 preauthorizations | two additions at base lines 9821 and 13605: one Vitest provenance script and four Vitest verifier-test rules | operands and locations are disjoint; both frozen-head hunks are `excluded-diagnostic` |
 | `.pdd/verification-profile-rotations.json` | one `+22` hunk after base line 263 adding `get_test_command` and `fix_error_loop` PR #2017 rotations | one `-1/+1` hunk at base line 261 changing the story rotation's head-policy digest for four Vitest diagnostic profiles | adding rotation rows is not equivalent to changing the existing row's digest; the frozen-head hunk is `excluded-diagnostic` |
 | `docs/global_sync_evidence_ledger.yaml` | 78 hunks, `+920/-143`: the merged #2213 current-state ledger, governance, gate predicates, and historical preservation | 34 hunks, `+190/-67`: frozen hosted Vitest/Stage A0/A evidence and replay records | both documents are evidence ledgers but their reviewed heads, predicates, and operands differ; every frozen-head hunk remains `excluded-diagnostic` and the merged ledger is not a frozen-head prerequisite |
 | `docs/global_sync_resolution_plan.md` | 42 hunks, `+793/-120`: the merged #2213 ratified critical path, lifecycle/certificate program, and historical boundary | 29 hunks, `+390/-62`: frozen diagnostic protocol and status material | both documents describe global-sync work, but no frozen diagnostic hunk is patch-equivalent to the merged plan; every frozen-head hunk remains `excluded-diagnostic` |
 | `pdd/sync_core/verification.py` | five hunks at base lines 379, 635, 819, 1418, and 2127: two bootstrap rows plus formatting-only changes | nine hunks at base lines 19, 73, 455, 495, 541, 549, 1755, 2069, and 2074: assurance import/input/parser/digest/merge | no changed symbol or operand is equivalent; all nine frozen-head assurance hunks are `excluded-diagnostic` |
-| `tests/test_sync_core_pdd_rollout_policy.py` | 19 hunks: PR #2017 constants/path sets/rotation assertions/tests plus formatting, including an insertion after the PDD-1989 test | six hunks at base lines 34, 36, 49, 161, 757, and 759: diagnostic managed-unit/profile digests and PDD-1989 count split | the nearby PDD-1989 insertion on main does not change the frozen head's count assertions; all six frozen-head hunks are `excluded-diagnostic` |
+| `tests/test_sync_core_pdd_rollout_policy.py` | 20 hunks: PR #2017 constants/path sets/rotation assertions/tests plus #2216 exact-four-path preauthorization and offline composition coverage, including an insertion after the PDD-1989 test | six hunks at base lines 34, 36, 49, 161, 757, and 759: diagnostic managed-unit/profile digests and PDD-1989 count split | the nearby PDD-1989 insertion and later protected preauthorization coverage on main do not change the frozen head's count assertions; all six frozen-head hunks are `excluded-diagnostic` |
 
 This also explains why none of these six rows is
 `already-merged-prerequisite`: main contains different additions, not a

@@ -1,5 +1,5 @@
 schema_version: 4
-updated_at: "2026-07-18"
+updated_at: "2026-07-19"
 tracking_issue: "https://github.com/promptdriven/pdd/issues/1932"
 controlling_plan: "docs/global_sync_resolution_plan.md"
 status_vocabulary: [pending, in-progress, passed]
@@ -211,17 +211,17 @@ certificate_program:
     pdd_cloud_vendored_sync_semantics: null
     real_pdd_cloud_canary: pending
 live_rebaseline:
-  captured_at: "2026-07-18"
+  captured_at: "2026-07-19"
   gates_passed: 0
   gates_required: 10
   qualifying_nights: 0
   qualifying_nights_required: 7
   pdd_registry_state: protected_main
-  pdd_repository_sha: "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
+  pdd_repository_sha: "c712cbb7e08c157757a238cb8e49d65a9a3a2239"
   pdd_profile_evidence_source_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
   pdd_profile_registry_sha256: "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
   pdd_profile_evidence_source_equivalent_to_current_protected_main: true
-  pdd_profile_source_current_equivalence_predicate: "git diff --quiet 2cacc91f90759ff45f1ad976da3b773e1a5f07a5..e7735e0f35a0915707142bfd4c767df59f8c3b9e -- .pdd/verification-profiles.json && sha256sum .pdd/verification-profiles.json == 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
+  pdd_profile_source_current_equivalence_predicate: "git diff --quiet 2cacc91f90759ff45f1ad976da3b773e1a5f07a5..c712cbb7e08c157757a238cb8e49d65a9a3a2239 -- .pdd/verification-profiles.json && sha256sum .pdd/verification-profiles.json == 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
   pdd_expected_managed_units: 468
   pdd_verification_profiles: 468
   pdd_machine_obligation_profiles: 1
@@ -246,7 +246,7 @@ live_rebaseline:
   pdd_cloud_repository_sha: "78eced4ec36844950b7ff3751ca92af7d3541235"
   pdd_cloud_protected_profile_registry_present: false
   pdd_cloud_demanded_validator_ids: null
-  single_next_blocker: "Open the guarded gate-1 PR from e7735e0f35a0915707142bfd4c767df59f8c3b9e with the exact local PDD pytest-only adapter-demand artifact and three-way extraction manifest, then obtain its complete review and hosted evidence."
+  single_next_blocker: "Open the guarded gate-1 PR from c712cbb7e08c157757a238cb8e49d65a9a3a2239 with the exact local PDD pytest-only adapter-demand artifact and three-way extraction manifest; #2216 closes only the four-path ownership prerequisite, then obtain complete Gate 1 review and hosted evidence."
   same_day_deliverable: "Publish the reviewed PDD-only adapter-demand artifact and complete three-way #1995 extraction manifest as the gate-1 PR."
   pr_1995:
     remote_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
@@ -267,19 +267,19 @@ current_critical_path:
   owning_pr: null
   reviewed_diagnostic_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
   reviewed_head_protected_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
-  evidence_snapshot_main_sha: "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
-  minimum_required_main_ancestor_sha: "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
+  evidence_snapshot_main_sha: "c712cbb7e08c157757a238cb8e49d65a9a3a2239"
+  minimum_required_main_ancestor_sha: "c712cbb7e08c157757a238cb8e49d65a9a3a2239"
   immutable_profile_evidence_source_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
   immutable_profile_evidence_digest_sha256: "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
-  source_current_profile_equivalence_predicate: "git diff --quiet 2cacc91f90759ff45f1ad976da3b773e1a5f07a5..e7735e0f35a0915707142bfd4c767df59f8c3b9e -- .pdd/verification-profiles.json && sha256sum .pdd/verification-profiles.json == 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
+  source_current_profile_equivalence_predicate: "git diff --quiet 2cacc91f90759ff45f1ad976da3b773e1a5f07a5..c712cbb7e08c157757a238cb8e49d65a9a3a2239 -- .pdd/verification-profiles.json && sha256sum .pdd/verification-profiles.json == 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
   source_current_profile_equivalence: true
   reviewed_head_contains_minimum_main_ancestor: false
   next_cycle_live_main_gate:
     status: pending
     resolution_command: "git fetch origin main && git rev-parse origin/main"
     required_predicate: "git merge-base --is-ancestor $(git rev-parse origin/main) $PDD_SHA"
-    observed_sha: "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
-    blocker: "Main advanced through the #2213 docs-gate squash merge. This does not invalidate exact-head diagnostic evidence, but no release extraction may treat d334266680881cbda59de4ecd4df967c92159fa7 as containing live main; open the guarded gate-1 PR from e7735e0f35a0915707142bfd4c767df59f8c3b9e."
+    observed_sha: "c712cbb7e08c157757a238cb8e49d65a9a3a2239"
+    blocker: "Main advanced through #2213 and the #2216 four-path ownership prerequisite. This does not invalidate exact-head diagnostic evidence, but no release extraction may treat d334266680881cbda59de4ecd4df967c92159fa7 as containing live main; open the guarded gate-1 PR from c712cbb7e08c157757a238cb8e49d65a9a3a2239."
   local_stage_a_candidate:
     status: passed
     exact_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
@@ -616,6 +616,19 @@ docs_gate_pr:
   codeql_run_url: "https://github.com/promptdriven/pdd/actions/runs/29663044528"
   heal_run_url: "https://github.com/promptdriven/pdd/actions/runs/29663045021"
   auto_heal_check_url: "https://github.com/promptdriven/pdd/runs/88128812347"
+preauthorization_pr:
+  url: "https://github.com/promptdriven/pdd/pull/2216"
+  reviewed_head_sha: "c1af7b2f5faab2bbe186ad8179afb1d1e1b09d0e"
+  reviewed_head_url: "https://github.com/promptdriven/pdd/commit/c1af7b2f5faab2bbe186ad8179afb1d1e1b09d0e"
+  merge_sha: "c712cbb7e08c157757a238cb8e49d65a9a3a2239"
+  merge_commit_url: "https://github.com/promptdriven/pdd/commit/c712cbb7e08c157757a238cb8e49d65a9a3a2239"
+  merged_at: "2026-07-19T01:53:17Z"
+  pr_check_rollup_url: "https://github.com/promptdriven/pdd/pull/2216/checks"
+  pr_check_rollup_total: 12
+  pr_check_rollup_success: 12
+  exact_head_hosted_green: true
+  merged: true
+  closes_prerequisite: "Exact absent-path ownership preauthorization for the four Gate 1 artifacts only; it does not provide Gate 1 hosted, merge, release, deployment, or certification evidence."
 steps:
   - order: 1
     name: "Reviewable implementation foundations"
@@ -630,24 +643,24 @@ steps:
       released: pending
       deployed: pending
       certified: pending
-    exact_repository_sha: "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
+    exact_repository_sha: "c712cbb7e08c157757a238cb8e49d65a9a3a2239"
     contract_rebaseline_recorded: true
     validation_commands:
       - "git diff --name-status 39776aa9bb027c638812a01b8dabbe03cab92f64..d334266680881cbda59de4ecd4df967c92159fa7"
-      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --profile-evidence-source-sha 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 --protected-main-sha e7735e0f35a0915707142bfd4c767df59f8c3b9e --profiles-sha256 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6 --output \"$RUNNER_TEMP/pdd-adapter-demand.json\" --require-exact-validators pytest --require-no-unknown-adapters"
+      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --profile-evidence-source-sha 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 --protected-main-sha c712cbb7e08c157757a238cb8e49d65a9a3a2239 --profiles-sha256 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6 --output \"$RUNNER_TEMP/pdd-adapter-demand.json\" --require-exact-validators pytest --require-no-unknown-adapters"
     planned_future_evidence:
       extraction_manifest_verifier:
         status: planned-non-executable
-        command: "python -m pdd.sync_core.extraction_manifest_verifier --manifest docs/global_sync_extraction_manifest.md --diagnostic-base 39776aa9bb027c638812a01b8dabbe03cab92f64 --diagnostic-head d334266680881cbda59de4ecd4df967c92159fa7 --protected-main e7735e0f35a0915707142bfd4c767df59f8c3b9e --require-complete-net-diff --require-disjoint-classifications already-merged-prerequisite,release-required-delta,excluded-diagnostic --require-fresh-main-release-prs --require-complete-review --output \"$RUNNER_TEMP/extraction-manifest.json\""
+        command: "python -m pdd.sync_core.extraction_manifest_verifier --manifest docs/global_sync_extraction_manifest.md --diagnostic-base 39776aa9bb027c638812a01b8dabbe03cab92f64 --diagnostic-head d334266680881cbda59de4ecd4df967c92159fa7 --protected-main c712cbb7e08c157757a238cb8e49d65a9a3a2239 --require-complete-net-diff --require-disjoint-classifications already-merged-prerequisite,release-required-delta,excluded-diagnostic --require-fresh-main-release-prs --require-complete-review --output \"$RUNNER_TEMP/extraction-manifest.json\""
         blocker: "Not implemented in this cycle; it is planned future evidence and cannot prove gate 1."
     required_predicate:
       diagnostic_base_sha: "39776aa9bb027c638812a01b8dabbe03cab92f64"
       diagnostic_head_sha: "d334266680881cbda59de4ecd4df967c92159fa7"
-      protected_main_sha: "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
+      protected_main_sha: "c712cbb7e08c157757a238cb8e49d65a9a3a2239"
       immutable_profile_evidence_source_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
       immutable_profile_evidence_digest_sha256: "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
       source_current_profile_equivalence: true
-      source_current_profile_equivalence_predicate: "git diff --quiet 2cacc91f90759ff45f1ad976da3b773e1a5f07a5..e7735e0f35a0915707142bfd4c767df59f8c3b9e -- .pdd/verification-profiles.json"
+      source_current_profile_equivalence_predicate: "git diff --quiet 2cacc91f90759ff45f1ad976da3b773e1a5f07a5..c712cbb7e08c157757a238cb8e49d65a9a3a2239 -- .pdd/verification-profiles.json"
       complete_diagnostic_net_diff_accounted: true
       classification_values_exact: [already-merged-prerequisite, release-required-delta, excluded-diagnostic]
       every_changed_path_has_exactly_one_classification: true
@@ -664,12 +677,12 @@ steps:
       adapter_demand_artifact: "docs/global_sync_pdd_adapter_demand.json"
       adapter_demand_schema_version: 2
       adapter_demand_profile_evidence_source_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
-      adapter_demand_protected_main_sha: "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
+      adapter_demand_protected_main_sha: "c712cbb7e08c157757a238cb8e49d65a9a3a2239"
       adapter_demand_registry_sha256: "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
       extraction_manifest: "docs/global_sync_extraction_manifest.md"
       local_sol_review_status: "pending same-Sol correction verification; the schema-v2 artifact and current head are not approved"
-    predicate_result: "The extraction manifest and its prior evidence are locally Sol-approved. The schema-v2 adapter-demand artifact and current head are pending same-Sol correction verification; no current-head approval is asserted. The manifest is rebaselined to exhaustive three-way classification against protected main e7735e0f35a0915707142bfd4c767df59f8c3b9e, while the immutable 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 profile source remains equivalent at digest 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6."
-    blocker: "Open the guarded gate-1 PR from e7735e0f35a0915707142bfd4c767df59f8c3b9e with these exact local artifacts, then obtain complete net-diff review and hosted evidence; artifact creation is not the next action."
+    predicate_result: "The extraction manifest and its prior evidence are locally Sol-approved. The schema-v2 adapter-demand artifact and current head are pending same-Sol correction verification; no current-head approval is asserted. The manifest is rebaselined to exhaustive three-way classification against protected main c712cbb7e08c157757a238cb8e49d65a9a3a2239, while the immutable 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 profile source remains equivalent at digest 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6. PR #2216 closes the exact four-path ownership prerequisite only."
+    blocker: "Open the guarded gate-1 PR from c712cbb7e08c157757a238cb8e49d65a9a3a2239 with these exact local artifacts, then obtain complete net-diff review and hosted evidence; #2216 does not pass Gate 1 and artifact creation is not the next action."
     owning_pr: null
   - order: 2
     name: "Protected reviewed checker release and pinned wheel digest"
@@ -775,16 +788,16 @@ steps:
       released: pending
       deployed: pending
       certified: pending
-    exact_repository_sha: "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
+    exact_repository_sha: "c712cbb7e08c157757a238cb8e49d65a9a3a2239"
     failure_baseline_sha: "b09b6bef2c8c4bee762965be463527cd0b050154"
     diagnostic_head_sha: "4bba47d60e03093707962712334e7340734a84a4"
     current_stage: "pdd-adapter-demand-matrix"
     cause_red_status: frozen-diagnostic
     validation_commands:
-      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --profile-evidence-source-sha 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 --protected-main-sha e7735e0f35a0915707142bfd4c767df59f8c3b9e --profiles-sha256 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6 --output \"$RUNNER_TEMP/pdd-adapter-demand.json\" --require-exact-validators pytest --require-no-unknown-adapters"
+      - "python -m pdd.sync_core.adapter_demand_verifier --pdd-profiles .pdd/verification-profiles.json --profile-evidence-source-sha 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 --protected-main-sha c712cbb7e08c157757a238cb8e49d65a9a3a2239 --profiles-sha256 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6 --output \"$RUNNER_TEMP/pdd-adapter-demand.json\" --require-exact-validators pytest --require-no-unknown-adapters"
       - "pytest -q tests/test_sync_core_runner_pytest.py -k 'collected or executed or plugin or skip or xfail or deselect or support'"
     required_predicate:
-      pdd_repository_sha: "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
+      pdd_repository_sha: "c712cbb7e08c157757a238cb8e49d65a9a3a2239"
       pdd_profile_evidence_source_sha: "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
       pdd_profile_registry_sha256: "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
       pdd_profile_count: 468
@@ -800,7 +813,7 @@ steps:
       undemanded_universal_adapters_may_be_deferred: true
       frozen_diagnostic_required_for_gate_pass: false
     artifact_check_urls: []
-    predicate_result: "The canonical PDD-only adapter-demand artifact binds immutable profile evidence source 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 and protected main e7735e0f35a0915707142bfd4c767df59f8c3b9e, requiring byte-identical registry digest 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6. Protected PDD profiles demand exactly pytest; no active PDD profile demands Vitest, Jest, or Playwright. The active gate is PDD-only until an exact-SHA pdd_cloud protected registry exists."
+    predicate_result: "The canonical PDD-only adapter-demand artifact binds immutable profile evidence source 2cacc91f90759ff45f1ad976da3b773e1a5f07a5 and protected main c712cbb7e08c157757a238cb8e49d65a9a3a2239, requiring byte-identical registry digest 56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6. Protected PDD profiles demand exactly pytest; no active PDD profile demands Vitest, Jest, or Playwright. The active gate is PDD-only until an exact-SHA pdd_cloud protected registry exists."
     blocker: "Review the dual-SHA exact adapter-demand artifact and prove the pytest adapter's complete collection/execution contract; pdd_cloud's protected registry remains absent."
     owning_pr: null
     archived_validation_commands:

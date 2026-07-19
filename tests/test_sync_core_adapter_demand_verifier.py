@@ -26,10 +26,12 @@ from pdd.sync_core.adapter_demand_verifier import (
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT = ROOT / "docs" / "global_sync_pdd_adapter_demand.json"
+EXPECTED_PROTECTED_MAIN_SHA = "c712cbb7e08c157757a238cb8e49d65a9a3a2239"
 
 
 def test_adapter_demand_protected_registry_matches_committed_artifact() -> None:
     """The committed artifact is the exact canonical protected-Git result."""
+    assert PROTECTED_MAIN_SHA == EXPECTED_PROTECTED_MAIN_SHA
     demand = build_adapter_demand(
         ROOT,
         PROFILE_EVIDENCE_SOURCE_SHA,
