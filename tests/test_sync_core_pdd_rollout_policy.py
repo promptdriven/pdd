@@ -792,9 +792,7 @@ def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
 
 def test_pr2017_phase_a_is_dormant_on_current_protected_base() -> None:
     """The prerequisite installs authority without consuming protected bytes."""
-    manifest = build_unit_manifest(
-        ROOT, base_ref=PR_2017_PHASE_A_BASE, head_ref="HEAD"
-    )
+    manifest = build_unit_manifest(ROOT, base_ref="origin/main", head_ref="HEAD")
     profiles = load_verification_profiles(ROOT, manifest)
 
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
