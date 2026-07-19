@@ -291,7 +291,7 @@ def _commit(root: Path, message: str) -> str:
 
 
 def _install_release_sync_checker_workflow_preauthorization(root: Path) -> str:
-    """Commit the reviewed workflow rule as a synthetic protected base."""
+    """Return a protected base containing exactly the reviewed workflow rule."""
     exact = ".github/workflows/release-sync-checker.yml"
     source_policy = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
     release_rule = next(
@@ -299,6 +299,12 @@ def _install_release_sync_checker_workflow_preauthorization(root: Path) -> str:
     )
     policy_path = root / ".pdd" / "sync-ownership.json"
     policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    existing_rules = [row for row in policy["rules"] if row["pattern"] == exact]
+    if existing_rules:
+        assert existing_rules == [release_rule]
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
     release_index = next(
         index
         for index, row in enumerate(policy["rules"])
