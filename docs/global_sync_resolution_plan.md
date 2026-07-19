@@ -88,10 +88,12 @@ release state.
 5. Gate 1 PR #2214 merged its reviewed adapter-demand artifact and extraction
    manifest as `63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee`. Its former
    ledger-generator/drift-check blocker is superseded by #2219's protected-main
-   merge. The next bounded blocker is Gate 2's pytest-only checker extraction
-   layer and pinned wheel digest. Any early certificate is explicitly narrower
-   and cannot satisfy the final global predicate until all managed units and
-   both repositories meet the gate-10 denominator.
+   merge. The canonical next blocker is
+   `gate2-standalone-checker-package-boundary`: under 24 hours, open the
+   standalone non-`pdd` checker extraction manifest/package-boundary PR; OCI and
+   protected pin wiring follow strictly. Any early certificate is explicitly
+   narrower and cannot satisfy the final global predicate until all managed
+   units and both repositories meet the gate-10 denominator.
 
 #### Historical attempt ledger
 
@@ -657,15 +659,23 @@ Those artifacts are not green merge evidence. The remote branch and all unpushed
 corrections are frozen as diagnostic evidence and are not on the gates 1-6
 critical path.
 
+#### 2026-07-19 Gate 2 architecture rebaseline
+
+Protected `main` is now [`35e903cb5ed103980affbdf2a64ef7a80a66ca4a`](https://github.com/promptdriven/pdd/commit/35e903cb5ed103980affbdf2a64ef7a80a66ca4a). [PR #2223](https://github.com/promptdriven/pdd/pull/2223) reviewed head [`0ca5eb173a31c2ed2b46d7db0feeb88c62645907`](https://github.com/promptdriven/pdd/commit/0ca5eb173a31c2ed2b46d7db0feeb88c62645907) merged as [`9c1dc6f2fb1b621ed5320f407f5ae6a2c5299214`](https://github.com/promptdriven/pdd/commit/9c1dc6f2fb1b621ed5320f407f5ae6a2c5299214), and [PR #2224](https://github.com/promptdriven/pdd/pull/2224) reviewed head [`862f725d9d9f41b5509dbbcba61d7789f49ad74b`](https://github.com/promptdriven/pdd/commit/862f725d9d9f41b5509dbbcba61d7789f49ad74b) merged as that protected head. Both had 12 green checks; #2223 adds only the released-checker evidence wrapper and #2224 only preauthorizes the absent target-lock path. Neither releases nor pins a checker.
+
+[PR #2225](https://github.com/promptdriven/pdd/pull/2225), closed unmerged, is diagnostic evidence only and cannot advance Gate 2. Attempt 1, head `09015bcc79c00575262e8c23d9b14693ae8be80f`, ended in a build-version failure at [job 88224039194](https://github.com/promptdriven/pdd/actions/runs/29698754085/job/88224039194). Attempt 2, head `d060da1cc1d6c81abf0c42cf5df69ac81d79a75e`, ended in a read-only build-source failure at [job 88224395133](https://github.com/promptdriven/pdd/actions/runs/29698879393/job/88224395133). Attempt 3, closed head [`0bae19c2fb9575d8b8edccaeee3c5d9420e00e9f`](https://github.com/promptdriven/pdd/commit/0bae19c2fb9575d8b8edccaeee3c5d9420e00e9f), built `pdd-cli 0.0.0` and resolved the Python closure, then candidate-owned `runpy` imported eager `pdd.__init__` → `update_main.py` → GitPython without a `git` executable at [job 88224752678](https://github.com/promptdriven/pdd/actions/runs/29699017734/job/88224752678). No artifact upload or target lock completed. `GIT_PYTHON_REFRESH=quiet` is rejected.
+
+Gate 2 is therefore ordered as: (1) a fresh separately released standalone checker under a non-`pdd` top-level package, with checker-only dependencies, strict lock/RECORD validation, and an exact `z3_solver-4.16.0.0-py3-none-manylinux_2_27_x86_64.whl` tag regression; (2) a sealed checker OCI runtime with Git/system closure, pinned base, Debian snapshot/InRelease, exact package and final-image digests, and signed provenance binding the exact released checker wheel digest and exact checker dependency-lock digest as well as Dockerfile/source SHA, image, SBOM, and dpkg inventory. Before launch, protected verification proves installed checker files and `RECORD` equivalent to the pinned wheel. Runtime execution uses only the verified absolute protected interpreter and installed entrypoint with `-I -S`, never a module resolved from candidate checkout or CWD. Signed evidence carries wheel, lock, image, SBOM/dpkg inventory, interpreter, and entrypoint identities. The runtime also has network-none/read-only root and candidate mounts, a sanitized environment, and a clean exact-SHA clone smoke; then (3) protected release and pin wiring for the checker wheel, OCI attestation, expectations, workflow, wheelhouse, scenarios, PATH, and verifier inputs. Candidates that unconditionally pass, print environment values, or edit scenarios remain red and unsigned. Non-goals are a `pdd/__init__` refactor, OCI/release/certificates in layer 1, checker semantic or candidate-policy changes in layer 2, and certificate promotion in layer 3. All new execution-binding predicates remain pending; no hosted-green, merged, released, deployed, or certified Gate 2 evidence exists.
+
 The deterministic ledger generator is now merged as [PR #2219](https://github.com/promptdriven/pdd/pull/2219): Sol HIGH approved exact reviewed head [`06d976de23f6da45c9078fdd1a8f89dbf1aecd2c`](https://github.com/promptdriven/pdd/commit/06d976de23f6da45c9078fdd1a8f89dbf1aecd2c) after full-net review and same-reviewer finding verification; all 12 hosted checks were green, including Unit workflow [29680411144](https://github.com/promptdriven/pdd/actions/runs/29680411144), heal [29680410549](https://github.com/promptdriven/pdd/actions/runs/29680410549), CodeQL [29680409993](https://github.com/promptdriven/pdd/actions/runs/29680409993), and auto-heal [88175432245](https://github.com/promptdriven/pdd/runs/88175432245). Its protected ledger-drift step passed and it squash-merged at [`fb344f1c66e807dc51cac0f5363e5484cc487de9`](https://github.com/promptdriven/pdd/commit/fb344f1c66e807dc51cac0f5363e5484cc487de9) on 2026-07-19T09:34:05Z. The local record is 55 ledger tests passed, pylint 10/10, live `--check --verify-remote` passed, source/generated bytes equal, and architecture and protected-ownership checks passed. Only `implemented`, `hosted_green`, and `merged` are promoted by the `github-pr-checks` bundle; local and independent-review states remain in progress, and release, deployment, certification, Gate 2, and either certificate remain pending.
 
 Ownership prerequisite [PR #2220](https://github.com/promptdriven/pdd/pull/2220) is supporting evidence only: reviewed head [`1c2abbdb495f9364614fe95fb8670b55275d2f70`](https://github.com/promptdriven/pdd/commit/1c2abbdb495f9364614fe95fb8670b55275d2f70) passed all 12 hosted checks and squash-merged as [`67c118bd2f469d780987f93e9b8edf663dd40b4b`](https://github.com/promptdriven/pdd/commit/67c118bd2f469d780987f93e9b8edf663dd40b4b) on 2026-07-19T08:19:35Z. It is not a promotion state or gate pass.
 
 Protected PDD `main` at
-`fb344f1c66e807dc51cac0f5363e5484cc487de9` contains 468 expected managed
+`35e903cb5ed103980affbdf2a64ef7a80a66ca4a` contains 468 expected managed
 units and 468 profiles. The immutable profile-evidence source is
 `2cacc91f90759ff45f1ad976da3b773e1a5f07a5`; its registry is profile-equivalent
-to live main (`git diff --quiet 2cacc91f..fb344f1c -- .pdd/verification-profiles.json`)
+to live main (`git diff --quiet 2cacc91f..35e903cb -- .pdd/verification-profiles.json`)
 at digest `56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6`.
 Only one profile has a required machine-test obligation;
 467 are human-attestation-only, so protected machine-obligation profile coverage
@@ -730,10 +740,12 @@ result globally certified.
 The deterministic ledger generator named in the YAML and its protected drift
 check are merged and green. They render the canonical ledger from an explicit
 versioned YAML source and fail closed on duplicate keys, malformed schema/state
-rows, or byte drift. The single next blocker is Gate 2: release the pytest-only
-checker from the next bounded fresh-main extraction layer and pin its wheel
-digest. That same-day deliverable is intentionally smaller than the whole
-release and does not authorize a release or certificate claim. The named
+rows, or byte drift. The canonical blocker
+`gate2-standalone-checker-package-boundary` requires the standalone non-`pdd`
+checker extraction manifest/package-boundary PR as the under-24-hour
+deliverable; the sealed OCI and protected pin wiring follow strictly. This
+deliverable is intentionally smaller than the whole release and does not
+authorize a release or certificate claim. The named
 `extraction_manifest_verifier` is planned future evidence only; it is not
 implemented and does not prove gate 1.
 
@@ -745,8 +757,8 @@ are extracted onto fresh live-main PRs and receive complete net-diff review.
 
 | Order | Unblock | Required exit evidence |
 | --- | --- | --- |
-| 1 | Rebaseline against protected live main. Inventory already-merged prerequisites, release-required #1995 deltas, and excluded diagnostic work in `docs/global_sync_extraction_manifest.md`; define only the fresh-main layers actually required for a pytest-only checker release. | The manifest accounts for the complete #1995 net diff, identifies already-protected foundations without re-extracting them, excludes all undemanded diagnostics, and maps every release-required delta to a bounded fresh-main PR with complete net-diff review. |
-| 2 | The ledger generator and protected drift check are merged. Extract and review the next bounded pytest-only checker layer from fresh live main, then publish the checker from protected reviewed PRs and a tag and pin its wheel digest in protected CI. PR #1995 remains diagnostic evidence and is not the release vehicle. The released checker, not candidate code, owns scenario definitions, lifecycle metrics, certificate predicate recomputation, and signing. Candidate generators and tests run only in credential-free children. | The bounded extraction has complete review, hosted green, and ancestry evidence; the released wheel digest is pinned. A candidate change that returns unconditional PASS, edits lifecycle scenarios, or prints environment variables still produces a red unsigned observation; the released checker artifact digest and workflow identity are present in the signed certificate. |
+| 1 | Rebaseline against protected live main. Inventory already-merged prerequisites, release-required deltas, and excluded diagnostic work in `docs/global_sync_extraction_manifest.md`; deliver the standalone non-`pdd` checker package boundary before OCI and protected pin wiring. | The manifest accounts for the frozen #1995 net diff and #2225 diagnostic attempts without treating either as a release vehicle, identifies already-protected foundations without re-extracting them, excludes diagnostic workflow/bootstrap work, and maps every release-required delta to a bounded fresh-main PR with complete net-diff review. |
+| 2 | Extract a standalone non-`pdd` checker distribution with checker-only dependencies, strict lock/RECORD validation, and corrected compatible-wheel tag handling; then seal it in a separately pinned Git-capable OCI runtime and wire protected release/pin expectations. #2225 is diagnostic evidence only, never the release vehicle. | All three layers have their distinct lifecycle evidence: released checker wheel digest; protected OCI digest, provenance, SBOM, and dpkg inventory; and protected workflow/expectation pins. Candidate-controlled checker, scenario, PATH, wheelhouse, expectation, or verifier inputs remain impossible, while unconditional-PASS, env-printing, and scenario-edit candidates are red and unsigned. |
 | 3 | Replace direct production writes with generate-to-staging followed by one durable transaction containing artifacts, shared metadata, evidence, report, and fingerprint. Use descriptor-relative no-follow commit operations and verify all WAL blobs before the first destination change. Before broad migration, run the protected vertical slice from clean clones and built wheels against one fixture, one PDD unit, and one real pdd_cloud unit. | Process death at every generation/journal/install phase recovers to the complete old or complete new state; prompt/include/code/test edits, stale evidence, and candidate tampering are detected; signed evidence binds exact SHAs; immediate rerun writes zero files. |
 | 4 | Carry the exact local PDD-only adapter-demand matrix into the guarded gate-1 PR. Make the pytest adapter compare protected expected node IDs with collected and executed node IDs and bind every config-loaded plugin and executable support module. Defer a combined PDD/pdd_cloud matrix until pdd_cloud has a protected profile registry. Implement every actually demanded adapter before claiming coverage; defer undemanded universal adapters. | The PDD matrix accounts for all 468 protected profiles, reports demanded validators exactly `{pytest}`, and has no unknown adapter. Removed parametrized cases, config-loaded local plugins, collection hooks, skips, xfails, deselection, and dirty support fail closed. The later combined matrix accounts for every protected pdd_cloud profile and requires real-browser execution only if a protected profile demands Playwright. |
 | 5 | Route every production mutator, runtime preprocessor, dependency discoverer, change detector, legacy operation selector, and fingerprint writer through the canonical include graph, identity, classifier, staging transaction, and fingerprint APIs. | A protected static enforcement test reports zero independent include parsers, fingerprint hashers, drift classifiers, or canonical metadata writers; compatibility modules contain orchestration only. |
@@ -2608,11 +2620,15 @@ predicate requires `candidate_controlled_verifier_inputs == 0`.
    `merged`: local and independent-review narrative evidence remains
    in-progress until a distinct protected verifier can prove those dimensions.
    The global score remains `0/10` and no release or certificate is claimed.
-2. Ledger generator PR #2219 is merged with its protected hosted drift check.
-   The single next blocker is Gate 2: extract and review the next bounded
-   pytest-only checker layer from fresh live main. This same-day deliverable is
-   not a claim that the whole release is complete.
-3. Release the reviewed pytest-only checker, pin its wheel digest, and record its
-   narrower named-denominator certificate as intermediate evidence only.
+2. Treat #2223 and #2224 as merged prerequisites only, and preserve closed,
+   unmerged #2225 as diagnostic evidence that cannot advance Gate 2. The single
+   canonical blocker is `gate2-standalone-checker-package-boundary`; its
+   same-day deliverable, bounded to under 24 hours, is the standalone checker
+   extraction manifest/package-boundary PR: a non-`pdd` top-level package with
+   checker-only dependencies, strict lock/RECORD salvage, and the exact z3
+   compatible-wheel regression. It does not release, containerize, or certify.
+3. Only after that boundary is released may the sealed Git-capable OCI runtime
+   and protected checker/OCI/workflow expectation pins be pursued. Certificate A
+   and Certificate B intent is unchanged; neither is claimed by these layers.
 4. Before gate 5 completes, generate the 467-unit gate-6 coverage partition and
    obtain the required human scoping decision.
