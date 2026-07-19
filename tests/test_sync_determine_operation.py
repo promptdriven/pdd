@@ -5807,3 +5807,28 @@ def test_sync_classifier_preserves_nested_prompt_alias_identity(
     assert digest_before is not None
     assert digest_after is not None
     assert digest_after != digest_before
+
+
+@pytest.mark.parametrize(
+    "basename",
+    ["mock_contract_validation", "sync_main", "sync_orchestration"],
+)
+def test_repaired_manager_artifacts_are_current_at_target_zero(
+    basename, monkeypatch
+):
+    """The repaired run reports must not schedule stale test work."""
+    repository_root = Path(__file__).resolve().parents[1]
+    monkeypatch.chdir(repository_root)
+
+    decision = sync_determine_operation(
+        basename,
+        "python",
+        0.0,
+        prompts_dir="pdd/prompts",
+        read_only=True,
+    )
+
+    # A normal completed workflow uses ``nothing``. ``all_synced`` is reserved
+    # for special completion paths such as deliberately skipped tests.
+    assert decision.operation == "nothing", decision.reason
+    assert decision.details["workflow_complete"] is True
