@@ -1035,6 +1035,10 @@
     },
     {
       "language_id": "python",
+      "prompt_path": "pdd/prompts/fingerprint_transaction_python.prompt"
+    },
+    {
+      "language_id": "python",
       "prompt_path": "pdd/prompts/fix_code_loop_python.prompt"
     },
     {
