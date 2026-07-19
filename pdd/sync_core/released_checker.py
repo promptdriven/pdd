@@ -138,7 +138,7 @@ _HUMAN_OBLIGATION_KEYS = frozenset(
 _MACHINE_OBLIGATION_KEYS = _HUMAN_OBLIGATION_KEYS | frozenset({"code_under_test_paths"})
 _INVENTORY_VALUES = frozenset({"MANAGED", "UNACCOUNTED"})
 _BASELINE_VALUES = frozenset({"CURRENT", "DRIFTED", "UNBASELINED", "CORRUPT"})
-_SEMANTIC_VALUES = frozenset({"PASS", "FAILED", "UNKNOWN", "CONFLICT"})
+_SEMANTIC_VALUES = frozenset({"VERIFIED", "FAILED", "UNKNOWN", "CONFLICT"})
 _KNOWN_FAIL_CLOSED_ERROR = "protected base has no attestation trust policy"
 
 
@@ -441,6 +441,17 @@ def _validate_report(report: object, pin: ReleasePin, denominator: int) -> tuple
     if not isinstance(units, list) or len(units) != denominator:
         raise ReleasedCheckerEvidenceError("report unit denominator does not match")
     subjects: list[str] = []
+    derived_counts = {
+        "managed_units": 0,
+        "trusted_in_sync": 0,
+        "trusted_current_evidence": 0,
+        "drifted": 0,
+        "unbaselined": 0,
+        "corrupt": 0,
+        "unknown": 0,
+        "conflict": 0,
+        "failed": 0,
+    }
     for unit in units:
         row = _require_closed_mapping(unit, _UNIT_KEYS, "report unit")
         subject = _require_string(row["subject"], "report unit subject")
@@ -456,9 +467,25 @@ def _validate_report(report: object, pin: ReleasePin, denominator: int) -> tuple
         _string_list(row["changed_roles"], "report unit changed_roles")
         _require_string(row["reason"], "report unit reason")
         subjects.append(subject)
+        derived_counts["managed_units"] += row["inventory"] == "MANAGED"
+        derived_counts["trusted_in_sync"] += row["in_sync"]
+        derived_counts["trusted_current_evidence"] += row["evidence_complete"]
+        derived_counts["drifted"] += row["baseline"] == "DRIFTED"
+        derived_counts["unbaselined"] += row["baseline"] == "UNBASELINED"
+        derived_counts["corrupt"] += row["baseline"] == "CORRUPT"
+        derived_counts["unknown"] += row["semantic"] == "UNKNOWN"
+        derived_counts["conflict"] += row["semantic"] == "CONFLICT"
+        derived_counts["failed"] += row["semantic"] == "FAILED"
     if len(subjects) != len(set(subjects)):
         raise ReleasedCheckerEvidenceError("report has duplicate subjects")
-    _report_counts(payload, denominator)
+    counts = _report_counts(payload, denominator)
+    if (
+        any(counts[key] != value for key, value in derived_counts.items())
+        or counts["invalid"] != 1
+    ):
+        raise ReleasedCheckerEvidenceError(
+            "report counters do not match unit rows or the reviewed fail-closed result"
+        )
     return tuple(sorted(subjects))
 
 

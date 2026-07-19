@@ -105,7 +105,7 @@ def _report() -> dict[str, object]:
         "managed_units": 2,
         "protected_expected_managed_units": 2,
         "managed_waivers": 0,
-        "invalid": 0,
+        "invalid": 1,
         "trusted_in_sync": 0,
         "verification_profile_complete": 2,
         "trusted_current_evidence": 0,
@@ -256,6 +256,21 @@ def test_report_schema_and_fail_closed_semantics_are_enforced(mutate) -> None:
     mutate(report)
     with pytest.raises(ReleasedCheckerEvidenceError):
         build_intermediate_release_evidence(_pin(), report, _profiles(), exit_code=1)
+
+
+def test_report_rejects_impossible_semantic_and_counter_combinations() -> None:
+    invalid_semantic = _report()
+    invalid_semantic["units"][0]["semantic"] = "PASS"
+    stale_failed_count = _report()
+    stale_failed_count["units"][0]["semantic"] = "UNKNOWN"
+    invalid_candidate_count = _report()
+    invalid_candidate_count["counts"]["invalid"] = 468
+
+    for report in (invalid_semantic, stale_failed_count, invalid_candidate_count):
+        with pytest.raises(ReleasedCheckerEvidenceError):
+            build_intermediate_release_evidence(
+                _pin(), report, _profiles(), exit_code=1
+            )
 
 
 def test_profile_obligation_schema_and_profile_digest_are_enforced() -> None:
