@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -87,7 +88,14 @@ ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS = {
     "scripts/build_vitest_fd_cloexec_addon.py",
     "setup.py",
 }
-ADAPTER_DEMAND_PREAUTHORIZED_PATHS = {"pdd/sync_core/adapter_demand_verifier.py"}
+GATE1_PREAUTHORIZED_PATHS = {
+    "docs/global_sync_extraction_manifest.md",
+    "docs/global_sync_pdd_adapter_demand.json",
+    "pdd/sync_core/adapter_demand_verifier.py",
+    "tests/test_sync_core_adapter_demand_verifier.py",
+}
+GATE1_FIRST_COMMIT = "0907904172e0442bca37e9e77d593151159dc513"
+GATE1_LAST_COMMIT = "8bb83209354f2188ae6a0add756a5f425507f94b"
 PR_2017_ABSENT_METADATA_PATHS = {
     ".pdd/meta/agentic_langtest_python.json",
     ".pdd/meta/agentic_langtest_python_run.json",
@@ -99,7 +107,7 @@ PR_2017_ABSENT_METADATA_PATHS = {
 PREAUTHORIZED_CHILD_PATHS = (
     LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS
     | ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
-    | ADAPTER_DEMAND_PREAUTHORIZED_PATHS
+    | GATE1_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
     | {
         ".github/toolchains/playwright_manifest.py",
@@ -1484,25 +1492,87 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
     assert len(manifest.expected_managed) == baseline_denominator
 
 
-def test_adapter_demand_verifier_is_exactly_preauthorized() -> None:
-    """Only the reviewed verifier path receives absent-path authority."""
+def test_gate1_paths_are_exactly_preauthorized() -> None:
+    """Only the four reviewed Gate 1 paths receive absent-path authority."""
     ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
     rules = {row["pattern"]: row for row in ownership["rules"]}
-    assert ADAPTER_DEMAND_PREAUTHORIZED_PATHS == {
-        "pdd/sync_core/adapter_demand_verifier.py"
-    }
     assert {
-        path: rules.get(path) for path in ADAPTER_DEMAND_PREAUTHORIZED_PATHS
+        path: rules.get(path) for path in GATE1_PREAUTHORIZED_PATHS
     } == {
         path: {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
-        for path in ADAPTER_DEMAND_PREAUTHORIZED_PATHS
+        for path in GATE1_PREAUTHORIZED_PATHS
     }
     assert {
         row["pattern"]
         for row in ownership["rules"]
         if row.get("preauthorize_absent", False)
-        and row["pattern"].startswith("pdd/sync_core/adapter_demand")
-    } == ADAPTER_DEMAND_PREAUTHORIZED_PATHS
+        and (
+            row["pattern"].startswith("pdd/sync_core/adapter_demand")
+            or row["pattern"].startswith("tests/test_sync_core_adapter_demand")
+            or row["pattern"].startswith("docs/global_sync_extract")
+            or row["pattern"].startswith("docs/global_sync_pdd_adapter_demand")
+        )
+    } == GATE1_PREAUTHORIZED_PATHS
+
+
+def test_gate1_range_composes_with_protected_preauthorization(tmp_path: Path) -> None:
+    """The exact Gate 1 range remains human-owned from protected preauth."""
+    root = tmp_path / "gate1-preauth-composition"
+    subprocess.run(
+        ["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(root)],
+        check=True,
+        capture_output=True,
+    )
+    for commit in (GATE1_FIRST_COMMIT, GATE1_LAST_COMMIT):
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{commit}^{{commit}}"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
+    protected_base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    _git(root, "update-ref", "refs/remotes/origin/main", protected_base)
+    subprocess.run(
+        ["git", "cherry-pick", f"{GATE1_FIRST_COMMIT}^..{GATE1_LAST_COMMIT}"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    for detector in (
+        "scripts/ci_detect_changed_modules.py",
+        "pdd/ci_detect_changed_modules.py",
+    ):
+        result = subprocess.run(
+            [sys.executable, detector, "--diff-base", "origin/main...HEAD"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert not result.stdout.strip()
+
+    manifest = build_unit_manifest(
+        root, base_ref="origin/main", head_ref="HEAD"
+    )
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix() in GATE1_PREAUTHORIZED_PATHS
+    }
+    assert set(records) == GATE1_PREAUTHORIZED_PATHS
+    assert not manifest.unaccounted_tracked_paths
+    assert not manifest.invalid_reasons
+    assert all(
+        item.inventory.value == "HUMAN_OWNED"
+        and item.candidate_id.role == "human-maintained"
+        and item.ownership_provenance
+        == f"protected-ownership:pdd-maintainers:{path}"
+        for path, item in records.items()
+    )
+    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
 
 
 def test_pr2017_absent_metadata_authorization_is_exact_six_path_set() -> None:

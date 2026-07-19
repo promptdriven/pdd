@@ -3045,6 +3045,20 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "docs/global_sync_extraction_manifest.md",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "docs/global_sync_pdd_adapter_demand.json",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "docs/global_sync_resolution_plan.md",
       "role": "human-maintained"
     },
@@ -13370,6 +13384,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_sync_contract_matrix.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_sync_core_adapter_demand_verifier.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
