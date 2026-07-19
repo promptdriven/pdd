@@ -586,13 +586,13 @@ jobs:
           set -euo pipefail
           image='python:3.12.13-slim-bookworm@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d'
           runtime="$RUNNER_TEMP/pdd-target-runtime"
-          mkdir -p "$runtime/project" "$runtime/wheelhouse" "$runtime/tooling" "$runtime/generator" "$runtime/candidate"
+          mkdir -p "$runtime/source" "$runtime/project" "$runtime/wheelhouse" "$runtime/tooling" "$runtime/generator" "$runtime/candidate"
+          tar --exclude=.git -C "$GITHUB_WORKSPACE" -cf - . | tar -C "$runtime/source" -xf -
           docker pull "$image"
           test "$(docker image inspect --format '{{.Architecture}}' "$image")" = amd64
           docker run --rm --network bridge \
-            -v "$GITHUB_WORKSPACE:/workspace:ro" \
             -v "$runtime:/runtime" \
-            -w /workspace "$image" bash -ceu '
+            -w /runtime/source "$image" bash -ceu '
               python -m pip install --disable-pip-version-check --upgrade pip==25.1.1 build==1.2.2.post1
               python -m pip download --disable-pip-version-check --only-binary=:all: --dest /runtime/tooling pip==25.1.1
               SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI=0.0.0 python -m build --wheel --outdir /runtime/project

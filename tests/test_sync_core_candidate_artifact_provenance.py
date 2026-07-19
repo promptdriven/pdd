@@ -657,6 +657,11 @@ def test_target_runtime_workflow_is_offline_validated_before_artifact_upload() -
     assert target_job.count("SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI") == 1
     assert synthetic_build in build_step
     assert "export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI" not in build_step
+    assert 'mkdir -p "$runtime/source"' in build_step
+    assert 'tar --exclude=.git -C "$GITHUB_WORKSPACE" -cf - .' in build_step
+    assert 'tar -C "$runtime/source" -xf -' in build_step
+    assert '-w /runtime/source "$image"' in build_step
+    assert "$GITHUB_WORKSPACE:/workspace" not in build_step
     assert not any(
         line.strip().startswith(("git ", "apt-get ", "sudo apt-get "))
         for line in target_job.splitlines()
