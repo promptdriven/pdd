@@ -38,6 +38,18 @@ PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
 CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
 PR_2017_PHASE_A_BASE = "c887daba0d171585658f8205e79316e5f36f82c6"
 PR_2017_PROTECTED_BASE = "e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347"
+PR_1971_COMBINED_BASE = "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
+PR_1971_COMBINED_PROFILE_DIGEST = (
+    "260dee7eb1efde3c3b3cf342d540952b43fb5f41915669dc9dd7483a692a2af2"
+)
+PR_1971_COMBINED_PROMPT_PATHS = {
+    "pdd/prompts/operation_log_python.prompt",
+    "pdd/prompts/pin_example_hack_python.prompt",
+    "pdd/prompts/server/routes/prompts_python.prompt",
+    "pdd/prompts/sync_determine_operation_python.prompt",
+    "pdd/prompts/sync_orchestration_python.prompt",
+    "pdd/prompts/update_main_python.prompt",
+}
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -493,16 +505,14 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 25
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 31
     story_identity = (STORY_REGRESSION_DORMANT_ROTATION["prompt_path"], "python")
     assert bootstrap_rows[story_identity] != STORY_REGRESSION_DORMANT_ROTATION
     bootstrap_rows[story_identity] = STORY_REGRESSION_DORMANT_ROTATION
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == (
-        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3"
-    )
+    assert profile_digest == PR_1971_COMBINED_PROFILE_DIGEST
     future_pr2017_rows = [
         row
         for row in rows
@@ -514,9 +524,6 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         "pdd/prompts/get_test_command_python.prompt",
     }
     assert all(
-        row["head_policy_sha256"] == profile_digest for row in future_pr2017_rows
-    )
-    assert all(
         row["base_policy_sha256"]
         == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
         for row in future_pr2017_rows
@@ -525,6 +532,21 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         hashlib.sha256((ROOT / row["prompt_path"]).read_bytes()).hexdigest()
         == row["head_prompt_sha256"]
         for row in future_pr2017_rows
+    )
+    pr1971_rows = [
+        row for row in rows if row["head_policy_sha256"] == profile_digest
+    ]
+    assert len(pr1971_rows) == len(PR_1971_COMBINED_PROMPT_PATHS)
+    assert {row["prompt_path"] for row in pr1971_rows} == PR_1971_COMBINED_PROMPT_PATHS
+    assert all(
+        row["base_policy_sha256"]
+        == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+        for row in pr1971_rows
+    )
+    assert all(
+        hashlib.sha256((ROOT / row["prompt_path"]).read_bytes()).hexdigest()
+        == row["head_prompt_sha256"]
+        for row in pr1971_rows
     )
     pdd1989_rows = [
         row
@@ -865,6 +887,50 @@ def test_pr2017_transition_has_complete_profiles_on_protected_base() -> None:
     assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
+
+
+def test_pr1971_combined_profile_reconciliation_is_exact_and_consumed() -> None:
+    """PR #1971 can consume only its exact six prompt/profile transitions."""
+    manifest = build_unit_manifest(
+        ROOT, base_ref=PR_1971_COMBINED_BASE, head_ref="HEAD"
+    )
+    profiles = load_verification_profiles(ROOT, manifest)
+
+    assert not manifest.invalid_reasons
+    assert not manifest.unaccounted_tracked_paths
+    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
+def test_pr1971_combined_profile_reconciliation_rejects_byte_mutation() -> None:
+    """The same-candidate exception is bound to all four reviewed byte sets."""
+    base_policy = subprocess.check_output(
+        [
+            "git",
+            "show",
+            f"{PR_1971_COMBINED_BASE}:{ROTATION_FILE.relative_to(ROOT)}",
+        ]
+    )
+    base_profile = subprocess.check_output(
+        [
+            "git",
+            "show",
+            f"{PR_1971_COMBINED_BASE}:{PROFILE_FILE.relative_to(ROOT)}",
+        ]
+    )
+    candidate_policy = ROTATION_FILE.read_bytes()
+    candidate_profile = PROFILE_FILE.read_bytes()
+
+    assert verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
+        base_policy, candidate_policy, base_profile, candidate_profile
+    )
+    assert not verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
+        base_policy, candidate_policy + b" ", base_profile, candidate_profile
+    )
+    assert not verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
+        base_policy, candidate_policy, base_profile, candidate_profile + b" "
+    )
 
 
 def _candidate_only_repo(tmp_path: Path) -> tuple[Path, str, str]:
