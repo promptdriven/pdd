@@ -956,56 +956,25 @@ steps:
       released: pending
       deployed: pending
       certified: pending
-    exact_repository_sha: "89218463d33baa58fdfeb37599e49a6e2cd13283"
-    release_pin:
-      schema_version: 1
-      repository: promptdriven/pdd
-      repository_id: "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
-      repository_sha: "89218463d33baa58fdfeb37599e49a6e2cd13283"
-      release_ref: refs/tags/v0.0.306
-      release_url: "https://github.com/promptdriven/pdd/releases/tag/v0.0.306"
-      wheel_url: "https://files.pythonhosted.org/packages/a6/66/562f6ae454c29ee6dcd064e1952f1029ca0a891cc379623ec5d22bff8aac/pdd_cli-0.0.306-py3-none-any.whl"
-      wheel_sha256: "e666ab38ce49413ff90c24f96fcbd9dbd01f73e4e38a3c6eb4391dd18369784d"
-      workflow_run_url: "https://github.com/promptdriven/pdd/actions/runs/29691352403"
-      workflow_run_conclusion: success
-      workflow_job_url: "https://github.com/promptdriven/pdd/actions/runs/29691352403/job/88204544350"
-      workflow_identity: "promptdriven/pdd/.github/workflows/release.yml@refs/tags/v0.0.306"
-      pypi_provenance_url: "https://pypi.org/integrity/pdd-cli/0.0.306/pdd_cli-0.0.306-py3-none-any.whl/provenance"
+    exact_repository_sha: null
     validation_commands:
-      - "gh release view \"$PDD_CHECKER_RELEASE_REF\" --repo promptdriven/pdd --json tagName,targetCommitish,isDraft,isPrerelease"
-      - "curl --fail --location --output \"$RUNNER_TEMP/pdd_cli-0.0.306-py3-none-any.whl\" https://files.pythonhosted.org/packages/a6/66/562f6ae454c29ee6dcd064e1952f1029ca0a891cc379623ec5d22bff8aac/pdd_cli-0.0.306-py3-none-any.whl && printf '%s  %s\\n' e666ab38ce49413ff90c24f96fcbd9dbd01f73e4e38a3c6eb4391dd18369784d \"$RUNNER_TEMP/pdd_cli-0.0.306-py3-none-any.whl\" | sha256sum --check --strict"
-      - "python -m pdd.sync_core.released_checker release-pin-evidence --ledger-source docs/global_sync_evidence_ledger_source.yaml --report \"$RUNNER_TEMP/released-checker-report.json\" --profiles .pdd/verification-profiles.json --released-checker-exit-code 1 --output \"$RUNNER_TEMP/intermediate-release-evidence.json\""
+      - "pytest -q tests/test_sync_core_released_checker.py"
+      - "python -m pylint pdd/sync_core/released_checker.py"
     required_predicate:
       ledger_generator_and_protected_drift_check_pass: true
       diagnostic_pr_used_as_release_vehicle: false
-      release_changes_extracted_from_live_main: true
-      complete_release_net_diff_independently_reviewed: true
-      release_ref_protected_and_reviewed: true
-      release_target_is_exact_repository_sha: true
-      release_is_draft: false
-      release_is_prerelease: false
-      downloaded_wheel_sha256_matches_protected_pin: true
-      checker_owns_scenarios_metrics_predicate_and_signing: true
-      unconditional_pass_candidate_is_rejected: true
-      scenario_editing_candidate_is_rejected: true
-      environment_printing_candidate_is_rejected: true
-      candidate_children_have_credentials: false
-      intermediate_certificate_bound_to_exact_pdd_sha: true
-      intermediate_certificate_included_units_named: true
-      intermediate_certificate_excluded_units_named: true
-      intermediate_certificate_denominator_recorded: true
-      intermediate_certificate_denominator_equals_protected_expected_managed_units: true
-      intermediate_certificate_included_plus_excluded_equals_denominator: true
-      intermediate_certificate_global_completion: false
-      intermediate_certificate_satisfies_gate_6: false
-      intermediate_certificate_satisfies_gate_10: false
-      released_checker_pin_valid: true
-      released_checker_release_observed: true
-      released_checker_machine_verified: false
-      released_checker_is_sync_certificate: false
+      released_wrapper_merged: false
+      released_wrapper_published: false
+      hash_locked_runtime_closure_published: false
+      protected_base_pin_lane_added: false
+      intermediate_evidence_global_completion: false
+      intermediate_evidence_satisfies_gate_6: false
+      intermediate_evidence_satisfies_gate_10: false
+      certificate_a: false
+      certificate_b: false
     artifact_check_urls: []
-    predicate_result: "Release v0.0.306 is pinned to exact commit 89218463d33baa58fdfeb37599e49a6e2cd13283, its exact wheel digest, PyPI provenance URL, release run, and publish job. The released checker report is deliberately fail-closed (exit 1) and its wrapper labels the result intermediate-release-evidence, not machine_verified evidence or a Sync Certificate. No promotion bundle authorizes released, hosted_green, merged, deployment, certification, or a Gate 2 pass."
-    blocker: "The reviewed pin is executable locally and in the protected workflow, but protected hosted/merged promotion evidence for this implementation is absent. Gate 2, both certificates, and the 0/10 scoreboard remain pending."
+    predicate_result: "Historical release v0.0.306 proved only prior checker publication and a fail-closed report. It cannot execute this new wrapper and does not contain a complete hash-locked runtime closure, so it is not the Gate 2 release vehicle and no pin, hosted evidence, or gate claim is recorded here."
+    blocker: "Merge and release this wrapper first, then publish and review a complete digest-pinned runtime closure before adding a protected-base pin lane. That future lane must prove the newly released wrapper from installed wheel bytes; Gate 2, both certificates, and the 0/10 scoreboard remain pending."
     prerequisite_blockers:
       ledger_generator: "passed through protected PR #2219 at exact head 06d976de23f6da45c9078fdd1a8f89dbf1aecd2c and merge fb344f1c66e807dc51cac0f5363e5484cc487de9"
       protected_drift_check: "passed on the exact #2219 reviewed head; regenerated ledger byte drift fails closed"
