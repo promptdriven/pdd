@@ -81,21 +81,73 @@ jobs:
       - name: Verify artifacts
         run: python -m twine check dist/*
 
+      - name: Build and validate closed Linux checker runtime bundle
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+        run: |
+          set -euo pipefail
+          tag="${{ github.ref_name }}"
+          source_sha="$(git rev-parse "${tag}^{}")"
+          bundle="$RUNNER_TEMP/pdd-runtime-bundle"
+          mkdir -p "$bundle/wheelhouse"
+          python -m pip download --only-binary=:all: --dest "$bundle/wheelhouse" \
+            dist/*.whl pip setuptools
+          python -m pdd.sync_core.artifact_provenance write-lock \
+            --wheelhouse "$bundle/wheelhouse" --output "$bundle/runtime.lock"
+          python -m venv "$RUNNER_TEMP/pdd-runtime-venv"
+          PIP_NO_INDEX=1 "$RUNNER_TEMP/pdd-runtime-venv/bin/python" -m pip install \
+            --no-index --find-links "$bundle/wheelhouse" --require-hashes \
+            --only-binary=:all: --force-reinstall -r "$bundle/runtime.lock"
+          "$RUNNER_TEMP/pdd-runtime-venv/bin/python" -m pdd.sync_core.artifact_provenance \
+            write-manifest --bundle "$bundle" --repository "$GITHUB_REPOSITORY" \
+            --tag "$tag" --source-sha "$source_sha"
+          manifest_sha="$(sha256sum "$bundle/runtime-manifest.json" | awk '{print $1}')"
+          PDD_RUNTIME_BUNDLE_DIR="$bundle" \
+          PDD_RUNTIME_BUNDLE_MANIFEST_SHA256="$manifest_sha" \
+          PDD_RUNTIME_BUNDLE_REPOSITORY="$GITHUB_REPOSITORY" \
+          PDD_RUNTIME_BUNDLE_TAG="$tag" \
+          PDD_RUNTIME_BUNDLE_SOURCE_SHA="$source_sha" \
+          "$RUNNER_TEMP/pdd-runtime-venv/bin/python" -m pdd.sync_core.artifact_provenance \
+            verify --bundle "$bundle" --manifest-sha256 "$manifest_sha" \
+            --repository "$GITHUB_REPOSITORY" --tag "$tag" --source-sha "$source_sha"
+          pdd_wheel="$(find "$bundle/wheelhouse" -maxdepth 1 -name 'pdd_cli-*.whl' -print -quit)"
+          PDD_RELEASED_CHECKER_WHEEL_PATH="$pdd_wheel" \
+          PDD_RELEASED_CHECKER_WHEEL_SHA256="$(sha256sum "$pdd_wheel" | awk '{print $1}')" \
+          PDD_RELEASED_CHECKER_REF="refs/tags/$tag" \
+          PDD_RELEASED_CHECKER_WORKFLOW_IDENTITY="$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/tags/$tag" \
+          PDD_RUNTIME_BUNDLE_DIR="$bundle" \
+          PDD_RUNTIME_BUNDLE_MANIFEST_SHA256="$manifest_sha" \
+          PDD_RUNTIME_BUNDLE_REPOSITORY="$GITHUB_REPOSITORY" \
+          PDD_RUNTIME_BUNDLE_TAG="$tag" \
+          PDD_RUNTIME_BUNDLE_SOURCE_SHA="$source_sha" \
+          if "$RUNNER_TEMP/pdd-runtime-venv/bin/pdd-sync-checker" --help; then
+            echo "::error::checker accepted an unsigned runtime bundle"
+            exit 1
+          fi
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+            -C "$RUNNER_TEMP" -czf "dist/pdd-runtime-bundle-linux-x86_64-cpython-3.12.tar.gz" \
+            "$(basename "$bundle")"
+          sha256sum dist/pdd-runtime-bundle-linux-x86_64-cpython-3.12.tar.gz \
+            > dist/pdd-runtime-bundle-linux-x86_64-cpython-3.12.sha256
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
           attestations: true
 
-      - name: Create GitHub Release with auto-notes (idempotent)
+      - name: Create GitHub Release with validated runtime bundle (idempotent)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ github.ref_name }}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "GitHub Release $tag already exists; skipping."
+            gh release upload "$tag" dist/pdd-runtime-bundle-linux-x86_64-cpython-3.12.tar.gz \
+              dist/pdd-runtime-bundle-linux-x86_64-cpython-3.12.sha256 --clobber
           else
-            gh release create "$tag" --generate-notes --verify-tag --target main
+            gh release create "$tag" --generate-notes --verify-tag --target main \
+              dist/pdd-runtime-bundle-linux-x86_64-cpython-3.12.tar.gz \
+              dist/pdd-runtime-bundle-linux-x86_64-cpython-3.12.sha256
           fi
 
       - name: Audit Claude Code OAuth rotation slots

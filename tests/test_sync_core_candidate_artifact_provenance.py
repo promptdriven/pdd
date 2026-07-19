@@ -5,6 +5,9 @@ import hashlib
 import json
 import threading
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import sys
+import zipfile
 
 import pytest
 
@@ -12,7 +15,13 @@ from pdd.sync_core import AttestationSigner
 from pdd.sync_core.artifact_provenance import (
     CandidateArtifactPolicy,
     CandidateArtifactProvenanceError,
+    RuntimeBundleError,
+    RuntimeBundlePolicy,
+    canonical_runtime_manifest_sha256,
     load_candidate_artifact_provenance,
+    runtime_bundle_policy_from_environment,
+    require_independent_runtime_provenance,
+    validate_runtime_bundle,
 )
 
 
@@ -281,3 +290,131 @@ def test_durable_replay_ledger_rejects_symlink_lock(tmp_path) -> None:
             _policy_with_replay_ledger(authority, replay_ledger),
             expected_source_sha=SOURCE_SHA,
         )
+
+
+RUNTIME_IDENTITY = {
+    "implementation": "CPython", "version": "3.12.3", "abi": "cp312",
+    "platform": "linux_x86_64",
+}
+RUNTIME_INSTALLED = [{"name": "pdd-cli", "version": "1.2.3",
+                      "files": [{"path": "pdd/__init__.py", "sha256": "1" * 64}]}]
+RUNTIME_ENTRIES = [
+    {"name": "pdd", "path": "bin/pdd", "sha256": "2" * 64},
+    {"name": "pdd-sync-checker", "path": "bin/pdd-sync-checker", "sha256": "3" * 64},
+]
+RUNTIME_STARTUP = {"pth": [], "sitecustomize": None, "usercustomize": None}
+RUNTIME_NATIVE = {"status": "complete", "members": [], "shared_libraries": []}
+
+
+def _runtime_wheel(path: Path, name: str, version: str) -> None:
+    """Create a minimal wheel with one exact distribution identity."""
+    dist_info = f"{name.replace('-', '_')}-{version}.dist-info"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(f"{dist_info}/METADATA",
+                         f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n")
+        archive.writestr(f"{dist_info}/RECORD", "")
+
+
+def _runtime_bundle(tmp_path: Path, monkeypatch) -> tuple[Path, dict, RuntimeBundlePolicy]:
+    """Build a controlled asset bundle and mock the Linux installed closure."""
+    bundle = tmp_path / "bundle"
+    wheelhouse = bundle / "wheelhouse"
+    wheelhouse.mkdir(parents=True)
+    _runtime_wheel(wheelhouse / "click-8.4.1-py3-none-any.whl", "click", "8.4.1")
+    _runtime_wheel(wheelhouse / "pdd_cli-1.2.3-py3-none-any.whl", "pdd-cli", "1.2.3")
+    members = [{"name": item.name, "sha256": hashlib.sha256(item.read_bytes()).hexdigest()}
+               for item in sorted(wheelhouse.iterdir(), key=lambda item: item.name)]
+    lock = "".join(f"{name}=={version} --hash=sha256:{digest}\n" for name, version, digest in (
+        ("click", "8.4.1", members[0]["sha256"]),
+        ("pdd-cli", "1.2.3", members[1]["sha256"]),
+    ))
+    (bundle / "runtime.lock").write_text(lock, encoding="utf-8")
+    manifest = {
+        "schema_version": 1, "repository": "promptdriven/pdd", "tag": "v1.2.3",
+        "source_sha": "a" * 40, "pdd_wheel": members[1],
+        "runtime_lock": {"name": "runtime.lock", "sha256": hashlib.sha256(lock.encode()).hexdigest()},
+        "wheelhouse": {"members": members, "digest": canonical_runtime_manifest_sha256(members)},
+        "runtime": RUNTIME_IDENTITY, "interpreter": {"sha256": "4" * 64},
+        "console_entry_points": RUNTIME_ENTRIES, "installed_distributions": RUNTIME_INSTALLED,
+        "startup": RUNTIME_STARTUP, "native_closure": RUNTIME_NATIVE,
+        "independent_provenance": {"status": "unsigned-blocked"},
+    }
+    (bundle / "runtime-manifest.json").write_text(
+        json.dumps(manifest, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    monkeypatch.setattr("pdd.sync_core.artifact_provenance._runtime_identity", lambda: RUNTIME_IDENTITY)
+    monkeypatch.setattr("pdd.sync_core.artifact_provenance._runtime_site_packages", lambda: tmp_path)
+    monkeypatch.setattr("pdd.sync_core.artifact_provenance._runtime_installed_distributions",
+                        lambda _root: RUNTIME_INSTALLED)
+    monkeypatch.setattr("pdd.sync_core.artifact_provenance._runtime_entry_points",
+                        lambda _root: RUNTIME_ENTRIES)
+    monkeypatch.setattr("pdd.sync_core.artifact_provenance._runtime_startup", lambda _root: RUNTIME_STARTUP)
+    monkeypatch.setattr("pdd.sync_core.artifact_provenance._runtime_native_closure", lambda _root: RUNTIME_NATIVE)
+    original_sha = hashlib.sha256
+    monkeypatch.setattr("pdd.sync_core.artifact_provenance._sha256", lambda path: (
+        "4" * 64 if Path(path) == Path(sys.executable).resolve()
+        else original_sha(Path(path).read_bytes()).hexdigest()))
+    policy = RuntimeBundlePolicy(canonical_runtime_manifest_sha256(manifest),
+                                 "promptdriven/pdd", "v1.2.3", "a" * 40)
+    return bundle, manifest, policy
+
+
+def test_runtime_bundle_valid_round_trip_and_protected_policy(tmp_path, monkeypatch) -> None:
+    bundle, manifest, policy = _runtime_bundle(tmp_path, monkeypatch)
+    assert validate_runtime_bundle(bundle, policy) == manifest
+    monkeypatch.setenv("PDD_RUNTIME_BUNDLE_DIR", str(bundle))
+    monkeypatch.setenv("PDD_RUNTIME_BUNDLE_MANIFEST_SHA256", policy.manifest_sha256)
+    monkeypatch.setenv("PDD_RUNTIME_BUNDLE_REPOSITORY", policy.repository)
+    monkeypatch.setenv("PDD_RUNTIME_BUNDLE_TAG", policy.tag)
+    monkeypatch.setenv("PDD_RUNTIME_BUNDLE_SOURCE_SHA", policy.source_sha)
+    assert runtime_bundle_policy_from_environment()[1] == policy
+    with pytest.raises(RuntimeBundleError, match="independent runtime bundle provenance"):
+        require_independent_runtime_provenance(manifest)
+    monkeypatch.delenv("PDD_RUNTIME_BUNDLE_MANIFEST_SHA256")
+    with pytest.raises(RuntimeBundleError, match="policy is required"):
+        runtime_bundle_policy_from_environment()
+
+
+@pytest.mark.parametrize("mutation", [
+    "lock", "wheel", "extra-wheel", "unknown-key", "traversal", "duplicate-normalized",
+])
+def test_runtime_bundle_asset_schema_and_candidate_policy_mutations_fail_closed(
+    tmp_path, monkeypatch, mutation
+) -> None:
+    bundle, manifest, policy = _runtime_bundle(tmp_path, monkeypatch)
+    if mutation == "lock":
+        (bundle / "runtime.lock").write_text("click==8.4.1\n", encoding="utf-8")
+    elif mutation == "wheel":
+        (bundle / "wheelhouse" / manifest["pdd_wheel"]["name"]).write_bytes(b"replacement")
+    elif mutation == "extra-wheel":
+        _runtime_wheel(bundle / "wheelhouse" / "extra-1.0-py3-none-any.whl", "extra", "1.0")
+    else:
+        if mutation == "unknown-key":
+            manifest["candidate_policy"] = {"accept": True}
+        elif mutation == "traversal":
+            manifest["pdd_wheel"]["name"] = "../replacement.whl"
+        else:
+            manifest["wheelhouse"]["members"].append(
+                {"name": "PDD_CLI-1.2.3-py3-none-any.whl", "sha256": "0" * 64})
+        (bundle / "runtime-manifest.json").write_text(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        policy = RuntimeBundlePolicy(canonical_runtime_manifest_sha256(manifest),
+                                     policy.repository, policy.tag, policy.source_sha)
+    with pytest.raises(RuntimeBundleError):
+        validate_runtime_bundle(bundle, policy)
+
+
+@pytest.mark.parametrize("function, value", [
+    ("_runtime_installed_distributions", [{"name": "pdd-cli", "version": "1.2.3", "files": []}]),
+    ("_runtime_entry_points", [{"name": "pdd-sync-checker", "path": "bin/pdd-sync-checker", "sha256": "0" * 64}]),
+    ("_runtime_startup", {"pth": [{"path": "injected.pth", "sha256": "0" * 64}], "sitecustomize": None, "usercustomize": None}),
+    ("_runtime_identity", {**RUNTIME_IDENTITY, "platform": "wrong"}),
+    ("_runtime_native_closure", {"status": "unsupported"}),
+])
+def test_runtime_record_entrypoint_startup_platform_and_native_mutations_fail_closed(
+    tmp_path, monkeypatch, function, value
+) -> None:
+    bundle, _manifest, policy = _runtime_bundle(tmp_path, monkeypatch)
+    monkeypatch.setattr(f"pdd.sync_core.artifact_provenance.{function}",
+                        lambda _root=None: value)
+    with pytest.raises(RuntimeBundleError):
+        validate_runtime_bundle(bundle, policy)

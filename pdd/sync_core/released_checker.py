@@ -15,6 +15,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 from urllib.parse import urlparse
 
+from .artifact_provenance import (
+    RuntimeBundleError,
+    require_independent_runtime_provenance,
+    runtime_bundle_policy_from_environment,
+    validate_runtime_bundle,
+)
 from .certificate import CheckerIdentity, checker_identity_from_environment
 from .global_sync_ledger import load_unique_yaml
 
@@ -669,12 +675,21 @@ def validate_released_checker_runtime(
 
 
 def _validated_runtime_identity() -> CheckerIdentity:
-    """Validate the same installed-wheel provenance before either checker mode runs."""
+    """Validate complete protected runtime closure before either checker mode runs."""
     identity = checker_identity_from_environment(require_execution_marker=False)
     wheel_value = os.environ.get("PDD_RELEASED_CHECKER_WHEEL_PATH")
     if not wheel_value:
         raise ReleasedCheckerError("PDD_RELEASED_CHECKER_WHEEL_PATH is required")
     validate_released_checker_runtime(identity, Path(wheel_value))
+    try:
+        bundle, policy = runtime_bundle_policy_from_environment()
+        manifest = validate_runtime_bundle(bundle, policy)
+        require_independent_runtime_provenance(manifest)
+    except RuntimeBundleError as exc:
+        raise ReleasedCheckerError(f"released checker runtime bundle is invalid: {exc}") from exc
+    wheel = manifest["pdd_wheel"]
+    if not isinstance(wheel, Mapping) or wheel.get("sha256") != identity.wheel_sha256:
+        raise ReleasedCheckerError("runtime bundle pdd wheel does not match checker identity")
     return identity
 
 
