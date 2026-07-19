@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import argparse
+import configparser
 import csv
 import hashlib
 import io
@@ -54,7 +55,17 @@ _LOCK_ROW = re.compile(
     r"(?P<hashes>(?: --hash=sha256:[0-9a-f]{64})+)"
 )
 _SHA256_HASH = re.compile(r"[0-9a-f]{64}")
-_MANYLINUX_PLATFORM = re.compile(r"manylinux(?:_[0-9]+|[0-9]+)_[0-9]+_x86_64")
+_MANYLINUX_GLIBC_CEILING = (2, 36)
+_MANYLINUX_LEGACY_FLOORS = {
+    "manylinux1_x86_64": (2, 5),
+    "manylinux2010_x86_64": (2, 12),
+    "manylinux2014_x86_64": (2, 17),
+}
+_SCRIPT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+_ENTRY_POINT = re.compile(
+    r"(?P<module>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
+    r":(?P<callable>[A-Za-z_][A-Za-z0-9_]*)"
+)
 
 
 @dataclass(frozen=True)
@@ -182,7 +193,7 @@ def _wheel_tags_are_compatible(filename: str) -> bool:
             "py3", "py312", "py2.py3"
         }:
             return True
-        if _MANYLINUX_PLATFORM.fullmatch(tag.platform) is None:
+        if not _manylinux_tag_is_compatible(tag.platform):
             continue
         if tag.interpreter == "cp312" and tag.abi in {"cp312", "abi3", "none"}:
             return True
@@ -190,6 +201,18 @@ def _wheel_tags_are_compatible(filename: str) -> bool:
         if match and tag.abi == "abi3" and 32 <= int(match.group(1)) <= 312:
             return True
     return False
+
+
+def _manylinux_tag_is_compatible(platform: str) -> bool:
+    """Accept x86_64 manylinux floors that bookworm's glibc can satisfy."""
+    legacy_floor = _MANYLINUX_LEGACY_FLOORS.get(platform)
+    if legacy_floor is not None:
+        return legacy_floor <= _MANYLINUX_GLIBC_CEILING
+    matched = re.fullmatch(r"manylinux_(\d+)_(\d+)_x86_64", platform)
+    if matched is None:
+        return False
+    minor = int(matched.group(2))
+    return matched.group(1) == "2" and minor <= _MANYLINUX_GLIBC_CEILING[1]
 
 
 def _safe_zip_path(value: str) -> PurePosixPath:
@@ -340,14 +363,26 @@ def _record_rows(record: Path) -> Iterable[tuple[str, str, str]]:
 
 
 def _installed_path(root: Path, relative: str) -> tuple[Path, PurePosixPath]:
-    try:
-        path = _safe_zip_path(relative)
-    except TargetRuntimeLockError as exc:
-        raise _runtime_error("installed RECORD has an unsafe path") from exc
-    target = root.joinpath(*path.parts)
-    if target.is_symlink() or not target.is_file():
+    """Resolve regular package files and pip's fixed --target script record form."""
+    if "\\" in relative:
+        raise _runtime_error("installed RECORD has an unsafe path")
+    record_path = PurePosixPath(relative)
+    if (
+        len(record_path.parts) == 4
+        and record_path.parts[:3] == ("..", "..", "bin")
+        and _SCRIPT_NAME.fullmatch(record_path.name)
+    ):
+        path = root / "bin" / record_path.name
+        relative_path = PurePosixPath("bin", record_path.name)
+    else:
+        try:
+            relative_path = _safe_zip_path(relative)
+        except TargetRuntimeLockError as exc:
+            raise _runtime_error("installed RECORD has an unsafe path") from exc
+        path = root.joinpath(*relative_path.parts)
+    if path.is_symlink() or not path.is_file():
         raise _runtime_error("installed RECORD references an unsafe or missing file")
-    return target, path
+    return path, relative_path
 
 
 def _record_hash(value: bytes) -> str:
@@ -383,11 +418,69 @@ def _expected_installed_files(info: _WheelInfo) -> dict[PurePosixPath, bytes]:
     return expected
 
 
+def _expected_console_scripts(info: _WheelInfo) -> dict[PurePosixPath, tuple[str, str]]:
+    """Read only simple Linux console entry points from the reviewed wheel bytes."""
+    entry_points = [
+        content
+        for path, content in info.files.items()
+        if path.name == "entry_points.txt" and path.parent.name.endswith(".dist-info")
+    ]
+    if not entry_points:
+        return {}
+    if len(entry_points) != 1:
+        raise _runtime_error("wheel has ambiguous entry point metadata")
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read_string(entry_points[0].decode("utf-8"))
+    except (UnicodeDecodeError, configparser.Error) as exc:
+        raise _runtime_error("wheel entry point metadata is malformed") from exc
+    scripts: dict[PurePosixPath, tuple[str, str]] = {}
+    for group in ("console_scripts", "gui_scripts"):
+        if not parser.has_section(group):
+            continue
+        for name, specification in parser.items(group):
+            matched = _ENTRY_POINT.fullmatch(specification.strip())
+            if _SCRIPT_NAME.fullmatch(name) is None or matched is None:
+                raise _runtime_error("wheel entry point metadata is unsupported")
+            path = PurePosixPath("bin", name)
+            if path in scripts:
+                raise _runtime_error("wheel entry point metadata is ambiguous")
+            scripts[path] = (matched.group("module"), matched.group("callable"))
+    return scripts
+
+
+def _matches_pip_script(
+    content: bytes, script_python: Path, entry_point: tuple[str, str]
+) -> bool:
+    """Accept only known pip 25.1 Linux script forms for a declared entry point."""
+    module, callable_name = entry_point
+    current = (
+        f"#!{script_python}\n"
+        "import sys\n"
+        f"from {module} import {callable_name}\n"
+        "if __name__ == '__main__':\n"
+        "    sys.argv[0] = sys.argv[0].removesuffix('.exe')\n"
+        f"    sys.exit({callable_name}())\n"
+    ).encode("utf-8")
+    legacy = (
+        f"#!{script_python}\n"
+        "# -*- coding: utf-8 -*-\n"
+        "import re\n"
+        "import sys\n"
+        f"from {module} import {callable_name}\n"
+        "if __name__ == '__main__':\n"
+        "    sys.argv[0] = re.sub(r'(-script\\.pyw|\\.exe)?$', '', sys.argv[0])\n"
+        f"    sys.exit({callable_name}())\n"
+    ).encode("utf-8")
+    return content in {current, legacy}
+
+
 def validate_installed_target_runtime(
     lock: TargetRuntimeLock,
     wheelhouse: Path,
     site_packages: Path,
     project_wheel: Path,
+    script_python: Path | None = None,
 ) -> None:
     """Verify an isolated install against locked wheels plus one exact pdd-cli wheel."""
     lock = parse_target_runtime_lock(lock.bytes())
@@ -396,6 +489,12 @@ def validate_installed_target_runtime(
     if project.name != "pdd-cli":
         raise _runtime_error("separate project wheel is not pdd-cli")
     expected_wheels = {**wheels, project.name: project}
+    expected_scripts: dict[PurePosixPath, tuple[str, str]] = {}
+    for wheel in expected_wheels.values():
+        for script_path, entry_point in _expected_console_scripts(wheel).items():
+            if script_path in expected_scripts:
+                raise _runtime_error("installed wheel set has duplicate console scripts")
+            expected_scripts[script_path] = entry_point
     root = _safe_directory(site_packages, "installed site-packages")
     dist_infos = sorted(root.glob("*.dist-info"), key=lambda item: item.name)
     if any(item.is_symlink() or not item.is_dir() for item in dist_infos):
@@ -436,14 +535,20 @@ def validate_installed_target_runtime(
                 or declared_size != str(len(content))
             ):
                 raise _runtime_error("installed RECORD hash or size does not match")
-            allowed_generated = (
+            allowed_metadata = (
                 relative_path.parent == PurePosixPath(dist_info.name)
                 and relative_path.name in {"INSTALLER", "REQUESTED"}
             )
+            entry_point = expected_scripts.get(relative_path)
+            allowed_script = (
+                entry_point is not None
+                and script_python is not None
+                and _matches_pip_script(content, script_python, entry_point)
+            )
             expected_content = expected_files.get(relative_path)
-            if not allowed_generated and expected_content != content:
+            if not allowed_metadata and not allowed_script and expected_content != content:
                 raise _runtime_error("installed files do not match their exact wheel")
-            if not allowed_generated:
+            if not allowed_metadata and not allowed_script:
                 recorded_expected.add(relative_path)
         if recorded_expected != set(expected_files):
             raise _runtime_error("installed RECORD does not close over its exact wheel")
@@ -496,6 +601,7 @@ def _runtime_lock_main(argv: list[str] | None = None) -> int:
     validate_installed.add_argument("--wheelhouse", type=Path, required=True)
     validate_installed.add_argument("--site-packages", type=Path, required=True)
     validate_installed.add_argument("--project-wheel", type=Path, required=True)
+    validate_installed.add_argument("--script-python", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "generate":
@@ -507,7 +613,11 @@ def _runtime_lock_main(argv: list[str] | None = None) -> int:
                 validate_target_wheelhouse(lock, args.wheelhouse)
             else:
                 validate_installed_target_runtime(
-                    lock, args.wheelhouse, args.site_packages, args.project_wheel
+                    lock,
+                    args.wheelhouse,
+                    args.site_packages,
+                    args.project_wheel,
+                    args.script_python,
                 )
     except (OSError, TargetRuntimeLockError) as exc:
         parser.error(str(exc))

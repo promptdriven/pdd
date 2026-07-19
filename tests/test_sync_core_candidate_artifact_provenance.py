@@ -409,6 +409,7 @@ def test_target_lock_rejects_noncanonical_or_unsafe_rows(mutation) -> None:
         ("cp312-cp312-macosx_11_0_x86_64", None),
         ("cp312-cp312-win_amd64", None),
         ("cp312-cp312-manylinux_2_17_aarch64", None),
+        ("cp312-cp312-manylinux_2_99_x86_64", None),
         ("py3-none-any", "different"),
     ],
 )
@@ -421,6 +422,14 @@ def test_target_wheelhouse_rejects_incompatible_or_misidentified_wheel(
 
     with pytest.raises(TargetRuntimeLockError):
         generate_target_runtime_lock(wheelhouse)
+
+
+def test_target_wheelhouse_accepts_bookworm_compatible_legacy_manylinux_tag(tmp_path) -> None:
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    _wheel(wheelhouse, "demo", tags="cp312-cp312-manylinux2014_x86_64")
+
+    assert generate_target_runtime_lock(wheelhouse).entries[0].name == "demo"
 
 
 def test_target_wheelhouse_requires_exact_bijection_and_regular_members(tmp_path) -> None:
@@ -498,6 +507,84 @@ def test_installed_target_runtime_accepts_exact_wheel_closure(tmp_path) -> None:
     validate_installed_target_runtime(lock, wheelhouse, installed, project)
 
 
+def test_real_pip_target_install_closes_console_scripts_under_target_root(tmp_path) -> None:
+    wheelhouse = tmp_path / "wheelhouse"
+    project_directory = tmp_path / "project"
+    wheelhouse.mkdir()
+    project_directory.mkdir()
+    _wheel(wheelhouse, "demo-dependency")
+    project = _wheel(
+        project_directory,
+        "pdd-cli",
+        "2.0",
+        extra={
+            "pdd_cli-2.0.dist-info/entry_points.txt": b"[console_scripts]\npdd = pdd_cli:main\n"
+        },
+    )
+    lock = generate_target_runtime_lock(wheelhouse)
+    requirements = tmp_path / "requirements.lock"
+    requirements.write_bytes(
+        lock.bytes()
+        + f"pdd-cli==2.0 --hash=sha256:{hashlib.sha256(project.read_bytes()).hexdigest()}\n".encode()
+    )
+    installed = tmp_path / "installed"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-index",
+            "--no-compile",
+            "--only-binary=:all:",
+            "--require-hashes",
+            "--find-links",
+            str(wheelhouse),
+            "--find-links",
+            str(project_directory),
+            "--target",
+            str(installed),
+            "-r",
+            str(requirements),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    validate_installed_target_runtime(
+        lock, wheelhouse, installed, project, Path(sys.executable)
+    )
+    record = next(installed.glob("pdd_cli-*.dist-info/RECORD")).read_text(encoding="utf-8")
+    assert "../../bin/pdd," in record
+    assert (installed / "bin/pdd").is_file()
+
+
+def test_isolated_runtime_bootstrap_does_not_execute_candidate_sitecustomize(tmp_path) -> None:
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    marker = tmp_path / "sitecustomize-ran"
+    (candidate / "sitecustomize.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n", encoding="utf-8"
+    )
+    bootstrap = "import sys; sys.path.insert(0, sys.argv[1])"
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            bootstrap,
+            str(candidate),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert not marker.exists()
+
+
 def test_target_runtime_lock_cli_generates_and_validates(tmp_path) -> None:
     wheelhouse = tmp_path / "wheelhouse"
     wheelhouse.mkdir()
@@ -547,13 +634,27 @@ def test_target_runtime_workflow_is_offline_validated_before_artifact_upload() -
     assert "docker run --rm --network bridge" in workflow
     assert "docker run --rm --network none" in workflow
     assert "--only-binary=:all:" in workflow
+    assert "--no-compile" in workflow
     assert "--require-hashes" in workflow
+    assert "--find-links /runtime/project" in workflow
     assert "pip==25.1.1 build==1.2.2.post1" in workflow
+    assert "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10" in workflow
     assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in workflow
     assert "release.yml" not in workflow[workflow.index("  target-runtime-lock:") :]
     assert "Gate 2" not in workflow
     assert "Certificate" not in workflow
     assert names[-1] == "Upload target runtime lock candidate"
+    target_job = workflow[workflow.index("  target-runtime-lock:") :]
+    assert "PYTHONPATH" not in target_job
+    assert target_job.count("-I -S -c") == 3
+    removed_project_wheel = (
+        'find /runtime/wheelhouse -maxdepth 1 -type f -name "pdd_cli-*.whl" -delete'
+    )
+    assert removed_project_wheel in target_job
+    assert target_job.index(removed_project_wheel) < target_job.index(
+        "generate --wheelhouse /runtime/wheelhouse"
+    )
+    assert "--find-links /runtime/wheelhouse --find-links /runtime/project" in target_job
     for step in steps:
         if "run" in step:
             checked = subprocess.run(

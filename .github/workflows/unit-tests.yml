@@ -576,7 +576,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           fetch-depth: 0
 
@@ -600,18 +600,25 @@ jobs:
               test -n "$project_wheel"
               python -m pip download --disable-pip-version-check --only-binary=:all: --dest /runtime/wheelhouse "$project_wheel"
               find /runtime/wheelhouse -maxdepth 1 -type f -name "pdd_cli-*.whl" -delete
-              PYTHONPATH=/runtime/generator python -m pip install --disable-pip-version-check --no-index --only-binary=:all: --find-links /runtime/wheelhouse --target /runtime/generator "$project_wheel"
+              python -m pip install --disable-pip-version-check --no-index --only-binary=:all: --find-links /runtime/wheelhouse --target /runtime/generator "$project_wheel"
               cd /tmp
-              PYTHONPATH=/runtime/generator python -m pdd.sync_core.artifact_provenance generate --wheelhouse /runtime/wheelhouse --output /runtime/candidate/runtime-linux-x86_64-cp312.lock --inventory /runtime/candidate/wheel-inventory.json
-              PYTHONPATH=/runtime/generator python - <<"PY"
-              from pathlib import Path
-              from pdd.sync_core.artifact_provenance import _inspect_wheel
+              python -I -S -c "import sys; exec(sys.stdin.read())" generate --wheelhouse /runtime/wheelhouse --output /runtime/candidate/runtime-linux-x86_64-cp312.lock --inventory /runtime/candidate/wheel-inventory.json <<PY
+          import runpy
+          import sys
+          sys.path.insert(0, "/runtime/generator")
+          runpy.run_module("pdd.sync_core.artifact_provenance", run_name="__main__")
+          PY
+              python -I -S -c "import sys; exec(sys.stdin.read())" <<PY
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, "/runtime/generator")
+          from pdd.sync_core.artifact_provenance import _inspect_wheel
 
-              project = _inspect_wheel(next(Path("/runtime/project").glob("pdd_cli-*.whl")))
-              lock = Path("/runtime/candidate/runtime-linux-x86_64-cp312.lock").read_text(encoding="ascii")
-              requirement = f"pdd-cli=={project.version} --hash=sha256:{project.digest}\n"
-              Path("/runtime/requirements.lock").write_text(lock + requirement, encoding="ascii")
-              PY
+          project = _inspect_wheel(next(Path("/runtime/project").glob("pdd_cli-*.whl")))
+          lock = Path("/runtime/candidate/runtime-linux-x86_64-cp312.lock").read_text(encoding="ascii")
+          requirement = f"pdd-cli=={project.version} --hash=sha256:{project.digest}\n"
+          Path("/runtime/requirements.lock").write_text(lock + requirement, encoding="ascii")
+          PY
             '
 
       - name: Validate candidate in fresh network-none container
@@ -628,8 +635,13 @@ jobs:
             -w /tmp "$image" bash -ceu '
               python -m venv /tmp/target-runtime
               /tmp/target-runtime/bin/python -m pip install --disable-pip-version-check --no-index --find-links /runtime/tooling --upgrade pip==25.1.1
-              /tmp/target-runtime/bin/python -m pip install --disable-pip-version-check --no-index --only-binary=:all: --require-hashes --find-links /runtime/wheelhouse --target /installed -r /runtime/requirements.lock
-              PYTHONPATH=/installed /tmp/target-runtime/bin/python -m pdd.sync_core.artifact_provenance validate-installed --lock /runtime/candidate/runtime-linux-x86_64-cp312.lock --wheelhouse /runtime/wheelhouse --site-packages /installed --project-wheel /runtime/project/$(basename /runtime/project/pdd_cli-*.whl)
+              /tmp/target-runtime/bin/python -m pip install --disable-pip-version-check --no-index --only-binary=:all: --no-compile --require-hashes --find-links /runtime/wheelhouse --find-links /runtime/project --target /installed -r /runtime/requirements.lock
+              /tmp/target-runtime/bin/python -I -S -c "import sys; exec(sys.stdin.read())" validate-installed --lock /runtime/candidate/runtime-linux-x86_64-cp312.lock --wheelhouse /runtime/wheelhouse --site-packages /installed --project-wheel /runtime/project/$(basename /runtime/project/pdd_cli-*.whl) --script-python /tmp/target-runtime/bin/python <<PY
+          import runpy
+          import sys
+          sys.path.insert(0, "/installed")
+          runpy.run_module("pdd.sync_core.artifact_provenance", run_name="__main__")
+          PY
             '
 
       - name: Compare committed target lock when present
