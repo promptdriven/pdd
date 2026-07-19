@@ -1197,7 +1197,9 @@ def test_runner_identity_binds_measured_runtime_and_checker(
     monkeypatch.setattr("pdd.sync_core.runner.platform.python_version", lambda: "99.1")
     assert runner_identity_digest(profile, root=root, ref=commit) != first
     monkeypatch.undo()
-    monkeypatch.setattr("pdd.sync_core.runner._checker_artifact_digest", lambda: "0" * 64)
+    monkeypatch.setattr(
+        "pdd.sync_core.runner._checker_artifact_digest", lambda _vitest: "0" * 64
+    )
     assert runner_identity_digest(profile, root=root, ref=commit) != first
 
 

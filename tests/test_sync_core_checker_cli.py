@@ -10,6 +10,7 @@ import sys
 import venv
 
 import pytest
+import cryptography
 
 from pdd.sync_core.standalone_package import build_standalone_wheel
 
@@ -39,7 +40,7 @@ def test_clean_installed_console_uses_standalone_module_not_checkout(tmp_path) -
         "PDD_RELEASED_CHECKER_WORKFLOW_IDENTITY": (
             "promptdriven/pdd/.github/workflows/release.yml@refs/tags/v1.0.0"
         ),
-        "PYTHONPATH": str(shadow),
+        "PYTHONPATH": str(shadow) + os.pathsep + str(Path(cryptography.__file__).parents[1]),
     }
 
     result = subprocess.run(
@@ -59,9 +60,14 @@ def test_clean_installed_console_uses_standalone_module_not_checkout(tmp_path) -
 def test_direct_cli_rejects_candidate_arguments_before_loading_them(monkeypatch, tmp_path) -> None:
     from pdd.sync_core import checker_cli
 
-    monkeypatch.setattr(checker_cli, "validate_released_checker_runtime", lambda *_args: None)
-    monkeypatch.setattr(checker_cli, "checker_identity_from_environment", lambda **_kwargs: object())
-    monkeypatch.setenv("PDD_RELEASED_CHECKER_WHEEL_PATH", str(tmp_path / "missing.whl"))
+    monkeypatch.setattr(checker_cli, "_validated_runtime_identity", lambda: object())
+    monkeypatch.setattr(
+        checker_cli,
+        "_evidence_main",
+        lambda _arguments: (_ for _ in ()).throw(
+            checker_cli.CheckerCliError("regular JSON input is required")
+        ),
+    )
 
     with pytest.raises(checker_cli.CheckerCliError, match="regular JSON"):
         checker_cli.main(("release-pin-evidence", "--ledger-source", str(tmp_path / "missing")))

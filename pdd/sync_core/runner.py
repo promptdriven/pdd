@@ -66,7 +66,7 @@ PYTEST_PROTECTED_FLAGS = (
 )
 _CHECKER_PYTEST_PROBE = Path(__file__).with_name("pytest_probe.py").resolve()
 _runtime_digest_cache: dict[
-    str,
+    bool,
     tuple[
         tuple[tuple[str, Path], ...],
         tuple[tuple[str, str, int, int, int], ...],
@@ -1678,11 +1678,14 @@ def runner_identity_digest(
     config: RunnerConfig = RunnerConfig(),
 ) -> str:
     """Bind evidence to protected adapters, configs, and exact artifact scopes."""
+    includes_vitest = any(
+        obligation.validator_id == "vitest" for obligation in profile.obligations
+    )
     payload = {
         "tool_version": TRUSTED_RUNNER_VERSION,
         "python_runtime": _measured_python_runtime(),
-        "released_runtime_digest": _released_runtime_closure_digest(),
-        "checker_artifact_digest": _checker_artifact_digest(),
+        "released_runtime_digest": _released_runtime_closure_digest(includes_vitest),
+        "checker_artifact_digest": _checker_artifact_digest(includes_vitest),
         "pytest_command": [
             "<measured-python-runtime>",
             "-P",
@@ -3235,21 +3238,22 @@ def _measured_python_runtime() -> dict[str, str]:
     }
 
 
-def _checker_artifact_digest() -> str:
-    """Hash checker modules and locked runtime dependency bytes by logical name."""
+def _checker_artifact_digest(include_vitest: bool = True) -> str:
+    """Hash checker modules and only the native source required by active adapters."""
     digest = hashlib.sha256()
     from . import isolation, supervisor  # pylint: disable=import-outside-toplevel
 
     modules = {
         "pdd/sync_core/runner.py": Path(__file__),
-        "pdd/sync_core/native/vitest_fd_cloexec.c": (
-            Path(__file__).resolve().parent / "native" / COORDINATOR_ADDON_SOURCE_NAME
-        ),
         "pdd/sync_core/pytest_probe.py": _CHECKER_PYTEST_PROBE,
         "pdd/sync_core/supervisor.py": Path(supervisor.__file__),
         "pdd/sync_core/isolation.py": Path(isolation.__file__),
         "pytest/__init__.py": Path(pytest.__file__),
     }
+    if include_vitest:
+        modules["pdd/sync_core/native/vitest_fd_cloexec.c"] = (
+            Path(__file__).resolve().parent / "native" / COORDINATOR_ADDON_SOURCE_NAME
+        )
     for name, path in sorted(modules.items()):
         digest.update(name.encode() + b"\0" + path.read_bytes() + b"\0")
     for distribution_name in ("pytest", "pluggy", "iniconfig", "packaging"):
@@ -3263,19 +3267,22 @@ def _checker_artifact_digest() -> str:
     return digest.hexdigest()
 
 
-def _released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
-    """Return the complete, logically named runtime exposed to protected pytest."""
+def _released_runtime_closure_paths(
+    include_vitest: bool = True,
+) -> tuple[tuple[str, Path], ...]:
+    """Return the runtime exposed to the profile's active protected adapters."""
     paths = list(released_runtime_closure_paths())
     paths.extend((
         ("checker/pdd/sync_core/runner.py", Path(__file__)),
-        (
+        ("checker/pdd/sync_core/pytest_probe.py", _CHECKER_PYTEST_PROBE),
+    ))
+    if include_vitest:
+        paths.append((
             "checker/pdd/sync_core/native/vitest_fd_cloexec.c",
             Path(__file__).resolve().parent
             / "native"
             / COORDINATOR_ADDON_SOURCE_NAME,
-        ),
-        ("checker/pdd/sync_core/pytest_probe.py", _CHECKER_PYTEST_PROBE),
-    ))
+        ))
     return tuple(sorted(paths, key=lambda item: item[0]))
 
 
@@ -3320,15 +3327,15 @@ def _hash_runtime_entry(entry: tuple[str, Path]) -> tuple[str, bytes] | None:
     return name, file_digest.digest()
 
 
-def _released_runtime_closure_digest() -> str:
+def _released_runtime_closure_digest(include_vitest: bool = True) -> str:
     """Hash the released runtime by logical name, never installation prefix."""
     default_paths = _released_runtime_closure_paths is _default_runtime_closure_paths
-    cached = _runtime_digest_cache.get("default")
+    cached = _runtime_digest_cache.get(include_vitest)
     if default_paths and cached is not None:
         entries, cached_manifest, cached_digest = cached
         if _runtime_manifest(entries) == cached_manifest:
             return cached_digest
-    entries = _released_runtime_closure_paths()
+    entries = _released_runtime_closure_paths(include_vitest)
     manifest = _runtime_manifest(entries)
     worker_count = min(32, (os.cpu_count() or 1) + 4)
     with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -3340,7 +3347,7 @@ def _released_runtime_closure_digest() -> str:
             digest.update(name.encode("utf-8") + b"\0" + content_digest + b"\0")
     result = digest.hexdigest()
     if default_paths:
-        _runtime_digest_cache["default"] = entries, manifest, result
+        _runtime_digest_cache[include_vitest] = entries, manifest, result
     return result
 
 

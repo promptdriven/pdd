@@ -1,0 +1,51 @@
+{
+  "dependencies": [
+    "cryptography >=46,<50",
+    "filelock >=3.12",
+    "pytest ==9.0.3",
+    "PyYAML ==6.0.3"
+  ],
+  "data": [
+    "pytest_probe.py"
+  ],
+  "distribution": "pdd-sync-checker",
+  "entry_point": "pdd_sync_checker.checker_cli:main",
+  "modules": [
+    "alias_policy.py",
+    "artifact_provenance.py",
+    "certificate.py",
+    "checker_cli.py",
+    "classifier.py",
+    "decommission.py",
+    "descriptor_store.py",
+    "durability.py",
+    "evidence_store.py",
+    "fingerprint_store.py",
+    "git_io.py",
+    "global_sync_ledger.py",
+    "identity.py",
+    "includes.py",
+    "isolation.py",
+    "language.py",
+    "manifest.py",
+    "path_policy.py",
+    "released_checker.py",
+    "reporting.py",
+    "runner.py",
+    "signer_process.py",
+    "snapshot.py",
+    "standalone_package.py",
+    "supervisor.py",
+    "transaction.py",
+    "trust.py",
+    "types.py",
+    "verification.py",
+    "waivers.py"
+  ],
+  "package": "pdd_sync_checker",
+  "schema_version": 1,
+  "target": {
+    "glibc": "2.36",
+    "platform": "linux_x86_64_cp312"
+  }
+}
