@@ -18,12 +18,12 @@ ledger_generation:
   status: in-progress
   current_mode: generated_from_versioned_metadata_source
   source: global_sync_evidence_ledger_source.yaml
-  trust_boundary: reviewed-source-only
+  trust_boundary: source-claims-require-protected-verification
   required_generator_command: "python -m pdd.sync_core.global_sync_ledger --plan docs/global_sync_resolution_plan.md --output docs/global_sync_evidence_ledger.yaml"
-  required_drift_check_command: "python -m pdd.sync_core.global_sync_ledger --plan docs/global_sync_resolution_plan.md --output docs/global_sync_evidence_ledger.yaml --check"
+  required_drift_check_command: "python -m pdd.sync_core.global_sync_ledger --plan docs/global_sync_resolution_plan.md --output docs/global_sync_evidence_ledger.yaml --check --verify-remote"
   evidence_state:
-    implemented: passed
-    local_green: passed
+    implemented: in-progress
+    local_green: in-progress
     independently_reviewed: pending
     hosted_green: pending
     merged: pending
@@ -31,6 +31,29 @@ ledger_generation:
     deployed: pending
     certified: pending
   blocker: "Obtain the same-day review and protected PR drift-check result for this generator, then begin the pytest-only checker release; no release or certification evidence is asserted."
+promotion_bundles:
+  gate_1_hosted_merge:
+    repository: promptdriven/pdd
+    repository_sha: "63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee"
+    head_sha: "6301d6c613199604702c2c3242fc8b837960d586"
+    validation_command: "gh api repos/promptdriven/pdd/pulls/2214 --jq '.head.sha, .merged, .merge_commit_sha'"
+    machine_predicate:
+      name: "gate-1-hosted-merge"
+      result: passed
+    artifact_bindings:
+      - kind: github_actions_job
+        url: "https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086892"
+      - kind: github_actions_job
+        url: "https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086891"
+      - kind: github_actions_run
+        url: "https://github.com/promptdriven/pdd/actions/runs/29674096680"
+      - kind: github_actions_run
+        url: "https://github.com/promptdriven/pdd/actions/runs/29674097086"
+      - kind: github_check_run
+        url: "https://github.com/promptdriven/pdd/runs/88158092713"
+    protected_verification:
+      mode: github-pr-checks
+      pull_request: 2214
 governance:
   ratified_at: "2026-07-18"
   last_state_change_rule: "Every gate records the date its evidence_state or status last changed; the initial ratified baseline date is used until the next evidence-backed transition."
@@ -670,6 +693,12 @@ steps:
       released: pending
       deployed: pending
       certified: pending
+    promotion_evidence:
+      implemented: gate_1_hosted_merge
+      local_green: gate_1_hosted_merge
+      independently_reviewed: gate_1_hosted_merge
+      hosted_green: gate_1_hosted_merge
+      merged: gate_1_hosted_merge
     exact_repository_sha: "63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee"
     contract_rebaseline_recorded: true
     validation_commands:

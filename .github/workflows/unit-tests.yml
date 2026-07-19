@@ -118,11 +118,13 @@ jobs:
         run: pip install -e ".[dev]" pytest-timeout
 
       - name: Verify protected global-sync evidence-ledger drift
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: >
           python -m pdd.sync_core.global_sync_ledger
           --plan docs/global_sync_resolution_plan.md
           --output docs/global_sync_evidence_ledger.yaml
-          --check
+          --check --verify-remote
 
       - name: Provision and verify protected Linux sandbox
         run: |

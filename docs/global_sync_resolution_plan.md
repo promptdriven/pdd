@@ -630,9 +630,11 @@ reviewed metadata source
 rendered verbatim to
 [`docs/global_sync_evidence_ledger.yaml`](global_sync_evidence_ledger.yaml).
 This narrative summarizes that ledger; it does not override missing or red
-machine evidence. The renderer never infers an accepted evidence state from
-this prose or local results; reviewed source rows must retain exact SHA and
-hosted-artifact values.
+machine evidence. Source rows are claims, not trust anchors: the protected
+drift command uses `--verify-remote` to match hosted/merge promotions to GitHub
+PR, check, and merge metadata. The renderer never infers an accepted evidence
+state from this prose or local results; reviewed source rows must retain exact
+SHA and hosted-artifact values.
 
 <!-- global-sync-ledger-source: global_sync_evidence_ledger_source.yaml -->
 
