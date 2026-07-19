@@ -107,6 +107,45 @@ GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS = {
 GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/runtime-linux-x86_64-cp312.lock",
 }
+STANDALONE_CHECKER_PREAUTHORIZED_PATHS = {
+    ".pdd/global-sync/standalone-checker-modules.json",
+    "pdd/sync_core/standalone_package.py",
+    "pdd/sync_core/checker_cli.py",
+    "tests/test_sync_core_standalone_package.py",
+    "tests/test_sync_core_checker_cli.py",
+}
+STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS = {
+    ".pdd/global-sync/standalone-checker-modules.json",
+}
+FUTURE_STANDALONE_CHECKER_AUTHORITY_PREFIXES = (
+    ".pdd/global-sync/standalone-checker-",
+    ".pdd/global-sync/gate2-",
+    ".pdd/global-sync/oci-",
+    ".pdd/global-sync/release-",
+    ".pdd/global-sync/gate3-",
+    ".pdd/global-sync/certificate-a-",
+    "pdd/sync_core/checker_",
+    "pdd/sync_core/standalone_",
+    "pdd/sync_core/gate2_",
+    "pdd/sync_core/oci_",
+    "pdd/sync_core/release_",
+    "pdd/sync_core/gate3_",
+    "pdd/sync_core/certificate_a",
+    "tests/test_sync_core_checker_",
+    "tests/test_sync_core_standalone_",
+    "tests/test_sync_core_gate2_",
+    "tests/test_sync_core_oci_",
+    "tests/test_sync_core_release_",
+    "tests/test_sync_core_gate3_",
+    "tests/test_sync_core_certificate_a",
+)
+FUTURE_STANDALONE_CHECKER_UNAUTHORIZED_PATHS = {
+    ".pdd/global-sync/gate2-checker-release.json",
+    ".pdd/global-sync/oci-checker-runtime.json",
+    ".pdd/global-sync/release-checker-pin.json",
+    ".pdd/global-sync/gate3-checker-pins.json",
+    ".pdd/global-sync/certificate-a-checker.json",
+}
 PR_2017_ABSENT_METADATA_PATHS = {
     ".pdd/meta/agentic_langtest_python.json",
     ".pdd/meta/agentic_langtest_python_run.json",
@@ -121,6 +160,7 @@ PREAUTHORIZED_CHILD_PATHS = (
     | GATE1_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
+    | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
     | {
         ".github/toolchains/playwright_manifest.py",
@@ -1674,7 +1714,14 @@ def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
         for row in ownership["rules"]
         if row.get("preauthorize_absent", False)
         and row["pattern"].startswith(".pdd/global-sync/")
-    } == GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
+    } == (
+        GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
+        | STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS
+    )
+    assert (
+        STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS
+        <= STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    )
 
     # Existing independently reviewed preauthorization families stay exact.
     assert GATE1_PREAUTHORIZED_PATHS == {
@@ -1737,6 +1784,166 @@ def test_global_sync_runtime_lock_composes_without_sibling_authority(
         reason == f"{sibling}: tracked path has no ownership rule"
         for reason in sibling_manifest.invalid_reasons
     )
+
+
+def test_standalone_checker_package_boundary_is_exactly_preauthorized() -> None:
+    """Only the five reviewed standalone-checker boundary paths are allowed."""
+    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    rules = {row["pattern"]: row for row in ownership["rules"]}
+    assert len(STANDALONE_CHECKER_PREAUTHORIZED_PATHS) == 5
+    assert {
+        path: rules.get(path) for path in STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    } == {
+        path: {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
+        for path in STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    }
+    assert [
+        row["pattern"]
+        for row in ownership["rules"]
+        if row["pattern"] in STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    ] == sorted(STANDALONE_CHECKER_PREAUTHORIZED_PATHS)
+
+    preauthorized = {
+        row["pattern"]
+        for row in ownership["rules"]
+        if row.get("preauthorize_absent", False)
+    }
+    assert {
+        path
+        for path in preauthorized
+        if path.startswith(FUTURE_STANDALONE_CHECKER_AUTHORITY_PREFIXES)
+    } == STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    assert not preauthorized & FUTURE_STANDALONE_CHECKER_UNAUTHORIZED_PATHS
+    assert all(
+        not path.endswith("/") and not any(token in path for token in ("*", "?", "["))
+        for path in STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    )
+    assert all(not (ROOT / path).exists() for path in STANDALONE_CHECKER_PREAUTHORIZED_PATHS)
+
+
+def test_standalone_checker_package_boundary_composes_offline_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """A branch-only checkout admits only the exact standalone boundary."""
+    protected_source = tmp_path / "protected-preauth-source"
+    root = tmp_path / "standalone-checker-preauth-composition"
+    subprocess.run(
+        ["git", "init", "-q", str(protected_source)],
+        check=True,
+        capture_output=True,
+    )
+    _git(
+        protected_source,
+        "fetch",
+        "-q",
+        "--no-tags",
+        str(ROOT),
+        "HEAD:refs/heads/protected-preauth",
+    )
+    assert subprocess.check_output(
+        ["git", "for-each-ref", "--format=%(refname)"],
+        cwd=protected_source,
+        text=True,
+    ).splitlines() == ["refs/heads/protected-preauth"]
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "-q",
+            "--no-hardlinks",
+            "--single-branch",
+            "--branch",
+            "protected-preauth",
+            str(protected_source),
+            str(root),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    protected_base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    _git(root, "update-ref", "refs/remotes/origin/main", protected_base)
+    assert not any(
+        "standalone-checker" in ref
+        for ref in subprocess.check_output(
+            ["git", "for-each-ref", "--format=%(refname)"], cwd=root, text=True
+        ).splitlines()
+    )
+
+    inert_paths = {
+        ".pdd/global-sync/standalone-checker-modules.json": b'{"modules": []}\n',
+        "pdd/sync_core/checker_cli.py": b'"""Synthetic checker CLI."""\n',
+        "pdd/sync_core/standalone_package.py": b'"""Synthetic package boundary."""\n',
+        "tests/test_sync_core_checker_cli.py": b'"""Synthetic checker CLI test."""\n',
+        "tests/test_sync_core_standalone_package.py": (
+            b'"""Synthetic package boundary test."""\n'
+        ),
+    }
+    assert set(inert_paths) == STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    for path, content in inert_paths.items():
+        candidate = root / path
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_bytes(content)
+    _git(root, "add", "-f", ".pdd/global-sync/standalone-checker-modules.json")
+    exact_head = _commit(root, "compose synthetic standalone checker boundary")
+
+    assert set(
+        subprocess.check_output(
+            ["git", "diff", "--name-only", "origin/main...HEAD"],
+            cwd=root,
+            text=True,
+        ).splitlines()
+    ) == STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    for detector in (
+        "scripts/ci_detect_changed_modules.py",
+        "pdd/ci_detect_changed_modules.py",
+    ):
+        result = subprocess.run(
+            [sys.executable, detector, "--diff-base", "origin/main...HEAD"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert not result.stdout.strip()
+
+    manifest = build_unit_manifest(root, base_ref="origin/main", head_ref="HEAD")
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix()
+        in STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    }
+    assert set(records) == STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    assert not manifest.unaccounted_tracked_paths
+    assert not manifest.invalid_reasons
+    assert all(
+        item.inventory.value == "HUMAN_OWNED"
+        and item.candidate_id.role == "human-maintained"
+        and item.ownership_provenance
+        == f"protected-ownership:pdd-maintainers:{path}"
+        for path, item in records.items()
+    )
+    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+
+    for path in FUTURE_STANDALONE_CHECKER_UNAUTHORIZED_PATHS:
+        candidate = root / path
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text("unauthorized future authority\n", encoding="utf-8")
+        _git(root, "add", "-f", path)
+    unauthorized_head = _commit(root, "attempt future standalone authority")
+    unauthorized_manifest = build_unit_manifest(
+        root, base_ref=exact_head, head_ref=unauthorized_head
+    )
+    assert {
+        Path(path) for path in FUTURE_STANDALONE_CHECKER_UNAUTHORIZED_PATHS
+    } <= set(unauthorized_manifest.unaccounted_tracked_paths)
+    assert {
+        f"{path}: tracked path has no ownership rule"
+        for path in FUTURE_STANDALONE_CHECKER_UNAUTHORIZED_PATHS
+    } <= set(unauthorized_manifest.invalid_reasons)
 
 
 def test_global_sync_ledger_paths_compose_with_protected_preauthorization(
