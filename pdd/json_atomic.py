@@ -8,9 +8,23 @@ from pathlib import Path
 from typing import Any
 
 
+def fsync_directory(path: Path) -> None:
+    """Durably persist a rename in ``path``'s directory on POSIX filesystems."""
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def atomic_write_json(path: Path, data: Any, *, indent: int = 2) -> None:
     """Write JSON to ``path`` via a temp file in the same directory and ``os.replace``."""
-    path = path.resolve()
+    # Do not resolve the destination: resolving a final-component symlink
+    # converts replacement of the link into a write outside its directory.
+    path = Path(os.path.abspath(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(
         dir=str(path.parent),
@@ -24,6 +38,7 @@ def atomic_write_json(path: Path, data: Any, *, indent: int = 2) -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
+        fsync_directory(path.parent)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -50,6 +65,7 @@ def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
+        fsync_directory(path.parent)
     except BaseException:
         try:
             os.unlink(tmp)

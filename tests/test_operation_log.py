@@ -2,6 +2,7 @@ import os
 import json
 import pytest
 import time
+import click
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from datetime import datetime
@@ -235,7 +236,10 @@ def test_load_operation_log_compatibility(temp_pdd_env):
 def test_save_fingerprint(temp_pdd_env):
     """Test saving fingerprint state in Fingerprint dataclass format."""
     basename, lang = "state", "go"
-    paths = {"prompt": Path("prompts/state_go.prompt")}
+    prompt = temp_pdd_env.parent.parent / "prompts" / "state_go.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% Goal\nState\n", encoding="utf-8")
+    paths = {"prompt": prompt}
 
     operation_log.save_fingerprint(basename, lang, "op1", paths, 0.5, "gpt-4")
 
@@ -299,7 +303,10 @@ def test_log_operation_decorator_success(temp_pdd_env):
     def my_command(prompt_file: str):
         return {"status": "ok"}, 0.15, "gpt-3.5"
 
-    prompt_path = "prompts/feat_logic_python.prompt"
+    prompt = temp_pdd_env.parent.parent / "prompts" / "feat_logic_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% Goal\nFeature logic\n", encoding="utf-8")
+    prompt_path = str(prompt)
     
     # Run
     result = my_command(prompt_file=prompt_path)
@@ -398,7 +405,10 @@ def test_log_operation_decorator_failure_preserves_run_report(temp_pdd_env):
     def failing_example(prompt_file: str):
         raise RuntimeError("generation failed")
 
-    prompt_path = f"prompts/{basename}_{lang}.prompt"
+    prompt = temp_pdd_env.parent.parent / "prompts" / f"{basename}_{lang}.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% Goal\nExample\n", encoding="utf-8")
+    prompt_path = str(prompt)
     with pytest.raises(RuntimeError, match="generation failed"):
         failing_example(prompt_file=prompt_path)
 
@@ -471,8 +481,10 @@ def test_log_operation_decorator_success_clears_run_report(temp_pdd_env):
     def ok_example(prompt_file: str):
         return "ok", 0.0, "mock"
 
-    prompt_path = f"prompts/{basename}_{lang}.prompt"
-    ok_example(prompt_file=prompt_path)
+    prompt = temp_pdd_env.parent.parent / "prompts" / f"{basename}_{lang}.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% Goal\nExample\n", encoding="utf-8")
+    ok_example(prompt_file=str(prompt))
 
     assert not rr_path.exists(), (
         "clears_run_report must remove the stale run report on success"
@@ -602,11 +614,14 @@ def test_fingerprint_path_extension_consistency(tmp_path):
     with patch("pdd.operation_log.META_DIR", str(meta_dir)):
 
         # Write a fingerprint using operation_log
+        prompt = tmp_path / "prompts" / "test.prompt"
+        prompt.parent.mkdir()
+        prompt.write_text("% Goal\nExtension\n", encoding="utf-8")
         save_fingerprint(
             basename=basename,
             language=language,
             operation="test_operation",
-            paths={"prompt": Path("prompts/test.prompt")},
+            paths={"prompt": prompt},
             cost=0.123,
             model="test-model"
         )
@@ -643,11 +658,14 @@ def test_fingerprint_format_compatibility(tmp_path):
     with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
          patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir):
 
+        prompt = tmp_path / "prompts" / "format_test_python.prompt"
+        prompt.parent.mkdir()
+        prompt.write_text("% Goal\nFormat\n", encoding="utf-8")
         save_fingerprint(
             basename=basename,
             language=language,
             operation="test_op",
-            paths={},
+            paths={"prompt": prompt},
             cost=0.1,
             model="test"
         )
@@ -666,7 +684,7 @@ def test_fingerprint_format_compatibility(tmp_path):
         assert "prompt_hash" in saved_data, "save_fingerprint should write 'prompt_hash' field"
 
         # read_fingerprint should successfully parse the fingerprint
-        result = read_fingerprint(basename, language)
+        result = read_fingerprint(basename, language, paths={"prompt": prompt})
 
         # Formats are now compatible - round-trip works!
         assert result is not None, (
@@ -848,7 +866,7 @@ def test_save_fingerprint_resolves_paths_when_none_issue_983(temp_pdd_env, tmp_p
     mock_paths = {"prompt": prompt_file, "code": code_file}
 
     with patch(
-        "pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths
+        "pdd.fingerprint_transaction.get_pdd_file_paths", return_value=mock_paths
     ), patch(
         "pdd.sync_determine_operation.get_meta_dir",
         return_value=Path(temp_pdd_env),
@@ -899,29 +917,27 @@ def test_save_fingerprint_skips_resolution_when_paths_provided_issue_983(temp_pd
         mock_get_paths.assert_not_called()
 
 
-def test_save_fingerprint_warns_on_path_resolution_failure_issue_983(temp_pdd_env):
+def test_save_fingerprint_path_resolution_failure_is_typed_and_preserves_state_issue_983(temp_pdd_env):
     """
-    Issue #983: If get_pdd_file_paths raises a recoverable error during
-    path resolution, save_fingerprint should warn and produce null hashes
-    (graceful degradation) rather than crashing.
+    #1926 intentionally replaces the former warning/null-fingerprint behavior:
+    failed path resolution is an explicit finalization failure and cannot
+    overwrite a valid fingerprint with partial state.
     """
+    path = operation_log.get_fingerprint_path("badmod", "python")
+    path.write_text('{"old": true}\n', encoding="utf-8")
     with patch(
-        "pdd.sync_determine_operation.get_pdd_file_paths",
+        "pdd.fingerprint_transaction.get_pdd_file_paths",
         side_effect=OSError("prompts dir not found"),
-    ), patch("pdd.operation_log.logger") as mock_logger:
-        # Should NOT raise
-        operation_log.save_fingerprint("badmod", "python", operation="generate")
-
-        mock_logger.warning.assert_called_once()
-        warning_args = str(mock_logger.warning.call_args)
-        assert "badmod" in warning_args
-        assert "python" in warning_args
+    ):
+        from pdd.fingerprint_transaction import FingerprintFinalizeError
+        with pytest.raises(FingerprintFinalizeError, match="path resolution failed"):
+            operation_log.save_fingerprint("badmod", "python", operation="generate")
+    assert json.loads(path.read_text(encoding="utf-8")) == {"old": True}
 
 
-def test_log_operation_decorator_skips_fingerprint_when_clear_silently_fails(temp_pdd_env):
+def test_log_operation_defers_run_report_removal_to_shared_finalizer(temp_pdd_env):
     """
-    Regression for issue #1057: if a stale run report survives clear_run_report(),
-    the decorator must not write a fresh fingerprint next to stale runtime state.
+    The decorator must not unlink prior evidence before the shared transaction.
     """
     operation_log.save_run_report("demo", "python", {"success": True})
     run_report_path = operation_log.get_run_report_path("demo", "python")
@@ -935,13 +951,64 @@ def test_log_operation_decorator_skips_fingerprint_when_clear_silently_fails(tem
     def successful_command(prompt_file):
         return "ok", False, 0.0, "model"
 
-    with patch("pdd.operation_log.os.remove", lambda _path: None), patch(
-        "pdd.operation_log.save_fingerprint"
-    ) as mock_save_fingerprint:
-        successful_command(prompt_file="prompts/demo_python.prompt")
+    prompt = temp_pdd_env.parent.parent / "prompts" / "demo_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% Goal\nDemo\n", encoding="utf-8")
+    with patch("pdd.operation_log.save_fingerprint") as mock_save_fingerprint:
+        successful_command(prompt_file=str(prompt))
 
     assert run_report_path.exists()
-    mock_save_fingerprint.assert_not_called()
+    assert mock_save_fingerprint.call_args.kwargs["remove_run_report"] is True
+
+
+def test_log_operation_finalization_failure_is_nonzero_for_click(temp_pdd_env):
+    """Click must expose stale-state finalization failures as a non-zero exit."""
+    operation_log.save_run_report("cli", "python", {"success": True})
+    prompt = temp_pdd_env.parent.parent / "prompts" / "cli_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% Goal\nCLI\n", encoding="utf-8")
+
+    @click.command()
+    @click.option("--prompt-file", required=True)
+    @operation_log.log_operation(
+        operation="generate", clears_run_report=True, updates_fingerprint=True
+    )
+    def command(prompt_file):
+        return "ok", False, 0.0, "model"
+
+    from pdd.fingerprint_transaction import FingerprintFinalizeError
+    with patch("pdd.operation_log.save_fingerprint", side_effect=FingerprintFinalizeError(
+        "generate", operation_log.get_fingerprint_path("cli", "python"), "disk full"
+    )):
+        result = CliRunner().invoke(command, ["--prompt-file", str(prompt)])
+
+    assert result.exit_code != 0
+    assert "disk full" in str(result.exception)
+
+
+def test_log_operation_restores_prior_run_report_when_fingerprint_fails(temp_pdd_env):
+    """A real post-mutation finalization error cannot erase prior evidence."""
+    operation_log.save_run_report("restore", "python", {"previous": True})
+    report_path = operation_log.get_run_report_path("restore", "python")
+    prior = report_path.read_bytes()
+    prompt = temp_pdd_env.parent.parent / "prompts" / "restore_python.prompt"
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text("% Goal\nRestore\n", encoding="utf-8")
+
+    @operation_log.log_operation(
+        operation="generate", clears_run_report=True, updates_fingerprint=True
+    )
+    def command(prompt_file):
+        return "ok", False, 0.0, "model"
+
+    from pdd.fingerprint_transaction import FingerprintFinalizeError
+    with patch("pdd.operation_log.save_fingerprint", side_effect=FingerprintFinalizeError(
+        "generate", report_path, "disk full",
+    )):
+        with pytest.raises(FingerprintFinalizeError, match="disk full"):
+            command(prompt_file=str(prompt))
+
+    assert report_path.read_bytes() == prior
 
 
 # --------------------------------------------------------------------------------
@@ -1291,7 +1358,7 @@ def test_log_operation_nested_subproject_from_parent_cwd_issue_1305_1211(
     report that log_paths still anchored at the subproject. The fix anchors
     resolution at the prompt file's subproject (absolute prompts_dir).
     """
-    from pdd.sync_determine_operation import calculate_current_hashes
+    from pdd.sync_determine_operation import calculate_current_hashes, sync_determine_operation
 
     parent = tmp_path / "monorepo"
     sub = parent / "service"
@@ -1379,6 +1446,20 @@ def test_log_operation_nested_subproject_from_parent_cwd_issue_1305_1211(
         assert fp_data[field] == expected.get(field), (
             f"{field} diverges from the on-disk subproject files -> auto-heal loop"
         )
+
+    # The persisted state must be consumed as fresh by the real read-only
+    # operation selector, not only by a mocked fingerprint reader.
+    monkeypatch.chdir(sub)
+    decision = sync_determine_operation(
+        basename,
+        language,
+        90.0,
+        log_mode=True,
+        prompts_dir=str(sub / "prompts"),
+        skip_tests=True,
+        skip_verify=True,
+    )
+    assert decision.operation in {"nothing", "all_synced"}, decision.reason
 
 
 def test_prompts_root_for_fingerprint_uses_base_prompts_dir_issue_1305(tmp_path):
@@ -1506,3 +1587,28 @@ def test_aggregate_agentic_fallback_metadata_does_not_equate_sync_mode_with_used
     assert aggregated["used"] is False
     assert aggregated["agentic_sync_mode"] is True
     assert "agentic sync mode enabled" in aggregated["reason"]
+
+
+def test_save_run_report_joins_active_transaction_without_truncating_old_bytes(
+    tmp_path: Path,
+) -> None:
+    """Report publication is buffered until the owning transaction commits."""
+    from pdd.fingerprint_transaction import AtomicStateUpdate
+
+    root = tmp_path / "project"
+    prompt = root / "prompts" / "sample_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    (root / ".pddrc").write_text("contexts: {}\n", encoding="utf-8")
+    prompt.write_text("% Goal\nSample\n", encoding="utf-8")
+    report = root / ".pdd" / "meta" / "sample_python_run.json"
+    report.parent.mkdir(parents=True)
+    old = b'{"tests_passed": 1}\n'
+    report.write_bytes(old)
+
+    with AtomicStateUpdate("sample", "python", directory=report.parent):
+        operation_log.save_run_report(
+            "sample", "python", {"tests_passed": 2}, paths={"prompt": prompt}
+        )
+        assert report.read_bytes() == old
+
+    assert json.loads(report.read_text(encoding="utf-8")) == {"tests_passed": 2}

@@ -1,0 +1,14 @@
+{
+  "pdd_version": "0.0.306.dev0",
+  "timestamp": "2026-07-19T01:10:09.632492+00:00",
+  "command": "verify",
+  "prompt_hash": "45cbca4446a3d0a1cbccf66422dac13df17ab9e197ea4a1fe1042b654c3201f9",
+  "code_hash": "ddaacb6fe24ee99d1745b97488eb7d8576763fa9cf3835d3945f601dfd9c7e97",
+  "example_hash": "91d357f59c2f098065e54fe78d88907dc717f3cb21845618bbfcdea421fc29b2",
+  "test_hash": "d24e8900629d8fc260d163165f25de5543362e7752b2e7248c2db0d59ccf0b85",
+  "test_files": {
+    "test_fingerprint_transaction.py": "d24e8900629d8fc260d163165f25de5543362e7752b2e7248c2db0d59ccf0b85",
+    "test_transactional_finalizer.py": "06be44e02f871ab7e6f85b79bfaf18a62e31009d785845a2ab84717e62f45fd8"
+  },
+  "include_deps": {}
+}

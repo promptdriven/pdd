@@ -70,7 +70,7 @@ def get_meta_dir(project_root=None, paths=None):
     try:
         from .operation_log import _resolve_meta_dir
     except ImportError:  # direct (non-package) import path
-        from operation_log import _resolve_meta_dir  # type: ignore
+        from pdd.operation_log import _resolve_meta_dir
     return _resolve_meta_dir(project_root=None, paths=paths)
 
 def get_locks_dir():
@@ -2022,6 +2022,13 @@ def read_fingerprint(
     """
     meta_dir = get_meta_dir(paths=paths)
     meta_dir.mkdir(parents=True, exist_ok=True)
+    # Recovery is deliberately lazy to avoid the import cycle with the shared
+    # finalizer. Every authoritative read repairs an interrupted paired-state
+    # publication before selecting a sync decision.
+    # This module is intentionally importable by path for legacy tooling;
+    # package-relative imports fail in that documented standalone mode.
+    from pdd.fingerprint_transaction import AtomicStateUpdate
+    AtomicStateUpdate.recover(basename, language, meta_dir)
     fingerprint_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}.json"
     
     if not fingerprint_file.exists():
@@ -2059,6 +2066,10 @@ def read_run_report(
     """
     meta_dir = get_meta_dir(paths=paths)
     meta_dir.mkdir(parents=True, exist_ok=True)
+    # Keep this lazy import package-qualified: this module also supports
+    # documented standalone loading by file path.
+    from pdd.fingerprint_transaction import AtomicStateUpdate
+    AtomicStateUpdate.recover(basename, language, meta_dir)
     run_report_file = meta_dir / f"{_safe_basename(basename)}_{language.lower()}_run.json"
     
     if not run_report_file.exists():

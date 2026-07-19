@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
@@ -8,19 +9,23 @@ import filelock
 from rich.console import Console
 
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
+from . import operation_log as _operation_log
 from .construct_paths import construct_paths
 from .insert_includes import insert_includes
 from .validate_prompt_includes import sanitize_prompt_output
 from .auto_deps_architecture import merge_auto_deps_includes_from_cwd
 from .operation_log import (
-    infer_module_identity,
-    save_fingerprint,
     clear_run_report,
+    infer_module_identity,
+    resolve_fingerprint_paths,
+    save_fingerprint,
     get_run_report_path,
+    get_fingerprint_path,
 )
+from .fingerprint_transaction import AtomicStateUpdate, FingerprintFinalizeError
 
 
-def auto_deps_main(
+def _auto_deps_main_locked(
     ctx: click.Context,
     prompt_file: str,
     directory_path: str,
@@ -74,12 +79,23 @@ def auto_deps_main(
 
         # Resolve CSV path with default fallback
         csv_path = output_file_paths.get("csv", "project_dependencies.csv")
+        output_path = Path(output_file_paths["output"])
+        unit_basename, unit_language = infer_module_identity(output_path)
+        outer_state = None
+        if unit_basename and unit_language:
+            outer_state = AtomicStateUpdate(
+                unit_basename,
+                unit_language,
+                directory=get_fingerprint_path(
+                    unit_basename, unit_language, paths={"prompt": output_path}
+                ).parent,
+            )
 
         # Acquire exclusive lock for the entire operation
         lock_path = Path(f"{csv_path}.lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock = filelock.FileLock(f"{csv_path}.lock")
-        with lock:
+        with outer_state if outer_state is not None else nullcontext(), lock:
             # Force-scan: delete existing CSV if requested
             if force_scan and Path(csv_path).exists():
                 if not quiet:
@@ -119,7 +135,6 @@ def auto_deps_main(
 
             # Sanitize prompt output before persisting (removes invalid <include>
             # selectors so a later `pdd sync` does not trip on them).
-            output_path = output_file_paths["output"]
             cleaned_prompt, invalid_includes = sanitize_prompt_output(
                 modified_prompt, output_path
             )
@@ -204,75 +219,27 @@ def auto_deps_main(
             if _skip_finalization:
                 return cleaned_prompt, total_cost, model_name
             try:
-                basename, language = infer_module_identity(Path(output_path))
+                basename, language = unit_basename, unit_language
                 if basename is None or language is None:
-                    if not quiet:
-                        console.print(
-                            f"[yellow]Warning: Could not infer module identity for "
-                            f"{output_path}; skipping fingerprint finalization.[/yellow]"
-                        )
+                    # Outputs outside PDD's managed prompt naming scheme have
+                    # no canonical unit identity and therefore no fingerprint.
+                    return cleaned_prompt, total_cost, model_name
                 else:
                     # Issue #1211: route clear/verify/save through the same
                     # `paths` hint (the prompt path we just wrote) so all
                     # three target the subproject's .pdd/meta — not a parent
                     # CWD orphan — when auto-deps is run from above the
                     # subproject root.
-                    _autodeps_paths = {"prompt": Path(output_path)}
-                    # Clear stale run report; do not let its failure block fingerprint save
-                    try:
-                        clear_run_report(basename, language, paths=_autodeps_paths)
-                    except Exception as cr_exc:
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Warning: Failed to clear run report for "
-                                f"{basename}_{language}: {cr_exc}[/yellow]"
-                            )
-                    # Defensive: clear_run_report() in pdd.operation_log silently swallows
-                    # OSError on the actual unlink, so verify the report is really gone.
-                    try:
-                        _stale_report_path = get_run_report_path(
-                            basename, language, paths=_autodeps_paths
-                        )
-                        if _stale_report_path.exists():
-                            if not quiet:
-                                console.print(
-                                    f"[yellow]Warning: clear_run_report did not remove "
-                                    f"{_stale_report_path}; downstream sync may still see "
-                                    f"stale results.[/yellow]"
-                                )
-                    except Exception as _vrf_exc:
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Warning: could not verify run-report removal: "
-                                f"{_vrf_exc}[/yellow]"
-                            )
-                    try:
-                        save_fingerprint(
-                            basename=basename,
-                            language=language,
-                            operation="auto-deps",
-                            paths=_autodeps_paths,
-                            cost=total_cost,
-                            model=model_name,
-                        )
-                    except Exception as fp_exc:
-                        from .sync_core.finalize import CanonicalFinalizationError
-                        if isinstance(fp_exc, CanonicalFinalizationError):
-                            raise
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Warning: Failed to save fingerprint for "
-                                f"{basename}_{language}: {fp_exc}[/yellow]"
-                            )
-            except Exception as meta_exc:
-                from .sync_core.finalize import CanonicalFinalizationError
-                if isinstance(meta_exc, CanonicalFinalizationError):
-                    raise
-                # Never mask a successful auto-deps result on metadata errors
-                if not quiet:
-                    console.print(
-                        f"[yellow]Warning: Metadata finalization encountered an error: {meta_exc}[/yellow]"
+                    _autodeps_paths = resolve_fingerprint_paths(
+                        basename, language, Path(output_path), paths={"prompt": Path(output_path)}
                     )
+                    save_fingerprint(
+                        basename=basename, language=language, operation="auto-deps",
+                        paths=_autodeps_paths, cost=total_cost, model=model_name,
+                        remove_run_report=True,
+                    )
+            except FingerprintFinalizeError:
+                raise
 
             return cleaned_prompt, total_cost, model_name
 
@@ -281,8 +248,52 @@ def auto_deps_main(
         raise
     except Exception as exc:
         from .sync_core.finalize import CanonicalFinalizationError
-        if isinstance(exc, CanonicalFinalizationError):
+        if isinstance(exc, (CanonicalFinalizationError, FingerprintFinalizeError)):
             raise
         if not quiet:
             console.print(f"[red]Error in auto-deps: {exc}[/red]")
         return "", 0.0, f"Error: {exc}"
+
+
+def auto_deps_main(
+    ctx: click.Context,
+    prompt_file: str,
+    directory_path: str,
+    auto_deps_csv_path: Optional[str],
+    output: Optional[str],
+    force_scan: Optional[bool] = False,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    include_docs: bool = False,
+    no_dedup: bool = False,
+    concurrency: int = 1,
+    compress: bool = False,
+    _skip_finalization: bool = False,
+) -> Tuple[str, float, str]:
+    """Lock the authoritative prompt before any mutable prompt bytes are read."""
+    # Capture the lock identity before construct_paths reads mutable prompt
+    # bytes. Keep the normal symbol for final-output identity so callers that
+    # intentionally substitute it retain the existing finalization seam.
+    basename, language = _operation_log.infer_module_identity(Path(prompt_file))
+    arguments = dict(
+        ctx=ctx,
+        prompt_file=prompt_file,
+        directory_path=directory_path,
+        auto_deps_csv_path=auto_deps_csv_path,
+        output=output,
+        force_scan=force_scan,
+        progress_callback=progress_callback,
+        include_docs=include_docs,
+        no_dedup=no_dedup,
+        concurrency=concurrency,
+        compress=compress,
+        _skip_finalization=_skip_finalization,
+    )
+    if not basename or not language:
+        return _auto_deps_main_locked(**arguments)
+    paths = {"prompt": Path(prompt_file)}
+    with AtomicStateUpdate(
+        basename,
+        language,
+        directory=get_fingerprint_path(basename, language, paths=paths).parent,
+    ):
+        return _auto_deps_main_locked(**arguments)

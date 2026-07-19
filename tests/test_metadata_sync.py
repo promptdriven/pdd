@@ -562,13 +562,44 @@ def test_architecture_stage_skipped_with_correct_reason(tmp_path: Path) -> None:
 # Stage-specific behavior — run_report
 # ---------------------------------------------------------------------------
 
-def test_run_report_clears_via_clear_run_report(tmp_path: Path) -> None:
+def test_run_report_tombstone_is_owned_by_fingerprint_transaction(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     with patch.object(ms, "clear_run_report") as mock_clear, \
          patch.object(ms, "save_fingerprint"):
         result = run_metadata_sync(ws["prompt_path"], dry_run=False)
-    mock_clear.assert_called_once_with("demo", "python", paths=ANY)
+    mock_clear.assert_not_called()
     assert result.stages["run_report"].status == "ok"
+
+
+@pytest.mark.parametrize("failure_point", ("set_fingerprint", "remove_run_report"))
+def test_metadata_owner_aborts_pair_when_buffer_mutation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str,
+) -> None:
+    """Real metadata ownership cannot publish one half after either buffer failure."""
+    from pdd.fingerprint_transaction import AtomicStateUpdate
+    from pdd.operation_log import get_fingerprint_path, get_run_report_path
+
+    ws = _make_workspace(tmp_path)
+    monkeypatch.chdir(ws["repo_root"])
+    paths = {"prompt": ws["prompt_path"]}
+    fingerprint = get_fingerprint_path("demo", "python", paths=paths)
+    report = get_run_report_path("demo", "python", paths=paths)
+    old_fingerprint = b'{"command": "old"}\n'
+    old_report = b'{"tests_passed": 1}\n'
+    fingerprint.write_bytes(old_fingerprint)
+    report.write_bytes(old_report)
+    original = getattr(AtomicStateUpdate, failure_point)
+
+    def fail_after_buffer(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        raise OSError(f"{failure_point} injected failure")
+
+    with patch.object(AtomicStateUpdate, failure_point, fail_after_buffer):
+        result = run_metadata_sync(ws["prompt_path"])
+
+    assert result.stages["fingerprint"].status == "failed"
+    assert fingerprint.read_bytes() == old_fingerprint
+    assert report.read_bytes() == old_report
 
 
 def test_run_report_skipped_when_identity_cannot_be_inferred(tmp_path: Path) -> None:
@@ -616,8 +647,8 @@ def test_fingerprint_runs_last_after_other_stages(tmp_path: Path) -> None:
     with patch.object(ms, "clear_run_report", side_effect=_record_clear), \
          patch.object(ms, "save_fingerprint", side_effect=_record_save):
         run_metadata_sync(ws["prompt_path"], dry_run=False)
-    # save_fingerprint must run AFTER clear_run_report.
-    assert call_order == ["clear_run_report", "save_fingerprint"], call_order
+    # The journaled finalizer owns the tombstone; no pre-publication unlink.
+    assert call_order == ["save_fingerprint"], call_order
 
 
 def test_fingerprint_dry_run_does_not_persist(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+from contextlib import nullcontext
 import json
 import logging
 import os
@@ -391,6 +392,58 @@ def _prompts_root_for_fingerprint(prompt_file: Union[str, Path]) -> Path:
     return prompt_path.parent
 
 
+def resolve_fingerprint_paths(
+    basename: str,
+    language: str,
+    prompt_file: Union[str, Path],
+    *,
+    paths: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Resolve sibling artifacts from the touched prompt's owning project.
+
+    Explicit paths always win.  This prevents parent-CWD invocations from
+    recording null hashes or writing metadata outside a nested subproject.
+    """
+    explicit: Dict[str, Any] = dict(paths or {})
+    prompt_path = Path(prompt_file)
+    # A decorator receives the user-facing relative argument; only let it
+    # override discovery when it is an actual path, not a display hint.
+    if prompt_path.exists():
+        explicit["prompt"] = prompt_path
+    else:
+        explicit.pop("prompt", None)
+    try:
+        from .sync_determine_operation import get_pdd_file_paths
+
+        discovered = get_pdd_file_paths(
+            basename, language, prompts_dir=str(_prompts_root_for_fingerprint(prompt_file))
+        )
+        if not isinstance(discovered.get("prompt"), Path) or not discovered["prompt"].exists():
+            return explicit
+        # Discovery occurs in a process whose CWD can be a parent checkout.
+        # Keep only artifacts owned by the touched prompt's project; otherwise
+        # a default output path from that parent would become an apparently
+        # explicit cross-project artifact at the finalization boundary.
+        discovered_prompt = Path(discovered["prompt"])
+        prompt_root = _detect_project_root(discovered_prompt) or _prompts_root_for_fingerprint(
+            discovered_prompt
+        ).parent
+        for key, value in tuple(discovered.items()):
+            if key == "prompt" or value is None:
+                continue
+            values = value if key == "test_files" else [value]
+            try:
+                for item in values:
+                    Path(item).resolve().relative_to(prompt_root.resolve())
+            except (TypeError, ValueError):
+                discovered[key] = [] if key == "test_files" else None
+        discovered.update(explicit)
+        return discovered
+    except (ImportError, OSError, ValueError) as exc:
+        logger.warning("Could not resolve complete fingerprint paths for %s/%s: %s", basename, language, exc)
+        return explicit
+
+
 def load_operation_log(
     basename: str,
     language: str,
@@ -576,7 +629,10 @@ def save_fingerprint(
     operation: str,
     paths: Optional[Dict[str, Path]] = None,
     cost: float = 0.0,
-    model: str = "unknown"
+    model: str = "unknown",
+    *,
+    remove_run_report: bool = False,
+    atomic_state: Any = None,
 ) -> None:
     """
     Save the current fingerprint/state to the state file.
@@ -585,54 +641,21 @@ def save_fingerprint(
     in sync_determine_operation.py. This ensures manual commands (generate, example)
     don't break sync's fingerprint tracking.
     """
-    from dataclasses import asdict
-    from datetime import timezone
-    from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
-    from . import __version__
-
-    # Issue #983: when the caller provides `paths`, use them directly — do
-    # NOT call get_pdd_file_paths. Issue #1211: at the same time, use those
-    # caller-supplied paths to detect the subproject root so the meta dir
-    # anchors at the .pddrc rather than the run CWD.
-    if not paths:
-        from .sync_determine_operation import get_pdd_file_paths
-        try:
-            paths = get_pdd_file_paths(basename, language)
-        except (ImportError, OSError, ValueError) as e:
-            logger.warning("Could not resolve paths for %s/%s: %s", basename, language, e)
-            paths = {}
+    # Explicit paths remain authoritative.  When omitted, the shared
+    # finalizer performs exactly one discovery attempt and turns failure into a
+    # typed command failure instead of writing a null-hash fingerprint.
 
     from .sync_core.finalize import finalize_legacy_paths
 
     if finalize_legacy_paths(paths):
         return
 
-    path = get_fingerprint_path(basename, language, paths=paths)
+    from .fingerprint_transaction import finalize_fingerprint
 
-    # Issue #522: Pass stored include deps for prompt hash calculation
-    prev_fp = read_fingerprint(basename, language, paths=paths)
-    stored_deps = prev_fp.include_deps if prev_fp else None
-    current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps) if paths else {}
-
-    # Create Fingerprint with same format as _save_fingerprint_atomic
-    fingerprint = Fingerprint(
-        pdd_version=__version__,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        command=operation,
-        prompt_hash=current_hashes.get('prompt_hash'),
-        code_hash=current_hashes.get('code_hash'),
-        example_hash=current_hashes.get('example_hash'),
-        test_hash=current_hashes.get('test_hash'),
-        test_files=current_hashes.get('test_files'),
-        include_deps=current_hashes.get('include_deps'),  # Issue #522
+    finalize_fingerprint(
+        basename, language, operation, paths, cost, model,
+        remove_run_report=remove_run_report, atomic_state=atomic_state,
     )
-
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(asdict(fingerprint), f, indent=2)
-    except Exception as e:
-        console = Console()
-        console.print(f"[yellow]Warning: Failed to save fingerprint to {path}: {e}[/yellow]")
 
 
 def save_run_report(
@@ -649,13 +672,18 @@ def save_run_report(
 
     if canonical_root_for_paths(paths):
         return
+    from .fingerprint_transaction import AtomicStateUpdate
+
     path = get_run_report_path(basename, language, paths=paths)
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(report_data, f, indent=2)
-    except Exception as e:
-        console = Console()
-        console.print(f"[yellow]Warning: Failed to save run report to {path}: {e}[/yellow]")
+    active = AtomicStateUpdate.active_for(basename, language, path.parent)
+    if active is not None:
+        active.set_run_report(report_data, path)
+        return
+    # A standalone report write has the same durability contract as a paired
+    # finalization.  Do not truncate the old authoritative report and turn a
+    # disk-full/short-write failure into a warning-only success.
+    with AtomicStateUpdate(basename, language, directory=path.parent) as state:
+        state.set_run_report(report_data, path)
 
 
 def clear_run_report(
@@ -666,12 +694,15 @@ def clear_run_report(
     """
     Remove an existing run report if it exists.
     """
+    from .fingerprint_transaction import AtomicStateUpdate
+
     path = get_run_report_path(basename, language, paths=paths)
-    if path.exists():
-        try:
-            os.remove(path)
-        except Exception:
-            pass
+    active = AtomicStateUpdate.active_for(basename, language, path.parent)
+    if active is not None:
+        active.remove_run_report(path)
+        return
+    with AtomicStateUpdate(basename, language, directory=path.parent) as state:
+        state.remove_run_report(path)
 
 
 def _clear_run_report_before_fingerprint(
@@ -682,6 +713,11 @@ def _clear_run_report_before_fingerprint(
     """Clear stale run report and verify it is gone before fingerprint update."""
     path = get_run_report_path(basename, language, paths=paths)
     console = Console()
+
+    from .fingerprint_transaction import AtomicStateUpdate
+    if AtomicStateUpdate.active_for(basename, language, path.parent) is not None:
+        clear_run_report(basename, language, paths=paths)
+        return True
 
     try:
         had_run_report = path.exists()
@@ -768,99 +804,74 @@ def log_operation(
             result = None
             error_msg = None
 
-            try:
-                result = func(*args, **kwargs)
-                success = True
-                return result
-            except Exception as e:
-                success = False
-                error_msg = str(e)
-                raise
-            finally:
-                duration = time.time() - start_time
-                cost = 0.0
-                model = "unknown"
-                if success and result:
-                    if isinstance(result, tuple) and len(result) >= 3:
-                        from .sync_orchestration import _extract_cost_from_result, _extract_model_from_result
-                        cost = _extract_cost_from_result(operation, result)
-                        model = _extract_model_from_result(operation, result)
+            outer_state = None
+            if basename and language:
+                # This outer scope begins before the decorated command body,
+                # then remains active while path completion, hashing, and
+                # journaled publication run in the finally block below.  Some
+                # commands only clear a report, but their writes must still be
+                # serialized with a concurrent command for the same unit.
+                from .fingerprint_transaction import AtomicStateUpdate
+                outer_state = AtomicStateUpdate(
+                    basename,
+                    language,
+                    directory=get_fingerprint_path(
+                        basename, language, paths=log_paths
+                    ).parent,
+                )
 
-                update_log_entry(entry, success=success, cost=cost, model=model, duration=duration, error=error_msg)
-                if _estimate_mode_active():
-                    pass
-                elif basename and language:
-                    append_log_entry(basename, language, entry, paths=log_paths)
-                    if success:
-                        fingerprint_allowed = True
-                        # Clear the stale run report only after the command
-                        # succeeds, so a failed run cannot erase existing
-                        # runtime verification state that still describes the
-                        # current code. The clear must happen before
-                        # save_fingerprint so a fresh fingerprint never
-                        # coexists with a stale per-module run report
-                        # (issue #1057).
-                        if clears_run_report:
-                            fingerprint_allowed = _clear_run_report_before_fingerprint(
-                                basename, language, paths=log_paths
-                            )
-                        if updates_fingerprint and fingerprint_allowed:
-                            # Issue #1305 + #1211: save_fingerprint hashes only
-                            # Path values, so a bare {"prompt": <str>} hint
-                            # yields all-null hashes (the prompt string is
-                            # skipped and code/example/test keys are absent) and
-                            # the fingerprint never converges (CI auto-heal
-                            # loops). Resolve the authoritative, complete Path
-                            # set here. get_pdd_file_paths re-resolves the
-                            # prompts root from the run CWD, so anchor it at the
-                            # prompt file's subproject via an absolute
-                            # prompts_dir — otherwise a command run from a PARENT
-                            # CWD for a nested subproject resolves to the parent
-                            # (null hashes again) and writes the fingerprint
-                            # outside the subproject, splitting it from the log /
-                            # run report that log_paths anchors. Fall back to a
-                            # Path-coerced prompt hint (never a raw string) if
-                            # resolution fails, so anchoring still works. The
-                            # #983 contract is preserved: the caller resolves the
-                            # paths, so save_fingerprint does not.
-                            from .sync_determine_operation import get_pdd_file_paths
-                            try:
-                                prompts_root = _prompts_root_for_fingerprint(
-                                    prompt_file
+            with outer_state if outer_state is not None else nullcontext():
+                try:
+                    result = func(*args, **kwargs)
+                    success = True
+                    return result
+                except Exception as e:
+                    success = False
+                    error_msg = str(e)
+                    raise
+                finally:
+                    duration = time.time() - start_time
+                    cost = 0.0
+                    model = "unknown"
+                    if success and result:
+                        if isinstance(result, tuple) and len(result) >= 3:
+                            from .sync_orchestration import _extract_cost_from_result, _extract_model_from_result
+                            cost = _extract_cost_from_result(operation, result)
+                            model = _extract_model_from_result(operation, result)
+
+                    update_log_entry(entry, success=success, cost=cost, model=model, duration=duration, error=error_msg)
+                    if _estimate_mode_active():
+                        pass
+                    elif basename and language:
+                        append_log_entry(basename, language, entry, paths=log_paths)
+                        if success:
+                            fingerprint_allowed = True
+                            if clears_run_report and not updates_fingerprint:
+                                fingerprint_allowed = _clear_run_report_before_fingerprint(
+                                    basename, language, paths=log_paths
                                 )
-                                fingerprint_paths: Dict[str, Any] = get_pdd_file_paths(
-                                    basename, language, prompts_dir=str(prompts_root)
+                            if updates_fingerprint and not fingerprint_allowed:
+                                from .fingerprint_transaction import FingerprintFinalizeError
+                                raise FingerprintFinalizeError(
+                                    operation,
+                                    get_fingerprint_path(basename, language, paths=log_paths),
+                                    "stale run report could not be cleared",
                                 )
-                                # Existence-gate the resolution: if it silently
-                                # resolved the prompt to a path that is not on
-                                # disk (a mis-resolution that did not raise), the
-                                # other paths are wrong too, so the fingerprint
-                                # would be null and mis-anchored. Fall back to the
-                                # real prompt path so prompt_hash is real and the
-                                # write still anchors at the subproject.
-                                resolved_prompt = fingerprint_paths.get("prompt")
-                                if not (
-                                    isinstance(resolved_prompt, Path)
-                                    and resolved_prompt.exists()
-                                ):
-                                    fingerprint_paths = {"prompt": Path(prompt_file)}
-                            except (ImportError, OSError, ValueError) as e:
-                                logger.warning(
-                                    "Could not resolve paths for %s/%s: %s",
+                            if updates_fingerprint:
+                                fingerprint_paths = resolve_fingerprint_paths(
+                                    basename, language, Path(prompt_file), paths=log_paths
+                                )
+                                save_fingerprint(
                                     basename,
                                     language,
-                                    e,
+                                    operation=operation,
+                                    paths=fingerprint_paths,
+                                    cost=cost,
+                                    model=model,
+                                    remove_run_report=clears_run_report,
+                                    atomic_state=outer_state,
                                 )
-                                fingerprint_paths = {"prompt": Path(prompt_file)}
-                            save_fingerprint(
-                                basename,
-                                language,
-                                operation=operation,
-                                paths=fingerprint_paths,
-                                cost=cost,
-                                model=model,
-                            )
-                        if updates_run_report and isinstance(result, dict):
-                            save_run_report(basename, language, result, paths=log_paths)
+                            if updates_run_report and isinstance(result, dict):
+                                save_run_report(basename, language, result, paths=log_paths)
         return wrapper
     return decorator
