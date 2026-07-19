@@ -1818,7 +1818,10 @@ def test_standalone_checker_package_boundary_is_exactly_preauthorized() -> None:
         not path.endswith("/") and not any(token in path for token in ("*", "?", "["))
         for path in STANDALONE_CHECKER_PREAUTHORIZED_PATHS
     )
-    assert all(not (ROOT / path).exists() for path in STANDALONE_CHECKER_PREAUTHORIZED_PATHS)
+    assert all(
+        (ROOT / path).is_file() and not (ROOT / path).is_symlink()
+        for path in sorted(STANDALONE_CHECKER_PREAUTHORIZED_PATHS)
+    )
 
 
 def test_standalone_checker_package_boundary_composes_offline_and_fails_closed(
