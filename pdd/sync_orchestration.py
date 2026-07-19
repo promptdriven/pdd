@@ -2082,10 +2082,10 @@ def sync_orchestration(
     steer_timeout: float = DEFAULT_STEER_TIMEOUT_S,
     agentic_mode: bool = False,
     compress: bool = False,
-    fresh: bool = False,
     evidence: bool = False,
     snapshot_context: bool = False,
     compressed_context: bool = False,
+    fresh: bool = False,
 ) -> Dict[str, Any]:
     """
     Orchestrates the complete PDD sync workflow with parallel animation.

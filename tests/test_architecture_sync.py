@@ -5,6 +5,7 @@ Tests bidirectional sync between architecture.json and prompt file metadata tags
 """
 
 import hashlib
+import inspect
 import json
 import tempfile
 import textwrap
@@ -33,6 +34,53 @@ from pdd.architecture_sync import (
     validate_architecture_modules,
     validate_interface_structure,
 )
+
+
+def _repository_architecture_entry(filename: str) -> dict:
+    """Return a real repository architecture entry for prompt-contract checks."""
+    repo_root = Path(__file__).resolve().parent.parent
+    entries = json.loads((repo_root / "architecture.json").read_text(encoding="utf-8"))
+    return next(entry for entry in entries if entry["filename"] == filename)
+
+
+def test_mock_contract_validation_real_prompt_interface_is_parseable():
+    """XML-safe memory sentinels must preserve the real security gate contract."""
+    repo_root = Path(__file__).resolve().parent.parent
+    prompt = repo_root / "pdd" / "prompts" / "mock_contract_validation_python.prompt"
+
+    tags = parse_prompt_tags(prompt.read_text(encoding="utf-8"))
+
+    assert "interface_parse_error" not in tags
+    assert tags["interface"] is not None
+    signatures = {
+        function["name"]: function["signature"]
+        for function in tags["interface"]["module"]["functions"]
+    }
+    assert "source_path: str = '<memory>'" in signatures["extract_query_fields"]
+    assert "source_path: str = '<memory>'" in signatures["extract_mock_fields"]
+    assert _repository_architecture_entry("mock_contract_validation_python.prompt")["interface"] == tags["interface"]
+
+
+def test_sync_orchestration_real_prompt_contract_matches_runtime():
+    """The orchestration prompt and architecture expose only runtime arguments."""
+    from pdd.sync_orchestration import sync_orchestration
+
+    repo_root = Path(__file__).resolve().parent.parent
+    prompt = repo_root / "pdd" / "prompts" / "sync_orchestration_python.prompt"
+    tags = parse_prompt_tags(prompt.read_text(encoding="utf-8"))
+    declared_signature = tags["interface"]["module"]["functions"][0]["signature"]
+    runtime_parameters = list(inspect.signature(sync_orchestration).parameters)
+
+    assert "one_session" not in declared_signature
+    assert "one_session" not in runtime_parameters
+    assert runtime_parameters[-2:] == ["compressed_context", "fresh"]
+    architecture_signature = _repository_architecture_entry(
+        "sync_orchestration_python.prompt"
+    )["interface"]["module"]["functions"][0]["signature"]
+    assert "one_session" not in architecture_signature
+    assert architecture_signature.endswith(
+        "compressed_context: bool = False, fresh: bool = False) -> Dict[str, Any]"
+    )
 
 
 # --- Test parse_prompt_tags ---

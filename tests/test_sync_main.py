@@ -1,6 +1,7 @@
 # tests/test_sync_main.py
 
 import base64
+import inspect
 import json
 import os
 import re
@@ -2780,3 +2781,16 @@ def test_sync_main_forwards_fresh_true_to_orchestration(
         fresh=True,
     )
     assert mock_sync_orchestration.call_args.kwargs["fresh"] is True
+
+
+def test_sync_main_appends_fresh_after_the_legacy_positional_tail():
+    """Legacy positional evidence must not bind the later ``fresh`` option."""
+    legacy_evidence = object()
+    bound = inspect.signature(sync_main).bind(
+        object(), "demo", 3, 10.0, False, False, 90.0, False,
+        True, 5.0, False, False, True, legacy_evidence, True, True,
+    )
+    bound.apply_defaults()
+
+    assert bound.arguments["evidence"] is legacy_evidence
+    assert bound.arguments["fresh"] is False

@@ -608,10 +608,10 @@ def sync_main(
     agentic_mode: bool = False,
     one_session: bool = False,
     compress: bool = False,
-    fresh: bool = False,
     evidence: bool = False,
     snapshot_context: bool = False,
     compressed_context: bool = False,
+    fresh: bool = False,
 ) -> Tuple[Dict[str, Any], float, str]:
     """
     CLI wrapper for the sync command. Handles parameter validation, path construction,

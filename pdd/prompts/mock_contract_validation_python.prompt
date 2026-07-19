@@ -7,8 +7,8 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "extract_query_fields", "signature": "(source: str, source_path: str = '<memory>') -> tuple[QueryFieldUse, ...]", "returns": "tuple[QueryFieldUse, ...]"},
-      {"name": "extract_mock_fields", "signature": "(source: str, source_path: str = '<memory>', resources: Optional[set[str]] = None) -> tuple[MockFieldUse, ...]", "returns": "tuple[MockFieldUse, ...]"},
+      {"name": "extract_query_fields", "signature": "(source: str, source_path: str = '&lt;memory&gt;') -> tuple[QueryFieldUse, ...]", "returns": "tuple[QueryFieldUse, ...]"},
+      {"name": "extract_mock_fields", "signature": "(source: str, source_path: str = '&lt;memory&gt;', resources: Optional[set[str]] = None) -> tuple[MockFieldUse, ...]", "returns": "tuple[MockFieldUse, ...]"},
       {"name": "resolve_protected_schema_ref", "signature": "(project_root: Path) -> str", "returns": "str"},
       {"name": "validate_mock_contracts", "signature": "(*, project_root: Path, production_sources: Mapping[str | Path, str], test_sources: Mapping[str | Path, str], baseline_production_sources: Optional[Mapping[str | Path, str]] = None, baseline_test_sources: Optional[Mapping[str | Path, str]] = None, protected_schema_ref: Optional[str] = None) -> MockContractReport", "returns": "MockContractReport"},
       {"name": "validate_changed_files", "signature": "(*, project_root: Path, changed_files: Sequence[str], baseline_ref: Optional[str] = None) -> MockContractReport", "returns": "MockContractReport"},
