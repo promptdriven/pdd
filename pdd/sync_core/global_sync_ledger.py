@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -24,7 +25,7 @@ from urllib.request import Request, urlopen
 import yaml
 
 
-LEDGER_SCHEMA_VERSION = 4
+LEDGER_SCHEMA_VERSION = 5
 REQUIRED_GATE_STATE_FIELDS = (
     "implemented",
     "local_green",
@@ -42,6 +43,8 @@ SHA256 = re.compile(r"[0-9a-f]{64}")
 ACTION_RUN_URL = re.compile(r"^/([^/]+/[^/]+)/actions/runs/(\d+)$")
 ACTION_JOB_URL = re.compile(r"^/([^/]+/[^/]+)/actions/runs/(\d+)/job/(\d+)$")
 CHECK_RUN_URL = re.compile(r"^/([^/]+/[^/]+)/runs/(\d+)$")
+SUBJECT_RECORD_LEDGER_GENERATION = "ledger_generation"
+SUBJECT_RECORD_GATE = "gate"
 
 
 class LedgerError(ValueError):
@@ -191,6 +194,44 @@ def _require_sha(value: object, field: str) -> str:
     return value
 
 
+def _canonical_json_value(value: object, field: str) -> object:
+    """Return a JSON-only value, rejecting coercible or ambiguous YAML types."""
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, list):
+        return [
+            _canonical_json_value(item, f"{field}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise LedgerError(f"{field} mapping keys must be strings")
+        return {
+            key: _canonical_json_value(item, f"{field}.{key}")
+            for key, item in value.items()
+        }
+    raise LedgerError(
+        f"{field} contains unsupported canonical value type {type(value).__name__}"
+    )
+
+
+def canonical_predicate_digest(predicate: object) -> str:
+    """Hash one typed predicate as canonical JSON, never prose or ``repr``."""
+    if not isinstance(predicate, dict):
+        raise LedgerError("required_predicate must be a mapping for canonical digesting")
+    canonical = _canonical_json_value(predicate, "required_predicate")
+    encoded = json.dumps(
+        canonical,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _parse_github_binding(binding: dict[str, Any]) -> dict[str, str]:
     url = binding.get("url")
     if not isinstance(url, str):
@@ -226,6 +267,8 @@ def _validate_promotion_bundle(bundle: object, name: str) -> dict[str, Any]:
         raise LedgerError(f"promotion bundle {name!r} repository is malformed")
     _require_sha(bundle.get("repository_sha"), f"promotion bundle {name!r} repository_sha")
     _require_sha(bundle.get("head_sha"), f"promotion bundle {name!r} head_sha")
+    subject = _require_mapping(bundle, "subject")
+    _validate_subject_shape(subject, name)
     command = bundle.get("validation_command")
     if not isinstance(command, str) or not command.strip():
         raise LedgerError(f"promotion bundle {name!r} requires a validation command")
@@ -249,9 +292,83 @@ def _validate_promotion_bundle(bundle: object, name: str) -> dict[str, Any]:
     return bundle
 
 
+def _validate_subject_shape(subject: dict[str, Any], name: str) -> None:
+    """Validate a closed subject declaration before matching it to a record."""
+    if set(subject) != {"record", "states", "required_predicate_sha256", "record_claims"}:
+        raise LedgerError(f"promotion bundle {name!r} subject has unexpected fields")
+    record = _require_mapping(subject, "record")
+    kind = record.get("kind")
+    if kind == SUBJECT_RECORD_LEDGER_GENERATION:
+        if set(record) != {"kind"}:
+            raise LedgerError(f"promotion bundle {name!r} ledger subject record is overbroad")
+    elif kind == SUBJECT_RECORD_GATE:
+        order = record.get("order")
+        if (
+            set(record) != {"kind", "order"}
+            or not isinstance(order, int)
+            or not 1 <= order <= GATE_COUNT
+        ):
+            raise LedgerError(f"promotion bundle {name!r} gate subject record is malformed")
+    else:
+        raise LedgerError(f"promotion bundle {name!r} subject record kind is invalid")
+    states = subject.get("states")
+    allowed_states = set(REQUIRED_GATE_STATE_FIELDS) | {"status"}
+    if (
+        not isinstance(states, list)
+        or not states
+        or any(not isinstance(state, str) or state not in allowed_states for state in states)
+        or len(states) != len(set(states))
+    ):
+        raise LedgerError(f"promotion bundle {name!r} subject states are malformed or duplicate")
+    digest = subject.get("required_predicate_sha256")
+    if not isinstance(digest, str) or SHA256.fullmatch(digest) is None:
+        raise LedgerError(f"promotion bundle {name!r} subject predicate digest is malformed")
+    claims = _require_mapping(subject, "record_claims")
+    if set(claims) != {
+        "repository",
+        "exact_repository_sha",
+        "reviewed_head_sha",
+        "merge_sha",
+    }:
+        raise LedgerError(f"promotion bundle {name!r} subject record claims are malformed")
+    repository = claims.get("repository")
+    if not isinstance(repository, str) or repository.count("/") != 1:
+        raise LedgerError(f"promotion bundle {name!r} subject repository is malformed")
+    for field in ("exact_repository_sha", "reviewed_head_sha", "merge_sha"):
+        _require_sha(claims.get(field), f"promotion bundle {name!r} subject {field}")
+
+
+def _record_subject(
+    record: dict[str, Any], record_name: str, record_identity: dict[str, object]
+) -> dict[str, object]:
+    """Recompute the only subject that can authorize one record's promotions."""
+    required_predicate = record.get("required_predicate")
+    digest = canonical_predicate_digest(required_predicate)
+    repository = record.get("repository")
+    if not isinstance(repository, str) or repository.count("/") != 1:
+        raise LedgerError(f"{record_name}.repository must be an owner/name repository")
+    claims = {
+        "repository": repository,
+        "exact_repository_sha": _require_sha(
+            record.get("exact_repository_sha"), f"{record_name}.exact_repository_sha"
+        ),
+        "reviewed_head_sha": _require_sha(
+            record.get("reviewed_head_sha"), f"{record_name}.reviewed_head_sha"
+        ),
+        "merge_sha": _require_sha(record.get("merge_sha"), f"{record_name}.merge_sha"),
+    }
+    if claims["exact_repository_sha"] != claims["merge_sha"]:
+        raise LedgerError(f"{record_name} exact_repository_sha must equal merge_sha")
+    return {
+        "record": record_identity,
+        "required_predicate_sha256": digest,
+        "record_claims": claims,
+    }
+
+
 def _promotion_references(
-    record: dict[str, Any], record_name: str
-) -> set[str]:
+    record: dict[str, Any], record_name: str, record_identity: dict[str, object]
+) -> list[tuple[str, dict[str, object]]]:
     evidence_state = record["evidence_state"]
     passed_states = [
         name for name in REQUIRED_GATE_STATE_FIELDS if evidence_state[name] == "passed"
@@ -278,7 +395,33 @@ def _promotion_references(
         )
     if any(not isinstance(value, str) or not value for value in references.values()):
         raise LedgerError(f"{record_name}.promotion_evidence bundle reference is malformed")
-    return set(references.values())
+    if not references:
+        return []
+    expected = _record_subject(record, record_name, record_identity)
+    return [
+        (bundle_name, {**expected, "states": [state]})
+        for state, bundle_name in references.items()
+    ]
+
+
+def _validate_subject_binding(
+    bundle: dict[str, Any], name: str, expected: dict[str, object]
+) -> None:
+    """Require a bundle's declared subject to exactly match every reference."""
+    subject = _require_mapping(bundle, "subject")
+    if subject != expected:
+        raise LedgerError(f"promotion bundle {name!r} subject does not match its record")
+    claims = _require_mapping(subject, "record_claims")
+    if bundle["repository"] != claims["repository"]:
+        raise LedgerError(f"promotion bundle {name!r} repository disagrees with subject")
+    if bundle["repository_sha"] != claims["exact_repository_sha"]:
+        raise LedgerError(
+            f"promotion bundle {name!r} repository_sha disagrees with subject"
+        )
+    if bundle["repository_sha"] != claims["merge_sha"]:
+        raise LedgerError(f"promotion bundle {name!r} merge SHA disagrees with subject")
+    if bundle["head_sha"] != claims["reviewed_head_sha"]:
+        raise LedgerError(f"promotion bundle {name!r} head SHA disagrees with subject")
 
 
 def _require_exact_string_sequence(
@@ -306,7 +449,9 @@ def _validate_plan(plan: Path, source: Path, payload: dict[str, Any]) -> None:
         )
 
 
-def _validate_step(step: object, statuses: set[str], index: int) -> set[str]:
+def _validate_step(
+    step: object, statuses: set[str], index: int
+) -> list[tuple[str, dict[str, object]]]:
     if not isinstance(step, dict):
         raise LedgerError(f"steps[{index}] must be a mapping")
     if step.get("status") not in statuses:
@@ -325,7 +470,34 @@ def _validate_step(step: object, statuses: set[str], index: int) -> set[str]:
         raise LedgerError(f"steps[{index}].required_predicate must be a mapping")
     if step["status"] == "passed" and not required_predicate:
         raise LedgerError(f"steps[{index}].required_predicate cannot be empty when passed")
-    return _promotion_references(step, f"steps[{index}]")
+    return _promotion_references(
+        step,
+        f"steps[{index}]",
+        {"kind": SUBJECT_RECORD_GATE, "order": index + 1},
+    )
+
+
+def _collect_bundle_subjects(
+    promotion_references: list[tuple[str, dict[str, object]]]
+) -> dict[str, dict[str, object]]:
+    """Combine same-record references while rejecting replay across records."""
+    bundle_subjects: dict[str, dict[str, object]] = {}
+    for bundle_name, expected in promotion_references:
+        existing = bundle_subjects.get(bundle_name)
+        if existing is None:
+            bundle_subjects[bundle_name] = expected
+            continue
+        existing_target = {key: value for key, value in existing.items() if key != "states"}
+        expected_target = {key: value for key, value in expected.items() if key != "states"}
+        if existing_target != expected_target:
+            raise LedgerError(
+                f"promotion bundle {bundle_name!r} is replayed across records or predicates"
+            )
+        states = existing["states"]
+        if not isinstance(states, list):  # Defensive: constructed above, never source input.
+            raise LedgerError(f"promotion bundle {bundle_name!r} subject states are malformed")
+        states.extend(expected["states"])
+    return bundle_subjects
 
 
 def validate_ledger(  # pylint: disable=too-many-locals,too-many-branches
@@ -373,11 +545,16 @@ def validate_ledger(  # pylint: disable=too-many-locals,too-many-branches
     steps = payload.get("steps")
     if not isinstance(steps, list) or len(steps) != GATE_COUNT:
         raise LedgerError(f"ledger source field 'steps' must contain exactly {GATE_COUNT} gates")
-    bundle_references = _promotion_references(ledger_generation, "ledger_generation")
+    promotion_references = _promotion_references(
+        ledger_generation,
+        "ledger_generation",
+        {"kind": SUBJECT_RECORD_LEDGER_GENERATION},
+    )
     for index, step in enumerate(steps):
         if not isinstance(step, dict) or step.get("order") != index + 1:
             raise LedgerError(f"steps[{index}].order must be stable order {index + 1}")
-        bundle_references.update(_validate_step(step, statuses, index))
+        promotion_references.extend(_validate_step(step, statuses, index))
+    bundle_subjects = _collect_bundle_subjects(promotion_references)
     live_rebaseline = _require_mapping(payload, "live_rebaseline")
     if live_rebaseline.get("gates_required") != GATE_COUNT:
         raise LedgerError(f"live_rebaseline.gates_required must equal {GATE_COUNT}")
@@ -385,14 +562,16 @@ def validate_ledger(  # pylint: disable=too-many-locals,too-many-branches
     if live_rebaseline.get("gates_passed") != passed_gates:
         raise LedgerError("live_rebaseline.gates_passed does not match passed gate statuses")
     bundles = _require_mapping(payload, "promotion_bundles")
-    if set(bundles) != bundle_references:
+    if set(bundles) != set(bundle_subjects):
         raise LedgerError("promotion_bundles must contain exactly the referenced promotion claims")
     validated_bundles = {
         name: _validate_promotion_bundle(bundle, name) for name, bundle in bundles.items()
     }
+    for name, expected in bundle_subjects.items():
+        _validate_subject_binding(validated_bundles[name], name, expected)
     if verify_remote:
         verifier = promotion_verifier or GitHubPromotionVerifier()
-        for name in sorted(bundle_references):
+        for name in sorted(bundle_subjects):
             verifier.verify(validated_bundles[name])
     _validate_plan(plan, source, payload)
 

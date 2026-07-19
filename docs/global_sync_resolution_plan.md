@@ -632,9 +632,14 @@ rendered verbatim to
 This narrative summarizes that ledger; it does not override missing or red
 machine evidence. Source rows are claims, not trust anchors: the protected
 drift command uses `--verify-remote` to match hosted/merge promotions to GitHub
-PR, check, and merge metadata. The renderer never infers an accepted evidence
-state from this prose or local results; reviewed source rows must retain exact
-SHA and hosted-artifact values.
+PR, check, and merge metadata. Every referenced bundle also carries a typed,
+exact subject: its ledger-generation or numbered-gate identity, only the named
+lifecycle states, a canonical SHA-256 of that record's required predicate, and
+the record's repository, reviewed-head, and merge claims. The renderer
+recomputes that subject for every reference, so a bundle cannot be replayed
+across gates, predicates, or lifecycle states. It never infers an accepted
+evidence state from this prose or local results; reviewed source rows must
+retain exact SHA and hosted-artifact values.
 
 <!-- global-sync-ledger-source: global_sync_evidence_ledger_source.yaml -->
 

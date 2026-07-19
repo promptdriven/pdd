@@ -1,4 +1,4 @@
-schema_version: 4
+schema_version: 5
 updated_at: "2026-07-19"
 tracking_issue: "https://github.com/promptdriven/pdd/issues/1932"
 controlling_plan: "docs/global_sync_resolution_plan.md"
@@ -21,6 +21,9 @@ ledger_generation:
   trust_boundary: source-claims-require-protected-verification
   required_generator_command: "python -m pdd.sync_core.global_sync_ledger --plan docs/global_sync_resolution_plan.md --output docs/global_sync_evidence_ledger.yaml"
   required_drift_check_command: "python -m pdd.sync_core.global_sync_ledger --plan docs/global_sync_resolution_plan.md --output docs/global_sync_evidence_ledger.yaml --check --verify-remote"
+  required_predicate:
+    generator_source_is_versioned: true
+    protected_drift_check_requires_remote_verification: true
   evidence_state:
     implemented: in-progress
     local_green: in-progress
@@ -36,6 +39,17 @@ promotion_bundles:
     repository: promptdriven/pdd
     repository_sha: "63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee"
     head_sha: "6301d6c613199604702c2c3242fc8b837960d586"
+    subject:
+      record:
+        kind: gate
+        order: 1
+      states: [implemented, local_green, independently_reviewed, hosted_green, merged]
+      required_predicate_sha256: "6cc3f5129385980677b0fc38746f627287fdf3cfe8cf96282d470a81353df81e"
+      record_claims:
+        repository: promptdriven/pdd
+        exact_repository_sha: "63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee"
+        reviewed_head_sha: "6301d6c613199604702c2c3242fc8b837960d586"
+        merge_sha: "63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee"
     validation_command: "gh api repos/promptdriven/pdd/pulls/2214 --jq '.head.sha, .merged, .merge_commit_sha'"
     machine_predicate:
       name: "gate-1-hosted-merge"
@@ -700,6 +714,9 @@ steps:
       hosted_green: gate_1_hosted_merge
       merged: gate_1_hosted_merge
     exact_repository_sha: "63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee"
+    repository: promptdriven/pdd
+    reviewed_head_sha: "6301d6c613199604702c2c3242fc8b837960d586"
+    merge_sha: "63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee"
     contract_rebaseline_recorded: true
     validation_commands:
       - "git diff --name-status 39776aa9bb027c638812a01b8dabbe03cab92f64..d334266680881cbda59de4ecd4df967c92159fa7"
