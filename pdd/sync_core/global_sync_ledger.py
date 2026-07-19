@@ -45,6 +45,9 @@ ACTION_JOB_URL = re.compile(r"^/([^/]+/[^/]+)/actions/runs/(\d+)/job/(\d+)$")
 CHECK_RUN_URL = re.compile(r"^/([^/]+/[^/]+)/runs/(\d+)$")
 SUBJECT_RECORD_LEDGER_GENERATION = "ledger_generation"
 SUBJECT_RECORD_GATE = "gate"
+PROTECTED_VERIFICATION_AUTHORIZATIONS = {
+    "github-pr-checks": frozenset({"implemented", "hosted_green", "merged"}),
+}
 
 
 class LedgerError(ValueError):
@@ -89,6 +92,9 @@ class GitHubPromotionVerifier:  # pylint: disable=too-few-public-methods
 
     def verify(self, bundle: dict[str, Any]) -> None:
         """Compare a claimed promotion bundle with protected GitHub records."""
+        subject = _require_mapping(bundle, "subject")
+        _validate_subject_shape(subject, "remote promotion")
+        _validate_protected_verification(bundle, subject, "remote promotion")
         verification = _require_mapping(bundle, "protected_verification")
         if verification.get("mode") != "github-pr-checks":
             raise LedgerError("protected verification mode must be github-pr-checks")
@@ -129,6 +135,10 @@ class GitHubPromotionVerifier:  # pylint: disable=too-few-public-methods
                 raise LedgerError("protected GitHub action run head SHA does not match")
             job = self._get(f"/repos/{repository}/actions/jobs/{parsed['job_id']}")
             self._require_success(job, "actions job")
+            if job.get("run_id") != int(parsed["run_id"]):
+                raise LedgerError("protected GitHub action job run ID does not match")
+            if job.get("head_sha") != head_sha:
+                raise LedgerError("protected GitHub action job head SHA does not match")
         else:
             check = self._get(f"/repos/{repository}/check-runs/{parsed['check_id']}")
             self._require_success(check, "check run")
@@ -269,6 +279,7 @@ def _validate_promotion_bundle(bundle: object, name: str) -> dict[str, Any]:
     _require_sha(bundle.get("head_sha"), f"promotion bundle {name!r} head_sha")
     subject = _require_mapping(bundle, "subject")
     _validate_subject_shape(subject, name)
+    _validate_protected_verification(bundle, subject, name)
     command = bundle.get("validation_command")
     if not isinstance(command, str) or not command.strip():
         raise LedgerError(f"promotion bundle {name!r} requires a validation command")
@@ -290,6 +301,31 @@ def _validate_promotion_bundle(bundle: object, name: str) -> dict[str, Any]:
         else:
             _parse_github_binding(binding)
     return bundle
+
+
+def _validate_protected_verification(
+    bundle: dict[str, Any], subject: dict[str, Any], name: str
+) -> None:
+    """Reject subject states that the selected protected verifier cannot prove."""
+    verification = _require_mapping(bundle, "protected_verification")
+    mode = verification.get("mode")
+    allowed_states = PROTECTED_VERIFICATION_AUTHORIZATIONS.get(mode)
+    if allowed_states is None:
+        raise LedgerError(f"promotion bundle {name!r} protected verification mode is invalid")
+    if set(verification) != {"mode", "pull_request"}:
+        raise LedgerError(f"promotion bundle {name!r} protected verification is malformed")
+    pull_request = verification.get("pull_request")
+    if not isinstance(pull_request, int) or pull_request < 1:
+        raise LedgerError(f"promotion bundle {name!r} requires a positive pull request")
+    states = subject["states"]
+    if not isinstance(states, list):  # Validated by _validate_subject_shape above.
+        raise LedgerError(f"promotion bundle {name!r} subject states are malformed")
+    unauthorized_states = set(states) - allowed_states
+    if unauthorized_states:
+        rendered = ", ".join(sorted(unauthorized_states))
+        raise LedgerError(
+            f"promotion bundle {name!r} mode {mode!r} cannot authorize states: {rendered}"
+        )
 
 
 def _validate_subject_shape(subject: dict[str, Any], name: str) -> None:
@@ -379,13 +415,6 @@ def _promotion_references(
         passed_states.append("status")
     elif len(passed_states) == len(REQUIRED_GATE_STATE_FIELDS):
         raise LedgerError(f"{record_name} must be passed when every lifecycle state is passed")
-    previous_rank = 2
-    ranks = {"pending": 0, "in-progress": 1, "passed": 2}
-    for state in REQUIRED_GATE_STATE_FIELDS:
-        rank = ranks[evidence_state[state]]
-        if rank > previous_rank:
-            raise LedgerError(f"{record_name}.evidence_state lifecycle progression is invalid")
-        previous_rank = rank
     references = record.get("promotion_evidence", {})
     if not isinstance(references, dict):
         raise LedgerError(f"{record_name}.promotion_evidence must be a mapping")

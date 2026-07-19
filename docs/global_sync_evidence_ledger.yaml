@@ -43,7 +43,7 @@ promotion_bundles:
       record:
         kind: gate
         order: 1
-      states: [implemented, local_green, independently_reviewed, hosted_green, merged]
+      states: [implemented, hosted_green, merged]
       required_predicate_sha256: "6cc3f5129385980677b0fc38746f627287fdf3cfe8cf96282d470a81353df81e"
       record_claims:
         repository: promptdriven/pdd
@@ -700,8 +700,8 @@ steps:
     last_state_change: "2026-07-18"
     evidence_state:
       implemented: passed
-      local_green: passed
-      independently_reviewed: passed
+      local_green: in-progress
+      independently_reviewed: in-progress
       hosted_green: passed
       merged: passed
       released: pending
@@ -709,8 +709,6 @@ steps:
       certified: pending
     promotion_evidence:
       implemented: gate_1_hosted_merge
-      local_green: gate_1_hosted_merge
-      independently_reviewed: gate_1_hosted_merge
       hosted_green: gate_1_hosted_merge
       merged: gate_1_hosted_merge
     exact_repository_sha: "63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee"

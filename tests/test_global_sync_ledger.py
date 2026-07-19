@@ -31,6 +31,7 @@ STATE_FIELDS = (
     "deployed",
     "certified",
 )
+GITHUB_PR_CHECK_STATES = ("implemented", "hosted_green", "merged")
 HEAD_SHA = "a" * 40
 MERGE_SHA = "b" * 40
 
@@ -77,7 +78,7 @@ def _promotion_bundle() -> dict[str, object]:
         "head_sha": HEAD_SHA,
         "subject": {
             "record": {"kind": "gate", "order": 1},
-            "states": list(STATE_FIELDS[:5]),
+            "states": list(GITHUB_PR_CHECK_STATES),
             "required_predicate_sha256": canonical_predicate_digest({"bounded": True}),
             "record_claims": {
                 "repository": "promptdriven/pdd",
@@ -105,8 +106,8 @@ def _add_hosted_merge_claim(payload: dict[str, object]) -> None:
     assert isinstance(step, dict)
     step["evidence_state"] = _state(
         implemented="passed",
-        local_green="passed",
-        independently_reviewed="passed",
+        local_green="in-progress",
+        independently_reviewed="in-progress",
         hosted_green="passed",
         merged="passed",
     )
@@ -114,9 +115,7 @@ def _add_hosted_merge_claim(payload: dict[str, object]) -> None:
     step["exact_repository_sha"] = MERGE_SHA
     step["reviewed_head_sha"] = HEAD_SHA
     step["merge_sha"] = MERGE_SHA
-    step["promotion_evidence"] = {
-        field: "gate_1" for field in STATE_FIELDS[:5]
-    }
+    step["promotion_evidence"] = {field: "gate_1" for field in GITHUB_PR_CHECK_STATES}
     bundles = payload["promotion_bundles"]
     assert isinstance(bundles, dict)
     bundles["gate_1"] = _promotion_bundle()
@@ -149,7 +148,11 @@ def _valid_github_responses() -> dict[str, dict[str, object]]:
             "head_sha": HEAD_SHA,
             "conclusion": "success",
         },
-        "/repos/promptdriven/pdd/actions/jobs/456": {"conclusion": "success"},
+        "/repos/promptdriven/pdd/actions/jobs/456": {
+            "conclusion": "success",
+            "run_id": 123,
+            "head_sha": HEAD_SHA,
+        },
     }
 
 
@@ -256,6 +259,62 @@ def test_canonical_predicate_digest_is_deterministic_and_type_safe() -> None:
         canonical_predicate_digest({"value": 1.5})
 
 
+@pytest.mark.parametrize(
+    "state, is_authorized",
+    [
+        ("implemented", True),
+        ("hosted_green", True),
+        ("merged", True),
+        ("local_green", False),
+        ("independently_reviewed", False),
+        ("released", False),
+        ("deployed", False),
+        ("certified", False),
+    ],
+)
+def test_github_pr_checks_authorization_matrix(
+    tmp_path: Path, state: str, is_authorized: bool
+) -> None:
+    payload = _payload()
+    _add_hosted_merge_claim(payload)
+    step = payload["steps"][0]
+    assert isinstance(step, dict)
+    step["evidence_state"] = _state(**{state: "passed"})
+    step["promotion_evidence"] = {state: "gate_1"}
+    payload["promotion_bundles"]["gate_1"]["subject"]["states"] = [state]
+    plan, source, output = _write_fixture(tmp_path, payload=payload)
+
+    if is_authorized:
+        assert run(plan, output, source) == 0
+    else:
+        with pytest.raises(LedgerError, match=f"cannot authorize states: {state}"):
+            run(plan, output, source)
+
+
+def test_github_pr_checks_rejects_self_consistent_terminal_expansion(
+    tmp_path: Path,
+) -> None:
+    payload = _payload()
+    _add_hosted_merge_claim(payload)
+    step = payload["steps"][0]
+    assert isinstance(step, dict)
+    step["evidence_state"] = _state(**{field: "passed" for field in STATE_FIELDS})
+    step["status"] = "passed"
+    step["promotion_evidence"] = {
+        **{field: "gate_1" for field in STATE_FIELDS},
+        "status": "gate_1",
+    }
+    payload["promotion_bundles"]["gate_1"]["subject"]["states"] = [
+        *STATE_FIELDS,
+        "status",
+    ]
+    payload["live_rebaseline"]["gates_passed"] = 1
+    plan, source, output = _write_fixture(tmp_path, payload=payload)
+
+    with pytest.raises(LedgerError, match="mode 'github-pr-checks' cannot authorize states"):
+        run(plan, output, source)
+
+
 def test_global_sync_ledger_rejects_cross_gate_promotion_replay(tmp_path: Path) -> None:
     payload = _payload()
     _add_hosted_merge_claim(payload)
@@ -360,7 +419,7 @@ def test_global_sync_ledger_rejects_mismatched_bundle_claims(
     [
         (("released",), "in-progress"),
         (("released", "deployed"), "in-progress"),
-        (("released", "deployed", "certified"), "passed"),
+        (("released", "deployed", "certified"), "in-progress"),
         (STATE_FIELDS, "passed"),
     ],
 )
@@ -393,7 +452,7 @@ def test_global_sync_ledger_rejects_unapproved_terminal_state(
         ),
         (
             lambda subject: subject["states"].append("released"),
-            "subject does not match its record",
+            "cannot authorize states: released",
         ),
     ],
 )
@@ -463,6 +522,30 @@ def test_global_sync_ledger_rejects_mismatched_remote_metadata(tmp_path: Path, m
     monkeypatch.setattr(verifier, "_get", responses.__getitem__)
 
     with pytest.raises(LedgerError, match="head SHA does not match"):
+        validate_ledger(
+            load_unique_yaml(source), plan, source, verify_remote=True, promotion_verifier=verifier
+        )
+
+
+@pytest.mark.parametrize(
+    "field, value, expected",
+    [
+        ("run_id", 999, "action job run ID does not match"),
+        ("head_sha", "c" * 40, "action job head SHA does not match"),
+    ],
+)
+def test_global_sync_ledger_rejects_job_not_bound_to_run_and_head(
+    tmp_path: Path, monkeypatch, field: str, value: object, expected: str
+) -> None:
+    payload = _payload()
+    _add_hosted_merge_claim(payload)
+    plan, source, _output = _write_fixture(tmp_path, payload=payload)
+    responses = _valid_github_responses()
+    responses["/repos/promptdriven/pdd/actions/jobs/456"][field] = value
+    verifier = GitHubPromotionVerifier()
+    monkeypatch.setattr(verifier, "_get", responses.__getitem__)
+
+    with pytest.raises(LedgerError, match=expected):
         validate_ledger(
             load_unique_yaml(source), plan, source, verify_remote=True, promotion_verifier=verifier
         )

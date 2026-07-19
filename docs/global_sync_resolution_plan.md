@@ -2598,8 +2598,10 @@ predicate requires `candidate_controlled_verifier_inputs == 0`.
    [heal run 29674097086](https://github.com/promptdriven/pdd/actions/runs/29674097086),
    and [auto-heal 88158092713](https://github.com/promptdriven/pdd/runs/88158092713),
    then merged as `63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee`. This advances
-   Gate 1 evidence through merge only; the global score remains `0/10` and no
-   release or certificate is claimed.
+   Machine promotion records only Gate 1 `implemented`, `hosted_green`, and
+   `merged`: local and independent-review narrative evidence remains
+   in-progress until a distinct protected verifier can prove those dimensions.
+   The global score remains `0/10` and no release or certificate is claimed.
 2. Obtain the same-day review and protected hosted drift-check result for the
    ledger generator. The check must regenerate without writing and fail on a
    byte mismatch.
