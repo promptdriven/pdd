@@ -52,7 +52,7 @@ release state.
 | Hosted evidence collected | Exact-head [run 29658808029](https://github.com/promptdriven/pdd/actions/runs/29658808029) bound reviewed head `d334266680881cbda59de4ecd4df967c92159fa7`, reviewed base, review evidence, producer, verifiers, corrected native source, and pinned toolchains. Source [job 88117749946](https://github.com/promptdriven/pdd/actions/runs/29658808029/job/88117749946) verified artifact [`8433732767`](https://github.com/promptdriven/pdd/actions/runs/29658808029/artifacts/8433732767), Stage A digest `5972d8ae01213e069b886e16cfac65301a609c0aaa08e8844c7365fcd47a9000`. Package attempt 1 timed out all seven mandatory Playwright cases before Vitest, while the identical prior lane had passed; the same-SHA bounded rerun [job 88118943320](https://github.com/promptdriven/pdd/actions/runs/29658808029/job/88118943320) passed all seven real-browser cases and verified installed-wheel artifact [`8433907757`](https://github.com/promptdriven/pdd/actions/runs/29658808029/artifacts/8433907757), Stage A digest `894a56e3333012fec433507235309c8a60b641a8a25556ea9e066ff6bb743bb6`. Both fail-closed verifiers accepted `PDD_VITEST_SEAL_DESCRIPTOR_TABLE_OPEN` at `reporter-authority-seal` in the `vitest-coordinator`, with matching progress frames, no result frame, zero cgroup event deltas, and `cause_red_status: pending`. The wheel artifact binds package attestation `be7e0711f93a54c60dc9b8dfc98c00de14bce1e8e4f541d62649fd7355bd044c`, wheel `be1c1379608f7390dbd2be3cb1cacbf482446942fb7d84d58fa785e9eae6d717`, and installed runner `c3e77f4fa3605c269dcc7c8299dca768c9e975d267cedf2af5422ab5d48164fc`. CodeQL, Story Regression, Public CLI Regression, and Repo Bloat Docker E2E passed. Unit and Package remain intentionally red after verifier acceptance because the candidate test still fails. | Stage A reconciled; one cause-specific RED is permitted |
 | Artifact predicates | Both hosted observation verifiers accepted their exact-lane artifacts. Independent replay of the downloaded bytes, after restoring archive-normalized mode `0600` and protected parent mode `0700`, reproduced both accepts and both exact termination-verifier rejections. Both traces are identical through `reporter-addon-load-succeeded`, `reporter-authority-seal-start`, `reporter-authority-seal-failed`, `coordinator-explicit-exit`, and `coordinator-exit`; supervisor exit is `0` and no result frame exists. | Stage A0 closed; evidence is explicitly non-causal |
 | Diagnostic disposition | Freeze remote PR #1995 at `d334266680881cbda59de4ecd4df967c92159fa7`; do not push or merge another diagnostic correction. Local native correction branch head `6ee03883aa39bf1a4eb822bfc259c9c23f92b80a` and GREEN-transition head `6c02fb5ff80c64956ff90792e7873fda56aa2de0` are preserved as unpushed evidence only. Sol found one native coverage gap, then the correction added cleanup and close-precedence coverage but remained Linux-unhosted. Sol found two blocking defects in the separate GREEN transition: four obsolete Stage A tests still fail and push runs can check out the stale reviewed PR SHA. These findings will not be corrected on #1995 because no protected PDD profile demands Vitest. | frozen diagnostic evidence; not on gates 1-6 critical path |
-| Merged to protected `main` | Docs-gate [PR #2213](https://github.com/promptdriven/pdd/pull/2213) reviewed exact head [`eea77668cad601711d5b43c610426ad78348830b`](https://github.com/promptdriven/pdd/commit/eea77668cad601711d5b43c610426ad78348830b), passed 12/12 hosted checks, and squash-merged as [`e7735e0f35a0915707142bfd4c767df59f8c3b9e`](https://github.com/promptdriven/pdd/commit/e7735e0f35a0915707142bfd4c767df59f8c3b9e). [Unit Tests run 29663045808](https://github.com/promptdriven/pdd/actions/runs/29663045808) passed Run Unit Tests in 38m19s plus package, public CLI, story regression, and repo-bloat Docker E2E; [CodeQL](https://github.com/promptdriven/pdd/actions/runs/29663044528), [heal](https://github.com/promptdriven/pdd/actions/runs/29663045021), and the [auto-heal check](https://github.com/promptdriven/pdd/runs/88128812347) passed. Subsequently, ownership-prerequisite [PR #2216](https://github.com/promptdriven/pdd/pull/2216) reviewed exact head [`c1af7b2f5faab2bbe186ad8179afb1d1e1b09d0e`](https://github.com/promptdriven/pdd/commit/c1af7b2f5faab2bbe186ad8179afb1d1e1b09d0e), passed [12/12 hosted checks](https://github.com/promptdriven/pdd/pull/2216/checks), and squash-merged as [`c712cbb7e08c157757a238cb8e49d65a9a3a2239`](https://github.com/promptdriven/pdd/commit/c712cbb7e08c157757a238cb8e49d65a9a3a2239) at `2026-07-19T01:53:17Z`; it preauthorizes only the four exact Gate 1 paths. The immutable profile evidence source remains `2cacc91f90759ff45f1ad976da3b773e1a5f07a5`: its registry is unchanged at digest `56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6`, as required by `git diff --quiet 2cacc91f..c712cbb7 -- .pdd/verification-profiles.json`. Neither source nor live main is an ancestor of diagnostic head `d334266680881cbda59de4ecd4df967c92159fa7`; #1995 remains frozen and is not a release vehicle. | docs gate and four-path ownership prerequisite hosted-green and merged; #2216 does not close Gate 1, and no global exit gate closed |
+| Merged to protected `main` | Docs-gate [PR #2213](https://github.com/promptdriven/pdd/pull/2213) and ownership prerequisite [PR #2216](https://github.com/promptdriven/pdd/pull/2216) remain historical evidence; #2216 merged as [`c712cbb7e08c157757a238cb8e49d65a9a3a2239`](https://github.com/promptdriven/pdd/commit/c712cbb7e08c157757a238cb8e49d65a9a3a2239) and preauthorized only the four exact Gate 1 paths. Gate 1 [PR #2214](https://github.com/promptdriven/pdd/pull/2214) reviewed exact head [`6301d6c613199604702c2c3242fc8b837960d586`](https://github.com/promptdriven/pdd/commit/6301d6c613199604702c2c3242fc8b837960d586), passed [Unit run 29674097485](https://github.com/promptdriven/pdd/actions/runs/29674097485) ([job 88158086892](https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086892)), [Package job 88158086891](https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086891), [CodeQL run 29674096680](https://github.com/promptdriven/pdd/actions/runs/29674096680), [heal run 29674097086](https://github.com/promptdriven/pdd/actions/runs/29674097086), and [auto-heal 88158092713](https://github.com/promptdriven/pdd/runs/88158092713), then merged as [`63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee`](https://github.com/promptdriven/pdd/commit/63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee). The immutable profile evidence source remains `2cacc91f90759ff45f1ad976da3b773e1a5f07a5`; its registry is unchanged at digest `56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6`, as required by `git diff --quiet 2cacc91f..63bf4dd -- .pdd/verification-profiles.json`. Neither source nor live main is an ancestor of diagnostic head `d334266680881cbda59de4ecd4df967c92159fa7`; #1995 remains frozen and is not a release vehicle. | Gate 1 evidence hosted-green and merged; global gates remain 0/10, with no checker release or certificate |
 | Released checker | No protected reviewed checker release or pinned wheel digest exists. | pending |
 | Globally certified | No protected merge-group certificate or seven-night streak exists. | pending |
 
@@ -83,17 +83,13 @@ release state.
    demands Vitest, Jest, or Playwright. pdd_cloud has no protected verification
    profile registry yet, so its future adapter demand is unknown and must be
    generated at migration time rather than assumed.
-5. Open the guarded gate-1 PR against live main. The exact local PDD
-   adapter-demand artifact and extraction manifest already exist; the identity, manifest, classifier,
-   includes, path-policy, snapshot, language, fingerprint-store, transaction,
-   and certificate foundations are already present on protected main and are not
-   net changes from #1995. Review the manifest's release-required net changes
-   against `c712cbb7`, split them into reviewable fresh-main PRs, and obtain
-   hosted evidence. Then publish
-   the protected pytest-only checker and pin its wheel digest. Any early
-   certificate is explicitly narrower and cannot satisfy the final global
-   predicate until all managed units and both repositories meet the gate-10
-   denominator.
+5. Gate 1 PR #2214 merged its reviewed adapter-demand artifact and extraction
+   manifest as `63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee`. The next bounded
+   blocker is the same-day deterministic ledger-generator/protected-drift-check
+   result; only after that may the pytest-only checker be extracted from fresh
+   protected main. Any early certificate is explicitly narrower and cannot
+   satisfy the final global predicate until all managed units and both
+   repositories meet the gate-10 denominator.
 
 #### Historical attempt ledger
 
@@ -628,10 +624,24 @@ proceed in this dependency order, with each exit check retained as evidence for
 the next stage. Frozen #1995 diagnostics are not a prerequisite to this sequence
 and do not alter any of its ten steps.
 
-The machine-readable source of truth for step status and exact evidence is
+The machine-readable source of truth for step status and exact evidence is the
+reviewed metadata source
+[`docs/global_sync_evidence_ledger_source.yaml`](global_sync_evidence_ledger_source.yaml),
+rendered verbatim to
 [`docs/global_sync_evidence_ledger.yaml`](global_sync_evidence_ledger.yaml).
 This narrative summarizes that ledger; it does not override missing or red
-machine evidence.
+machine evidence. Source rows are claims, not trust anchors: the protected
+drift command uses `--verify-remote` to match hosted/merge promotions to GitHub
+PR, check, and merge metadata. Every referenced bundle also carries a typed,
+exact subject: its ledger-generation or numbered-gate identity, only the named
+lifecycle states, a canonical SHA-256 of that record's required predicate, and
+the record's repository, reviewed-head, and merge claims. The renderer
+recomputes that subject for every reference, so a bundle cannot be replayed
+across gates, predicates, or lifecycle states. It never infers an accepted
+evidence state from this prose or local results; reviewed source rows must
+retain exact SHA and hosted-artifact values.
+
+<!-- global-sync-ledger-source: global_sync_evidence_ledger_source.yaml -->
 
 #### 2026-07-19 live rebaseline and recommendation disposition
 
@@ -646,10 +656,10 @@ corrections are frozen as diagnostic evidence and are not on the gates 1-6
 critical path.
 
 Protected PDD `main` at
-`c712cbb7e08c157757a238cb8e49d65a9a3a2239` contains 468 expected managed
+`63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee` contains 468 expected managed
 units and 468 profiles. The immutable profile-evidence source is
 `2cacc91f90759ff45f1ad976da3b773e1a5f07a5`; its registry is profile-equivalent
-to live main (`git diff --quiet 2cacc91f..c712cbb7 -- .pdd/verification-profiles.json`)
+to live main (`git diff --quiet 2cacc91f..63bf4dd -- .pdd/verification-profiles.json`)
 at digest `56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6`.
 Only one profile has a required machine-test obligation;
 467 are human-attestation-only, so protected machine-obligation profile coverage
@@ -711,14 +721,15 @@ If an obligation cannot be machine verified, the certificate must name the
 excluded units and denominator and make a narrower claim; it must not call that
 result globally certified.
 
-Before any gate changes to `passed`, implement the deterministic ledger generator
-named in the YAML and a protected drift check that regenerates the ledger and
-fails on a diff. Until then the machine-readable ledger is authoritative but
-manually maintained, and `ledger_generation.status` remains `pending`.
-Those two controls are explicit prerequisites for checker step 2: the ratified
-order remains gate-1 artifacts, ledger generator plus protected drift check,
-then checker release. The named `extraction_manifest_verifier` is planned future
-evidence only; it is not implemented and does not prove gate 1.
+Before any gate changes to `passed`, the deterministic ledger generator named in
+the YAML and its protected drift check must be merged and green. They now render
+the canonical ledger from an explicit versioned YAML source and fail closed on
+duplicate keys, malformed schema/state rows, or byte drift. Their local
+implementation evidence is recorded as `in-progress`; protected PR evidence is
+still required. The ratified order remains merged Gate 1 artifacts, this
+same-day-completable generator/drift-check result, then the pytest-only checker
+release. The named `extraction_manifest_verifier` is planned future evidence
+only; it is not implemented and does not prove gate 1.
 
 PR #1995 is frozen at remote head
 `d334266680881cbda59de4ecd4df967c92159fa7`. Its hosted Stage A artifacts and
@@ -2577,18 +2588,25 @@ predicate requires `candidate_controlled_verifier_inputs == 0`.
 
 ## 12. Immediate next actions
 
-1. Preserve #2213 as historical docs-gate evidence and use #2216 merge
-   `c712cbb7e08c157757a238cb8e49d65a9a3a2239` as the live protected-main
-   baseline. #2216 passed 12/12 hosted checks and closes only the four-path
-   ownership prerequisite, not Gate 1 or any global exit gate.
-2. Open the guarded gate-1 PR with the exact local PDD-only adapter-demand
-   artifact and complete three-way #1995 extraction manifest; obtain complete
-   net-diff review and hosted evidence. Do not recreate the artifacts or claim
-   final current-head Sol approval before that review.
-3. Implement the ledger generator and protected drift check against the ratified
-   schema.
-4. Extract, review, and release the pytest-only checker from fresh live-main PRs;
+1. Preserve #2213 and #2216 as historical prerequisite evidence. Gate 1 PR
+   [#2214](https://github.com/promptdriven/pdd/pull/2214) was reviewed at
+   `6301d6c613199604702c2c3242fc8b837960d586`, passed Unit run
+   [29674097485](https://github.com/promptdriven/pdd/actions/runs/29674097485)
+   (job [88158086892](https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086892)),
+   Package job [88158086891](https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086891),
+   [CodeQL run 29674096680](https://github.com/promptdriven/pdd/actions/runs/29674096680),
+   [heal run 29674097086](https://github.com/promptdriven/pdd/actions/runs/29674097086),
+   and [auto-heal 88158092713](https://github.com/promptdriven/pdd/runs/88158092713),
+   then merged as `63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee`. This advances
+   Machine promotion records only Gate 1 `implemented`, `hosted_green`, and
+   `merged`: local and independent-review narrative evidence remains
+   in-progress until a distinct protected verifier can prove those dimensions.
+   The global score remains `0/10` and no release or certificate is claimed.
+2. Obtain the same-day review and protected hosted drift-check result for the
+   ledger generator. The check must regenerate without writing and fail on a
+   byte mismatch.
+3. Extract, review, and release the pytest-only checker from fresh live-main PRs;
    pin its wheel digest and record its narrower named-denominator certificate as
    intermediate evidence only.
-5. Before gate 5 completes, generate the 467-unit gate-6 coverage partition and
+4. Before gate 5 completes, generate the 467-unit gate-6 coverage partition and
    obtain the required human scoping decision.
