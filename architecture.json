@@ -9842,6 +9842,7 @@
           "tests": [
             "test_failure_diagnostic_output_quiet_false",
             "test_failure_diagnostic_metadata_resolution_failure",
+            "test_partial_unresolved_metadata_is_incomplete_after_evaluating_resolved_prompt",
             "test_detect_stories_cli_failure_output_e2e_with_mocked_llm",
             "test_failure_diagnostic_output_preserves_rich_markup_characters"
           ],
