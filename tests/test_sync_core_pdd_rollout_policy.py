@@ -52,6 +52,7 @@ REPLAY_PROTECTED_BASE = "e10bd9b3d0d5ac94d1a56af88f5abf07cf8af775"
 PR_1971_COMBINED_BASE = "ee9fcff457b23fb7123bb7e15666c9287409ad0f"
 PR_1971_COMBINED_HEAD = REPLAY_PROTECTED_BASE
 PDD_1875_PROTECTED_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
+PDD_1875_PROTECTED_HEAD = "4597a4d1a1ace37dcf4aa4129cb193f9e2268524"
 PR_1971_COMBINED_PROFILE_DIGEST = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
 )
@@ -73,6 +74,63 @@ PR_1971_PYTEST_OBLIGATIONS = {
     },
 }
 PDD_1989_EXPECTED_MANAGED_UNITS = 468
+TERRA_SOL_DORMANT_ROTATIONS = (
+    {
+        "prompt_path": "pdd/prompts/agentic_checkup_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": "CONTRACT-SHA256:1812c6d204e346d0745403c908a47e5d4d42b53612efd61efbe40af04ba4b868",
+        "to_requirement_id": "CONTRACT-SHA256:6ffbc126545fc817d69c784521b32ca947fd6b120b891ab8f8a8f3f7ee4885bb",
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
+        "head_policy_sha256": "fed436316c49f6b248c6b5ed79a8e835357abe675128659b808798889d889e1d",
+        "base_prompt_sha256": "1812c6d204e346d0745403c908a47e5d4d42b53612efd61efbe40af04ba4b868",
+        "head_prompt_sha256": "6ffbc126545fc817d69c784521b32ca947fd6b120b891ab8f8a8f3f7ee4885bb",
+    },
+    {
+        "prompt_path": "pdd/prompts/checkup_review_loop_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": "CONTRACT-SHA256:c5ec02fb049e1359da107067d65e725b3ad0a8cca4da6fd31328821f6b6d1c73",
+        "to_requirement_id": "CONTRACT-SHA256:ee5a910b670cba4ad6a7f32617288783cf0fee8e843bc012e70e17a29e2a937b",
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
+        "head_policy_sha256": "fed436316c49f6b248c6b5ed79a8e835357abe675128659b808798889d889e1d",
+        "base_prompt_sha256": "c5ec02fb049e1359da107067d65e725b3ad0a8cca4da6fd31328821f6b6d1c73",
+        "head_prompt_sha256": "ee5a910b670cba4ad6a7f32617288783cf0fee8e843bc012e70e17a29e2a937b",
+    },
+    {
+        "prompt_path": "pdd/prompts/commands/checkup_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": "CONTRACT-SHA256:b453bb71475123c5545a37dd23bbff9f057d960b775c0e977151ee98a9b976e0",
+        "to_requirement_id": "CONTRACT-SHA256:1096ee61eeba061adae05e4a4e8f8239cff6103ce75e451efb053f5644203be4",
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
+        "head_policy_sha256": "fed436316c49f6b248c6b5ed79a8e835357abe675128659b808798889d889e1d",
+        "base_prompt_sha256": "b453bb71475123c5545a37dd23bbff9f057d960b775c0e977151ee98a9b976e0",
+        "head_prompt_sha256": "1096ee61eeba061adae05e4a4e8f8239cff6103ce75e451efb053f5644203be4",
+    },
+    {
+        "prompt_path": "pdd/prompts/checkup_agentic_artifact_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": "CONTRACT-SHA256:dc4db042ae408dcd90c0dcfe4fb9607421e331f024f56de8e22ca1272d0df1f7",
+        "to_requirement_id": "CONTRACT-SHA256:460c5c8f6ec93da5aa0d3ee30d41d5dfbda05e4631c79354c1a16e6818b45a16",
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
+        "head_policy_sha256": "fed436316c49f6b248c6b5ed79a8e835357abe675128659b808798889d889e1d",
+        "base_prompt_sha256": "dc4db042ae408dcd90c0dcfe4fb9607421e331f024f56de8e22ca1272d0df1f7",
+        "head_prompt_sha256": "460c5c8f6ec93da5aa0d3ee30d41d5dfbda05e4631c79354c1a16e6818b45a16",
+    },
+    {
+        "prompt_path": "pdd/prompts/agentic_common_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": "CONTRACT-SHA256:e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c",
+        "to_requirement_id": "CONTRACT-SHA256:11aa8636691deb2c6e1dd1051ba46cb06947bb1a65335914868647e8240cede9",
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
+        "head_policy_sha256": "fed436316c49f6b248c6b5ed79a8e835357abe675128659b808798889d889e1d",
+        "base_prompt_sha256": "e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c",
+        "head_prompt_sha256": "11aa8636691deb2c6e1dd1051ba46cb06947bb1a65335914868647e8240cede9",
+    },
+)
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -537,6 +595,27 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
     }
 
 
+def test_terra_sol_transitions_are_exact_ordered_and_dormant() -> None:
+    """Authorize the current #2171 prompt/profile bytes without consuming them."""
+    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    rows = policy["requirement_rotations"]
+    terra_paths = {row["prompt_path"] for row in TERRA_SOL_DORMANT_ROTATIONS}
+    terra_rows = [row for row in rows if row["prompt_path"] in terra_paths]
+
+    assert terra_rows == list(TERRA_SOL_DORMANT_ROTATIONS)
+    assert rows[-len(TERRA_SOL_DORMANT_ROTATIONS) :] == terra_rows
+
+    profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
+    for row in terra_rows:
+        prompt_digest = hashlib.sha256(
+            (ROOT / row["prompt_path"]).read_bytes()
+        ).hexdigest()
+        assert prompt_digest == row["base_prompt_sha256"]
+        assert prompt_digest != row["head_prompt_sha256"]
+        assert profile_digest == row["base_policy_sha256"]
+        assert profile_digest != row["head_policy_sha256"]
+
+
 def _requirement_authorization_row(authorization) -> dict[str, str]:
     """Render one in-code exact authorization in protected-policy form."""
     return {
@@ -566,9 +645,9 @@ def test_pdd1875_composed_reconciliation_is_exact(mutated_input: str) -> None:
             PDD_1875_PROTECTED_BASE,
             ROOT / ".pdd/verification-profile-rotations.json",
         ),
-        "candidate_policy": ROTATION_FILE.read_bytes(),
+        "candidate_policy": _git_blob(PDD_1875_PROTECTED_HEAD, ROTATION_FILE),
         "base_profile": _git_blob(PDD_1875_PROTECTED_BASE, PROFILE_FILE),
-        "candidate_profile": PROFILE_FILE.read_bytes(),
+        "candidate_profile": _git_blob(PDD_1875_PROTECTED_HEAD, PROFILE_FILE),
     }
 
     assert verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
@@ -597,9 +676,11 @@ def test_pdd1875_composed_reconciliation_binds_prompt_bytes(authorization) -> No
         ROOT, "exact #1875 protected history", PDD_1875_PROTECTED_BASE
     )
     base_profile = _git_blob(PDD_1875_PROTECTED_BASE, PROFILE_FILE)
-    candidate_profile = PROFILE_FILE.read_bytes()
+    candidate_profile = _git_blob(PDD_1875_PROTECTED_HEAD, PROFILE_FILE)
     base_prompt = _git_blob(PDD_1875_PROTECTED_BASE, ROOT / authorization.prompt_path)
-    candidate_prompt = (ROOT / authorization.prompt_path).read_bytes()
+    candidate_prompt = _git_blob(
+        PDD_1875_PROTECTED_HEAD, ROOT / authorization.prompt_path
+    )
 
     assert verification._transition_bytes_match(  # pylint: disable=protected-access
         authorization,
@@ -658,6 +739,12 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         json.dumps(_requirement_authorization_row(item), sort_keys=True)
         for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
     }
+    terra_paths = {row["prompt_path"] for row in TERRA_SOL_DORMANT_ROTATIONS}
+    replaced_protected_rows.update(
+        json.dumps(row, sort_keys=True)
+        for row in protected_rows
+        if row["prompt_path"] in terra_paths
+    )
     surviving_rows = [
         row
         for row in protected_rows
@@ -666,12 +753,12 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     ]
     candidate_rows = [
         row for row in bootstrap_rows if row in rows and row not in protected_rows
-    ]
+    ] + list(TERRA_SOL_DORMANT_ROTATIONS)
     assert len(protected_rows) == 31
     assert len(bootstrap_rows) == 62
-    assert len(surviving_rows) == 21
-    assert len(candidate_rows) == 34
-    assert len(rows) == 55
+    assert len(surviving_rows) == 19
+    assert len(candidate_rows) == 37
+    assert len(rows) == 56
     assert all(
         _requirement_authorization_row(item) not in rows
         for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
@@ -765,6 +852,11 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         json.dumps(_requirement_authorization_row(item), sort_keys=True)
         for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
     }
+    replaced_rows.update(
+        json.dumps(row, sort_keys=True)
+        for row in protected_rows
+        if row["prompt_path"] in terra_paths
+    )
     expected_pr1790_rows = [
         row
         for row in protected_rows
@@ -772,7 +864,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
         and json.dumps(row, sort_keys=True) not in replaced_rows
     ]
-    assert len(pr1790_rows) == 4
+    assert len(pr1790_rows) == 3
     assert pr1790_rows == expected_pr1790_rows
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
     head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
