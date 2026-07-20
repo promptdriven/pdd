@@ -7,7 +7,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15580,9 +15580,11 @@ class TestTerraSolUnboundedLoop:
 
         self._patch_io(monkeypatch, tmp_path)
         calls: List[Tuple[str, str]] = []
+        deadlines: List[Optional[float]] = []
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             calls.append((role, kwargs["label"]))
+            deadlines.append(kwargs.get("deadline"))
             return True, _json("clean"), 0.05, role
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
@@ -15599,6 +15601,8 @@ class TestTerraSolUnboundedLoop:
         assert "codex=clean" in report
         review_labels = [lbl for _, lbl in calls]
         assert any("review" in lbl for lbl in review_labels)
+        assert deadlines
+        assert all(deadline is None for deadline in deadlines)
         assert '"terra_sol_mode": true' in report
 
     def test_terra_sol_runs_more_than_five_iterations(
@@ -15737,6 +15741,46 @@ class TestTerraSolUnboundedLoop:
         past_deadline = time.monotonic() - 9999
         # Must return False in terra_sol mode
         assert _budget_exhausted(config, state, past_deadline) is False
+
+    def test_terra_sol_agentic_artifact_has_no_budget_caps(
+        self, tmp_path: Path
+    ) -> None:
+        """Hosted artifact recomputation must preserve the unbounded contract."""
+        from pdd.checkup_review_loop import (
+            ReviewLoopState,
+            _maybe_write_agentic_artifact,
+        )
+
+        artifact_path = tmp_path / "terra-sol-agentic.json"
+        state = ReviewLoopState(
+            reviewer_status={"codex": "findings"},
+            active_reviewer="codex",
+            original_reviewer="codex",
+            fresh_final_status="findings",
+            rounds_completed=6,
+            elapsed_minutes=91.0,
+            total_cost=51.0,
+            terra_sol_mode=True,
+            issue_aligned=True,
+        )
+        config = self._terra_sol_config(
+            agentic_mode=True,
+            agentic_artifact_path=str(artifact_path),
+            max_rounds=5,
+            max_minutes=90.0,
+            max_cost=50.0,
+        )
+
+        written = _maybe_write_agentic_artifact(_ctx(tmp_path), config, state)
+
+        assert written == str(artifact_path)
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        assert payload["budget"] == {
+            "max_rounds_reached": False,
+            "max_minutes_reached": False,
+            "max_cost_reached": False,
+        }
+        assert payload["status"] != "budget_exhausted"
 
     def test_terra_sol_state_reflects_mode(
         self, monkeypatch: Any, tmp_path: Path

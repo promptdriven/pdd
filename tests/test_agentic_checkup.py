@@ -830,6 +830,80 @@ class TestRunAgenticCheckup:
         assert "{{" not in context.issue_content
         assert "{{" not in context.pr_content
 
+    @pytest.mark.parametrize(
+        ("final_state", "expected_success"),
+        [
+            (
+                {
+                    "reviewer_status": {"codex": "failed"},
+                    "active_reviewer": "codex",
+                    "fresh_final_status": "missing",
+                    "findings": [],
+                },
+                False,
+            ),
+            (
+                {
+                    "reviewer_status": {"codex": "clean"},
+                    "active_reviewer": "codex",
+                    "fresh_final_status": "clean",
+                    "findings": [],
+                },
+                True,
+            ),
+        ],
+    )
+    def test_terra_sol_uses_sol_verdict_and_disables_role_fallbacks(
+        self,
+        monkeypatch,
+        tmp_path,
+        final_state,
+        expected_success,
+    ):
+        """Terra/Sol exits zero only for a current clean Codex/Sol verdict."""
+        import pdd.agentic_checkup as mod
+
+        monkeypatch.delenv("PDD_CHECKUP_FALLBACK_MIRROR", raising=False)
+        monkeypatch.delenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", raising=False)
+        monkeypatch.setattr(mod, "_check_gh_cli", lambda: True)
+        monkeypatch.setattr(mod, "_find_project_root", lambda _cwd: tmp_path)
+        monkeypatch.setattr(mod, "_load_architecture_json", lambda _root: ([], None))
+        monkeypatch.setattr(mod, "_load_pddrc_content", lambda _root: "")
+        monkeypatch.setattr(mod, "_fetch_pr_context", lambda *_args: "PR context")
+        monkeypatch.setattr(mod, "clear_final_state", lambda *_args: None)
+        states = iter((None, final_state))
+        monkeypatch.setattr(mod, "load_final_state", lambda *_args: next(states))
+        observed = {}
+
+        def fake_review_loop(**kwargs):
+            observed["config"] = kwargs["config"]
+            return True, "trustworthy report", 0.25, "codex"
+
+        monkeypatch.setattr(mod, "run_checkup_review_loop", fake_review_loop)
+
+        success, message, cost, model = mod.run_agentic_checkup(
+            None,
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            terra_sol=True,
+            reviewer_fallback="claude",
+            fixer_fallback="gemini",
+            cwd=tmp_path,
+            use_github_state=False,
+        )
+
+        assert success is expected_success
+        assert message == "trustworthy report"
+        assert cost == pytest.approx(0.25)
+        assert model == "codex"
+        config = observed["config"]
+        assert config.reviewers == ("codex",)
+        assert config.reviewer == "codex"
+        assert config.fixer == "codex"
+        assert config.reviewer_fallback is None
+        assert config.fixer_fallback is None
+        assert config.unbounded_terra_sol is True
+
     def test_agentic_layer1_failure_spends_no_reviewer_budget(
         self, monkeypatch, tmp_path
     ):

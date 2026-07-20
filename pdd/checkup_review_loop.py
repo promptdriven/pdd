@@ -1183,7 +1183,14 @@ def run_checkup_review_loop(
     )
     loop_start_monotonic = time.monotonic()
     state.started_monotonic = loop_start_monotonic
-    deadline = loop_start_monotonic + (config.max_minutes * 60.0)
+    # Terra/Sol convergence is genuinely unbounded: pass ``None`` through every
+    # provider dispatch so _run_role_task does not retain the ordinary
+    # max-minutes deadline after the loop-level budget checks are disabled.
+    deadline: Optional[float] = (
+        None
+        if config.unbounded_terra_sol
+        else loop_start_monotonic + (config.max_minutes * 60.0)
+    )
     worktree, setup_error = _setup_pr_worktree(
         cwd,
         context.pr_owner,
@@ -2561,9 +2568,18 @@ def _maybe_write_agentic_artifact(
                 "blockers": [],
             }
 
+        # The hosted artifact builder normally recomputes budget exhaustion
+        # from actual use versus the configured caps. Terra/Sol has no caps, so
+        # give the builder an explicit no-cap snapshot instead of allowing the
+        # legacy 5-round / 90-minute / $50 defaults to leak into Cloud state.
+        artifact_config = (
+            replace(config, max_rounds=0, max_minutes=0.0, max_cost=0.0)
+            if config.unbounded_terra_sol
+            else config
+        )
         artifact = build_agentic_v1_artifact(
             loop_state=state,
-            config=config,
+            config=artifact_config,
             context=context,
             final_gate_report=final_gate_report,
         )
@@ -6393,21 +6409,31 @@ def _fix_dispute_note(fix: FixResult, finding: ReviewFinding) -> str:
 def _budget_exhausted(
     config: ReviewLoopConfig,
     state: ReviewLoopState,
-    deadline: float,
+    deadline: Optional[float],
 ) -> bool:
     # Terra/Sol unbounded mode has no cost or time budget; all budget checks
     # must be inert so provider/transient failures are never mistaken for a
     # clean Sol result and remain observable and retriable.
     if config.unbounded_terra_sol:
         return False
+    if deadline is None:
+        # Bounded callers must always establish a deadline. Fail closed if a
+        # future refactor violates that invariant.
+        return True
     return state.total_cost >= config.max_cost or time.monotonic() >= deadline
 
 
 def _mark_budget_exhausted(
     config: ReviewLoopConfig,
     state: ReviewLoopState,
-    deadline: float,
+    deadline: Optional[float],
 ) -> None:
+    if config.unbounded_terra_sol:
+        return
+    if deadline is None:
+        state.max_duration_reached = True
+        state.stop_reason = "Review-loop deadline was unavailable."
+        return
     if state.total_cost >= config.max_cost:
         state.max_cost_reached = True
         state.stop_reason = f"Max review cost reached: ${config.max_cost:.2f}."

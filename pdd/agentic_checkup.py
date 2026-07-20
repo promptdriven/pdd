@@ -1765,6 +1765,11 @@ def run_agentic_checkup(
         effective_reviewers = "codex" if terra_sol else reviewers
         effective_reviewer = "codex" if terra_sol else reviewer
         effective_fixer = "codex" if terra_sol else fixer
+        # There is no distinct GPT-5.6 Codex fallback role. Ignore caller
+        # fallbacks in Terra/Sol mode so Claude/Gemini can never take over
+        # either authoritative role after a Codex failure.
+        effective_reviewer_fallback = None if terra_sol else reviewer_fallback
+        effective_fixer_fallback = None if terra_sol else fixer_fallback
         effective_allow_same = allow_same_reviewer_fixer or terra_sol
         loop_config = ReviewLoopConfig(
             # Hosted fallback/mirror settings are additive evidence only: they
@@ -1774,8 +1779,8 @@ def run_agentic_checkup(
             reviewers=parse_reviewers(effective_reviewers),
             reviewer=effective_reviewer,
             fixer=effective_fixer,
-            reviewer_fallback=reviewer_fallback,
-            fixer_fallback=fixer_fallback,
+            reviewer_fallback=effective_reviewer_fallback,
+            fixer_fallback=effective_fixer_fallback,
             review_only=review_only or no_fix,
             no_fix=no_fix,
             max_rounds=max_review_rounds,
@@ -1935,9 +1940,30 @@ def run_agentic_checkup(
     if terra_sol:
         if not pr_context_ready:
             return False, "--terra-sol requires --pr.", 0.0, ""
-        result = _run_review_loop_layer()
+        assert pr_number is not None
+        # The returned loop boolean means "trustworthy report produced", not
+        # "Sol is clean". Remove any prior verdict before this run and derive
+        # the CLI result only from the current final-state.json.
+        clear_final_state(project_root, issue_number, pr_number)
+        if load_final_state(project_root, issue_number, pr_number) is not None:
+            return (
+                False,
+                (
+                    "Terra/Sol could not clear the stale review-loop verdict at "
+                    ".pdd/checkup-review-loop/; refusing to trust a prior run."
+                ),
+                0.0,
+                "",
+            )
+        _loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer()
+        ship = _review_loop_ship_verdict(
+            load_final_state(project_root, issue_number, pr_number),
+            has_issue=has_issue,
+        )
         return _require_hosted_publication(
-            result, hosted_artifact_reservation, canonical_passed=None
+            (ship, loop_message, loop_cost, loop_model),
+            hosted_artifact_reservation,
+            canonical_passed=ship,
         )
 
     # For the final gate, snapshot PR context BEFORE Layer 1 so Layer 2 reviews
