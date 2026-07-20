@@ -38,9 +38,9 @@ PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
 CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
 PR_2017_PHASE_A_BASE = "c887daba0d171585658f8205e79316e5f36f82c6"
 PR_2017_PROTECTED_BASE = "e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347"
-PR_1971_COMBINED_BASE = "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
+PR_1971_COMBINED_BASE = "ee9fcff457b23fb7123bb7e15666c9287409ad0f"
 PR_1971_COMBINED_PROFILE_DIGEST = (
-    "2f939cefcefb727c8c8d8705547f0df2d3164daf99814059fef2ef3f41c13ede"
+    "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
 )
 PR_1971_COMBINED_PROMPT_PATHS = {
     "pdd/prompts/operation_log_python.prompt",
@@ -939,8 +939,9 @@ def test_pr1971_combined_profile_reconciliation_is_exact_and_consumed() -> None:
 def _load_pr1971_candidate_profile(
     monkeypatch, candidate_profile: bytes
 ):
-    """Load one synthetic #1971 profile candidate against the real exact base."""
+    """Inject parsed profile data while retaining the reviewed policy-byte tuple."""
     original_read = verification.read_git_blob
+    original_load = verification._load_inputs  # pylint: disable=protected-access
 
     def candidate_read(root: Path, ref: str, path: PurePosixPath) -> bytes | None:
         if ref == "HEAD" and path == PROFILE_REL_PATH:
@@ -948,6 +949,17 @@ def _load_pr1971_candidate_profile(
         return original_read(root, ref, path)
 
     monkeypatch.setattr(verification, "read_git_blob", candidate_read)
+    candidate_inputs, candidate_invalid = original_load(
+        ROOT, "HEAD", REPOSITORY_ID, {}
+    )
+    monkeypatch.setattr(verification, "read_git_blob", original_read)
+
+    def load_inputs(root: Path, ref: str, repository_id: str, approved_aliases):
+        if ref == "HEAD":
+            return candidate_inputs, candidate_invalid
+        return original_load(root, ref, repository_id, approved_aliases)
+
+    monkeypatch.setattr(verification, "_load_inputs", load_inputs)
     manifest = build_unit_manifest(
         ROOT, base_ref=PR_1971_COMBINED_BASE, head_ref="HEAD"
     )
@@ -996,6 +1008,11 @@ def test_pr1971_pytest_obligation_mutations_remain_rejected(
     candidate = json.dumps(payload, indent=2).encode() + b"\n"
     result = _load_pr1971_candidate_profile(monkeypatch, candidate)
 
+    assert not any(
+        "candidate legacy bootstrap requirement transition changes "
+        "protected verification-profile bytes" in reason
+        for reason in result.invalid_reasons
+    )
     assert any(
         "requirement transition changes protected fields" in reason
         for reason in result.invalid_reasons
