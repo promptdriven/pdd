@@ -150,6 +150,10 @@ class TestParseRuleIds:
         ids = _parse_rule_ids(text)
         assert ids == ["R-001", "R-002"]
 
+    def test_suffixed_id_remains_distinct_from_numeric_base(self):
+        ids = _parse_rule_ids("R1 - Base\nR1a - Specialized\nR2 - Other")
+        assert ids == ["R1", "R1A", "R2"]
+
     def test_sequential_ids(self):
         text = "1. MUST do A\n2. MUST do B"
         ids = _parse_rule_ids(text)
@@ -243,6 +247,10 @@ class TestParseCoverageBlock:
         result = _parse_coverage_block(text)
         assert "R2" in result
 
+    def test_suffixed_rule_id_is_preserved(self):
+        result = _parse_coverage_block("R1a: story__specialized.md")
+        assert result == {"R1A": "story__specialized.md"}
+
     def test_bullet_prefix_stripped(self):
         text = "- R1: test_bar"
         result = _parse_coverage_block(text)
@@ -268,7 +276,8 @@ class TestStoryLinkPrompt:
 
     def test_path_variant_matches(self):
         text = "<!-- pdd-story-prompts: prompts/foo_python.prompt -->"
-        assert _story_links_prompt(text, "foo_python.prompt")
+        assert _story_links_prompt(text, "prompts/foo_python.prompt")
+        assert not _story_links_prompt(text, "foo_python.prompt")
 
     def test_case_insensitive_match(self):
         text = "<!-- pdd-story-prompts: FOO_PYTHON.PROMPT -->"
@@ -284,7 +293,7 @@ class TestRuleIdsFromCovers:
 
     def test_cross_module_refs_matching_prompt(self):
         covers = "- prompts/foo.prompt#R3: description"
-        ids = _rule_ids_from_covers(covers, "foo.prompt")
+        ids = _rule_ids_from_covers(covers, "prompts/foo.prompt")
         assert "R3" in ids
 
     def test_cross_module_refs_other_prompt_excluded(self):
@@ -298,6 +307,11 @@ class TestRuleIdsFromCovers:
     def test_normalises_to_uppercase(self):
         ids = _rule_ids_from_covers("- r5: rule", "foo.prompt")
         assert "R5" in ids
+
+    def test_suffixed_cross_module_ref_keeps_path_and_suffix(self):
+        covers = "- prompts/a/foo.prompt#R1a: specialized rule"
+        assert _rule_ids_from_covers(covers, "prompts/a/foo.prompt") == {"R1A"}
+        assert _rule_ids_from_covers(covers, "prompts/b/foo.prompt") == set()
 
 
 class TestScanStoryEvidence:
@@ -364,6 +378,123 @@ class TestScanStoryEvidence:
             )
         evidence = scan_story_evidence(stories_dir, prompt_path)
         assert len(evidence["R1"]) == 2
+
+    def test_build_coverage_distinguishes_same_basename_story_owners(self, tmp_path):
+        prompts = tmp_path / "prompts"
+        prompt_a = prompts / "a" / "foo.prompt"
+        prompt_b = prompts / "b" / "foo.prompt"
+        prompt_a.parent.mkdir(parents=True)
+        prompt_b.parent.mkdir(parents=True)
+        contract = (
+            "<contract_rules>\nR1a - Specialized\n"
+            "The system MUST specialize.\n</contract_rules>\n"
+        )
+        prompt_a.write_text(contract, encoding="utf-8")
+        prompt_b.write_text(contract, encoding="utf-8")
+        stories_dir = tmp_path / "stories"
+        stories_dir.mkdir()
+        (stories_dir / "story__only_a.md").write_text(
+            "<!-- pdd-story-prompts: prompts/a/foo.prompt -->\n"
+            "## Covers\n- prompts/a/foo.prompt#R1a: only A\n\n"
+            "## Acceptance Criteria\n- Specialized behavior works.\n",
+            encoding="utf-8",
+        )
+
+        result_a = build_coverage(
+            prompt_a, stories_dir=stories_dir, tests_dir=tmp_path / "none"
+        )
+        result_b = build_coverage(
+            prompt_b, stories_dir=stories_dir, tests_dir=tmp_path / "none"
+        )
+
+        assert result_a.rules[0].stories == ["story__only_a.md"]
+        assert result_a.rules[0].status == STATUS_STORY_ONLY
+        assert result_b.rules[0].stories == []
+        assert result_b.rules[0].status == STATUS_UNCHECKED
+
+    def test_wrong_qualified_story_path_never_falls_back_to_unique_basename(self, tmp_path):
+        prompt = tmp_path / "prompts" / "a" / "foo.prompt"
+        prompt.parent.mkdir(parents=True)
+        prompt.write_text(
+            "<contract_rules>\nR1a - Specialized\n"
+            "The system MUST specialize.\n</contract_rules>\n",
+            encoding="utf-8",
+        )
+        stories_dir = tmp_path / "stories"
+        stories_dir.mkdir()
+        (stories_dir / "story__wrong.md").write_text(
+            "<!-- pdd-story-prompts: prompts/wrong/foo.prompt -->\n"
+            "## Covers\n- prompts/wrong/foo.prompt#R1a: wrong owner\n\n"
+            "## Acceptance Criteria\n- It works.\n",
+            encoding="utf-8",
+        )
+
+        result = build_coverage(
+            prompt,
+            stories_dir=stories_dir,
+            tests_dir=tmp_path / "none",
+            project_root=tmp_path,
+        )
+        assert result.rules[0].stories == []
+        assert result.rules[0].status == STATUS_UNCHECKED
+
+    def test_legacy_metadata_does_not_authorize_wrong_qualified_covers(self, tmp_path):
+        prompt = tmp_path / "prompts" / "a" / "foo.prompt"
+        prompt.parent.mkdir(parents=True)
+        prompt.write_text(
+            "<contract_rules>\nR1a - Specialized\n"
+            "The system MUST specialize.\n</contract_rules>\n",
+            encoding="utf-8",
+        )
+        stories_dir = tmp_path / "stories"
+        stories_dir.mkdir()
+        (stories_dir / "story__wrong_covers.md").write_text(
+            "<!-- pdd-story-prompts: foo.prompt -->\n"
+            "## Covers\n- prompts/wrong/foo.prompt#R1a: wrong owner\n",
+            encoding="utf-8",
+        )
+
+        result = build_coverage(
+            prompt,
+            stories_dir=stories_dir,
+            tests_dir=tmp_path / "none",
+            project_root=tmp_path,
+        )
+        failures = scan_story_validation_failures(
+            stories_dir,
+            prompt,
+            project_root=tmp_path,
+        )
+        assert result.rules[0].stories == []
+        assert result.rules[0].status == STATUS_UNCHECKED
+        assert failures == {}
+
+    def test_package_local_scope_cannot_prove_legacy_basename_unique(self, tmp_path):
+        package_a = tmp_path / "packages" / "a"
+        prompt_a = package_a / "prompts" / "foo.prompt"
+        prompt_b = tmp_path / "packages" / "b" / "prompts" / "foo.prompt"
+        prompt_a.parent.mkdir(parents=True)
+        prompt_b.parent.mkdir(parents=True)
+        contract = (
+            "<contract_rules>\nR1a - Specialized\n"
+            "The system MUST specialize.\n</contract_rules>\n"
+        )
+        prompt_a.write_text(contract, encoding="utf-8")
+        prompt_b.write_text(contract, encoding="utf-8")
+        stories_dir = package_a / "stories"
+        stories_dir.mkdir()
+        (stories_dir / "story__legacy.md").write_text(
+            "<!-- pdd-story-prompts: foo.prompt -->\n"
+            "## Covers\n- R1a: ambiguous legacy owner\n\n"
+            "## Acceptance Criteria\n- It works.\n",
+            encoding="utf-8",
+        )
+
+        result = build_coverage(
+            prompt_a, stories_dir=stories_dir, tests_dir=package_a / "tests"
+        )
+        assert result.rules[0].stories == []
+        assert result.rules[0].status == STATUS_UNCHECKED
 
 
 class TestStoryValidationFailures:
@@ -473,8 +604,76 @@ class TestScanTestValidationFailures:
         _make_test_file(tmp_path, "def test_R6_ok():\n    assert True\n")
         assert scan_test_validation_failures(tmp_path) == {}
 
+    def test_qualified_marker_away_from_malformed_test_is_not_failure(self, tmp_path):
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        prompt = _make_prompt(prompts, "", name="foo.prompt")
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        _make_test_file(
+            tests_dir,
+            "MARKER = 'prompts/foo.prompt#R1a'\n\ndef test_broken(:\n    pass\n",
+        )
+        assert scan_test_validation_failures(
+            tests_dir,
+            prompt_path=prompt,
+            require_prompt_qualified=True,
+        ) == {}
+
+    def test_assignment_after_malformed_test_is_not_a_docstring(self, tmp_path):
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        prompt = _make_prompt(prompts, "", name="foo.prompt")
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        _make_test_file(
+            tests_dir,
+            "def test_broken(:\n    MARKER = 'prompts/foo.prompt#R1a'\n",
+        )
+        assert scan_test_validation_failures(
+            tests_dir,
+            prompt_path=prompt,
+            require_prompt_qualified=True,
+        ) == {}
+
+    def test_malformed_async_test_qualified_docstring_marks_failure(self, tmp_path):
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        prompt = _make_prompt(prompts, "", name="foo.prompt")
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        _make_test_file(
+            tests_dir,
+            "async def test_broken(:\n"
+            "    \"\"\"prompts/foo.prompt#R1a: specialized behavior.\"\"\"\n",
+        )
+        failures = scan_test_validation_failures(
+            tests_dir,
+            prompt_path=prompt,
+            require_prompt_qualified=True,
+        )
+        assert set(failures) == {"R1A"}
+
 
 class TestScanTestFileDirectly:
+    def test_suffixed_function_name_maps_only_to_suffixed_rule(self):
+        source = "def test_R1a_specialized():\n    pass\n"
+        evidence: dict = {}
+        _scan_test_file(source, evidence, prompt_name="", require_prompt_qualified=False)
+        assert evidence == {"R1A": ["test_R1a_specialized"]}
+
+    def test_bare_docstring_rule_mention_is_not_evidence(self):
+        source = 'def test_unrelated():\n    """Uses the R1 algorithm internally."""\n    pass\n'
+        evidence: dict = {}
+        _scan_test_file(source, evidence, prompt_name="", require_prompt_qualified=False)
+        assert evidence == {}
+
+    def test_inline_comment_with_suffixed_id_is_evidence(self):
+        source = "def test_specialized():  # covers R1a\n    pass\n"
+        evidence: dict = {}
+        _scan_test_file(source, evidence, prompt_name="", require_prompt_qualified=False)
+        assert evidence == {"R1A": ["test_specialized"]}
+
     def test_docstring_covers_tag(self):
         source = 'def test_foo():\n    """R7: validates boundary."""\n    pass\n'
         evidence: dict = {}
@@ -531,7 +730,13 @@ def test_directory_mode_requires_prompt_qualified_test_refs(tmp_path: Path) -> N
     prompts.mkdir()
     foo = _make_prompt(
         prompts,
-        "<contract_rules>\nR1 - Foo\nThe system MUST foo.\n</contract_rules>\n",
+        (
+            "<contract_rules>\n"
+            "R1 - Foo\nThe system MUST foo.\n"
+            "R1a - Specialized foo\nThe system MUST specialize foo.\n"
+            "R2 - Other foo\nThe system MUST do other foo.\n"
+            "</contract_rules>\n"
+        ),
         name="foo_python.prompt",
     )
     _make_prompt(
@@ -545,16 +750,60 @@ def test_directory_mode_requires_prompt_qualified_test_refs(tmp_path: Path) -> N
         tests_dir,
         """\
         def test_only_foo():
-            \"\"\"foo_python.prompt#R1: covers foo rule\"\"\"
+            \"\"\"foo_python.prompt#R1a: covers specialized foo rule\"\"\"
             assert True
         """,
         name="test_foo.py",
     )
+    _make_test_file(
+        tests_dir,
+        """\
+        def test_R1_unrelated_module_behavior():
+            assert True
+
+        def test_R2_unrelated_module_behavior():
+            assert True
+        """,
+        name="test_unrelated.py",
+    )
 
     results = build_coverage_directory(prompts, stories_dir=tmp_path / "none", tests_dir=tests_dir)
     by_name = {r.path.name: r for r in results}
-    assert by_name[foo.name].rules[0].status == STATUS_TEST_ONLY
+    foo_rules = {rule.rule_id: rule for rule in by_name[foo.name].rules}
+    assert list(foo_rules) == ["R1", "R1A", "R2"]
+    assert foo_rules["R1"].status == STATUS_UNCHECKED
+    assert foo_rules["R2"].status == STATUS_UNCHECKED
+    assert foo_rules["R1A"].status == STATUS_TEST_ONLY
+    assert foo_rules["R1A"].tests == ["test_only_foo"]
     assert by_name["bar_python.prompt"].rules[0].status == STATUS_UNCHECKED
+
+
+def test_directory_mode_distinguishes_same_basename_prompt_paths(tmp_path: Path) -> None:
+    """A qualified nested path must not collapse to a shared basename."""
+    prompts = tmp_path / "prompts"
+    for subdir in ("a", "b"):
+        target = prompts / subdir
+        target.mkdir(parents=True)
+        _make_prompt(
+            target,
+            "<contract_rules>\nR1a - Specialized\nThe system MUST specialize.\n</contract_rules>\n",
+            name="foo.prompt",
+        )
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    _make_test_file(
+        tests_dir,
+        "def test_only_a():\n"
+        "    \"\"\"prompts/a/foo.prompt#R1a: covers only A.\"\"\"\n"
+        "    pass\n",
+    )
+
+    results = build_coverage_directory(
+        prompts, stories_dir=tmp_path / "none", tests_dir=tests_dir
+    )
+    by_parent = {result.path.parent.name: result.rules[0] for result in results}
+    assert by_parent["a"].tests == ["test_only_a"]
+    assert by_parent["b"].tests == []
 
 
 # ===========================================================================
@@ -958,6 +1207,32 @@ class TestBuildCoverageDirectory:
         )
         results = build_coverage_directory(tmp_path)
         assert len(results) == 1
+
+    def test_nested_prompt_directory_discovers_project_root(self, tmp_path):
+        (tmp_path / ".pdd").mkdir()
+        prompts = tmp_path / "pkg" / "prompts"
+        prompts.mkdir(parents=True)
+        prompt = prompts / "foo.prompt"
+        prompt.write_text(
+            "<contract_rules>\nR1 - Nested\nThe system MUST nest.\n</contract_rules>\n",
+            encoding="utf-8",
+        )
+        stories = tmp_path / "stories"
+        stories.mkdir()
+        (stories / "story__nested.md").write_text(
+            "<!-- pdd-story-prompts: pkg/prompts/foo.prompt -->\n"
+            "## Covers\n- pkg/prompts/foo.prompt#R1: nested owner\n\n"
+            "## Acceptance Criteria\n- It works.\n",
+            encoding="utf-8",
+        )
+
+        results = build_coverage_directory(
+            prompts,
+            stories_dir=stories,
+            tests_dir=tmp_path / "tests",
+        )
+        assert results[0].rules[0].stories == ["story__nested.md"]
+        assert results[0].rules[0].status == STATUS_STORY_ONLY
 
 
 # ===========================================================================

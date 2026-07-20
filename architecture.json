@@ -8616,7 +8616,8 @@
       "auto_include_python.prompt",
       "agentic_langtest_python.prompt",
       "architecture_sync_python.prompt",
-      "metadata_sync_python.prompt"
+      "metadata_sync_python.prompt",
+      "context_snapshot_python.prompt"
     ],
     "priority": 80,
     "filename": "ci_drift_heal_python.prompt",

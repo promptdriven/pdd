@@ -26,10 +26,63 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from rich.console import Console
 from rich.table import Table
 
+from .context_snapshot import redact_snapshot_text
+
 console = Console()
 
 _HEAL_SUBPROCESS_TIMEOUT_DEFAULT = 2400
 _HEAL_PROMPT_CHURN_MAX_RATIO_DEFAULT = 5.0
+_HEAL_FAILURE_DIAGNOSTIC_MAX_CHARS = 2000
+_HEAL_FAILURE_STREAM_MAX_CHARS = 880
+_HEAL_FAILURE_LABEL_MAX_CHARS = 160
+_HEAL_FAILURE_TRUNCATED_MARKER = "... [truncated]"
+
+_HEAL_FAILURE_SIGNAL_RE = re.compile(
+    r"(?i)(?:"
+    r"\b(?:error|failed|failure|exception|traceback|fatal|abort(?:ed)?|invalid)\w*\b|"
+    r"\b(?:auth(?:entication)?|credential|api[-_ ]?key|provider|rate[-_ ]?limit)\w*\b"
+    r")"
+)
+_ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+_UNSAFE_CONTROL_RE = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]"
+)
+_NOISY_DIAGNOSTIC_RE = re.compile(r"(?i)\b(?:warning|debug|retry(?:ing)?)\b")
+_HEAL_PEM_BLOCK_RE = re.compile(
+    r"-----BEGIN (?P<pem_type>[A-Z0-9 ]*PRIVATE KEY)-----.*?"
+    r"-----END (?P=pem_type)-----",
+    re.IGNORECASE | re.DOTALL,
+)
+_HEAL_QUOTED_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b([A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?|"
+    r"ACCESS_KEY|PRIVATE_KEY))\s*([=:])\s*"
+    r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')'''
+)
+_GOOGLE_OAUTH_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9._~+/-])ya29\.[A-Za-z0-9._~+/-]{8,}=*"
+    r"(?![A-Za-z0-9._~+/=-])"
+)
+_HOME_PATH_PATTERNS = (
+    re.compile(r"(?i)(?<![A-Za-z0-9_])/[Uu]sers/[^/\\\s:;]+"),
+    re.compile(r"(?i)(?<![A-Za-z0-9_])/[Hh]ome/[^/\\\s:;]+"),
+    re.compile(r"(?i)(?<![A-Za-z0-9_])[A-Z]:\\Users\\[^/\\\s:;]+"),
+)
+_HEAL_SECRET_PATTERNS = (
+    re.compile(
+        r"(?i)\b([A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?|"
+        r"ACCESS_KEY|PRIVATE_KEY))"
+        r"\s*([=:])\s*([^\s,;]+)"
+    ),
+    re.compile(r"(?i)\b(Authorization\s*:\s*Bearer\s+)([^\s,;]+)"),
+    re.compile(
+        r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
+        r"sk-[A-Za-z0-9_-]{10,})\b"
+    ),
+    re.compile(
+        r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\."
+        r"[A-Za-z0-9_-]+(?![A-Za-z0-9_-])"
+    ),
+)
 
 
 def _heal_subprocess_timeout() -> int:
@@ -711,11 +764,126 @@ def _restore_protected_paths() -> None:
         pass
 
 
+def _redact_heal_diagnostic(text: str) -> str:
+    """Remove credentials and personal home-directory owners from diagnostics."""
+    redacted = _ANSI_ESCAPE_RE.sub("", text)
+    redacted = _UNSAFE_CONTROL_RE.sub("", redacted)
+    # Multiline/quoted forms must be removed before line selection and before
+    # simpler scrubbers can consume only their first token or PEM header.
+    redacted = _HEAL_PEM_BLOCK_RE.sub("[REDACTED]", redacted)
+    redacted = _HEAL_QUOTED_ASSIGNMENT_RE.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", redacted
+    )
+    redacted = _GOOGLE_OAUTH_TOKEN_RE.sub("[REDACTED]", redacted)
+    # Reuse the repository's mature snapshot scrubber for provider keys,
+    # Authorization headers, credentialed URLs, and ambient credential values.
+    redacted, _, _ = redact_snapshot_text(redacted)
+    for pattern in _HOME_PATH_PATTERNS:
+        redacted = pattern.sub("[HOME]", redacted)
+    redacted = _HEAL_SECRET_PATTERNS[0].sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", redacted
+    )
+    redacted = _HEAL_SECRET_PATTERNS[1].sub(
+        lambda match: f"{match.group(1)}[REDACTED]", redacted
+    )
+    for pattern in _HEAL_SECRET_PATTERNS[2:]:
+        redacted = pattern.sub("[REDACTED]", redacted)
+    return redacted
+
+
+def _coerce_heal_diagnostic_text(value: Any) -> str:
+    """Return subprocess output as text without allowing decoding failures."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return ""
+
+
+def _bounded_heal_stream(text: Any, max_chars: int) -> str:
+    """Select error-bearing and trailing lines from one subprocess stream."""
+    raw = _coerce_heal_diagnostic_text(text)
+    if not raw.strip():
+        return ""
+    safe = _redact_heal_diagnostic(raw)
+    raw_lines = [line.strip() for line in safe.splitlines() if line.strip()]
+    lines: List[str] = []
+    previous_key = ""
+    for line in raw_lines:
+        normalized = re.sub(r"\s+", " ", line).strip()
+        key = normalized
+        if _NOISY_DIAGNOSTIC_RE.search(normalized):
+            key = re.sub(r"\b\d+\b", "#", normalized).casefold()
+        if key == previous_key:
+            continue
+        lines.append(normalized)
+        previous_key = key
+    if not lines:
+        return ""
+
+    selected = lines[-20:]
+    selected_set = set(selected)
+    # A useful error can precede a long cleanup/logging tail. Append the last
+    # error-bearing lines so tail truncation preserves them.
+    for line in [line for line in lines if _HEAL_FAILURE_SIGNAL_RE.search(line)][-8:]:
+        if line not in selected_set:
+            selected.append(line)
+            selected_set.add(line)
+    excerpt = "\n".join(selected)
+    if len(excerpt) > max_chars:
+        signal_lines = [line for line in selected if _HEAL_FAILURE_SIGNAL_RE.search(line)]
+        signal_prefix = signal_lines[-1][:160] if signal_lines else ""
+        fixed = len(signal_prefix) + len(_HEAL_FAILURE_TRUNCATED_MARKER) + 2
+        keep = max(0, max_chars - fixed)
+        excerpt = "\n".join(
+            part
+            for part in (
+                signal_prefix,
+                _HEAL_FAILURE_TRUNCATED_MARKER,
+                excerpt[-keep:] if keep else "",
+            )
+            if part
+        )
+    return excerpt[:max_chars]
+
+
+def _format_heal_failure(returncode: Optional[int], stdout: Any, stderr: Any) -> str:
+    """Build a bounded, privacy-safe failure diagnostic from both streams."""
+    exit_detail = (
+        f"exit code {returncode}"
+        if isinstance(returncode, int)
+        else "exit code unavailable"
+    )
+    parts = [exit_detail]
+    stdout_excerpt = _bounded_heal_stream(stdout, _HEAL_FAILURE_STREAM_MAX_CHARS)
+    stderr_excerpt = _bounded_heal_stream(stderr, _HEAL_FAILURE_STREAM_MAX_CHARS)
+    if stdout_excerpt:
+        parts.append(f"stdout:\n{stdout_excerpt}")
+    if stderr_excerpt:
+        parts.append(f"stderr:\n{stderr_excerpt}")
+    diagnostic = "\n".join(parts)
+    return diagnostic[:_HEAL_FAILURE_DIAGNOSTIC_MAX_CHARS]
+
+
+def _format_heal_console_message(
+    label: Any, returncode: Optional[int], stdout: Any, stderr: Any
+) -> str:
+    """Return the final sanitized console payload within the public size cap."""
+    safe_label = " ".join(_redact_heal_diagnostic(str(label)).split())
+    safe_label = safe_label[:_HEAL_FAILURE_LABEL_MAX_CHARS] or "PDD heal"
+    diagnostic = _format_heal_failure(returncode, stdout, stderr)
+    payload = _redact_heal_diagnostic(f"{safe_label} failed: {diagnostic}")
+    return payload[:_HEAL_FAILURE_DIAGNOSTIC_MAX_CHARS]
+
+
 def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
     """Run a `pdd ...` subprocess with protected-paths rollback on failure."""
     rollback_eligible = _capture_rollback_state(cmd, env)
 
     timeout = _heal_subprocess_timeout()
+    stdout = ""
+    stderr = ""
+    returncode: Optional[int] = None
     try:
         result = subprocess.run(
             cmd,
@@ -724,13 +892,22 @@ def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
             text=True,
             timeout=timeout,
         )
-        success = result.returncode == 0
+        returncode = result.returncode
+        success = returncode == 0
+        stdout = getattr(result, "stdout", "") or ""
         stderr = getattr(result, "stderr", "") or ""
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         success = False
-        stderr = f"timeout after {timeout}s"
-    except FileNotFoundError:
-        return False
+        stdout = getattr(exc, "stdout", "") or ""
+        captured_stderr = _coerce_heal_diagnostic_text(
+            getattr(exc, "stderr", "") or ""
+        )
+        stderr = "\n".join(
+            part for part in (captured_stderr, f"timeout after {timeout}s") if part
+        )
+    except FileNotFoundError as exc:
+        success = False
+        stderr = str(exc) or "pdd executable not found"
     except Exception as exc:
         success = False
         stderr = str(exc)
@@ -738,8 +915,8 @@ def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
     if not success:
         if rollback_eligible is True:
             _restore_protected_paths()
-        if isinstance(stderr, str) and stderr:
-            console.print(f"[red]{label} failed: {stderr.strip()[:300]}[/red]")
+        payload = _format_heal_console_message(label, returncode, stdout, stderr)
+        console.print(payload, style="red", markup=False)
     return success
 
 

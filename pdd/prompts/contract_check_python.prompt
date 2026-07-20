@@ -15,8 +15,25 @@
   - `check_directory(directory, *, strict=False) -> List[ContractResult]`
   - `check_stories(stories_dir, prompts_dir, *, strict=False) -> List[ContractResult]`
 - Parse contract sections via `pdd/contract_ir.py` (do not re-implement parsing here).
+- Treat `R<N>`, `R-<N>`, `RULE<N>`, and `RULE-<N>` with an optional single
+  ASCII letter suffix as canonical explicit IDs everywhere this module validates
+  an ID. Normalize the suffix to uppercase and keep `R1` distinct from `R1A`.
 - MUST-NOT coverage check must only treat explicit leading `<coverage>` entries as coverage.
+- Resolve path-qualified `## Covers` prompt identities exactly after POSIX/case
+  normalization. A qualified reference such as `prompts/foo.prompt#R99` may use
+  a unique legacy basename-only rule map entry (`foo.prompt`) and MUST then warn
+  when `R99` is unknown. Never substitute a different qualified prompt path by
+  basename; same-basename paths remain distinct and ambiguous basename matches
+  fail closed.
+- `check_stories` MUST index prompts by normalized project-relative identity,
+  using the nearest explicit project marker/common project scope. It may add a
+  basename alias only when that basename is unique across all discovered prompts.
+  Story metadata with a qualified prompt path must select that exact prompt;
+  duplicate basenames MUST NOT overwrite one another or empty a valid qualified
+  lookup before `UNKNOWN_STORY_REF` validation runs.
 - Provide stable JSON-serializable results (`as_dict()`).
 
 % Deliverables
 - Code: `pdd/contract_check.py`
+- Regression coverage MUST show that `R1a` is accepted by both the shared parser
+  and this module's malformed-ID validation rather than being dropped or rejected.

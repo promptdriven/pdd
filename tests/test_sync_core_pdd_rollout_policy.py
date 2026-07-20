@@ -182,6 +182,7 @@ PREAUTHORIZED_CHILD_PATHS = (
         "pdd/sync_core/human_attestation.py",
         "tests/test_sync_core_human_attestation.py",
         ".pdd/meta/ci_detect_changed_modules_python.json",
+        ".pdd/meta/context_generator_main_python.json",
         ".pdd/meta/evidence_manifest_python.json",
         ".pdd/meta/story_detection_result_python.json",
         "pdd/schemas/story_detection_result.schema.json",

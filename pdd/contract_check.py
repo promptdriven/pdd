@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import posixpath
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -78,8 +80,8 @@ _MODAL_PATTERN = re.compile(
 )
 
 # Canonical explicit IDs (both R1 and R-001 forms supported):
-#   R1  R-1  R-001  RULE1  RULE-001
-_EXPLICIT_ID_RE = re.compile(r"^(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
+#   R1  R1a  R-1  R-001B  RULE1  RULE-001a
+_EXPLICIT_ID_RE = re.compile(r"^(R-?\d+[a-zA-Z]?|RULE-?\d+[a-zA-Z]?)\b", re.IGNORECASE)
 
 # Candidate "looks like an ID" but malformed:  RR-01  R_001  RULE_003
 _CANDIDATE_ID_RE = re.compile(r"^([A-Z]{1,5}[-_]\w+)\b", re.IGNORECASE)
@@ -613,16 +615,35 @@ def _check_story_covers(
     if not covers_text or linked_prompt_rules is None:
         return issues
 
+    def _prompt_rules_for(reference: str) -> set[str]:
+        normalised_ref = posixpath.normpath(reference.replace("\\", "/")).lower()
+        normalised_map = {
+            posixpath.normpath(key.replace("\\", "/")).lower(): ids
+            for key, ids in linked_prompt_rules.items()
+        }
+        if normalised_ref in normalised_map:
+            return normalised_map[normalised_ref]
+
+        basename = posixpath.basename(normalised_ref)
+        candidates = [
+            (key, ids)
+            for key, ids in normalised_map.items()
+            if posixpath.basename(key) == basename
+        ]
+        if len(candidates) != 1:
+            return set()
+        key, ids = candidates[0]
+        # A basename-only map is legacy and cannot express the qualified path;
+        # accept it only when unique. Never substitute one qualified path for
+        # another merely because their basenames match.
+        if "/" in normalised_ref and "/" in key:
+            return set()
+        return ids
+
     for ref in iter_covers_refs(covers_text):
         if ref.prompt_filename is not None:
             prompt_file = ref.prompt_filename
-            prompt_ids = linked_prompt_rules.get(prompt_file, set())
-            if not prompt_ids:
-                prompt_ids = next(
-                    (ids for k, ids in linked_prompt_rules.items()
-                     if k.endswith(prompt_file)),
-                    set(),
-                )
+            prompt_ids = _prompt_rules_for(prompt_file)
             if prompt_ids and ref.rule_id not in prompt_ids:
                 issues.append(ContractIssue(
                     level="warn",
@@ -834,13 +855,37 @@ def check_stories(  # pylint: disable=too-many-locals,invalid-name
     # Build prompt ID map if prompts_dir given
     prompt_id_map: dict[str, set[str]] = {}
     if prompts_dir and prompts_dir.exists():
+        resolved_prompts = Path(os.path.abspath(prompts_dir))
+        resolved_stories = Path(os.path.abspath(stories_dir))
+        common_root = Path(os.path.commonpath((resolved_prompts, resolved_stories)))
+        project_root = common_root
+        for candidate in (common_root, *common_root.parents):
+            if any(
+                (candidate / marker).exists()
+                for marker in (".git", ".pdd", "architecture.json", "pyproject.toml")
+            ):
+                project_root = candidate
+                break
+
+        parsed_prompts: list[tuple[str, str, set[str]]] = []
         for prompt_path in prompts_dir.rglob("*.prompt"):
             try:
                 parsed = parse_prompt_contracts(prompt_path)
                 if parsed.has_contract_rules:
-                    prompt_id_map[prompt_path.name] = parsed.known_rule_ids
+                    absolute_prompt = Path(os.path.abspath(prompt_path))
+                    identity = absolute_prompt.relative_to(project_root).as_posix().lower()
+                    parsed_prompts.append(
+                        (identity, prompt_path.name.lower(), parsed.known_rule_ids)
+                    )
             except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
                 pass
+        basename_counts: dict[str, int] = {}
+        for _identity, basename, _ids in parsed_prompts:
+            basename_counts[basename] = basename_counts.get(basename, 0) + 1
+        for identity, basename, known_ids in parsed_prompts:
+            prompt_id_map[identity] = known_ids
+            if basename_counts[basename] == 1:
+                prompt_id_map[basename] = known_ids
 
     for story_path in sorted(stories_dir.rglob("story__*.md")):
         result = ContractResult(path=story_path)
@@ -856,8 +901,11 @@ def check_stories(  # pylint: disable=too-many-locals,invalid-name
                 r"<!--\s*pdd-story-prompts:\s*([^>]+)-->", story_text
             )
             if meta_match:
-                names = [n.strip() for n in meta_match.group(1).split(",")]
-                linked = {n: prompt_id_map.get(n, set()) for n in names}
+                names = [
+                    posixpath.normpath(n.strip().replace("\\", "/")).lower()
+                    for n in meta_match.group(1).split(",")
+                ]
+                linked = {name: prompt_id_map.get(name, set()) for name in names}
             else:
                 linked = prompt_id_map  # check against all known prompts
 

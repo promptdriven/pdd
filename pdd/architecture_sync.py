@@ -1063,6 +1063,8 @@ def _extract_contract_summary(
             resolved_stories,
             resolved_tests,
             prompt_text=prompt_text,
+            require_prompt_qualified_tests=True,
+            project_root=project_root,
         )
         if prompt_text is not None:
             ir = parse_prompt_contracts_text(prompt_text, prompt_path)

@@ -27,12 +27,12 @@ _MODAL_PATTERN = re.compile(
     r"\b(" + "|".join(re.escape(m) for m in sorted(MODALS, key=len, reverse=True)) + r")\b",
 )
 
-_EXPLICIT_ID_RE = re.compile(r"^(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
+_EXPLICIT_ID_RE = re.compile(r"^(R-?\d+[a-zA-Z]?|RULE-?\d+[a-zA-Z]?)\b", re.IGNORECASE)
 _CANDIDATE_ID_RE = re.compile(r"^([A-Z]{1,5}[-_]\w+)\b", re.IGNORECASE)
 _SEQ_ID_RE = re.compile(r"^(\d+)[.):\s]")
-COVERAGE_REF_RE = re.compile(r"\b(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
+COVERAGE_REF_RE = re.compile(r"\b(R-?\d+[a-zA-Z]?|RULE-?\d+[a-zA-Z]?)\b", re.IGNORECASE)
 CROSS_MODULE_REF_RE = re.compile(
-    r"([\w./\-]+\.prompt)#(R-?\d+|RULE-?\d+)\b", re.IGNORECASE
+    r"([\w./\-]+\.prompt)#(R-?\d+[a-zA-Z]?|RULE-?\d+[a-zA-Z]?)\b", re.IGNORECASE
 )
 _COVERAGE_REF_RE = COVERAGE_REF_RE  # backward-compat alias for internal callers
 _CROSS_MODULE_REF_RE = CROSS_MODULE_REF_RE
@@ -73,7 +73,8 @@ class CoversRef:
     rule_id:
         Canonical uppercase rule ID (e.g. ``"R1"``, ``"R-001"``).
     prompt_filename:
-        Basename of the prompt the reference scopes to, or ``None`` for
+        Normalized path/reference identity of the prompt the reference scopes
+        to (for example ``"prompts/api/foo.prompt"``), or ``None`` for the
         single-prompt format (``- R1: …``).
     line:
         Verbatim source line the reference was parsed from (post lstrip).
@@ -105,7 +106,7 @@ def iter_covers_refs(covers_text: str) -> list["CoversRef"]:
                 refs.append(
                     CoversRef(
                         rule_id=cross.group(2).upper(),
-                        prompt_filename=cross.group(1).rsplit("/", 1)[-1],
+                        prompt_filename=cross.group(1).replace("\\", "/"),
                         line=stripped,
                     )
                 )
@@ -121,7 +122,12 @@ def iter_covers_refs(covers_text: str) -> list["CoversRef"]:
     return refs
 
 
-def rule_ids_from_covers(covers_text: str, prompt_name: str) -> set[str]:
+def rule_ids_from_covers(
+    covers_text: str,
+    prompt_name: str,
+    *,
+    allow_basename: bool = True,
+) -> set[str]:
     """Return rule IDs from ``## Covers`` scoped to ``prompt_name``.
 
     For cross-module lines, only the matching prompt's IDs are returned;
@@ -129,12 +135,18 @@ def rule_ids_from_covers(covers_text: str, prompt_name: str) -> set[str]:
     responsible for linking the story to a prompt via metadata).
     """
     ids: set[str] = set()
-    target = prompt_name.lower()
+    target = prompt_name.replace("\\", "/").lower().removeprefix("./")
     for ref in iter_covers_refs(covers_text):
         if ref.prompt_filename is None:
             ids.add(ref.rule_id)
-        elif ref.prompt_filename.lower() == target:
-            ids.add(ref.rule_id)
+        else:
+            referenced = ref.prompt_filename.lower().removeprefix("./")
+            if referenced == target or (
+                allow_basename
+                and "/" not in referenced
+                and referenced == target.rsplit("/", 1)[-1]
+            ):
+                ids.add(ref.rule_id)
     return ids
 
 _XML_SECTION_RE = re.compile(
@@ -593,9 +605,11 @@ def _parse_review_section(review_text: str) -> list[ReviewRecord]:
     def _flush() -> None:
         if current_id is None:
             return
+        raw_rule_id = fields.get("rule", "")
+        rule_match = COVERAGE_REF_RE.fullmatch(raw_rule_id.strip())
         records.append(ReviewRecord(
             finding_id=current_id,
-            rule_id=fields.get("rule", ""),
+            rule_id=rule_match.group(1).upper() if rule_match else raw_rule_id,
             status=fields.get("status", ""),
             reviewer=fields.get("reviewer", ""),
             reason=fields.get("reason", ""),
@@ -649,7 +663,11 @@ def _parse_formalization_section(formal_text: str) -> list[FormalizationRecord]:
         stripped = line.strip()
         if not stripped:
             continue
-        rule_hdr = re.match(r"^(R-?\d+|RULE-?\d+):?\s*$", stripped, re.IGNORECASE)
+        rule_hdr = re.match(
+            r"^(R-?\d+[a-zA-Z]?|RULE-?\d+[a-zA-Z]?):?\s*$",
+            stripped,
+            re.IGNORECASE,
+        )
         if rule_hdr:
             _flush()
             current_rule = rule_hdr.group(1).upper()

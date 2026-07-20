@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+import textwrap
 
 import pytest
 
@@ -11,6 +12,7 @@ from pdd.contract_check import (
     ContractResult,
     Rule,
     Waiver,
+    _EXPLICIT_ID_RE,
     _check_capabilities_modals,
     _check_coverage_entries,
     _check_duplicate_ids,
@@ -27,6 +29,7 @@ from pdd.contract_check import (
     check_prompt,
     check_stories,
 )
+from pdd.contract_ir import parse_prompt_contracts_text
 
 FIXTURES = Path(__file__).parent / "fixtures" / "contract_check"
 
@@ -78,6 +81,52 @@ class TestExtractRules:
     def test_rule_ids_are_normalised_uppercase(self):
         rules = _extract_rules("rule-003: The service MUST respond.\n")
         assert rules[0].raw_id == "RULE-003"
+
+    def test_suffixed_id_is_canonical_and_preserved(self):
+        assert _EXPLICIT_ID_RE.match("R1a - specialized rule")
+        rules = _extract_rules(
+            "R1 - Base\nThe system MUST handle base behavior.\n"
+            "R1a - Specialized\nThe system MUST handle specialized behavior.\n"
+        )
+        assert [rule.raw_id for rule in rules] == ["R1", "R1A"]
+
+    def test_suffixed_formalization_header_is_preserved(self, tmp_path):
+        prompt = tmp_path / "specialized_python.prompt"
+        text = textwrap.dedent(
+            """\
+            <contract_rules>
+            R1a - Specialized
+            The system MUST handle specialized behavior.
+            </contract_rules>
+            <formalization>
+            R1a:
+            level: executable
+            target: specialized behavior
+            predicate: result is valid
+            status: active
+            </formalization>
+            """
+        )
+        parsed = parse_prompt_contracts_text(text, prompt)
+        assert [record.rule_id for record in parsed.formalizations] == ["R1A"]
+
+    def test_suffixed_review_rule_is_normalised(self, tmp_path):
+        prompt = tmp_path / "specialized_python.prompt"
+        text = textwrap.dedent(
+            """\
+            <contract_rules>
+            R1a - Specialized
+            The system MUST handle specialized behavior.
+            </contract_rules>
+            <contract_review>
+            LLM-1:
+            rule: r1a
+            status: accepted
+            </contract_review>
+            """
+        )
+        parsed = parse_prompt_contracts_text(text, prompt)
+        assert [record.rule_id for record in parsed.reviews] == ["R1A"]
 
     def test_sequential_ids(self):
         text = "1. The system MUST accept uploads.\n2. The system MUST log requests.\n"
@@ -754,6 +803,79 @@ class TestCrossModuleCovers:
         )
         assert len(issues) == 1
         assert issues[0].code == "UNKNOWN_STORY_REF"
+        assert issues[0].rule_id == "R99"
+
+    def test_qualified_ref_uses_unique_legacy_basename_map(self):
+        text = self._story("- prompts/foo.prompt#R99: does not exist\n")
+        issues = _check_story_covers(text, {"foo.prompt": {"R1"}})
+        assert len(issues) == 1
+        assert issues[0].code == "UNKNOWN_STORY_REF"
+        assert issues[0].rule_id == "R99"
+
+    def test_qualified_ref_does_not_cross_match_other_same_basename_path(self):
+        text = self._story("- prompts/a/foo.prompt#R1: belongs to A\n")
+        issues = _check_story_covers(
+            text,
+            {
+                "prompts/b/foo.prompt": {"R2"},
+                "prompts/c/foo.prompt": {"R3"},
+            },
+        )
+        assert issues == []
+
+    def test_qualified_ref_checks_exact_path_among_duplicate_basenames(self):
+        text = self._story("- prompts/a/foo.prompt#R99: missing from A\n")
+        issues = _check_story_covers(
+            text,
+            {
+                "prompts/a/foo.prompt": {"R1"},
+                "prompts/b/foo.prompt": {"R99"},
+            },
+        )
+        assert len(issues) == 1
+        assert issues[0].code == "UNKNOWN_STORY_REF"
+
+    def test_check_stories_qualified_unknown_rule_warns_end_to_end(self, tmp_path):
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "foo.prompt").write_text(
+            "<contract_rules>\nR1 - Known\nThe system MUST work.\n</contract_rules>\n",
+            encoding="utf-8",
+        )
+        stories = tmp_path / "stories"
+        stories.mkdir()
+        (stories / "story__qualified.md").write_text(
+            "<!-- pdd-story-prompts: prompts/foo.prompt -->\n"
+            "## Covers\n- prompts/foo.prompt#R99: missing\n",
+            encoding="utf-8",
+        )
+
+        results = check_stories(stories, prompts)
+        issues = _issues_for_code(results[0], "UNKNOWN_STORY_REF")
+        assert len(issues) == 1
+        assert issues[0].rule_id == "R99"
+
+    def test_check_stories_duplicate_basenames_keep_qualified_identity(self, tmp_path):
+        prompts = tmp_path / "prompts"
+        for subdir, rule_id in (("a", "R1"), ("b", "R99")):
+            target = prompts / subdir
+            target.mkdir(parents=True)
+            (target / "foo.prompt").write_text(
+                f"<contract_rules>\n{rule_id} - Known\n"
+                "The system MUST work.\n</contract_rules>\n",
+                encoding="utf-8",
+            )
+        stories = tmp_path / "stories"
+        stories.mkdir()
+        (stories / "story__only_a.md").write_text(
+            "<!-- pdd-story-prompts: prompts/a/foo.prompt -->\n"
+            "## Covers\n- prompts/a/foo.prompt#R99: absent from A\n",
+            encoding="utf-8",
+        )
+
+        results = check_stories(stories, prompts)
+        issues = _issues_for_code(results[0], "UNKNOWN_STORY_REF")
+        assert len(issues) == 1
         assert issues[0].rule_id == "R99"
 
     def test_fixture_cross_module_story_no_issues(self):
