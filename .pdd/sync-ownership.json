@@ -3087,6 +3087,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "docs/global_sync_gate6_partition.json",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "docs/global_sync_extraction_manifest.md",
       "preauthorize_absent": true,
       "role": "human-maintained"
