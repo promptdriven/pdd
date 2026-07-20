@@ -121,6 +121,12 @@ OCI_CHECKER_RUNTIME_LAYER2_POLICY_SHA = "51ad58f28858178d02146df2ac75595277a7044
 C1_GLOBAL_SYNC_GATE6_PARTITION_PREAUTHORIZED_PATHS = {
     "docs/global_sync_gate6_partition.json",
 }
+C1_GLOBAL_SYNC_GATE6_PARTITION_PROTECTED_BASE = (
+    "a0a8da9e15447c7eb7f4faade5d0792383afa509"
+)
+C1_GLOBAL_SYNC_GATE6_PARTITION_POLICY_SHA = (
+    "57e2c4baa0cb384ebf1112e3262e08d3270ee040"
+)
 C1_GLOBAL_SYNC_GATE6_PARTITION_UNAUTHORIZED_PATHS = {
     ".pdd/global-sync/oci-checker-modules.json",
     "docs/global_sync_gate6_partition/c2.json",
@@ -2177,10 +2183,14 @@ def test_c1_global_sync_gate6_partition_composes_and_fails_closed(
         check=True,
         capture_output=True,
     )
-    policy_path = root / ".pdd" / "sync-ownership.json"
-    policy_path.write_bytes(OWNERSHIP_PATH.read_bytes())
-    _git(root, "add", ".pdd/sync-ownership.json")
-    protected_base = _commit(root, "install C1 Gate 6 partition preauthorization")
+    _git(root, "checkout", "--detach", C1_GLOBAL_SYNC_GATE6_PARTITION_POLICY_SHA)
+    protected_base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    assert protected_base == C1_GLOBAL_SYNC_GATE6_PARTITION_POLICY_SHA
+    assert subprocess.check_output(
+        ["git", "rev-parse", "HEAD^"], cwd=root, text=True
+    ).strip() == C1_GLOBAL_SYNC_GATE6_PARTITION_PROTECTED_BASE
     _git(root, "update-ref", "refs/remotes/origin/main", protected_base)
 
     exact = next(iter(C1_GLOBAL_SYNC_GATE6_PARTITION_PREAUTHORIZED_PATHS))
