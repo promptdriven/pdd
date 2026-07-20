@@ -1774,10 +1774,10 @@ ESTIMATE_REQUIREMENT_ROTATIONS = (
         ),
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": (
-            "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+            "62dc99e86d33b6059480bff6be75fa6f90461a7f9ab9abc21537b223971be34f"
         ),
         "head_policy_sha256": (
-            "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18"
+            "0173be89eb3c2de37178281fedbf7abecaf982f4b23bf808dcbf3d7791c6b6cf"
         ),
         "base_prompt_sha256": (
             "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f"
@@ -1790,23 +1790,23 @@ ESTIMATE_REQUIREMENT_ROTATIONS = (
         "prompt_path": "pdd/prompts/core/cli_python.prompt",
         "language_id": "python",
         "from_requirement_id": (
-            "CONTRACT-SHA256:f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724"
+            "CONTRACT-SHA256:53e3aac6f96865bb35aa49678da5492d2ba4b18298cf63395fde178cc63f1387"
         ),
         "to_requirement_id": (
-            "CONTRACT-SHA256:e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37"
+            "CONTRACT-SHA256:ed339507b710ba5c501c96a6024bd39ee67a1d5e85de6cde73b515d94ebe3352"
         ),
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": (
-            "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+            "62dc99e86d33b6059480bff6be75fa6f90461a7f9ab9abc21537b223971be34f"
         ),
         "head_policy_sha256": (
-            "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18"
+            "0173be89eb3c2de37178281fedbf7abecaf982f4b23bf808dcbf3d7791c6b6cf"
         ),
         "base_prompt_sha256": (
-            "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724"
+            "53e3aac6f96865bb35aa49678da5492d2ba4b18298cf63395fde178cc63f1387"
         ),
         "head_prompt_sha256": (
-            "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37"
+            "ed339507b710ba5c501c96a6024bd39ee67a1d5e85de6cde73b515d94ebe3352"
         ),
     },
 )

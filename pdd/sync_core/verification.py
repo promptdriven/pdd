@@ -323,6 +323,14 @@ _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
     ),
     _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/analysis_python.prompt",
+        "python",
+        "5aff15e367047ac59ad70b842c7a0a59cdf266526e09df274f56f7928413aafd",
+        "89c8005f5fe933af745285a6a2f28f73b79112e1b96e7af4d7b0e47cde136a16",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+        "62dc99e86d33b6059480bff6be75fa6f90461a7f9ab9abc21537b223971be34f",
+    ),
+    _exact_bootstrap_requirement_transition(
         "pdd/prompts/core/cloud_python.prompt",
         "python",
         "565f81380607551771e87da37bf291f553141513a7f8bad618d3344ee9dc15c8",
@@ -354,6 +362,22 @@ _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
     ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/user_story_tests_python.prompt",
+        "python",
+        "c63d875cc5d488b8fd9bfdd72ea015f33962d22b5cde90b9be751de55a209e32",
+        "1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+        "62dc99e86d33b6059480bff6be75fa6f90461a7f9ab9abc21537b223971be34f",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/detect_change_python.prompt",
+        "python",
+        "2987422f58c48f279289d5b739e46bd1346d596dce1ec14b67a1ac840ee33e60",
+        "d5ac2b7fceec8fa95e4711829525faa57bdf5cf01f9d44132a346bb020dcf0a9",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+        "62dc99e86d33b6059480bff6be75fa6f90461a7f9ab9abc21537b223971be34f",
+    ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS
 
@@ -370,6 +394,14 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
         "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18",
     ),
     _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/generate_python.prompt",
+        "python",
+        "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f",
+        "503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403",
+        "62dc99e86d33b6059480bff6be75fa6f90461a7f9ab9abc21537b223971be34f",
+        "0173be89eb3c2de37178281fedbf7abecaf982f4b23bf808dcbf3d7791c6b6cf",
+    ),
+    _exact_bootstrap_requirement_transition(
         "pdd/prompts/core/cli_python.prompt",
         "python",
         "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724",
@@ -378,11 +410,19 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
         "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18",
     ),
     _exact_bootstrap_requirement_transition(
+        "pdd/prompts/core/cli_python.prompt",
+        "python",
+        "53e3aac6f96865bb35aa49678da5492d2ba4b18298cf63395fde178cc63f1387",
+        "ed339507b710ba5c501c96a6024bd39ee67a1d5e85de6cde73b515d94ebe3352",
+        "62dc99e86d33b6059480bff6be75fa6f90461a7f9ab9abc21537b223971be34f",
+        "0173be89eb3c2de37178281fedbf7abecaf982f4b23bf808dcbf3d7791c6b6cf",
+    ),
+    _exact_bootstrap_requirement_transition(
         "pdd/prompts/get_test_command_python.prompt",
         "python",
         "ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
         "023045865bfe0d5920b5008986106a16e7014b35f09fc80faa43b1f0d42bcd44",
-        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+        "62dc99e86d33b6059480bff6be75fa6f90461a7f9ab9abc21537b223971be34f",
         "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
     ),
     _exact_bootstrap_requirement_transition(
@@ -390,7 +430,7 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
         "python",
         "afffd825b4495819b853fec9a86b0be7644f6fe0468d40548d8b9b2803d183ce",
         "8f4ef46cf85f9ed8e4ff28732dba2614005a1d50d6793ceb25e15608d5ffb751",
-        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+        "62dc99e86d33b6059480bff6be75fa6f90461a7f9ab9abc21537b223971be34f",
         "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
     ),
 )
@@ -1679,7 +1719,8 @@ def _load_requirement_transition_authorizations(
             manifest, base, head, policies, prompt_pair, item
         ):
             raise VerificationProfileError(
-                "candidate requirement transition lacks protected authorization"
+                "candidate requirement transition lacks protected authorization: "
+                f"{item.prompt_path}"
             )
         if (
             prior is not None

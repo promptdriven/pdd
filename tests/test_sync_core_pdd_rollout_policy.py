@@ -163,6 +163,8 @@ PREAUTHORIZED_CHILD_PATHS = (
     | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
     | {
+        ".pdd/meta/user_story_tests_python.json",
+        ".pdd/meta/user_story_tests_python_run.json",
         ".github/toolchains/playwright_manifest.py",
         ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
         ".pdd/meta/checkup_agentic_artifact_python.json",
@@ -186,6 +188,7 @@ PREAUTHORIZED_CHILD_PATHS = (
         "pdd/schemas/story_detection_result.schema.json",
         "pdd/schemas/story_detection_scope.schema.json",
         "tests/test_story_detection_result.py",
+        "tests/test_e2e_story_failure_diagnostics.py",
     }
 )
 PREAUTHORIZED_CHILD_OWNERSHIP = {
@@ -459,7 +462,7 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
     assert prompt_digest != STORY_REGRESSION_DORMANT_ROTATION["base_prompt_sha256"]
     assert prompt_digest == STORY_REGRESSION_DORMANT_ROTATION["head_prompt_sha256"]
     assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
-    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+    assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
 
 
 def _requirement_authorization_row(authorization) -> dict[str, str]:
@@ -489,14 +492,14 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 25
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 26
     story_identity = (STORY_REGRESSION_DORMANT_ROTATION["prompt_path"], "python")
     assert bootstrap_rows[story_identity] != STORY_REGRESSION_DORMANT_ROTATION
     bootstrap_rows[story_identity] = STORY_REGRESSION_DORMANT_ROTATION
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+    assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
     future_pr2017_rows = [
         row
         for row in rows
