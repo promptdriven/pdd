@@ -373,7 +373,9 @@ def scan_test_evidence(
 
 def scan_test_validation_failures(
     tests_dir: Path,
+    prompt_path: Optional[Path] = None,
     read_errors: Optional[list[str]] = None,
+    require_prompt_qualified: bool = False,
 ) -> dict[str, list[str]]:
     """
     Return rule_id -> validation failure descriptions for test files.
@@ -400,7 +402,11 @@ def scan_test_validation_failures(
                 warnings.simplefilter("ignore", SyntaxWarning)
                 ast.parse(source)
         except SyntaxError as exc:
-            referenced_rules = _rule_ids_from_test_source(source)
+            referenced_rules = _rule_ids_from_test_source(
+                source,
+                prompt_name=prompt_path.name if prompt_path is not None else "",
+                require_prompt_qualified=require_prompt_qualified,
+            )
             for rid in referenced_rules:
                 failures.setdefault(rid, [])
                 failures[rid].append(
@@ -410,8 +416,23 @@ def scan_test_validation_failures(
     return failures
 
 
-def _rule_ids_from_test_source(source: str) -> set[str]:
+def _rule_ids_from_test_source(
+    source: str,
+    *,
+    prompt_name: str = "",
+    require_prompt_qualified: bool = False,
+) -> set[str]:
     """Extract explicit rule IDs from a possibly invalid test file."""
+    if require_prompt_qualified:
+        return {
+            match.group(2).upper()
+            for match in CROSS_MODULE_REF_RE.finditer(source)
+            if (
+                match.group(1).lower().endswith("/" + prompt_name.lower())
+                or match.group(1).lower() == prompt_name.lower()
+            )
+        }
+
     ids: set[str] = set()
     for suffix in _TEST_FUNC_RE.findall(source):
         ids.add(f"R{suffix}".upper())
@@ -440,7 +461,12 @@ def _scan_test_file(  # pylint: disable=too-many-locals
             tree = ast.parse(source)
     except SyntaxError:
         # Fall back to regex-only scanning
-        _scan_test_file_regex(source, evidence)
+        _scan_test_file_regex(
+            source,
+            evidence,
+            prompt_name=prompt_name,
+            require_prompt_qualified=require_prompt_qualified,
+        )
         return
 
     # Map line number → comment text for comment scanning
@@ -501,9 +527,16 @@ def _scan_test_file(  # pylint: disable=too-many-locals
                     evidence[rid].append(fname)
 
 
-def _scan_test_file_regex(source: str, evidence: dict[str, list[str]]) -> None:
+def _scan_test_file_regex(
+    source: str,
+    evidence: dict[str, list[str]],
+    *,
+    prompt_name: str = "",
+    require_prompt_qualified: bool = False,
+) -> None:
     """Fallback regex-only scanner used when AST parsing fails."""
-    for line in source.splitlines():
+    lines = source.splitlines()
+    for line_index, line in enumerate(lines):
         stripped = line.strip()
         if not stripped.startswith("def test"):
             continue
@@ -511,6 +544,24 @@ def _scan_test_file_regex(source: str, evidence: dict[str, list[str]]) -> None:
         if not fname_match:
             continue
         fname = fname_match.group(1)
+        if require_prompt_qualified:
+            # Mirror the AST path's bounded ownership surfaces: the signature
+            # and the following line (where a one-line docstring normally sits).
+            texts = [line]
+            if line_index + 1 < len(lines):
+                texts.append(lines[line_index + 1])
+            for text in texts:
+                for match in CROSS_MODULE_REF_RE.finditer(text):
+                    ref_prompt = match.group(1).lower()
+                    if (
+                        ref_prompt.endswith("/" + prompt_name.lower())
+                        or ref_prompt == prompt_name.lower()
+                    ):
+                        rid = match.group(2).upper()
+                        evidence.setdefault(rid, [])
+                        if fname not in evidence[rid]:
+                            evidence[rid].append(fname)
+            continue
         for suffix in _TEST_FUNC_RE.findall(fname):
             rid = f"R{suffix}".upper()
             evidence.setdefault(rid, [])
@@ -864,7 +915,12 @@ def build_coverage(
     validation_failures: dict[str, list[str]] = {}
     for source in (
         scan_story_validation_failures(stories_dir, path, read_errors=read_errors),
-        scan_test_validation_failures(tests_dir, read_errors=read_errors),
+        scan_test_validation_failures(
+            tests_dir,
+            prompt_path=path,
+            read_errors=read_errors,
+            require_prompt_qualified=require_prompt_qualified_tests,
+        ),
     ):
         for rid, messages in source.items():
             validation_failures.setdefault(rid, []).extend(messages)

@@ -649,7 +649,11 @@ def _parse_formalization_section(formal_text: str) -> list[FormalizationRecord]:
         stripped = line.strip()
         if not stripped:
             continue
-        rule_hdr = re.match(r"^(R-?\d+|RULE-?\d+):?\s*$", stripped, re.IGNORECASE)
+        rule_hdr = re.match(
+            r"^(R-?\d+[a-zA-Z]?|RULE-?\d+[a-zA-Z]?):?\s*$",
+            stripped,
+            re.IGNORECASE,
+        )
         if rule_hdr:
             _flush()
             current_rule = rule_hdr.group(1).upper()

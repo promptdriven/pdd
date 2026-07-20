@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+import textwrap
 
 import pytest
 
@@ -11,6 +12,7 @@ from pdd.contract_check import (
     ContractResult,
     Rule,
     Waiver,
+    _EXPLICIT_ID_RE,
     _check_capabilities_modals,
     _check_coverage_entries,
     _check_duplicate_ids,
@@ -27,6 +29,7 @@ from pdd.contract_check import (
     check_prompt,
     check_stories,
 )
+from pdd.contract_ir import parse_prompt_contracts_text
 
 FIXTURES = Path(__file__).parent / "fixtures" / "contract_check"
 
@@ -78,6 +81,34 @@ class TestExtractRules:
     def test_rule_ids_are_normalised_uppercase(self):
         rules = _extract_rules("rule-003: The service MUST respond.\n")
         assert rules[0].raw_id == "RULE-003"
+
+    def test_suffixed_id_is_canonical_and_preserved(self):
+        assert _EXPLICIT_ID_RE.match("R1a - specialized rule")
+        rules = _extract_rules(
+            "R1 - Base\nThe system MUST handle base behavior.\n"
+            "R1a - Specialized\nThe system MUST handle specialized behavior.\n"
+        )
+        assert [rule.raw_id for rule in rules] == ["R1", "R1A"]
+
+    def test_suffixed_formalization_header_is_preserved(self, tmp_path):
+        prompt = tmp_path / "specialized_python.prompt"
+        text = textwrap.dedent(
+            """\
+            <contract_rules>
+            R1a - Specialized
+            The system MUST handle specialized behavior.
+            </contract_rules>
+            <formalization>
+            R1a:
+            level: executable
+            target: specialized behavior
+            predicate: result is valid
+            status: active
+            </formalization>
+            """
+        )
+        parsed = parse_prompt_contracts_text(text, prompt)
+        assert [record.rule_id for record in parsed.formalizations] == ["R1A"]
 
     def test_sequential_ids(self):
         text = "1. The system MUST accept uploads.\n2. The system MUST log requests.\n"

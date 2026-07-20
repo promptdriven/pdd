@@ -150,6 +150,10 @@ class TestParseRuleIds:
         ids = _parse_rule_ids(text)
         assert ids == ["R-001", "R-002"]
 
+    def test_suffixed_id_remains_distinct_from_numeric_base(self):
+        ids = _parse_rule_ids("R1 - Base\nR1a - Specialized\nR2 - Other")
+        assert ids == ["R1", "R1A", "R2"]
+
     def test_sequential_ids(self):
         text = "1. MUST do A\n2. MUST do B"
         ids = _parse_rule_ids(text)
@@ -475,6 +479,18 @@ class TestScanTestValidationFailures:
 
 
 class TestScanTestFileDirectly:
+    def test_suffixed_function_name_maps_only_to_suffixed_rule(self):
+        source = "def test_R1a_specialized():\n    pass\n"
+        evidence: dict = {}
+        _scan_test_file(source, evidence, prompt_name="", require_prompt_qualified=False)
+        assert evidence == {"R1A": ["test_R1a_specialized"]}
+
+    def test_bare_docstring_rule_mention_is_not_evidence(self):
+        source = 'def test_unrelated():\n    """Uses the R1 algorithm internally."""\n    pass\n'
+        evidence: dict = {}
+        _scan_test_file(source, evidence, prompt_name="", require_prompt_qualified=False)
+        assert evidence == {}
+
     def test_docstring_covers_tag(self):
         source = 'def test_foo():\n    """R7: validates boundary."""\n    pass\n'
         evidence: dict = {}
@@ -531,7 +547,13 @@ def test_directory_mode_requires_prompt_qualified_test_refs(tmp_path: Path) -> N
     prompts.mkdir()
     foo = _make_prompt(
         prompts,
-        "<contract_rules>\nR1 - Foo\nThe system MUST foo.\n</contract_rules>\n",
+        (
+            "<contract_rules>\n"
+            "R1 - Foo\nThe system MUST foo.\n"
+            "R1a - Specialized foo\nThe system MUST specialize foo.\n"
+            "R2 - Other foo\nThe system MUST do other foo.\n"
+            "</contract_rules>\n"
+        ),
         name="foo_python.prompt",
     )
     _make_prompt(
@@ -545,15 +567,31 @@ def test_directory_mode_requires_prompt_qualified_test_refs(tmp_path: Path) -> N
         tests_dir,
         """\
         def test_only_foo():
-            \"\"\"foo_python.prompt#R1: covers foo rule\"\"\"
+            \"\"\"foo_python.prompt#R1a: covers specialized foo rule\"\"\"
             assert True
         """,
         name="test_foo.py",
     )
+    _make_test_file(
+        tests_dir,
+        """\
+        def test_R1_unrelated_module_behavior():
+            assert True
+
+        def test_R2_unrelated_module_behavior():
+            assert True
+        """,
+        name="test_unrelated.py",
+    )
 
     results = build_coverage_directory(prompts, stories_dir=tmp_path / "none", tests_dir=tests_dir)
     by_name = {r.path.name: r for r in results}
-    assert by_name[foo.name].rules[0].status == STATUS_TEST_ONLY
+    foo_rules = {rule.rule_id: rule for rule in by_name[foo.name].rules}
+    assert list(foo_rules) == ["R1", "R1A", "R2"]
+    assert foo_rules["R1"].status == STATUS_UNCHECKED
+    assert foo_rules["R2"].status == STATUS_UNCHECKED
+    assert foo_rules["R1A"].status == STATUS_TEST_ONLY
+    assert foo_rules["R1A"].tests == ["test_only_foo"]
     assert by_name["bar_python.prompt"].rules[0].status == STATUS_UNCHECKED
 
 

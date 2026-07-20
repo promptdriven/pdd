@@ -78,8 +78,8 @@ _MODAL_PATTERN = re.compile(
 )
 
 # Canonical explicit IDs (both R1 and R-001 forms supported):
-#   R1  R-1  R-001  RULE1  RULE-001
-_EXPLICIT_ID_RE = re.compile(r"^(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
+#   R1  R1a  R-1  R-001B  RULE1  RULE-001a
+_EXPLICIT_ID_RE = re.compile(r"^(R-?\d+[a-zA-Z]?|RULE-?\d+[a-zA-Z]?)\b", re.IGNORECASE)
 
 # Candidate "looks like an ID" but malformed:  RR-01  R_001  RULE_003
 _CANDIDATE_ID_RE = re.compile(r"^([A-Z]{1,5}[-_]\w+)\b", re.IGNORECASE)

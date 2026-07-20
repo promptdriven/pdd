@@ -4128,6 +4128,49 @@ def test_extract_contract_summary_with_story(tmp_path):
     assert summary["unchecked"] == []
 
 
+def test_extract_contract_summary_requires_prompt_owned_test_evidence(tmp_path):
+    """Generic test_R1 names in another module must not cover this prompt."""
+    project_root, prompts_dir, _ = _contract_summary_fixture(tmp_path)
+    prompt_path = prompts_dir / "refund_python.prompt"
+    prompt_path.write_text(
+        textwrap.dedent(
+            """\
+            <contract_rules>
+            R1 - Refund cap
+            The system MUST cap refunds.
+            R1a - Specialized refund
+            The system MUST handle specialized refunds.
+            R2 - Audit
+            The system MUST audit refunds.
+            </contract_rules>
+            """
+        ),
+        encoding="utf-8",
+    )
+    tests_dir = project_root / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_other_module.py").write_text(
+        "def test_R1_other_module(:\n    pass\n\n"
+        "def test_R2_other_module():\n    pass\n",
+        encoding="utf-8",
+    )
+    (tests_dir / "test_refund.py").write_text(
+        "def test_specialized_refund():\n"
+        "    \"\"\"refund_python.prompt#R1a: covers specialized refund.\"\"\"\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+
+    summary, warnings = _extract_contract_summary(prompt_path, project_root)
+
+    assert warnings == []
+    assert summary["rules"] == ["R1", "R1A", "R2"]
+    assert summary["rules_detail"]["R1"]["tests"] == []
+    assert summary["rules_detail"]["R1"]["failures"] == []
+    assert summary["rules_detail"]["R2"]["tests"] == []
+    assert summary["rules_detail"]["R1A"]["tests"] == ["test_specialized_refund"]
+
+
 def test_extract_contract_summary_fresh_and_stale_evidence(tmp_path):
     """Evidence manifest SHA match yields fresh; mismatch yields stale."""
     project_root, prompts_dir, _ = _contract_summary_fixture(tmp_path)

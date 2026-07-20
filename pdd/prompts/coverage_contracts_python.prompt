@@ -8,7 +8,7 @@
       {"name": "CoverageResult", "kind": "dataclass"}
     ],
     "functions": [
-      {"name": "build_coverage", "signature": "(path: Path, stories_dir=None, tests_dir=None, global_story_registry=None) -> CoverageResult", "returns": "CoverageResult"},
+      {"name": "build_coverage", "signature": "(path: Path, stories_dir=None, tests_dir=None, *, prompt_text=None, require_prompt_qualified_tests=False, story_map=None, global_story_registry=None) -> CoverageResult", "returns": "CoverageResult"},
       {"name": "build_coverage_directory", "signature": "(directory: Path, stories_dir=None, tests_dir=None) -> list[CoverageResult]", "returns": "list[CoverageResult]"}
     ]
   }
@@ -28,13 +28,18 @@
   `<!-- pdd-story-prompts: ... -->` metadata and their `## Covers` sections.
 - Read test evidence from recursively discovered `test_*.py` files only when a
   test name, nearby comment, or first docstring line explicitly references a rule ID.
+- Recognize canonical rule IDs with an optional single ASCII letter suffix in
+  declarations and all explicit test-evidence forms. Preserve `R1` and `R1a` as
+  distinct normalized IDs (`R1` and `R1A`). A docstring reference is explicit
+  only when the ID is followed by `:` or `-`; incidental prose such as "uses R1"
+  MUST NOT count as evidence.
 - Read waivers from `<waivers>` blocks and `WAIVED W<N>` entries in `<coverage>`.
 - Classify rules as `checked`, `story-only`, `test-only`, `unchecked`, `waived`,
   or `failed`, applying priority `waived > failed > checked > story-only >
   test-only > unchecked`.
 - Treat prompts without `<contract_rules>` as legacy-safe: return no rules and no error.
 - Directory scans must recurse over `*.prompt` files and skip `*_LLM.prompt`.
-- Expose `build_coverage(path, stories_dir=None, tests_dir=None, global_story_registry: Optional[set[str]] = None) -> CoverageResult`
+- Expose `build_coverage(path, stories_dir=None, tests_dir=None, *, prompt_text=None, require_prompt_qualified_tests=False, story_map=None, global_story_registry: Optional[set[str]] = None) -> CoverageResult`
   and `build_coverage_directory(directory, stories_dir=None, tests_dir=None) -> list[CoverageResult]`.
 - Surface a story-keyed `has_regression_test` dimension per discovered user
   story: `true` when at least one collected pytest test claims the story via
@@ -111,6 +116,20 @@ R9 - Single-file mode bypasses deduplication
 When `build_coverage` is called directly without a `global_story_registry`
 (i.e. `global_story_registry` is `None`), deduplication MUST be skipped entirely.
 This preserves backward compatibility for existing callers.
+
+R10 - Suffixed rule IDs remain distinct
+The analyzer MUST retain an optional single-letter rule suffix across declaration
+parsing and test evidence. For example, `R1` and `R1a` are separate rules and
+`test_R1a_*` is evidence for `R1A`, never `R1`.
+
+R11 - Directory evidence proves prompt ownership
+Directory scans MUST require test evidence to name both the prompt and rule using
+`<prompt-path>#<rule-id>`. A generic repository test name such as `test_R1_*` MUST
+NOT be attributed to every prompt that declares `R1`. Direct single-file calls
+retain their backward-compatible unqualified behavior unless the caller sets
+`require_prompt_qualified_tests=True`. Apply the same ownership rule to the
+syntax-error fallback scanner and validation failures; malformed unrelated tests
+MUST NOT add evidence or mark a local rule failed.
 </contract_rules>
 
 <acceptance_tests>
@@ -125,4 +144,7 @@ This preserves backward compatibility for existing callers.
 - `test_build_coverage_directory_deduplicates_cross_unit_story`: a cross-unit story linked to two prompts is counted once globally; the second prompt's rule does not gain independent coverage from the already-counted story.
 - `test_build_coverage_single_file_no_deduplication`: calling `build_coverage` directly (no `global_story_registry`) counts the story normally without deduplication.
 - `test_build_coverage_directory_story_slug_key`: deduplication uses the story filename stem after `story__` as the slug key, not the full path.
+- A two-prompt regression fixture MUST prove that generic `test_R1_*` and
+  `test_R2_*` functions do not bleed into either prompt during directory scans,
+  while `module_a.prompt#R1a` is attributed only to module A.
 </acceptance_tests>

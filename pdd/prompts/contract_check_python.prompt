@@ -15,8 +15,13 @@
   - `check_directory(directory, *, strict=False) -> List[ContractResult]`
   - `check_stories(stories_dir, prompts_dir, *, strict=False) -> List[ContractResult]`
 - Parse contract sections via `pdd/contract_ir.py` (do not re-implement parsing here).
+- Treat `R<N>`, `R-<N>`, `RULE<N>`, and `RULE-<N>` with an optional single
+  ASCII letter suffix as canonical explicit IDs everywhere this module validates
+  an ID. Normalize the suffix to uppercase and keep `R1` distinct from `R1A`.
 - MUST-NOT coverage check must only treat explicit leading `<coverage>` entries as coverage.
 - Provide stable JSON-serializable results (`as_dict()`).
 
 % Deliverables
 - Code: `pdd/contract_check.py`
+- Regression coverage MUST show that `R1a` is accepted by both the shared parser
+  and this module's malformed-ID validation rather than being dropped or rejected.
