@@ -39,9 +39,85 @@ PR [#2228](https://github.com/promptdriven/pdd/pull/2228) reviewed exact head `a
 
 PR [#2229](https://github.com/promptdriven/pdd/pull/2229) first reviewed `be90cbdc7e5280eae19db02d041fd05467315b11`; Unit [run 29705890972/job 88242687030](https://github.com/promptdriven/pdd/actions/runs/29705890972/job/88242687030) then failed only two `_VITEST_RUNTIME_SOURCE` reserved-prefix assertions. A bounded correction received Sol HIGH approval at final head `ff95e9d31f8029f8f9cb1c55edb1ec328b006c16`; its affected local suite reported 358 passed/59 skipped and pylint 10/10. All 12 final hosted checks were green, including Unit [29708379126/job 88248917137](https://github.com/promptdriven/pdd/actions/runs/29708379126/job/88248917137), [Package job 88248917126](https://github.com/promptdriven/pdd/actions/runs/29708379126/job/88248917126), [CodeQL 29708378251](https://github.com/promptdriven/pdd/actions/runs/29708378251), [heal 29708378649/job 88248915909](https://github.com/promptdriven/pdd/actions/runs/29708378649/job/88248915909), and [auto-heal 88248922089](https://github.com/promptdriven/pdd/runs/88248922089). It squash-merged at `2026-07-20T00:17:55Z`. The deterministic wheel SHA-256 `2f6bb048ef6eb3c8486f2e2df5c62066b9907b89dcc55a76bab0993556424438` is strictly local candidate evidence, not a released digest.
 
-This closes only #2229's implemented/local/reviewed/hosted/merged package-boundary sublayer. Gate 2 remains in progress; released/deployed/certified evidence, OCI, and protected pins remain pending. No full Gate 2 lifecycle state may be promoted without a machine-verifiable bundle. PR [#2230](https://github.com/promptdriven/pdd/pull/2230) is reviewed/local-only at `842b73e93d0d2e275726d0755f6b0b3347a13488`; its initial and rerun GitHub 503/504 failures are external-service evidence, not product-pass evidence, and it is neither hosted-green nor merged.
+This accepts #2229 as delivered Layer 1 within 24 hours, closing only its package-boundary sublayer. Gate 2 remains in progress; release, deploy, OCI, protected-pin, and certificate claims remain false. PR [#2230](https://github.com/promptdriven/pdd/pull/2230) is reviewed/local-only at `842b73e93d0d2e275726d0755f6b0b3347a13488`; its initial and rerun GitHub 503/504 failures are external-service evidence, not product-pass evidence, and it is neither hosted-green nor merged.
 
-The one under-24-hour deliverable is `gate2-checker-release-workflow-reviewed-pr`: produce one exact-head checker-release-workflow implementation and reviewed PR artifact. The canonical Gate 2 objective is separately `gate2-protected-checker-wheel-publication`: protected publication of the standalone wheel with its exact released digest. Publication is the subsequent pending evidence transition; OCI and protected pins remain later release-required deltas.
+### Ratified live scheduler
+
+`live_deliverables` is the only live scheduling surface and has exactly two ordered slots.
+
+1. **A2 — sealed OCI Layer 2** is in progress under the ratified
+   three-working-day governance timebox. Its under-24-hour deliverable is the
+   literal path-set preauthorization/review PR for exactly
+   `.github/workflows/oci-checker-runtime.yml`,
+   `.pdd/global-sync/oci-checker-runtime.json`, `ci/sync-checker/Dockerfile`,
+   `pdd/sync_core/oci_runtime.py`, and `tests/test_sync_core_oci_runtime.py`; that PR changes only
+   `.pdd/sync-ownership.json` and `tests/test_sync_core_pdd_rollout_policy.py`
+   and does not claim OCI is released. Its fallback intent is verbatim: **on
+   timebox overrun, pin runner image plus system git identities in the pin lane,
+   release wheel + exact digest, and defer OCI to a hardening PR**. OCI cannot
+   be promoted until its provenance binds the exact released wheel digest; the
+   local candidate digest is not release evidence.
+2. **C1 — Gate 6 partition** is in progress. Its under-24-hour deliverable is
+   `docs/global_sync_gate6_partition.json`, only after a protected exact
+   absent-path preauthorization/review prerequisite for that literal path is
+   merged. Its only output classes are `derivable-from-existing-tests`,
+   `needs-new-tests`, and `decommission-candidate`. A derivable row requires
+   explicit protected profile/artifact-to-node evidence and collected pytest
+   nodes; a decommission candidate requires protected ownership, tombstone, and
+   rule evidence. Every other human-only unit is `needs-new-tests`: no
+   qualifying obligation can be mechanically derived from protected
+   registry+collection, not a claim that no existing test happens to cover it.
+   The artifact binds protected profile source
+   `2cacc91f90759ff45f1ad976da3b773e1a5f07a5`, its digest
+   `56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6`,
+   protected main `e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347`, the exact
+   pytest collection command/tool identity, collected node IDs and their digest,
+   and exactly-once accounting for all 467 human-only units. Queue C2's external
+   append-only anchor, then C3's minimal separately released no-shared-code
+   reference verifier and documented schema; both are required before the
+   seven-night streak.
+
+Gate 1 remains `in-progress`. Its historical #2214 predicate and promotion
+bundle are preserved; the remaining live machine sub-predicate is an executable
+extraction/net-diff verifier proving
+`complete_diagnostic_net_diff_accounted`,
+`every_changed_path_has_exactly_one_classification`,
+`already_merged_prerequisites_proven_at_protected_main`,
+`release_required_deltas_mapped_to_fresh_main_prs`,
+`excluded_diagnostics_absent_from_release_prs`, and
+`complete_release_net_diff_reviewed`. The required result must be an exact-SHA
+artifact URL binding [diagnostic base `39776aa9bb027c638812a01b8dabbe03cab92f64`](https://github.com/promptdriven/pdd/commit/39776aa9bb027c638812a01b8dabbe03cab92f64), [frozen diagnostic head `d334266680881cbda59de4ecd4df967c92159fa7`](https://github.com/promptdriven/pdd/commit/d334266680881cbda59de4ecd4df967c92159fa7), and [protected main `e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347`](https://github.com/promptdriven/pdd/commit/e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347). No such result artifact exists yet; `local_green`, `independently_reviewed`, `released`, `deployed`, and `certified` remain unclosed, and mapping alone cannot pass Gate 1.
+
+### Retained Gate 2 branches and diagnostic input
+
+- `origin/feat/global-sync-gate2-release-pin` contains
+  `0ca5eb173a31c2ed2b46d7db0feeb88c62645907`; its merged prerequisite
+  ancestors are #2223 `9c1dc6f2fb1b621ed5320f407f5ae6a2c5299214` and #2224
+  `35e903cb5ed103980affbdf2a64ef7a80a66ca4a`. Its branch-only release/pin
+  work is folded into the pin lane, and its remote ref is retained/archive; it
+  is not a release vehicle.
+- `origin/feat/global-sync-gate2-runtime-closure` contains
+  `862f725d9d9f41b5509dbbcba61d7789f49ad74b`. Its merged ancestors are
+  retained, its branch-only work is folded into sealed OCI Layer 2, and its
+  remote ref is archived; it is not a release vehicle.
+- `origin/feat/global-sync-gate2-target-lock` contains
+  `0bae19c2fb9575d8b8edccaeee3c5d9420e00e9f`. #2224 is its merged
+  preauthorization prerequisite; `d6b9c99b9fcff250eabd819ceac7e7ccf27b4d30`,
+  `09015bcc79c00575262e8c23d9b14693ae8be80f`,
+  `d060da1cc1d6c81abf0c42cf5df69ac81d79a75e`, and
+  `0bae19c2fb9575d8b8edccaeee3c5d9420e00e9f` are archived diagnostic-only
+  attempts. Its remote ref is retained and is not a release vehicle.
+
+The partial runtime-closure worktree
+`/private/tmp/pdd-global-sync-checker-release-workflow-v2`, based on
+`842b73e93d0d2e275726d0755f6b0b3347a13488`, remains uncommitted
+diagnostic/folded input only. Its tracked diff SHA-256 is
+`882cd4808002be36900ed875a4fce25e40bc48debbb124786e10953de8b51b8d` and
+ignored lock SHA-256 is
+`485cc8a742ae72400f489cbb41be3d8703143de35d10fce876546d60d6c1cefa`.
+Twenty-five released-checker tests and the 10-wheel Linux cp312 lock probe
+passed, but full validation is absent. It is never marked implemented, reviewed,
+or released.
 
 ### Historical critical-path snapshot (2026-07-18)
 
@@ -99,16 +175,15 @@ release state.
    generated at migration time rather than assumed.
 5. Gate 1 PR #2214 merged its reviewed adapter-demand artifact and extraction
    manifest as `63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee`, but remains in
-   progress at global score `0/10`. PR #2229 subsequently closed only the Gate 2
-   package-boundary sublayer on protected main. The canonical next blocker is
-   `gate2-protected-checker-wheel-publication`: publish the standalone wheel
-   through the protected path with its exact released digest. The one under-24-hour
-   deliverable is the controllable precursor `gate2-checker-release-workflow-reviewed-pr`,
-   an exact-head checker-release-workflow implementation and reviewed PR artifact.
-   Publication remains the subsequent pending evidence transition. OCI and
-   protected pin wiring follow strictly. Any early certificate is explicitly
-   narrower and cannot satisfy the final global predicate until all managed units
-   and both repositories meet the gate-10 denominator.
+   progress at global score `0/10`. #2229 subsequently delivered only Gate 2
+   Layer 1 package-boundary evidence within 24 hours. The two live slots now
+   control progress: A2 is the sealed OCI Layer 2 path-set preauthorization/review
+   PR under its three-working-day timebox, and C1 is the preauthorized 467-unit
+   Gate 6 partition. OCI still requires provenance bound to the exact released
+   wheel digest; release, protected pins, and every certificate claim remain
+   pending. Any early certificate is explicitly narrower and cannot satisfy the
+   final global predicate until all managed units and both repositories meet the
+   gate-10 denominator.
 
 #### Historical attempt ledger
 
@@ -746,9 +821,10 @@ The 2026-07-18 execution ratification fixes the immediate sequencing:
 - Define the ledger generator schema before moving attempt history out of this
   plan. The future design separates generated current state from append-only
   historical evidence; an arbitrary line count cannot remove evidence.
-- The three-working-day and same-day-deliverable rules are governance discipline,
-  not certificate predicates. Every gate initializes `last_state_change` at this
-  ratified baseline and updates it only on an evidence-backed state transition.
+- The three-working-day and two-slot `live_deliverables` rules are governance
+  discipline, not certificate predicates. Every gate initializes
+  `last_state_change` at this ratified baseline and updates it only on an
+  evidence-backed state transition.
 
 For the full global claim, the certificate predicate is non-negotiable:
 `machine_verified_units == expected_managed_units`, machine verification-profile
@@ -764,16 +840,15 @@ The deterministic ledger generator named in the YAML and its protected drift
 check are merged and green, but its lifecycle status remains in progress until
 the full evidence model is satisfied. They render the canonical ledger from an
 explicit versioned YAML source and fail closed on duplicate keys, malformed
-schema/state rows, or byte drift. Every gate-affecting protected merge updates
-the reviewed source and regenerates the output. The canonical blocker
-`gate2-protected-checker-wheel-publication` requires protected standalone-wheel
-publication with the exact released digest. The separate one-artifact,
-under-24-hour deliverable is `gate2-checker-release-workflow-reviewed-pr`: one
-exact-head checker-release-workflow implementation and reviewed PR artifact.
-Publication remains the subsequent pending evidence transition; OCI and protected
-pin wiring follow strictly. This does not authorize a certificate claim. The named
-`extraction_manifest_verifier` is planned future evidence only; it is not
-implemented and does not prove gate 1.
+schema/state rows, byte drift, legacy live-slot fields, or a live schedule that
+does not contain exactly ordered A2 and C1 slots. Every gate-affecting protected
+merge updates the reviewed source and regenerates the output. A2's current
+under-24-hour work is only the literal OCI workflow path-set
+preauthorization/review PR; it does not claim OCI release. C1's concurrent
+under-24-hour work is the exact Gate 6 partition artifact after its protected
+absent-path prerequisite. Release, deployment, and certificate evidence remain
+pending. The named `extraction_manifest_verifier` is required live Gate 1
+evidence, not an implemented verifier or a Gate 1 pass.
 
 PR #1995 is frozen at remote head
 `d334266680881cbda59de4ecd4df967c92159fa7`. Its hosted Stage A artifacts and
@@ -813,10 +888,18 @@ sets are disjoint:
 - **C, certification data:** build the PDD demand matrix and ledger generator,
   then build PDD/pdd_cloud inventories, machine profiles, and evidence without
   touching A or B production modules. Once profile generation exists and before
-  gate 5 completes, partition all 467 current human-only PDD units into:
-  obligations derivable from existing tests, units requiring new tests, and
-  candidates for protected expected-managed narrowing with named exclusions.
-  Surface that partition for a human scoping decision before gate 6 begins.
+  gate 5 completes, C1 produces `docs/global_sync_gate6_partition.json` after
+  its exact protected absent-path preauthorization. It accounts for every one of
+  the 467 current human-only PDD units exactly once using only
+  `derivable-from-existing-tests`, `needs-new-tests`, or
+  `decommission-candidate`. Derivable requires explicit protected
+  profile/artifact-to-node evidence and collected nodes; decommission requires
+  protected ownership, tombstone, and rule evidence. Every other human-only
+  unit is `needs-new-tests`, meaning no qualifying obligation can be
+  mechanically derived from protected registry+collection, not that no existing
+  test happens to cover it. C2's external append-only anchor and C3's minimal,
+  separately released no-shared-code reference verifier/documented schema both
+  precede the seven-night streak.
 
 Local work may overlap in time, but B cannot close protected/released evidence
 before A, and C cannot claim trusted current coverage before the released checker
@@ -840,9 +923,13 @@ released checker digest: sha256:<digest> | pending
 protected lifecycle rows: passed/required
 pdd_cloud canary: pass | fail | pending
 qualifying nights/7: N/7
-single next blocker: <one evidence gate>
 gate last_state_change: 1=YYYY-MM-DD ... 10=YYYY-MM-DD
-same-day deliverable: <one concrete artifact or PR>
+live deliverable slot 1 [A2] status: in-progress
+slot 1 blocker: sealed OCI layer 2 under the ratified 3-working-day timebox
+slot 1 under-24h deliverable: literal OCI layer path-set preauthorization/review PR
+live deliverable slot 2 [C1] status: in-progress
+slot 2 blocker: protected 467-unit Gate 6 partition accounting
+slot 2 under-24h deliverable: docs/global_sync_gate6_partition.json after exact preauthorization
 ```
 
 The profile denominator in each update is the exact protected target SHA. A
@@ -2651,21 +2738,25 @@ predicate requires `candidate_controlled_verifier_inputs == 0`.
    The global score remains `0/10` and no release or certificate is claimed.
 2. Treat #2223 and #2224 as merged prerequisites only, preserve closed,
    unmerged #2225 as diagnostic evidence, and retain #2228 as only the literal
-   five-path preauthorization. #2229 is landed on protected main only as the
-   package boundary; it is not a checker release or Gate 2 promotion. The single
-   canonical blocker is `gate2-protected-checker-wheel-publication`: publish the
-   standalone wheel through its protected path with the exact released digest.
-   The one under-24-hour deliverable is
-   `gate2-checker-release-workflow-reviewed-pr`, an exact-head workflow
-   implementation and reviewed PR artifact. #2230 is reviewed/local-only; its
-   GitHub 503/504 outcomes do not prove product success.
-3. Only after protected wheel publication may the sealed Git-capable OCI runtime
-   and protected checker/OCI/workflow expectation pins be pursued. Certificate A
-   and Certificate B intent is unchanged; neither is claimed by these layers.
-4. Before gate 5 completes, generate the 467-unit Gate 6 partition and obtain
-   the required human scoping decision. Where collection cannot prove
-   derivability or decommission, classify the row `pending_protected_rule` rather
-   than inferring either result.
+   five-path preauthorization. #2229 is accepted only as delivered Layer 1
+   package boundary; it is not a checker release or Gate 2 promotion. The live
+   A2 under-24-hour deliverable is the literal OCI layer 2 path-set
+   preauthorization/review PR for exactly `.github/workflows/oci-checker-runtime.yml`,
+   `.pdd/global-sync/oci-checker-runtime.json`, `ci/sync-checker/Dockerfile`,
+   `pdd/sync_core/oci_runtime.py`, and `tests/test_sync_core_oci_runtime.py`;
+   it makes no OCI release claim. #2230 is reviewed/local-only, and its GitHub
+   503/504 outcomes do not prove product success.
+3. OCI may be promoted only after provenance binds the exact released wheel
+   digest. If the A2 timebox overruns, pin the runner image plus system git
+   identities in the pin lane, release the wheel + exact digest, and defer OCI
+   to a hardening PR. Certificate A and Certificate B remain unclaimed.
+4. Before gate 5 completes, C1 generates the preauthorized
+   `docs/global_sync_gate6_partition.json`, binding the protected profile
+   source/digest, protected main, pytest collection command/tool identity, node
+   IDs/digest, and exactly-once accounting for all 467 human-only units. Its only
+   classes are `derivable-from-existing-tests`, `needs-new-tests`, and
+   `decommission-candidate`; then complete C2 and C3 before the seven-night
+   streak.
 5. Future preauthorization may batch only a fully designed literal exact path
    set. It may never provide speculative, wildcard, or cross-gate authority. The
    old docs worktree was retired only after its preservation audit; remote archival

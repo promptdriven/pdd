@@ -10,18 +10,21 @@ history. Protected main is `e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347`.
 | Disposition | Evidence and extraction rule |
 | --- | --- |
 | `already-merged-prerequisite` | [#2228](https://github.com/promptdriven/pdd/pull/2228), reviewed at exact head `aa32884363e383745e878770a247e4897977de59`, had all 12 checks green, and merged as `c2575db6cfd3f5144081bb517724043a057d0f9c`. Exact-head evidence includes Unit [29702650352/job 88234226053](https://github.com/promptdriven/pdd/actions/runs/29702650352/job/88234226053), [Package job 88234226047](https://github.com/promptdriven/pdd/actions/runs/29702650352/job/88234226047), [CodeQL 29702649361](https://github.com/promptdriven/pdd/actions/runs/29702649361), [heal 29702650465/job 88234226580](https://github.com/promptdriven/pdd/actions/runs/29702650465/job/88234226580), and [auto-heal 88234234171](https://github.com/promptdriven/pdd/runs/88234234171). It preauthorizes only the literal five package-boundary paths: the standalone-checker module manifest, `standalone_package.py`, `checker_cli.py`, and their two tests. It is neither a release nor a pin. |
-| `landed-package-boundary` | [#2229](https://github.com/promptdriven/pdd/pull/2229) landed the standalone non-`pdd` checker distribution with checker-only dependencies, strict lock/`RECORD` validation, and the exact z3 compatible-wheel regression. Prior reviewed head `be90cbdc7e5280eae19db02d041fd05467315b11` had only the two `_VITEST_RUNTIME_SOURCE` reserved-prefix assertions fail in Unit [29705890972/job 88242687030](https://github.com/promptdriven/pdd/actions/runs/29705890972/job/88242687030); a bounded correction received Sol HIGH approval at `ff95e9d31f8029f8f9cb1c55edb1ec328b006c16`. The final 12 checks were green and the protected squash merge is `e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347` at `2026-07-20T00:17:55Z`. This is package-boundary evidence only, not release evidence. |
-| `release-required-delta` | First produce one exact-head checker-release-workflow implementation and reviewed PR artifact; this is the sole under-24-hour deliverable. Then, as a separate pending evidence transition, publish the standalone wheel through the protected path and record its exact released digest. PR [#2230](https://github.com/promptdriven/pdd/pull/2230) is reviewed/local preauthorization evidence only at `842b73e93d0d2e275726d0755f6b0b3347a13488`; its initial and rerun GitHub 503/504 failures are external-service evidence, not product-pass evidence. OCI and protected pins remain later release-required deltas. |
+| `landed-package-boundary` | [#2229](https://github.com/promptdriven/pdd/pull/2229) delivered Layer 1 within 24 hours: the standalone non-`pdd` checker distribution with checker-only dependencies, strict lock/`RECORD` validation, and the exact z3 compatible-wheel regression. Prior reviewed head `be90cbdc7e5280eae19db02d041fd05467315b11` had only the two `_VITEST_RUNTIME_SOURCE` reserved-prefix assertions fail in Unit [29705890972/job 88242687030](https://github.com/promptdriven/pdd/actions/runs/29705890972/job/88242687030); a bounded correction received Sol HIGH approval at `ff95e9d31f8029f8f9cb1c55edb1ec328b006c16`. The final 12 checks were green and the protected squash merge is `e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347` at `2026-07-20T00:17:55Z`. This is package-boundary evidence only, not a Gate 2, wheel-release, OCI-release, pin, deployment, or certificate transition. |
+| `release-required-delta` | A2 is sealed OCI Layer 2 under the ratified three-working-day governance timebox. Its only under-24-hour deliverable is the literal OCI path-set preauthorization/review PR for exactly `.github/workflows/oci-checker-runtime.yml`, `.pdd/global-sync/oci-checker-runtime.json`, `ci/sync-checker/Dockerfile`, `pdd/sync_core/oci_runtime.py`, and `tests/test_sync_core_oci_runtime.py`, with the review PR changing only `.pdd/sync-ownership.json` and `tests/test_sync_core_pdd_rollout_policy.py`; it is not an OCI release claim. On timebox overrun, pin runner image plus system git identities in the pin lane, release wheel + exact digest, and defer OCI to a hardening PR. PR [#2230](https://github.com/promptdriven/pdd/pull/2230) is reviewed/local preauthorization evidence only at `842b73e93d0d2e275726d0755f6b0b3347a13488`; its initial and rerun GitHub 503/504 failures are external-service evidence, not product-pass evidence. |
 | `excluded-diagnostic` | Keep #2225 workflow/bootstrap commits and hosted lanes as diagnostic evidence only. Head `09015bcc79c00575262e8c23d9b14693ae8be80f` ended in a build-version failure at [job 88224039194](https://github.com/promptdriven/pdd/actions/runs/29698754085/job/88224039194); head `d060da1cc1d6c81abf0c42cf5df69ac81d79a75e` ended in a read-only build-source failure at [job 88224395133](https://github.com/promptdriven/pdd/actions/runs/29698879393/job/88224395133); and closed head `0bae19c2fb9575d8b8edccaeee3c5d9420e00e9f` ended in the eager `pdd.__init__` → `update_main.py` → GitPython/no-git failure at [job 88224752678](https://github.com/promptdriven/pdd/actions/runs/29699017734/job/88224752678). No artifact upload or target lock completed, and `GIT_PYTHON_REFRESH=quiet` is rejected. |
 
-The standalone checker boundary is landed on protected main. The next same-day,
-under-24-hour deliverable is one exact-head checker-release-workflow
-implementation and reviewed PR artifact. Protected wheel publication and its
-exact released digest are the subsequent pending evidence transition. This work
-excludes `pdd/__init__` refactoring, OCI, certificates, and scenario expansion.
-A later sealed OCI layer supplies Git/system closure; a final protected pin-wiring
-layer binds released checker/OCI digests and prevents candidate control of
-checker, scenarios, PATH, wheelhouse, expectations, or verifier inputs.
+The standalone checker boundary is delivered Layer 1 on protected main, not Gate
+2. A2's current under-24-hour work is only the literal OCI path-set
+preauthorization/review PR; it is neither an OCI implementation nor an OCI
+release. C1 concurrently produces `docs/global_sync_gate6_partition.json` after
+its exact protected absent-path preauthorization. The artifact must bind the
+protected profile source SHA/digest, protected main, pytest collection
+command/tool identity, node IDs/digest, and exactly-once accounting of all 467
+human-only units with only `derivable-from-existing-tests`, `needs-new-tests`,
+or `decommission-candidate`. C2's external append-only anchor and C3's minimal
+separately released no-shared-code reference verifier/documented schema are both
+required before the seven-night streak.
 
 The OCI layer is cryptographically downstream of the release: provenance binds
 the exact released checker wheel digest and exact checker dependency-lock digest
@@ -32,6 +35,41 @@ interpreter and installed entrypoint with `-I -S`; it cannot resolve a module
 from candidate checkout or CWD. Signed evidence carries wheel, lock, image,
 SBOM/dpkg inventory, interpreter, and entrypoint identities. These are future
 acceptance contracts, not executable commands or completed Gate 2 evidence.
+OCI cannot be promoted until that provenance binds the exact released wheel
+digest; the local candidate wheel digest is not release evidence.
+
+## Live Gate 1 and retained Gate 2 evidence
+
+Gate 1 remains `in-progress` at `0/10`. Its historical #2214 predicate and
+bundle remain digest-bound; the remaining current-main sub-predicate is an
+executable extraction/net-diff verifier with exact-SHA artifact URLs binding
+`39776aa9bb027c638812a01b8dabbe03cab92f64`,
+`d334266680881cbda59de4ecd4df967c92159fa7`, and
+`e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347`. It must prove
+`complete_diagnostic_net_diff_accounted`,
+`every_changed_path_has_exactly_one_classification`,
+`already_merged_prerequisites_proven_at_protected_main`,
+`release_required_deltas_mapped_to_fresh_main_prs`,
+`excluded_diagnostics_absent_from_release_prs`, and
+`complete_release_net_diff_reviewed`. No result artifact exists yet;
+`local_green`, `independently_reviewed`, `released`, `deployed`, and `certified`
+remain unclosed, so mapping alone cannot pass Gate 1.
+
+| Retained ref | Exact disposition |
+| --- | --- |
+| `origin/feat/global-sync-gate2-release-pin` | Contains `0ca5eb173a31c2ed2b46d7db0feeb88c62645907`; merged prerequisite ancestors #2223 `9c1dc6f2fb1b621ed5320f407f5ae6a2c5299214` and #2224 `35e903cb5ed103980affbdf2a64ef7a80a66ca4a` remain retained. Branch-only release/pin work is folded into the pin lane; retain/archive the ref. It is not a release vehicle. |
+| `origin/feat/global-sync-gate2-runtime-closure` | Contains `862f725d9d9f41b5509dbbcba61d7789f49ad74b`; retain merged ancestors, fold branch-only work into sealed OCI Layer 2, and archive the ref. It is not a release vehicle. |
+| `origin/feat/global-sync-gate2-target-lock` | Contains `0bae19c2fb9575d8b8edccaeee3c5d9420e00e9f`; #2224 is the merged preauthorization prerequisite. Archive `d6b9c99b9fcff250eabd819ceac7e7ccf27b4d30`, `09015bcc79c00575262e8c23d9b14693ae8be80f`, `d060da1cc1d6c81abf0c42cf5df69ac81d79a75e`, and `0bae19c2fb9575d8b8edccaeee3c5d9420e00e9f` as diagnostic-only attempts; retain the remote ref. |
+
+`/private/tmp/pdd-global-sync-checker-release-workflow-v2` remains uncommitted
+diagnostic/folded input only at base
+`842b73e93d0d2e275726d0755f6b0b3347a13488`. Its tracked diff SHA-256 is
+`882cd4808002be36900ed875a4fce25e40bc48debbb124786e10953de8b51b8d` and
+ignored lock SHA-256 is
+`485cc8a742ae72400f489cbb41be3d8703143de35d10fce876546d60d6c1cefa`.
+Twenty-five released-checker tests and the 10-wheel Linux cp312 lock probe
+passed, but full validation is absent. It is never implemented, reviewed, or
+released.
 
 ## Fixed comparison and decision rule
 

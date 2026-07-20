@@ -24,7 +24,6 @@ from urllib.request import Request, urlopen
 
 import yaml
 
-
 LEDGER_SCHEMA_VERSION = 5
 REQUIRED_GATE_STATE_FIELDS = (
     "implemented",
@@ -38,6 +37,107 @@ REQUIRED_GATE_STATE_FIELDS = (
 )
 SOURCE_MARKER = "<!-- global-sync-ledger-source: {source_name} -->"
 GATE_COUNT = 10
+LIVE_DELIVERABLE_SLOT_IDS = ("A2", "C1")
+LIVE_DELIVERABLE_UNDER_24_HOUR_TEXT = (
+    "Under 24 hours, submit the literal OCI layer 2 path-set preauthorization/review PR "
+    "for exactly five named paths; this does not claim OCI is released.",
+    "Under 24 hours, produce `docs/global_sync_gate6_partition.json` only after its "
+    "exact protected absent-path preauthorization/review prerequisite is merged.",
+)
+LIVE_DELIVERABLE_OUTPUT_CLASSES = (
+    "derivable-from-existing-tests", "needs-new-tests", "decommission-candidate",
+)
+OCI_LAYER2_EXACT_FUTURE_PATHS = (
+    ".github/workflows/oci-checker-runtime.yml", ".pdd/global-sync/oci-checker-runtime.json",
+    "ci/sync-checker/Dockerfile", "pdd/sync_core/oci_runtime.py",
+    "tests/test_sync_core_oci_runtime.py",
+)
+RATIFIED_A2_INTENT: dict[str, object] = {
+    "governance_timebox_working_days": 3,
+    "literal_preauthorization_review_pr": {
+        "status": "pending",
+        "exact_future_path_set": list(OCI_LAYER2_EXACT_FUTURE_PATHS),
+        "review_pr_change_set": [
+            ".pdd/sync-ownership.json",
+            "tests/test_sync_core_pdd_rollout_policy.py",
+        ],
+        "does_not_claim_oci_release": True,
+    },
+    "fallback_on_timebox_overrun": (
+        "on timebox overrun, pin runner image plus system git identities in the pin lane, "
+        "release wheel + exact digest, and defer OCI to a hardening PR"
+    ),
+    "oci_promotion": {
+        "status": "pending",
+        "requires_exact_released_wheel_digest": True,
+        "local_candidate_digest_is_release_evidence": False,
+    },
+}
+RATIFIED_C1_INTENT: dict[str, object] = {
+    "preauthorization_prerequisite": {
+        "status": "pending",
+        "exact_absent_path": "docs/global_sync_gate6_partition.json",
+        "required_before_output": True,
+        "wildcard_authority_allowed": False,
+    },
+    "output_classes": list(LIVE_DELIVERABLE_OUTPUT_CLASSES),
+    "classification_definitions": {
+        "derivable-from-existing-tests": (
+            "Requires explicit protected profile/artifact-to-node evidence and "
+            "collected pytest nodes."
+        ),
+        "needs-new-tests": (
+            "Every other human-only unit is needs-new-tests: no qualifying obligation can be "
+            "mechanically derived from protected registry+collection; this is not a claim that "
+            "no existing test happens to cover it."
+        ),
+        "decommission-candidate": "Requires protected ownership, tombstone, and rule evidence.",
+    },
+    "artifact_contract": {
+        "output_path": "docs/global_sync_gate6_partition.json",
+        "protected_profile_source_sha": "2cacc91f90759ff45f1ad976da3b773e1a5f07a5",
+        "protected_profile_source_digest_sha256": (
+            "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
+        ),
+        "protected_main_sha": "e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347",
+        "pytest_collection_command": (
+            "/opt/homebrew/Caskroom/miniforge/base/envs/pdd/bin/python "
+            "-m pytest --collect-only -q"
+        ),
+        "pytest_tool_identity": "/opt/homebrew/Caskroom/miniforge/base/envs/pdd/bin/python",
+        "required_node_fields": ["collected_node_ids", "collected_node_ids_sha256"],
+        "human_only_units_expected": 467,
+        "accounts_each_human_only_unit_exactly_once": True,
+    },
+    "follow_on_queue": [
+        {
+            "id": "C2",
+            "status": "pending",
+            "deliverable": "External append-only anchor",
+            "required_before_7_night_streak": True,
+        },
+        {
+            "id": "C3",
+            "status": "pending",
+            "deliverable": (
+                "Minimal separately released no-shared-code reference verifier "
+                "and documented schema"
+            ),
+            "required_before_7_night_streak": True,
+        },
+    ],
+}
+RATIFIED_LIVE_DELIVERABLE_INTENTS = (RATIFIED_A2_INTENT, RATIFIED_C1_INTENT)
+LEGACY_LIVE_SLOT_FIELDS = frozenset(
+    {
+        "canonical_blockers",
+        "same_day_deliverables",
+        "single_next_blocker",
+        "single_next_blocker_id",
+        "same_day_deliverable",
+        "same_day_deliverable_id",
+    }
+)
 SHA1 = re.compile(r"[0-9a-f]{40}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 ACTION_RUN_URL = re.compile(r"^/([^/]+/[^/]+)/actions/runs/(\d+)$")
@@ -586,6 +686,69 @@ def _require_exact_string_sequence(
         raise LedgerError(f"ledger source field {key!r} must equal {list(expected)!r}")
 
 
+def _require_nonempty_string(value: object, field: str) -> str:
+    """Return one non-empty string without silently coercing ledger content."""
+    if not isinstance(value, str) or not value.strip():
+        raise LedgerError(f"{field} must be a non-empty string")
+    return value
+
+
+def _reject_legacy_live_slot_fields(value: object, path: str = "ledger") -> None:
+    """Forbid a second, stale live-status source anywhere in the ledger."""
+    if isinstance(value, dict):
+        legacy_fields = sorted(set(value) & LEGACY_LIVE_SLOT_FIELDS)
+        if legacy_fields:
+            rendered = ", ".join(legacy_fields)
+            raise LedgerError(f"{path} contains legacy live-slot fields: {rendered}")
+        for key, nested in value.items():
+            _reject_legacy_live_slot_fields(nested, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            _reject_legacy_live_slot_fields(nested, f"{path}[{index}]")
+
+
+def _validate_live_deliverables(payload: dict[str, Any], statuses: set[str]) -> None:
+    """Require the only live scheduler surface to be the ratified two-slot sequence."""
+    _reject_legacy_live_slot_fields(payload)
+    deliverables = payload.get("live_deliverables")
+    if not isinstance(deliverables, list) or len(deliverables) != 2:
+        raise LedgerError("live_deliverables must contain exactly two slots")
+    if any(not isinstance(slot, dict) for slot in deliverables):
+        raise LedgerError("live_deliverables slots must be mappings")
+    ids = [slot.get("id") for slot in deliverables]
+    if any(not isinstance(slot_id, str) or not slot_id for slot_id in ids):
+        raise LedgerError("live_deliverables slot ids must be non-empty strings")
+    if len(set(ids)) != len(ids):
+        raise LedgerError("live_deliverables slot ids must not be duplicate")
+    if tuple(ids) != LIVE_DELIVERABLE_SLOT_IDS:
+        raise LedgerError("live_deliverables slots must retain ratified A2, C1 order")
+    for index, slot in enumerate(deliverables):
+        expected_fields = {
+            "id",
+            "status",
+            "current_blocker",
+            "under_24h_deliverable",
+            "intent",
+        }
+        if set(slot) != expected_fields:
+            raise LedgerError(f"live_deliverables[{index}] has unexpected fields")
+        status = slot.get("status")
+        if status not in statuses or status != "in-progress":
+            raise LedgerError(f"live_deliverables[{index}].status must be ratified in-progress")
+        _require_nonempty_string(
+            slot.get("current_blocker"), f"live_deliverables[{index}].current_blocker"
+        )
+        if slot.get("under_24h_deliverable") != LIVE_DELIVERABLE_UNDER_24_HOUR_TEXT[index]:
+            raise LedgerError(
+                f"live_deliverables[{index}].under_24h_deliverable must match the ratified text"
+            )
+        intent = slot.get("intent")
+        if not isinstance(intent, dict) or intent != RATIFIED_LIVE_DELIVERABLE_INTENTS[index]:
+            raise LedgerError(
+                f"live_deliverables[{index}].intent must match the ratified contract"
+            )
+
+
 def _validate_plan(plan: Path, source: Path, payload: dict[str, Any]) -> None:
     if plan.is_symlink() or not plan.is_file():
         raise LedgerError(f"plan input must be a regular file: {plan}")
@@ -678,6 +841,7 @@ def validate_ledger(  # pylint: disable=too-many-locals,too-many-branches
     _require_exact_string_sequence(
         payload, "required_gate_state_fields", REQUIRED_GATE_STATE_FIELDS
     )
+    _validate_live_deliverables(payload, statuses)
     ledger_generation = _require_mapping(payload, "ledger_generation")
     if ledger_generation.get("status") not in statuses:
         raise LedgerError("ledger_generation.status is not in status_vocabulary")

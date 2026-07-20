@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import subprocess
 import sys
 from pathlib import Path
@@ -20,8 +21,10 @@ from pdd.sync_core.global_sync_ledger import (
     validate_ledger,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
+LIVE_DELIVERABLES = load_unique_yaml(
+    ROOT / "docs/global_sync_evidence_ledger_source.yaml"
+)["live_deliverables"]
 STATE_FIELDS = (
     "implemented",
     "local_green",
@@ -59,6 +62,7 @@ def _payload() -> dict[str, object]:
         "status_vocabulary": ["pending", "in-progress", "passed"],
         "evidence_state_vocabulary": ["pending", "in-progress", "passed"],
         "required_gate_state_fields": list(STATE_FIELDS),
+        "live_deliverables": deepcopy(LIVE_DELIVERABLES),
         "ledger_generation": {
             "status": "in-progress",
             "source": "ledger_source.yaml",
@@ -319,6 +323,74 @@ def test_global_sync_ledger_rejects_malformed_schema(
     tmp_path: Path, source_text: str, expected: str
 ) -> None:
     plan, source, output = _write_fixture(tmp_path, source_text)
+
+    with pytest.raises(LedgerError, match=expected):
+        run(plan, output, source)
+
+
+@pytest.mark.parametrize(
+    "mutate, expected",
+    [
+        (
+            lambda payload: payload.pop("live_deliverables"),
+            "must contain exactly two slots",
+        ),
+        (
+            lambda payload: payload["live_deliverables"].pop(),
+            "must contain exactly two slots",
+        ),
+        (
+            lambda payload: payload["live_deliverables"].append(
+                payload["live_deliverables"][0].copy()
+            ),
+            "must contain exactly two slots",
+        ),
+        (
+            lambda payload: payload["live_deliverables"][1].update({"id": "A2"}),
+            "ids must not be duplicate",
+        ),
+        (
+            lambda payload: payload["live_deliverables"].reverse(),
+            "must retain ratified A2, C1 order",
+        ),
+        (
+            lambda payload: payload["live_deliverables"][0].update({"id": ""}),
+            "ids must be non-empty strings",
+        ),
+        (
+            lambda payload: payload["live_deliverables"][0].update({"status": "passed"}),
+            "status must be ratified in-progress",
+        ),
+        (
+            lambda payload: payload["live_deliverables"][0].update(
+                {"under_24h_deliverable": "OCI is released"}
+            ),
+            "under_24h_deliverable must match the ratified text",
+        ),
+        (
+            lambda payload: payload.update({"single_next_blocker": "legacy"}),
+            "contains legacy live-slot fields",
+        ),
+        (
+            lambda payload: payload["live_rebaseline"].update(
+                {"same_day_deliverable": "legacy"}
+            ),
+            "contains legacy live-slot fields",
+        ),
+        (
+            lambda payload: payload["live_deliverables"][1]["intent"][
+                "output_classes"
+            ].append("pending_protected_rule"),
+            "intent must match the ratified contract",
+        ),
+    ],
+)
+def test_global_sync_ledger_rejects_invalid_live_deliverable_slots(
+    tmp_path: Path, mutate, expected: str
+) -> None:
+    payload = _payload()
+    mutate(payload)
+    plan, source, output = _write_fixture(tmp_path, payload=payload)
 
     with pytest.raises(LedgerError, match=expected):
         run(plan, output, source)
