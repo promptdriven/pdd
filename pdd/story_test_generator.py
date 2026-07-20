@@ -11,7 +11,10 @@ from .user_story_tests import _contract_path_for_story, _story_content_hash, sto
 
 
 _HEADING_RE = re.compile(r"^##\s+(?P<heading>.+?)\s*$", re.MULTILINE)
-_COVER_RE = re.compile(r"\b(R\d+)\b", re.IGNORECASE)
+_COVER_RE = re.compile(
+    r"\b(R-?\d+[a-zA-Z]?|RULE-?\d+[a-zA-Z]?)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -182,6 +185,11 @@ def _safe_name(text: str) -> str:
     return name or "assertion"
 
 
+def _safe_rule_name(rule_id: str) -> str:
+    """Return a valid identifier segment without changing the canonical ID."""
+    return re.sub(r"[^a-zA-Z0-9_]", "_", rule_id)
+
+
 def render_story_test(spec: StoryTestSpec) -> str:
     """Render deterministic pytest source for *spec*."""
     seams_source = "[" + ", ".join(
@@ -201,6 +209,7 @@ def render_story_test(spec: StoryTestSpec) -> str:
         f"ENTRY_ARGS = {spec.args}",
         f"ENTRY_KWARGS = {spec.kwargs}",
         f"SEAMS = {seams_source}",
+        f"RULE_IDS = {spec.rule_ids!r}",
         "",
         "",
         "@pytest.fixture()",
@@ -217,7 +226,10 @@ def render_story_test(spec: StoryTestSpec) -> str:
     assertions.extend(("negative", item) for item in spec.negative_assertions)
     for index, (kind, expr) in enumerate(assertions, 1):
         rule = spec.rule_ids[min(index - 1, len(spec.rule_ids) - 1)] if spec.rule_ids else f"R{index}"
-        fn_name = f"test_story_{_safe_name(spec.story_id)}_{rule}_{kind}_{index}"
+        fn_name = (
+            f"test_story_{_safe_name(spec.story_id)}_"
+            f"{_safe_rule_name(rule)}_{kind}_{index}"
+        )
         lines.extend(
             [
                 f"@pytest.mark.story(story_id=STORY_ID, story_hash=STORY_HASH)",

@@ -9,7 +9,11 @@ import pytest
 from click.testing import CliRunner
 
 from pdd.commands.generate import test as test_cmd
-from pdd.story_test_generator import generate_story_test, parse_story_test_spec
+from pdd.story_test_generator import (
+    generate_story_test,
+    parse_story_test_spec,
+    render_story_test,
+)
 from pdd.user_story_tests import _story_content_hash
 
 
@@ -64,6 +68,36 @@ def test_parse_story_test_spec_reads_entrypoint_and_hash(tmp_path: Path):
     assert spec.module == "checkout_app"
     assert spec.callable_name == "checkout_total"
     assert spec.rule_ids == ("R1",)
+
+
+@pytest.mark.parametrize(
+    ("rule_id", "function_segment"),
+    [
+        ("R1a", "R1A"),
+        ("R-1A", "R_1A"),
+        ("RULE1A", "RULE1A"),
+        ("RULE-1A", "RULE_1A"),
+    ],
+)
+def test_story_rule_grammar_renders_valid_python(
+    tmp_path: Path,
+    rule_id: str,
+    function_segment: str,
+):
+    story = _write_story_contract(tmp_path)
+    contract = tmp_path / "user_stories" / "contracts" / "checkout_total.contract.md"
+    contract.write_text(
+        contract.read_text(encoding="utf-8").replace(
+            "- R1: checkout total", f"- {rule_id}: specialized checkout total"
+        ),
+        encoding="utf-8",
+    )
+    spec = parse_story_test_spec(story)
+    assert spec.rule_ids == (rule_id.upper(),)
+    rendered = render_story_test(spec)
+    compile(rendered, "<generated-story-test>", "exec")
+    assert f"RULE_IDS = ({rule_id.upper()!r},)" in rendered
+    assert f"test_story_checkout_total_{function_segment}_oracle_1" in rendered
 
 
 def test_generate_story_test_is_deterministic_and_marks_story(tmp_path: Path):

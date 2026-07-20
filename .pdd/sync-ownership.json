@@ -12748,12 +12748,6 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
-      "pattern": "tests/test_issue_2233_suffixed_rule_ids.py",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
       "pattern": "tests/test_issue_225_paths_and_includes.py",
       "role": "human-maintained"
     },
