@@ -2,22 +2,25 @@
 
 Status: ratified extraction boundary for the first checker release.
 
-## 2026-07-19 #2225 Gate 2 architecture disposition
+## 2026-07-19 Gate 2 package-boundary disposition
 
 This supersedes the Gate 2 release path below without reclassifying frozen #1995
-history. Protected main is `35e903cb5ed103980affbdf2a64ef7a80a66ca4a`.
+history. Protected main is `e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347`.
 
 | Disposition | Evidence and extraction rule |
 | --- | --- |
-| `already-merged-prerequisite` | [#2223](https://github.com/promptdriven/pdd/pull/2223), reviewed at `0ca5eb173a31c2ed2b46d7db0feeb88c62645907` and squash-merged as `9c1dc6f2fb1b621ed5320f407f5ae6a2c5299214`, supplies the released-checker evidence wrapper only. [#2224](https://github.com/promptdriven/pdd/pull/2224), reviewed at `862f725d9d9f41b5509dbbcba61d7789f49ad74b` and squash-merged as protected main, only preauthorizes the absent target-lock path. Both had 12 green checks; neither is a release or pin. |
-| `release-required-delta` | Extract strict lock and wheel `RECORD` validation from #2225 into a fresh standalone checker distribution under a non-`pdd` top-level package, with checker-only dependencies. Correct compatible-wheel tag handling and add the exact `z3_solver-4.16.0.0-py3-none-manylinux_2_27_x86_64.whl` regression. Candidate `pdd-cli` is inspected input only; the checker must not import `pdd` or `pdd.__init__`. |
+| `already-merged-prerequisite` | [#2228](https://github.com/promptdriven/pdd/pull/2228), reviewed at `aa32884363e383745e878770a247e4897977de59`, had all 12 checks green, and merged as `c2575db6cfd3f5144081bb517724043a057d0f9c`. It preauthorizes only the literal five package-boundary paths: the standalone-checker module manifest, `standalone_package.py`, `checker_cli.py`, and their two tests. It is neither a release nor a pin. |
+| `landed-package-boundary` | [#2229](https://github.com/promptdriven/pdd/pull/2229) landed the standalone non-`pdd` checker distribution with checker-only dependencies, strict lock/`RECORD` validation, and the exact z3 compatible-wheel regression. Prior reviewed head `be90cbdc7e5280eae19db02d041fd05467315b11` had only the two `_VITEST_RUNTIME_SOURCE` reserved-prefix assertions fail in Unit [29705890972/job 88242687030](https://github.com/promptdriven/pdd/actions/runs/29705890972/job/88242687030); a bounded correction received Sol HIGH approval at `ff95e9d31f8029f8f9cb1c55edb1ec328b006c16`. The final 12 checks were green and the protected squash merge is `e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347` at `2026-07-20T00:17:55Z`. This is package-boundary evidence only, not release evidence. |
+| `release-required-delta` | Implement the checker-specific release workflow and protected publication of the standalone wheel with its exact released digest. PR [#2230](https://github.com/promptdriven/pdd/pull/2230) is reviewed/local evidence only at `842b73e93d0d2e275726d0755f6b0b3347a13488`; its initial and rerun GitHub 503/504 failures are external-service evidence, not product-pass evidence. OCI and protected pins remain later release-required deltas. |
 | `excluded-diagnostic` | Keep #2225 workflow/bootstrap commits and hosted lanes as diagnostic evidence only. Head `09015bcc79c00575262e8c23d9b14693ae8be80f` ended in a build-version failure at [job 88224039194](https://github.com/promptdriven/pdd/actions/runs/29698754085/job/88224039194); head `d060da1cc1d6c81abf0c42cf5df69ac81d79a75e` ended in a read-only build-source failure at [job 88224395133](https://github.com/promptdriven/pdd/actions/runs/29698879393/job/88224395133); and closed head `0bae19c2fb9575d8b8edccaeee3c5d9420e00e9f` ended in the eager `pdd.__init__` → `update_main.py` → GitPython/no-git failure at [job 88224752678](https://github.com/promptdriven/pdd/actions/runs/29699017734/job/88224752678). No artifact upload or target lock completed, and `GIT_PYTHON_REFRESH=quiet` is rejected. |
 
-The standalone checker boundary is the one same-day, under-24-hour deliverable.
-It excludes `pdd/__init__` refactoring, OCI, release, certificates, and scenario
-expansion. A later sealed OCI layer supplies Git/system closure; a final protected
-pin-wiring layer binds released checker/OCI digests and prevents candidate control
-of checker, scenarios, PATH, wheelhouse, expectations, or verifier inputs.
+The standalone checker boundary is landed on protected main. The next same-day,
+under-24-hour deliverable is the checker-specific release workflow and protected
+publication of the standalone wheel with its exact released digest. It excludes
+`pdd/__init__` refactoring, OCI, certificates, and scenario expansion. A later
+sealed OCI layer supplies Git/system closure; a final protected pin-wiring layer
+binds released checker/OCI digests and prevents candidate control of checker,
+scenarios, PATH, wheelhouse, expectations, or verifier inputs.
 
 The OCI layer is cryptographically downstream of the release: provenance binds
 the exact released checker wheel digest and exact checker dependency-lock digest
@@ -35,7 +38,7 @@ acceptance contracts, not executable commands or completed Gate 2 evidence.
 | --- | --- |
 | Diagnostic base | `39776aa9bb027c638812a01b8dabbe03cab92f64` |
 | Frozen diagnostic head | `d334266680881cbda59de4ecd4df967c92159fa7` |
-| Protected main | `c712cbb7e08c157757a238cb8e49d65a9a3a2239` |
+| Protected main | `e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347` |
 
 This is a three-way, hunk-level manifest, not a proposal to merge the frozen
 branch.  The only permitted classifications are:

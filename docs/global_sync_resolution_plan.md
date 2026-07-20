@@ -31,6 +31,18 @@ itself, prove that those bytes express the same intent.
 
 ## 2. Evidence and current state
 
+### 2026-07-19 Gate 2 package-boundary update
+
+Protected main is [`e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347`](https://github.com/promptdriven/pdd/commit/e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347). Gate 1 remains in progress and the scoreboard remains `0/10`: an ownership mapping or preauthorization alone never passes Gate 1.
+
+PR [#2228](https://github.com/promptdriven/pdd/pull/2228) reviewed head `aa32884363e383745e878770a247e4897977de59`, all 12 checks were green, and it protected-merged as `c2575db6cfd3f5144081bb517724043a057d0f9c`. Its authority is only the literal five-path package-boundary set: `.pdd/global-sync/standalone-checker-modules.json`, `pdd/sync_core/standalone_package.py`, `pdd/sync_core/checker_cli.py`, `tests/test_sync_core_standalone_package.py`, and `tests/test_sync_core_checker_cli.py`.
+
+PR [#2229](https://github.com/promptdriven/pdd/pull/2229) first reviewed `be90cbdc7e5280eae19db02d041fd05467315b11`; Unit [run 29705890972/job 88242687030](https://github.com/promptdriven/pdd/actions/runs/29705890972/job/88242687030) then failed only two `_VITEST_RUNTIME_SOURCE` reserved-prefix assertions. A bounded correction received Sol HIGH approval at final head `ff95e9d31f8029f8f9cb1c55edb1ec328b006c16`; its affected local suite reported 358 passed/59 skipped and pylint 10/10. All 12 final hosted checks were green, including Unit [29708379126/job 88248917137](https://github.com/promptdriven/pdd/actions/runs/29708379126/job/88248917137), [Package job 88248917126](https://github.com/promptdriven/pdd/actions/runs/29708379126/job/88248917126), [CodeQL 29708378251](https://github.com/promptdriven/pdd/actions/runs/29708378251), [heal 29708378649/job 88248915909](https://github.com/promptdriven/pdd/actions/runs/29708378649/job/88248915909), and [auto-heal 88248922089](https://github.com/promptdriven/pdd/runs/88248922089). It squash-merged at `2026-07-20T00:17:55Z`. The deterministic wheel SHA-256 `2f6bb048ef6eb3c8486f2e2df5c62066b9907b89dcc55a76bab0993556424438` is strictly local candidate evidence, not a released digest.
+
+This closes only #2229's implemented/local/reviewed/hosted/merged package-boundary sublayer. Gate 2 remains in progress; released/deployed/certified evidence, OCI, and protected pins remain pending. No full Gate 2 lifecycle state may be promoted without a machine-verifiable bundle. PR [#2230](https://github.com/promptdriven/pdd/pull/2230) is reviewed/local-only at `842b73e93d0d2e275726d0755f6b0b3347a13488`; its initial and rerun GitHub 503/504 failures are external-service evidence, not product-pass evidence, and it is neither hosted-green nor merged.
+
+The next under-24-hour blocker is `gate2-checker-release-workflow-and-wheel-publication`: implement the checker-specific release workflow and publish the standalone wheel through the protected publication path with its exact released digest. OCI and protected pins remain later release-required deltas.
+
 ### Historical critical-path snapshot (2026-07-18)
 
 This retained diagnostic snapshot is not a release prerequisite. The current
@@ -86,14 +98,15 @@ release state.
    profile registry yet, so its future adapter demand is unknown and must be
    generated at migration time rather than assumed.
 5. Gate 1 PR #2214 merged its reviewed adapter-demand artifact and extraction
-   manifest as `63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee`. Its former
-   ledger-generator/drift-check blocker is superseded by #2219's protected-main
-   merge. The canonical next blocker is
-   `gate2-standalone-checker-package-boundary`: under 24 hours, open the
-   standalone non-`pdd` checker extraction manifest/package-boundary PR; OCI and
-   protected pin wiring follow strictly. Any early certificate is explicitly
-   narrower and cannot satisfy the final global predicate until all managed
-   units and both repositories meet the gate-10 denominator.
+   manifest as `63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee`, but remains in
+   progress at global score `0/10`. PR #2229 subsequently closed only the Gate 2
+   package-boundary sublayer on protected main. The canonical next blocker is
+   `gate2-checker-release-workflow-and-wheel-publication`: under 24 hours,
+   implement the checker-specific release workflow and publish the standalone
+   wheel with its exact released digest. OCI and protected pin wiring follow
+   strictly. Any early certificate is explicitly narrower and cannot satisfy the
+   final global predicate until all managed units and both repositories meet the
+   gate-10 denominator.
 
 #### Historical attempt ledger
 
@@ -738,14 +751,16 @@ excluded units and denominator and make a narrower claim; it must not call that
 result globally certified.
 
 The deterministic ledger generator named in the YAML and its protected drift
-check are merged and green. They render the canonical ledger from an explicit
-versioned YAML source and fail closed on duplicate keys, malformed schema/state
-rows, or byte drift. The canonical blocker
-`gate2-standalone-checker-package-boundary` requires the standalone non-`pdd`
-checker extraction manifest/package-boundary PR as the under-24-hour
-deliverable; the sealed OCI and protected pin wiring follow strictly. This
-deliverable is intentionally smaller than the whole release and does not
-authorize a release or certificate claim. The named
+check are merged and green, but its lifecycle status remains in progress until
+the full evidence model is satisfied. They render the canonical ledger from an
+explicit versioned YAML source and fail closed on duplicate keys, malformed
+schema/state rows, or byte drift. Every gate-affecting protected merge updates
+the reviewed source and regenerates the output. The canonical blocker
+`gate2-checker-release-workflow-and-wheel-publication` requires the
+checker-specific release workflow and protected standalone-wheel publication
+with the exact released digest as the under-24-hour deliverable; OCI and
+protected pin wiring follow strictly. This does not authorize a certificate
+claim. The named
 `extraction_manifest_verifier` is planned future evidence only; it is not
 implemented and does not prove gate 1.
 
@@ -799,6 +814,8 @@ and vertical slice pass.
 Start nonqualifying shadow nightlies immediately to exercise release lookup,
 signer identity, immutable storage, lifecycle orchestration, and canary plumbing.
 Every row must be marked `qualifying: false` and excluded from streak counters.
+Shadow rows may record observed machine-verified percentages, but cannot set or
+ratchet `floor_pct`; that floor starts only with the first valid Certificate A.
 The first qualifying UTC row is permitted only after steps 1-8 pass.
 
 Every progress update uses this exact scoreboard:
@@ -2421,11 +2438,12 @@ The separately released reference verifier must share no code with
 and all predicates are evaluated at the exact protected merge-group SHA. Seeded
 mutation runs publish their seed in the certificate.
 
-The `floor_pct` starts at the measured `machine_verified_pct` of the first
-Certificate A. It may only increase through protected-expectations PRs as gate-6
-coverage work lands. The previous-certificate comparison is a non-regression
-ratchet. A void night requires the named preflight classification and checksummed
-failure artifact; a third void night invalidates the current window.
+The `floor_pct` starts at the measured `machine_verified_pct` of the first valid
+Certificate A, never at a shadow-run observation. It may only increase through
+protected-expectations PRs as gate-6 coverage work lands. The previous-certificate
+comparison is a non-regression ratchet. A void night requires the named preflight
+classification and checksummed failure artifact; a third void night invalidates
+the current window.
 
 ### 11.3 Certificate B: Global Sync
 
@@ -2620,15 +2638,23 @@ predicate requires `candidate_controlled_verifier_inputs == 0`.
    `merged`: local and independent-review narrative evidence remains
    in-progress until a distinct protected verifier can prove those dimensions.
    The global score remains `0/10` and no release or certificate is claimed.
-2. Treat #2223 and #2224 as merged prerequisites only, and preserve closed,
-   unmerged #2225 as diagnostic evidence that cannot advance Gate 2. The single
-   canonical blocker is `gate2-standalone-checker-package-boundary`; its
-   same-day deliverable, bounded to under 24 hours, is the standalone checker
-   extraction manifest/package-boundary PR: a non-`pdd` top-level package with
-   checker-only dependencies, strict lock/RECORD salvage, and the exact z3
-   compatible-wheel regression. It does not release, containerize, or certify.
-3. Only after that boundary is released may the sealed Git-capable OCI runtime
+2. Treat #2223 and #2224 as merged prerequisites only, preserve closed,
+   unmerged #2225 as diagnostic evidence, and retain #2228 as only the literal
+   five-path preauthorization. #2229 is landed on protected main only as the
+   package boundary; it is not a checker release or Gate 2 promotion. The single
+   canonical blocker is `gate2-checker-release-workflow-and-wheel-publication`:
+   implement the release workflow and publish the standalone wheel through its
+   protected path with the exact released digest. #2230 is reviewed/local-only;
+   its GitHub 503/504 outcomes do not prove product success.
+3. Only after protected wheel publication may the sealed Git-capable OCI runtime
    and protected checker/OCI/workflow expectation pins be pursued. Certificate A
    and Certificate B intent is unchanged; neither is claimed by these layers.
-4. Before gate 5 completes, generate the 467-unit gate-6 coverage partition and
-   obtain the required human scoping decision.
+4. Before gate 5 completes, generate the 467-unit Gate 6 partition and obtain
+   the required human scoping decision. Where collection cannot prove
+   derivability or decommission, classify the row `pending_protected_rule` rather
+   than inferring either result.
+5. Future preauthorization may batch only a fully designed literal exact path
+   set. It may never provide speculative, wildcard, or cross-gate authority. The
+   old docs worktree was retired only after its preservation audit; remote archival
+   ref `origin/docs/issue-1932-goal-rebaseline` remains retained at
+   `eea77668cad601711d5b43c610426ad78348830b`.
