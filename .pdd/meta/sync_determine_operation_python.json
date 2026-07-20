@@ -1,9 +1,9 @@
 {
-  "pdd_version": "0.0.304.dev0",
-  "timestamp": "2026-07-14T19:02:31+00:00",
-  "command": "test",
-  "prompt_hash": "e57bc65539005e7a62f6cd09a92e7aed09add27f470498e68cf0c1cf997c1be6",
-  "code_hash": "e9dbfc88588fec6a64149c3b56baad118696e6066dff3931f0ade3b1ce8e1faf",
+  "pdd_version": "0.0.306.dev0",
+  "timestamp": "2026-07-18T21:51:34.514945+00:00",
+  "command": "verify",
+  "prompt_hash": "d78eee431bf5772c617f4abb4422a245f123f6efd52c0b0924074af8b9a22c3c",
+  "code_hash": "0e351a93664635e5297703f69d60ba64434df9dc9ae701b2f09aaebef8bd8093",
   "example_hash": "225d20ea0210bbf52650a9f424879ff495e574dd2411eb4b86592a6d06cf59a5",
   "test_hash": "c80addf9aa95722ea5a6ba12d718a1852221b26814359103d788df6f77d74faa",
   "test_files": {
@@ -12,7 +12,7 @@
   "include_deps": {
     "context/construct_paths_example.py": "412cb260650bcbd628fba647db917a8d32f8191df2e1c32cc22f22c0c11b1740",
     "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
-    "pdd/llm_invoke.py": "02399fb620819d0b4fea01254f54e031eecffa38e911dd0c94165f1b355b8a0b",
+    "pdd/llm_invoke.py": "57de3f0e3fccc88a154e0011f4da7321967438828d4535e8244fa1ddf1ac4b25",
     "context/get_language_example.py": "8b09af25b96fa49e2dcf5ff307bbeb0bc83e84b64618971d393397772a2fafab",
     "pdd/template_expander.py": "bcaa670f334b9fa7726aa85906e70125ad2cd4b7e7b62a8e39f8bdd06c975edb",
     "prompts/sync_analysis_LLM.prompt": "b54ff4325be64b9393db33026a576468bfa45f6c7aa736526b7bae2872f0520d",

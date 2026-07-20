@@ -1616,7 +1616,7 @@
         "functions": [
           {
             "name": "auto_deps_main",
-            "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1, _skip_finalization: bool = False)",
+            "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1, compress: bool = False, _skip_finalization: bool = False)",
             "returns": "Tuple[str, float, str]"
           }
         ]
@@ -3144,7 +3144,7 @@
         "functions": [
           {
             "name": "sync_orchestration",
-            "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", examples_dir: str = \"examples\", tests_dir: str = \"tests\", max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, snapshot_context: bool = False, compressed_context: bool = False) -> Dict[str, Any]",
+            "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", examples_dir: str = \"examples\", tests_dir: str = \"tests\", max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, one_session: bool = False, compress: bool = False, evidence: bool = False, snapshot_context: bool = False, compressed_context: bool = False) -> Dict[str, Any]",
             "returns": "Dict[str, Any]"
           }
         ]
@@ -7427,7 +7427,7 @@
   },
   {
     "reason": "Provides sync operation logging, fingerprints, run reports, and compression metadata storage.",
-    "description": "Decorator-based operation logging that tracks PDD command executions. Manages fingerprints, run reports, and event logs. Works with Click commands to extract module identity from prompt_file parameter.",
+    "description": "Decorator-based operation logging that tracks PDD command executions. Manages fingerprints, run reports, and event logs, restoring prior run-report evidence if post-mutation finalization fails. Works with Click commands to extract module identity from prompt_file parameter.",
     "dependencies": [],
     "priority": 210,
     "filename": "operation_log_python.prompt",
@@ -7453,7 +7453,7 @@
           },
           {
             "name": "log_event",
-            "signature": "(basename: str, language: str, event: str, details: Mapping[str, Any] | None = None, project_root=None, paths=None) -> None",
+            "signature": "(basename: str, language: str, event: str, details: Mapping[str, Any] | None = None, project_root=None, paths=None, compression=None, agentic_fallback=None) -> None",
             "returns": "None"
           }
         ]
@@ -9333,7 +9333,7 @@
   },
   {
     "reason": "Centralized cloud config: routes endpoint URLs (incl. submitExample) and JWT auth honoring PDD_CLOUD_URL.",
-  "description": "CloudConfig provides static methods for cloud URL resolution (get_base_url, get_endpoint_url with CLOUD_ENDPOINTS map including submitExample), environment inference (ensure_default_env), JWT auth (get_jwt_token), and cloud-environment detection (is_running_in_cloud, is_cloud_enabled). JWT auth delegates to the shared helper, preserving injected/cache/keyring-refresh credentials while explicit machine flags cause the helper to refuse device flow. Module-level get_cloud_timeout() reads PDD_CLOUD_TIMEOUT, and get_cloud_request_timeout() returns the requests timeout tuple used by cloud POST calls. Used by sync/fix auto-submit so PDD_CLOUD_URL is honored across staging/prod/local (#859).",
+    "description": "CloudConfig provides static methods for cloud URL resolution (get_base_url, get_endpoint_url with CLOUD_ENDPOINTS map including submitExample), environment inference (ensure_default_env), JWT auth (get_jwt_token), and cloud-environment detection (is_running_in_cloud, is_cloud_enabled). JWT auth delegates to the shared helper, preserving injected/cache/keyring-refresh credentials while explicit machine flags cause the helper to refuse device flow. Module-level get_cloud_timeout() reads PDD_CLOUD_TIMEOUT, and get_cloud_request_timeout() returns the requests timeout tuple used by cloud POST calls. Used by sync/fix auto-submit so PDD_CLOUD_URL is honored across staging/prod/local (#859).",
     "dependencies": [
       "auth_service_python.prompt"
     ],
@@ -9459,7 +9459,8 @@
     "dependencies": [
       "architecture_sync_python.prompt",
       "sync_determine_operation_python.prompt",
-      "operation_log_python.prompt"
+      "operation_log_python.prompt",
+      "fingerprint_transaction_python.prompt"
     ],
     "priority": 5,
     "filename": "metadata_sync_python.prompt",
@@ -11658,6 +11659,63 @@
       "type": "config",
       "config": {
         "keys": []
+      }
+    }
+  },
+  {
+    "reason": "Single transactional finalizer for legacy PDD fingerprints.",
+    "description": "Canonical transactional persistence boundary for legacy fingerprints. Resolves and validates prompt-rooted artifacts under the per-unit lock, rejects null or cross-project hashes, and provides journaled, fsync-backed, lock-serialized recovery for coupled run-report/fingerprint publication.",
+    "dependencies": [
+      "sync_determine_operation_python.prompt"
+    ],
+    "priority": 209,
+    "filename": "fingerprint_transaction_python.prompt",
+    "filepath": "pdd/fingerprint_transaction.py",
+    "tags": [
+      "module",
+      "python",
+      "sync",
+      "durability"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "finalize_fingerprint",
+            "signature": "(*args: Any, **kwargs: Any) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "AtomicStateUpdate.recover",
+            "signature": "(basename: str, language: str, directory: Path) -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Retains the targeted sync-test execution helper used by the pin-example prompt unit.",
+    "description": "Provides the pin-example unit's tested run-report execution helper, including configured test-command working-directory handling.",
+    "dependencies": [
+      "fingerprint_transaction_python.prompt",
+      "sync_determine_operation_python.prompt"
+    ],
+    "priority": 5,
+    "filename": "pin_example_hack_python.prompt",
+    "filepath": "pdd/pin_example_hack.py",
+    "tags": ["grounding", "sync", "python"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_execute_tests_and_create_run_report",
+            "signature": "(test_file: Path, basename: str, language: str, target_coverage: float, *, code_file: Optional[Path] = None, atomic_state: Optional[AtomicStateUpdate] = None, test_files: Optional[List[Path]] = None) -> RunReport",
+            "returns": "RunReport"
+          }
+        ]
       }
     }
   }

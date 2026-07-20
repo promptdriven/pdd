@@ -1057,11 +1057,14 @@ def test_garbage_collection_called_on_invocation_issue_231(
 @patch('pdd.core.dump.garbage_collect_core_dumps')
 @patch('pdd.commands.generate.code_generator_main')
 def test_garbage_collection_respects_keep_option_issue_231(
-    mock_main, mock_gc, mock_auto_update, runner, create_dummy_files
+    mock_main, mock_gc, mock_auto_update, runner, create_dummy_files, tmp_path, monkeypatch
 ):
     """
     Issue #231: Garbage collection should respect --keep-core-dumps option.
     """
+    # The command derives a generated output name from the prompt.  Keep that
+    # test-only output in pytest's temporary workspace, never at repo root.
+    monkeypatch.chdir(tmp_path)
     files = create_dummy_files("test_gc_with_keep.prompt")
     mock_main.return_value = ('code', False, 0.0, 'model')
     mock_gc.return_value = 0

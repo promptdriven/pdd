@@ -840,6 +840,8 @@ def sync_main(
             )
             continue
 
+        outer_state = None
+        transaction_completed = False
         try:
             # prompt_file_path is now the correct discovered path from lang_to_path
             
@@ -912,6 +914,22 @@ def sync_main(
             code_dir = resolved_config.get("code_dir", "src")
             tests_dir = resolved_config.get("tests_dir", "tests")
             examples_dir = resolved_config.get("examples_dir", "examples")
+
+            # Hold the exact unit lock before either normal or one-session
+            # sync can mutate generated artifacts.  ``save_fingerprint``
+            # discovers this active state and buffers its paired publication
+            # for this outer commit.
+            from .fingerprint_transaction import AtomicStateUpdate
+            from .operation_log import get_fingerprint_path
+            lock_paths = {"prompt": Path(prompt_file_path)}
+            outer_state = AtomicStateUpdate(
+                basename,
+                resolved_language,
+                directory=get_fingerprint_path(
+                    basename, resolved_language, paths=lock_paths
+                ).parent,
+            )
+            outer_state.__enter__()
 
             if one_session:
                 if skip_tests or skip_verify:
@@ -1235,6 +1253,7 @@ def sync_main(
                                 basename, resolved_language, "fix",
                                 pdd_files, one_session_result.get("total_cost", 0.0),
                                 one_session_result.get("model_name", "unknown") or pre_model or "unknown",
+                                remove_run_report=True,
                             )
 
                         # Post-sync: auto-submit example to cloud on success
@@ -1301,6 +1320,11 @@ def sync_main(
                 overall_success = False
 
             aggregated_results["results_by_language"][lang] = sync_result
+            # A normal orchestration failure is not an exception, but it must
+            # abort the enclosing journal just as an exception would.  The
+            # active state may already contain a run-report tombstone and a
+            # replacement fingerprint from an earlier phase.
+            transaction_completed = bool(sync_result.get("success", False))
 
         except AmbiguousModuleError:
             # Issue #1677: an ambiguous bare basename is an actionable user error, not
@@ -1346,6 +1370,15 @@ def sync_main(
                 "total_cost": exc_cost,
                 "model_name": exc_model,
             }
+        finally:
+            if outer_state is not None:
+                # A caught per-language failure is still a failed transaction:
+                # do not publish any buffered finalizer state in that case.
+                outer_state.__exit__(
+                    None if transaction_completed else RuntimeError,
+                    None,
+                    None,
+                )
 
     # 7. Final Summary Report
     if not quiet:

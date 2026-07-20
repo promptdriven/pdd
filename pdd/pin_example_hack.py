@@ -60,96 +60,7 @@ from . import DEFAULT_STRENGTH
 
 # --- Atomic State Update (Issue #159 Fix) ---
 
-@dataclass
-class PendingStateUpdate:
-    """Holds pending state updates for atomic commit."""
-    run_report: Optional[Dict[str, Any]] = None
-    fingerprint: Optional[Dict[str, Any]] = None
-    run_report_path: Optional[Path] = None
-    fingerprint_path: Optional[Path] = None
-
-
-class AtomicStateUpdate:
-    """
-    Context manager for atomic state updates.
-
-    Ensures run_report and fingerprint are both written or neither is written.
-    This fixes Issue #159 where non-atomic writes caused state desynchronization.
-
-    Usage:
-        with AtomicStateUpdate(basename, language) as state:
-            state.set_run_report(report_dict, report_path)
-            state.set_fingerprint(fingerprint_dict, fp_path)
-        # On successful exit, both files are written atomically
-        # On exception, neither file is written (rollback)
-    """
-
-    def __init__(self, basename: str, language: str):
-        self.basename = basename
-        self.language = language
-        self.pending = PendingStateUpdate()
-        self._temp_files: List[str] = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is None:
-            self._commit()
-        else:
-            self._rollback()
-        return False  # Don't suppress exceptions
-
-    def set_run_report(self, report: Dict[str, Any], path: Path):
-        """Buffer a run report for atomic write."""
-        self.pending.run_report = report
-        self.pending.run_report_path = path
-
-    def set_fingerprint(self, fingerprint: Dict[str, Any], path: Path):
-        """Buffer a fingerprint for atomic write."""
-        self.pending.fingerprint = fingerprint
-        self.pending.fingerprint_path = path
-
-    def _atomic_write(self, data: Dict[str, Any], target_path: Path) -> None:
-        """Write data to file atomically using temp file + rename pattern."""
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write to temp file in same directory (required for atomic rename)
-        fd, temp_path = tempfile.mkstemp(
-            dir=target_path.parent,
-            prefix=f".{target_path.stem}_",
-            suffix=".tmp"
-        )
-        self._temp_files.append(temp_path)
-
-        try:
-            with os.fdopen(fd, 'w') as f:
-                json.dump(data, f, indent=2, default=str)
-
-            # Atomic rename - guaranteed atomic on POSIX systems
-            os.replace(temp_path, target_path)
-            self._temp_files.remove(temp_path)  # Successfully moved, stop tracking
-        except Exception:
-            # Leave temp file for rollback to clean up
-            raise
-
-    def _commit(self):
-        """Commit all pending state updates atomically."""
-        # Write fingerprint first (checkpoint), then run_report
-        if self.pending.fingerprint and self.pending.fingerprint_path:
-            self._atomic_write(self.pending.fingerprint, self.pending.fingerprint_path)
-        if self.pending.run_report and self.pending.run_report_path:
-            self._atomic_write(self.pending.run_report, self.pending.run_report_path)
-
-    def _rollback(self):
-        """Clean up any temp files without committing changes."""
-        for temp_path in self._temp_files:
-            try:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-            except OSError:
-                pass  # Best effort cleanup
-        self._temp_files.clear()
+from .fingerprint_transaction import AtomicStateUpdate
 
 
 # --- Mock Helper Functions ---
@@ -254,31 +165,12 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
 
     if finalize_legacy_paths(paths):
         return
-    from datetime import datetime, timezone
-    from .sync_determine_operation import calculate_current_hashes, Fingerprint
-    from . import __version__
+    from .fingerprint_transaction import finalize_fingerprint, operation_invalidates_run_report
 
-    current_hashes = calculate_current_hashes(paths)
-    fingerprint = Fingerprint(
-        pdd_version=__version__,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        command=operation,
-        prompt_hash=current_hashes.get('prompt_hash'),
-        code_hash=current_hashes.get('code_hash'),
-        example_hash=current_hashes.get('example_hash'),
-        test_hash=current_hashes.get('test_hash'),
-        test_files=current_hashes.get('test_files'),  # Bug #156
+    finalize_fingerprint(
+        basename, language, operation, paths, cost, model, atomic_state=atomic_state,
+        remove_run_report=operation_invalidates_run_report(operation),
     )
-
-    fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}.json"
-    if atomic_state:
-        # Buffer for atomic write
-        atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
-    else:
-        # Legacy direct write
-        META_DIR.mkdir(parents=True, exist_ok=True)
-        with open(fingerprint_file, 'w') as f:
-            json.dump(asdict(fingerprint), f, indent=2, default=str)
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
     """Return a `pytest-cov` `--cov` target for a Python code file.
@@ -1265,7 +1157,11 @@ def sync_orchestration(
                     op_start_time = time.time()
 
                     # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
-                    with AtomicStateUpdate(basename, language) as atomic_state:
+                    from .operation_log import get_fingerprint_path
+                    with AtomicStateUpdate(
+                        basename, language,
+                        directory=get_fingerprint_path(basename, language, paths=pdd_files).parent,
+                    ) as atomic_state:
 
                         # --- Execute Operation ---
                         try:

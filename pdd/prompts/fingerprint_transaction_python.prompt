@@ -1,0 +1,74 @@
+<pdd-reason>Single transactional finalizer for legacy PDD fingerprints.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "finalize_fingerprint", "signature": "(*args: Any, **kwargs: Any) -> None", "returns": "None"},
+      {"name": "AtomicStateUpdate.recover", "signature": "(basename: str, language: str, directory: Path) -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>sync_determine_operation_python.prompt</pdd-dependency>
+
+Implement `pdd.fingerprint_transaction` with one public thin API:
+
+- `finalize_fingerprint(basename, language, operation, paths=None, cost=0.0, model="unknown", *, atomic_state=None, include_deps_override=None)`.
+- Determine the owning root from the explicit prompt path and reject every real
+  explicit code/example/test artifact that resolves outside it (including
+  traversal and symlink escape). Optional null/empty hints do not erase
+  discovered artifacts; discard invalid advisory discovery rather than hashing
+  an unrelated parent-checkout default. Every discovered canonical role,
+  including a root-level default, remains authoritative even when its expected
+  file is absent: do not accept a same-named override from another directory
+  without configuration or architecture proof. When a prompt path does not by
+  itself identify its declared `.pddrc` context, an in-root code path may select
+  that context only; accept it only if the context's canonical code role is the
+  same path. Reject duplicate test filenames.
+- Acquire the per-unit metadata lock before canonical path completion,
+  recovery, previous-fingerprint reads, and hashing in both direct and paired
+  callers. A paired `AtomicStateUpdate` retains that lock through publication,
+  so an older snapshot cannot overwrite a newer mutation.
+- Build the persisted `Fingerprint` only here, using current hashes and prior include dependencies.
+- Reject a null prompt hash and a null hash for any existing code/example/test artifact with `FingerprintFinalizeError`.
+- Persist direct writes only through `json_atomic.atomic_write_json`, whose temporary file is in the destination directory and is replaced with `os.replace` after fsync.
+- `AtomicStateUpdate` is the only coupled run-report/fingerprint publication
+  path. It uses same-directory staged files, fsync, a fixed-size two-record
+  journal, backups, and an exclusive lock. Restart recovery restores a prepared
+  or partially-published pair before a new writer proceeds; it never suppresses
+  recovery errors or claims that two renames are one atomic operation.
+- The durable `committed` journal state is the API commit point. A cleanup
+  failure after that point is restartable bookkeeping: return success (after a
+  bounded retry) and leave recovery authority intact, never tell a command to
+  repeat an already published mutation.
+- Treat journals as untrusted project data: bind a closed versioned schema to a
+  hashed unit identity, validate every role/name/path under the metadata
+  directory, never resolve a target through a symlink, and reject hard-link
+  aliases, replacement races, wrong target roles, and a held lock for a
+  different metadata directory. Bound encoded new payloads, old/restore copy
+  streams, aggregate journal data, and short writes before publishing. The
+  journal records old/new bounded digests so recovery refuses to overwrite a
+  target replaced by another writer. Readers recover under the same lock before
+  making an authoritative decision. Use a supported Windows locking fallback
+  rather than importing POSIX-only APIs unconditionally.
+- When given an atomic-state buffer, submit the identical payload via
+  `set_fingerprint`; never duplicate payload construction in callers. When an
+  operation also invalidates a run report, prepare the payload and both pending
+  mutations as one all-or-nothing owner update: a set/remove/path failure must
+  abort the active state so a caller that records a failed stage cannot later
+  commit either a fresh fingerprint or a tombstone alone.
+- Nested work for the same `(metadata directory, basename, language)` MUST join
+  the active in-thread transaction in O(1): it shares pending records and never
+  takes a second OS lock, commits, or releases the outer lock. Different units
+  retain independent locks. A non-null exception at any nested depth aborts the
+  outer publication rather than committing buffered state.
+- A later same-path run-report intent supersedes an earlier one inside that
+  transaction: post-mutation verification can replace a buffered stale-report
+  tombstone, while a later invalidation can tombstone a buffered report. Reject
+  conflicting paths rather than publishing either record ambiguously.
+- Wrap path/hash/write failures in `FingerprintFinalizeError` containing the operation and destination. A mutating caller must propagate this failure instead of reporting success.
+
+The implementation must not add a second fingerprint file format or alter the durable `Fingerprint` schema.

@@ -448,15 +448,6 @@ def _use_agentic_path(language: str, agentic_mode: bool) -> bool:
 # --- Atomic State Update (Issue #159 Fix) ---
 
 @dataclass
-class PendingStateUpdate:
-    """Holds pending state updates for atomic commit."""
-    run_report: Optional[Dict[str, Any]] = None
-    fingerprint: Optional[Dict[str, Any]] = None
-    run_report_path: Optional[Path] = None
-    fingerprint_path: Optional[Path] = None
-
-
-@dataclass
 class FileRollbackSnapshot:
     """Snapshot of a single file before an operation mutates it."""
     path: Path
@@ -464,87 +455,7 @@ class FileRollbackSnapshot:
     content: Optional[bytes] = None
 
 
-class AtomicStateUpdate:
-    """
-    Context manager for atomic state updates.
-
-    Ensures run_report and fingerprint are both written or neither is written.
-    This fixes Issue #159 where non-atomic writes caused state desynchronization.
-
-    Usage:
-        with AtomicStateUpdate(basename, language) as state:
-            state.set_run_report(report_dict, report_path)
-            state.set_fingerprint(fingerprint_dict, fp_path)
-        # On successful exit, both files are written atomically
-        # On exception, neither file is written (rollback)
-    """
-
-    def __init__(self, basename: str, language: str):
-        self.basename = basename
-        self.language = language
-        self.pending = PendingStateUpdate()
-        self._temp_files: List[str] = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is None:
-            self._commit()
-        else:
-            self._rollback()
-        return False  # Don't suppress exceptions
-
-    def set_run_report(self, report: Dict[str, Any], path: Path):
-        """Buffer a run report for atomic write."""
-        self.pending.run_report = report
-        self.pending.run_report_path = path
-
-    def set_fingerprint(self, fingerprint: Dict[str, Any], path: Path):
-        """Buffer a fingerprint for atomic write."""
-        self.pending.fingerprint = fingerprint
-        self.pending.fingerprint_path = path
-
-    def _atomic_write(self, data: Dict[str, Any], target_path: Path) -> None:
-        """Write data to file atomically using temp file + rename pattern."""
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write to temp file in same directory (required for atomic rename)
-        fd, temp_path = tempfile.mkstemp(
-            dir=target_path.parent,
-            prefix=f".{target_path.stem}_",
-            suffix=".tmp"
-        )
-        self._temp_files.append(temp_path)
-
-        try:
-            with os.fdopen(fd, 'w') as f:
-                json.dump(data, f, indent=2, default=str)
-
-            # Atomic rename - guaranteed atomic on POSIX systems
-            os.replace(temp_path, target_path)
-            self._temp_files.remove(temp_path)  # Successfully moved, stop tracking
-        except Exception:
-            # Leave temp file for rollback to clean up
-            raise
-
-    def _commit(self):
-        """Commit all pending state updates atomically."""
-        # Write fingerprint first (checkpoint), then run_report
-        if self.pending.fingerprint and self.pending.fingerprint_path:
-            self._atomic_write(self.pending.fingerprint, self.pending.fingerprint_path)
-        if self.pending.run_report and self.pending.run_report_path:
-            self._atomic_write(self.pending.run_report, self.pending.run_report_path)
-
-    def _rollback(self):
-        """Clean up any temp files without committing changes."""
-        for temp_path in self._temp_files:
-            try:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-            except OSError:
-                pass  # Best effort cleanup
-        self._temp_files.clear()
+from .fingerprint_transaction import AtomicStateUpdate
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
@@ -716,43 +627,13 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
             signer=attestation_signer_from_environment(),
         )
         return
-    if atomic_state:
-        # Buffer for atomic write
-        from datetime import datetime, timezone
-        from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
-        from . import __version__
+    from .fingerprint_transaction import finalize_fingerprint, operation_invalidates_run_report
 
-        # Issue #522: Use override deps if provided (captured before auto-deps),
-        # otherwise fall back to stored deps from previous fingerprint
-        if include_deps_override is not None:
-            stored_deps = include_deps_override
-        else:
-            prev_fp = read_fingerprint(basename, language, paths=paths)
-            stored_deps = prev_fp.include_deps if prev_fp else None
-        current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps)
-        # If override provided and current extraction found nothing, use the override
-        if include_deps_override and not current_hashes.get('include_deps'):
-            current_hashes['include_deps'] = include_deps_override
-        fingerprint = Fingerprint(
-            pdd_version=__version__,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            command=operation,
-            prompt_hash=current_hashes.get('prompt_hash'),
-            code_hash=current_hashes.get('code_hash'),
-            example_hash=current_hashes.get('example_hash'),
-            test_hash=current_hashes.get('test_hash'),
-            test_files=current_hashes.get('test_files'),  # Bug #156
-            include_deps=current_hashes.get('include_deps'),  # Issue #522
-        )
-
-        # Issue #1211: route the atomic fingerprint file through the
-        # paths-aware helper so subprojects whose .pddrc is below run CWD
-        # get the file under <subproject>/.pdd/meta, not parent CWD.
-        fingerprint_file = get_fingerprint_path(basename, language, paths=paths)
-        atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
-    else:
-        # Direct write using operation_log
-        save_fingerprint(basename, language, operation, paths, cost, model)
+    finalize_fingerprint(
+        basename, language, operation, paths, cost, model,
+        atomic_state=atomic_state, include_deps_override=include_deps_override,
+        remove_run_report=operation_invalidates_run_report(operation),
+    )
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
     """Return a `pytest-cov` `--cov` target for a Python code file.
@@ -2653,20 +2534,37 @@ def sync_orchestration(
                         print(f"PDD_PHASE: skip:{operation}", flush=True)
                         update_log_entry(log_entry, success=True, cost=0.0, model='skipped', duration=0.0, error=None)
                         append_log_entry(basename, language, log_entry, paths=pdd_files)
-                        # Save fingerprint with 'skip:' prefix to indicate operation was skipped, not executed
-                        _save_fingerprint_atomic(basename, language, 'skip:crash', pdd_files, 0.0, 'skipped')
-                        # FIX: Create a synthetic run_report to prevent infinite loop when crash is skipped
-                        # Without this, sync_determine_operation keeps returning 'crash' because no run_report exists
-                        current_hashes = calculate_current_hashes(pdd_files)
-                        synthetic_report = RunReport(
-                            timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                            exit_code=0,  # Assume success since we're skipping validation
-                            tests_passed=0,
-                            tests_failed=0,
-                            coverage=0.0,
-                            test_hash=current_hashes.get('test_hash')
-                        )
-                        _save_run_report_atomic(asdict(synthetic_report), basename, language, paths=pdd_files)
+                        # The skip fingerprint and synthetic report are one
+                        # authority pair.  A crash between two direct saves
+                        # previously exposed a fresh skip fingerprint beside a
+                        # stale report with no recovery journal.
+                        with AtomicStateUpdate(
+                            basename,
+                            language,
+                            directory=get_fingerprint_path(
+                                basename, language, paths=pdd_files
+                            ).parent,
+                        ) as skipped_state:
+                            # The state lock also owns the report snapshot.
+                            # Hashing before it would let a concurrent writer
+                            # pair an old report hash with a new fingerprint.
+                            current_hashes = calculate_current_hashes(pdd_files)
+                            synthetic_report = RunReport(
+                                timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                exit_code=0,
+                                tests_passed=0,
+                                tests_failed=0,
+                                coverage=0.0,
+                                test_hash=current_hashes.get('test_hash'),
+                            )
+                            _save_run_report_atomic(
+                                asdict(synthetic_report), basename, language,
+                                atomic_state=skipped_state, paths=pdd_files,
+                            )
+                            _save_fingerprint_atomic(
+                                basename, language, 'skip:crash', pdd_files,
+                                0.0, 'skipped', atomic_state=skipped_state,
+                            )
                         consecutive_noop_fixes = 0
                         continue
 
@@ -2705,7 +2603,10 @@ def sync_orchestration(
                     # Drop any stale LLM trace for this operation key so failure paths only
                     # attach pairs from the current attempt (success paths do not pop).
                     pop_last_pair(operation)
-                    with AtomicStateUpdate(basename, language) as atomic_state:
+                    with AtomicStateUpdate(
+                        basename, language,
+                        directory=get_fingerprint_path(basename, language, paths=pdd_files).parent,
+                    ) as atomic_state:
 
                         # --- Execute Operation ---
                         try:
@@ -2743,16 +2644,8 @@ def sync_orchestration(
                                     new_content = temp_output.read_text(encoding='utf-8')
                                     if new_content != original_content:
                                         shutil.move(str(temp_output), str(pdd_files['prompt']))
-                                        # Issue #989: clear the canonical stale
-                                        # ``_run.json`` because the prompt
-                                        # content just changed. Mirrors the
-                                        # clear after generate (line 2272).
-                                        try:
-                                            clear_run_report(basename, language, paths=pdd_files)
-                                        except Exception:
-                                            # Never mask a successful auto-deps
-                                            # result on metadata cleanup errors.
-                                            pass
+                                        # The paired finalizer journals stale
+                                        # report removal with its fingerprint.
                                     else:
                                         temp_output.unlink()
                                         result = (new_content, 0.0, 'no-changes')
@@ -2896,8 +2789,8 @@ def sync_orchestration(
                                         os.environ.pop("PDD_REPAIR_DIRECTIVE", None)
                                     else:
                                         os.environ["PDD_REPAIR_DIRECTIVE"] = _prev_repair
-                                # Clear stale run_report so crash/verify is required for newly generated code
-                                clear_run_report(basename, language, paths=pdd_files)
+                                # The paired finalizer journals stale report
+                                # removal with its fingerprint below.
 
                                 if evidence:
                                     try:
@@ -3588,6 +3481,14 @@ def sync_orchestration(
                             )
                             if not _is_noop_fix:
                                 _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state, include_deps_override=include_deps_override)
+                                # Keep invalidation explicit at the operation
+                                # boundary.  The active transaction buffers the
+                                # removal with the fingerprint, while this
+                                # still invalidates stale validation evidence
+                                # when a caller supplies a finalization seam.
+                                from .fingerprint_transaction import operation_invalidates_run_report
+                                if operation_invalidates_run_report(operation):
+                                    clear_run_report(basename, language, paths=pdd_files)
                             if operation_rollback is not None:
                                 operation_rollback.commit()
 
