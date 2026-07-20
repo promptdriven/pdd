@@ -48,6 +48,17 @@ _UNSAFE_CONTROL_RE = re.compile(
     r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]"
 )
 _NOISY_DIAGNOSTIC_RE = re.compile(r"(?i)\b(?:warning|debug|retry(?:ing)?)\b")
+_HEAL_PEM_BLOCK_RE = re.compile(
+    r"-----BEGIN (?P<pem_type>[A-Z0-9 ]*PRIVATE KEY)-----.*?"
+    r"-----END (?P=pem_type)-----",
+    re.IGNORECASE | re.DOTALL,
+)
+_HEAL_QUOTED_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b([A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?|"
+    r"ACCESS_KEY|PRIVATE_KEY))\s*([=:])\s*"
+    r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')'''
+)
+_GOOGLE_OAUTH_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_-])ya29\.[A-Za-z0-9._-]{10,}")
 _HOME_PATH_PATTERNS = (
     re.compile(r"(?i)(?<![A-Za-z0-9_])/[Uu]sers/[^/\\\s:;]+"),
     re.compile(r"(?i)(?<![A-Za-z0-9_])/[Hh]ome/[^/\\\s:;]+"),
@@ -55,7 +66,7 @@ _HOME_PATH_PATTERNS = (
 )
 _HEAL_SECRET_PATTERNS = (
     re.compile(
-        r"(?i)\b([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?|"
+        r"(?i)\b([A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?|"
         r"ACCESS_KEY|PRIVATE_KEY))"
         r"\s*([=:])\s*([^\s,;]+)"
     ),
@@ -754,6 +765,13 @@ def _redact_heal_diagnostic(text: str) -> str:
     """Remove credentials and personal home-directory owners from diagnostics."""
     redacted = _ANSI_ESCAPE_RE.sub("", text)
     redacted = _UNSAFE_CONTROL_RE.sub("", redacted)
+    # Multiline/quoted forms must be removed before line selection and before
+    # simpler scrubbers can consume only their first token or PEM header.
+    redacted = _HEAL_PEM_BLOCK_RE.sub("[REDACTED]", redacted)
+    redacted = _HEAL_QUOTED_ASSIGNMENT_RE.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", redacted
+    )
+    redacted = _GOOGLE_OAUTH_TOKEN_RE.sub("[REDACTED]", redacted)
     # Reuse the repository's mature snapshot scrubber for provider keys,
     # Authorization headers, credentialed URLs, and ambient credential values.
     redacted, _, _ = redact_snapshot_text(redacted)

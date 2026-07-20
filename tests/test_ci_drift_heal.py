@@ -3084,6 +3084,36 @@ class TestRunPddCommandDiagnostics:
             assert secret not in printed
         assert printed.count("[REDACTED]") >= 8
 
+    def test_quoted_multiline_and_oauth_secrets_are_redacted_in_all_channels(self):
+        quoted_first = "first-secret"
+        quoted_second = "second-secret"
+        pem_body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"
+        oauth_token = "ya29.a0AfH6SMBvery-private-oauth-token"
+        failed = MagicMock(
+            returncode=1,
+            stdout=f'Error: API_KEY="{quoted_first} {quoted_second}"',
+            stderr=(
+                'PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n'
+                f"{pem_body}\n"
+                '-----END PRIVATE KEY-----"\nprovider failed'
+            ),
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"],
+                {},
+                f"Heal OAuth {oauth_token}",
+            )
+
+        printed = self._printed(mock_print)
+        for secret in (quoted_first, quoted_second, pem_body, oauth_token):
+            assert secret not in printed
+        assert "BEGIN PRIVATE KEY" not in printed
+        assert "END PRIVATE KEY" not in printed
+        assert printed.count("[REDACTED]") >= 3
+
     def test_compact_jwt_is_redacted_without_hiding_dotted_versions(self):
         compact_jwt = "eyJhbGciOiJub25lIn0.e30.signature123"
         failed = MagicMock(
