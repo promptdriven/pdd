@@ -313,6 +313,19 @@ governance:
   future_preauthorization_policy: "May batch only a fully designed literal exact path set; speculative, wildcard, or cross-gate authority is prohibited."
   gate_affecting_merge_update_rule: "Every gate-affecting protected merge updates the reviewed ledger source and regenerates the output in the same evidence update."
   gate_1_mapping_rule: "Mapping or preauthorization alone cannot mark Gate 1 passed."
+  incident_recovery_controls:
+    effective_date: "2026-07-20"
+    source: "Operator incident recap; the referenced incident document was not present at observed protected pdd or pdd_cloud main when this correction was prepared."
+    agent_fleets_allowed: false
+    schedulers_allowed: false
+    auto_heal_allowed: false
+    correction_rounds_before_human_escalation: 1
+    hosted_check_rounds_per_pr_per_day: 2
+    review_must_bind_exact_sha: true
+    staging_deploy_mode: manual-only
+    docs_only_pushes_skip_ci: true
+    code_bearing_docs_prs_require_normal_ci: true
+    restart_requires_process_cloud_task_credential_webhook_inventory: true
   retired_docs_worktree_audit:
     retired: true
     remote_archival_ref: "origin/docs/issue-1932-goal-rebaseline"

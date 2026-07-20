@@ -44,90 +44,29 @@ LIVE_DELIVERABLE_UNDER_24_HOUR_TEXT = (
     "Under 24 hours, produce `docs/global_sync_gate6_partition.json` only after its "
     "exact protected absent-path preauthorization/review prerequisite is merged.",
 )
-LIVE_DELIVERABLE_OUTPUT_CLASSES = (
-    "derivable-from-existing-tests", "needs-new-tests", "decommission-candidate",
+LIVE_DELIVERABLE_BLOCKERS = (
+    "Sealed OCI layer 2 is the current critical path under the ratified "
+    "3-working-day governance timebox.",
+    "The 467 human-only units need one protected, collected-node partition artifact "
+    "before Gate 6 can begin.",
 )
-OCI_LAYER2_EXACT_FUTURE_PATHS = (
-    ".github/workflows/oci-checker-runtime.yml", ".pdd/global-sync/oci-checker-runtime.json",
-    "ci/sync-checker/Dockerfile", "pdd/sync_core/oci_runtime.py",
-    "tests/test_sync_core_oci_runtime.py",
+LIVE_DELIVERABLE_INTENT_DIGESTS = (
+    "107a7e45f077c92863078047940f8c93b9142dd37621599f40a7fbf746c916a4",
+    "063f4463715447f979e5e157bee9c8855d6f867bbdc3a4f68ed172aefb8790db",
 )
-RATIFIED_A2_INTENT: dict[str, object] = {
-    "governance_timebox_working_days": 3,
-    "literal_preauthorization_review_pr": {
-        "status": "pending",
-        "exact_future_path_set": list(OCI_LAYER2_EXACT_FUTURE_PATHS),
-        "review_pr_change_set": [
-            ".pdd/sync-ownership.json",
-            "tests/test_sync_core_pdd_rollout_policy.py",
-        ],
-        "does_not_claim_oci_release": True,
-    },
-    "fallback_on_timebox_overrun": (
-        "on timebox overrun, pin runner image plus system git identities in the pin lane, "
-        "release wheel + exact digest, and defer OCI to a hardening PR"
-    ),
-    "oci_promotion": {
-        "status": "pending",
-        "requires_exact_released_wheel_digest": True,
-        "local_candidate_digest_is_release_evidence": False,
-    },
-}
-RATIFIED_C1_INTENT: dict[str, object] = {
-    "preauthorization_prerequisite": {
-        "status": "pending",
-        "exact_absent_path": "docs/global_sync_gate6_partition.json",
-        "required_before_output": True,
-        "wildcard_authority_allowed": False,
-    },
-    "output_classes": list(LIVE_DELIVERABLE_OUTPUT_CLASSES),
-    "classification_definitions": {
-        "derivable-from-existing-tests": (
-            "Requires explicit protected profile/artifact-to-node evidence and "
-            "collected pytest nodes."
-        ),
-        "needs-new-tests": (
-            "Every other human-only unit is needs-new-tests: no qualifying obligation can be "
-            "mechanically derived from protected registry+collection; this is not a claim that "
-            "no existing test happens to cover it."
-        ),
-        "decommission-candidate": "Requires protected ownership, tombstone, and rule evidence.",
-    },
-    "artifact_contract": {
-        "output_path": "docs/global_sync_gate6_partition.json",
-        "protected_profile_source_sha": "2cacc91f90759ff45f1ad976da3b773e1a5f07a5",
-        "protected_profile_source_digest_sha256": (
-            "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
-        ),
-        "protected_main_sha": "e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347",
-        "pytest_collection_command": (
-            "/opt/homebrew/Caskroom/miniforge/base/envs/pdd/bin/python "
-            "-m pytest --collect-only -q"
-        ),
-        "pytest_tool_identity": "/opt/homebrew/Caskroom/miniforge/base/envs/pdd/bin/python",
-        "required_node_fields": ["collected_node_ids", "collected_node_ids_sha256"],
-        "human_only_units_expected": 467,
-        "accounts_each_human_only_unit_exactly_once": True,
-    },
-    "follow_on_queue": [
-        {
-            "id": "C2",
-            "status": "pending",
-            "deliverable": "External append-only anchor",
-            "required_before_7_night_streak": True,
-        },
-        {
-            "id": "C3",
-            "status": "pending",
-            "deliverable": (
-                "Minimal separately released no-shared-code reference verifier "
-                "and documented schema"
-            ),
-            "required_before_7_night_streak": True,
-        },
-    ],
-}
-RATIFIED_LIVE_DELIVERABLE_INTENTS = (RATIFIED_A2_INTENT, RATIFIED_C1_INTENT)
+GATE_1_RESIDUAL_DIGEST = "3d792dfb073aaf89507b68ec090da601858a2dc270ea704ad990782c5fe4c05a"
+CERTIFICATE_PROGRAM_DIGEST = "d1e12d437a55530ed5668696297a88f56b2a4b2a03a71ddb0ab3b3b1e72f91e3"
+LEDGER_TOP_LEVEL_FIELDS = frozenset(
+    (
+        "schema_version updated_at tracking_issue controlling_plan status_vocabulary "
+        "pass_rule evidence_state_vocabulary required_gate_state_fields live_deliverables "
+        "ledger_generation promotion_bundles governance certificate_program live_rebaseline "
+        "historical_critical_path_context docs_gate_pr preauthorization_pr "
+        "ledger_generation_ownership_prerequisite gate_1_evidence_pr "
+        "gate_2_package_boundary_prerequisite gate_2_package_boundary_pr "
+        "gate_2_release_workflow_preauthorization_pr steps"
+    ).split()
+)
 LEGACY_LIVE_SLOT_FIELDS = frozenset(
     {
         "canonical_blockers",
@@ -735,18 +674,38 @@ def _validate_live_deliverables(payload: dict[str, Any], statuses: set[str]) -> 
         status = slot.get("status")
         if status not in statuses or status != "in-progress":
             raise LedgerError(f"live_deliverables[{index}].status must be ratified in-progress")
-        _require_nonempty_string(
-            slot.get("current_blocker"), f"live_deliverables[{index}].current_blocker"
-        )
+        if slot.get("current_blocker") != LIVE_DELIVERABLE_BLOCKERS[index]:
+            raise LedgerError(
+                f"live_deliverables[{index}].current_blocker must match the ratified text"
+            )
         if slot.get("under_24h_deliverable") != LIVE_DELIVERABLE_UNDER_24_HOUR_TEXT[index]:
             raise LedgerError(
                 f"live_deliverables[{index}].under_24h_deliverable must match the ratified text"
             )
         intent = slot.get("intent")
-        if not isinstance(intent, dict) or intent != RATIFIED_LIVE_DELIVERABLE_INTENTS[index]:
+        if (
+            not isinstance(intent, dict)
+            or canonical_predicate_digest(intent) != LIVE_DELIVERABLE_INTENT_DIGESTS[index]
+        ):
             raise LedgerError(
                 f"live_deliverables[{index}].intent must match the ratified contract"
             )
+
+
+def _validate_ratified_contracts(payload: dict[str, Any]) -> dict[str, Any]:
+    """Pin the scheduler, Gate 1 residual, and terminal certificate contracts."""
+    if set(payload) != LEDGER_TOP_LEVEL_FIELDS:
+        raise LedgerError("ledger source must contain exactly the ratified top-level fields")
+    live_rebaseline = _require_mapping(payload, "live_rebaseline")
+    gate_1_residual = _require_mapping(
+        live_rebaseline, "gate_1_remaining_machine_subpredicate"
+    )
+    if canonical_predicate_digest(gate_1_residual) != GATE_1_RESIDUAL_DIGEST:
+        raise LedgerError("Gate 1 residual contract differs from the ratified pending predicate")
+    certificate_program = _require_mapping(payload, "certificate_program")
+    if canonical_predicate_digest(certificate_program) != CERTIFICATE_PROGRAM_DIGEST:
+        raise LedgerError("Certificate A/B program differs from the ratified contract")
+    return live_rebaseline
 
 
 def _validate_plan(plan: Path, source: Path, payload: dict[str, Any]) -> None:
@@ -842,6 +801,7 @@ def validate_ledger(  # pylint: disable=too-many-locals,too-many-branches
         payload, "required_gate_state_fields", REQUIRED_GATE_STATE_FIELDS
     )
     _validate_live_deliverables(payload, statuses)
+    live_rebaseline = _validate_ratified_contracts(payload)
     ledger_generation = _require_mapping(payload, "ledger_generation")
     if ledger_generation.get("status") not in statuses:
         raise LedgerError("ledger_generation.status is not in status_vocabulary")
@@ -873,7 +833,6 @@ def validate_ledger(  # pylint: disable=too-many-locals,too-many-branches
             raise LedgerError(f"steps[{index}].order must be stable order {index + 1}")
         promotion_references.extend(_validate_step(step, statuses, index))
     bundle_subjects = _collect_bundle_subjects(promotion_references)
-    live_rebaseline = _require_mapping(payload, "live_rebaseline")
     if live_rebaseline.get("gates_required") != GATE_COUNT:
         raise LedgerError(f"live_rebaseline.gates_required must equal {GATE_COUNT}")
     passed_gates = sum(step["status"] == "passed" for step in steps)

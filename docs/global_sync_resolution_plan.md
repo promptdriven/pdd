@@ -77,6 +77,29 @@ This accepts #2229 as delivered Layer 1 within 24 hours, closing only its packag
    reference verifier and documented schema; both are required before the
    seven-night streak.
 
+### 2026-07-20 incident recovery controls
+
+The operator incident recap changes execution governance without weakening any
+Certificate A or B predicate. Until an explicit restart authorization lands:
+
+- no subagent fleet, scheduler, auto-heal, or autonomous review loop may run;
+- each PR gets one correction round, followed by exact-SHA human escalation;
+- each PR may consume at most two hosted check rounds per UTC day;
+- docs-only pushes intentionally skip CI, but this code-bearing ledger PR still
+  requires its normal hosted checks;
+- staging deployment is manual-only and is never inferred from a merge; and
+- fleet restart requires an inventory of local/tmux processes, Codex Cloud
+  tasks, credential identities, and repository webhooks.
+
+At preparation time, the referenced incident file was not present on observed
+protected `pdd` main `e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347` or protected
+`pdd_cloud` main `03d8f80a3d9cfc46bfca940b813a0cdba4a08f6a`; the operator recap
+is therefore the controlling incident input. The local inventory found multiple
+long-lived Codex, Claude, and Herdr processes whose ownership must be reconciled
+before fleet restart. No process owned by another session is terminated by this
+program. Codex Cloud reported 60 historical tasks, all `ready` and none running;
+tmux is not installed. Credential values are never recorded.
+
 Gate 1 remains `in-progress`. Its historical #2214 predicate and promotion
 bundle are preserved; the remaining live machine sub-predicate is an executable
 extraction/net-diff verifier proving
@@ -800,7 +823,7 @@ The recommendations are adopted with these corrections:
 | Early protected vertical slice | Adopt | Immediately after checker release, gate broad migration on one fixture, one PDD unit, and one real pdd_cloud unit covering edits, death, stale evidence, tampering, recovery, exact-SHA signatures, and zero-write reruns. |
 | Canonical mutator routing and static enforcement | Adopt | Production code must use canonical identity/include/classifier/transaction/fingerprint APIs; a protected static ownership test rejects independent implementations and direct canonical metadata writes. |
 | Nonqualifying shadow nightlies | Adopt | Start shadows immediately for infrastructure debugging. They never increment the official streak, which starts only after steps 1-8 pass. |
-| Evidence-based progress format | Adopt | Every update reports gates, machine profile coverage, released digest, lifecycle rows, cloud canary, qualifying nights, and one blocker. |
+| Evidence-based progress format | Adopt | Every update reports gates, machine profile coverage, released digest, lifecycle rows, cloud canary, qualifying nights, and both live slots with each blocker and under-24-hour deliverable. |
 
 The 2026-07-18 execution ratification fixes the immediate sequencing:
 
@@ -858,7 +881,7 @@ are extracted onto fresh live-main PRs and receive complete net-diff review.
 
 | Order | Unblock | Required exit evidence |
 | --- | --- | --- |
-| 1 | Rebaseline against protected live main. Inventory already-merged prerequisites, release-required deltas, and excluded diagnostic work in `docs/global_sync_extraction_manifest.md`; deliver the standalone non-`pdd` checker package boundary before OCI and protected pin wiring. | The manifest accounts for the frozen #1995 net diff and #2225 diagnostic attempts without treating either as a release vehicle, identifies already-protected foundations without re-extracting them, excludes diagnostic workflow/bootstrap work, and maps every release-required delta to a bounded fresh-main PR with complete net-diff review. |
+| 1 | Rebaseline against protected live main. The standalone non-`pdd` checker package boundary was delivered by #2229; retain its evidence as historical Layer 1 while A2 advances sealed OCI and C1 advances the Gate 6 partition. | The manifest accounts for the frozen #1995 net diff and #2225 diagnostic attempts without treating either as a release vehicle, identifies already-protected foundations without re-extracting them, excludes diagnostic workflow/bootstrap work, and maps every remaining release-required delta to a bounded fresh-main PR with complete net-diff review. |
 | 2 | Extract a standalone non-`pdd` checker distribution with checker-only dependencies, strict lock/RECORD validation, and corrected compatible-wheel tag handling; then seal it in a separately pinned Git-capable OCI runtime and wire protected release/pin expectations. #2225 is diagnostic evidence only, never the release vehicle. | All three layers have their distinct lifecycle evidence: released checker wheel digest; protected OCI digest, provenance, SBOM, and dpkg inventory; and protected workflow/expectation pins. Candidate-controlled checker, scenario, PATH, wheelhouse, expectation, or verifier inputs remain impossible, while unconditional-PASS, env-printing, and scenario-edit candidates are red and unsigned. |
 | 3 | Replace direct production writes with generate-to-staging followed by one durable transaction containing artifacts, shared metadata, evidence, report, and fingerprint. Use descriptor-relative no-follow commit operations and verify all WAL blobs before the first destination change. Before broad migration, run the protected vertical slice from clean clones and built wheels against one fixture, one PDD unit, and one real pdd_cloud unit. | Process death at every generation/journal/install phase recovers to the complete old or complete new state; prompt/include/code/test edits, stale evidence, and candidate tampering are detected; signed evidence binds exact SHAs; immediate rerun writes zero files. |
 | 4 | Carry the exact local PDD-only adapter-demand matrix into the guarded gate-1 PR. Make the pytest adapter compare protected expected node IDs with collected and executed node IDs and bind every config-loaded plugin and executable support module. Defer a combined PDD/pdd_cloud matrix until pdd_cloud has a protected profile registry. Implement every actually demanded adapter before claiming coverage; defer undemanded universal adapters. | The PDD matrix accounts for all 468 protected profiles, reports demanded validators exactly `{pytest}`, and has no unknown adapter. Removed parametrized cases, config-loaded local plugins, collection hooks, skips, xfails, deselection, and dirty support fail closed. The later combined matrix accounts for every protected pdd_cloud profile and requires real-browser execution only if a protected profile demands Playwright. |

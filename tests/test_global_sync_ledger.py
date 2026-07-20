@@ -22,9 +22,8 @@ from pdd.sync_core.global_sync_ledger import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-LIVE_DELIVERABLES = load_unique_yaml(
-    ROOT / "docs/global_sync_evidence_ledger_source.yaml"
-)["live_deliverables"]
+BASE_LEDGER = load_unique_yaml(ROOT / "docs/global_sync_evidence_ledger_source.yaml")
+LIVE_DELIVERABLES = BASE_LEDGER["live_deliverables"]
 STATE_FIELDS = (
     "implemented",
     "local_green",
@@ -56,7 +55,10 @@ def _payload() -> dict[str, object]:
         }
         for order in range(1, 11)
     ]
-    return {
+    payload = deepcopy(BASE_LEDGER)
+    live_rebaseline = deepcopy(BASE_LEDGER["live_rebaseline"])
+    live_rebaseline.update({"gates_required": 10, "gates_passed": 0})
+    payload.update({
         "schema_version": 5,
         "controlling_plan": "plan.md",
         "status_vocabulary": ["pending", "in-progress", "passed"],
@@ -71,9 +73,10 @@ def _payload() -> dict[str, object]:
             "required_predicate": {"generator": True},
         },
         "promotion_bundles": {},
-        "live_rebaseline": {"gates_required": 10, "gates_passed": 0},
+        "live_rebaseline": live_rebaseline,
         "steps": steps,
-    }
+    })
+    return payload
 
 
 def _promotion_bundle() -> dict[str, object]:
@@ -328,68 +331,56 @@ def test_global_sync_ledger_rejects_malformed_schema(
         run(plan, output, source)
 
 
-@pytest.mark.parametrize(
-    "mutate, expected",
-    [
-        (
-            lambda payload: payload.pop("live_deliverables"),
-            "must contain exactly two slots",
-        ),
-        (
-            lambda payload: payload["live_deliverables"].pop(),
-            "must contain exactly two slots",
-        ),
-        (
-            lambda payload: payload["live_deliverables"].append(
-                payload["live_deliverables"][0].copy()
-            ),
-            "must contain exactly two slots",
-        ),
-        (
-            lambda payload: payload["live_deliverables"][1].update({"id": "A2"}),
-            "ids must not be duplicate",
-        ),
-        (
-            lambda payload: payload["live_deliverables"].reverse(),
-            "must retain ratified A2, C1 order",
-        ),
-        (
-            lambda payload: payload["live_deliverables"][0].update({"id": ""}),
-            "ids must be non-empty strings",
-        ),
-        (
-            lambda payload: payload["live_deliverables"][0].update({"status": "passed"}),
-            "status must be ratified in-progress",
-        ),
-        (
-            lambda payload: payload["live_deliverables"][0].update(
-                {"under_24h_deliverable": "OCI is released"}
-            ),
-            "under_24h_deliverable must match the ratified text",
-        ),
-        (
-            lambda payload: payload.update({"single_next_blocker": "legacy"}),
-            "contains legacy live-slot fields",
-        ),
-        (
-            lambda payload: payload["live_rebaseline"].update(
-                {"same_day_deliverable": "legacy"}
-            ),
-            "contains legacy live-slot fields",
-        ),
-        (
-            lambda payload: payload["live_deliverables"][1]["intent"][
-                "output_classes"
-            ].append("pending_protected_rule"),
-            "intent must match the ratified contract",
-        ),
-    ],
+INVALID_CONTRACT_MUTATIONS = (
+    (("live_deliverables",), "delete", None, "must contain exactly two slots"),
+    (("live_deliverables",), "pop", None, "must contain exactly two slots"),
+    (("live_deliverables",), "duplicate", None, "must contain exactly two slots"),
+    (("live_deliverables", 1, "id"), "set", "A2", "ids must not be duplicate"),
+    (("live_deliverables",), "reverse", None, "must retain ratified A2, C1 order"),
+    (("live_deliverables", 0, "id"), "set", "", "ids must be non-empty strings"),
+    (("live_deliverables", 0, "status"), "set", "passed", "status must be ratified"),
+    (("live_deliverables", 0, "under_24h_deliverable"), "set", "released", "must match"),
+    (("live_deliverables", 0, "current_blocker"), "set", "C9", "must match"),
+    (("competing_live_blocker",), "set", {"id": "C9"}, "ratified top-level fields"),
+    (("single_next_blocker",), "set", "legacy", "legacy live-slot fields"),
+    (("live_rebaseline", "same_day_deliverable"), "set", "legacy", "legacy live-slot"),
+    (("live_deliverables", 1, "intent", "output_classes"), "append", "fourth", "intent"),
+    (("live_rebaseline", "gate_1_remaining_machine_subpredicate"), "delete", None,
+     "gate_1_remaining_machine_subpredicate"),
+    (("live_rebaseline", "gate_1_remaining_machine_subpredicate", "required_predicate",
+      "complete_diagnostic_net_diff_accounted"), "set", True, "Gate 1 residual contract"),
+    (("certificate_program", "certificate_a_required", "reference_verifier_accepts"),
+     "set", False, "Certificate A/B program"),
+    (("certificate_program", "certificate_b", "status"), "set", "passed",
+     "Certificate A/B program"),
 )
-def test_global_sync_ledger_rejects_invalid_live_deliverable_slots(
-    tmp_path: Path, mutate, expected: str
+
+
+def _mutate_contract(payload: dict, path: tuple, operation: str, value: object) -> None:
+    target = payload
+    for key in path[:-1]:
+        target = target[key]
+    key = path[-1]
+    if operation == "delete":
+        target.pop(key)
+    elif operation == "set":
+        target[key] = value
+    elif operation == "append":
+        target[key].append(value)
+    elif operation == "pop":
+        target[key].pop()
+    elif operation == "duplicate":
+        target[key].append(target[key][0].copy())
+    else:
+        target[key].reverse()
+
+
+@pytest.mark.parametrize("path, operation, value, expected", INVALID_CONTRACT_MUTATIONS)
+def test_global_sync_ledger_rejects_ratified_contract_mutations(
+    tmp_path: Path, path: tuple, operation: str, value: object, expected: str
 ) -> None:
     payload = _payload()
-    mutate(payload)
+    _mutate_contract(payload, path, operation, value)
     plan, source, output = _write_fixture(tmp_path, payload=payload)
 
     with pytest.raises(LedgerError, match=expected):
@@ -405,7 +396,7 @@ def test_global_sync_ledger_rejects_all_passed_exploit(tmp_path: Path) -> None:
         step["status"] = "passed"
         step["evidence_state"] = _state(**{field: "passed" for field in STATE_FIELDS})
         step["required_predicate"] = {}
-    payload["live_rebaseline"] = {"gates_required": 10, "gates_passed": 10}
+    payload["live_rebaseline"].update({"gates_required": 10, "gates_passed": 10})
     plan, source, output = _write_fixture(tmp_path, payload=payload)
 
     with pytest.raises(LedgerError, match="required_predicate cannot be empty"):
