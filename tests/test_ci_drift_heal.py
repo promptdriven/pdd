@@ -3114,6 +3114,37 @@ class TestRunPddCommandDiagnostics:
         assert "END PRIVATE KEY" not in printed
         assert printed.count("[REDACTED]") >= 3
 
+    def test_google_oauth_redaction_consumes_full_bearer_alphabet(self):
+        stdout_token = "ya29.a0Af+SENSITIVE/TAIL=="
+        stderr_token = "ya29.b0Bg~OTHER/TAIL="
+        label_token = "ya29.c0Ch+LABEL/TAIL=="
+        failed = MagicMock(
+            returncode=1,
+            stdout=(
+                f"AuthenticationError received {stdout_token}; "
+                "ya29 documentation; version 0.0.307"
+            ),
+            stderr=f"provider rejected {stderr_token}",
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"],
+                {},
+                f"Heal OAuth {label_token}",
+            )
+
+        printed = self._printed(mock_print)
+        for token in (stdout_token, stderr_token, label_token):
+            assert token not in printed
+        assert "+SENSITIVE/TAIL==" not in printed
+        assert "~OTHER/TAIL=" not in printed
+        assert "+LABEL/TAIL==" not in printed
+        assert "ya29 documentation" in printed
+        assert "0.0.307" in printed
+        assert printed.count("[REDACTED]") >= 3
+
     def test_compact_jwt_is_redacted_without_hiding_dotted_versions(self):
         compact_jwt = "eyJhbGciOiJub25lIn0.e30.signature123"
         failed = MagicMock(
