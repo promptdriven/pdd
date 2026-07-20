@@ -37,6 +37,7 @@ PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
 PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
 CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
 PR_2017_PHASE_A_BASE = "c887daba0d171585658f8205e79316e5f36f82c6"
+PR_2017_PROTECTED_BASE = "e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -459,7 +460,10 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
     assert prompt_digest != STORY_REGRESSION_DORMANT_ROTATION["base_prompt_sha256"]
     assert prompt_digest == STORY_REGRESSION_DORMANT_ROTATION["head_prompt_sha256"]
     assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
-    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+    assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+    assert profile_digest == (
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3"
+    )
 
 
 def _requirement_authorization_row(authorization) -> dict[str, str]:
@@ -496,7 +500,9 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+    assert profile_digest == (
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3"
+    )
     future_pr2017_rows = [
         row
         for row in rows
@@ -508,11 +514,16 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         "pdd/prompts/get_test_command_python.prompt",
     }
     assert all(
-        row["base_policy_sha256"] == profile_digest for row in future_pr2017_rows
+        row["head_policy_sha256"] == profile_digest for row in future_pr2017_rows
+    )
+    assert all(
+        row["base_policy_sha256"]
+        == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+        for row in future_pr2017_rows
     )
     assert all(
         hashlib.sha256((ROOT / row["prompt_path"]).read_bytes()).hexdigest()
-        == row["base_prompt_sha256"]
+        == row["head_prompt_sha256"]
         for row in future_pr2017_rows
     )
     pdd1989_rows = [
@@ -840,9 +851,11 @@ def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     assert profiles.coverage == 1.0
 
 
-def test_pr2017_phase_a_is_dormant_on_current_protected_base() -> None:
-    """The prerequisite installs authority without consuming protected bytes."""
-    manifest = build_unit_manifest(ROOT, base_ref="origin/main", head_ref="HEAD")
+def test_pr2017_transition_has_complete_profiles_on_protected_base() -> None:
+    """The merged prerequisite authorizes the exact protected-base transition."""
+    manifest = build_unit_manifest(
+        ROOT, base_ref=PR_2017_PROTECTED_BASE, head_ref="HEAD"
+    )
     profiles = load_verification_profiles(ROOT, manifest)
 
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
