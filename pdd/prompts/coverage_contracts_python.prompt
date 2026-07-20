@@ -129,7 +129,12 @@ NOT be attributed to every prompt that declares `R1`. Direct single-file calls
 retain their backward-compatible unqualified behavior unless the caller sets
 `require_prompt_qualified_tests=True`. Apply the same ownership rule to the
 syntax-error fallback scanner and validation failures; malformed unrelated tests
-MUST NOT add evidence or mark a local rule failed.
+MUST NOT add evidence or mark a local rule failed. Compare normalized
+project-relative prompt paths, not just basenames, so `prompts/a/foo.prompt` and
+`prompts/b/foo.prompt` remain distinct. Accept a legacy basename-only marker only
+when that basename identifies exactly one prompt in the project. In malformed
+source, bind a qualified marker to the test definition signature or its immediate
+initial docstring line; a marker elsewhere in the file is not test evidence.
 </contract_rules>
 
 <acceptance_tests>

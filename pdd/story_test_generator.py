@@ -11,7 +11,10 @@ from .user_story_tests import _contract_path_for_story, _story_content_hash, sto
 
 
 _HEADING_RE = re.compile(r"^##\s+(?P<heading>.+?)\s*$", re.MULTILINE)
-_COVER_RE = re.compile(r"\b(R\d+)\b", re.IGNORECASE)
+_COVER_RE = re.compile(
+    r"\b(R-?\d+[a-zA-Z]?|RULE-?\d+[a-zA-Z]?)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)

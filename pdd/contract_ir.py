@@ -105,7 +105,7 @@ def iter_covers_refs(covers_text: str) -> list["CoversRef"]:
                 refs.append(
                     CoversRef(
                         rule_id=cross.group(2).upper(),
-                        prompt_filename=cross.group(1).rsplit("/", 1)[-1],
+                        prompt_filename=cross.group(1).replace("\\", "/"),
                         line=stripped,
                     )
                 )
@@ -129,12 +129,17 @@ def rule_ids_from_covers(covers_text: str, prompt_name: str) -> set[str]:
     responsible for linking the story to a prompt via metadata).
     """
     ids: set[str] = set()
-    target = prompt_name.lower()
+    target = prompt_name.replace("\\", "/").lower().removeprefix("./")
     for ref in iter_covers_refs(covers_text):
         if ref.prompt_filename is None:
             ids.add(ref.rule_id)
-        elif ref.prompt_filename.lower() == target:
-            ids.add(ref.rule_id)
+        else:
+            referenced = ref.prompt_filename.lower().removeprefix("./")
+            if referenced == target or (
+                "/" not in target
+                and referenced.rsplit("/", 1)[-1] == target
+            ):
+                ids.add(ref.rule_id)
     return ids
 
 _XML_SECTION_RE = re.compile(
@@ -593,9 +598,11 @@ def _parse_review_section(review_text: str) -> list[ReviewRecord]:
     def _flush() -> None:
         if current_id is None:
             return
+        raw_rule_id = fields.get("rule", "")
+        rule_match = COVERAGE_REF_RE.fullmatch(raw_rule_id.strip())
         records.append(ReviewRecord(
             finding_id=current_id,
-            rule_id=fields.get("rule", ""),
+            rule_id=rule_match.group(1).upper() if rule_match else raw_rule_id,
             status=fields.get("status", ""),
             reviewer=fields.get("reviewer", ""),
             reason=fields.get("reason", ""),

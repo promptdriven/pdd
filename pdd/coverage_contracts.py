@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import ast
 import logging
+import os
+import posixpath
 import re
 import warnings
 from dataclasses import dataclass, field
@@ -337,6 +339,49 @@ def scan_story_validation_failures(
 # No fuzzy or semantic matching is performed.
 
 
+def _normalise_prompt_identity(value: str) -> str:
+    """Return a stable, case-insensitive POSIX prompt identity."""
+    normalised = posixpath.normpath(value.replace("\\", "/").strip())
+    while normalised.startswith("./"):
+        normalised = normalised[2:]
+    return normalised.lower()
+
+
+def _prompt_reference_scope(prompt_path: Path, tests_dir: Path) -> tuple[str, bool]:
+    """Return project-relative identity and whether basename fallback is unique."""
+    # Preserve the caller-visible lexical path (not a symlink-resolved path),
+    # because prompt references use project identities such as ``prompts/x``.
+    resolved_prompt = Path(os.path.abspath(prompt_path))
+    resolved_tests = Path(os.path.abspath(tests_dir))
+    common_root = Path(os.path.commonpath((resolved_prompt, resolved_tests)))
+    identity = resolved_prompt.relative_to(common_root).as_posix()
+    basename = resolved_prompt.name.lower()
+    basename_matches = [
+        candidate
+        for candidate in common_root.rglob("*.prompt")
+        if candidate.name.lower() == basename
+    ]
+    return _normalise_prompt_identity(identity), len(basename_matches) == 1
+
+
+def _prompt_reference_matches(
+    reference: str,
+    prompt_identity: str,
+    *,
+    allow_basename: bool,
+) -> bool:
+    """Match an exact project-relative prompt ref, with safe legacy fallback."""
+    normalised_ref = _normalise_prompt_identity(reference)
+    normalised_target = _normalise_prompt_identity(prompt_identity)
+    if normalised_ref == normalised_target:
+        return True
+    return (
+        allow_basename
+        and "/" not in normalised_ref
+        and normalised_ref == posixpath.basename(normalised_target)
+    )
+
+
 def scan_test_evidence(
     tests_dir: Path,
     prompt_path: Optional[Path] = None,
@@ -356,7 +401,12 @@ def scan_test_evidence(
     if not tests_dir.exists():
         return evidence
 
-    prompt_name = prompt_path.name if prompt_path is not None else ""
+    prompt_name = ""
+    allow_prompt_basename = False
+    if prompt_path is not None:
+        prompt_name, allow_prompt_basename = _prompt_reference_scope(
+            prompt_path, tests_dir
+        )
 
     for test_file in sorted(tests_dir.rglob("test_*.py")):
         try:
@@ -366,7 +416,13 @@ def scan_test_evidence(
                 read_errors.append(f"{test_file.name}: {exc}")
             continue
 
-        _scan_test_file(source, evidence, prompt_name=prompt_name, require_prompt_qualified=require_prompt_qualified)
+        _scan_test_file(
+            source,
+            evidence,
+            prompt_name=prompt_name,
+            require_prompt_qualified=require_prompt_qualified,
+            allow_prompt_basename=allow_prompt_basename,
+        )
 
     return evidence
 
@@ -389,6 +445,13 @@ def scan_test_validation_failures(
     if not tests_dir.exists():
         return failures
 
+    prompt_name = ""
+    allow_prompt_basename = False
+    if prompt_path is not None:
+        prompt_name, allow_prompt_basename = _prompt_reference_scope(
+            prompt_path, tests_dir
+        )
+
     for test_file in sorted(tests_dir.rglob("test_*.py")):
         try:
             source = test_file.read_text(encoding="utf-8")
@@ -404,8 +467,9 @@ def scan_test_validation_failures(
         except SyntaxError as exc:
             referenced_rules = _rule_ids_from_test_source(
                 source,
-                prompt_name=prompt_path.name if prompt_path is not None else "",
+                prompt_name=prompt_name,
                 require_prompt_qualified=require_prompt_qualified,
+                allow_prompt_basename=allow_prompt_basename,
             )
             for rid in referenced_rules:
                 failures.setdefault(rid, [])
@@ -421,17 +485,19 @@ def _rule_ids_from_test_source(
     *,
     prompt_name: str = "",
     require_prompt_qualified: bool = False,
+    allow_prompt_basename: bool = True,
 ) -> set[str]:
     """Extract explicit rule IDs from a possibly invalid test file."""
     if require_prompt_qualified:
-        return {
-            match.group(2).upper()
-            for match in CROSS_MODULE_REF_RE.finditer(source)
-            if (
-                match.group(1).lower().endswith("/" + prompt_name.lower())
-                or match.group(1).lower() == prompt_name.lower()
-            )
-        }
+        evidence: dict[str, list[str]] = {}
+        _scan_test_file_regex(
+            source,
+            evidence,
+            prompt_name=prompt_name,
+            require_prompt_qualified=True,
+            allow_prompt_basename=allow_prompt_basename,
+        )
+        return set(evidence)
 
     ids: set[str] = set()
     for suffix in _TEST_FUNC_RE.findall(source):
@@ -449,6 +515,7 @@ def _scan_test_file(  # pylint: disable=too-many-locals
     *,
     prompt_name: str,
     require_prompt_qualified: bool,
+    allow_prompt_basename: bool = True,
 ) -> None:
     """
     Parse a single test file's source and populate evidence in-place.
@@ -466,6 +533,7 @@ def _scan_test_file(  # pylint: disable=too-many-locals
             evidence,
             prompt_name=prompt_name,
             require_prompt_qualified=require_prompt_qualified,
+            allow_prompt_basename=allow_prompt_basename,
         )
         return
 
@@ -492,7 +560,11 @@ def _scan_test_file(  # pylint: disable=too-many-locals
             sig_line = source.splitlines()[max(node.lineno - 1, 0)] if source else ""
             for text in (first_line, sig_line):
                 for match in CROSS_MODULE_REF_RE.finditer(text):
-                    if match.group(1).lower().endswith("/" + prompt_name.lower()) or match.group(1).lower() == prompt_name.lower():
+                    if _prompt_reference_matches(
+                        match.group(1),
+                        prompt_name,
+                        allow_basename=allow_prompt_basename,
+                    ):
                         rid = match.group(2).upper()
                         evidence.setdefault(rid, [])
                         if fname not in evidence[rid]:
@@ -533,6 +605,7 @@ def _scan_test_file_regex(
     *,
     prompt_name: str = "",
     require_prompt_qualified: bool = False,
+    allow_prompt_basename: bool = True,
 ) -> None:
     """Fallback regex-only scanner used when AST parsing fails."""
     lines = source.splitlines()
@@ -552,10 +625,10 @@ def _scan_test_file_regex(
                 texts.append(lines[line_index + 1])
             for text in texts:
                 for match in CROSS_MODULE_REF_RE.finditer(text):
-                    ref_prompt = match.group(1).lower()
-                    if (
-                        ref_prompt.endswith("/" + prompt_name.lower())
-                        or ref_prompt == prompt_name.lower()
+                    if _prompt_reference_matches(
+                        match.group(1),
+                        prompt_name,
+                        allow_basename=allow_prompt_basename,
                     ):
                         rid = match.group(2).upper()
                         evidence.setdefault(rid, [])

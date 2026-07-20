@@ -110,6 +110,24 @@ class TestExtractRules:
         parsed = parse_prompt_contracts_text(text, prompt)
         assert [record.rule_id for record in parsed.formalizations] == ["R1A"]
 
+    def test_suffixed_review_rule_is_normalised(self, tmp_path):
+        prompt = tmp_path / "specialized_python.prompt"
+        text = textwrap.dedent(
+            """\
+            <contract_rules>
+            R1a - Specialized
+            The system MUST handle specialized behavior.
+            </contract_rules>
+            <contract_review>
+            LLM-1:
+            rule: r1a
+            status: accepted
+            </contract_review>
+            """
+        )
+        parsed = parse_prompt_contracts_text(text, prompt)
+        assert [record.rule_id for record in parsed.reviews] == ["R1A"]
+
     def test_sequential_ids(self):
         text = "1. The system MUST accept uploads.\n2. The system MUST log requests.\n"
         rules = _extract_rules(text)

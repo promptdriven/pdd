@@ -66,6 +66,19 @@ def test_parse_story_test_spec_reads_entrypoint_and_hash(tmp_path: Path):
     assert spec.rule_ids == ("R1",)
 
 
+def test_parse_story_test_spec_preserves_suffixed_cover_id(tmp_path: Path):
+    story = _write_story_contract(tmp_path)
+    contract = tmp_path / "user_stories" / "contracts" / "checkout_total.contract.md"
+    contract.write_text(
+        contract.read_text(encoding="utf-8").replace(
+            "- R1: checkout total", "- R1a: specialized checkout total"
+        ),
+        encoding="utf-8",
+    )
+    spec = parse_story_test_spec(story)
+    assert spec.rule_ids == ("R1A",)
+
+
 def test_generate_story_test_is_deterministic_and_marks_story(tmp_path: Path):
     story = _write_story_contract(tmp_path)
     output = tmp_path / "tests" / "test_story_checkout_total.py"

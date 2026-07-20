@@ -24,7 +24,11 @@
   - optional `args: [...]`
   - optional `kwargs: {...}`
 - Parse optional `## Seams` bullets as `dotted.import.path = <python literal>` and emit `monkeypatch.setattr` calls.
-- Parse `## Covers` for `R<n>` ids, and parse `## Oracle` plus `## Negative Cases` bullets as Python assertion expressions over a `result` variable.
+- Parse `## Covers` using the canonical explicit rule-ID grammar: `R<n>`,
+  `R-<n>`, `RULE<n>`, or `RULE-<n>`, optionally followed by one ASCII letter
+  suffix. Normalize IDs to uppercase and preserve suffixed IDs such as `R1a` as
+  `R1A`. Parse `## Oracle` plus `## Negative Cases` bullets as Python assertion
+  expressions over a `result` variable.
 - Emit plain pytest tests that import cleanly, call the entry point in-process, patch seams before calling it, and tag every generated test with `@pytest.mark.story(story_id=..., story_hash=...)`.
 - Use `_story_content_hash` from `user_story_tests`; do not reimplement hashing.
 - Runtime execution of generated tests must be public-safe: no LLM, no network, no cloud credentials.
@@ -34,5 +38,6 @@
 
 <acceptance_tests>
 - `pytest tests/test_story_test_generator.py -q` must pass.
+- `parse_story_test_spec` must retain `R1a` from `## Covers` as `R1A`.
 - `pdd test --from-story user_stories/story__x.md --output tests/story_regression/test_story_x.py` must write a pytest file with story marker and story_hash.
 </acceptance_tests>

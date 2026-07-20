@@ -35,6 +35,11 @@
   uppercase without collapsing a suffixed ID into its numeric base. Apply this
   grammar consistently to contract rules, coverage and cross-module references,
   waivers, reviews, and `<formalization>` record headers.
+- Preserve the normalized path portion of a cross-module `## Covers` reference
+  in `CoversRef.prompt_filename`; do not collapse `prompts/a/foo.prompt` and
+  `prompts/b/foo.prompt` to the shared basename. When a caller supplies a
+  path-qualified prompt identity, match that identity exactly. Basename matching
+  remains only for legacy callers that supply a basename.
 - Keep parsing deterministic and side-effect free.
 - **Cross-dev-unit support (issue #1769):** Extend `CoversRef` with `dev_units: list[str] = field(default_factory=list)`. Because `CoversRef` is `@dataclass(frozen=True)`, direct post-construction attribute assignment (`ref.dev_units = [...]`) will raise `FrozenInstanceError`. The coverage engine (`coverage_contracts.py`) MUST therefore create a new `CoversRef` instance via `dataclasses.replace(ref, dev_units=[...])` when populating this field after calling `get_all_dev_units_for_story` from `pdd.user_story_tests` — it MUST NOT mutate an existing instance. `iter_covers_refs` itself does NOT populate `dev_units` (the default empty list is correct at parse time). Reflect the `dev_units` field in `as_dict()` when the list is non-empty (omit the key when empty for backward compatibility). Required tests: `test_covers_ref_dev_units_default_empty`, `test_covers_ref_dev_units_populated`.
 

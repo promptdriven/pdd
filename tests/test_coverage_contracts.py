@@ -247,6 +247,10 @@ class TestParseCoverageBlock:
         result = _parse_coverage_block(text)
         assert "R2" in result
 
+    def test_suffixed_rule_id_is_preserved(self):
+        result = _parse_coverage_block("R1a: story__specialized.md")
+        assert result == {"R1A": "story__specialized.md"}
+
     def test_bullet_prefix_stripped(self):
         text = "- R1: test_bar"
         result = _parse_coverage_block(text)
@@ -302,6 +306,11 @@ class TestRuleIdsFromCovers:
     def test_normalises_to_uppercase(self):
         ids = _rule_ids_from_covers("- r5: rule", "foo.prompt")
         assert "R5" in ids
+
+    def test_suffixed_cross_module_ref_keeps_path_and_suffix(self):
+        covers = "- prompts/a/foo.prompt#R1a: specialized rule"
+        assert _rule_ids_from_covers(covers, "prompts/a/foo.prompt") == {"R1A"}
+        assert _rule_ids_from_covers(covers, "prompts/b/foo.prompt") == set()
 
 
 class TestScanStoryEvidence:
@@ -477,6 +486,22 @@ class TestScanTestValidationFailures:
         _make_test_file(tmp_path, "def test_R6_ok():\n    assert True\n")
         assert scan_test_validation_failures(tmp_path) == {}
 
+    def test_qualified_marker_away_from_malformed_test_is_not_failure(self, tmp_path):
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        prompt = _make_prompt(prompts, "", name="foo.prompt")
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        _make_test_file(
+            tests_dir,
+            "MARKER = 'prompts/foo.prompt#R1a'\n\ndef test_broken(:\n    pass\n",
+        )
+        assert scan_test_validation_failures(
+            tests_dir,
+            prompt_path=prompt,
+            require_prompt_qualified=True,
+        ) == {}
+
 
 class TestScanTestFileDirectly:
     def test_suffixed_function_name_maps_only_to_suffixed_rule(self):
@@ -490,6 +515,12 @@ class TestScanTestFileDirectly:
         evidence: dict = {}
         _scan_test_file(source, evidence, prompt_name="", require_prompt_qualified=False)
         assert evidence == {}
+
+    def test_inline_comment_with_suffixed_id_is_evidence(self):
+        source = "def test_specialized():  # covers R1a\n    pass\n"
+        evidence: dict = {}
+        _scan_test_file(source, evidence, prompt_name="", require_prompt_qualified=False)
+        assert evidence == {"R1A": ["test_specialized"]}
 
     def test_docstring_covers_tag(self):
         source = 'def test_foo():\n    """R7: validates boundary."""\n    pass\n'
@@ -593,6 +624,34 @@ def test_directory_mode_requires_prompt_qualified_test_refs(tmp_path: Path) -> N
     assert foo_rules["R1A"].status == STATUS_TEST_ONLY
     assert foo_rules["R1A"].tests == ["test_only_foo"]
     assert by_name["bar_python.prompt"].rules[0].status == STATUS_UNCHECKED
+
+
+def test_directory_mode_distinguishes_same_basename_prompt_paths(tmp_path: Path) -> None:
+    """A qualified nested path must not collapse to a shared basename."""
+    prompts = tmp_path / "prompts"
+    for subdir in ("a", "b"):
+        target = prompts / subdir
+        target.mkdir(parents=True)
+        _make_prompt(
+            target,
+            "<contract_rules>\nR1a - Specialized\nThe system MUST specialize.\n</contract_rules>\n",
+            name="foo.prompt",
+        )
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    _make_test_file(
+        tests_dir,
+        "def test_only_a():\n"
+        "    \"\"\"prompts/a/foo.prompt#R1a: covers only A.\"\"\"\n"
+        "    pass\n",
+    )
+
+    results = build_coverage_directory(
+        prompts, stories_dir=tmp_path / "none", tests_dir=tests_dir
+    )
+    by_parent = {result.path.parent.name: result.rules[0] for result in results}
+    assert by_parent["a"].tests == ["test_only_a"]
+    assert by_parent["b"].tests == []
 
 
 # ===========================================================================
