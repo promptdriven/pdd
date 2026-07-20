@@ -1,13 +1,13 @@
 {
   "pdd_version": "0.0.305.dev0",
-  "timestamp": "2026-07-20T22:47:37.088747+00:00",
+  "timestamp": "2026-07-20T22:50:57.311485+00:00",
   "command": "sync",
-  "prompt_hash": "c575658c61b35b5e33eebfbdfb67f42cc244bcfea484fd4a0a01ab142bab2b9c",
-  "code_hash": "862911771922bc33839d22000ab4e3f3995c8543c18e9992147d269ca4a1489f",
+  "prompt_hash": "0df320a5f004f0bee64d13e5211608d7aa1d64c95232530271894ad62dd4d28b",
+  "code_hash": "253521774c007ace15d7b76406e04abbff9f9c4f709fd2ccbeeaf9b8ca00a3b1",
   "example_hash": "6d59ad841e1440dd349f248a46f9456430afcbdee23792574590cad347e354e0",
-  "test_hash": "b7a39b145c0ef83bd2589d4654f311ccc2ba3e63a1098d52ab50a0ebda26778b",
+  "test_hash": "51c80518ac2903fbd8d5e960e6d53262e8dbf9719f2d226d019bc601a70064d8",
   "test_files": {
-    "test_ci_drift_heal.py": "b7a39b145c0ef83bd2589d4654f311ccc2ba3e63a1098d52ab50a0ebda26778b"
+    "test_ci_drift_heal.py": "51c80518ac2903fbd8d5e960e6d53262e8dbf9719f2d226d019bc601a70064d8"
   },
   "include_deps": {
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",

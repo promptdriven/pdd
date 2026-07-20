@@ -3115,9 +3115,9 @@ class TestRunPddCommandDiagnostics:
         assert printed.count("[REDACTED]") >= 3
 
     def test_google_oauth_redaction_consumes_full_bearer_alphabet(self):
-        stdout_token = "ya29.a0Af+SENSITIVE/TAIL=="
-        stderr_token = "ya29.b0Bg~OTHER/TAIL="
-        label_token = "ya29.c0Ch+LABEL/TAIL=="
+        stdout_token = "ya29.a0Af+SENSITIVE/TAIL==="
+        stderr_token = "ya29.b0Bg~OTHER/TAIL===="
+        label_token = "ya29.c0Ch+LABEL/TAIL====="
         failed = MagicMock(
             returncode=1,
             stdout=(
@@ -3138,9 +3138,9 @@ class TestRunPddCommandDiagnostics:
         printed = self._printed(mock_print)
         for token in (stdout_token, stderr_token, label_token):
             assert token not in printed
-        assert "+SENSITIVE/TAIL==" not in printed
-        assert "~OTHER/TAIL=" not in printed
-        assert "+LABEL/TAIL==" not in printed
+        assert "+SENSITIVE/TAIL===" not in printed
+        assert "~OTHER/TAIL====" not in printed
+        assert "+LABEL/TAIL=====" not in printed
         assert "ya29 documentation" in printed
         assert "0.0.307" in printed
         assert printed.count("[REDACTED]") >= 3

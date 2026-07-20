@@ -59,7 +59,7 @@ _HEAL_QUOTED_ASSIGNMENT_RE = re.compile(
     r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')'''
 )
 _GOOGLE_OAUTH_TOKEN_RE = re.compile(
-    r"(?<![A-Za-z0-9._~+/-])ya29\.[A-Za-z0-9._~+/-]{8,}={0,2}"
+    r"(?<![A-Za-z0-9._~+/-])ya29\.[A-Za-z0-9._~+/-]{8,}=*"
     r"(?![A-Za-z0-9._~+/=-])"
 )
 _HOME_PATH_PATTERNS = (
