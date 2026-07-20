@@ -68,12 +68,14 @@ _STORY_PROMPTS_META_RE = re.compile(
 )
 
 # Test-name heuristic patterns
-# Matches: test_R1_something  test_r2_foo  testR3bar
-_TEST_FUNC_RE = re.compile(r"\btest[_]?[Rr](\d+)[_\b]", re.IGNORECASE)
-# Inline comment: # R1:  # covers R2  # rule R3
+# Matches: test_R1_something  test_r2_foo  testR3bar  test_R1a_sub
+_TEST_FUNC_RE = re.compile(r"\btest[_]?[Rr](\d+[a-zA-Z]?)(?:_|\b)", re.IGNORECASE)
+# Inline comment: # R1:  # covers R2  # rule R3  # R1a:
 _TEST_COMMENT_RE = re.compile(
-    r"#\s*(?:covers\s+|rule\s+)?(R-?\d+)\b", re.IGNORECASE
+    r"#\s*(?:covers\s+|rule\s+)?(R-?\d+[a-zA-Z]?)\b", re.IGNORECASE
 )
+# Docstring explicit form: R1: text  or  R1 - text  (colon/dash required to avoid bare mentions)
+_TEST_DOCSTRING_RE = re.compile(r"\b(R-?\d+[a-zA-Z]?)\s*[-:]", re.IGNORECASE)
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -411,8 +413,8 @@ def scan_test_validation_failures(
 def _rule_ids_from_test_source(source: str) -> set[str]:
     """Extract explicit rule IDs from a possibly invalid test file."""
     ids: set[str] = set()
-    for digit in _TEST_FUNC_RE.findall(source):
-        ids.add(f"R{digit}")
+    for suffix in _TEST_FUNC_RE.findall(source):
+        ids.add(f"R{suffix}".upper())
     for comment_match in _TEST_COMMENT_RE.finditer(source):
         ids.add(comment_match.group(1).upper())
     for ref_match in COVERAGE_REF_RE.finditer(source):
@@ -471,9 +473,9 @@ def _scan_test_file(  # pylint: disable=too-many-locals
                             evidence[rid].append(fname)
             continue
 
-        # Pattern 1: function name contains R<N> (unqualified, single-prompt usage)
-        for digit in _TEST_FUNC_RE.findall(fname):
-            rid = f"R{digit}"
+        # Pattern 1: function name contains R<N>[a] (unqualified, single-prompt usage)
+        for suffix in _TEST_FUNC_RE.findall(fname):
+            rid = f"R{suffix}".upper()
             evidence.setdefault(rid, [])
             if fname not in evidence[rid]:
                 evidence[rid].append(fname)
@@ -487,11 +489,12 @@ def _scan_test_file(  # pylint: disable=too-many-locals
                 if fname not in evidence[rid]:
                     evidence[rid].append(fname)
 
-        # Pattern 3: first line of docstring
+        # Pattern 3: first line of docstring — requires explicit R<N>: or R<N> - form
+        # to avoid false positives from bare mentions like "uses R1 algorithm"
         docstring = ast.get_docstring(node)
         if docstring:
             first_line = docstring.splitlines()[0][:120]
-            for doc_match in COVERAGE_REF_RE.finditer(first_line):
+            for doc_match in _TEST_DOCSTRING_RE.finditer(first_line):
                 rid = doc_match.group(1).upper()
                 evidence.setdefault(rid, [])
                 if fname not in evidence[rid]:
@@ -508,8 +511,8 @@ def _scan_test_file_regex(source: str, evidence: dict[str, list[str]]) -> None:
         if not fname_match:
             continue
         fname = fname_match.group(1)
-        for digit in _TEST_FUNC_RE.findall(fname):
-            rid = f"R{digit}"
+        for suffix in _TEST_FUNC_RE.findall(fname):
+            rid = f"R{suffix}".upper()
             evidence.setdefault(rid, [])
             if fname not in evidence[rid]:
                 evidence[rid].append(fname)

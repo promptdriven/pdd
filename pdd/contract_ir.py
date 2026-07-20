@@ -27,12 +27,12 @@ _MODAL_PATTERN = re.compile(
     r"\b(" + "|".join(re.escape(m) for m in sorted(MODALS, key=len, reverse=True)) + r")\b",
 )
 
-_EXPLICIT_ID_RE = re.compile(r"^(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
+_EXPLICIT_ID_RE = re.compile(r"^(R-?\d+[a-zA-Z]?|RULE-?\d+[a-zA-Z]?)\b", re.IGNORECASE)
 _CANDIDATE_ID_RE = re.compile(r"^([A-Z]{1,5}[-_]\w+)\b", re.IGNORECASE)
 _SEQ_ID_RE = re.compile(r"^(\d+)[.):\s]")
-COVERAGE_REF_RE = re.compile(r"\b(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
+COVERAGE_REF_RE = re.compile(r"\b(R-?\d+[a-zA-Z]?|RULE-?\d+[a-zA-Z]?)\b", re.IGNORECASE)
 CROSS_MODULE_REF_RE = re.compile(
-    r"([\w./\-]+\.prompt)#(R-?\d+|RULE-?\d+)\b", re.IGNORECASE
+    r"([\w./\-]+\.prompt)#(R-?\d+[a-zA-Z]?|RULE-?\d+[a-zA-Z]?)\b", re.IGNORECASE
 )
 _COVERAGE_REF_RE = COVERAGE_REF_RE  # backward-compat alias for internal callers
 _CROSS_MODULE_REF_RE = CROSS_MODULE_REF_RE
