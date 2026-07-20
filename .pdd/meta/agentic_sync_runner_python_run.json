@@ -4,8 +4,9 @@
   "tests_passed": 180,
   "tests_failed": 0,
   "coverage": 81.25,
-  "test_hash": "781deb083113a3c96b990501f24cdf41e0742190be5cfbe85553639c25e62e22",
+  "test_hash": "1a8323a419ba91a63924133810b509339f8db7b909d732c2627f88a1dbafc8a0",
   "test_files": {
-    "test_agentic_sync_runner.py": "781deb083113a3c96b990501f24cdf41e0742190be5cfbe85553639c25e62e22"
+    "test_agentic_sync_runner.py": "1a8323a419ba91a63924133810b509339f8db7b909d732c2627f88a1dbafc8a0",
+    "test_issue_1900_surface_contract.py": "f9e7a79825f76973f12a2059425f94807aa3df7cf8005b41c3424b52358f02e5"
   }
 }

@@ -64,6 +64,9 @@ MAX_WORKERS = _read_sync_max_workers()
 STDOUT_CAPTURE_LINE_LIMIT = 5000
 STDOUT_CAPTURE_BYTE_LIMIT = 1024 * 1024
 OUTPUT_CAPTURE_READ_CHUNK_SIZE = 8192
+STRUCTURED_SURFACE_MAX_BYTES = 64 * 1024
+STRUCTURED_SURFACE_MAX_FIELD_BYTES = 16 * 1024
+STRUCTURED_SURFACE_MAX_DETAILS = 64
 
 
 class _BoundedTextCapture:
@@ -136,6 +139,88 @@ class _BoundedTextCapture:
 
     def reversed_lines(self):
         return reversed(self.lines)
+
+
+class _StructuredSurfaceCapture:
+    """Bounded, validated capture of one public-surface diagnostic block.
+
+    This intentionally is not a general log spool: only the wire fields emitted
+    by ``PublicSurfaceRegressionError`` are accepted.  A second block, duplicate
+    scalar field, malformed detail or size overflow invalidates the record so a
+    hostile child cannot smuggle an unbounded repair contract through the runner.
+    """
+
+    _scalar_fields = {
+        "removed:", "signature_changed:", "output:", "pre_surface_size:",
+        "post_surface_size:",
+    }
+
+    def __init__(self) -> None:
+        self._lines: List[str] = []
+        self._seen: set[str] = set()
+        self._bytes = 0
+        self._details = 0
+        self._started = False
+        self.error: Optional[str] = None
+
+    def _reject(self, reason: str) -> None:
+        if self.error is None:
+            self.error = reason
+
+    def feed(self, line: str) -> None:
+        stripped = line.strip()
+        if _PUBLIC_SURFACE_PREFIX in stripped:
+            if self._started:
+                self._reject("multiple public-surface diagnostic blocks")
+                return
+            self._started = True
+            self._append(line)
+            return
+        if not self._started or self.error is not None:
+            return
+        prefix = next((field for field in self._scalar_fields if stripped.startswith(field)), None)
+        if prefix is not None:
+            if prefix in self._seen:
+                self._reject(f"duplicate structured field {prefix.rstrip(':')}")
+                return
+            self._seen.add(prefix)
+            self._append(line)
+            return
+        if stripped.startswith("signature_detail:"):
+            payload = stripped[len("signature_detail:"):].strip()
+            try:
+                detail = json.loads(payload)
+                if not isinstance(detail, dict) or set(detail) != {"symbol", "expected", "actual", "source"} or not all(
+                    isinstance(detail[field], str) for field in detail
+                ):
+                    raise ValueError("invalid detail shape")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                self._reject("malformed signature_detail field")
+                return
+            self._details += 1
+            if self._details > STRUCTURED_SURFACE_MAX_DETAILS:
+                self._reject("too many signature_detail fields")
+                return
+            self._append(line)
+
+    def _append(self, line: str) -> None:
+        line_bytes = len(line.encode("utf-8", errors="replace"))
+        if line_bytes > STRUCTURED_SURFACE_MAX_FIELD_BYTES:
+            self._reject("structured field exceeds byte limit")
+            return
+        if self._bytes + line_bytes > STRUCTURED_SURFACE_MAX_BYTES:
+            self._reject("structured diagnostic exceeds byte limit")
+            return
+        self._lines.append(line if line.endswith("\n") else f"{line}\n")
+        self._bytes += line_bytes
+
+    def materialize(self) -> Tuple[str, Optional[str]]:
+        required = {"removed:", "signature_changed:", "output:", "pre_surface_size:", "post_surface_size:"}
+        if self._started and self.error is None and not required.issubset(self._seen):
+            self._reject("incomplete public-surface diagnostic block")
+        if self.error is not None:
+            return "", f"Structured public-surface evidence rejected: {self.error}"
+        return "".join(self._lines), None
 
 # Heartbeat interval for printing progress hints during long-running modules
 HEARTBEAT_INTERVAL = 60
@@ -645,9 +730,59 @@ def build_conformance_hard_failure_from_error(
     return "\n".join(block_lines)
 
 
+def _parse_signature_detail_lines(combined: str) -> List[Tuple[str, str, str, str]]:
+    """Parse ``signature_detail:`` lines into ``(symbol, expected, actual, source)``.
+
+    A ``signature_detail:`` line carries the full expected-vs-actual contract for
+    one declared signature mismatch (issue #1900). The subprocess path rebuilds
+    the repair directive from stdout, so it must recover these lines to keep the
+    DECLARED expected signature — the stable repair target — in the directive and
+    the hard-failure block. Emitted by ``PublicSurfaceRegressionError`` and
+    ``_build_public_surface_hard_failure`` as a JSON object:
+      ``signature_detail: {"symbol": ..., "expected": ..., "actual": ..., "source": ...}``
+
+    JSON is bulletproof against signatures/defaults that contain the old ` | ` /
+    ``| actual: `` / ``| source: `` field delimiters (PEP-604 unions, string
+    defaults) — a class of corruption that recurred across several review passes
+    (codex round-8 finding 2). A line whose payload is not a well-formed JSON
+    object with the four string fields is SKIPPED (never raises). De-duplicated,
+    preserving first-seen order.
+    """
+    details: List[Tuple[str, str, str, str]] = []
+    seen: set = set()
+    for raw_line in combined.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("signature_detail:"):
+            continue
+        payload = line[len("signature_detail:"):].strip()
+        try:
+            obj = json.loads(payload)
+            detail = (
+                str(obj["symbol"]),
+                str(obj["expected"]),
+                str(obj["actual"]),
+                str(obj["source"]),
+            )
+        except (ValueError, TypeError, KeyError):
+            # Not a well-formed JSON detail object -> malformed line, skip it.
+            continue
+        if detail in seen:
+            continue
+        seen.add(detail)
+        details.append(detail)
+    return details
+
+
 def _parse_public_surface_failure_fields(
     stdout: str, stderr: str
-) -> Optional[Tuple[str, Tuple[str, ...], Tuple[str, ...]]]:
+) -> Optional[
+    Tuple[
+        str,
+        Tuple[str, ...],
+        Tuple[str, ...],
+        Tuple[Tuple[str, str, str, str], ...],
+    ]
+]:
     """Detect a public-surface regression and keep removals/signatures separate."""
     combined = (stdout or "") + "\n" + (stderr or "")
     if _PUBLIC_SURFACE_PREFIX not in combined:
@@ -681,6 +816,9 @@ def _parse_public_surface_failure_fields(
             }
         )
     )
+    # Preserve declaration source order (de-duped) so the directive lists the
+    # declared repair targets deterministically.
+    details_tuple = tuple(_parse_signature_detail_lines(combined))
     if not removed and not changed:
         return None
     lines = ["Public surface regression repair required."]
@@ -688,16 +826,42 @@ def _parse_public_surface_failure_fields(
         lines.append("Restore these public symbols from the existing module:")
         for sym in removed:
             lines.append(f"- {sym}")
-    if changed:
+    # Prefer the DECLARED signature as the repair target: it is a stable target,
+    # unlike "restore compatible signatures" (compatible with the code being
+    # regenerated), which dead-ended the change->sync loop (issue #1900).
+    declared_details = [d for d in details_tuple if d[3] == "pdd-interface"]
+    if declared_details:
+        lines.append(
+            "Restore these public symbols to their declared "
+            "<pdd-interface> signatures:"
+        )
+        for symbol, expected_entry, actual_entry, _ in declared_details:
+            lines.append(
+                f"- Restore `{symbol}` to its declared signature "
+                f"`{expected_entry}` (found `{actual_entry}`)."
+            )
+        lines.append(
+            "If a declared parameter change is intended, edit the prompt's "
+            "<pdd-interface> declaration to the intended signature (the "
+            "declaration is the contract for declared symbols)."
+        )
+    declared_changed = {d[0] for d in declared_details}
+    remaining_changed = [sym for sym in changed if sym not in declared_changed]
+    if remaining_changed:
         lines.append("Restore compatible signatures for these public symbols:")
-        for sym in changed:
+        for sym in remaining_changed:
             lines.append(f"- {sym}")
-    lines.append(
-        "Preserve backward-compatible public helpers unless the prompt lists "
-        "the intended changes with scoped BREAKING-CHANGE: remove <symbol> "
-        "or BREAKING-CHANGE: change signature <symbol> markers."
-    )
-    return "\n".join(lines), removed, changed
+    # Keep the BREAKING-CHANGE guidance only for UNDECLARED / removed violations:
+    # for a declared symbol it relaxes only binding-kind/async, not the declared
+    # params, so advising it on a pure declared-param violation loops the user
+    # back into the dead-end #1900 removes (codex round-7 finding 3).
+    if removed or remaining_changed or not declared_details:
+        lines.append(
+            "Preserve backward-compatible public helpers unless the prompt lists "
+            "the intended changes with scoped BREAKING-CHANGE: remove <symbol> "
+            "or BREAKING-CHANGE: change signature <symbol> markers."
+        )
+    return "\n".join(lines), removed, changed, details_tuple
 
 
 def _parse_public_surface_failure(
@@ -707,7 +871,7 @@ def _parse_public_surface_failure(
     parsed = _parse_public_surface_failure_fields(stdout, stderr)
     if parsed is None:
         return None
-    directive, removed, changed = parsed
+    directive, removed, changed, _details = parsed
     signature = tuple(
         [f"removed:{symbol}" for symbol in removed]
         + [f"signature_changed:{symbol}" for symbol in changed]
@@ -753,6 +917,36 @@ def _parse_test_churn_failure(
     return directive, signature
 
 
+def _public_surface_repair_advice(
+    has_declared: bool,
+    has_non_declared: bool,
+) -> List[str]:
+    """Repair-advice lines for a public-surface hard-failure block.
+
+    A declared ``<pdd-interface>`` violation is fixed by editing the declaration —
+    ``BREAKING-CHANGE: change signature`` relaxes only the un-declarable
+    binding-kind/async for declared symbols, NOT their parameters, so advising the
+    marker for a declared-param mismatch loops the user back into the dead-end
+    #1900 removes (codex round-7 finding 3). Undeclared / removed violations keep
+    the BREAKING-CHANGE guidance.
+    """
+    lines: List[str] = []
+    if has_declared:
+        lines += [
+            "For a declared `<pdd-interface>` symbol, update the prompt's",
+            "`<pdd-interface>` declaration to the intended signature (the",
+            "declaration is the contract), or restore the declared signature",
+            "shown above.",
+        ]
+    if has_non_declared or not has_declared:
+        lines += [
+            "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
+            "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
+            "`rename`, `change signature`).",
+        ]
+    return lines
+
+
 def build_public_surface_hard_failure_from_error(
     exc: Any,
     basename: str,
@@ -760,6 +954,10 @@ def build_public_surface_hard_failure_from_error(
     """Format a structured public-surface hard-failure block."""
     removed = list(getattr(exc, "removed_symbols", []) or [])
     changed = list(getattr(exc, "changed_signatures", []) or [])
+    details = list(getattr(exc, "signature_details", []) or [])
+    declared_changed = {d[0] for d in details if len(d) >= 4 and d[3] == "pdd-interface"}
+    has_declared = bool(declared_changed)
+    has_non_declared = bool(removed) or bool(set(changed) - declared_changed)
     block_lines = [
         str(exc),
         "",
@@ -771,9 +969,7 @@ def build_public_surface_hard_failure_from_error(
         f"pre surface size: {getattr(exc, 'pre_surface_size', '<unknown>')}",
         f"post surface size: {getattr(exc, 'post_surface_size', '<unknown>')}",
         "",
-        "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
-        "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
-        "`rename`, `change signature`).",
+        *_public_surface_repair_advice(has_declared, has_non_declared),
         "",
         f"Reproduce locally: pdd sync {basename}",
         "",
@@ -2623,6 +2819,7 @@ class AsyncSyncRunner:
         parsed = _parse_public_surface_failure_fields(stdout, stderr)
         removed = parsed[1] if parsed else tuple()
         changed = parsed[2] if parsed else tuple()
+        details = parsed[3] if parsed else tuple()
         combined = (stdout or "") + "\n" + (stderr or "")
 
         prompt_field = "<unknown>"
@@ -2660,28 +2857,52 @@ class AsyncSyncRunner:
                 return default
             return match.group(1).strip().rstrip(".").strip() or default
 
-        return "\n".join(
+        block_lines = [
+            failure_summary or "Public surface regression",
+            "",
+            "=== public surface regression ===",
+            f"prompt: {prompt_field}",
+            f"output: {_extract_field('Output')}",
+            "removed: " + (", ".join(removed) if removed else "<none>"),
+            "signature_changed: "
+            + (", ".join(changed) if changed else "<none>"),
+            f"pre surface size: {_extract_field('Pre surface size')}",
+            f"post surface size: {_extract_field('Post surface size')}",
+        ]
+        # Carry the full expected-vs-actual contract for each declared signature
+        # mismatch so criterion 4 (no truncation) holds on the agentic path too
+        # (issue #1900). Byte-identical JSON to the ``signature_detail:`` message
+        # line emitted by ``PublicSurfaceRegressionError`` (codex round-8 #2).
+        for symbol, expected_entry, actual_entry, source in details:
+            block_lines.append(
+                "signature_detail: "
+                + json.dumps(
+                    {
+                        "symbol": symbol,
+                        "expected": expected_entry,
+                        "actual": actual_entry,
+                        "source": source,
+                    }
+                )
+            )
+        declared_changed = {
+            d[0] for d in details if len(d) >= 4 and d[3] == "pdd-interface"
+        }
+        has_declared = bool(declared_changed)
+        has_non_declared = bool(removed) or bool(set(changed) - declared_changed)
+        block_lines.append("")
+        block_lines.extend(
+            _public_surface_repair_advice(has_declared, has_non_declared)
+        )
+        block_lines.extend(
             [
-                failure_summary or "Public surface regression",
-                "",
-                "=== public surface regression ===",
-                f"prompt: {prompt_field}",
-                f"output: {_extract_field('Output')}",
-                "removed: " + (", ".join(removed) if removed else "<none>"),
-                "signature_changed: "
-                + (", ".join(changed) if changed else "<none>"),
-                f"pre surface size: {_extract_field('Pre surface size')}",
-                f"post surface size: {_extract_field('Post surface size')}",
-                "",
-                "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
-                "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
-                "`rename`, `change signature`).",
                 "",
                 f"Reproduce locally: {self._reproduce_command(basename)}",
                 "",
                 _env_fingerprint(),
             ]
         )
+        return "\n".join(block_lines)
 
     def _build_test_churn_hard_failure(
         self,
@@ -2802,6 +3023,8 @@ class AsyncSyncRunner:
         )
         verbose_print = self.verbose and not self.quiet
         line_lock = threading.Lock()
+        evidence_lock = threading.Lock()
+        surface_evidence = _StructuredSurfaceCapture()
 
         # Sticky capture of the child's "Overall status: ... Failed" verdict.
         # Recorded as each stdout line streams in (see _process_child_line) so a
@@ -2809,6 +3032,16 @@ class AsyncSyncRunner:
         # bounded tail still yields a failed verdict and a correct failure
         # reason. Only the stdout reader thread writes it, so no lock is needed.
         streamed_failure_markers: List[str] = []
+
+        def _capture_surface_evidence(line: str) -> None:
+            """Capture only one bounded, validated diagnostic block."""
+            with evidence_lock:
+                surface_evidence.feed(line)
+
+        def _take_surface_evidence() -> Tuple[str, Optional[str]]:
+            """Materialize the fixed-size record without an on-disk spool."""
+            with evidence_lock:
+                return surface_evidence.materialize()
 
         def _dropped_output_message() -> str:
             out_lines = stdout_capture.dropped_lines
@@ -2848,6 +3081,7 @@ class AsyncSyncRunner:
 
         def _process_child_line(line: str, prefix: str = "") -> None:
             stripped = line.strip()
+            _capture_surface_evidence(line)
             # Record the failure verdict on the stdout stream (prefix == "") the
             # moment it is seen, mirroring the success-scan predicate, so it is
             # not lost if later output evicts the line from the bounded tail.
@@ -2937,6 +3171,7 @@ class AsyncSyncRunner:
                 os.unlink(cost_file.name)
             except OSError:
                 pass
+            _take_surface_evidence()
             return False, cost, str(exc), "", ""
 
         t_out = threading.Thread(
@@ -3049,9 +3284,16 @@ class AsyncSyncRunner:
                 pass
             stdout = stdout_capture.text()
             stderr = stderr_capture.text()
+            surface_text, surface_error = _take_surface_evidence()
+            if surface_text:
+                stderr = f"{stderr}\n{surface_text}" if stderr else surface_text
+            if surface_error:
+                stderr = f"{stderr}\n{surface_error}" if stderr else surface_error
             _log_dropped_output()
             truncation_msg = _dropped_output_message()
             error_msg = f"Timeout after {int(effective_timeout)}s waiting for sync"
+            if surface_error:
+                error_msg = f"{error_msg}\n{surface_error}"
             if truncation_msg:
                 error_msg = f"{error_msg}\n{truncation_msg}"
             return (
@@ -3073,6 +3315,11 @@ class AsyncSyncRunner:
 
         stdout = stdout_capture.text()
         stderr = stderr_capture.text()
+        surface_text, surface_error = _take_surface_evidence()
+        if surface_text:
+            stderr = f"{stderr}\n{surface_text}" if stderr else surface_text
+        if surface_error:
+            stderr = f"{stderr}\n{surface_error}" if stderr else surface_error
         _log_dropped_output()
 
         success = exit_code == 0
@@ -3160,6 +3407,8 @@ class AsyncSyncRunner:
                 )
 
         error = "\n".join(p for p in summary_parts if p)
+        if surface_error:
+            error = f"{error}\n{surface_error}" if error else surface_error
         truncation_msg = _dropped_output_message()
         if truncation_msg:
             error = f"{error}\n{truncation_msg}" if error else truncation_msg

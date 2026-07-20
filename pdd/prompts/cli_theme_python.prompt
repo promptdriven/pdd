@@ -17,12 +17,12 @@
       {"name": "BREAK_RED", "type": "str"},
       {"name": "BRAND_PALETTE", "type": "dict"},
       {"name": "SEMANTIC_STYLES", "type": "dict"},
-      {"name": "PDD_THEME", "type": "rich.theme.Theme"},
+      {"name": "PDD_THEME", "type": "Theme"},
       {"name": "ANSI_RESET", "type": "str"},
       {"name": "ANSI_FAINT", "type": "str"}
     ],
     "functions": [
-      {"name": "get_console", "signature": "(**kwargs) -> rich.console.Console"},
+      {"name": "get_console", "signature": "(**kwargs) -> Console"},
       {"name": "style", "signature": "(role: str, text: str) -> str"},
       {"name": "hex_to_ansi", "signature": "(hex_color: str) -> str"},
       {"name": "apply_global_color_preference", "signature": "(preference: Optional[bool]) -> Callable[[], None]"}
@@ -79,7 +79,8 @@
      Keep the keys `info`, `warning`, `error`, `success`, `path`, and `selector`
      present and resolvable so existing modules that already use those style
      names keep working when they switch to this theme.
-  4. Define `PDD_THEME = Theme(SEMANTIC_STYLES)` using `rich.theme.Theme`.
+  4. Define `PDD_THEME: Theme = Theme(SEMANTIC_STYLES)` using
+     `rich.theme.Theme`; preserve that constructor right-hand side exactly.
   5. Provide `get_console(**kwargs) -> Console` that returns a `rich.console.Console`
      constructed with `theme=PDD_THEME`, forwarding any extra keyword arguments
      (e.g. `stderr=True`). It must not cache in a way that breaks per-call kwargs.

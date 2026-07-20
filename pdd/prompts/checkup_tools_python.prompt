@@ -5,10 +5,10 @@
   "module": {
     "classes": [
       {"name": "ToolResult", "kind": "dataclass"},
-      {"name": "CheckupTool", "kind": "dataclass"}
+      {"name": "CheckupTool", "kind": "protocol"}
     ],
     "constants": [
-      {"name": "ALL_TOOLS", "kind": "dict"}
+      {"name": "ALL_TOOLS", "type": "dict[str, CheckupTool]"}
     ]
   }
 }

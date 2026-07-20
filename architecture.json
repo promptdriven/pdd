@@ -1418,7 +1418,7 @@
   },
   {
     "reason": "Centralizes concise user-facing CLI branding strings for orientation surfaces.",
-    "description": "Defines shared tagline and positioning constants used by root help, setup onboarding, and connect startup output.",
+    "description": "Defines shared tagline and positioning constants used by root help, setup onboarding, and connect startup output; PDD_FULL_TAGLINE carries an explicit str annotation while retaining its exact interpolation.",
     "dependencies": [],
     "priority": 31,
     "filename": "cli_branding_python.prompt",
@@ -1451,6 +1451,52 @@
     "position": {
       "x": 14960,
       "y": 220
+    }
+  },
+  {
+    "reason": "Centralizes the PDD CLI color system so commands share one brand-derived semantic palette.",
+    "description": "Defines the palette, semantic Rich styles, explicit Theme-annotated PDD_THEME, and console/color-preference helpers while preserving the Theme(SEMANTIC_STYLES) construction.",
+    "dependencies": [],
+    "priority": 93,
+    "filename": "cli_theme_python.prompt",
+    "filepath": "pdd/cli_theme.py",
+    "tags": [
+      "module",
+      "python",
+      "cli",
+      "theme"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "constants": [
+          {"name": "ELECTRIC_CYAN", "type": "str"},
+          {"name": "DEEP_NAVY", "type": "str"},
+          {"name": "LUMEN_PURPLE", "type": "str"},
+          {"name": "PROMPT_MAGENTA", "type": "str"},
+          {"name": "LIGHT_SLEET", "type": "str"},
+          {"name": "GRAPHITE_900", "type": "str"},
+          {"name": "BUILD_GREEN", "type": "str"},
+          {"name": "BUILD_GREEN_700", "type": "str"},
+          {"name": "DIFF_YELLOW", "type": "str"},
+          {"name": "BREAK_RED", "type": "str"},
+          {"name": "BRAND_PALETTE", "type": "dict"},
+          {"name": "SEMANTIC_STYLES", "type": "dict"},
+          {"name": "PDD_THEME", "type": "Theme"},
+          {"name": "ANSI_RESET", "type": "str"},
+          {"name": "ANSI_FAINT", "type": "str"}
+        ],
+        "functions": [
+          {"name": "get_console", "signature": "(**kwargs) -> Console"},
+          {"name": "style", "signature": "(role: str, text: str) -> str"},
+          {"name": "hex_to_ansi", "signature": "(hex_color: str) -> str"},
+          {"name": "apply_global_color_preference", "signature": "(preference: Optional[bool]) -> Callable[[], None]"}
+        ]
+      }
+    },
+    "position": {
+      "x": 14960,
+      "y": 440
     }
   },
   {
@@ -2292,6 +2338,7 @@
   },
   {
     "reason": "Primary orchestration engine for transitioning .prompt files to source code, handling path resolution, incremental generation, and architectural conformance.",
+    "contract_notes": "A present type: module <pdd-interface> is a fail-closed exact public-API declaration: its complete symbol set, callable/class kind, async form, parameter shape/order/names, annotations/defaults, and return annotations must match generated Python. Malformed, partial, duplicate, or unsupported declarations raise PromptInterfaceContractError; only an absent declaration uses legacy snapshot and BREAKING-CHANGE behavior. Classes and declared methods are validated too.",
     "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name (constructor accepts an optional repair_directive override for the <pdd-interface> signature check whose source of truth is the prompt, not architecture.json), and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions. Architecture conformance now also enforces the prompt's <pdd-interface> signature across module/cli/command interface types in three categories: (1) missing function/method — declared callables (including dotted methods like ContentSelector.select) absent from the generated code surface as bare names in missing_symbols; (2) missing parameter — declared parameter names absent from a matching function/method signature surface as dotted funcname.paramname entries; (3) signature drift — annotation drift is conservative (raises only when both sides specify and differ) while default drift is strict (raises when the prompt declares a default and the generated code drops or changes it, since callers omitting an optional kwarg would otherwise break with TypeError). Each category emits a distinct error sentence so the agentic_sync_runner repair loop can build a targeted directive (add missing function/method, add missing parameter, or update parameter to match the prompt's annotation/default). Issue #1012 adds two additional repair-loop gates: (a) PublicSurfaceRegressionError — for mature modules (pre-existing non-empty code file), snapshots top-level functions, classes, recursively-walked nested classes/methods (so a method on `Outer.Inner` is captured as `Outer.Inner.method`), and module-level public `ast.Assign` / bound `ast.AnnAssign` (only when `node.value is not None`; bare annotations like `PUBLIC_NAME: int` don't bind a runtime attribute and are ignored) targets plus `ast.Import`/`ast.ImportFrom` aliases (so removing a re-export like `import git` or a public constant like `PUBLIC_SETTING = ...` surfaces as a regression). When the module declares `__all__` as a clean list/tuple of string constants, that list is AUTHORITATIVE per Python semantics: a name is public iff it appears in `__all__`, even if underscore-prefixed; names NOT in `__all__` are NOT public. Classes listed in `__all__` ALSO contribute their recursively-walked members (methods, nested classes, methods on nested classes at every depth) regardless of underscore prefix — so `__all__ = [\"Service\"]` protects `Service.run`, `Service.Inner`, and `Service.Inner.method`. Computed `__all__` (`sorted(...)`, `X + Y`) or AugAssign extension (`__all__ += [...]`) falls back to the heuristic. Without `__all__`, underscore-prefixed names (including dunders) are excluded at every level; `from X import *` contributes no fixed name and is ignored. The same `__all__` precedence rule (including the class-member recursion) is applied to the parallel `_snapshot_public_signatures` so signature-drift detection sees the same public set. `_snapshot_public_signatures` entries carry a leading kind prefix (`[function]`/`[async_function]`/`[class]` at top level; `[instance]`/`[staticmethod]`/`[classmethod]`/`[property:<roles>]` inside classes; `[assignment]` for module-level rebindings; and `[import]`/`[import:<module>]`/`[import:from <module>]`/`[import:from <module>:<source>]` for re-exports) so a binding-kind flip (e.g. a re-exported `pathlib.Path` replaced by a same-named `def`) diffs even when the parameter list happens to match. For `@dataclass` classes without an explicit `__init__`, `_snapshot_public_signatures` synthesises the constructor signature from class-body `AnnAssign` fields in source order: `@dataclass(kw_only=True)` emits a leading `*` so every field is kw-only; an in-body `_: KW_ONLY` sentinel (`KW_ONLY` Name or `dataclasses.KW_ONLY` Attribute) splits positional vs kw-only fields and is recognised before the underscore-prefix skip; when both decorator and sentinel are present only ONE `*` is emitted (decorator wins); `InitVar[...]` fields ARE included (they are runtime constructor params even though not stored as instance attributes); `ClassVar[...]` fields and `field(init=False, ...)` defaults are excluded; an explicit `__init__` still wins over synthesis. Inherited dataclass fields are collected in REVERSE-MRO order (matching Python's `@dataclass`: `__dataclass_fields__` is populated by walking bases right-to-left so later bases overwrite earlier ones in dict-insertion order) — `class C(A, B)` synthesises `(b, a, c)`. A base decorated with `@dataclass(init=False)` STILL contributes its annotated fields to a derived `@dataclass`'s synth; `init=False` only suppresses the base's OWN `__init__` synthesis. Cross-module bases that resolve to imports rather than same-module `ClassDef`s are marked `[inherited_unresolved]`. When a derived class redeclares a base's field name, the derived annotation/default wins but the field's POSITION matches the base's original slot (insertion-order dict semantics). The gate raises when public symbols are removed/renamed or their callable signature changes unless the prompt body contains an anchored `BREAKING-CHANGE:` directive (regex `^\\s*BREAKING-CHANGE:\\s*` with `re.MULTILINE`) whose tail starts with a `remove`/`delete`/`drop`/`rename` action verb (followed by a comma-separated symbol list) for removals or a `change signature`/`change api`/`change contract` verb pair for signature drift. Buried mid-line marker mentions and bare `BREAKING-CHANGE:` markers do NOT disable the gate. First-time generation is exempt. (b) TestChurnError — when overwriting an existing non-empty test file through code_generator_main or cmd_test_main, computes the stdlib `difflib.unified_diff` churn ratio between pre and post test bodies and raises when the ratio exceeds `PDD_TEST_CHURN_THRESHOLD` (default 0.40, accepts both decimal `0.40` and percent `40%` strings; defensive fallback to default on unparseable values) without an anchored `BREAKING-CHANGE:` directive that pairs an opt-out verb (`rewrite`/`replace`/`regenerate`/`overwrite`/`churn`/`remove`/`drop`) with `tests` as the verb's direct object. PublicSurfaceRegressionError and TestChurnError share the existing PDD_REPAIR_DIRECTIVE plumbing so sync_main, sync_orchestration, and agentic_sync_runner route them through the same repair loop. Issue #1649 adds ProseOutputError before the architecture/public-surface/test-churn gates: when extracted generated content is empty or whitespace-only for a non-prompt target, code_generator_main raises a typed generation-output extraction failure containing provider/model, prompt, output path, extractor result, and raw-output excerpt, so sync retries once with an output-shape directive instead of misdiagnosing empty extraction as missing exports/churn. `PDD_ALLOW_EMPTY_GENERATION=1` is the explicit escape hatch for the rare intentional empty-output case.",
     "dependencies": [
       "construct_paths_python.prompt",
@@ -2350,7 +2397,7 @@
           },
           {
             "name": "PublicSurfaceRegressionError",
-            "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)",
+            "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None, signature_details: Optional[List[Tuple[str, str, str, str]]] = None)",
             "returns": "PublicSurfaceRegressionError"
           },
           {
@@ -7750,6 +7797,7 @@
   },
   {
     "reason": "Parallel dependency-aware sync runner that forwards compressed-context sync settings.",
+    "contract_notes": "Public-surface repair evidence is captured in a dedicated per-attempt structured spill record while stdout/stderr remain bounded tails. The complete surface prefix, fields, and signature_detail records survive trailing output for parsing, retry, and final failure evidence; the spill artifact is removed after materialization.",
     "description": "Manages pdd sync subprocesses using a ThreadPoolExecutor whose worker count is read by _read_sync_max_workers() from the PDD_SYNC_MAX_WORKERS env var at construction (default 4, non-integer falls back to 4, clamped to 1-4, forced to 1 when total_budget is set; MAX_WORKERS stays a backwards-compatible module constant), preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects four repairable generation failures from per-module sync subprocesses - architecture-conformance ('Architecture conformance error for ' line prefix, parsed by _parse_conformance_failure), public-surface regression ('Public surface regression for ' line prefix, parsed by _parse_public_surface_failure, issue #1012), test-churn ('Test churn threshold exceeded for ' line prefix, parsed by _parse_test_churn_failure, issue #1012), and prose-output ('Generation output extraction failure for ' line prefix, parsed by _parse_prose_output_failure, issue #1649, checked first and limited to 1 additional attempt) - and retries conformance/surface/churn failures up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact offending symbols / churn ratio and forbids editing architecture.json or rewriting unrelated tests. Every child/retry keeps the per-module resolved .pddrc context, --strength, and --temperature stable so a flaky regeneration cannot silently switch model or context between attempts. Stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the failure signature (sorted missing/removed symbols, ('prose',), or (rounded churn_ratio, pre_line_count)) repeats, and on hard failure records the matching structured block - '=== architecture conformance failure ===', '=== public surface regression ===', '=== test churn threshold exceeded ===', or '=== generation output extraction failure ===' with extractor_result/raw_output_excerpt fields (built by build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error / build_prose_output_hard_failure_from_error, all importable from pdd.agentic_sync_runner so sync_main and sync_orchestration reuse them verbatim) - plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits. Bounds per-attempt child stdout/stderr capture with a _BoundedTextCapture tail (capped by STDOUT_CAPTURE_LINE_LIMIT=5000 lines and STDOUT_CAPTURE_BYTE_LIMIT=1 MiB per stream, allocated fresh each attempt) so verbose repair retries cannot grow memory unbounded and trigger SIGKILL on Cloud Run; reads child pipes as bytes and decodes UTF-8 incrementally; tracks dropped line/byte counts surfaced via _log_dropped_output() and appended to failure/timeout summaries without injecting diagnostics into captured child output. The 'Overall status: ... Failed' verdict is recorded as the stdout line streams in (sticky), so a failure marker evicted from the bounded tail by trailing output still yields a failed verdict and a correct failure reason.",
     "dependencies": [
       "architecture_sync_python.prompt",
@@ -7908,6 +7956,34 @@
               {
                 "name": "pr_number",
                 "type": "int"
+              },
+              {
+                "name": "receipt_key",
+                "type": "Optional[bytes]"
+              },
+              {
+                "name": "receipt_artifact_path",
+                "type": "str"
+              },
+              {
+                "name": "receipt_run_id",
+                "type": "str"
+              },
+              {
+                "name": "receipt_expected_head_sha",
+                "type": "str"
+              },
+              {
+                "name": "private_dir",
+                "type": "Optional[Path]"
+              },
+              {
+                "name": "private_file",
+                "type": "Optional[IO[str]]"
+              },
+              {
+                "name": "private_payload",
+                "type": "bytearray"
               }
             ]
           }
@@ -9004,7 +9080,7 @@
   },
   {
     "reason": "Post-extraction validation for the agentic split orchestrator (git sanity, completeness, metadata, test seams, parent wiring).",
-    "description": "Runs checks (a-g) on a worktree after extraction: byte_equivalence, children_completeness, prompt_metadata, explicit new_example/example_file and new_test/test_file existence with conventional fallbacks, test_ownership, test_seam_resolution, and parent_wiring. Works with full or single-child plan views for the split orchestrator's per-child 6v gate. Also exposes deterministic resolvers for test/lint commands (delegating to get_test_command and get_lint_commands; returns None / empty list when no deterministic command exists).",
+    "description": "Runs checks (a-g) on a worktree after extraction: byte_equivalence, children_completeness, prompt_metadata, explicit new_example/example_file and new_test/test_file existence with conventional fallbacks, test_ownership, test_seam_resolution, and parent_wiring. Patch-target discovery amortizes parsed sibling tests by repository directory set while validating directory and test-file inode/mode/ctime/mtime/size identities before reuse; unreadable files make a corpus retryable after the one-second freshness window, and a small deterministic LRU cap bounds long-lived-process memory. Works with full or single-child plan views for the split orchestrator's per-child 6v gate. Also exposes deterministic resolvers for test/lint commands (delegating to get_test_command and get_lint_commands; returns None / empty list when no deterministic command exists).",
     "dependencies": [
       "get_test_command_python.prompt",
       "get_lint_commands_python.prompt"
@@ -9413,30 +9489,26 @@
     "interface": {
       "type": "module",
       "module": {
+        "classes": [
+          {
+            "name": "Job"
+          },
+          {
+            "name": "JobCallbacks"
+          },
+          {
+            "name": "JobManager"
+          }
+        ],
         "functions": [
           {
-            "name": "Job",
-            "signature": "dataclass Job(id: str, command: str, args: Dict[str, Any], options: Dict[str, Any], status: JobStatus, result: Optional[Any], error: Optional[str], cost: float, created_at: datetime, started_at: Optional[datetime], completed_at: Optional[datetime], live_stdout: str, live_stderr: str)",
-            "returns": "Job"
-          },
-          {
-            "name": "JobCallbacks",
-            "signature": "()",
-            "returns": "JobCallbacks"
-          },
-          {
-            "name": "JobManager",
-            "signature": "(max_concurrent: int = 1, executor=None, project_root=None)",
-            "returns": "JobManager"
-          },
-          {
             "name": "JobManager.submit",
-            "signature": "async (command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None) -> Job",
+            "signature": "async def submit(command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None) -> Job",
             "returns": "Job"
           },
           {
             "name": "JobManager.cancel",
-            "signature": "async (job_id: str) -> bool",
+            "signature": "async def cancel(job_id: str) -> bool",
             "returns": "bool"
           },
           {
@@ -9446,7 +9518,7 @@
           },
           {
             "name": "JobManager.shutdown",
-            "signature": "async () -> None",
+            "signature": "async def shutdown() -> None",
             "returns": "None"
           }
         ]
@@ -9772,17 +9844,17 @@
           },
           {
             "name": "run_user_story_tests",
-            "signature": "(story_dir=None, prompt_dir=None, ..., contract_files: Optional[Mapping[Path, Path]] = None) -> Tuple[bool, List[Dict], float, str]",
+            "signature": "(...) -> Tuple[bool, List[Dict], float, str]",
             "returns": "Tuple[bool, List[Dict], float, str]"
           },
           {
             "name": "run_user_story_fix",
-            "signature": "(story_file, ...) -> Tuple[bool, str, float, str, List[str]]",
+            "signature": "(...) -> Tuple[bool, str, float, str, List[str]]",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
             "name": "generate_user_story",
-            "signature": "(prompt_files, issue, ...) -> Tuple[bool, str, float, str, str, List[str]]",
+            "signature": "(...) -> Tuple[bool, str, float, str, str, List[str]]",
             "returns": "Tuple[bool, str, float, str, str, List[str]]"
           },
           {
@@ -10814,18 +10886,43 @@
       "type": "module",
       "module": {
         "dataclasses": [
-          "ApprovedPatch",
-          "RepairOption"
+          {
+            "name": "ApprovedPatch",
+            "fields": [
+              {"name": "kind", "type": "str"},
+              {"name": "target", "type": "Path"},
+              {"name": "anchor", "type": "dict[str, Any]"},
+              {"name": "replacement", "type": "str"},
+              {"name": "finding_id", "type": "str"}
+            ]
+          },
+          {
+            "name": "RepairOption",
+            "fields": [
+              {"name": "label", "type": "str"},
+              {"name": "preview", "type": "str"},
+              {"name": "patch", "type": "ApprovedPatch"}
+            ]
+          }
         ],
-        "functions": [
+        "classes": [
           {
             "name": "InteractiveRepairSession",
-            "returns": "Protocol"
+            "kind": "protocol",
+            "methods": [
+              {"name": "seed", "signature": "(self, report: PromptSourceSetReport) -> None", "binding": "instance"},
+              {"name": "present_finding", "signature": "(self, finding_id: str) -> list[RepairOption]", "binding": "instance"},
+              {"name": "ask", "signature": "(self, question: str) -> str", "binding": "instance"},
+              {"name": "record_choice", "signature": "(self, finding_id: str, option: RepairOption) -> None", "binding": "instance"},
+              {"name": "approved_patches", "signature": "(self) -> list[ApprovedPatch]", "binding": "instance"}
+            ]
           },
           {
             "name": "FakeInteractiveSession",
-            "signature": "(options_by_finding=None, answers=None)",
-            "returns": "FakeInteractiveSession"
+            "kind": "class",
+            "methods": [
+              {"name": "__init__", "signature": "(self, options_by_finding: Mapping[str, Sequence[RepairOption]] | None = None, answers: Iterable[str] | None = None) -> None", "binding": "instance"}
+            ]
           }
         ]
       }
@@ -11096,7 +11193,7 @@
         "constants": [
           {
             "name": "ALL_TOOLS",
-            "kind": "dict"
+            "type": "dict[str, CheckupTool]"
           }
         ]
       }

@@ -5,6 +5,8 @@ import ast
 import errno
 import re
 import subprocess
+import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -136,6 +138,155 @@ _PATCH_OBJECT_PATTERNS = [
         r'''(?:patch|mocker\.patch)\.object\s*\(\s*([\w.]+)\s*,\s*["']([^"']+)["']'''
     ),
 ]
+
+
+@dataclass
+class _PatchTargetCorpus:
+    """Validated patch-target index for one set of sibling test directories.
+
+    A public-surface check can run once for every module in a repository.  The
+    old implementation reparsed every shared ``tests/test_*.py`` file for each
+    module.  Keep one index per directory set, but validate the directories and
+    every cached test file by stat signature before using it: a long-lived PDD
+    process therefore observes added, removed, and edited tests.
+    """
+
+    directory_signatures: tuple[Optional[tuple[int, int, int, int, int]], ...]
+    test_files: tuple[Path, ...]
+    test_signatures: dict[Path, Optional[tuple[int, int, int, int, int]]]
+    symbols_by_stem: dict[str, set[str]]
+    validated_at: float
+    incomplete: bool = False
+
+
+_PATCH_TARGET_CORPUS_CACHE: OrderedDict[tuple[str, ...], _PatchTargetCorpus] = OrderedDict()
+_PATCH_TARGET_CACHE_VALIDATION_SECONDS = 1.0
+_PATCH_TARGET_CORPUS_CACHE_MAX_ENTRIES = 32
+
+
+def _stat_signature(path: Path) -> Optional[tuple[int, int, int, int, int]]:
+    """Return a cheap identity/change token, tolerating transient removal."""
+    try:
+        status = path.stat()
+    except OSError:
+        return None
+    return (
+        int(getattr(status, "st_ino", 0)),
+        int(getattr(status, "st_mode", 0)),
+        int(getattr(status, "st_ctime_ns", 0)),
+        int(getattr(status, "st_mtime_ns", 0)),
+        int(getattr(status, "st_size", 0)),
+    )
+
+
+def _sibling_test_directories(file_path: Path) -> tuple[Path, ...]:
+    """Return every directory whose ``test_*.py`` files apply to *file_path*."""
+    directories = (
+        file_path.parent,
+        file_path.parent / "tests",
+        file_path.parent.parent / "tests",
+    )
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for directory in directories:
+        key = str(directory.resolve())
+        if key not in seen:
+            seen.add(key)
+            unique.append(directory)
+    return tuple(unique)
+
+
+def _index_patch_path(symbols_by_stem: dict[str, set[str]], patch_path: str) -> None:
+    """Index a dotted patch path with the same stem matching as the legacy scan."""
+    parts = patch_path.split(".")
+    for index, stem in enumerate(parts[:-1]):
+        symbols_by_stem.setdefault(stem, set()).add(".".join(parts[index + 1 :]))
+
+
+def _index_test_patch_symbols(test_file_content: str) -> dict[str, set[str]]:
+    """Parse a test once and index every module stem it can patch."""
+    symbols_by_stem: dict[str, set[str]] = {}
+    for patch_path in _collect_patch_paths(test_file_content):
+        _index_patch_path(symbols_by_stem, patch_path)
+    for pattern in _PATCH_OBJECT_PATTERNS:
+        for module_ref, attr in pattern.findall(test_file_content):
+            dotted = module_ref if module_ref.endswith(f".{attr}") else f"{module_ref}.{attr}"
+            _index_patch_path(symbols_by_stem, dotted)
+    try:
+        tree = ast.parse(test_file_content)
+    except SyntaxError:
+        return symbols_by_stem
+    imported_targets: dict[str, tuple[str, str]] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module_stem = alias.name.rsplit(".", 1)[-1]
+                imported_targets[alias.asname or module_stem] = (module_stem, "")
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            module_stem = node.module.rsplit(".", 1)[-1]
+            for alias in node.names:
+                if alias.name != "*":
+                    imported_targets[alias.asname or alias.name] = (module_stem, alias.name)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not _is_patch_object_callee(node.func):
+            continue
+        attr = _patch_object_attr_from_call(node)
+        target_ref = _patch_object_target_ref(node.args[0]) if node.args else None
+        if attr is None or target_ref not in imported_targets:
+            continue
+        module_stem, owner = imported_targets[target_ref]
+        symbol = f"{owner}.{attr}" if owner else attr
+        symbols_by_stem.setdefault(module_stem, set()).add(symbol)
+    return symbols_by_stem
+
+
+def _build_patch_target_corpus(
+    directories: tuple[Path, ...],
+    directory_signatures: tuple[Optional[tuple[int, int, int, int, int]], ...],
+) -> _PatchTargetCorpus:
+    """Discover and parse sibling tests once for a cache refresh."""
+    seen: set[str] = set()
+    test_files: list[Path] = []
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+        for candidate in directory.glob("test_*.py"):
+            key = str(candidate.resolve())
+            if key not in seen:
+                seen.add(key)
+                test_files.append(candidate)
+    symbols_by_stem: dict[str, set[str]] = {}
+    test_signatures: dict[Path, Optional[tuple[int, int, int, int, int]]] = {}
+    incomplete = False
+    for test_file in test_files:
+        test_signatures[test_file] = _stat_signature(test_file)
+        try:
+            indexed = _index_test_patch_symbols(test_file.read_text(encoding="utf-8"))
+        except OSError:
+            # Do not treat a momentarily unreadable file as a complete corpus:
+            # its stat token can remain unchanged while access recovers.
+            incomplete = True
+            continue
+        for stem, symbols in indexed.items():
+            symbols_by_stem.setdefault(stem, set()).update(symbols)
+    return _PatchTargetCorpus(
+        directory_signatures=directory_signatures,
+        test_files=tuple(test_files),
+        test_signatures=test_signatures,
+        symbols_by_stem=symbols_by_stem,
+        validated_at=time.monotonic(),
+        incomplete=incomplete,
+    )
+
+
+def _cache_patch_target_corpus(
+    cache_key: tuple[str, ...], corpus: _PatchTargetCorpus
+) -> None:
+    """Store a corpus with deterministic least-recently-used eviction."""
+    _PATCH_TARGET_CORPUS_CACHE[cache_key] = corpus
+    _PATCH_TARGET_CORPUS_CACHE.move_to_end(cache_key)
+    while len(_PATCH_TARGET_CORPUS_CACHE) > _PATCH_TARGET_CORPUS_CACHE_MAX_ENTRIES:
+        _PATCH_TARGET_CORPUS_CACHE.popitem(last=False)
 
 
 def _collect_patch_paths(test_file_content: str) -> list[str]:
@@ -314,13 +465,9 @@ def iter_sibling_test_files(file_path: Path | str) -> list[Path]:
     """Return deduplicated ``test_*.py`` files adjacent to *file_path*."""
     path = Path(file_path)
     candidates: list[Path] = []
-    candidates.extend(path.parent.glob("test_*.py"))
-    tests_dir = path.parent / "tests"
-    if tests_dir.is_dir():
-        candidates.extend(tests_dir.glob("test_*.py"))
-    parent_tests = path.parent.parent / "tests"
-    if parent_tests.is_dir():
-        candidates.extend(parent_tests.glob("test_*.py"))
+    for directory in _sibling_test_directories(path):
+        if directory.is_dir():
+            candidates.extend(directory.glob("test_*.py"))
     seen: set[str] = set()
     unique: list[Path] = []
     for candidate in candidates:
@@ -333,23 +480,41 @@ def iter_sibling_test_files(file_path: Path | str) -> list[Path]:
 
 
 def collect_patch_symbols_for_module(file_path: Path | str | None) -> set[str]:
-    """Collect dotted symbol names patched by sibling tests for a Python module."""
+    """Collect dotted symbol names patched by sibling tests for a Python module.
+
+    The shared test corpus is parsed once, then revalidated on every lookup with
+    directory and file stat signatures.  This preserves live test-file changes
+    without repeatedly reading and parsing the repository test suite.
+    """
     if not file_path:
         return set()
     path = Path(file_path)
     if not path.is_file() or path.suffix.lower() != ".py":
         return set()
-    module_stem = path.stem
-    symbols: set[str] = set()
-    for test_file in iter_sibling_test_files(path):
-        try:
-            test_content = test_file.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        for patch_path in _collect_patch_paths(test_content):
-            symbols.update(symbols_from_patch_path(patch_path, module_stem))
-        symbols.update(_collect_patch_object_symbols(test_content, module_stem))
-    return symbols
+    directories = _sibling_test_directories(path)
+    cache_key = tuple(str(directory.resolve()) for directory in directories)
+    directory_signatures = tuple(_stat_signature(directory) for directory in directories)
+    corpus = _PATCH_TARGET_CORPUS_CACHE.get(cache_key)
+    if corpus is not None:
+        _PATCH_TARGET_CORPUS_CACHE.move_to_end(cache_key)
+    needs_refresh = corpus is None
+    if corpus is not None and time.monotonic() - corpus.validated_at >= _PATCH_TARGET_CACHE_VALIDATION_SECONDS:
+        needs_refresh = (
+            corpus.incomplete
+            or
+            corpus.directory_signatures != directory_signatures
+            or any(
+                _stat_signature(test_file) != signature
+                for test_file, signature in corpus.test_signatures.items()
+            )
+        )
+        # Even when unchanged, record that the bounded freshness check ran so
+        # a repository corpus does not restat every shared test file per module.
+        corpus.validated_at = time.monotonic()
+    if needs_refresh:
+        corpus = _build_patch_target_corpus(directories, directory_signatures)
+        _cache_patch_target_corpus(cache_key, corpus)
+    return set(corpus.symbols_by_stem.get(path.stem, set()))
 
 
 _STDLIB_MODULES_COMMON: set[str] = {

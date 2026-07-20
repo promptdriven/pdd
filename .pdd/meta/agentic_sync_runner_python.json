@@ -2,12 +2,13 @@
   "pdd_version": "0.0.275.dev3",
   "timestamp": "2026-06-16T01:31:18.161464+00:00",
   "command": "fix",
-  "prompt_hash": "0784d6ff7f749b74e6938bfdd945a1cf97aed961ebea4bf3849fe512bf7163f9",
-  "code_hash": "587d51aaed8470de39bbefbb0882f481f269431cca8b50e45b22e90dbd2eb695",
+  "prompt_hash": "69ef6d4649a9a8a7282ac761216d7e85886db3194079750a18e28acc3347bd92",
+  "code_hash": "f5683b80fd8abcb213bee217b81745def2948f2892667533de41166d61f72627",
   "example_hash": "fcb36209abb5ab882ad551754fb574d62509c968f8c564e18163be7f2b7ef35a",
-  "test_hash": "781deb083113a3c96b990501f24cdf41e0742190be5cfbe85553639c25e62e22",
+  "test_hash": "1a8323a419ba91a63924133810b509339f8db7b909d732c2627f88a1dbafc8a0",
   "test_files": {
-    "test_agentic_sync_runner.py": "781deb083113a3c96b990501f24cdf41e0742190be5cfbe85553639c25e62e22"
+    "test_agentic_sync_runner.py": "1a8323a419ba91a63924133810b509339f8db7b909d732c2627f88a1dbafc8a0",
+    "test_issue_1900_surface_contract.py": "f9e7a79825f76973f12a2059425f94807aa3df7cf8005b41c3424b52358f02e5"
   },
   "include_deps": {
     "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",

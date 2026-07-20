@@ -5,11 +5,10 @@
   "module": {
     "classes": [
       {"name": "Plan", "kind": "dataclass"},
-      {"name": "Planner", "kind": "protocol"},
       {"name": "DeterministicPlanner", "kind": "class"}
     ],
     "functions": [
-      {"name": "make_planner", "signature": "(name: str | None) -> Planner", "returns": "Planner"}
+      {"name": "make_planner", "signature": "(name: str) -> DeterministicPlanner | LLMPlanner", "returns": "DeterministicPlanner | LLMPlanner"}
     ]
   }
 }
