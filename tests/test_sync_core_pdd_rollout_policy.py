@@ -117,6 +117,7 @@ OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS = {
 OCI_CHECKER_RUNTIME_LAYER2_PROTECTED_BASE = (
     "e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347"
 )
+OCI_CHECKER_RUNTIME_LAYER2_POLICY_SHA = "51ad58f28858178d02146df2ac75595277a70448"
 STANDALONE_CHECKER_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/standalone-checker-modules.json",
     "pdd/sync_core/standalone_package.py",
@@ -151,7 +152,6 @@ FUTURE_STANDALONE_CHECKER_AUTHORITY_PREFIXES = (
 )
 FUTURE_STANDALONE_CHECKER_UNAUTHORIZED_PATHS = {
     ".pdd/global-sync/gate2-checker-release.json",
-    ".pdd/global-sync/oci-checker-runtime.json",
     ".pdd/global-sync/release-checker-pin.json",
     ".pdd/global-sync/gate3-checker-pins.json",
     ".pdd/global-sync/certificate-a-checker.json",
@@ -1822,15 +1822,17 @@ def test_standalone_checker_package_boundary_is_exactly_preauthorized() -> None:
         for row in ownership["rules"]
         if row.get("preauthorize_absent", False)
     }
+    expected_oci_prefix_overlaps = {
+        path
+        for path in OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS
+        if path.startswith(FUTURE_STANDALONE_CHECKER_AUTHORITY_PREFIXES)
+    }
     assert {
         path
         for path in preauthorized
         if path.startswith(FUTURE_STANDALONE_CHECKER_AUTHORITY_PREFIXES)
-        and path not in OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS
-    } == STANDALONE_CHECKER_PREAUTHORIZED_PATHS
-    assert not (
-        preauthorized - OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS
-    ) & FUTURE_STANDALONE_CHECKER_UNAUTHORIZED_PATHS
+    } == STANDALONE_CHECKER_PREAUTHORIZED_PATHS | expected_oci_prefix_overlaps
+    assert not preauthorized & FUTURE_STANDALONE_CHECKER_UNAUTHORIZED_PATHS
     assert all(
         not path.endswith("/") and not any(token in path for token in ("*", "?", "["))
         for path in STANDALONE_CHECKER_PREAUTHORIZED_PATHS
@@ -2039,10 +2041,14 @@ def test_oci_checker_runtime_layer2_composes_clean_manifest_and_fails_closed(
         check=True,
         capture_output=True,
     )
-    policy_path = root / ".pdd" / "sync-ownership.json"
-    policy_path.write_bytes(OWNERSHIP_PATH.read_bytes())
-    _git(root, "add", ".pdd/sync-ownership.json")
-    protected_base = _commit(root, "install OCI layer 2 preauthorization")
+    _git(root, "checkout", "--detach", OCI_CHECKER_RUNTIME_LAYER2_POLICY_SHA)
+    protected_base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    assert protected_base == OCI_CHECKER_RUNTIME_LAYER2_POLICY_SHA
+    assert subprocess.check_output(
+        ["git", "rev-parse", "HEAD^"], cwd=root, text=True
+    ).strip() == OCI_CHECKER_RUNTIME_LAYER2_PROTECTED_BASE
     _git(root, "update-ref", "refs/remotes/origin/main", protected_base)
 
     for path in OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS:
