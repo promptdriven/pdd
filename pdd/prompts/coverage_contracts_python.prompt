@@ -135,6 +135,11 @@ project-relative prompt paths, not just basenames, so `prompts/a/foo.prompt` and
 when that basename identifies exactly one prompt in the project. In malformed
 source, bind a qualified marker to the test definition signature or its immediate
 initial docstring line; a marker elsewhere in the file is not test evidence.
+The syntax-error fallback MUST recognize both `def test_*` and
+`async def test_*`, and MUST verify that the following line is an actual string
+literal before treating it as docstring evidence; an assignment containing a
+marker is not a docstring. Apply the same normalized path identity and unique
+legacy-basename rule to story metadata and qualified `## Covers` references.
 </contract_rules>
 
 <acceptance_tests>

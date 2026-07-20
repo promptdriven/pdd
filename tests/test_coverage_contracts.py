@@ -378,6 +378,39 @@ class TestScanStoryEvidence:
         evidence = scan_story_evidence(stories_dir, prompt_path)
         assert len(evidence["R1"]) == 2
 
+    def test_build_coverage_distinguishes_same_basename_story_owners(self, tmp_path):
+        prompts = tmp_path / "prompts"
+        prompt_a = prompts / "a" / "foo.prompt"
+        prompt_b = prompts / "b" / "foo.prompt"
+        prompt_a.parent.mkdir(parents=True)
+        prompt_b.parent.mkdir(parents=True)
+        contract = (
+            "<contract_rules>\nR1a - Specialized\n"
+            "The system MUST specialize.\n</contract_rules>\n"
+        )
+        prompt_a.write_text(contract, encoding="utf-8")
+        prompt_b.write_text(contract, encoding="utf-8")
+        stories_dir = tmp_path / "stories"
+        stories_dir.mkdir()
+        (stories_dir / "story__only_a.md").write_text(
+            "<!-- pdd-story-prompts: prompts/a/foo.prompt -->\n"
+            "## Covers\n- prompts/a/foo.prompt#R1a: only A\n\n"
+            "## Acceptance Criteria\n- Specialized behavior works.\n",
+            encoding="utf-8",
+        )
+
+        result_a = build_coverage(
+            prompt_a, stories_dir=stories_dir, tests_dir=tmp_path / "none"
+        )
+        result_b = build_coverage(
+            prompt_b, stories_dir=stories_dir, tests_dir=tmp_path / "none"
+        )
+
+        assert result_a.rules[0].stories == ["story__only_a.md"]
+        assert result_a.rules[0].status == STATUS_STORY_ONLY
+        assert result_b.rules[0].stories == []
+        assert result_b.rules[0].status == STATUS_UNCHECKED
+
 
 class TestStoryValidationFailures:
     def test_linked_story_missing_acceptance_criteria_fails_covered_rule(self, tmp_path):
@@ -501,6 +534,40 @@ class TestScanTestValidationFailures:
             prompt_path=prompt,
             require_prompt_qualified=True,
         ) == {}
+
+    def test_assignment_after_malformed_test_is_not_a_docstring(self, tmp_path):
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        prompt = _make_prompt(prompts, "", name="foo.prompt")
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        _make_test_file(
+            tests_dir,
+            "def test_broken(:\n    MARKER = 'prompts/foo.prompt#R1a'\n",
+        )
+        assert scan_test_validation_failures(
+            tests_dir,
+            prompt_path=prompt,
+            require_prompt_qualified=True,
+        ) == {}
+
+    def test_malformed_async_test_qualified_docstring_marks_failure(self, tmp_path):
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        prompt = _make_prompt(prompts, "", name="foo.prompt")
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        _make_test_file(
+            tests_dir,
+            "async def test_broken(:\n"
+            "    \"\"\"prompts/foo.prompt#R1a: specialized behavior.\"\"\"\n",
+        )
+        failures = scan_test_validation_failures(
+            tests_dir,
+            prompt_path=prompt,
+            require_prompt_qualified=True,
+        )
+        assert set(failures) == {"R1A"}
 
 
 class TestScanTestFileDirectly:

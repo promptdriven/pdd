@@ -206,12 +206,12 @@ class CoverageResult:
 # ---------------------------------------------------------------------------
 
 
-def _prompt_basename(path: Path) -> str:
-    """Return just the filename of a prompt path, e.g. 'foo_python.prompt'."""
-    return path.name
-
-
-def _story_links_prompt(story_text: str, prompt_name: str) -> bool:
+def _story_links_prompt(
+    story_text: str,
+    prompt_name: str,
+    *,
+    allow_prompt_basename: bool = True,
+) -> bool:
     """
     Return True if the story's pdd-story-prompts metadata mentions prompt_name.
 
@@ -223,9 +223,12 @@ def _story_links_prompt(story_text: str, prompt_name: str) -> bool:
         return True  # no metadata = applies to prompt set
     prompts_str = meta_match.group("prompts")
     listed = [p.strip() for p in prompts_str.split(",")]
-    prompt_base = prompt_name.lower()
     return any(
-        p.lower() == prompt_base or p.lower().endswith("/" + prompt_base)
+        _prompt_reference_matches(
+            p,
+            prompt_name,
+            allow_basename=allow_prompt_basename,
+        )
         for p in listed
     )
 
@@ -249,7 +252,9 @@ def scan_story_evidence(
     if not stories_dir.exists():
         return evidence
 
-    prompt_name = _prompt_basename(prompt_path)
+    prompt_name, allow_prompt_basename = _prompt_reference_scope(
+        prompt_path, stories_dir
+    )
 
     for story_path in sorted(stories_dir.rglob("story__*.md")):
         try:
@@ -259,14 +264,23 @@ def scan_story_evidence(
                 read_errors.append(f"{story_path.name}: {exc}")
             continue
 
-        if not _story_links_prompt(story_text, prompt_name):
+        if not _story_links_prompt(
+            story_text,
+            prompt_name,
+            allow_prompt_basename=allow_prompt_basename,
+        ):
             continue
 
         covers_text = _extract_markdown_section(story_text, "Covers")
         if not covers_text:
             continue
 
-        rule_ids = _rule_ids_from_covers(covers_text, prompt_name)
+        covers_prompt_name = (
+            posixpath.basename(prompt_name)
+            if allow_prompt_basename
+            else prompt_name
+        )
+        rule_ids = _rule_ids_from_covers(covers_text, covers_prompt_name)
         for rid in rule_ids:
             evidence.setdefault(rid, [])
             if story_path.name not in evidence[rid]:
@@ -292,7 +306,9 @@ def scan_story_validation_failures(
     if not stories_dir.exists():
         return failures
 
-    prompt_name = _prompt_basename(prompt_path)
+    prompt_name, allow_prompt_basename = _prompt_reference_scope(
+        prompt_path, stories_dir
+    )
 
     for story_path in sorted(stories_dir.rglob("story__*.md")):
         try:
@@ -302,14 +318,23 @@ def scan_story_validation_failures(
                 read_errors.append(f"{story_path.name}: {exc}")
             continue
 
-        if not _story_links_prompt(story_text, prompt_name):
+        if not _story_links_prompt(
+            story_text,
+            prompt_name,
+            allow_prompt_basename=allow_prompt_basename,
+        ):
             continue
 
         covers_text = _extract_markdown_section(story_text, "Covers")
         if not covers_text:
             continue
 
-        rule_ids = _rule_ids_from_covers(covers_text, prompt_name)
+        covers_prompt_name = (
+            posixpath.basename(prompt_name)
+            if allow_prompt_basename
+            else prompt_name
+        )
+        rule_ids = _rule_ids_from_covers(covers_text, covers_prompt_name)
         if not rule_ids:
             continue
 
@@ -375,9 +400,12 @@ def _prompt_reference_matches(
     normalised_target = _normalise_prompt_identity(prompt_identity)
     if normalised_ref == normalised_target:
         return True
+    if not allow_basename:
+        return False
+    if "/" not in normalised_target:
+        return posixpath.basename(normalised_ref) == normalised_target
     return (
-        allow_basename
-        and "/" not in normalised_ref
+        "/" not in normalised_ref
         and normalised_ref == posixpath.basename(normalised_target)
     )
 
@@ -611,9 +639,9 @@ def _scan_test_file_regex(
     lines = source.splitlines()
     for line_index, line in enumerate(lines):
         stripped = line.strip()
-        if not stripped.startswith("def test"):
+        if not re.match(r"^(?:async\s+)?def\s+test", stripped):
             continue
-        fname_match = re.match(r"def\s+(test\w+)", stripped)
+        fname_match = re.match(r"(?:async\s+)?def\s+(test\w+)", stripped)
         if not fname_match:
             continue
         fname = fname_match.group(1)
@@ -622,7 +650,9 @@ def _scan_test_file_regex(
             # and the following line (where a one-line docstring normally sits).
             texts = [line]
             if line_index + 1 < len(lines):
-                texts.append(lines[line_index + 1])
+                possible_docstring = lines[line_index + 1].lstrip()
+                if re.match(r"^(?:[rRuU]{0,2})?(?:'''|\"\"\"|'|\")", possible_docstring):
+                    texts.append(lines[line_index + 1])
             for text in texts:
                 for match in CROSS_MODULE_REF_RE.finditer(text):
                     if _prompt_reference_matches(
@@ -793,7 +823,9 @@ def _linked_story_ids(
 
     if not stories_dir.exists():
         return []
-    prompt_name = _prompt_basename(prompt_path)
+    prompt_name, allow_prompt_basename = _prompt_reference_scope(
+        prompt_path, stories_dir
+    )
     ids: set[str] = set()
     for story_path in sorted(stories_dir.rglob("story__*.md")):
         try:
@@ -802,7 +834,11 @@ def _linked_story_ids(
             if read_errors is not None:
                 read_errors.append(f"{story_path.name}: {exc}")
             continue
-        if _story_links_prompt(story_text, prompt_name):
+        if _story_links_prompt(
+            story_text,
+            prompt_name,
+            allow_prompt_basename=allow_prompt_basename,
+        ):
             ids.add(story_id(story_path))
     return sorted(ids)
 
@@ -825,7 +861,9 @@ def _cross_unit_story_partners(
 
     from .user_story_tests import get_all_dev_units_for_story, story_is_cross_unit
 
-    prompt_name = _prompt_basename(prompt_path)
+    prompt_name, allow_prompt_basename = _prompt_reference_scope(
+        prompt_path, stories_dir
+    )
     partners: dict[str, list[str]] = {}
     for story_path in sorted(stories_dir.rglob("story__*.md")):
         try:
@@ -834,7 +872,11 @@ def _cross_unit_story_partners(
             if read_errors is not None:
                 read_errors.append(f"{story_path.name}: {exc}")
             continue
-        if not _story_links_prompt(story_text, prompt_name):
+        if not _story_links_prompt(
+            story_text,
+            prompt_name,
+            allow_prompt_basename=allow_prompt_basename,
+        ):
             continue
         if not story_is_cross_unit(story_text):
             continue
