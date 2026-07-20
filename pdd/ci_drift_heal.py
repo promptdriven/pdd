@@ -30,6 +30,30 @@ console = Console()
 
 _HEAL_SUBPROCESS_TIMEOUT_DEFAULT = 2400
 _HEAL_PROMPT_CHURN_MAX_RATIO_DEFAULT = 5.0
+_HEAL_FAILURE_DIAGNOSTIC_MAX_CHARS = 2000
+_HEAL_FAILURE_STREAM_MAX_CHARS = 880
+_HEAL_FAILURE_TRUNCATED_MARKER = "... [truncated]"
+
+_HEAL_FAILURE_SIGNAL_RE = re.compile(
+    r"(?i)\b(?:error|failed|failure|exception|traceback|fatal|abort(?:ed)?|invalid)\b"
+)
+_ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+_HOME_PATH_PATTERNS = (
+    re.compile(r"(?i)(?<![A-Za-z0-9_])/[Uu]sers/[^/\\\s:;]+"),
+    re.compile(r"(?i)(?<![A-Za-z0-9_])/[Hh]ome/[^/\\\s:;]+"),
+    re.compile(r"(?i)(?<![A-Za-z0-9_])[A-Z]:\\Users\\[^/\\\s:;]+"),
+)
+_HEAL_SECRET_PATTERNS = (
+    re.compile(
+        r"(?i)\b([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?))"
+        r"\s*([=:])\s*([^\s,;]+)"
+    ),
+    re.compile(r"(?i)\b(Authorization\s*:\s*Bearer\s+)([^\s,;]+)"),
+    re.compile(
+        r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
+        r"sk-[A-Za-z0-9_-]{10,})\b"
+    ),
+)
 
 
 def _heal_subprocess_timeout() -> int:
@@ -711,11 +735,92 @@ def _restore_protected_paths() -> None:
         pass
 
 
+def _redact_heal_diagnostic(text: str) -> str:
+    """Remove credentials and personal home-directory owners from diagnostics."""
+    redacted = _ANSI_ESCAPE_RE.sub("", text)
+    for pattern in _HOME_PATH_PATTERNS:
+        redacted = pattern.sub("[HOME]", redacted)
+    redacted = _HEAL_SECRET_PATTERNS[0].sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", redacted
+    )
+    redacted = _HEAL_SECRET_PATTERNS[1].sub(
+        lambda match: f"{match.group(1)}[REDACTED]", redacted
+    )
+    redacted = _HEAL_SECRET_PATTERNS[2].sub("[REDACTED]", redacted)
+    return redacted
+
+
+def _coerce_heal_diagnostic_text(value: Any) -> str:
+    """Return subprocess output as text without allowing decoding failures."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return ""
+
+
+def _bounded_heal_stream(text: Any, max_chars: int) -> str:
+    """Select error-bearing and trailing lines from one subprocess stream."""
+    raw = _coerce_heal_diagnostic_text(text)
+    if not raw.strip():
+        return ""
+    safe = _redact_heal_diagnostic(raw)
+    lines = [line.strip() for line in safe.splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    selected = lines[-20:]
+    selected_set = set(selected)
+    # A useful error can precede a long cleanup/logging tail. Append the last
+    # error-bearing lines so tail truncation preserves them.
+    for line in [line for line in lines if _HEAL_FAILURE_SIGNAL_RE.search(line)][-8:]:
+        if line not in selected_set:
+            selected.append(line)
+            selected_set.add(line)
+    excerpt = "\n".join(selected)
+    if len(excerpt) > max_chars:
+        signal_lines = [line for line in selected if _HEAL_FAILURE_SIGNAL_RE.search(line)]
+        signal_prefix = signal_lines[-1][:160] if signal_lines else ""
+        fixed = len(signal_prefix) + len(_HEAL_FAILURE_TRUNCATED_MARKER) + 2
+        keep = max(0, max_chars - fixed)
+        excerpt = "\n".join(
+            part
+            for part in (
+                signal_prefix,
+                _HEAL_FAILURE_TRUNCATED_MARKER,
+                excerpt[-keep:] if keep else "",
+            )
+            if part
+        )
+    return excerpt[:max_chars]
+
+
+def _format_heal_failure(returncode: Optional[int], stdout: Any, stderr: Any) -> str:
+    """Build a bounded, privacy-safe failure diagnostic from both streams."""
+    exit_detail = (
+        f"exit code {returncode}"
+        if isinstance(returncode, int)
+        else "exit code unavailable"
+    )
+    parts = [exit_detail]
+    stdout_excerpt = _bounded_heal_stream(stdout, _HEAL_FAILURE_STREAM_MAX_CHARS)
+    stderr_excerpt = _bounded_heal_stream(stderr, _HEAL_FAILURE_STREAM_MAX_CHARS)
+    if stdout_excerpt:
+        parts.append(f"stdout:\n{stdout_excerpt}")
+    if stderr_excerpt:
+        parts.append(f"stderr:\n{stderr_excerpt}")
+    diagnostic = "\n".join(parts)
+    return diagnostic[:_HEAL_FAILURE_DIAGNOSTIC_MAX_CHARS]
+
+
 def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
     """Run a `pdd ...` subprocess with protected-paths rollback on failure."""
     rollback_eligible = _capture_rollback_state(cmd, env)
 
     timeout = _heal_subprocess_timeout()
+    stdout = ""
+    stderr = ""
+    returncode: Optional[int] = None
     try:
         result = subprocess.run(
             cmd,
@@ -724,13 +829,22 @@ def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
             text=True,
             timeout=timeout,
         )
-        success = result.returncode == 0
+        returncode = result.returncode
+        success = returncode == 0
+        stdout = getattr(result, "stdout", "") or ""
         stderr = getattr(result, "stderr", "") or ""
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         success = False
-        stderr = f"timeout after {timeout}s"
-    except FileNotFoundError:
-        return False
+        stdout = getattr(exc, "stdout", "") or ""
+        captured_stderr = _coerce_heal_diagnostic_text(
+            getattr(exc, "stderr", "") or ""
+        )
+        stderr = "\n".join(
+            part for part in (captured_stderr, f"timeout after {timeout}s") if part
+        )
+    except FileNotFoundError as exc:
+        success = False
+        stderr = str(exc) or "pdd executable not found"
     except Exception as exc:
         success = False
         stderr = str(exc)
@@ -738,8 +852,8 @@ def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
     if not success:
         if rollback_eligible is True:
             _restore_protected_paths()
-        if isinstance(stderr, str) and stderr:
-            console.print(f"[red]{label} failed: {stderr.strip()[:300]}[/red]")
+        diagnostic = _format_heal_failure(returncode, stdout, stderr)
+        console.print(f"{label} failed: {diagnostic}", style="red", markup=False)
     return success
 
 
