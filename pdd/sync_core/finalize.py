@@ -217,6 +217,13 @@ def _reusable_result(
     ):
         return None
     envelope = load_attestation(root, baseline.attestation_ref)
+    outcomes = {item.obligation_id: item.outcome for item in envelope.results}
+    if envelope.binding.native_runner_digest is None and any(
+        obligation.validator_id == "vitest"
+        and outcomes.get(obligation.obligation_id) is EvidenceOutcome.PASS
+        for obligation in profile.obligations
+    ):
+        return None
     binding = AttestationBinding(
         snapshot.unit_id,
         snapshot.digest(),
@@ -231,6 +238,7 @@ def _reusable_result(
         base_sha,
         envelope.binding.checked_sha,
         adapter_identities=envelope.binding.adapter_identities,
+        native_runner_digest=envelope.binding.native_runner_digest,
     )
     verifier.verify_current_for_idempotency(envelope, binding, now=now)
     ancestry = subprocess.run(
@@ -325,6 +333,10 @@ def finalize_unit(
     if len(matches) != 1:
         raise ValueError(f"finalization requires exactly one managed unit: {module}")
     profiles = load_verification_profiles(repository_root, manifest)
+    if profiles.invalid_reasons:
+        raise ValueError(
+            "canonical finalization requires valid protected verification profiles"
+        )
     profile = profiles.for_unit(matches[0].unit_id)
     if profile is None or not profile.complete:
         raise ValueError("finalization requires a complete protected profile")

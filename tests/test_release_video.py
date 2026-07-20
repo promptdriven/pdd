@@ -35,6 +35,7 @@ def release_video_env(extra: dict | None = None) -> dict:
         "RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT",
         "RELEASE_VIDEO_FORCE_REGENERATE",
         "RELEASE_VIDEO_METADATA_CONFLICT",
+        "RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID",
         "RELEASE_VIDEO_PDS_CLAUDE_MODEL",
         "RELEASE_VIDEO_PDS_CREATE_TIMEOUT",
         "RELEASE_VIDEO_RELEASE_NOTES_PATH",
@@ -286,6 +287,455 @@ def test_release_video_visual_safety_allows_safe_abstract_cues():
     assert artifacts["validation"]["checks"]["hasNoExactGeometryVisuals"] is True
     assert artifacts["validation"]["checks"]["hasNoMandatoryMotionVisuals"] is True
     assert artifacts["validation"]["errors"] == []
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A rounded package cube rests inside a faint translucent shell in diffuse blue light.",
+        "A matte orb rests inside a protective shell, lit by a soft violet glow.",
+        "Three abstract geometric shells (translucent and unlabeled) rest in blue light.",
+        "A rounded cube sits within a TRANSLUCENT SHELL; soft light fills the scene.",
+    ],
+)
+def test_release_video_visual_safety_allows_abstract_shell_cues(cue: str):
+    release_video = load_release_video_module()
+
+    artifacts = release_video.prepare_release_video_script(
+        visual_safety_script(cue),
+        source="script-path",
+    )
+
+    assert artifacts["validation"]["checks"]["hasNoReadableSurfaceVisuals"] is True
+    assert artifacts["validation"]["visualSafetyFindings"] == []
+    assert artifacts["validation"]["errors"] == []
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A translucent shell surrounds a matte cube in diffuse blue light.",
+        "A protective shell surrounds a rounded package cube.",
+        "An abstract geometric shell rests in a violet field.",
+        "A hard outer shell physically encloses a simple matte orb.",
+        "A physical enclosure forms an outer shell around the package cube.",
+        "A shell of light surrounds the matte cubes.",
+        "A SHELL OF GLOW surrounds a simple orb.",
+        "A luminous shell—of soft light—surrounds the package cube.",
+        "An abstract, geometric shell; translucent and unlabeled, surrounds an orb.",
+        "A seashell, eggshell texture, and shellfish silhouette rest in soft light.",
+    ],
+)
+def test_release_video_visual_safety_allows_strong_physical_shell_contexts(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" not in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A terminal shell appears in the foreground.",
+        "A command shell appears in the foreground.",
+        "A Bash shell appears in the foreground.",
+        "A POSIX shell appears in the foreground.",
+        "A Unix shell appears in the foreground.",
+        "A Zsh shell appears in the foreground.",
+        "A SHELL PROMPT appears in the foreground.",
+        "A shell's prompt appears in the foreground.",
+        "A shell’s prompt appears in the foreground.",
+        "A shell-output window appears in the foreground.",
+        "A shell displaying output appears in the foreground.",
+        "A shell showing its prompt appears in the foreground.",
+        "A shell CLI appears in the foreground.",
+        "A shell with a blinking prompt appears.",
+        "A shell's blinking prompt appears.",
+        "A shell’s blinking prompt appears.",
+        "A shell: prompt appears.",
+        "A shell:\nprompt appears.",
+        "A root shell appears.",
+        "A system shell appears.",
+        "A Windows shell appears.",
+        "A default shell appears.",
+        "A shell presenting its current output appears.",
+        "A shell presents the current output.",
+        "A shell window appears.",
+        "A shell screen appears.",
+        "A shell interface appears.",
+        "A shell session appears.",
+        "An OS shell appears.",
+        "A PowerShell prompt appears.",
+        "A shell-like technical surface presents command output.",
+    ],
+)
+def test_release_video_visual_safety_rejects_command_shell_surfaces(cue: str):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A translucent shell with a blinking prompt appears.",
+        "A protective shell's current output appears.",
+        "An abstract geometric shell: CLI prompt appears.",
+        "A shell of light surrounds a terminal window.",
+        "A physical outer shell presents a system session.",
+        "A translucent Windows shell displays output.",
+        "A protective Bash shell appears.",
+    ],
+)
+def test_release_video_visual_safety_technical_shell_evidence_overrides_safe_context(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A translucent shell with a blinking cursor appears.",
+        "A protective shell accepts keyboard input.",
+        "A glowing shell waits for typed input.",
+        "A luminous shell displays stdout and stderr.",
+        "A physical shell shows a blinking caret.",
+        "A translucent shell: blinking cursor appears.",
+        "A protective shell—after a brief pause—accepts typed input.",
+        "A geometric shell\ndisplays its current stdout.",
+        "A ceramic shell's blinking caret awaits keyboard input.",
+        "A command-driven translucent shell appears.",
+        "A protective fish shell presents a prompt.",
+        "A translucent shell in the foreground, softly lit and centered, "
+        "presents its current command output.",
+        "A translucent shell surrounds an orb; a command shell shows a prompt.",
+    ],
+)
+def test_release_video_visual_safety_rejects_local_shell_interaction_evidence(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A translucent shell rests beside a fish silhouette.",
+        "A protective shell surrounds an abstract root system.",
+        "A glowing shell carries a dash of blue.",
+        "A luminous shell frames a window of soft light.",
+        "A physical shell forms the interface between two ceramic layers.",
+        "A root system grows near a protective shell in diffuse light.",
+        "A fish silhouette rests near a translucent shell; both remain unlabeled.",
+        "A translucent shell rests in the foreground. Far behind it, a window "
+        "of light frames a ceramic sculpture.",
+        "A geometric shell—frosted and text-free—rests beside a dash of blue.",
+    ],
+)
+def test_release_video_visual_safety_ignores_unrelated_technical_homonyms(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" not in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A transparent glass shell surrounds a matte cube.",
+        "A matte ceramic shell rests in diffuse violet light.",
+        "A shell made of frosted glass surrounds a simple orb.",
+        "A shell formed of transparent glass encloses a package cube.",
+        "A delicate organic shell rests on a matte surface.",
+        "A protective, geometric shell surrounds an unlabeled orb.",
+        "A TRANSLUCENT GLASS SHELL; softly lit, surrounds a ceramic shape.",
+        "A shell\nmade of matte ceramic encloses a rounded cube.",
+    ],
+)
+def test_release_video_visual_safety_allows_local_physical_shell_materials(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" not in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A shell: of soft light surrounds a matte orb.",
+        "A shell:\nof diffuse glow surrounds a matte orb.",
+        "A shell: made of frosted glass surrounds a rounded cube.",
+        "A shell; made of matte ceramic encloses an orb.",
+        "A translucent shell rests during an unlabeled portrait session.",
+        "A protective shell sits beside an unlabeled musical keyboard.",
+        "A glowing shell appears at a celebratory bash.",
+        "A physical shell rests near a caretaker who shows an unlabeled keyboard instrument.",
+        "A bare shell appears in the foreground.",
+        "A shell appears in the foreground.",
+        "A smooth shell surrounds a matte orb.",
+        "A thin shell encloses the package cube.",
+        "An iridescent shell floats in diffuse blue light.",
+        "A hollow shell cradles a simple sphere.",
+        "A metal shell surrounds the mechanism, with no text or labels.",
+        "A fish-shell sculpture rests in diffuse light.",
+        "A dash shell of blue paint rims the sculpture.",
+        "A musical keyboard input jack rests beside a physical shell.",
+        "A birthday bash session unfolds beside a physical shell.",
+        "A cursor-shaped seashell rests in diffuse light.",
+        "A physical shell's window of light frames the sculpture.",
+        "A shell's interface between ceramic layers remains unlabeled.",
+        "A sculpture displays a cursor-shaped seashell.",
+        "A synthesizer accepts keyboard input beside a physical shell.",
+        "A visible cursor-shaped ornament rests beside a physical shell.",
+        "A blinking caret-shaped seashell rests in diffuse light.",
+        "A physical shell rests beside a synthesizer that accepts keyboard input.",
+        "A physical shell rests beside a sculpture that presents its output as diffuse light.",
+        "A shell of light rests beside a lantern which displays its output as a diffuse glow.",
+        "A physical shell rests beside an ornament that shows a blinking caret-shaped accent.",
+        "A protective shell's output is diffuse blue light.",
+        "A physical shell's history is represented by concentric rings.",
+        "A physical shell rests under a lantern, and the lantern presents its output as diffuse light.",
+        "A translucent shell rests beneath a sculpture, but the sculpture displays its output as bands of color.",
+        "A ceramic shell surrounds an orb, while a nearby lamp presents its output as a soft glow.",
+        "A physical shell rests near a printer that prints artistic output onto paper.",
+        "A shell-shaped sculpture rests near a plotter which writes a patterned output on paper.",
+        "A visible cursor-like ornament rests beside the orb.",
+        "A blinking caret-like accent rests on the sculpture.",
+        "A physical shell rests under a lantern, and another lamp presents its output as diffuse light.",
+        "A physical shell rests under a lantern, while another lamp presents its output as diffuse light.",
+        "A physical shell rests under a lantern as a nearby lamp presents its output as diffuse light.",
+        "A physical shell surrounds an orb and a nearby lantern displays its output as blue light.",
+        "A physical shell is matte, while a nearby lamp presents its output as blue light.",
+        "A physical shell has concentric rings, and another lamp displays output as diffuse light.",
+        "A physical shell is translucent and a nearby lantern displays its output as blue light.",
+        "A physical shell is beside a sculpture that displays its output as diffuse light.",
+        "A physical shell with concentric rings rests beside a lamp that displays output as diffuse light.",
+        "A physical shell is matte: a lamp displays output as diffuse light.",
+        "A shell that shows a prompt-shaped ornament surrounds an orb.",
+        "A physical shell shows a prompt-like glow around the package cube.",
+        "A physical shell is matte while nearby lamps present output as blue light.",
+        "A physical shell has concentric rings and two lamps display output as diffuse light.",
+        "A physical shell is translucent as each nearby lantern displays output as blue light.",
+        "A Bash prompt-shaped ornament rests beside the orb.",
+        "A Bash prompt-like glow surrounds a matte cube.",
+        "A physical shell with nearby lamps displaying output as colored light.",
+        "A physical shell with two lanterns presenting output as a diffuse glow.",
+        "A physical shell, with nearby lamps displaying output as colored light, surrounds an orb.",
+        "A physical shell is matte while Maya displays output as colored light.",
+        "A physical shell is translucent as machinery presents output as diffuse light.",
+        "A physical shell is matte, with machinery displaying output as colored light.",
+        "A physical shell has concentric rings and Alice presents her output as a soft glow.",
+        "A physical shell with a glass pane surrounds a matte orb.",
+        "A physical shell with a window pane of diffuse light surrounds a matte orb.",
+        "A physical shell with a ceramic pane-like opening surrounds a matte orb.",
+        "A physical shell with a glass pane beside a lamp displaying output as diffuse light.",
+        "A physical shell with a window pane and a nearby lamp showing files as colored patterns.",
+        "A physical shell with a ceramic pane near machinery presenting output as a soft glow.",
+        "A physical shell with a glass pane alongside Maya displaying output as bands of light.",
+    ],
+)
+def test_release_video_visual_safety_preserves_physical_shell_punctuation_and_homonyms(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" not in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A translucent shell rests: with a blinking cursor inside.",
+        "A shell of light rests; there, its prompt blinks.",
+        "A shell made of glass. In the foreground, it displays stdout.",
+        "A protective shell rests. It glows. Its prompt blinks.",
+        "A translucent shell runs zsh.",
+        "A translucent shell executes Bash.",
+        "A physical shell is a Bash session.",
+        "A translucent shell hosts a login session.",
+        "A glowing shell opens into a REPL.",
+        "A translucent shell with a prompt waits in the foreground.",
+        "A matte shell shows environment variables.",
+        "PowerShell appears in the foreground.",
+        "A pwsh window appears.",
+        "An xonsh shell appears.",
+        "A Korn shell appears.",
+        "A shell script appears.",
+        "A shell's standard output appears.",
+        "A shell reads stdin.",
+        "A shell awaits user input.",
+        "A shell starts Bash.",
+        "A shell spawns zsh.",
+        "A shell launches /bin/zsh.",
+        "The Bash prompt glows.",
+        "/bin/bash prompt appears.",
+        "A shell accepts input.",
+        "A shell receives user input.",
+        "A shell takes keyboard input.",
+        "The Bash output appears.",
+        "/bin/bash output appears.",
+        "A shell prints output.",
+        "A shell writes its current output.",
+        "The Bash history appears in the foreground.",
+        "A Bash script appears in the foreground.",
+        "A Bash session appears in the foreground.",
+        "/bin/bash appears in the foreground.",
+        "A shell prints diagnostic output in the foreground.",
+        "A shell writes the build output in the foreground.",
+        "A bash script appears in the foreground.",
+        "The bash history appears in the foreground.",
+        "A BASH window appears in the foreground.",
+        "/bin/sh appears in the foreground.",
+        "/bin/dash appears in the foreground.",
+        "/bin/fish appears in the foreground.",
+        "A shell that shows a prompt.",
+        "A shell which accepts user input.",
+        "A shell that prints diagnostic output.",
+        "A shell which writes build output.",
+        "A Bash pane appears.",
+        "A shell displays a directory listing.",
+        "A shell lists files.",
+        "A shell shows filenames.",
+        "A shell transcript appears.",
+        "A shell that lists files appears.",
+        "A shell which waits for user input appears.",
+        "A shell that awaits keyboard input appears.",
+        "A shell that shows file names appears.",
+        "A shell that displays files appears.",
+        "A shell which lists a directory appears.",
+        "A shell which renders build output appears.",
+        "A Bash transcript appears in the foreground.",
+        "A Bash directory listing appears in the foreground.",
+        "A Bash cursor appears in the foreground.",
+        "A shell has a matte surface, and it accepts keyboard input.",
+        "A shell has the outer form of an orb, but it waits for user input.",
+        "A shell rests, and it accepts keyboard input.",
+        "A physical shell is translucent, and it displays output.",
+        "A Bash file listing appears in the foreground.",
+        "A Bash file names appear in the foreground.",
+        "A shell that displays its working directory appears.",
+        "A shell which has a transcript appears.",
+        "A shell that reads files appears.",
+        "A shell rests and then displays output.",
+        "A shell pauses but eventually displays output.",
+        "A shell sits still, yet later shows files.",
+        "A shell glows while softly displaying output.",
+        "A shell is translucent and prominently displays its working directory.",
+        "A shell rests and after a moment displays a file listing.",
+        "A shell with a blinking prompt appears.",
+        "A shell rests and always displays output.",
+        "A shell pauses but sometimes shows files.",
+        "A shell rests and afterwards presents a directory listing.",
+        "A shell rests and gradually displays output.",
+        "A shell pauses but finally shows files.",
+        "A shell glows while subtly displaying output.",
+        "A shell rests and now presents a directory listing.",
+        "A shell rests and it gradually displays output.",
+        "A shell rests and after two moments displays a file listing.",
+        "A shell with a softly blinking prompt glows.",
+        "A shell with a bright pane displaying output glows.",
+        "A shell with its bright current output visible glows.",
+        "A shell with a bright rectangular pane displaying output glows.",
+        "A shell with a large bright pane showing files glows.",
+        "A shell with a pane that is displaying output glows.",
+        "A shell with a pane which is showing files glows.",
+        "A shell with a pane listing files glows.",
+        "A shell with a pane that lists files glows.",
+        "A shell with a pane, and it is displaying output.",
+        "A shell with a pane that accepts keyboard input glows.",
+        "A shell with a pane which waits for user input glows.",
+        "A shell with a pane receiving input glows.",
+        "A shell with a pane, and it takes input.",
+        "A shell with a pane that has a prompt glows.",
+        "A shell with a pane which has current output glows.",
+    ],
+)
+def test_release_video_visual_safety_rejects_technical_surface_after_punctuation(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A shell of light with a blinking cursor appears.",
+        "A shell made of frosted glass with a blinking caret appears.",
+        "A translucent shell has a prompt.",
+        "A protective shell contains a blinking cursor.",
+        "A luminous shell shows keystrokes.",
+        "A physical shell invokes Bash.",
+        "A translucent shell surrounds one orb, and it shows a cursor.",
+        "A protective shell rests by a lamp, but its prompt blinks.",
+        "A glowing shell rests; inside the shell, a blinking caret appears.",
+        "A physical shell rests: within the shell, typed input appears.",
+        "A geometric shell rests,\nand it displays stdout.",
+        "A shell of light rests, and across the shell a CLI prompt appears.",
+        "A protective shell rests; on the shell, keystrokes appear.",
+    ],
+)
+def test_release_video_visual_safety_rejects_shell_clause_technical_references(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" in categories
+
+
+@pytest.mark.parametrize(
+    "cue",
+    [
+        "A translucent shell surrounds one orb, and a separate membrane "
+        "presents an interface between blue and violet layers.",
+        "A protective shell rests by a lamp, but the lamp emits its output as "
+        "diffuse light.",
+        "A glowing shell rests beside a sculpture, and the sculpture shows a "
+        "window-shaped opening filled with light.",
+        "A physical shell rests; a separate lamp emits output as diffuse light.",
+        "A geometric shell rests: a sculpture presents an interface between "
+        "two ceramic layers.",
+        "A translucent shell rests.\nA separate sculpture shows a window of light.",
+        "A protective shell emits its output as diffuse light.",
+        "A translucent shell has a window of light.",
+        "A physical shell presents an interface between ceramic layers.",
+    ],
+)
+def test_release_video_visual_safety_ignores_other_subject_or_physical_homonyms(
+    cue: str,
+):
+    release_video = load_release_video_module()
+
+    categories = release_video.visual_safety_categories(cue)
+
+    assert "risky_readable_surface" not in categories
 
 
 @pytest.mark.parametrize(
@@ -2140,6 +2590,118 @@ def test_release_video_env_can_force_regenerate(tmp_path: Path):
     assert "--force-regenerate" in pds_capture_argv(capture)
 
 
+def test_release_video_cli_forwards_veo_validation_recovery_job(tmp_path: Path):
+    _result, capture = run_release_video_with_existing_script(
+        tmp_path,
+        extra_args=[
+            "--project-id",
+            "pdd-v1-1-0-release",
+            "--veo-validation-recovery-job-id",
+            "job-veo-validation-only-1",
+        ],
+    )
+
+    pds_call = pds_capture_argv(capture)
+    assert pds_call[pds_call.index("--project") + 1] == "pdd-v1-1-0-release"
+    assert (
+        pds_call[pds_call.index("--veo-validation-recovery-job-id") + 1]
+        == "job-veo-validation-only-1"
+    )
+
+
+def test_release_video_env_forwards_veo_validation_recovery_job(tmp_path: Path):
+    _result, capture = run_release_video_with_existing_script(
+        tmp_path,
+        env_extra={
+            "RELEASE_VIDEO_PROJECT_ID": "pdd-v1-1-0-release",
+            "RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID": (
+                "job-veo-validation-only-env"
+            ),
+        },
+    )
+
+    pds_call = pds_capture_argv(capture)
+    assert (
+        pds_call[pds_call.index("--veo-validation-recovery-job-id") + 1]
+        == "job-veo-validation-only-env"
+    )
+
+
+def test_release_video_veo_validation_recovery_requires_selected_project(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--claude-cli",
+            str(tmp_path / "missing-claude"),
+            "--pds-cli",
+            str(pds_stub(tmp_path, {"ok": True})),
+            "--veo-validation-recovery-job-id",
+            "job-veo-validation-only-1",
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Veo validation recovery requires --project-id" in result.stderr
+    assert "Claude CLI" not in result.stderr
+    assert not capture.exists()
+
+
+def test_release_video_veo_validation_recovery_rejects_force_regenerate(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--claude-cli",
+            str(tmp_path / "missing-claude"),
+            "--pds-cli",
+            str(pds_stub(tmp_path, {"ok": True})),
+            "--project-id",
+            "pdd-v1-1-0-release",
+            "--veo-validation-recovery-job-id",
+            "job-veo-validation-only-1",
+            "--force-regenerate",
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Veo validation recovery cannot be combined with --force-regenerate" in (
+        result.stderr
+    )
+    assert "Claude CLI" not in result.stderr
+    assert not capture.exists()
+
+
 def test_release_video_cli_can_set_metadata_conflict_use_existing(tmp_path: Path):
     _result, capture = run_release_video_with_existing_script(
         tmp_path,
@@ -2220,6 +2782,7 @@ def test_release_video_recovery_flags_default_to_disabled(tmp_path: Path):
     assert "--bootstrap-selected-project" not in pds_call
     assert "--force-regenerate" not in pds_call
     assert "--metadata-conflict" not in pds_call
+    assert "--veo-validation-recovery-job-id" not in pds_call
 
 
 def test_release_video_empty_pds_claude_model_omits_downstream_override(
@@ -2261,6 +2824,7 @@ def test_release_video_makefile_passes_recovery_env_vars():
     assert "RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT ?= 0" in makefile_text
     assert "RELEASE_VIDEO_FORCE_REGENERATE ?= 0" in makefile_text
     assert "RELEASE_VIDEO_METADATA_CONFLICT ?=" in makefile_text
+    assert "RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID ?=" in makefile_text
     assert (
         'RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT="$(RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT)"'
         in makefile_text
@@ -2272,6 +2836,30 @@ def test_release_video_makefile_passes_recovery_env_vars():
     assert (
         'RELEASE_VIDEO_METADATA_CONFLICT="$(RELEASE_VIDEO_METADATA_CONFLICT)"'
         in makefile_text
+    )
+    assert (
+        'RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID='
+        '"$(RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID)"'
+        in makefile_text
+    )
+
+    release_video = subprocess.run(
+        [
+            "make",
+            "-n",
+            "release-video",
+            "RELEASE_TAG=v1.1.0",
+            "RELEASE_VIDEO_PROJECT_ID=pdd-v1-1-0-release",
+            "RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID=job-veo-validation-only-1",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert (
+        'RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID="job-veo-validation-only-1"'
+        in release_video.stdout
     )
 
 
@@ -2371,6 +2959,17 @@ def test_release_video_metadata_conflict_recovery_is_documented():
     assert "RELEASE_VIDEO_METADATA_CONFLICT=replace" in doc_text
     assert "RELEASE_VIDEO_FORCE_REGENERATE=1" in doc_text
     assert "--metadata-conflict replace --force-regenerate" in doc_text
+
+
+def test_release_video_veo_validation_recovery_is_documented():
+    doc_text = (
+        ROOT / "docs" / "contributors" / "pdd-cli-release-process.md"
+    ).read_text(encoding="utf8")
+
+    assert "RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID" in doc_text
+    assert "exact successful validation-only Veo job" in doc_text
+    assert "locally built PDS CLI from the exact deployed GVS commit" in doc_text
+    assert "does not run Veo generation" in doc_text
 
 
 def test_release_video_makefile_has_status_target():

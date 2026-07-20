@@ -24,6 +24,7 @@ from .transaction import TransactionError, TransactionManager
 from .trust import AttestationError, ValidationEvidence
 from .types import (
     BaselineStatus,
+    EvidenceOutcome,
     InventoryStatus,
     SemanticStatus,
     SyncVerdict,
@@ -126,6 +127,17 @@ def _error_verdict(unit: ManifestUnit, baseline: BaselineStatus, reason: str) ->
     )
 
 
+def _invalid_profile_verdict(unit: ManifestUnit) -> SyncVerdict:
+    """Return a non-current unknown verdict without consulting stale evidence."""
+    return SyncVerdict(
+        unit.unit_id,
+        InventoryStatus.MANAGED,
+        BaselineStatus.CORRUPT,
+        SemanticStatus.UNKNOWN,
+        VerdictDetails((), "verification profile reconciliation is invalid"),
+    )
+
+
 def _evidence(
     context: ReportContext,
     expectation: EvidenceExpectation,
@@ -161,8 +173,15 @@ def _evidence(
     ):
         return None
     profile = context.profiles.for_unit(expectation.unit.unit_id)
+    outcomes = {item.obligation_id: item.outcome for item in envelope.results}
+    vitest_pass_is_unbound = profile is not None and any(
+        obligation.validator_id == "vitest"
+        and outcomes.get(obligation.obligation_id) is EvidenceOutcome.PASS
+        for obligation in profile.obligations
+    ) and binding.native_runner_digest is None
     if (
         profile is None
+        or vitest_pass_is_unbound
         or binding.runner_digest
         != runner_identity_digest(
             profile, root=context.root, ref=context.manifest.head_ref,
@@ -179,6 +198,8 @@ def _evidence(
 def _unit_verdict(context: ReportContext, unit: ManifestUnit) -> SyncVerdict:
     if context.manifest.invalid_reasons:
         return _error_verdict(unit, BaselineStatus.CORRUPT, "manifest is invalid")
+    if context.profiles.invalid_reasons:
+        return _invalid_profile_verdict(unit)
     profile = context.profiles.for_unit(unit.unit_id)
     if profile is None:
         return _error_verdict(unit, BaselineStatus.CORRUPT, "profile is missing")

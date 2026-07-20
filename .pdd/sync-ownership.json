@@ -88,6 +88,20 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".pdd/global-sync/runtime-linux-x86_64-cp312.lock",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/global-sync/standalone-checker-modules.json",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/agentic_architecture_orchestrator_python.json",
       "role": "human-maintained"
     },
@@ -169,6 +183,20 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/agentic_e2e_fix_orchestrator_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/agentic_langtest_python.json",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/agentic_langtest_python_run.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -278,6 +306,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/code_generator_main_python_run.json",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/commands_checkup_python.json",
       "role": "human-maintained"
     },
@@ -369,7 +404,21 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/fix_code_loop_python_run.json",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/fix_error_loop_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/fix_error_loop_python_run.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -389,6 +438,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/get_test_command_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/get_test_command_python_run.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -2992,6 +3048,33 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "docs/generating_user_stories.md",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "docs/global_sync_evidence_ledger.yaml",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "docs/global_sync_evidence_ledger_source.yaml",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "docs/global_sync_extraction_manifest.md",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "docs/global_sync_pdd_adapter_demand.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -5901,6 +5984,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "pdd/sync_core/adapter_demand_verifier.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "pdd/sync_core/alias_policy.py",
       "role": "human-maintained"
     },
@@ -5926,6 +6016,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "pdd/sync_core/certificate_verifier.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "pdd/sync_core/checker_cli.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -5974,6 +6071,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "pdd/sync_core/git_io.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "pdd/sync_core/global_sync_ledger.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -6078,6 +6182,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "pdd/sync_core/signer_process.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "pdd/sync_core/standalone_package.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -12468,6 +12579,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "tests/test_global_sync_ledger.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "tests/test_grounding_generate_evidence.py",
       "role": "human-maintained"
     },
@@ -13320,6 +13438,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "tests/test_sync_core_adapter_demand_verifier.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "tests/test_sync_core_candidate_artifact_provenance.py",
       "role": "human-maintained"
     },
@@ -13345,6 +13470,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_sync_core_certificate_verifier.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_sync_core_checker_cli.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -13463,6 +13595,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_sync_core_snapshot.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_sync_core_standalone_package.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
