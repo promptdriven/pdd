@@ -1783,6 +1783,10 @@
     },
     {
       "language_id": "python",
+      "prompt_path": "pdd/prompts/sync_plan_python.prompt"
+    },
+    {
+      "language_id": "python",
       "prompt_path": "pdd/prompts/sync_tui_python.prompt"
     },
     {

@@ -32,7 +32,8 @@ OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
-EXPECTED_MANAGED_UNITS = 468
+EXPECTED_MANAGED_UNITS = 469
+PDD_1989_EXPECTED_MANAGED_UNITS = 468
 PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
 PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
 CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
@@ -48,7 +49,10 @@ PYTEST_VALIDATOR_CONFIG_DIGEST = (
 )
 FOUNDATION_PROFILE = "pdd/prompts/durable_sync_runner_python.prompt"
 FOUNDATION_PROFILE_DIGEST = (
-    "3fb63c651345467be6b2cb445b34edf979b35ffba1bb1ebb44a81f1313beb244"
+    "ed4cacb0388a234df88b9c3d7c72287dcc371e2123275dd88125d13bbb48c1e8"
+)
+CURRENT_PROFILE_POLICY_DIGEST = (
+    "e2dbc8a9298558941118a7df0065f59361757b48d8c0e121f6a76b22c900637f"
 )
 FOUNDATION_OBLIGATIONS = {
     "pytest-descriptor-store": {
@@ -488,7 +492,7 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
     assert prompt_digest != STORY_REGRESSION_DORMANT_ROTATION["base_prompt_sha256"]
     assert prompt_digest == STORY_REGRESSION_DORMANT_ROTATION["head_prompt_sha256"]
     assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
-    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+    assert profile_digest == CURRENT_PROFILE_POLICY_DIGEST
 
 
 def _requirement_authorization_row(authorization) -> dict[str, str]:
@@ -525,7 +529,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+    assert profile_digest == CURRENT_PROFILE_POLICY_DIGEST
     future_pr2017_rows = [
         row
         for row in rows
@@ -537,7 +541,9 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         "pdd/prompts/get_test_command_python.prompt",
     }
     assert all(
-        row["base_policy_sha256"] == profile_digest for row in future_pr2017_rows
+        row["base_policy_sha256"]
+        == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+        for row in future_pr2017_rows
     )
     assert all(
         hashlib.sha256((ROOT / row["prompt_path"]).read_bytes()).hexdigest()
@@ -862,9 +868,9 @@ def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     )
     profiles = load_verification_profiles(ROOT, manifest)
 
-    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+    assert len(manifest.expected_managed) == PDD_1989_EXPECTED_MANAGED_UNITS
     assert not manifest.invalid_reasons
-    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert len(profiles.profiles) == PDD_1989_EXPECTED_MANAGED_UNITS
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
 

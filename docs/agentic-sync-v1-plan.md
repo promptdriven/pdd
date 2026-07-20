@@ -31,20 +31,23 @@ Selection precedence is deterministic:
    declared filepath, scoped origin, governing context, or frozen candidate;
    requested targets retain caller order only where dependency-safe while
    transitive dependencies remain frozen in canonical graph order.
-3. Changed prompt paths from the branch diff supply path-aware candidates.
-4. Architecture entries supply prompt/output paths and dependency edges.
-5. When architecture is absent, discovery is limited to `prompts/` under the
-   governing `.pddrc` root; it records lower-confidence provenance and never
-   scans arbitrary repository content.
+3. Otherwise, changed prompt paths from the branch diff select path-aware
+   candidates from the already-frozen inventory.
+4. If the complete branch diff is proven to contain only runtime `*_LLM.prompt`
+   templates, selection returns an explicit successful no-op.
+5. Otherwise, exact canonical candidate IDs mentioned in the issue text are
+   selected without a provider call.
 6. Only unresolved choices may be sent to an ambiguity agent. Its compact
    protocol contains at most 64 candidate IDs, compact metadata, and an
    explicitly untrusted size-bounded issue number/title/body excerpt. It never
    includes comments, repository content, architecture, commands, or unbounded
-   issue text. The sole accepted response field is a sorted, unique
-   `selected_module_ids` subset; commands, paths, prose, dependency edits, and
-   invented IDs fail closed.
+   issue text. The sole accepted response field is a sorted, unique, non-empty
+   `selected_module_ids` subset whenever unresolved candidates were presented;
+   commands, paths, prose, dependency edits, invented IDs, and an empty attempt
+   to discard the unresolved set fail closed.
 
-The plan records governing root/context, prompt and output paths, reason,
+The plan records governing root/context, prompt and exact generated-code,
+example, and test output paths, reason,
 operation, dependency/SCC order, confidence, and provenance. Required
 dependencies are retained transitively; a candidate edge outside the frozen set
 is an error, not an omitted scheduling hint. Both normal and fallback lists are
@@ -60,6 +63,8 @@ the immutable attempt kind, plan digest, selection digest, ordered graph, and
 checkout identity; only an exact binding match may resume a module on a fresh
 clone. Each child unit is relocated into its own worktree before it runs. Before
 checkpoint staging, durable mode examines tracked and untracked changes and
-permits only the selected candidate's frozen `output_paths` plus target-scoped
-`.pdd/meta/<target>_*.json`; an out-of-scope mutation fails rather than becoming
-an empty successful checkpoint.
+permits only the selected candidate's exact frozen `output_paths`, exact
+`prompt_paths` needed by legitimate update/auto-deps operations, and separately
+bounded target-scoped `.pdd/meta/<target>_*.json`; a directory never grants
+authority, and an out-of-scope mutation fails rather than becoming an empty
+successful checkpoint.

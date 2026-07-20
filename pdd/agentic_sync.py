@@ -55,12 +55,14 @@ from .architecture_registry import (
     find_project_root as _find_project_root,
 )
 from .construct_paths import (
+    _detect_context,
     _detect_context_from_basename,
     _extract_prefix_from_prompts_dir,
     _find_nearest_pddrc_for_file,
     _find_pddrc_file,
     _load_pddrc_config,
 )
+from .generate_output_paths import generate_output_paths
 from .json_atomic import atomic_write_json
 from .load_prompt_template import load_prompt_template
 from .resolved_sync_unit import ResolvedSyncUnit, resolve_sync_unit
@@ -79,7 +81,11 @@ from .sync_plan import (
     resolve_selection_aliases,
     validate_explicit_scope_evidence,
 )
-from .sync_determine_operation import sync_determine_operation
+from .sync_determine_operation import (
+    _generate_paths_from_templates,
+    get_extension,
+    sync_determine_operation,
+)
 from .sync_main import _detect_languages_with_context
 from .sync_order import build_dependency_graph, extract_module_from_include, topological_sort
 
@@ -2572,6 +2578,219 @@ def _derive_readonly_expected_operation(
     return operations[0] if len(set(operations)) == 1 else "mixed"
 
 
+def _candidate_context_defaults(
+    unit: ResolvedSyncUnit,
+    context_name: Optional[str],
+    *,
+    path_hint: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Return the exact context defaults used by this resolved child unit."""
+    if unit.pddrc_path is None:
+        return {}
+    try:
+        config = _load_pddrc_config(unit.pddrc_path)
+    except Exception:
+        return {}
+    effective_context = context_name or unit.context
+    if effective_context is None and path_hint is not None:
+        try:
+            effective_context = _detect_context(path_hint, config, None)
+        except Exception:
+            effective_context = None
+    contexts = config.get("contexts", {}) if isinstance(config, dict) else {}
+    entry = contexts.get(effective_context or "default", {})
+    if not isinstance(entry, dict):
+        return {}
+    defaults = entry.get("defaults", {})
+    return defaults if isinstance(defaults, dict) else {}
+
+
+def _candidate_template_basename(
+    target: str, language: str, prompt_path: Path, prompts_dir: Path
+) -> str:
+    """Derive the context-relative basename used by configured output templates."""
+    try:
+        relative = prompt_path.resolve().relative_to(prompts_dir.resolve())
+    except (OSError, ValueError):
+        return target
+    stem = relative.stem
+    suffix = f"_{language}"
+    if stem.casefold().endswith(suffix.casefold()):
+        stem = stem[: -len(suffix)]
+    return relative.with_name(stem).as_posix()
+
+
+def _rooted_candidate_path(path: Path, base: Path) -> Path:
+    """Make a configured candidate path absolute without creating it."""
+    candidate = path if path.is_absolute() else base / path
+    return candidate.resolve(strict=False)
+
+
+def _candidate_language_output_paths(
+    unit: ResolvedSyncUnit,
+    language: str,
+    prompt_path: Path,
+    context_name: Optional[str],
+    architecture_entry: Optional[Mapping[str, Any]],
+    *,
+    ambiguous_architecture_leaf: bool,
+) -> tuple[Path, ...]:
+    """Resolve exact files a child sync may write, without touching the tree.
+
+    ``ResolvedSyncUnit`` intentionally stores advisory output *directories*.
+    Durable checkpoint authority cannot use those directories as a broad
+    allowlist, so planning expands the same context, language, and architecture
+    facts into exact code/test/example files before the plan is frozen.
+    """
+    architecture_filepath = ""
+    if isinstance(architecture_entry, Mapping):
+        architecture_filepath = str(architecture_entry.get("filepath") or "").strip()
+    architecture_root = (
+        unit.architecture_path.parent
+        if unit.architecture_path is not None
+        else unit.cwd
+    )
+    path_hint = (
+        _rooted_candidate_path(Path(architecture_filepath), architecture_root)
+        if architecture_filepath
+        else None
+    )
+    defaults = _candidate_context_defaults(
+        unit, context_name, path_hint=path_hint
+    )
+    extension = get_extension(language)
+    dotted_extension = f".{extension}" if extension else ""
+
+    if architecture_filepath:
+        filepath = Path(architecture_filepath)
+        artifact_stem = filepath.stem
+        if ambiguous_architecture_leaf:
+            artifact_stem = filepath.with_suffix("").as_posix().replace("/", "_")
+
+        generate_dir = str(defaults.get("generate_output_path") or "").strip()
+        if generate_dir and filepath.parent == Path("."):
+            code_dir = _rooted_candidate_path(Path(generate_dir), architecture_root)
+            code_path = code_dir / filepath.name
+        else:
+            code_path = _rooted_candidate_path(filepath, architecture_root)
+
+        example_dir = _rooted_candidate_path(
+            Path(str(defaults.get("example_output_path") or "examples")),
+            architecture_root,
+        )
+        test_dir = _rooted_candidate_path(
+            Path(str(defaults.get("test_output_path") or "tests")),
+            architecture_root,
+        )
+        example_path = example_dir / f"{artifact_stem}_example{dotted_extension}"
+        test_path = test_dir / f"test_{artifact_stem}{dotted_extension}"
+
+        # Match get_pdd_file_paths' compatibility rule for an architecture
+        # filename alias whose existing artifacts use the prompt basename.
+        target_leaf = unit.target_basename.rsplit("/", 1)[-1]
+        if target_leaf != filepath.stem and not ambiguous_architecture_leaf:
+            alias_example = example_dir / f"{target_leaf}_example{dotted_extension}"
+            alias_test = test_dir / f"test_{target_leaf}{dotted_extension}"
+            if alias_example.exists():
+                example_path = alias_example
+            if alias_test.exists():
+                test_path = alias_test
+        return tuple(
+            path.resolve(strict=False)
+            for path in (code_path, test_path, example_path)
+        )
+
+    basename = _candidate_template_basename(
+        unit.target_basename, language, prompt_path, unit.prompts_dir
+    )
+    generated = generate_output_paths(
+        command="sync",
+        output_locations={},
+        basename=basename,
+        language=language,
+        file_extension=extension,
+        context_config=defaults,
+        input_file_dir=str(unit.cwd),
+        config_base_dir=str(unit.cwd),
+        path_resolution_mode="config_base",
+    )
+    outputs_config = defaults.get("outputs")
+    if isinstance(outputs_config, dict):
+        templated = _generate_paths_from_templates(
+            basename, language, extension, outputs_config, str(prompt_path)
+        )
+        # ``get_pdd_file_paths`` overlays the resolved legacy code location
+        # when a template block customizes only example/test paths. Preserve
+        # that compatibility without invoking the filesystem-writing path
+        # constructor during read-only planning.
+        if "code" not in outputs_config and generated.get("generate_output_path"):
+            templated["code"] = Path(generated["generate_output_path"])
+        exact_paths = [
+            _rooted_candidate_path(Path(templated[key]), unit.cwd)
+            for key in ("code", "example")
+            if key in templated
+        ]
+        if "test" in templated:
+            test_path = _rooted_candidate_path(Path(templated["test"]), unit.cwd)
+            test_name = basename.rsplit("/", 1)[-1]
+            matching_tests = (
+                sorted(
+                    test_path.parent.glob(
+                        f"test_{glob.escape(test_name)}*.{glob.escape(extension)}"
+                    )
+                )
+                if test_path.parent.exists()
+                else []
+            )
+            exact_paths.extend(matching_tests or [test_path])
+        return tuple(exact_paths)
+
+    exact_paths = [
+        Path(generated[key]).resolve(strict=False)
+        for key in ("generate_output_path", "example_output_path")
+        if generated.get(key)
+    ]
+    generated_test = generated.get("test_output_path")
+    if generated_test:
+        test_path = Path(generated_test).resolve(strict=False)
+        test_name = basename.rsplit("/", 1)[-1]
+        matching_tests = (
+            sorted(
+                test_path.parent.glob(
+                    f"test_{glob.escape(test_name)}*.{glob.escape(extension)}"
+                )
+            )
+            if test_path.parent.exists()
+            else []
+        )
+        exact_paths.extend(matching_tests or [test_path])
+    return tuple(exact_paths)
+
+
+def _candidate_exact_output_paths(
+    unit: ResolvedSyncUnit,
+    language_paths: Mapping[str, Path],
+    context_name: Optional[str],
+    architecture_entry: Optional[Mapping[str, Any]],
+    *,
+    ambiguous_architecture_leaf: bool = False,
+) -> tuple[Path, ...]:
+    """Return a sorted, de-duplicated exact output allowlist for one unit."""
+    paths = {
+        path
+        for language, prompt_path in language_paths.items()
+        for path in _candidate_language_output_paths(
+            unit,
+            language,
+            Path(prompt_path),
+            context_name,
+            architecture_entry,
+            ambiguous_architecture_leaf=ambiguous_architecture_leaf,
+        )
+    }
+    return tuple(sorted(paths, key=lambda path: path.as_posix()))
+
+
 def _build_issue_candidate_inventory(
     project_root: Path,
     architecture: Optional[List[Dict[str, Any]]],
@@ -2633,6 +2852,19 @@ def _build_issue_candidate_inventory(
     prompt_paths: dict[str, tuple[Path, ...]] = {}
     output_paths: dict[str, tuple[Path, ...]] = {}
     expected_operations: dict[str, str] = {}
+    entry_by_key: dict[str, Mapping[str, Any]] = {}
+    architecture_leaf_counts: dict[str, int] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        filename_key = _basename_from_architecture_filename(entry.get("filename", ""))
+        filepath_key = _basename_from_architecture_filepath(entry.get("filepath", ""))
+        entry_key = filepath_key or filename_key
+        if entry_key:
+            entry_by_key.setdefault(entry_key, entry)
+        if filename_key:
+            leaf = filename_key.rsplit("/", 1)[-1]
+            architecture_leaf_counts[leaf] = architecture_leaf_counts.get(leaf, 0) + 1
     for key in keys:
         try:
             scoped = scoped_by_key.get(key)
@@ -2661,9 +2893,16 @@ def _build_issue_candidate_inventory(
         if module_id in ids_by_key.values():
             raise SyncPlanError(f"duplicate canonical candidate ID: {module_id}")
         all_paths = tuple(sorted(Path(path) for path in language_paths.values()))
-        generated = tuple(path for path in (
-            unit.generate_output_path, unit.test_output_path, unit.meta_path,
-        ) if path is not None)
+        architecture_entry = scoped.entry if scoped is not None else entry_by_key.get(key)
+        generated = _candidate_exact_output_paths(
+            unit,
+            language_paths,
+            context_override or resolved_context,
+            architecture_entry,
+            ambiguous_architecture_leaf=(
+                architecture_leaf_counts.get(target.rsplit("/", 1)[-1], 0) > 1
+            ),
+        )
         for path in (*all_paths, *generated):
             if not _path_is_within_root(path, root):
                 raise SyncPlanError(f"candidate path escapes governing root for {key!r}: {path}")
@@ -2782,14 +3021,11 @@ def _freeze_issue_sync_plan(
         for prompt_path in prompt_paths:
             if not _path_is_within_root(prompt_path, project_root):
                 raise SyncPlanError(f"prompt path escapes governing root for {key!r}: {prompt_path}")
-        output_paths = tuple(
-            path
-            for path in (
-                unit.generate_output_path,
-                unit.test_output_path,
-                unit.meta_path,
-            )
-            if path is not None
+        output_paths = _candidate_exact_output_paths(
+            unit,
+            language_paths,
+            context_override or resolved_context,
+            None,
         )
         for output_path in output_paths:
             if not _path_is_within_root(output_path, project_root):
@@ -3617,16 +3853,20 @@ def run_agentic_sync(
                     candidate_inventory, candidate_ids, selected
                 )
                 selected = list(selected_plan.selected_module_ids)
-            except (SyncPlanError, ValueError, TypeError, json.JSONDecodeError):
+            except (SyncPlanError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                selection_error = (
+                    "Ambiguity selection must be a non-empty closed candidate-ID "
+                    f"JSON response: {exc}"
+                    if "at least one candidate" in str(exc)
+                    else "Ambiguity selection must be a closed candidate-ID JSON response"
+                )
                 return (
                     False,
-                    "Ambiguity selection must be a closed candidate-ID JSON response",
+                    selection_error,
                     llm_cost,
                     provider,
                 )
             modules_to_sync = selected
-            if not modules_to_sync:
-                return True, "All modules are already synced — nothing to do.", llm_cost, provider
 
     # LLMs sometimes return architecture-style names with language suffixes
     # (e.g. "crm_models_Python").  Normalize before resolving through the

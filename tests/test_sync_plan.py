@@ -85,6 +85,8 @@ def test_ambiguity_agent_protocol_is_bounded_and_rejects_invention(tmp_path: Pat
 
     with pytest.raises(SyncPlanError, match="invented or invalid"):
         apply_ambiguity_selection(plan, ["api/page", "web/page"], ["outside/module"])
+    with pytest.raises(SyncPlanError, match="at least one candidate"):
+        apply_ambiguity_selection(plan, ["api/page", "web/page"], [])
     selected = apply_ambiguity_selection(plan, ["api/page", "web/page"], ["web/page"])
     assert selected.selected_module_ids == ("web/page",)
     for malformed in ([{}], [None], [1], [True], ["api/page", "api/page"]):
@@ -609,6 +611,22 @@ def test_path_aware_identity_reuses_resolved_sync_unit(tmp_path: Path) -> None:
     assert canonical_module_id(
         tmp_path, resolve_sync_unit("wrong-id", "job", nested)
     ) == "apps/worker/job"
+
+
+def test_path_aware_identity_accepts_managed_underscore_components(
+    tmp_path: Path,
+) -> None:
+    """Private managed modules are canonical; traversal-like components are not."""
+    module_root = tmp_path / "pdd"
+    module_root.mkdir()
+    unit = resolve_sync_unit(
+        "pdd/_keyring_timeout", "_keyring_timeout", module_root
+    )
+    assert canonical_module_id(tmp_path, unit) == "pdd/_keyring_timeout"
+
+    unsafe = resolve_sync_unit("pdd/-hidden", "-hidden", module_root)
+    with pytest.raises(SyncPlanError, match="unable to create canonical module ID"):
+        canonical_module_id(tmp_path, unsafe)
 
 
 def test_plan_rejects_regex_valid_id_that_disagrees_with_resolved_unit(
