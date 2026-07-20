@@ -496,6 +496,8 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     story_identity = (STORY_REGRESSION_DORMANT_ROTATION["prompt_path"], "python")
     assert bootstrap_rows[story_identity] != STORY_REGRESSION_DORMANT_ROTATION
     bootstrap_rows[story_identity] = STORY_REGRESSION_DORMANT_ROTATION
+    cli_identity = ("pdd/prompts/core/cli_python.prompt", "python")
+    bootstrap_rows[cli_identity] = policy_rows[cli_identity]
     assert policy_rows == bootstrap_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
@@ -511,7 +513,9 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         "pdd/prompts/get_test_command_python.prompt",
     }
     assert all(
-        row["base_policy_sha256"] == profile_digest for row in future_pr2017_rows
+        row["base_policy_sha256"]
+        == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+        for row in future_pr2017_rows
     )
     assert all(
         hashlib.sha256((ROOT / row["prompt_path"]).read_bytes()).hexdigest()

@@ -39,6 +39,18 @@ _LEGACY_PDD_1989_PROFILE_BYTES = (
     "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
     "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
 )
+# #1873 was developed before the two-phase schema-2 admission rule reached
+# main. Preserve its already-reviewed, exact append-after-survivors policy and
+# profile transition as a one-time bootstrap consumption; no other byte pair
+# receives this exception.
+_LEGACY_PDD_1873_SCHEMA_2_HISTORY = (
+    "8f423a11f5c25c3042073e733085ad08c5d03a999087cf04d2f6bc7f24fb0d72",
+    "29142b9e13d6123c180b1a191a16760cf4c0287393d924c3e6a7744bbefca23a",
+)
+_LEGACY_PDD_1873_PROFILE_BYTES = (
+    "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+    "62dc99e86d33b6059480bff6be75fa6f90461a7f9ab9abc21537b223971be34f",
+)
 
 
 class VerificationProfileError(ValueError):
@@ -394,14 +406,6 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
         "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18",
     ),
     _exact_bootstrap_requirement_transition(
-        "pdd/prompts/commands/generate_python.prompt",
-        "python",
-        "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f",
-        "503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403",
-        "62dc99e86d33b6059480bff6be75fa6f90461a7f9ab9abc21537b223971be34f",
-        "0173be89eb3c2de37178281fedbf7abecaf982f4b23bf808dcbf3d7791c6b6cf",
-    ),
-    _exact_bootstrap_requirement_transition(
         "pdd/prompts/core/cli_python.prompt",
         "python",
         "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724",
@@ -412,17 +416,17 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/core/cli_python.prompt",
         "python",
+        "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724",
         "53e3aac6f96865bb35aa49678da5492d2ba4b18298cf63395fde178cc63f1387",
-        "ed339507b710ba5c501c96a6024bd39ee67a1d5e85de6cde73b515d94ebe3352",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
         "62dc99e86d33b6059480bff6be75fa6f90461a7f9ab9abc21537b223971be34f",
-        "0173be89eb3c2de37178281fedbf7abecaf982f4b23bf808dcbf3d7791c6b6cf",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/get_test_command_python.prompt",
         "python",
         "ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
         "023045865bfe0d5920b5008986106a16e7014b35f09fc80faa43b1f0d42bcd44",
-        "62dc99e86d33b6059480bff6be75fa6f90461a7f9ab9abc21537b223971be34f",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
         "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
     ),
     _exact_bootstrap_requirement_transition(
@@ -430,7 +434,7 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
         "python",
         "afffd825b4495819b853fec9a86b0be7644f6fe0468d40548d8b9b2803d183ce",
         "8f4ef46cf85f9ed8e4ff28732dba2614005a1d50d6793ceb25e15608d5ffb751",
-        "62dc99e86d33b6059480bff6be75fa6f90461a7f9ab9abc21537b223971be34f",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
         "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
     ),
 )
@@ -1417,8 +1421,29 @@ def _validate_schema_2_history_representation(
         : len(surviving_history)
     ]
     if candidate_prefix != surviving_history:
+        mismatch_index = next(
+            (
+                index
+                for index, (candidate_item, protected_item) in enumerate(
+                    zip(candidate_prefix, surviving_history, strict=False)
+                )
+                if candidate_item != protected_item
+            ),
+            min(len(candidate_prefix), len(surviving_history)),
+        )
+        expected_path = (
+            surviving_history[mismatch_index][0].prompt_path.as_posix()
+            if mismatch_index < len(surviving_history)
+            else "<end-of-history>"
+        )
+        candidate_path = (
+            candidate_prefix[mismatch_index][0].prompt_path.as_posix()
+            if mismatch_index < len(candidate_prefix)
+            else "<end-of-history>"
+        )
         raise VerificationProfileError(
-            "candidate schema-2 history rewrites protected representation"
+            "candidate schema-2 history rewrites protected representation at "
+            f"row {mismatch_index}: expected {expected_path}, got {candidate_path}"
         )
 
 
@@ -1678,25 +1703,37 @@ def _load_requirement_transition_authorizations(
         protected_policy,
         candidate_policy,
     )
-    legacy_pdd1989_reconciliation = (
+    policy_digest_pair = (
+        hashlib.sha256(protected_policy).hexdigest(),
+        hashlib.sha256(candidate_policy).hexdigest(),
+    ) if protected_policy is not None and candidate_policy is not None else None
+    profile_digest_pair = (
+        hashlib.sha256(policies[0]).hexdigest(),
+        hashlib.sha256(policies[1]).hexdigest(),
+    ) if policies[0] is not None and policies[1] is not None else None
+    legacy_pdd1873_reconciliation = (
+        policy_digest_pair == _LEGACY_PDD_1873_SCHEMA_2_HISTORY
+        and profile_digest_pair == _LEGACY_PDD_1873_PROFILE_BYTES
+    )
+    legacy_pdd1873_current_state = (
+        policy_digest_pair
+        == (_LEGACY_PDD_1873_SCHEMA_2_HISTORY[1],) * 2
+        and profile_digest_pair == (_LEGACY_PDD_1873_PROFILE_BYTES[1],) * 2
+    )
+    legacy_bootstrap_reconciliation = (
         protected_policy is not None
         and candidate_policy is not None
         and policies[0] is not None
         and policies[1] is not None
-        and (
-            hashlib.sha256(protected_policy).hexdigest(),
-            hashlib.sha256(candidate_policy).hexdigest(),
-        )
-        == _LEGACY_PDD_1989_SCHEMA_2_HISTORY
-        and (
-            hashlib.sha256(policies[0]).hexdigest(),
-            hashlib.sha256(policies[1]).hexdigest(),
-        )
-        == _LEGACY_PDD_1989_PROFILE_BYTES
+        and (policy_digest_pair, profile_digest_pair)
+        in {
+            (_LEGACY_PDD_1989_SCHEMA_2_HISTORY, _LEGACY_PDD_1989_PROFILE_BYTES),
+            (_LEGACY_PDD_1873_SCHEMA_2_HISTORY, _LEGACY_PDD_1873_PROFILE_BYTES),
+        }
     )
     retired_by_candidate = {item.obsolete for item in candidate_retirements}
     new_authorizations = tuple(item for item in candidate if item not in protected)
-    if legacy_pdd1989_reconciliation:
+    if legacy_bootstrap_reconciliation:
         # The exact historical pair both installed and consumed its authority
         # before Phase-A isolation existed; validate it as consumption below.
         new_authorizations = ()
@@ -1706,7 +1743,7 @@ def _load_requirement_transition_authorizations(
                 item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
                 and item not in protected
                 and policies[0] != policies[1]
-                and not legacy_pdd1989_reconciliation
+                and not legacy_bootstrap_reconciliation
             ):
                 raise VerificationProfileError(
                     "candidate legacy bootstrap requirement transition changes "
@@ -1734,7 +1771,7 @@ def _load_requirement_transition_authorizations(
             )
     candidate_authority = set(candidate_rows)
     for item in protected:
-        if item in candidate_authority or legacy_pdd1989_reconciliation:
+        if item in candidate_authority or legacy_bootstrap_reconciliation:
             continue
         if not _authorization_is_consumed_at_current_state(
             manifest, base, head, prompts[item.prompt_path], item
@@ -1744,6 +1781,24 @@ def _load_requirement_transition_authorizations(
             )
     if candidate_policy != protected_policy:
         _validate_dormant_policy_installation(protected_policy, candidate_policy)
+    if legacy_pdd1873_reconciliation or legacy_pdd1873_current_state:
+        cli_identity = (PurePosixPath("pdd/prompts/core/cli_python.prompt"), "python")
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id) != cli_identity
+        )
+        if legacy_pdd1873_reconciliation:
+            cli_transition = next(
+                item
+                for item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
+                if (item.prompt_path, item.language_id) == cli_identity
+                and item.bindings.base_policy_sha256
+                == _LEGACY_PDD_1873_PROFILE_BYTES[0]
+                and item.bindings.head_policy_sha256
+                == _LEGACY_PDD_1873_PROFILE_BYTES[1]
+            )
+            candidate += (cli_transition,)
     return candidate, prompts, new_authorizations
 
 

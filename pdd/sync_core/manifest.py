@@ -89,9 +89,9 @@ class OwnershipRule:
 
 
 # A candidate cannot normally introduce its own human-ownership rule: the
-# protected base must establish an exact dormant rule first.  These six files
-# are the one-time story-detection rollout boundary and are bound to this
-# repository identity and exact paths.  Keeping the tuple in code makes the
+# protected base must establish an exact dormant rule first. These exact files
+# are one-time story-detection and story-diagnostics rollout boundaries bound
+# to this repository identity and exact paths. Keeping the tuple in code makes the
 # bootstrap auditable and prevents a candidate from broadening it with a
 # wildcard, parent directory, or altered owner/inventory fields.
 _PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
@@ -118,6 +118,20 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
         True,
     ),
     OwnershipRule(
+        ".pdd/meta/user_story_tests_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        ".pdd/meta/user_story_tests_python_run.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
         "pdd/schemas/story_detection_result.schema.json",
         InventoryStatus.HUMAN_OWNED,
         "human-maintained",
@@ -126,6 +140,13 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
     ),
     OwnershipRule(
         "pdd/schemas/story_detection_scope.schema.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "tests/test_e2e_story_failure_diagnostics.py",
         InventoryStatus.HUMAN_OWNED,
         "human-maintained",
         "pdd-maintainers",
