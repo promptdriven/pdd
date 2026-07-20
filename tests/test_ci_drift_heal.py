@@ -16,6 +16,7 @@ from pdd.ci_drift_heal import (
     PromptRevertError,
     _AUTO_HEAL_SUCCESS_TRAILER,
     _capture_rollback_state,
+    _format_heal_failure,
     _git_add_pathspecs,
     _git_relative_path_candidates,
     _has_symlinked_ancestor,
@@ -2946,6 +2947,339 @@ class TestRunPddCommandRollback:
         calls = [c[0][0] for c in mock_run.call_args_list]
         assert ["git", "status", "--porcelain", "--", ".pdd/meta", "project_dependencies.csv"] in calls
         assert not any(cmd[:2] == ["git", "restore"] for cmd in calls)
+
+
+class TestRunPddCommandDiagnostics:
+    """Failure logs retain actionable output without leaking local secrets."""
+
+    @staticmethod
+    def _printed(mock_print):
+        return "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
+
+    def test_actionable_stdout_survives_noisy_stderr(self):
+        noisy_stderr = "\n".join(
+            f"LiteLLM warning {index}: retrying provider" for index in range(100)
+        )
+        failed = MagicMock(
+            returncode=7,
+            stdout="Working...\nError: example prompt has unresolved include context/missing.py\n",
+            stderr=noisy_stderr,
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            result = _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"],
+                {},
+                "Heal demo",
+            )
+
+        printed = self._printed(mock_print)
+        assert result is False
+        assert "exit code 7" in printed
+        assert "example prompt has unresolved include" in printed
+
+    def test_failure_includes_useful_output_from_both_streams(self):
+        failed = MagicMock(
+            returncode=2,
+            stdout="Error: generated example failed validation",
+            stderr="Traceback: provider invocation failed",
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            result = _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"], {}, "Heal demo"
+            )
+
+        printed = self._printed(mock_print)
+        assert result is False
+        assert "stdout:" in printed
+        assert "generated example failed validation" in printed
+        assert "stderr:" in printed
+        assert "provider invocation failed" in printed
+
+    def test_failure_diagnostic_is_strictly_bounded_and_keeps_final_error(self):
+        failed = MagicMock(
+            returncode=1,
+            stdout=("progress output\n" * 1000) + "Error: FINAL_ACTIONABLE_MARKER\n",
+            stderr="debug warning\n" * 1000,
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"], {}, "Heal demo"
+            )
+
+        printed = self._printed(mock_print)
+        diagnostic = _format_heal_failure(1, failed.stdout, failed.stderr)
+        assert "Error:" in printed
+        assert "FINAL_ACTIONABLE_MARKER" in printed
+        assert len(diagnostic) <= 2000
+
+    def test_failure_redacts_credentials_and_personal_home_paths(self):
+        failed = MagicMock(
+            returncode=1,
+            stdout=(
+                "Error in /Users/alice/private/repo and /home/bob/secret/repo; "
+                "OPENAI_API_KEY=sk-proj-supersecret"
+            ),
+            stderr=(
+                r"C:\Users\Carol\private\repo failed; "
+                "Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456"
+            ),
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"], {}, "Heal demo"
+            )
+
+        printed = self._printed(mock_print)
+        assert "[HOME]/private/repo" in printed
+        assert "alice" not in printed
+        assert "bob" not in printed
+        assert "Carol" not in printed
+        assert "supersecret" not in printed
+        assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in printed
+        assert "[REDACTED]" in printed
+
+    def test_failure_redacts_provider_keys_jwt_auth_and_credentialed_urls(self):
+        secrets = [
+            "AIzaSy" + "A" * 33,
+            "AKIA" + "B" * 16,
+            "C" * 40,
+            "xoxb-" + "D" * 24,
+            "xai-" + "E" * 24,
+            "gsk_" + "F" * 24,
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJwcml2YXRlIn0.signaturevalue123",
+            "basic-credential-value",
+            "token-credential-value",
+            "url-password-value",
+        ]
+        failed = MagicMock(
+            returncode=1,
+            stdout=(
+                f"google={secrets[0]} aws={secrets[1]} "
+                f"AWS_SECRET_ACCESS_KEY={secrets[2]} slack={secrets[3]} "
+                f"xai={secrets[4]} groq={secrets[5]} jwt={secrets[6]}"
+            ),
+            stderr=(
+                f"Authorization: Basic {secrets[7]}\n"
+                f"Authorization: Token {secrets[8]}\n"
+                f"clone https://user:{secrets[9]}@example.invalid/private.git failed"
+            ),
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"], {}, "Heal demo"
+            )
+
+        printed = self._printed(mock_print)
+        for secret in secrets:
+            assert secret not in printed
+        assert printed.count("[REDACTED]") >= 8
+
+    def test_quoted_multiline_and_oauth_secrets_are_redacted_in_all_channels(self):
+        quoted_first = "first-secret"
+        quoted_second = "second-secret"
+        pem_body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"
+        oauth_token = "ya29.a0AfH6SMBvery-private-oauth-token"
+        failed = MagicMock(
+            returncode=1,
+            stdout=f'Error: API_KEY="{quoted_first} {quoted_second}"',
+            stderr=(
+                'PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n'
+                f"{pem_body}\n"
+                '-----END PRIVATE KEY-----"\nprovider failed'
+            ),
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"],
+                {},
+                f"Heal OAuth {oauth_token}",
+            )
+
+        printed = self._printed(mock_print)
+        for secret in (quoted_first, quoted_second, pem_body, oauth_token):
+            assert secret not in printed
+        assert "BEGIN PRIVATE KEY" not in printed
+        assert "END PRIVATE KEY" not in printed
+        assert printed.count("[REDACTED]") >= 3
+
+    def test_google_oauth_redaction_consumes_full_bearer_alphabet(self):
+        stdout_token = "ya29.a0Af+SENSITIVE/TAIL==="
+        stderr_token = "ya29.b0Bg~OTHER/TAIL===="
+        label_token = "ya29.c0Ch+LABEL/TAIL====="
+        failed = MagicMock(
+            returncode=1,
+            stdout=(
+                f"AuthenticationError received {stdout_token}; "
+                "ya29 documentation; version 0.0.307"
+            ),
+            stderr=f"provider rejected {stderr_token}",
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"],
+                {},
+                f"Heal OAuth {label_token}",
+            )
+
+        printed = self._printed(mock_print)
+        for token in (stdout_token, stderr_token, label_token):
+            assert token not in printed
+        assert "+SENSITIVE/TAIL===" not in printed
+        assert "~OTHER/TAIL====" not in printed
+        assert "+LABEL/TAIL=====" not in printed
+        assert "ya29 documentation" in printed
+        assert "0.0.307" in printed
+        assert printed.count("[REDACTED]") >= 3
+
+    def test_compact_jwt_is_redacted_without_hiding_dotted_versions(self):
+        compact_jwt = "eyJhbGciOiJub25lIn0.e30.signature123"
+        failed = MagicMock(
+            returncode=1,
+            stdout=f"AuthenticationError received {compact_jwt}; cli-version=0.0.307",
+            stderr="",
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"], {}, "Heal demo"
+            )
+
+        printed = self._printed(mock_print)
+        assert compact_jwt not in printed
+        assert "[REDACTED]" in printed
+        assert "0.0.307" in printed
+
+    def test_early_auth_and_provider_signals_survive_long_cleanup_tail(self):
+        signals = (
+            "AuthenticationError: OAuth login expired\n"
+            "RateLimitError: quota exhausted\n"
+            "credential lookup failed\n"
+            "API-key is unavailable\n"
+            "provider rejected request\n"
+        )
+        failed = MagicMock(
+            returncode=1,
+            stdout=signals + "".join(
+                f"cleanup complete phase-{index}\n" for index in range(50)
+            ),
+            stderr="",
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"], {}, "Heal demo"
+            )
+
+        printed = self._printed(mock_print)
+        for marker in (
+            "AuthenticationError",
+            "RateLimitError",
+            "credential lookup",
+            "API-key",
+            "provider rejected",
+        ):
+            assert marker in printed
+
+    def test_adjacent_normalized_warning_noise_is_deduplicated(self):
+        failed = MagicMock(
+            returncode=1,
+            stdout="Error: actionable failure",
+            stderr="".join(
+                f"LiteLLM warning {index}: retrying provider\n" for index in range(30)
+            ),
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"], {}, "Heal demo"
+            )
+
+        printed = self._printed(mock_print)
+        assert printed.count("LiteLLM warning") == 1
+        assert "Error: actionable failure" in printed
+
+    def test_failure_strips_unsafe_controls_and_bidi_overrides(self):
+        failed = MagicMock(
+            returncode=1,
+            stdout="Error:\x00 unsafe\x07 text \u061c\u202esecret.exe\u2066 done",
+            stderr="failed\x85with control",
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"], {}, "Heal demo"
+            )
+
+        printed = self._printed(mock_print)
+        for unsafe in ("\x00", "\x07", "\x85", "\u061c", "\u202e", "\u2066"):
+            assert unsafe not in printed
+        assert "secret.exe" in printed
+
+    def test_final_console_payload_sanitizes_and_bounds_label(self):
+        label_secret = "AIzaSy" + "L" * 33
+        failed = MagicMock(
+            returncode=1,
+            stdout=("progress\n" * 1000) + "Error: final failure",
+            stderr="warning\n" * 1000,
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"],
+                {},
+                (f"Heal {label_secret} \u202e" * 300),
+            )
+
+        payload = str(mock_print.call_args.args[0])
+        assert len(payload) <= 2000
+        assert label_secret not in payload
+        assert "\u202e" not in payload
+        assert "Error: final failure" in payload
+
+    def test_success_emits_no_failure_diagnostic(self):
+        succeeded = MagicMock(returncode=0, stdout="ok", stderr="warning")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=succeeded), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            result = _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"], {}, "Heal demo"
+            )
+
+        assert result is True
+        mock_print.assert_not_called()
+
+    def test_missing_pdd_binary_emits_actionable_failure(self):
+        with patch(
+            "pdd.ci_drift_heal.subprocess.run",
+            side_effect=FileNotFoundError("pdd executable not found"),
+        ), patch("pdd.ci_drift_heal.console.print") as mock_print:
+            result = _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"], {}, "Heal demo"
+            )
+
+        printed = self._printed(mock_print)
+        assert result is False
+        assert "exit code unavailable" in printed
+        assert "pdd executable not found" in printed
 
 
 # ---------------------------------------------------------------------------
