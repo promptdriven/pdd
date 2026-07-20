@@ -839,6 +839,8 @@ class TestRunAgenticCheckup:
                     "active_reviewer": "codex",
                     "fresh_final_status": "missing",
                     "findings": [],
+                    "terra_sol_mode": True,
+                    "last_model": "gpt-5.6-sol",
                 },
                 False,
             ),
@@ -848,6 +850,8 @@ class TestRunAgenticCheckup:
                     "active_reviewer": "codex",
                     "fresh_final_status": "clean",
                     "findings": [],
+                    "terra_sol_mode": True,
+                    "last_model": "gpt-5.6-sol",
                 },
                 True,
             ),
@@ -877,7 +881,7 @@ class TestRunAgenticCheckup:
 
         def fake_review_loop(**kwargs):
             observed["config"] = kwargs["config"]
-            return True, "trustworthy report", 0.25, "codex"
+            return True, "trustworthy report", 0.25, "gpt-5.6-sol"
 
         monkeypatch.setattr(mod, "run_checkup_review_loop", fake_review_loop)
 
@@ -895,7 +899,7 @@ class TestRunAgenticCheckup:
         assert success is expected_success
         assert message == "trustworthy report"
         assert cost == pytest.approx(0.25)
-        assert model == "codex"
+        assert model == "gpt-5.6-sol"
         config = observed["config"]
         assert config.reviewers == ("codex",)
         assert config.reviewer == "codex"
@@ -903,6 +907,62 @@ class TestRunAgenticCheckup:
         assert config.reviewer_fallback is None
         assert config.fixer_fallback is None
         assert config.unbounded_terra_sol is True
+
+    @pytest.mark.parametrize(
+        ("mode_kwargs", "conflicting_flag"),
+        [
+            ({"final_gate": True}, "--final-gate"),
+            ({"review_loop": True}, "--review-loop"),
+            ({"no_fix": True}, "--no-fix"),
+            ({"review_only": True}, "--review-only"),
+            ({"agentic_review_loop": True}, "--agentic-review-loop"),
+        ],
+    )
+    def test_terra_sol_library_boundary_rejects_conflicting_modes_before_io(
+        self, monkeypatch, mode_kwargs, conflicting_flag
+    ):
+        """Direct pdd_cloud/e2e callers get the same exclusive-mode contract."""
+        import pdd.agentic_checkup as mod
+
+        monkeypatch.setattr(
+            mod,
+            "_check_gh_cli",
+            lambda: pytest.fail("mode validation must run before GitHub I/O"),
+        )
+        monkeypatch.setenv(mod._HOSTED_RECEIPT_KEY_ENV, "still-private")
+
+        success, message, cost, model = mod.run_agentic_checkup(
+            None,
+            pr_url="https://github.com/owner/repo/pull/2",
+            terra_sol=True,
+            **mode_kwargs,
+        )
+
+        assert success is False
+        assert conflicting_flag in message
+        assert cost == 0.0
+        assert model == ""
+        assert os.environ[mod._HOSTED_RECEIPT_KEY_ENV] == "still-private"
+
+    @pytest.mark.parametrize("model", ["", "codex", "gpt-5.5", "gpt-5.4"])
+    def test_terra_sol_ship_verdict_requires_observed_gpt_5_6(self, model):
+        """A clean Sol status from an absent or wrong model cannot ship."""
+        import pdd.agentic_checkup as mod
+
+        state = {
+            "reviewer_status": {"codex": "clean"},
+            "active_reviewer": "codex",
+            "fresh_final_status": "clean",
+            "findings": [],
+            "terra_sol_mode": True,
+            "last_model": model,
+        }
+
+        assert not mod._review_loop_ship_verdict(
+            state,
+            has_issue=False,
+            require_terra_sol_model=True,
+        )
 
     def test_agentic_layer1_failure_spends_no_reviewer_budget(
         self, monkeypatch, tmp_path
@@ -1276,6 +1336,7 @@ class TestRunAgenticCheckup:
             ),
             encoding="utf-8",
         )
+
         def fail_private_reservation(*args, **kwargs):
             raise OSError("private reservation failed")
 

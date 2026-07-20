@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.305.dev0",
-  "timestamp": "2026-07-20T18:45:00+00:00",
-  "command": "sync",
-  "prompt_hash": "669206fc81cb1b7267723d469d27b04a8c9c71188eb2deba972c38c92c8d8ead",
-  "code_hash": "08187e0da3ae3dddc2067eeb47a76086b75dae400b8ff1cc8221b7e2ed0bbc70",
+  "pdd_version": "0.0.307.dev0",
+  "timestamp": "2026-07-20T21:09:35.016382+00:00",
+  "command": "fix",
+  "prompt_hash": "24472e7eefdde8fe01771056a01f321bdceea16d183c9b7a915c2131ec44a6c8",
+  "code_hash": "d223a752b663350789c0f319affa74181849a1752aa17e4c0f1da39210f2b7f7",
   "example_hash": "b073c715dbc68e6865dfc8730d25251481b400a8f7e3c382e2122d1f7de07d40",
-  "test_hash": "ae6595c98465502cd6dad2bec6b7089ce994f1d17f70e9cd480461e9543dbff5",
+  "test_hash": "7b71be574563d4abcc63fc57f8aecb383590d1ddbbead1d7c171c24c246bb676",
   "test_files": {
-    "test_checkup_review_loop.py": "ae6595c98465502cd6dad2bec6b7089ce994f1d17f70e9cd480461e9543dbff5"
+    "test_checkup_review_loop.py": "7b71be574563d4abcc63fc57f8aecb383590d1ddbbead1d7c171c24c246bb676"
   },
   "include_deps": {
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
@@ -15,6 +15,6 @@
     "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",
     "context/agentic_checkup_orchestrator_example.py": "295a9ae294e22224d3c447f13c462854bfe4e526cebc89bcbba417ea514c7ef2",
     "context/agentic_e2e_fix_orchestrator_example.py": "180cc2c4316b531586040d61fc5f82f1f605d5c5736fd23bad63a889ac0b7d1e",
-    "pdd/list_drift_detection.py": "6c7f849c998e758852158e49f0c044f08c7f492a4b10560d2dd6e62efa902231"
+    "pdd/prompts/../list_drift_detection.py": "6c7f849c998e758852158e49f0c044f08c7f492a4b10560d2dd6e62efa902231"
   }
 }

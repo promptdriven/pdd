@@ -1245,7 +1245,10 @@ def _post_final_gate_report(
 
 
 def _review_loop_ship_verdict(
-    final_state: Optional[Dict[str, Any]], *, has_issue: bool
+    final_state: Optional[Dict[str, Any]],
+    *,
+    has_issue: bool,
+    require_terra_sol_model: bool = False,
 ) -> bool:
     """Derive a real ship/no-ship verdict from a review-loop ``final-state.json``.
 
@@ -1285,6 +1288,12 @@ def _review_loop_ship_verdict(
         return False
     if reviewer_status.get(active) not in _SHIP_REVIEWER_STATES:
         return False
+    if require_terra_sol_model:
+        if final_state.get("terra_sol_mode") is not True or active != "codex":
+            return False
+        observed_model = str(final_state.get("last_model") or "").strip().lower()
+        if not observed_model.startswith("gpt-5.6"):
+            return False
     # The canonical ``_write_final_state`` ALWAYS serializes ``findings`` as a
     # list of dicts (``ReviewFinding.to_dict()``) whose ``status`` is a non-empty
     # string ("open" while unresolved, "fixed" once resolved). The canonical
@@ -1479,10 +1488,40 @@ def run_agentic_checkup(
             cached state already contains earlier step outputs.
         agentic_artifact_path: Invocation-private artifact destination for an
             explicit standalone agentic review loop. Ignored in other modes.
+        terra_sol: Run the unbounded Codex-only Terra/Sol convergence loop.
+            Conflicting review/final-gate/report-only modes are rejected before
+            any environment mutation or external I/O.
 
     Returns:
         Tuple of (success, message, total_cost, model_used).
     """
+    # ``run_agentic_checkup`` is the library boundary used by pdd_cloud and
+    # e2e callers, so enforce the same mutually-exclusive mode contract as the
+    # Click command before mutating the hosted environment, reserving artifacts,
+    # fetching GitHub state, or running any provider. Terra/Sol owns its
+    # fix/review loop end to end.
+    if terra_sol:
+        incompatible = [
+            name
+            for enabled, name in (
+                (final_gate, "--final-gate"),
+                (review_loop, "--review-loop"),
+                (no_fix, "--no-fix"),
+                (review_only, "--review-only"),
+                (agentic_review_loop, "--agentic-review-loop"),
+            )
+            if enabled
+        ]
+        if incompatible:
+            return (
+                False,
+                "--terra-sol cannot be combined with " + ", ".join(incompatible) + ".",
+                0.0,
+                "",
+            )
+        if not str(pr_url or "").strip():
+            return False, "--terra-sol requires --pr.", 0.0, ""
+
     # Capture the receipt secret at the function boundary, before any target
     # repository hook, provider, test, or subprocess can inherit it. The key is
     # never restored to ``os.environ`` and is retained only in this process.
@@ -1959,6 +1998,7 @@ def run_agentic_checkup(
         ship = _review_loop_ship_verdict(
             load_final_state(project_root, issue_number, pr_number),
             has_issue=has_issue,
+            require_terra_sol_model=True,
         )
         return _require_hosted_publication(
             (ship, loop_message, loop_cost, loop_model),

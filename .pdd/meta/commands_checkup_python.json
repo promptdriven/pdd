@@ -1,9 +1,9 @@
 {
-  "pdd_version": "0.0.305.dev0",
-  "timestamp": "2026-07-20T18:45:00+00:00",
-  "command": "sync",
-  "prompt_hash": "226d1dc53ea91abef2deece6aa88a4ce65db90df2448e80b7044927110d80328",
-  "code_hash": "8a4f4026ff86397a2ddd3302effb1efaed5f57d0e6946cd0fbd15448eef69ee9",
+  "pdd_version": "0.0.307.dev0",
+  "timestamp": "2026-07-20T21:03:10.947115+00:00",
+  "command": "fix",
+  "prompt_hash": "56b3a3b5c8abb11eff80032933207a612d7d13880a20d2febf8afd729bd26e06",
+  "code_hash": "6bc78f28d8267b21277ae1e34e784260371249efd8d36d6c18f93b56768c82ad",
   "example_hash": "847008502198ff360190831172d5d6cc6de6e5e76d3782d2b53823297a5b1349",
   "test_hash": "1550d2a6275603bb7fd35178f7d150b893434105d645639b720db4b19eb02bb0",
   "test_files": {

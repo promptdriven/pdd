@@ -53,6 +53,7 @@ from .agentic_checkup_orchestrator import (
 from .agentic_common import DEFAULT_MAX_RETRIES, run_agentic_task
 from .agentic_e2e_fix_orchestrator import push_with_retry
 from .architecture_registry import extract_modules
+from .routing_policy import CODEX_MODEL_DEFAULT
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -118,6 +119,10 @@ ALL_SEVERITIES = {"blocker", "critical", "medium", "low", "nit", "info"}
 DEFAULT_REVIEWER = "codex"
 DEFAULT_FIXER = "claude"
 DEFAULT_REVIEWERS = ("codex", "claude")
+TERRA_SOL_REVIEWER = "codex"
+TERRA_SOL_FIXER = "codex"
+TERRA_SOL_MODEL_PREFIX = "gpt-5.6"
+TERRA_SOL_MODEL = CODEX_MODEL_DEFAULT
 EXTERNAL_STATUS_FINDING_MARKERS: Tuple[str, ...] = (
     "action required",
     "action_required",
@@ -865,8 +870,50 @@ class ReviewLoopConfig:
     unbounded_terra_sol: bool = False
 
     def __post_init__(self) -> None:
+        if self.unbounded_terra_sol:
+            if self.no_fix or self.review_only:
+                raise ValueError(
+                    "Terra/Sol mode requires Terra fixes; no_fix and review_only "
+                    "are incompatible"
+                )
+            # Enforce the issue #2170 role contract at the configuration
+            # boundary, not only in the CLI dispatcher. Direct callers (notably
+            # pdd_cloud) cannot retain Claude/Gemini roles or fallbacks.
+            self.reviewers = (TERRA_SOL_REVIEWER,)
+            self.reviewer = TERRA_SOL_REVIEWER
+            self.fixer = TERRA_SOL_FIXER
+            self.reviewer_fallback = None
+            self.fixer_fallback = None
+            self.fallback_reviewer_on_failure = False
+            self.allow_same_reviewer_fixer = True
+            self.fresh_final_review_role = TERRA_SOL_REVIEWER
         if self.no_fix:
             self.review_only = True
+
+
+def _is_terra_sol_model(model: object) -> bool:
+    """Return whether provider evidence identifies the required GPT-5.6 family."""
+    return str(model or "").strip().lower().startswith(TERRA_SOL_MODEL_PREFIX)
+
+
+def _enforce_terra_sol_task_model(
+    config: ReviewLoopConfig,
+    result: Tuple[bool, str, float, str],
+) -> Tuple[bool, str, float, str]:
+    """Fail a successful Terra/Sol task closed when model evidence is absent/wrong."""
+    success, output, cost, model = result
+    if not config.unbounded_terra_sol or not success:
+        return result
+    if _is_terra_sol_model(model):
+        return result
+    observed = str(model or "missing").strip() or "missing"
+    return (
+        False,
+        "Terra/Sol requires an observed GPT-5.6 Codex model; "
+        f"provider reported {observed!r}.",
+        cost,
+        model,
+    )
 
 
 @dataclass
@@ -1480,9 +1527,7 @@ def run_checkup_review_loop(
                 status=(
                     hard_review.status
                     if hard_review is not None
-                    else "findings"
-                    if aggregate_findings
-                    else "clean"
+                    else "findings" if aggregate_findings else "clean"
                 ),
                 issue_aligned=(
                     all(item.issue_aligned is not False for item in round_reviews)
@@ -2774,9 +2819,7 @@ def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
     reviewer = (
         explicit_reviewer[0]
         if explicit_reviewer
-        else legacy_roles[0]
-        if legacy_roles
-        else DEFAULT_REVIEWER
+        else legacy_roles[0] if legacy_roles else DEFAULT_REVIEWER
     )
     # ``--reviewers`` names independent reviewer passes.  It must never be
     # overloaded as the fixer selection: issue #1788 explicitly requires the
@@ -3845,18 +3888,22 @@ def _run_review(
     _write_provider_evidence(
         artifacts_dir, base, "prompt", prompt, agentic_mode=config.agentic_mode
     )
-    success, output, cost, model = _run_role_task(
-        reviewer,
-        prompt,
-        worktree,
-        verbose=verbose,
-        quiet=quiet,
-        label=f"checkup-review-loop-{mode}-{reviewer}-round{round_number}",
-        timeout=900.0 + config.timeout_adder,
-        max_retries=DEFAULT_MAX_RETRIES,
-        reasoning_time=config.reasoning_time,
-        deadline=deadline,
-        read_only=True,
+    success, output, cost, model = _enforce_terra_sol_task_model(
+        config,
+        _run_role_task(
+            reviewer,
+            prompt,
+            worktree,
+            verbose=verbose,
+            quiet=quiet,
+            label=f"checkup-review-loop-{mode}-{reviewer}-round{round_number}",
+            timeout=900.0 + config.timeout_adder,
+            max_retries=DEFAULT_MAX_RETRIES,
+            reasoning_time=config.reasoning_time,
+            deadline=deadline,
+            read_only=True,
+            model_override=(TERRA_SOL_MODEL if config.unbounded_terra_sol else None),
+        ),
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
@@ -3994,18 +4041,22 @@ def _run_review_parse_repair(
     _write_provider_evidence(
         artifacts_dir, base, "prompt", prompt, agentic_mode=config.agentic_mode
     )
-    success, output, cost, model = _run_role_task(
-        reviewer,
-        prompt,
-        worktree,
-        verbose=verbose,
-        quiet=quiet,
-        label=f"checkup-review-loop-parse-repair-{mode}-{reviewer}-round{round_number}",
-        timeout=300.0 + config.timeout_adder,
-        max_retries=DEFAULT_MAX_RETRIES,
-        reasoning_time=config.reasoning_time,
-        deadline=deadline,
-        read_only=True,
+    success, output, cost, model = _enforce_terra_sol_task_model(
+        config,
+        _run_role_task(
+            reviewer,
+            prompt,
+            worktree,
+            verbose=verbose,
+            quiet=quiet,
+            label=f"checkup-review-loop-parse-repair-{mode}-{reviewer}-round{round_number}",
+            timeout=300.0 + config.timeout_adder,
+            max_retries=DEFAULT_MAX_RETRIES,
+            reasoning_time=config.reasoning_time,
+            deadline=deadline,
+            read_only=True,
+            model_override=(TERRA_SOL_MODEL if config.unbounded_terra_sol else None),
+        ),
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
@@ -4065,17 +4116,21 @@ def _run_fix(
     _write_provider_evidence(
         artifacts_dir, base, "prompt", prompt, agentic_mode=config.agentic_mode
     )
-    success, output, cost, model = _run_role_task(
-        fixer,
-        prompt,
-        worktree,
-        verbose=verbose,
-        quiet=quiet,
-        label=f"checkup-review-loop-fix-{fixer}-for-{reviewer}-round{round_number}",
-        timeout=1200.0 + config.timeout_adder,
-        max_retries=DEFAULT_MAX_RETRIES,
-        reasoning_time=config.reasoning_time,
-        deadline=deadline,
+    success, output, cost, model = _enforce_terra_sol_task_model(
+        config,
+        _run_role_task(
+            fixer,
+            prompt,
+            worktree,
+            verbose=verbose,
+            quiet=quiet,
+            label=f"checkup-review-loop-fix-{fixer}-for-{reviewer}-round{round_number}",
+            timeout=1200.0 + config.timeout_adder,
+            max_retries=DEFAULT_MAX_RETRIES,
+            reasoning_time=config.reasoning_time,
+            deadline=deadline,
+            model_override=(TERRA_SOL_MODEL if config.unbounded_terra_sol else None),
+        ),
     )
     state.total_cost += cost
     state.last_model = model or state.last_model
@@ -4148,9 +4203,11 @@ def _write_fix_artifact(
             {
                 "summary": summary,
                 "changed_files": _bounded_changed_files(changed_files),
-                "changed_files_original_count": changed_files_original_count
-                if changed_files_original_count is not None
-                else len(changed_files),
+                "changed_files_original_count": (
+                    changed_files_original_count
+                    if changed_files_original_count is not None
+                    else len(changed_files)
+                ),
                 "changed_files_omitted_count": max(
                     0,
                     (
@@ -4163,21 +4220,29 @@ def _write_fix_artifact(
                 "success": success,
                 "dispositions": _bounded_fix_mapping(dispositions),
                 "rationales": _bounded_fix_mapping(rationales),
-                "dispositions_original_count": dispositions_original_count
-                if dispositions_original_count is not None
-                else len(dispositions),
-                "rationales_original_count": rationales_original_count
-                if rationales_original_count is not None
-                else len(rationales),
+                "dispositions_original_count": (
+                    dispositions_original_count
+                    if dispositions_original_count is not None
+                    else len(dispositions)
+                ),
+                "rationales_original_count": (
+                    rationales_original_count
+                    if rationales_original_count is not None
+                    else len(rationales)
+                ),
                 "fix_items_omitted_count": max(
                     0,
                     max(
-                        dispositions_original_count
-                        if dispositions_original_count is not None
-                        else len(dispositions),
-                        rationales_original_count
-                        if rationales_original_count is not None
-                        else len(rationales),
+                        (
+                            dispositions_original_count
+                            if dispositions_original_count is not None
+                            else len(dispositions)
+                        ),
+                        (
+                            rationales_original_count
+                            if rationales_original_count is not None
+                            else len(rationales)
+                        ),
                     )
                     - PROVIDER_FIX_ITEMS_MAX_ITEMS,
                 ),
@@ -4297,6 +4362,7 @@ def _run_role_task(
     reasoning_time: Optional[float],
     deadline: Optional[float] = None,
     read_only: bool = False,
+    model_override: Optional[str] = None,
 ) -> Tuple[bool, str, float, str]:
     provider_deadline: Optional[float] = None
     if deadline is not None:
@@ -4314,7 +4380,15 @@ def _run_role_task(
         # one remaining-duration snapshot instead of mixing clock domains.
         provider_deadline = time.time() + remaining
     provider = ROLE_TO_PROVIDER.get(role, role)
+    if model_override is not None and provider != "openai":
+        return (
+            False,
+            "A Codex model override cannot be applied to a non-Codex role.",
+            0.0,
+            "",
+        )
     original_codex_sandbox = os.environ.get("CODEX_SANDBOX_MODE")
+    original_codex_model = os.environ.get("CODEX_MODEL")
     credential_keys = (
         "GH_TOKEN",
         "GITHUB_TOKEN",
@@ -4339,6 +4413,8 @@ def _run_role_task(
         os.environ["GIT_CONFIG_COUNT"] = "1"
         os.environ["GIT_CONFIG_KEY_0"] = "credential.helper"
         os.environ["GIT_CONFIG_VALUE_0"] = ""
+    if model_override is not None:
+        os.environ["CODEX_MODEL"] = model_override
     try:
         claude_policy = (
             {
@@ -4369,6 +4445,10 @@ def _run_role_task(
             os.environ.pop("CODEX_SANDBOX_MODE", None)
         else:
             os.environ["CODEX_SANDBOX_MODE"] = original_codex_sandbox
+        if original_codex_model is None:
+            os.environ.pop("CODEX_MODEL", None)
+        else:
+            os.environ["CODEX_MODEL"] = original_codex_model
         if read_only:
             for key, value in {**saved_credentials, **saved_git_guard}.items():
                 if value is None:
@@ -6220,10 +6300,9 @@ def _record_review(
                 continue
             state.findings_by_key[finding.key] = finding
             state._finding_accounting_reviewer_by_key[finding.key] = result.reviewer
-            state._finding_blocking_by_key[finding.key] = (
-                finding.severity.lower()
-                in {severity.lower() for severity in result.blocking_severities}
-            )
+            state._finding_blocking_by_key[finding.key] = finding.severity.lower() in {
+                severity.lower() for severity in result.blocking_severities
+            }
         else:
             existing.status = finding.status
             existing.evidence = finding.evidence or existing.evidence
@@ -6378,9 +6457,9 @@ def _record_reviewer_feedback(
                 f"{disposition!r}. Reviewer reason: {feedback}"
             )
             if rationale:
-                state.reviewer_feedback_by_key[finding.key] += (
-                    f" Fixer rationale was: {rationale}"
-                )
+                state.reviewer_feedback_by_key[
+                    finding.key
+                ] += f" Fixer rationale was: {rationale}"
 
 
 def _fix_dispute_note(fix: FixResult, finding: ReviewFinding) -> str:
@@ -7956,17 +8035,21 @@ def _attempt_source_of_truth_repair(
         instruction,
         agentic_mode=config.agentic_mode,
     )
-    success, output, cost, model = _run_role_task(
-        active_fixer,
-        instruction,
-        worktree,
-        verbose=verbose,
-        quiet=quiet,
-        label=f"checkup-review-loop-sot-repair-{active_fixer}-round{round_number}",
-        timeout=1200.0 + config.timeout_adder,
-        max_retries=DEFAULT_MAX_RETRIES,
-        reasoning_time=config.reasoning_time,
-        deadline=deadline,
+    success, output, cost, model = _enforce_terra_sol_task_model(
+        config,
+        _run_role_task(
+            active_fixer,
+            instruction,
+            worktree,
+            verbose=verbose,
+            quiet=quiet,
+            label=f"checkup-review-loop-sot-repair-{active_fixer}-round{round_number}",
+            timeout=1200.0 + config.timeout_adder,
+            max_retries=DEFAULT_MAX_RETRIES,
+            reasoning_time=config.reasoning_time,
+            deadline=deadline,
+            model_override=(TERRA_SOL_MODEL if config.unbounded_terra_sol else None),
+        ),
     )
     state.total_cost += cost
     if model:
@@ -8768,6 +8851,13 @@ def _write_final_state(
         "max_cost_reached": state.max_cost_reached,
         "max_duration_reached": state.max_duration_reached,
         "terra_sol_mode": state.terra_sol_mode,
+        "sol_review_status": (
+            state.reviewer_status.get(state.active_reviewer or "", "missing")
+            if state.terra_sol_mode
+            else None
+        ),
+        "sol_model": state.last_model if state.terra_sol_mode else None,
+        "terra_fixer": TERRA_SOL_FIXER if state.terra_sol_mode else None,
         "fix_attempts_by_key": dict(state.fix_attempts_by_key),
         "dispute_notes_by_key": dict(state.dispute_notes_by_key),
         "reviewer_feedback_by_key": dict(state.reviewer_feedback_by_key),
@@ -9219,6 +9309,7 @@ def _render_machine_verdict_block(
         and not state.max_rounds_reached
         and not state.max_cost_reached
         and not state.max_duration_reached
+        and (not state.terra_sol_mode or _is_terra_sol_model(state.last_model))
     )
     payload = {
         "schema": FINAL_GATE_REPORT_SCHEMA,
@@ -9244,6 +9335,13 @@ def _render_machine_verdict_block(
         "max_cost_reached": state.max_cost_reached,
         "max_duration_reached": state.max_duration_reached,
         "terra_sol_mode": state.terra_sol_mode,
+        "sol_review_status": (
+            state.reviewer_status.get(state.active_reviewer or "", "missing")
+            if state.terra_sol_mode
+            else None
+        ),
+        "sol_model": state.last_model if state.terra_sol_mode else None,
+        "terra_fixer": TERRA_SOL_FIXER if state.terra_sol_mode else None,
         "findings": [finding.to_dict() for finding in remaining_findings],
     }
     return [
@@ -9301,6 +9399,19 @@ def _render_final_report(
         remote_sha_line = "unknown"
     else:
         remote_sha_line = "none"
+    terra_sol_audit_lines = (
+        [
+            f"sol-reviewer: {state.active_reviewer or TERRA_SOL_REVIEWER}",
+            "sol-review-status: "
+            + state.reviewer_status.get(
+                state.active_reviewer or TERRA_SOL_REVIEWER, "missing"
+            ),
+            f"terra-fixer: {TERRA_SOL_FIXER}",
+            f"terra-sol-model: {state.last_model or 'none'}",
+        ]
+        if state.terra_sol_mode
+        else []
+    )
     lines = [
         "## Step 7/8: Review Loop Final Report",
         "",
@@ -9318,6 +9429,7 @@ def _render_final_report(
         f"max-rounds-reached: {str(state.max_rounds_reached).lower()}",
         f"max-cost-reached: {str(state.max_cost_reached).lower()}",
         f"max-duration-reached: {str(state.max_duration_reached).lower()}",
+        *terra_sol_audit_lines,
         "",
         "### Summary",
         "",
