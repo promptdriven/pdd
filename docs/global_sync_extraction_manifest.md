@@ -9,18 +9,19 @@ history. Protected main is `e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347`.
 
 | Disposition | Evidence and extraction rule |
 | --- | --- |
-| `already-merged-prerequisite` | [#2228](https://github.com/promptdriven/pdd/pull/2228), reviewed at `aa32884363e383745e878770a247e4897977de59`, had all 12 checks green, and merged as `c2575db6cfd3f5144081bb517724043a057d0f9c`. It preauthorizes only the literal five package-boundary paths: the standalone-checker module manifest, `standalone_package.py`, `checker_cli.py`, and their two tests. It is neither a release nor a pin. |
+| `already-merged-prerequisite` | [#2228](https://github.com/promptdriven/pdd/pull/2228), reviewed at exact head `aa32884363e383745e878770a247e4897977de59`, had all 12 checks green, and merged as `c2575db6cfd3f5144081bb517724043a057d0f9c`. Exact-head evidence includes Unit [29702650352/job 88234226053](https://github.com/promptdriven/pdd/actions/runs/29702650352/job/88234226053), [Package job 88234226047](https://github.com/promptdriven/pdd/actions/runs/29702650352/job/88234226047), [CodeQL 29702649361](https://github.com/promptdriven/pdd/actions/runs/29702649361), [heal 29702650465/job 88234226580](https://github.com/promptdriven/pdd/actions/runs/29702650465/job/88234226580), and [auto-heal 88234234171](https://github.com/promptdriven/pdd/runs/88234234171). It preauthorizes only the literal five package-boundary paths: the standalone-checker module manifest, `standalone_package.py`, `checker_cli.py`, and their two tests. It is neither a release nor a pin. |
 | `landed-package-boundary` | [#2229](https://github.com/promptdriven/pdd/pull/2229) landed the standalone non-`pdd` checker distribution with checker-only dependencies, strict lock/`RECORD` validation, and the exact z3 compatible-wheel regression. Prior reviewed head `be90cbdc7e5280eae19db02d041fd05467315b11` had only the two `_VITEST_RUNTIME_SOURCE` reserved-prefix assertions fail in Unit [29705890972/job 88242687030](https://github.com/promptdriven/pdd/actions/runs/29705890972/job/88242687030); a bounded correction received Sol HIGH approval at `ff95e9d31f8029f8f9cb1c55edb1ec328b006c16`. The final 12 checks were green and the protected squash merge is `e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347` at `2026-07-20T00:17:55Z`. This is package-boundary evidence only, not release evidence. |
-| `release-required-delta` | Implement the checker-specific release workflow and protected publication of the standalone wheel with its exact released digest. PR [#2230](https://github.com/promptdriven/pdd/pull/2230) is reviewed/local evidence only at `842b73e93d0d2e275726d0755f6b0b3347a13488`; its initial and rerun GitHub 503/504 failures are external-service evidence, not product-pass evidence. OCI and protected pins remain later release-required deltas. |
+| `release-required-delta` | First produce one exact-head checker-release-workflow implementation and reviewed PR artifact; this is the sole under-24-hour deliverable. Then, as a separate pending evidence transition, publish the standalone wheel through the protected path and record its exact released digest. PR [#2230](https://github.com/promptdriven/pdd/pull/2230) is reviewed/local preauthorization evidence only at `842b73e93d0d2e275726d0755f6b0b3347a13488`; its initial and rerun GitHub 503/504 failures are external-service evidence, not product-pass evidence. OCI and protected pins remain later release-required deltas. |
 | `excluded-diagnostic` | Keep #2225 workflow/bootstrap commits and hosted lanes as diagnostic evidence only. Head `09015bcc79c00575262e8c23d9b14693ae8be80f` ended in a build-version failure at [job 88224039194](https://github.com/promptdriven/pdd/actions/runs/29698754085/job/88224039194); head `d060da1cc1d6c81abf0c42cf5df69ac81d79a75e` ended in a read-only build-source failure at [job 88224395133](https://github.com/promptdriven/pdd/actions/runs/29698879393/job/88224395133); and closed head `0bae19c2fb9575d8b8edccaeee3c5d9420e00e9f` ended in the eager `pdd.__init__` → `update_main.py` → GitPython/no-git failure at [job 88224752678](https://github.com/promptdriven/pdd/actions/runs/29699017734/job/88224752678). No artifact upload or target lock completed, and `GIT_PYTHON_REFRESH=quiet` is rejected. |
 
 The standalone checker boundary is landed on protected main. The next same-day,
-under-24-hour deliverable is the checker-specific release workflow and protected
-publication of the standalone wheel with its exact released digest. It excludes
-`pdd/__init__` refactoring, OCI, certificates, and scenario expansion. A later
-sealed OCI layer supplies Git/system closure; a final protected pin-wiring layer
-binds released checker/OCI digests and prevents candidate control of checker,
-scenarios, PATH, wheelhouse, expectations, or verifier inputs.
+under-24-hour deliverable is one exact-head checker-release-workflow
+implementation and reviewed PR artifact. Protected wheel publication and its
+exact released digest are the subsequent pending evidence transition. This work
+excludes `pdd/__init__` refactoring, OCI, certificates, and scenario expansion.
+A later sealed OCI layer supplies Git/system closure; a final protected pin-wiring
+layer binds released checker/OCI digests and prevents candidate control of
+checker, scenarios, PATH, wheelhouse, expectations, or verifier inputs.
 
 The OCI layer is cryptographically downstream of the release: provenance binds
 the exact released checker wheel digest and exact checker dependency-lock digest
@@ -60,13 +61,14 @@ Reproducible inventory and equivalence checks:
 ```bash
 base=39776aa9bb027c638812a01b8dabbe03cab92f64
 head=d334266680881cbda59de4ecd4df967c92159fa7
-main=c712cbb7e08c157757a238cb8e49d65a9a3a2239
+historical_gate1_main=c712cbb7e08c157757a238cb8e49d65a9a3a2239
+current_main=e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347
 git diff --name-only "$base" "$head" | sort -u | wc -l       # 48
 git diff --check "$base" "$head"                              # clean
 comm -12 \
-  <(git diff --name-only "$base" "$main" | sort) \
+  <(git diff --name-only "$base" "$historical_gate1_main" | sort) \
   <(git diff --name-only "$base" "$head" | sort)             # exact six paths
-for ref in "$main" "$head"; do
+for ref in "$historical_gate1_main" "$head"; do
   git diff --unified=0 "$base" "$ref" -- \
     .pdd/sync-ownership.json \
     .pdd/verification-profile-rotations.json \
@@ -77,25 +79,38 @@ for ref in "$main" "$head"; do
 done
 git diff --unified=0 "$base" "$head" -- pdd/sync_core/finalize.py \
   pdd/sync_core/reporting.py tests/test_sync_core_reporting.py
+git merge-base --is-ancestor "$historical_gate1_main" "$current_main"
+git diff --quiet "$historical_gate1_main" "$current_main" -- \
+  .pdd/expected-managed.json .pdd/verification-profiles.json
+git diff --quiet \
+  2cacc91f90759ff45f1ad976da3b773e1a5f07a5 "$current_main" -- \
+  .pdd/verification-profiles.json
 ```
 
-`git merge-base "$head" "$main"` is the diagnostic base. Protected main now
-also contains `2c917fde4`, the docs-gate squash merge `e7735e0f3`, and the
-#2216 ownership-prerequisite squash merge `c712cbb7e`; the latter contributes
-exact absent-path preauthorizations for the four Gate 1 artifacts. The
-hunk-level comparison below, rather than commit-level `git cherry`, finds zero
-direct changed hunks with a patch-equivalent foundation already merged. The
-`already-merged-prerequisite` net is deliberately zero, rather than treating an
-overlapping filename or the common base as equivalence.
+The six-path inventory below is explicitly the historical comparison at
+`c712cbb7e08c157757a238cb8e49d65a9a3a2239`; it is not a current-main
+inventory. `git merge-base "$head" "$historical_gate1_main"` is the diagnostic
+base. That historical snapshot contained `2c917fde4`, docs-gate squash merge
+`e7735e0f3`, and #2216 ownership-prerequisite squash merge `c712cbb7e`; the
+latter contributed exact absent-path preauthorizations for four Gate 1 artifacts.
+The explicit current-main comparator above binds
+`e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347`, proves the historical snapshot is
+its ancestor, proves the expected-managed and verification-profile inventory
+operands are unchanged from that snapshot, and compares immutable profile
+evidence with current main. The hunk-level historical comparison below, rather
+than commit-level `git cherry`, finds zero direct changed hunks with a
+patch-equivalent foundation already merged. Its `already-merged-prerequisite`
+net is deliberately zero, rather than treating an overlapping filename or the
+common base as equivalence.
 
 ### Hunk-level reconciliation of the six intersecting paths
 
-The paths below are the complete intersection of `git diff --name-only "$base"
-"$main"` and `git diff --name-only "$base" "$head"`.  Hunk headers come from
-the `--unified=0` command above; the changed operands/rows were then compared,
-not just their enclosing filenames.
+The paths below are the complete historical intersection of `git diff
+--name-only "$base" "$historical_gate1_main"` and `git diff --name-only "$base"
+"$head"`. Hunk headers come from the `--unified=0` command above; the changed
+operands/rows were then compared, not just their enclosing filenames.
 
-| Path | Base to protected main | Base to frozen head | Resolution of frozen-head hunks |
+| Path | Base to historical Gate 1 snapshot | Base to frozen head | Resolution of frozen-head hunks |
 | --- | --- | --- | --- |
 | `.pdd/sync-ownership.json` | eight additions at base lines 173, 277, 368, 374, 393, 3002, 5906, and 13325: six `.pdd/meta/*` PR #2017 absent-metadata rules plus four exact #2216 Gate 1 preauthorizations | two additions at base lines 9821 and 13605: one Vitest provenance script and four Vitest verifier-test rules | operands and locations are disjoint; both frozen-head hunks are `excluded-diagnostic` |
 | `.pdd/verification-profile-rotations.json` | one `+22` hunk after base line 263 adding `get_test_command` and `fix_error_loop` PR #2017 rotations | one `-1/+1` hunk at base line 261 changing the story rotation's head-policy digest for four Vitest diagnostic profiles | adding rotation rows is not equivalent to changing the existing row's digest; the frozen-head hunk is `excluded-diagnostic` |
@@ -105,8 +120,8 @@ not just their enclosing filenames.
 | `tests/test_sync_core_pdd_rollout_policy.py` | 20 hunks: PR #2017 constants/path sets/rotation assertions/tests plus #2216 exact-four-path preauthorization and offline composition coverage, including an insertion after the PDD-1989 test | six hunks at base lines 34, 36, 49, 161, 757, and 759: diagnostic managed-unit/profile digests and PDD-1989 count split | the nearby PDD-1989 insertion and later protected preauthorization coverage on main do not change the frozen head's count assertions; all six frozen-head hunks are `excluded-diagnostic` |
 
 This also explains why none of these six rows is
-`already-merged-prerequisite`: main contains different additions, not a
-patch-equivalent form of any frozen-head hunk.
+`already-merged-prerequisite`: the historical Gate 1 snapshot contains different
+additions, not a patch-equivalent form of any frozen-head hunk.
 
 ## Net result
 

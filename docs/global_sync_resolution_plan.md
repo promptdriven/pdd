@@ -35,13 +35,13 @@ itself, prove that those bytes express the same intent.
 
 Protected main is [`e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347`](https://github.com/promptdriven/pdd/commit/e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347). Gate 1 remains in progress and the scoreboard remains `0/10`: an ownership mapping or preauthorization alone never passes Gate 1.
 
-PR [#2228](https://github.com/promptdriven/pdd/pull/2228) reviewed head `aa32884363e383745e878770a247e4897977de59`, all 12 checks were green, and it protected-merged as `c2575db6cfd3f5144081bb517724043a057d0f9c`. Its authority is only the literal five-path package-boundary set: `.pdd/global-sync/standalone-checker-modules.json`, `pdd/sync_core/standalone_package.py`, `pdd/sync_core/checker_cli.py`, `tests/test_sync_core_standalone_package.py`, and `tests/test_sync_core_checker_cli.py`.
+PR [#2228](https://github.com/promptdriven/pdd/pull/2228) reviewed exact head `aa32884363e383745e878770a247e4897977de59`, all 12 checks were green, and it protected-merged as `c2575db6cfd3f5144081bb517724043a057d0f9c`. Exact-head evidence includes Unit [29702650352/job 88234226053](https://github.com/promptdriven/pdd/actions/runs/29702650352/job/88234226053), [Package job 88234226047](https://github.com/promptdriven/pdd/actions/runs/29702650352/job/88234226047), [CodeQL 29702649361](https://github.com/promptdriven/pdd/actions/runs/29702649361), [heal 29702650465/job 88234226580](https://github.com/promptdriven/pdd/actions/runs/29702650465/job/88234226580), and [auto-heal 88234234171](https://github.com/promptdriven/pdd/runs/88234234171). Its authority is only the literal five-path package-boundary set: `.pdd/global-sync/standalone-checker-modules.json`, `pdd/sync_core/standalone_package.py`, `pdd/sync_core/checker_cli.py`, `tests/test_sync_core_standalone_package.py`, and `tests/test_sync_core_checker_cli.py`.
 
 PR [#2229](https://github.com/promptdriven/pdd/pull/2229) first reviewed `be90cbdc7e5280eae19db02d041fd05467315b11`; Unit [run 29705890972/job 88242687030](https://github.com/promptdriven/pdd/actions/runs/29705890972/job/88242687030) then failed only two `_VITEST_RUNTIME_SOURCE` reserved-prefix assertions. A bounded correction received Sol HIGH approval at final head `ff95e9d31f8029f8f9cb1c55edb1ec328b006c16`; its affected local suite reported 358 passed/59 skipped and pylint 10/10. All 12 final hosted checks were green, including Unit [29708379126/job 88248917137](https://github.com/promptdriven/pdd/actions/runs/29708379126/job/88248917137), [Package job 88248917126](https://github.com/promptdriven/pdd/actions/runs/29708379126/job/88248917126), [CodeQL 29708378251](https://github.com/promptdriven/pdd/actions/runs/29708378251), [heal 29708378649/job 88248915909](https://github.com/promptdriven/pdd/actions/runs/29708378649/job/88248915909), and [auto-heal 88248922089](https://github.com/promptdriven/pdd/runs/88248922089). It squash-merged at `2026-07-20T00:17:55Z`. The deterministic wheel SHA-256 `2f6bb048ef6eb3c8486f2e2df5c62066b9907b89dcc55a76bab0993556424438` is strictly local candidate evidence, not a released digest.
 
 This closes only #2229's implemented/local/reviewed/hosted/merged package-boundary sublayer. Gate 2 remains in progress; released/deployed/certified evidence, OCI, and protected pins remain pending. No full Gate 2 lifecycle state may be promoted without a machine-verifiable bundle. PR [#2230](https://github.com/promptdriven/pdd/pull/2230) is reviewed/local-only at `842b73e93d0d2e275726d0755f6b0b3347a13488`; its initial and rerun GitHub 503/504 failures are external-service evidence, not product-pass evidence, and it is neither hosted-green nor merged.
 
-The next under-24-hour blocker is `gate2-checker-release-workflow-and-wheel-publication`: implement the checker-specific release workflow and publish the standalone wheel through the protected publication path with its exact released digest. OCI and protected pins remain later release-required deltas.
+The one under-24-hour deliverable is `gate2-checker-release-workflow-reviewed-pr`: produce one exact-head checker-release-workflow implementation and reviewed PR artifact. The canonical Gate 2 objective is separately `gate2-protected-checker-wheel-publication`: protected publication of the standalone wheel with its exact released digest. Publication is the subsequent pending evidence transition; OCI and protected pins remain later release-required deltas.
 
 ### Historical critical-path snapshot (2026-07-18)
 
@@ -66,7 +66,7 @@ release state.
 | Hosted evidence collected | Exact-head [run 29658808029](https://github.com/promptdriven/pdd/actions/runs/29658808029) bound reviewed head `d334266680881cbda59de4ecd4df967c92159fa7`, reviewed base, review evidence, producer, verifiers, corrected native source, and pinned toolchains. Source [job 88117749946](https://github.com/promptdriven/pdd/actions/runs/29658808029/job/88117749946) verified artifact [`8433732767`](https://github.com/promptdriven/pdd/actions/runs/29658808029/artifacts/8433732767), Stage A digest `5972d8ae01213e069b886e16cfac65301a609c0aaa08e8844c7365fcd47a9000`. Package attempt 1 timed out all seven mandatory Playwright cases before Vitest, while the identical prior lane had passed; the same-SHA bounded rerun [job 88118943320](https://github.com/promptdriven/pdd/actions/runs/29658808029/job/88118943320) passed all seven real-browser cases and verified installed-wheel artifact [`8433907757`](https://github.com/promptdriven/pdd/actions/runs/29658808029/artifacts/8433907757), Stage A digest `894a56e3333012fec433507235309c8a60b641a8a25556ea9e066ff6bb743bb6`. Both fail-closed verifiers accepted `PDD_VITEST_SEAL_DESCRIPTOR_TABLE_OPEN` at `reporter-authority-seal` in the `vitest-coordinator`, with matching progress frames, no result frame, zero cgroup event deltas, and `cause_red_status: pending`. The wheel artifact binds package attestation `be7e0711f93a54c60dc9b8dfc98c00de14bce1e8e4f541d62649fd7355bd044c`, wheel `be1c1379608f7390dbd2be3cb1cacbf482446942fb7d84d58fa785e9eae6d717`, and installed runner `c3e77f4fa3605c269dcc7c8299dca768c9e975d267cedf2af5422ab5d48164fc`. CodeQL, Story Regression, Public CLI Regression, and Repo Bloat Docker E2E passed. Unit and Package remain intentionally red after verifier acceptance because the candidate test still fails. | Stage A reconciled; one cause-specific RED is permitted |
 | Artifact predicates | Both hosted observation verifiers accepted their exact-lane artifacts. Independent replay of the downloaded bytes, after restoring archive-normalized mode `0600` and protected parent mode `0700`, reproduced both accepts and both exact termination-verifier rejections. Both traces are identical through `reporter-addon-load-succeeded`, `reporter-authority-seal-start`, `reporter-authority-seal-failed`, `coordinator-explicit-exit`, and `coordinator-exit`; supervisor exit is `0` and no result frame exists. | Stage A0 closed; evidence is explicitly non-causal |
 | Diagnostic disposition | Freeze remote PR #1995 at `d334266680881cbda59de4ecd4df967c92159fa7`; do not push or merge another diagnostic correction. Local native correction branch head `6ee03883aa39bf1a4eb822bfc259c9c23f92b80a` and GREEN-transition head `6c02fb5ff80c64956ff90792e7873fda56aa2de0` are preserved as unpushed evidence only. Sol found one native coverage gap, then the correction added cleanup and close-precedence coverage but remained Linux-unhosted. Sol found two blocking defects in the separate GREEN transition: four obsolete Stage A tests still fail and push runs can check out the stale reviewed PR SHA. These findings will not be corrected on #1995 because no protected PDD profile demands Vitest. | frozen diagnostic evidence; not on gates 1-6 critical path |
-| Merged to protected `main` | Docs-gate [PR #2213](https://github.com/promptdriven/pdd/pull/2213) and ownership prerequisite [PR #2216](https://github.com/promptdriven/pdd/pull/2216) remain historical evidence; #2216 merged as [`c712cbb7e08c157757a238cb8e49d65a9a3a2239`](https://github.com/promptdriven/pdd/commit/c712cbb7e08c157757a238cb8e49d65a9a3a2239) and preauthorized only the four exact Gate 1 paths. Gate 1 [PR #2214](https://github.com/promptdriven/pdd/pull/2214) reviewed exact head [`6301d6c613199604702c2c3242fc8b837960d586`](https://github.com/promptdriven/pdd/commit/6301d6c613199604702c2c3242fc8b837960d586), passed [Unit run 29674097485](https://github.com/promptdriven/pdd/actions/runs/29674097485) ([job 88158086892](https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086892)), [Package job 88158086891](https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086891), [CodeQL run 29674096680](https://github.com/promptdriven/pdd/actions/runs/29674096680), [heal run 29674097086](https://github.com/promptdriven/pdd/actions/runs/29674097086), and [auto-heal 88158092713](https://github.com/promptdriven/pdd/runs/88158092713), then merged as [`63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee`](https://github.com/promptdriven/pdd/commit/63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee). The immutable profile evidence source remains `2cacc91f90759ff45f1ad976da3b773e1a5f07a5`; its registry is unchanged at digest `56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6`, as required by `git diff --quiet 2cacc91f..63bf4dd -- .pdd/verification-profiles.json`. Neither source nor live main is an ancestor of diagnostic head `d334266680881cbda59de4ecd4df967c92159fa7`; #1995 remains frozen and is not a release vehicle. | Gate 1 evidence hosted-green and merged; global gates remain 0/10, with no checker release or certificate |
+| Historical merges to protected `main` | Docs-gate [PR #2213](https://github.com/promptdriven/pdd/pull/2213) and ownership prerequisite [PR #2216](https://github.com/promptdriven/pdd/pull/2216) remain historical evidence; #2216 merged as [`c712cbb7e08c157757a238cb8e49d65a9a3a2239`](https://github.com/promptdriven/pdd/commit/c712cbb7e08c157757a238cb8e49d65a9a3a2239) and preauthorized only the four exact Gate 1 paths. Gate 1 [PR #2214](https://github.com/promptdriven/pdd/pull/2214) reviewed exact head [`6301d6c613199604702c2c3242fc8b837960d586`](https://github.com/promptdriven/pdd/commit/6301d6c613199604702c2c3242fc8b837960d586), passed [Unit run 29674097485](https://github.com/promptdriven/pdd/actions/runs/29674097485) ([job 88158086892](https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086892)), [Package job 88158086891](https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086891), [CodeQL run 29674096680](https://github.com/promptdriven/pdd/actions/runs/29674096680), [heal run 29674097086](https://github.com/promptdriven/pdd/actions/runs/29674097086), and [auto-heal 88158092713](https://github.com/promptdriven/pdd/runs/88158092713), then merged as [`63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee`](https://github.com/promptdriven/pdd/commit/63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee). At that snapshot, immutable profile evidence source `2cacc91f90759ff45f1ad976da3b773e1a5f07a5` had registry digest `56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6`, as required by `git diff --quiet 2cacc91f..63bf4dd -- .pdd/verification-profiles.json`. Neither that historical source nor the historical Gate 1 merge SHA is an ancestor of diagnostic head `d334266680881cbda59de4ecd4df967c92159fa7`; #1995 remains frozen and is not a release vehicle. | Historical Gate 1 evidence hosted-green and merged; global gates remain 0/10, with no checker release or certificate |
 | Released checker | No protected reviewed checker release or pinned wheel digest exists. | pending |
 | Globally certified | No protected merge-group certificate or seven-night streak exists. | pending |
 
@@ -101,12 +101,14 @@ release state.
    manifest as `63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee`, but remains in
    progress at global score `0/10`. PR #2229 subsequently closed only the Gate 2
    package-boundary sublayer on protected main. The canonical next blocker is
-   `gate2-checker-release-workflow-and-wheel-publication`: under 24 hours,
-   implement the checker-specific release workflow and publish the standalone
-   wheel with its exact released digest. OCI and protected pin wiring follow
-   strictly. Any early certificate is explicitly narrower and cannot satisfy the
-   final global predicate until all managed units and both repositories meet the
-   gate-10 denominator.
+   `gate2-protected-checker-wheel-publication`: publish the standalone wheel
+   through the protected path with its exact released digest. The one under-24-hour
+   deliverable is the controllable precursor `gate2-checker-release-workflow-reviewed-pr`,
+   an exact-head checker-release-workflow implementation and reviewed PR artifact.
+   Publication remains the subsequent pending evidence transition. OCI and
+   protected pin wiring follow strictly. Any early certificate is explicitly
+   narrower and cannot satisfy the final global predicate until all managed units
+   and both repositories meet the gate-10 denominator.
 
 #### Historical attempt ledger
 
@@ -672,35 +674,43 @@ Those artifacts are not green merge evidence. The remote branch and all unpushed
 corrections are frozen as diagnostic evidence and are not on the gates 1-6
 critical path.
 
-#### 2026-07-19 Gate 2 architecture rebaseline
+#### Historical 2026-07-19 Gate 2 architecture snapshot
 
-Protected `main` is now [`35e903cb5ed103980affbdf2a64ef7a80a66ca4a`](https://github.com/promptdriven/pdd/commit/35e903cb5ed103980affbdf2a64ef7a80a66ca4a). [PR #2223](https://github.com/promptdriven/pdd/pull/2223) reviewed head [`0ca5eb173a31c2ed2b46d7db0feeb88c62645907`](https://github.com/promptdriven/pdd/commit/0ca5eb173a31c2ed2b46d7db0feeb88c62645907) merged as [`9c1dc6f2fb1b621ed5320f407f5ae6a2c5299214`](https://github.com/promptdriven/pdd/commit/9c1dc6f2fb1b621ed5320f407f5ae6a2c5299214), and [PR #2224](https://github.com/promptdriven/pdd/pull/2224) reviewed head [`862f725d9d9f41b5509dbbcba61d7789f49ad74b`](https://github.com/promptdriven/pdd/commit/862f725d9d9f41b5509dbbcba61d7789f49ad74b) merged as that protected head. Both had 12 green checks; #2223 adds only the released-checker evidence wrapper and #2224 only preauthorizes the absent target-lock path. Neither releases nor pins a checker.
+At this historical snapshot, protected `main` was [`35e903cb5ed103980affbdf2a64ef7a80a66ca4a`](https://github.com/promptdriven/pdd/commit/35e903cb5ed103980affbdf2a64ef7a80a66ca4a). [PR #2223](https://github.com/promptdriven/pdd/pull/2223) reviewed head [`0ca5eb173a31c2ed2b46d7db0feeb88c62645907`](https://github.com/promptdriven/pdd/commit/0ca5eb173a31c2ed2b46d7db0feeb88c62645907) and merged as [`9c1dc6f2fb1b621ed5320f407f5ae6a2c5299214`](https://github.com/promptdriven/pdd/commit/9c1dc6f2fb1b621ed5320f407f5ae6a2c5299214); [PR #2224](https://github.com/promptdriven/pdd/pull/2224) reviewed head [`862f725d9d9f41b5509dbbcba61d7789f49ad74b`](https://github.com/promptdriven/pdd/commit/862f725d9d9f41b5509dbbcba61d7789f49ad74b) and merged as that historical head. Both had 12 green checks; #2223 added only the released-checker evidence wrapper and #2224 only preauthorized the absent target-lock path. Neither released nor pinned a checker.
 
 [PR #2225](https://github.com/promptdriven/pdd/pull/2225), closed unmerged, is diagnostic evidence only and cannot advance Gate 2. Attempt 1, head `09015bcc79c00575262e8c23d9b14693ae8be80f`, ended in a build-version failure at [job 88224039194](https://github.com/promptdriven/pdd/actions/runs/29698754085/job/88224039194). Attempt 2, head `d060da1cc1d6c81abf0c42cf5df69ac81d79a75e`, ended in a read-only build-source failure at [job 88224395133](https://github.com/promptdriven/pdd/actions/runs/29698879393/job/88224395133). Attempt 3, closed head [`0bae19c2fb9575d8b8edccaeee3c5d9420e00e9f`](https://github.com/promptdriven/pdd/commit/0bae19c2fb9575d8b8edccaeee3c5d9420e00e9f), built `pdd-cli 0.0.0` and resolved the Python closure, then candidate-owned `runpy` imported eager `pdd.__init__` → `update_main.py` → GitPython without a `git` executable at [job 88224752678](https://github.com/promptdriven/pdd/actions/runs/29699017734/job/88224752678). No artifact upload or target lock completed. `GIT_PYTHON_REFRESH=quiet` is rejected.
 
-Gate 2 is therefore ordered as: (1) a fresh separately released standalone checker under a non-`pdd` top-level package, with checker-only dependencies, strict lock/RECORD validation, and an exact `z3_solver-4.16.0.0-py3-none-manylinux_2_27_x86_64.whl` tag regression; (2) a sealed checker OCI runtime with Git/system closure, pinned base, Debian snapshot/InRelease, exact package and final-image digests, and signed provenance binding the exact released checker wheel digest and exact checker dependency-lock digest as well as Dockerfile/source SHA, image, SBOM, and dpkg inventory. Before launch, protected verification proves installed checker files and `RECORD` equivalent to the pinned wheel. Runtime execution uses only the verified absolute protected interpreter and installed entrypoint with `-I -S`, never a module resolved from candidate checkout or CWD. Signed evidence carries wheel, lock, image, SBOM/dpkg inventory, interpreter, and entrypoint identities. The runtime also has network-none/read-only root and candidate mounts, a sanitized environment, and a clean exact-SHA clone smoke; then (3) protected release and pin wiring for the checker wheel, OCI attestation, expectations, workflow, wheelhouse, scenarios, PATH, and verifier inputs. Candidates that unconditionally pass, print environment values, or edit scenarios remain red and unsigned. Non-goals are a `pdd/__init__` refactor, OCI/release/certificates in layer 1, checker semantic or candidate-policy changes in layer 2, and certificate promotion in layer 3. All new execution-binding predicates remain pending; no hosted-green, merged, released, deployed, or certified Gate 2 evidence exists.
+At that snapshot, the proposed Gate 2 order was: (1) a fresh separately released standalone checker under a non-`pdd` top-level package, with checker-only dependencies, strict lock/RECORD validation, and an exact `z3_solver-4.16.0.0-py3-none-manylinux_2_27_x86_64.whl` tag regression; (2) a sealed checker OCI runtime with Git/system closure, pinned base, Debian snapshot/InRelease, exact package and final-image digests, and signed provenance binding the exact released checker wheel digest and exact checker dependency-lock digest as well as Dockerfile/source SHA, image, SBOM, and dpkg inventory; then (3) protected release and pin wiring. The snapshot's statement that no hosted-green or merged Gate 2 evidence existed is superseded by the current #2229 package-boundary record above. This paragraph is retained only as historical design lineage and makes no current gate-state claim.
 
 The deterministic ledger generator is now merged as [PR #2219](https://github.com/promptdriven/pdd/pull/2219): Sol HIGH approved exact reviewed head [`06d976de23f6da45c9078fdd1a8f89dbf1aecd2c`](https://github.com/promptdriven/pdd/commit/06d976de23f6da45c9078fdd1a8f89dbf1aecd2c) after full-net review and same-reviewer finding verification; all 12 hosted checks were green, including Unit workflow [29680411144](https://github.com/promptdriven/pdd/actions/runs/29680411144), heal [29680410549](https://github.com/promptdriven/pdd/actions/runs/29680410549), CodeQL [29680409993](https://github.com/promptdriven/pdd/actions/runs/29680409993), and auto-heal [88175432245](https://github.com/promptdriven/pdd/runs/88175432245). Its protected ledger-drift step passed and it squash-merged at [`fb344f1c66e807dc51cac0f5363e5484cc487de9`](https://github.com/promptdriven/pdd/commit/fb344f1c66e807dc51cac0f5363e5484cc487de9) on 2026-07-19T09:34:05Z. The local record is 55 ledger tests passed, pylint 10/10, live `--check --verify-remote` passed, source/generated bytes equal, and architecture and protected-ownership checks passed. Only `implemented`, `hosted_green`, and `merged` are promoted by the `github-pr-checks` bundle; local and independent-review states remain in progress, and release, deployment, certification, Gate 2, and either certificate remain pending.
 
 Ownership prerequisite [PR #2220](https://github.com/promptdriven/pdd/pull/2220) is supporting evidence only: reviewed head [`1c2abbdb495f9364614fe95fb8670b55275d2f70`](https://github.com/promptdriven/pdd/commit/1c2abbdb495f9364614fe95fb8670b55275d2f70) passed all 12 hosted checks and squash-merged as [`67c118bd2f469d780987f93e9b8edf663dd40b4b`](https://github.com/promptdriven/pdd/commit/67c118bd2f469d780987f93e9b8edf663dd40b4b) on 2026-07-19T08:19:35Z. It is not a promotion state or gate pass.
 
-Protected PDD `main` at
-`35e903cb5ed103980affbdf2a64ef7a80a66ca4a` contains 468 expected managed
-units and 468 profiles. The immutable profile-evidence source is
-`2cacc91f90759ff45f1ad976da3b773e1a5f07a5`; its registry is profile-equivalent
-to live main (`git diff --quiet 2cacc91f..35e903cb -- .pdd/verification-profiles.json`)
+Historical PDD snapshot `35e903cb5ed103980affbdf2a64ef7a80a66ca4a`
+contained 468 expected managed units and 468 profiles. Immutable profile-evidence
+source `2cacc91f90759ff45f1ad976da3b773e1a5f07a5` was profile-equivalent to that
+snapshot (`git diff --quiet 2cacc91f..35e903cb -- .pdd/verification-profiles.json`)
 at digest `56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6`.
-Only one profile has a required machine-test obligation;
-467 are human-attestation-only, so protected machine-obligation profile coverage
-is `1/468` (`0.213675%`). The PR #1995 candidate contains 472 expected units and
-profiles, but still only one machine-obligation profile and 471 human-only
-profiles (`1/472`, `0.211864%`). These figures prove only profile configuration.
+Only one profile had a required machine-test obligation; 467 were
+human-attestation-only, so the historical machine-obligation profile coverage was
+`1/468` (`0.213675%`). The PR #1995 candidate had 472 expected units and profiles,
+but still only one machine-obligation profile and 471 human-only profiles
+(`1/472`, `0.211864%`). These figures prove only historical profile configuration.
+Current protected main `e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347`
+has explicit comparators:
+`git diff --quiet c712cbb7..e072e09e -- .pdd/expected-managed.json
+.pdd/verification-profiles.json` and `git diff --quiet
+2cacc91f..e072e09e -- .pdd/verification-profiles.json`. They prove that the
+468-unit/profile inventory operands and immutable profile source remain
+byte-equivalent at current main without reclassifying the historical hunk
+inventory.
 No protected artifact establishes machine-verified unit count or current machine-
 evidence coverage for either exact SHA; both remain unknown. Profile presence and
 trusted human attestation must not be reported as machine verification.
 Diagnostic head `d334266680881cbda59de4ecd4df967c92159fa7` contains reviewed
 base `39776aa9bb027c638812a01b8dabbe03cab92f64` but not current protected
-`main`; live-main ancestry remains a separate red gate.
+main `e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347`; current-main ancestry
+remains a separate red gate.
 
 The recommendations are adopted with these corrections:
 
@@ -756,11 +766,12 @@ the full evidence model is satisfied. They render the canonical ledger from an
 explicit versioned YAML source and fail closed on duplicate keys, malformed
 schema/state rows, or byte drift. Every gate-affecting protected merge updates
 the reviewed source and regenerates the output. The canonical blocker
-`gate2-checker-release-workflow-and-wheel-publication` requires the
-checker-specific release workflow and protected standalone-wheel publication
-with the exact released digest as the under-24-hour deliverable; OCI and
-protected pin wiring follow strictly. This does not authorize a certificate
-claim. The named
+`gate2-protected-checker-wheel-publication` requires protected standalone-wheel
+publication with the exact released digest. The separate one-artifact,
+under-24-hour deliverable is `gate2-checker-release-workflow-reviewed-pr`: one
+exact-head checker-release-workflow implementation and reviewed PR artifact.
+Publication remains the subsequent pending evidence transition; OCI and protected
+pin wiring follow strictly. This does not authorize a certificate claim. The named
 `extraction_manifest_verifier` is planned future evidence only; it is not
 implemented and does not prove gate 1.
 
@@ -2642,10 +2653,12 @@ predicate requires `candidate_controlled_verifier_inputs == 0`.
    unmerged #2225 as diagnostic evidence, and retain #2228 as only the literal
    five-path preauthorization. #2229 is landed on protected main only as the
    package boundary; it is not a checker release or Gate 2 promotion. The single
-   canonical blocker is `gate2-checker-release-workflow-and-wheel-publication`:
-   implement the release workflow and publish the standalone wheel through its
-   protected path with the exact released digest. #2230 is reviewed/local-only;
-   its GitHub 503/504 outcomes do not prove product success.
+   canonical blocker is `gate2-protected-checker-wheel-publication`: publish the
+   standalone wheel through its protected path with the exact released digest.
+   The one under-24-hour deliverable is
+   `gate2-checker-release-workflow-reviewed-pr`, an exact-head workflow
+   implementation and reviewed PR artifact. #2230 is reviewed/local-only; its
+   GitHub 503/504 outcomes do not prove product success.
 3. Only after protected wheel publication may the sealed Git-capable OCI runtime
    and protected checker/OCI/workflow expectation pins be pursued. Certificate A
    and Certificate B intent is unchanged; neither is claimed by these layers.
