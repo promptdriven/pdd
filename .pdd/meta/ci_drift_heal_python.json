@@ -1,13 +1,13 @@
 {
   "pdd_version": "0.0.305.dev0",
-  "timestamp": "2026-07-20T22:08:57.246816+00:00",
+  "timestamp": "2026-07-20T22:28:56.422787+00:00",
   "command": "sync",
-  "prompt_hash": "30e682a9edee699ae1f98fcc896632bd4d7b5c5991d1033c39bb44ad70655792",
-  "code_hash": "c66409568f11e318273e698c8635a4de9ecafe481501a056fe0c375114fb921e",
+  "prompt_hash": "2752e4f25260af3934af2fbeb5c4c12978b29fcafbd28cd6140c5a9f46d516fd",
+  "code_hash": "fb4e5c10670483cf5b2606d3e8ae5ba819341a71e5e2706d8100d1ce55c6e7fc",
   "example_hash": "6d59ad841e1440dd349f248a46f9456430afcbdee23792574590cad347e354e0",
-  "test_hash": "f82bdf9d85c762bd299f059ee35944399fb9746242dc21c914968c603bd41588",
+  "test_hash": "407232c5c369871421a9e51bc8fc4c7353218c2156652d61b404daa2453351b6",
   "test_files": {
-    "test_ci_drift_heal.py": "f82bdf9d85c762bd299f059ee35944399fb9746242dc21c914968c603bd41588"
+    "test_ci_drift_heal.py": "407232c5c369871421a9e51bc8fc4c7353218c2156652d61b404daa2453351b6"
   },
   "include_deps": {
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
@@ -18,6 +18,7 @@
     "context/auto_include_example.py": "0c278ed716298149777bc7082827eb8aa6d80dac264c66b6cded6871232f2df7",
     "context/architecture_sync_example.py": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
     "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
-    "context/metadata_sync_example.py": "704453b3386724eef225b61c48f2fe922e1a973ac211c494e1d955dd44bcca11"
+    "context/metadata_sync_example.py": "704453b3386724eef225b61c48f2fe922e1a973ac211c494e1d955dd44bcca11",
+    "pdd/context_snapshot.py": "6aa1ea0d41f73c40b02b72603f6193d4b6e51fdefb57d62f501311365a9ab1b8"
   }
 }

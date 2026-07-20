@@ -26,18 +26,28 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from rich.console import Console
 from rich.table import Table
 
+from .context_snapshot import redact_snapshot_text
+
 console = Console()
 
 _HEAL_SUBPROCESS_TIMEOUT_DEFAULT = 2400
 _HEAL_PROMPT_CHURN_MAX_RATIO_DEFAULT = 5.0
 _HEAL_FAILURE_DIAGNOSTIC_MAX_CHARS = 2000
 _HEAL_FAILURE_STREAM_MAX_CHARS = 880
+_HEAL_FAILURE_LABEL_MAX_CHARS = 160
 _HEAL_FAILURE_TRUNCATED_MARKER = "... [truncated]"
 
 _HEAL_FAILURE_SIGNAL_RE = re.compile(
-    r"(?i)\b(?:error|failed|failure|exception|traceback|fatal|abort(?:ed)?|invalid)\b"
+    r"(?i)(?:"
+    r"\b(?:error|failed|failure|exception|traceback|fatal|abort(?:ed)?|invalid)\w*\b|"
+    r"\b(?:auth(?:entication)?|credential|api[-_ ]?key|provider|rate[-_ ]?limit)\w*\b"
+    r")"
 )
 _ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+_UNSAFE_CONTROL_RE = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]"
+)
+_NOISY_DIAGNOSTIC_RE = re.compile(r"(?i)\b(?:warning|debug|retry(?:ing)?)\b")
 _HOME_PATH_PATTERNS = (
     re.compile(r"(?i)(?<![A-Za-z0-9_])/[Uu]sers/[^/\\\s:;]+"),
     re.compile(r"(?i)(?<![A-Za-z0-9_])/[Hh]ome/[^/\\\s:;]+"),
@@ -45,13 +55,17 @@ _HOME_PATH_PATTERNS = (
 )
 _HEAL_SECRET_PATTERNS = (
     re.compile(
-        r"(?i)\b([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?))"
+        r"(?i)\b([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?|"
+        r"ACCESS_KEY|PRIVATE_KEY))"
         r"\s*([=:])\s*([^\s,;]+)"
     ),
     re.compile(r"(?i)\b(Authorization\s*:\s*Bearer\s+)([^\s,;]+)"),
     re.compile(
         r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
         r"sk-[A-Za-z0-9_-]{10,})\b"
+    ),
+    re.compile(
+        r"\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"
     ),
 )
 
@@ -738,6 +752,10 @@ def _restore_protected_paths() -> None:
 def _redact_heal_diagnostic(text: str) -> str:
     """Remove credentials and personal home-directory owners from diagnostics."""
     redacted = _ANSI_ESCAPE_RE.sub("", text)
+    redacted = _UNSAFE_CONTROL_RE.sub("", redacted)
+    # Reuse the repository's mature snapshot scrubber for provider keys,
+    # Authorization headers, credentialed URLs, and ambient credential values.
+    redacted, _, _ = redact_snapshot_text(redacted)
     for pattern in _HOME_PATH_PATTERNS:
         redacted = pattern.sub("[HOME]", redacted)
     redacted = _HEAL_SECRET_PATTERNS[0].sub(
@@ -746,7 +764,8 @@ def _redact_heal_diagnostic(text: str) -> str:
     redacted = _HEAL_SECRET_PATTERNS[1].sub(
         lambda match: f"{match.group(1)}[REDACTED]", redacted
     )
-    redacted = _HEAL_SECRET_PATTERNS[2].sub("[REDACTED]", redacted)
+    for pattern in _HEAL_SECRET_PATTERNS[2:]:
+        redacted = pattern.sub("[REDACTED]", redacted)
     return redacted
 
 
@@ -765,7 +784,18 @@ def _bounded_heal_stream(text: Any, max_chars: int) -> str:
     if not raw.strip():
         return ""
     safe = _redact_heal_diagnostic(raw)
-    lines = [line.strip() for line in safe.splitlines() if line.strip()]
+    raw_lines = [line.strip() for line in safe.splitlines() if line.strip()]
+    lines: List[str] = []
+    previous_key = ""
+    for line in raw_lines:
+        normalized = re.sub(r"\s+", " ", line).strip()
+        key = normalized
+        if _NOISY_DIAGNOSTIC_RE.search(normalized):
+            key = re.sub(r"\b\d+\b", "#", normalized).casefold()
+        if key == previous_key:
+            continue
+        lines.append(normalized)
+        previous_key = key
     if not lines:
         return ""
 
@@ -813,6 +843,17 @@ def _format_heal_failure(returncode: Optional[int], stdout: Any, stderr: Any) ->
     return diagnostic[:_HEAL_FAILURE_DIAGNOSTIC_MAX_CHARS]
 
 
+def _format_heal_console_message(
+    label: Any, returncode: Optional[int], stdout: Any, stderr: Any
+) -> str:
+    """Return the final sanitized console payload within the public size cap."""
+    safe_label = " ".join(_redact_heal_diagnostic(str(label)).split())
+    safe_label = safe_label[:_HEAL_FAILURE_LABEL_MAX_CHARS] or "PDD heal"
+    diagnostic = _format_heal_failure(returncode, stdout, stderr)
+    payload = _redact_heal_diagnostic(f"{safe_label} failed: {diagnostic}")
+    return payload[:_HEAL_FAILURE_DIAGNOSTIC_MAX_CHARS]
+
+
 def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
     """Run a `pdd ...` subprocess with protected-paths rollback on failure."""
     rollback_eligible = _capture_rollback_state(cmd, env)
@@ -852,8 +893,8 @@ def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
     if not success:
         if rollback_eligible is True:
             _restore_protected_paths()
-        diagnostic = _format_heal_failure(returncode, stdout, stderr)
-        console.print(f"{label} failed: {diagnostic}", style="red", markup=False)
+        payload = _format_heal_console_message(label, returncode, stdout, stderr)
+        console.print(payload, style="red", markup=False)
     return success
 
 
