@@ -465,6 +465,57 @@ _PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PR1971_COMBINED_REQUIREMENT_TRANSITIONS
 
+# The exact #1971 candidate also adds these three complete pytest obligations.
+# They are not a general profile-field rotation: each addition is accepted only
+# while the reviewed four-byte reconciliation and all six transition rows match.
+_PR1971_COMBINED_PYTEST_OBLIGATIONS = {
+    (
+        PurePosixPath("pdd/prompts/operation_log_python.prompt"),
+        "python",
+    ): VerificationObligation(
+        "pytest-operation-log",
+        "test",
+        "pytest",
+        "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+        (
+            "CONTRACT-SHA256:370d4f511f320b3db71cb74bb17532a6293d1c48def1a0faebfa8fbb7f00eb12",
+        ),
+        (PurePosixPath("tests/test_operation_log.py"),),
+        True,
+        (PurePosixPath("pdd/operation_log.py"),),
+    ),
+    (
+        PurePosixPath("pdd/prompts/server/routes/prompts_python.prompt"),
+        "python",
+    ): VerificationObligation(
+        "pytest-server-routes-prompts",
+        "test",
+        "pytest",
+        "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+        (
+            "CONTRACT-SHA256:0cef545efaa9eef5007d338656c0e40e70db314ddbd0e7a00b64f300dba7f342",
+        ),
+        (PurePosixPath("tests/server/routes/test_prompts.py"),),
+        True,
+        (PurePosixPath("pdd/server/routes/prompts.py"),),
+    ),
+    (
+        PurePosixPath("pdd/prompts/update_main_python.prompt"),
+        "python",
+    ): VerificationObligation(
+        "pytest-update-main",
+        "test",
+        "pytest",
+        "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+        (
+            "CONTRACT-SHA256:17fc1c03860bca7d7889ac388e4de26c19b73edb7ead9bea20f6be1016995bb5",
+        ),
+        (PurePosixPath("tests/test_update_main.py"),),
+        True,
+        (PurePosixPath("pdd/update_main.py"),),
+    ),
+}
+
 
 # One long-lived pre-schema-2 unit first becomes managed in pdd#1790. Bind its
 # initial profile to the exact candidate policy and prompt bytes so the merged
@@ -1254,6 +1305,30 @@ def _is_exact_combined_requirement_reconciliation(
     }
 
 
+def _is_exact_pr1971_pytest_reconciliation(
+    manifest: UnitManifest,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+    authorizations: tuple[_RequirementTransitionAuthorization, ...],
+) -> bool:
+    """Recognize only #1971's complete reviewed profile-obligation addition."""
+    pr1971_rows = tuple(
+        item
+        for item in authorizations
+        if item.bindings.head_policy_sha256 == _PR1971_COMBINED_PROFILE_BYTES[1]
+    )
+    return (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and _is_exact_combined_requirement_reconciliation(
+            rotation_policies[0],
+            rotation_policies[1],
+            profile_policies[0],
+            profile_policies[1],
+        )
+        and pr1971_rows == _PR1971_COMBINED_REQUIREMENT_TRANSITIONS
+    )
+
+
 def _candidate_authorization_is_strictly_dormant(
     manifest: UnitManifest,
     base: Mapping[UnitId, _ProfileInput],
@@ -1820,6 +1895,7 @@ def _expected_requirement_update(
     authorization: _RequirementTransitionAuthorization,
     protected: _ProfileInput,
     candidate: _ProfileInput,
+    pytest_obligation: VerificationObligation | None = None,
 ) -> tuple[_ProfileInput | None, str | None]:
     """Return the sole permitted profile delta for one exact prompt transition."""
     obligations = {item.obligation_id: item for item in protected.obligations}
@@ -1852,6 +1928,8 @@ def _expected_requirement_update(
         )
         for obligation_id, obligation in obligations.items()
     }
+    if pytest_obligation is not None:
+        obligations[pytest_obligation.obligation_id] = pytest_obligation
     expected = _ProfileInput(
         (authorization.to_requirement_id,), tuple(sorted(obligations.values()))
     )
@@ -1911,6 +1989,7 @@ def _matches_unchanged_requirement_state(
 def _evaluate_requirement_authorization(
     context: _RequirementTransitionContext,
     authorization: _RequirementTransitionAuthorization,
+    pytest_obligation: VerificationObligation | None = None,
 ) -> tuple[UnitId, _ProfileInput | None, str | None]:
     """Evaluate one rule as dormant, consumed, exact, or invalid."""
     unit_id = UnitId(
@@ -1958,7 +2037,9 @@ def _evaluate_requirement_authorization(
         prompts[1],
     ):
         return unit_id, None, "requirement transition bindings mismatch"
-    result, reason = _expected_requirement_update(authorization, protected, candidate)
+    result, reason = _expected_requirement_update(
+        authorization, protected, candidate, pytest_obligation
+    )
     return unit_id, result, reason
 
 
@@ -1977,12 +2058,24 @@ def _authorized_requirement_updates(
         read_git_blob(root, manifest.base_ref, PROFILE_PATH),
         read_git_blob(root, manifest.head_ref, PROFILE_PATH),
     )
+    rotation_policies = (
+        read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH),
+        read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH),
+    )
+    pr1971_pytest_reconciliation = _is_exact_pr1971_pytest_reconciliation(
+        manifest, rotation_policies, policies, authorizations
+    )
     context = _RequirementTransitionContext(
         root, manifest, base, head, policies, prompts
     )
     for authorization in authorizations:
+        pytest_obligation = None
+        if pr1971_pytest_reconciliation:
+            pytest_obligation = _PR1971_COMBINED_PYTEST_OBLIGATIONS.get(
+                (authorization.prompt_path, authorization.language_id)
+            )
         unit_id, result, reason = _evaluate_requirement_authorization(
-            context, authorization
+            context, authorization, pytest_obligation
         )
         if reason is not None:
             invalid.append(f"{authorization.prompt_path}: {reason}")

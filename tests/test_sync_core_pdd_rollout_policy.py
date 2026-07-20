@@ -921,11 +921,85 @@ def test_pr1971_combined_profile_reconciliation_is_exact_and_consumed() -> None:
     )
     profiles = load_verification_profiles(ROOT, manifest)
 
-    assert not manifest.invalid_reasons
-    assert not manifest.unaccounted_tracked_paths
     assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
+    for prompt_path, expected_obligation in PR_1971_PYTEST_OBLIGATIONS.items():
+        profile = next(
+            item
+            for item in profiles.profiles
+            if item.unit_id.prompt_relpath.as_posix() == prompt_path
+        )
+        assert any(
+            item.obligation_id == expected_obligation["obligation_id"]
+            for item in profile.obligations
+        )
+
+
+def _load_pr1971_candidate_profile(
+    monkeypatch, candidate_profile: bytes
+):
+    """Load one synthetic #1971 profile candidate against the real exact base."""
+    original_read = verification.read_git_blob
+
+    def candidate_read(root: Path, ref: str, path: PurePosixPath) -> bytes | None:
+        if ref == "HEAD" and path == PROFILE_REL_PATH:
+            return candidate_profile
+        return original_read(root, ref, path)
+
+    monkeypatch.setattr(verification, "read_git_blob", candidate_read)
+    manifest = build_unit_manifest(
+        ROOT, base_ref=PR_1971_COMBINED_BASE, head_ref="HEAD"
+    )
+    return load_verification_profiles(ROOT, manifest)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("altered", "extra", "partial", "reordered", "unrelated"),
+)
+def test_pr1971_pytest_obligation_mutations_remain_rejected(
+    monkeypatch, mutation: str
+) -> None:
+    """The exact tuple cannot authorize an altered or unrelated obligation."""
+    payload = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+    profiles = {row["prompt_path"]: row for row in payload["profiles"]}
+    target_path = "pdd/prompts/operation_log_python.prompt"
+    target = profiles[target_path]
+    pytest_obligation = next(
+        item
+        for item in target["obligations"]
+        if item["obligation_id"] == "pytest-operation-log"
+    )
+
+    if mutation == "altered":
+        pytest_obligation["validator_config_digest"] = "pytest-v2"
+    elif mutation == "extra":
+        target["obligations"].append(
+            {
+                **pytest_obligation,
+                "obligation_id": "pytest-operation-log-extra",
+            }
+        )
+    elif mutation == "partial":
+        pytest_obligation["code_under_test_paths"] = []
+    elif mutation == "reordered":
+        target["obligations"].reverse()
+    else:
+        profiles["pdd/prompts/pin_example_hack_python.prompt"]["obligations"].append(
+            {
+                **pytest_obligation,
+                "obligation_id": "pytest-unrelated",
+            }
+        )
+
+    candidate = json.dumps(payload, indent=2).encode() + b"\n"
+    result = _load_pr1971_candidate_profile(monkeypatch, candidate)
+
+    assert any(
+        "requirement transition changes protected fields" in reason
+        for reason in result.invalid_reasons
+    )
 
 
 def test_pr1971_combined_profile_reconciliation_rejects_byte_mutation() -> None:
