@@ -138,6 +138,14 @@ def _collect_story_tests(tests_dir: Path) -> _StoryCollectionPlugin:
     plugin = _StoryCollectionPlugin(tests_dir)
     if not tests_dir.exists():
         return plugin
+    test_candidates = (
+        path
+        for pattern in ("test_*.py", "*_test.py")
+        for path in tests_dir.rglob(pattern)
+        if path.is_file()
+    )
+    if not any(test_candidates):
+        return plugin
     args = [
         "--collect-only",
         "-q",
