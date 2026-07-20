@@ -399,6 +399,41 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS += (
 )
 
 
+# Agentic Sync Wave 1 changes three already-managed prompt contracts in the
+# same candidate policy that installs sync_plan's first profile. Bind that
+# composition to the exact protected policy and reviewed candidate bytes;
+# every later transition must come from the protected rotation policy.
+_AGENTIC_SYNC_WAVE1_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_sync_python.prompt",
+        "python",
+        "aa67cf6c09fdd10aa2670a0c8c2dba3b01630b8c18c86c34d3f1ec213b45aad8",
+        "5ba68fefd53e21913babfd46a49e2832e6cc3e586a5dfa773220e145f7a7ed3e",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+        "e2dbc8a9298558941118a7df0065f59361757b48d8c0e121f6a76b22c900637f",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_sync_runner_python.prompt",
+        "python",
+        "99010afb8c3a52d2f1a1af15b8fa2c786d5fdcaaddb04b61e8c0ae719f7f23a1",
+        "52588c82ffdf507670e9f8f44f5c0c4b26e1cacb3c0bea043dcc5dadd52128c3",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+        "e2dbc8a9298558941118a7df0065f59361757b48d8c0e121f6a76b22c900637f",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/durable_sync_runner_python.prompt",
+        "python",
+        "fb45ad84ba8adb320baadeb47cac7917626dfd0e44916e8ffd6709cd13ccb72e",
+        "77e70dc4962473377cb9eab464bdad9927b30dccad77c2289bffe44f0e91db0f",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+        "e2dbc8a9298558941118a7df0065f59361757b48d8c0e121f6a76b22c900637f",
+    ),
+)
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS += (
+    _AGENTIC_SYNC_WAVE1_BOOTSTRAP_REQUIREMENT_TRANSITIONS
+)
+
+
 # Bind each reviewed first profile to exact candidate policy and prompt bytes so
 # the protected checker can authorize only that repository-bound addition,
 # without granting a general candidate-only profile escape hatch.
@@ -428,7 +463,7 @@ _BOOTSTRAP_PROFILE_ADDITIONS = (
         PurePosixPath("pdd/prompts/sync_plan_python.prompt"),
         "python",
         "CONTRACT-SHA256:3b312560a11435f30e721e0832c4d11dcb8a7430ba219f15479eddf85f336e49",
-        "3e22d0bc72fa462e111682a326248bc64a89366185a1d19bd9817747a30cab8e",
+        "e2dbc8a9298558941118a7df0065f59361757b48d8c0e121f6a76b22c900637f",
         "3b312560a11435f30e721e0832c4d11dcb8a7430ba219f15479eddf85f336e49",
     ),
 )

@@ -199,8 +199,28 @@ WAVE1_BOOTSTRAP_PROFILE_ADDITIONS = (
         PurePosixPath("pdd/prompts/sync_plan_python.prompt"),
         "python",
         "CONTRACT-SHA256:3b312560a11435f30e721e0832c4d11dcb8a7430ba219f15479eddf85f336e49",
-        "3e22d0bc72fa462e111682a326248bc64a89366185a1d19bd9817747a30cab8e",
+        "e2dbc8a9298558941118a7df0065f59361757b48d8c0e121f6a76b22c900637f",
         "3b312560a11435f30e721e0832c4d11dcb8a7430ba219f15479eddf85f336e49",
+    ),
+)
+WAVE1_AGENTIC_SYNC_REQUIREMENT_TRANSITIONS = (
+    (
+        PurePosixPath("pdd/prompts/agentic_sync_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:aa67cf6c09fdd10aa2670a0c8c2dba3b01630b8c18c86c34d3f1ec213b45aad8",
+        "CONTRACT-SHA256:5ba68fefd53e21913babfd46a49e2832e6cc3e586a5dfa773220e145f7a7ed3e",
+    ),
+    (
+        PurePosixPath("pdd/prompts/agentic_sync_runner_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:99010afb8c3a52d2f1a1af15b8fa2c786d5fdcaaddb04b61e8c0ae719f7f23a1",
+        "CONTRACT-SHA256:52588c82ffdf507670e9f8f44f5c0c4b26e1cacb3c0bea043dcc5dadd52128c3",
+    ),
+    (
+        PurePosixPath("pdd/prompts/durable_sync_runner_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:fb45ad84ba8adb320baadeb47cac7917626dfd0e44916e8ffd6709cd13ccb72e",
+        "CONTRACT-SHA256:77e70dc4962473377cb9eab464bdad9927b30dccad77c2289bffe44f0e91db0f",
     ),
 )
 CI_DETECT_REQUIREMENT_ROTATION = {
@@ -498,7 +518,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         )
     }
     policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 25
+    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 28
     story_identity = (STORY_REGRESSION_DORMANT_ROTATION["prompt_path"], "python")
     assert bootstrap_rows[story_identity] != STORY_REGRESSION_DORMANT_ROTATION
     bootstrap_rows[story_identity] = STORY_REGRESSION_DORMANT_ROTATION
@@ -849,9 +869,21 @@ def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     assert profiles.coverage == 1.0
 
 
-def test_pr2017_phase_a_is_dormant_on_current_protected_base() -> None:
-    """The prerequisite installs authority without consuming protected bytes."""
-    manifest = build_unit_manifest(ROOT, base_ref="origin/main", head_ref="HEAD")
+def test_latest_transition_policy_is_consumable_as_protected_base() -> None:
+    """The latest transition-policy commit authorizes the current candidate."""
+    protected_base = subprocess.check_output(
+        [
+            "git",
+            "log",
+            "-1",
+            "--format=%H",
+            "--",
+            ROTATION_FILE.relative_to(ROOT).as_posix(),
+        ],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    manifest = build_unit_manifest(ROOT, base_ref=protected_base, head_ref="HEAD")
     profiles = load_verification_profiles(ROOT, manifest)
 
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
@@ -1183,6 +1215,30 @@ def test_wave1_bootstrap_profile_additions_are_exact_and_append_only() -> None:
     )
     identities = [(row[0], row[1]) for row in additions]
     assert len(identities) == len(set(identities)) == 4
+
+
+def test_wave1_agentic_sync_requirement_transitions_are_exact() -> None:
+    """Wave 1 authorizes only its three exact existing-profile transitions."""
+    transitions = (
+        verification._AGENTIC_SYNC_WAVE1_BOOTSTRAP_REQUIREMENT_TRANSITIONS
+        # pylint: disable=protected-access
+    )
+    assert tuple(
+        (
+            row.prompt_path,
+            row.language_id,
+            row.from_requirement_id,
+            row.to_requirement_id,
+        )
+        for row in transitions
+    ) == WAVE1_AGENTIC_SYNC_REQUIREMENT_TRANSITIONS
+    assert all(
+        row.bindings.base_policy_sha256
+        == "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
+        and row.bindings.head_policy_sha256
+        == "e2dbc8a9298558941118a7df0065f59361757b48d8c0e121f6a76b22c900637f"
+        for row in transitions
+    )
 
 
 def test_wave1_profile_addition_composes_with_consumed_transition(
