@@ -107,6 +107,16 @@ GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS = {
 GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/runtime-linux-x86_64-cp312.lock",
 }
+OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS = {
+    ".github/workflows/oci-checker-runtime.yml",
+    ".pdd/global-sync/oci-checker-runtime.json",
+    "ci/sync-checker/Dockerfile",
+    "pdd/sync_core/oci_runtime.py",
+    "tests/test_sync_core_oci_runtime.py",
+}
+OCI_CHECKER_RUNTIME_LAYER2_PROTECTED_BASE = (
+    "e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347"
+)
 STANDALONE_CHECKER_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/standalone-checker-modules.json",
     "pdd/sync_core/standalone_package.py",
@@ -160,6 +170,7 @@ PREAUTHORIZED_CHILD_PATHS = (
     | GATE1_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
+    | OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS
     | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
     | {
@@ -1493,22 +1504,20 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         capture_output=True,
     )
 
+    # Exercise every current preauthorization family from a protected policy
+    # commit, including rows being introduced by this rollout.
+    policy_path = root / ".pdd" / "sync-ownership.json"
+    policy_path.write_bytes(OWNERSHIP_PATH.read_bytes())
+    _git(root, "add", ".pdd/sync-ownership.json")
+
     # A child PR can itself add a preauthorized path.  Build the protected base
     # explicitly so this regression continues to exercise absent-path routing
     # after such a child has merged into another branch.
-    removed_existing_child_paths = False
     for path in PREAUTHORIZED_CHILD_PATHS:
         child_path = root / path
         if child_path.exists():
             _git(root, "rm", path)
-            removed_existing_child_paths = True
-    base = (
-        _commit(root, "remove preauthorized child paths")
-        if removed_existing_child_paths
-        else subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=root, text=True
-        ).strip()
-    )
+    base = _commit(root, "prepare protected absent-path policy")
     baseline = build_unit_manifest(root, base_ref=base, head_ref=base)
     baseline_paths = {
         item.candidate_id.artifact_relpath.as_posix() for item in baseline.candidates
@@ -1717,6 +1726,11 @@ def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
     } == (
         GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
         | STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS
+        | {
+            path
+            for path in OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS
+            if path.startswith(".pdd/global-sync/")
+        }
     )
     assert (
         STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS
@@ -1812,8 +1826,11 @@ def test_standalone_checker_package_boundary_is_exactly_preauthorized() -> None:
         path
         for path in preauthorized
         if path.startswith(FUTURE_STANDALONE_CHECKER_AUTHORITY_PREFIXES)
+        and path not in OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS
     } == STANDALONE_CHECKER_PREAUTHORIZED_PATHS
-    assert not preauthorized & FUTURE_STANDALONE_CHECKER_UNAUTHORIZED_PATHS
+    assert not (
+        preauthorized - OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS
+    ) & FUTURE_STANDALONE_CHECKER_UNAUTHORIZED_PATHS
     assert all(
         not path.endswith("/") and not any(token in path for token in ("*", "?", "["))
         for path in STANDALONE_CHECKER_PREAUTHORIZED_PATHS
@@ -1947,6 +1964,146 @@ def test_standalone_checker_package_boundary_composes_offline_and_fails_closed(
         f"{path}: tracked path has no ownership rule"
         for path in FUTURE_STANDALONE_CHECKER_UNAUTHORIZED_PATHS
     } <= set(unauthorized_manifest.invalid_reasons)
+
+
+def test_oci_checker_runtime_layer2_paths_are_exactly_preauthorized_at_base() -> None:
+    """Layer 2 grants only its five absent OCI runtime boundary paths."""
+    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    rules = {row["pattern"]: row for row in ownership["rules"]}
+    preauthorized = {
+        row["pattern"]
+        for row in ownership["rules"]
+        if row.get("preauthorize_absent", False)
+    }
+
+    assert len(OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS) == 5
+    assert {
+        path: rules.get(path)
+        for path in OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS
+    } == {
+        path: {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
+        for path in OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS
+    }
+    assert subprocess.run(
+        ["git", "cat-file", "-e", f"{OCI_CHECKER_RUNTIME_LAYER2_PROTECTED_BASE}^{{commit}}"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+    ).returncode == 0
+    for path in OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS:
+        assert subprocess.run(
+            ["git", "cat-file", "-e", f"{OCI_CHECKER_RUNTIME_LAYER2_PROTECTED_BASE}:{path}"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+        ).returncode != 0
+
+    rejected_authority = {
+        ".github/workflows/oci-checker-release.yml",
+        ".github/workflows/oci-runtime.yml",
+        ".github/workflows/release.yml",
+        ".pdd/global-sync/certificate-a-checker.json",
+        ".pdd/global-sync/gate3-checker-pins.json",
+        ".pdd/global-sync/oci-checker-modules.json",
+        ".pdd/global-sync/oci-checker-runtime-lock.json",
+        ".pdd/global-sync/release-checker-pin.json",
+        "ci/oci-checker/Dockerfile",
+        "ci/sync-checker/Containerfile",
+        "ci/sync-checker/Dockerfile.alpine",
+        "docs/global_sync_gate6_partition.json",
+        "docs/global_sync_workstream_c.json",
+        "pdd/sync_core/oci_checker.py",
+        "pdd_cloud/sync_core/oci_runtime.py",
+        "tests/test_sync_core_oci_checker.py",
+        "tests/test_sync_core_workstream_c.py",
+    }
+    assert preauthorized.isdisjoint(rejected_authority)
+    assert not any(path.startswith("pdd_cloud/") for path in preauthorized)
+    assert not any(
+        "workstream_c" in path or "workstream-c" in path
+        for path in preauthorized
+    )
+    assert not any(
+        any(token in path for token in ("*", "?", "["))
+        for path in preauthorized
+    )
+
+
+def test_oci_checker_runtime_layer2_composes_clean_manifest_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """A protected OCI preauthorization composes only the sealed five-path layer."""
+    root = tmp_path / "oci-checker-runtime-layer2"
+    subprocess.run(
+        ["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(root)],
+        check=True,
+        capture_output=True,
+    )
+    policy_path = root / ".pdd" / "sync-ownership.json"
+    policy_path.write_bytes(OWNERSHIP_PATH.read_bytes())
+    _git(root, "add", ".pdd/sync-ownership.json")
+    protected_base = _commit(root, "install OCI layer 2 preauthorization")
+    _git(root, "update-ref", "refs/remotes/origin/main", protected_base)
+
+    for path in OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS:
+        assert not (root / path).exists()
+    inert_paths = {
+        ".github/workflows/oci-checker-runtime.yml": b"name: synthetic OCI runtime\n",
+        ".pdd/global-sync/oci-checker-runtime.json": b"{}\n",
+        "ci/sync-checker/Dockerfile": b"FROM scratch\n",
+        "pdd/sync_core/oci_runtime.py": b'"""Synthetic OCI runtime boundary."""\n',
+        "tests/test_sync_core_oci_runtime.py": b'"""Synthetic OCI runtime test."""\n',
+    }
+    assert set(inert_paths) == OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS
+    for path, content in inert_paths.items():
+        candidate = root / path
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_bytes(content)
+    _git(root, "add", "-f", *OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS)
+    exact_head = _commit(root, "compose synthetic OCI layer 2 boundary")
+
+    manifest = build_unit_manifest(root, base_ref="origin/main", head_ref=exact_head)
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix()
+        in OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS
+    }
+    assert set(records) == OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS
+    assert not manifest.unaccounted_tracked_paths
+    assert not manifest.invalid_reasons
+    assert all(
+        item.inventory.value == "HUMAN_OWNED"
+        and item.candidate_id.role == "human-maintained"
+        and item.ownership_provenance
+        == f"protected-ownership:pdd-maintainers:{path}"
+        for path, item in records.items()
+    )
+
+    rejected_paths = {
+        ".github/workflows/oci-checker-release.yml",
+        ".pdd/global-sync/oci-checker-modules.json",
+        "ci/sync-checker/Dockerfile.alpine",
+        "docs/global_sync_gate6_partition.json",
+        "pdd/sync_core/oci_checker.py",
+        "pdd_cloud/sync_core/oci_runtime.py",
+        "tests/test_sync_core_oci_checker.py",
+    }
+    for path in rejected_paths:
+        candidate = root / path
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text("unauthorized OCI layer 2 sibling\n", encoding="utf-8")
+    _git(root, "add", "-f", *rejected_paths)
+    rejected_head = _commit(root, "attempt OCI layer 2 sibling authority")
+    rejected_manifest = build_unit_manifest(
+        root, base_ref=exact_head, head_ref=rejected_head
+    )
+    assert {Path(path) for path in rejected_paths} <= set(
+        rejected_manifest.unaccounted_tracked_paths
+    )
+    assert {
+        f"{path}: tracked path has no ownership rule" for path in rejected_paths
+    } <= set(rejected_manifest.invalid_reasons)
 
 
 def test_global_sync_ledger_paths_compose_with_protected_preauthorization(
