@@ -7694,14 +7694,36 @@
     }
   },
   {
+    "reason": "Freezes the canonical Agentic Sync V1 candidate set, validates fallback payload scope, and produces deterministic plan/selection/execution evidence.",
+    "description": "Pure path-aware planning model for agentic sync. It records resolved prompt/output paths, governing context, operation/provenance, canonical dependency/SCC order, and dependency-safe authoritative execution order; limits V1 scope lists to 64 canonical IDs; sends ambiguity agents only bounded untrusted issue signal plus frozen candidates; validates closed fallback payload JSON against durable primary plan evidence including module_id == governing_root plus target_basename; and never performs provider, subprocess, or filesystem writes.",
+    "dependencies": [
+      "resolved_sync_unit_python.prompt"
+    ],
+    "priority": 215,
+    "filename": "sync_plan_python.prompt",
+    "filepath": "pdd/sync_plan.py",
+    "tags": ["sync", "agentic", "evidence", "python"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {"name": "build_sync_plan", "signature": "(root: Path, candidates: Iterable[SyncPlanCandidate], selected_module_ids: Iterable[str], *, execution_order: Iterable[str] | None = None) -> SyncPlan", "returns": "SyncPlan"},
+          {"name": "validate_explicit_scope_evidence", "signature": "(scope: Mapping[str, Any], evidence: Mapping[str, Any]) -> tuple[dict[str, object], tuple[str, ...]]", "returns": "tuple[dict[str, object], tuple[str, ...]]"}
+        ]
+      }
+    },
+    "position": {"x": 15400, "y": 2300}
+  },
+  {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
-    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync consumes a cloud-owned provider-failure capability before children inherit it, transports trusted provider state through private token-authenticated channels from pinned PDD validation children, and never promotes marker-shaped stdout. It uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
+    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync builds a complete path-scoped inventory before selection, validates canonical dependency closure, and dispatches AsyncSyncRunner — or DurableSyncRunner with immutable checkout authority when invoked with durable=True. A non-empty PDD_CHANGED_MODULES value is ordered authoritative selection input only: every alias is resolved against declared architecture/scoped identity before dry-run, unknown/runtime/ambiguous/unowned-prefix entries fail the entire request without LLM identification, and path-qualified leaves retain caller order only when dependency-safe while the frozen graph remains canonical. Ambiguity receives only frozen candidates and a bounded explicitly untrusted issue signal. Issue sync consumes a cloud-owned provider-failure capability before children inherit it, transports trusted provider state through private token-authenticated channels from pinned PDD validation children, and never promotes marker-shaped stdout. It preserves nested architecture origins rather than using flattened combined records as identity authority.",
     "dependencies": [
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",
       "agentic_sync_runner_python.prompt",
       "durable_sync_runner_python.prompt",
-      "resolved_sync_unit_python.prompt"
+      "resolved_sync_unit_python.prompt",
+      "sync_plan_python.prompt"
     ],
     "priority": 215,
     "filename": "agentic_sync_python.prompt",
@@ -7731,6 +7753,11 @@
             "returns": "bool"
           },
           {
+            "name": "_freeze_issue_sync_plan",
+            "signature": "(project_root: Path, modules: List[str], module_cwds: Dict[str, Path], module_targets: Dict[str, str], dep_graph: Dict[str, List[str]], *, context_override: Optional[str] = None, provenance_source: str = 'issue_selection') -> SyncPlan",
+            "returns": "SyncPlan"
+          },
+          {
             "name": "_parse_llm_response",
             "signature": "(response: str) -> Tuple[List[str], bool, List[Dict]]",
             "returns": "Tuple[List[str], bool, List[Dict]]"
@@ -7756,7 +7783,8 @@
       "agentic_langtest_python.prompt",
       "agentic_test_orchestrator_python.prompt",
       "sync_order_python.prompt",
-      "resolved_sync_unit_python.prompt"
+      "resolved_sync_unit_python.prompt",
+      "sync_plan_python.prompt"
     ],
     "priority": 216,
     "filename": "agentic_sync_runner_python.prompt",
@@ -7772,7 +7800,7 @@
         "functions": [
           {
             "name": "AsyncSyncRunner",
-            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, *, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Any]] = None, module_targets: Optional[Dict[str, str]] = None, module_contexts: Optional[Dict[str, Optional[str]]] = None, module_units: Optional[Dict[str, ResolvedSyncUnit]] = None, initial_cost: float = 0.0) -> AsyncSyncRunner",
+            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, *, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Any]] = None, module_targets: Optional[Dict[str, str]] = None, module_contexts: Optional[Dict[str, Optional[str]]] = None, module_units: Optional[Dict[str, ResolvedSyncUnit]] = None, initial_cost: float = 0.0, project_root: Optional[Path] = None, checkout_identity: Optional[str] = None) -> AsyncSyncRunner",
             "returns": "AsyncSyncRunner"
           },
           {
@@ -7820,7 +7848,7 @@
   },
   {
     "reason": "Durable issue-sync execution engine that isolates each module in a dedicated git worktree and checkpoints successful module output to a durable branch.",
-    "description": "Subclass of AsyncSyncRunner used when run_agentic_sync is invoked with durable=True. Worker concurrency follows the same precedence as the parent: total_budget forces one worker, an explicit durable_max_parallel overrides, otherwise it reads the shared PDD_SYNC_MAX_WORKERS default via _read_sync_max_workers(). Prepares a `sync/issue-<N>` durable branch (or an explicit override) and a `.pdd/worktrees/durable-issue-<N>` worktree, runs each scheduled module inside its own per-module worktree, and on success applies the module diff to the durable branch as a checkpoint commit carrying a `PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>` trailer. Pushes checkpoints with bounded retries, halts further checkpointing on patch conflict or non-fast-forward push, refuses to operate on `main`/`master`/the repository default branch, ignores `.pdd/agentic_sync_state.json` for resume, and emits stdout markers (`PDD_CHECKPOINT: issue=<N> module=<m> commit=<sha> empty=<bool>`) only after a successful push.",
+    "description": "Subclass of AsyncSyncRunner used when run_agentic_sync is invoked with durable=True. Worker concurrency follows the same precedence as the parent: total_budget forces one worker, an explicit durable_max_parallel overrides, otherwise it reads the shared PDD_SYNC_MAX_WORKERS default via _read_sync_max_workers(). It receives the frozen exact checkout identity, rejects an unavailable or changed current checkout before worktree setup, and never rebinds that authority. Prepares a `sync/issue-<N>` durable branch (or an explicit override) and a `.pdd/worktrees/durable-issue-<N>` worktree, runs each scheduled module inside its own per-module worktree, relocates the supplied or frozen V1 unit into that worktree, and on success checkpoints only the frozen candidate output_paths plus target-scoped metadata; tracked/untracked out-of-scope paths fail before staging. Checkpoints carry a `PDD-Sync-Checkpoint-V2` trailer with the immutable plan, selection, schedule, and checkout binding. Pushes checkpoints with bounded retries, halts further checkpointing on patch conflict or non-fast-forward push, refuses to operate on `main`/`master`/the repository default branch, ignores `.pdd/agentic_sync_state.json` for resume, and emits stdout markers (`PDD_CHECKPOINT: issue=<N> module=<m> commit=<sha> empty=<bool>`) only after a successful push.",
     "dependencies": [
       "agentic_sync_runner_python.prompt",
       "resolved_sync_unit_python.prompt"
@@ -7839,7 +7867,7 @@
         "functions": [
           {
             "name": "DurableSyncRunner",
-            "signature": "(*, basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, object], github_info: Optional[Dict[str, object]], issue_number: int, project_root: Path, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None, quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, module_targets: Optional[Dict[str, str]] = None, module_contexts: Optional[Dict[str, Optional[str]]] = None, module_units: Optional[Dict[str, ResolvedSyncUnit]] = None, initial_cost: float = 0.0)",
+            "signature": "(*, basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, object], github_info: Optional[Dict[str, object]], issue_number: int, project_root: Path, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None, quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, module_targets: Optional[Dict[str, str]] = None, module_contexts: Optional[Dict[str, Optional[str]]] = None, module_units: Optional[Dict[str, ResolvedSyncUnit]] = None, initial_cost: float = 0.0, checkout_identity: Optional[str] = None)",
             "returns": "DurableSyncRunner",
             "sideEffects": [
               "Resolves durable branch name and durable worktree path; total_budget in sync_options forces sequential scheduling, else an explicit durable_max_parallel caps concurrency, else concurrency falls back to the shared PDD_SYNC_MAX_WORKERS default via agentic_sync_runner._read_sync_max_workers()"

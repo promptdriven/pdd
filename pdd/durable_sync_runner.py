@@ -11,6 +11,9 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import base64
+import binascii
+import json
 # Durable sync shells out to git with shell=False.
 import subprocess  # nosec B404
 import threading
@@ -26,6 +29,7 @@ from .resolved_sync_unit import ResolvedSyncUnit
 MAX_WORKERS = _read_sync_max_workers()
 
 CHECKPOINT_TRAILER = "PDD-Sync-Checkpoint-V1"
+CHECKPOINT_TRAILER_V2 = "PDD-Sync-Checkpoint-V2"
 CHECKPOINT_AUTHOR_NAME = "PDD Durable Sync"
 CHECKPOINT_AUTHOR_EMAIL = "pdd-durable-sync@example.invalid"
 
@@ -53,6 +57,7 @@ class DurableSyncRunner(AsyncSyncRunner):
         module_contexts: Optional[Dict[str, Optional[str]]] = None,
         module_units: Optional[Dict[str, ResolvedSyncUnit]] = None,
         initial_cost: float = 0.0,
+        checkout_identity: Optional[str] = None,
     ) -> None:
         self.issue_number = issue_number
         self.git_root = project_root.resolve()
@@ -71,6 +76,7 @@ class DurableSyncRunner(AsyncSyncRunner):
         self._checkpoint_halted = threading.Event()
         self._run_id = uuid.uuid4().hex[:8]
         self._prepared = False
+        self._durable_resume_binding: Optional[Dict[str, object]] = None
 
         super().__init__(
             basenames=basenames,
@@ -91,6 +97,8 @@ class DurableSyncRunner(AsyncSyncRunner):
             module_contexts=dict(module_contexts or {}),
             module_units={},
             initial_cost=initial_cost,
+            project_root=self.git_root,
+            checkout_identity=checkout_identity,
         )
         self.project_root = self.git_root
         if self.total_budget is not None:
@@ -152,6 +160,26 @@ class DurableSyncRunner(AsyncSyncRunner):
         self.git_root = Path(root.stdout.strip()).resolve()
         self.project_root = self.git_root
 
+        head = self._git(["rev-parse", "HEAD"], cwd=self.git_root)
+        checkout = head.stdout.strip() if head.returncode == 0 else ""
+        supplied_checkout = self._resume_binding.get("checkout_identity")
+        if not isinstance(supplied_checkout, str) or not re.fullmatch(
+            r"[0-9a-f]{40}", supplied_checkout
+        ):
+            return False, "Durable sync requires an exact supplied checkout identity"
+        if not re.fullmatch(r"[0-9a-f]{40}", checkout):
+            return False, "Durable sync could not verify the current checkout identity"
+        if checkout != supplied_checkout:
+            return (
+                False,
+                "Durable sync checkout identity changed after plan freeze; "
+                "refusing to rebind the frozen scope",
+            )
+        # The supplied SHA is frozen plan authority.  Never replace it with a
+        # later checkout value: durable checkpoints may only resume the same
+        # plan, selection, schedule, and exact source tree.
+        self._durable_resume_binding = dict(self._resume_binding)
+
         if self._git(["remote", "get-url", "origin"], cwd=self.git_root).returncode != 0:
             return False, "Durable sync requires an origin remote for checkpoint pushes"
 
@@ -172,7 +200,10 @@ class DurableSyncRunner(AsyncSyncRunner):
             self.module_cwds[basename] = module_cwd
             # Rebase the canonical unit onto the worktree cwd so the child keeps
             # the same target/context identity inside the worktree (#1675).
-            parent_unit = self.parent_module_units.get(basename)
+            parent_unit = (
+                self.parent_module_units.get(basename)
+                or self.module_units.get(basename)
+            )
             if parent_unit is not None:
                 # Relocate relative to the repo root (the worktree mirrors it) so
                 # paths that are ancestors of cwd — e.g. a .pddrc one level up —
@@ -378,9 +409,35 @@ class DurableSyncRunner(AsyncSyncRunner):
         if reset.returncode != 0:
             return False, f"Failed to reset module index: {_combined_output(reset)}", False
 
-        add = self._git(["add", "-A"], cwd=module_worktree)
-        if add.returncode != 0:
-            return False, f"Failed to stage module changes: {_combined_output(add)}", False
+        changed_ok, changed_or_msg = self._unstaged_module_changes(module_worktree)
+        if not changed_ok:
+            return False, changed_or_msg, False
+        changed_paths = changed_or_msg.split("\n") if changed_or_msg else []
+        unsafe = self._unsafe_staged_paths(basename, changed_paths)
+        if unsafe:
+            return (
+                False,
+                "Durable sync refuses to checkpoint unsafe path(s): "
+                + ", ".join(unsafe),
+                False,
+            )
+        out_of_scope = self._out_of_scope_output_paths(basename, changed_paths)
+        if out_of_scope:
+            return (
+                False,
+                "Durable sync refuses to checkpoint out-of-scope path(s): "
+                + ", ".join(out_of_scope),
+                False,
+            )
+
+        output_changes = [
+            path for path in changed_paths
+            if path not in self._metadata_paths(basename, changed_paths)
+        ]
+        if output_changes:
+            add = self._git(["add", "-A", "--", *output_changes], cwd=module_worktree)
+            if add.returncode != 0:
+                return False, f"Failed to stage module changes: {_combined_output(add)}", False
 
         self._force_add_module_metadata(basename, module_worktree)
 
@@ -400,9 +457,70 @@ class DurableSyncRunner(AsyncSyncRunner):
                 + ", ".join(unsafe),
                 False,
             )
+        out_of_scope = self._out_of_scope_output_paths(basename, changed_paths)
+        if out_of_scope:
+            return (
+                False,
+                "Durable sync refuses to checkpoint out-of-scope path(s): "
+                + ", ".join(out_of_scope),
+                False,
+            )
 
         empty = not changed_paths
         return True, "", empty
+
+    def _unstaged_module_changes(self, module_worktree: Path) -> Tuple[bool, str]:
+        """Return every changed repository path without staging ambient files."""
+        tracked = self._git(["diff", "--name-only", "--diff-filter=ACMRTD"], cwd=module_worktree)
+        untracked = self._git(
+            ["ls-files", "--others", "--exclude-standard"], cwd=module_worktree
+        )
+        if tracked.returncode != 0 or untracked.returncode != 0:
+            detail = _combined_output(tracked) or _combined_output(untracked)
+            return False, f"Failed to inspect module changes: {detail}"
+        paths = sorted({
+            line.strip()
+            for result in (tracked, untracked)
+            for line in result.stdout.splitlines()
+            if line.strip()
+        })
+        return True, "\n".join(paths)
+
+    def _metadata_paths(self, basename: str, paths: List[str]) -> set[str]:
+        safe = self._metadata_basename(basename)
+        prefixes = {
+            prefix.as_posix().rstrip("/") + "/"
+            for prefix in self._allowed_metadata_prefixes(basename)
+        }
+        return {
+            path for path in paths
+            if any(path.replace(os.sep, "/").startswith(prefix) for prefix in prefixes)
+            and Path(path).name.startswith(f"{safe}_")
+            and Path(path).name.endswith(".json")
+        }
+
+    def _out_of_scope_output_paths(self, basename: str, paths: List[str]) -> List[str]:
+        """Reject changes not declared by this module's frozen V1 candidate."""
+        if self._scope_evidence is None:
+            return sorted(paths)
+        plan = self._scope_evidence["sync_plan"]
+        candidate = next(
+            (
+                item for item in plan.get("candidates", [])
+                if isinstance(item, dict) and item.get("module_id") == basename
+            ),
+            None,
+        )
+        outputs = candidate.get("output_paths") if isinstance(candidate, dict) else None
+        if not isinstance(outputs, list) or any(not isinstance(path, str) for path in outputs):
+            return sorted(paths)
+        allowed = {path.replace("\\", "/").strip("/") for path in outputs}
+        metadata = self._metadata_paths(basename, paths)
+        return sorted(
+            path for path in paths
+            if path.replace(os.sep, "/").strip("/") not in allowed
+            and path not in metadata
+        )
 
     def _metadata_basename(self, basename: str) -> str:
         """Filesystem-safe stem for this module's ``.pdd/meta`` files.
@@ -616,7 +734,7 @@ class DurableSyncRunner(AsyncSyncRunner):
 
         has_current_issue_checkpoint = False
         for line in log.stdout.splitlines():
-            parsed = _parse_checkpoint_trailer(line)
+            parsed = _parse_checkpoint_binding(line)
             if parsed and parsed[0] == self.issue_number:
                 has_current_issue_checkpoint = True
                 break
@@ -636,16 +754,25 @@ class DurableSyncRunner(AsyncSyncRunner):
 
         completed: Set[str] = set()
         for line in log.stdout.splitlines():
-            parsed = _parse_checkpoint_trailer(line)
+            parsed = _parse_checkpoint_binding(line)
             if not parsed:
                 continue
-            issue, module = parsed
-            if issue == self.issue_number:
+            issue, module, binding = parsed
+            if issue == self.issue_number and binding == self._durable_resume_binding:
                 completed.add(module)
         return completed
 
     def _checkpoint_trailer(self, basename: str) -> str:
-        return f"{CHECKPOINT_TRAILER}: issue={self.issue_number} module={basename}"
+        binding = self._durable_resume_binding
+        if binding is None:
+            return f"{CHECKPOINT_TRAILER_V2}: issue={self.issue_number} module={basename} resume=disabled"
+        encoded = base64.urlsafe_b64encode(
+            json.dumps(binding, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii")
+        return (
+            f"{CHECKPOINT_TRAILER_V2}: issue={self.issue_number} module={basename} "
+            f"binding={encoded}"
+        )
 
     def _ensure_clean_durable_worktree(self) -> Tuple[bool, str]:
         status = self._git(["status", "--porcelain"], cwd=self.durable_worktree_path)
@@ -802,6 +929,42 @@ def _parse_checkpoint_trailer(line: str) -> Optional[Tuple[int, str]]:
     if not module:
         return None
     return issue, module
+
+
+def _parse_checkpoint_binding(
+    line: str,
+) -> Optional[Tuple[int, str, Dict[str, object]]]:
+    """Parse only complete V2 checkpoint authority; legacy trailers never resume."""
+    prefix = f"{CHECKPOINT_TRAILER_V2}:"
+    stripped = line.strip()
+    if not stripped.startswith(prefix):
+        return None
+    fields = dict(re.findall(r"(\w+)=([^\s]+)", stripped[len(prefix):].strip()))
+    try:
+        issue = int(fields["issue"])
+        module = fields["module"]
+        encoded = fields["binding"]
+        decoded = base64.urlsafe_b64decode(encoded.encode("ascii"))
+        binding = json.loads(decoded.decode("utf-8"))
+    except (KeyError, ValueError, UnicodeError, binascii.Error, json.JSONDecodeError):
+        return None
+    if not module or not isinstance(binding, dict):
+        return None
+    required = {
+        "attempt_kind", "sync_plan_digest", "selection_digest",
+        "ordered_module_ids", "dependency_graph", "checkout_identity",
+    }
+    if set(binding) != required:
+        return None
+    if not all(
+        isinstance(binding[field], str)
+        and re.fullmatch(r"[0-9a-f]{64}", binding[field])
+        for field in ("sync_plan_digest", "selection_digest")
+    ) or not isinstance(binding["checkout_identity"], str) or re.fullmatch(
+        r"[0-9a-f]{40}", binding["checkout_identity"]
+    ) is None:
+        return None
+    return issue, module, binding
 
 
 def _slugify_basename(basename: str) -> str:

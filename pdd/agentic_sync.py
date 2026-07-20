@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Tuple
 
 from rich.console import Console
 
@@ -37,6 +37,7 @@ from .agentic_common import (
 from .agentic_sync_runner import (
     AsyncSyncRunner,
     _architecture_entry_aliases,
+    _basename_from_architecture_filepath,
     _basename_from_architecture_filename,
     _find_pdd_executable,
     build_dep_graph_from_architecture_data,
@@ -63,6 +64,21 @@ from .construct_paths import (
 from .json_atomic import atomic_write_json
 from .load_prompt_template import load_prompt_template
 from .resolved_sync_unit import ResolvedSyncUnit, resolve_sync_unit
+from .sync_plan import (
+    AmbiguousSyncModuleError,
+    PlanProvenance,
+    SyncPlan,
+    SyncPlanCandidate,
+    SyncPlanDetails,
+    SyncPlanError,
+    build_sync_plan,
+    canonical_module_id,
+    ambiguity_request,
+    apply_ambiguity_selection,
+    parse_explicit_scope,
+    resolve_selection_aliases,
+    validate_explicit_scope_evidence,
+)
 from .sync_determine_operation import sync_determine_operation
 from .sync_main import _detect_languages_with_context
 from .sync_order import build_dependency_graph, extract_module_from_include, topological_sort
@@ -158,6 +174,81 @@ def _parse_changed_modules_env(value: str) -> List[str]:
         modules.append(module)
         seen.add(module)
     return modules
+
+
+def _validate_changed_modules_env_aliases(
+    modules: List[str],
+    architecture: Optional[List[Dict[str, Any]]],
+    scoped_modules: Optional[List[GlobalSyncModule]],
+) -> Tuple[List[str], List[str]]:
+    """Return architecture-backed environment aliases and deterministic rejects.
+
+    ``PDD_CHANGED_MODULES`` is an authoritative *selection* input, not an
+    authority to manufacture new candidates.  A path-qualified alias may name
+    a unique architecture leaf, but every entry must still correspond to one
+    declared candidate before dry-run can begin.  Keep accepted aliases in the
+    caller's order; those aliases remain useful scheduler keys for legacy
+    nested-project execution.
+    """
+    if scoped_modules:
+        known_keys = []
+        for module in scoped_modules:
+            known_keys.append(module.key)
+            # Scoped records retain the governing root that flattened
+            # architecture records lose. Their public canonical alias uses a
+            # slash (``apps/a/page``), while the internal graph key uses a
+            # colon (``apps/a:page``).
+            if ":" in module.key:
+                root, target = module.key.rsplit(":", 1)
+                known_keys.append(f"{root}/{target}")
+    else:
+        known_keys = _architecture_candidate_keys(architecture or [])
+    normalized_keys = {
+        _strip_language_suffix_preserving_path(key) or key
+        for key in known_keys
+        if not _is_runtime_llm_template(key)
+    }
+    leaf_counts: Dict[str, int] = {}
+    for key in normalized_keys:
+        leaf = key.rsplit("/", 1)[-1]
+        leaf_counts[leaf] = leaf_counts.get(leaf, 0) + 1
+
+    accepted: List[str] = []
+    rejected: List[str] = []
+    for alias in modules:
+        normalized = _strip_language_suffix_preserving_path(alias) or alias
+        leaf = normalized.rsplit("/", 1)[-1]
+        if _is_runtime_llm_template(normalized):
+            rejected.append(alias)
+        elif normalized in normalized_keys:
+            accepted.append(normalized)
+        elif "/" not in normalized and leaf_counts.get(leaf) == 1:
+            # Unique *leaf* compatibility is only for a leaf selector.  A
+            # prefix is execution authority and must be independently proven
+            # by a frozen architecture/scoped candidate identity above.
+            accepted.append(normalized)
+        else:
+            rejected.append(alias)
+    return accepted, rejected
+
+
+def _architecture_candidate_keys(architecture: List[Dict[str, Any]]) -> List[str]:
+    """Return only architecture-declared candidate identities.
+
+    A unique filename leaf remains a legacy alias, but a declared filepath is
+    the authoritative path-qualified identity.  In particular, this function
+    never derives a key from an environment selector or prompt discovery.
+    """
+    keys: List[str] = []
+    for entry in architecture:
+        if not isinstance(entry, dict):
+            continue
+        filename_key = _basename_from_architecture_filename(entry.get("filename", ""))
+        filepath_key = _basename_from_architecture_filepath(entry.get("filepath", ""))
+        key = filepath_key or filename_key
+        if key and not _is_runtime_llm_template(key):
+            keys.append(key)
+    return list(dict.fromkeys(keys))
 
 
 def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
@@ -674,17 +765,37 @@ class GlobalSyncModule(NamedTuple):
 
 
 def _architecture_module_basenames(architecture: List[Dict[str, Any]]) -> List[str]:
-    """Return syncable architecture module basenames, preserving declaration order."""
-    basenames: List[str] = []
-    seen = set()
+    """Return stable path-qualified keys without collapsing duplicate leaves."""
+    discovered: List[Tuple[str, str]] = []
     for entry in architecture:
         if not isinstance(entry, dict):
             continue
         basename = _basename_from_architecture_filename(entry.get("filename", ""))
-        if basename and basename not in seen:
-            basenames.append(basename)
-            seen.add(basename)
-    return basenames
+        if basename:
+            discovered.append((basename, str(entry.get("filepath") or "")))
+    counts: Dict[str, int] = {}
+    for basename, _filepath in discovered:
+        counts[basename] = counts.get(basename, 0) + 1
+
+    keys: List[str] = []
+    used: set[str] = set()
+    for basename, filepath in discovered:
+        key = basename
+        if counts[basename] > 1:
+            parent = Path(filepath.replace("\\", "/")).parent
+            # Combined architecture records retain their output path even when
+            # their source architecture roots differ.  It is the only stable
+            # path evidence available at this adapter boundary.
+            if str(parent) not in ("", "."):
+                key = (parent / basename).as_posix()
+        if key in used:
+            # Repeated records for the same declared output are aliases, not
+            # a second governing unit. Distinct duplicate leaves were given a
+            # qualified key above and therefore cannot reach this branch.
+            continue
+        used.add(key)
+        keys.append(key)
+    return keys
 
 
 def _merge_duplicate_output_dependencies(
@@ -2395,6 +2506,521 @@ def _filter_already_synced(
     return needs_sync
 
 
+def _path_is_within_root(path: Optional[Path], root: Path) -> bool:
+    """Return whether a resolved advisory path is safely inside ``root``."""
+    if path is None:
+        return False
+    try:
+        Path(path).resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _validated_checkout_identity(project_root: Path) -> Optional[str]:
+    """Return the exact checked-out SHA, or no resume authority at all."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    candidate = result.stdout.strip() if result.returncode == 0 else ""
+    return candidate if re.fullmatch(r"[0-9a-f]{40}", candidate) else None
+
+
+def _derive_readonly_expected_operation(
+    target: str,
+    cwd: Path,
+    context_name: Optional[str],
+    prompts_dir: Path,
+    language_paths: Mapping[str, Path],
+) -> str:
+    """Record the actual read-only operation state for one candidate.
+
+    Planning must not guess that every candidate will generate.  A failed or
+    incomplete inspection is represented explicitly as ``unknown``; it is not
+    silently converted into an executable operation.  Multi-language units
+    retain the fact that their language-specific analyses disagree as
+    ``mixed``.
+    """
+    operations: list[str] = []
+    for language in sorted(language_paths):
+        try:
+            decision = _run_readonly_sync_determine_in_cwd(
+                cwd,
+                basename=target,
+                language=language,
+                target_coverage=90.0,
+                log_mode=True,
+                prompts_dir=str(prompts_dir),
+                context_override=context_name,
+            )
+            operation = getattr(decision, "operation", None)
+            if not isinstance(operation, str) or not operation:
+                return "unknown"
+            operations.append(operation)
+        except Exception:
+            return "unknown"
+    if not operations:
+        return "unknown"
+    return operations[0] if len(set(operations)) == 1 else "mixed"
+
+
+def _build_issue_candidate_inventory(
+    project_root: Path,
+    architecture: Optional[List[Dict[str, Any]]],
+    arch_path: Optional[Path],
+    *,
+    context_override: Optional[str] = None,
+    scoped_modules: Optional[List[GlobalSyncModule]] = None,
+    selection_aliases: Optional[List[str]] = None,
+) -> SyncPlan:
+    """Build the complete read-only V1 candidate inventory before selection.
+
+    This deliberately resolves every governing unit and edge up front.  It is
+    the only source used by ambiguity selection and final plan freezing; later
+    dry-run/fingerprint filtering may narrow execution but cannot rediscover or
+    erase a candidate/dependency from the immutable inventory.
+    """
+    root = project_root.resolve()
+    entries = architecture or []
+    scoped_by_key = {
+        module.key: module
+        for module in scoped_modules or []
+        if not _is_runtime_llm_template(module.key)
+    }
+    # ``load_combined_architecture_data`` deliberately returns plain records.
+    # That is useful to legacy callers, but its flattened entries do not retain
+    # which nested architecture file governed an otherwise identical relative
+    # ``filepath``.  Prefer the already-scoped records whenever they exist so
+    # ``apps/a/page.py`` and ``apps/b/page.py`` remain distinct candidates.
+    keys = (
+        list(scoped_by_key)
+        if scoped_by_key
+        else _architecture_candidate_keys(entries)
+    )
+    # The optional selector is deliberately ignored here.  It was validated
+    # against these declared identities by the caller, but must never create a
+    # candidate merely because PDD_CHANGED_MODULES supplied a plausible path.
+    _ = selection_aliases
+    if not keys and architecture is None:
+        prompts_root = root / "prompts"
+        if prompts_root.is_dir():
+            for prompt in sorted(prompts_root.rglob("*_*.prompt")):
+                try:
+                    relative = prompt.resolve().relative_to(prompts_root.resolve())
+                except ValueError as exc:
+                    raise SyncPlanError(
+                        f"missing-architecture prompt escapes root: {prompt}"
+                    ) from exc
+                if len(relative.parts) > 5:
+                    continue
+                basename = _basename_from_architecture_filename(relative.name)
+                if basename and not _is_runtime_llm_template(basename):
+                    keys.append(relative.with_name(basename).as_posix())
+    keys = sorted(set(keys))
+    if not keys:
+        return build_sync_plan(root, (), ())
+
+    units: dict[str, ResolvedSyncUnit] = {}
+    ids_by_key: dict[str, str] = {}
+    prompt_paths: dict[str, tuple[Path, ...]] = {}
+    output_paths: dict[str, tuple[Path, ...]] = {}
+    expected_operations: dict[str, str] = {}
+    for key in keys:
+        try:
+            scoped = scoped_by_key.get(key)
+            if scoped is not None:
+                cwd, target = scoped.cwd, scoped.basename
+                unit_architecture_path = scoped.architecture_path
+            # Root architecture records are already scoped by their governing
+            # architecture file.  Do not let an unrelated nested demo with the
+            # same bare prompt name hijack that identity during inventory build.
+            elif "/" not in key:
+                cwd, target = root, key
+                unit_architecture_path = arch_path
+            else:
+                cwd, target = _resolve_module_cwd_and_target(key, root)
+                unit_architecture_path = arch_path
+            unit = resolve_sync_unit(
+                key, target, cwd, requested_context=context_override,
+                architecture_path=unit_architecture_path,
+            )
+            module_id = canonical_module_id(root, unit)
+            resolved_context, prompts_dir, language_paths = _resolve_module_sync_context(
+                target, cwd
+            )
+        except Exception as exc:
+            raise SyncPlanError(f"unable to resolve candidate {key!r}: {exc}") from exc
+        if module_id in ids_by_key.values():
+            raise SyncPlanError(f"duplicate canonical candidate ID: {module_id}")
+        all_paths = tuple(sorted(Path(path) for path in language_paths.values()))
+        generated = tuple(path for path in (
+            unit.generate_output_path, unit.test_output_path, unit.meta_path,
+        ) if path is not None)
+        for path in (*all_paths, *generated):
+            if not _path_is_within_root(path, root):
+                raise SyncPlanError(f"candidate path escapes governing root for {key!r}: {path}")
+        units[key] = unit
+        ids_by_key[key] = module_id
+        prompt_paths[key] = all_paths
+        output_paths[key] = generated
+        expected_operations[key] = _derive_readonly_expected_operation(
+            target,
+            cwd,
+            context_override or resolved_context,
+            prompts_dir,
+            language_paths,
+        )
+
+    if scoped_by_key:
+        graph, warnings = _build_scoped_global_dep_graph(
+            list(scoped_by_key.values()), keys, root
+        )
+    else:
+        graph, warnings = _build_targeted_dep_graph(
+            entries, keys, root, str(arch_path or "architecture.json")
+        )
+    if warnings:
+        raise SyncPlanError("candidate dependency resolution failed: " + "; ".join(warnings))
+    candidates: list[SyncPlanCandidate] = []
+    for key in keys:
+        raw_dependencies = graph.get(key, [])
+        missing = [dependency for dependency in raw_dependencies if dependency not in ids_by_key]
+        if missing:
+            raise SyncPlanError(
+                f"candidate {key!r} has dependencies absent from inventory: {sorted(missing)}"
+            )
+        candidates.append(SyncPlanCandidate(
+            module_id=ids_by_key[key],
+            unit=units[key],
+            prompt_paths=prompt_paths[key],
+            output_paths=output_paths[key],
+            details=SyncPlanDetails(
+                changed_reason=(
+                    "architecture inventory"
+                    if architecture is not None
+                    else "bounded prompt discovery"
+                ),
+                expected_operation=expected_operations[key],
+                confidence="high" if architecture is not None else "low",
+                provenance=(
+                    PlanProvenance(
+                        (
+                            "architecture"
+                            if architecture is not None
+                            else "missing_architecture_discovery"
+                        ),
+                        key,
+                    ),
+                    PlanProvenance("read_only_operation", expected_operations[key]),
+                ),
+            ),
+            dependencies=tuple(
+                sorted(ids_by_key[dependency] for dependency in raw_dependencies)
+            ),
+        ))
+    return build_sync_plan(root, candidates, ())
+
+
+def _freeze_issue_sync_plan(
+    project_root: Path,
+    modules: List[str],
+    module_cwds: Dict[str, Path],
+    module_targets: Dict[str, str],
+    dep_graph: Dict[str, List[str]],
+    *,
+    context_override: Optional[str] = None,
+    provenance_source: str = "issue_selection",
+    inventory: Optional[SyncPlan] = None,
+) -> SyncPlan:
+    """Freeze the write-free issue-sync scope before a child runner starts.
+
+    This adapter deliberately consumes the same resolved cwd/target pair that
+    dry-run validation produced.  It is kept narrow so legacy runners continue
+    to receive their existing scheduler keys while Cloud evidence gets only the
+    contract's canonical, path-qualified module IDs.
+    """
+    if inventory is not None:
+        execution_ids = tuple(
+            resolve_selection_aliases([module], inventory.candidates)[0]
+            for module in modules
+        )
+        selected_ids = tuple(sorted(set(execution_ids)))
+        return build_sync_plan(
+            project_root, inventory.candidates, selected_ids,
+            execution_order=tuple(dict.fromkeys(execution_ids)),
+        )
+
+    ids_by_scheduler_key: Dict[str, str] = {}
+    candidates: List[SyncPlanCandidate] = []
+    for key in modules:
+        cwd = module_cwds.get(key)
+        if cwd is None:
+            raise SyncPlanError(f"unresolved sync target {key!r}")
+        unit = resolve_sync_unit(
+            key,
+            module_targets.get(key, key),
+            cwd,
+            requested_context=context_override,
+        )
+        module_id = canonical_module_id(project_root, unit)
+        ids_by_scheduler_key[key] = module_id
+        try:
+            resolved_context, prompts_dir, language_paths = _resolve_module_sync_context(
+                unit.target_basename, unit.cwd
+            )
+        except Exception as exc:
+            raise SyncPlanError(f"unable to resolve prompt paths for {key!r}: {exc}") from exc
+        prompt_paths = tuple(sorted(Path(path) for path in language_paths.values()))
+        for prompt_path in prompt_paths:
+            if not _path_is_within_root(prompt_path, project_root):
+                raise SyncPlanError(f"prompt path escapes governing root for {key!r}: {prompt_path}")
+        output_paths = tuple(
+            path
+            for path in (
+                unit.generate_output_path,
+                unit.test_output_path,
+                unit.meta_path,
+            )
+            if path is not None
+        )
+        for output_path in output_paths:
+            if not _path_is_within_root(output_path, project_root):
+                raise SyncPlanError(
+                    f"output path escapes governing root for {key!r}: {output_path}"
+                )
+        expected_operation = _derive_readonly_expected_operation(
+            unit.target_basename,
+            unit.cwd,
+            context_override or resolved_context,
+            prompts_dir,
+            language_paths,
+        )
+        candidates.append(
+            SyncPlanCandidate(
+                module_id=module_id,
+                unit=unit,
+                prompt_paths=prompt_paths,
+                output_paths=output_paths,
+                details=SyncPlanDetails(
+                    changed_reason="selected for issue sync",
+                    expected_operation=expected_operation,
+                    confidence="high" if prompt_paths else "low",
+                    provenance=(
+                        PlanProvenance(provenance_source, key),
+                        PlanProvenance("read_only_operation", expected_operation),
+                    ),
+                ),
+            )
+        )
+
+    candidates_with_deps: List[SyncPlanCandidate] = []
+    scheduler_key_by_id = {
+        module_id: key for key, module_id in ids_by_scheduler_key.items()
+    }
+    for candidate in candidates:
+        scheduler_key = scheduler_key_by_id[candidate.module_id]
+        missing = sorted(
+            dependency for dependency in dep_graph.get(scheduler_key, [])
+            if dependency not in ids_by_scheduler_key
+        )
+        if missing:
+            raise SyncPlanError(
+                f"candidate {scheduler_key!r} has dependencies absent from frozen inventory: {missing}"
+            )
+        dependencies = tuple(sorted(ids_by_scheduler_key[dependency] for dependency in dep_graph.get(scheduler_key, [])))
+        candidates_with_deps.append(
+            SyncPlanCandidate(
+                module_id=candidate.module_id,
+                unit=candidate.unit,
+                prompt_paths=candidate.prompt_paths,
+                output_paths=candidate.output_paths,
+                details=candidate.details,
+                dependencies=dependencies,
+            )
+        )
+    return build_sync_plan(
+        project_root,
+        candidates_with_deps,
+        [ids_by_scheduler_key[key] for key in modules],
+        execution_order=[ids_by_scheduler_key[key] for key in modules],
+    )
+
+
+def _load_fallback_scope_execution(
+    project_root: Path,
+) -> tuple[dict[str, Any], tuple[str, ...], dict[str, Path], dict[str, str], dict[str, Optional[str]], str]:
+    """Load and verify the primary plan required by fallback_payload_v1 mode."""
+    if "PDD_CHANGED_MODULES" in os.environ:
+        raise SyncPlanError(
+            "PDD_CHANGED_MODULES is forbidden with PDD_SYNC_SCOPE_SOURCE=fallback_payload_v1"
+        )
+    raw_scope = os.environ.get("PDD_EXPLICIT_SYNC_SCOPE_V1")
+    if not raw_scope:
+        raise SyncPlanError(
+            "PDD_EXPLICIT_SYNC_SCOPE_V1 is required for fallback_payload_v1"
+        )
+    scope = parse_explicit_scope(raw_scope)
+    digest = scope["sync_plan_digest"]
+    assert isinstance(digest, str)
+    evidence_path = project_root / ".pdd" / "evidence" / "sync-plans" / f"{digest}.json"
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SyncPlanError(
+            f"frozen primary SyncPlan evidence is unavailable for digest {digest}"
+        ) from exc
+    plan, selected = validate_explicit_scope_evidence(scope, evidence)
+    candidates = plan.get("candidates")
+    if not isinstance(candidates, list):
+        raise SyncPlanError("persisted primary SyncPlan has no candidates")
+    by_id = {
+        candidate.get("module_id"): candidate
+        for candidate in candidates
+        if isinstance(candidate, dict) and isinstance(candidate.get("module_id"), str)
+    }
+    module_cwds: dict[str, Path] = {}
+    module_targets: dict[str, str] = {}
+    module_contexts: dict[str, Optional[str]] = {}
+    for module_id in selected:
+        candidate = by_id.get(module_id)
+        if candidate is None:
+            raise SyncPlanError(f"fallback module {module_id!r} is not a frozen candidate")
+        root_label = candidate.get("governing_root")
+        target = candidate.get("target_basename")
+        if not isinstance(root_label, str) or not isinstance(target, str):
+            raise SyncPlanError(f"frozen candidate {module_id!r} lacks execution identity")
+        cwd = (project_root / root_label).resolve()
+        try:
+            cwd.relative_to(project_root.resolve())
+        except ValueError as exc:
+            raise SyncPlanError(f"frozen candidate {module_id!r} escapes project root") from exc
+        if not cwd.is_dir():
+            raise SyncPlanError(f"frozen candidate {module_id!r} has no governing directory")
+        module_cwds[module_id] = cwd
+        module_targets[module_id] = target
+        context = candidate.get("context")
+        module_contexts[module_id] = context if isinstance(context, str) else None
+    return plan, selected, module_cwds, module_targets, module_contexts, raw_scope
+
+
+def _run_fallback_scope_sync(
+    *,
+    project_root: Path,
+    owner: str,
+    repo: str,
+    issue_number: int,
+    issue_url: str,
+    verbose: bool,
+    quiet: bool,
+    budget: Optional[float],
+    skip_verify: bool,
+    skip_tests: bool,
+    dry_run: bool,
+    agentic_mode: bool,
+    no_steer: bool,
+    max_attempts: Optional[int],
+    timeout_adder: float,
+    use_github_state: bool,
+    durable: bool,
+    durable_branch: Optional[str],
+    no_resume: bool,
+    durable_max_parallel: Optional[int],
+    strength: Optional[float],
+    temperature: Optional[float],
+    compressed_context: bool,
+    local: bool,
+) -> tuple[bool, str, float, str]:
+    """Run only the cryptographically bound failed-module fallback scope."""
+    _ = agentic_mode  # Kept for CLI compatibility; fallback mode is always agentic.
+    try:
+        plan, selected, module_cwds, module_targets, module_contexts, raw_scope = (
+            _load_fallback_scope_execution(project_root)
+        )
+    except SyncPlanError as exc:
+        return False, f"Fallback SyncPlan validation failed before writes: {exc}", 0.0, ""
+    if dry_run:
+        return (
+            True,
+            f"Fallback dry run complete: {len(selected)} frozen module(s) would sync: "
+            + ", ".join(selected),
+            0.0,
+            "",
+        )
+    selected_set = set(selected)
+    candidate_by_id = {candidate["module_id"]: candidate for candidate in plan["candidates"]}
+    dep_graph = {
+        module_id: [
+            dependency for dependency in candidate_by_id[module_id].get("dependencies", [])
+            if dependency in selected_set
+        ]
+        for module_id in selected
+    }
+    order = [module_id for module_id in plan.get("execution_order", []) if module_id in selected_set]
+    order.extend(module_id for module_id in selected if module_id not in order)
+    sync_options = {
+        "total_budget": budget,
+        "skip_verify": skip_verify,
+        "skip_tests": skip_tests,
+        # The explicit Wave-0 fallback payload is itself the authority for the
+        # retry mode.  It always executes exactly one child --agentic flag;
+        # callers cannot downgrade that validated fallback to a normal sync.
+        "agentic": True,
+        "no_steer": no_steer,
+        "max_attempts": max_attempts,
+        "timeout_adder": timeout_adder,
+        "strength": strength,
+        "temperature": temperature,
+        "compressed_context": compressed_context,
+        "local": local,
+        "sync_plan": plan,
+        "sync_plan_digest": plan and parse_explicit_scope(raw_scope)["sync_plan_digest"],
+        "selection_digest": parse_explicit_scope(raw_scope)["selection_digest"],
+        "execution_selected_module_ids": list(selected),
+        "execution_dependency_order": order,
+        "explicit_sync_scope": raw_scope,
+    }
+    github_info = {
+        "owner": owner, "repo": repo, "issue_number": issue_number,
+        "cwd": project_root,
+    } if use_github_state else None
+    runner_args = dict(
+        basenames=order,
+        dep_graph=dep_graph,
+        sync_options=sync_options,
+        github_info=github_info,
+        quiet=quiet,
+        verbose=verbose,
+        issue_url=issue_url,
+        module_cwds=module_cwds,
+        module_targets=module_targets,
+        module_contexts=module_contexts,
+        initial_cost=0.0,
+        project_root=project_root,
+        checkout_identity=_validated_checkout_identity(project_root),
+    )
+    if durable:
+        runner = DurableSyncRunner(
+            **runner_args,
+            issue_number=issue_number,
+            project_root=project_root,
+            durable_branch=durable_branch,
+            no_resume=no_resume,
+            durable_max_parallel=durable_max_parallel,
+        )
+    else:
+        runner = AsyncSyncRunner(**runner_args)
+    success, message, cost = runner.run()
+    return success, message, cost, ""
+
+
 def _parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict[str, Any]]]:
     """
     Parse the LLM response for module identification and dependency validation.
@@ -2796,24 +3422,125 @@ def run_agentic_sync(
         _build_identify_issue_content(title, body, filtered_comments)
     )
 
-    # 6. Find project root and load architecture.json
+    # 6. Resolve the fallback payload before any diff, architecture, or LLM
+    # scope source can run.  It is an exclusive, Cloud-bound retry scope.
     project_root = _find_project_root(Path.cwd())
+    scope_source = os.environ.get("PDD_SYNC_SCOPE_SOURCE")
+    if scope_source == "fallback_payload_v1":
+        return _run_fallback_scope_sync(
+            project_root=project_root,
+            owner=owner,
+            repo=repo,
+            issue_number=issue_number,
+            issue_url=issue_url,
+            verbose=verbose,
+            quiet=quiet,
+            budget=budget,
+            skip_verify=skip_verify,
+            skip_tests=skip_tests,
+            dry_run=dry_run,
+            agentic_mode=agentic_mode,
+            no_steer=no_steer,
+            max_attempts=max_attempts,
+            timeout_adder=timeout_adder,
+            use_github_state=use_github_state,
+            durable=durable,
+            durable_branch=durable_branch,
+            no_resume=no_resume,
+            durable_max_parallel=durable_max_parallel,
+            strength=strength,
+            temperature=temperature,
+            compressed_context=compressed_context,
+            local=local,
+        )
+    if scope_source:
+        return (
+            False,
+            f"Unsupported PDD_SYNC_SCOPE_SOURCE: {scope_source}",
+            0.0,
+            "",
+        )
+
+    # 7. Load architecture only for normal scope planning.
     architecture, arch_path = _load_architecture_json(project_root, issue_number=issue_number)
+    # Keep the path-scoped architecture records alongside the compatibility
+    # flattened view.  The latter remains useful to legacy helpers, while the
+    # former is the authoritative inventory input for duplicate nested leaves.
+    scoped_architecture_modules, scoped_architecture, _scoped_arch_path = (
+        _architecture_sync_modules(project_root)
+    )
+    scoped_inventory_modules = (
+        scoped_architecture_modules
+        if architecture is not None and architecture == scoped_architecture
+        else None
+    )
 
     if architecture is None:
         if not quiet:
             console.print("[yellow]No architecture.json found, falling back to include-based dependency graph[/yellow]")
+    else:
+        # Include the active issue branch's declared units before inventory,
+        # selection, or graph validation.  This is read-only augmentation of
+        # the governing graph, never a post-selection plan rewrite.
+        architecture = _augment_architecture_from_pr_branch(
+            architecture, project_root, issue_number
+        )
 
-    # 7. Try git diff-based module detection first (deterministic, free)
+    # Validate the authoritative environment selector before inventory
+    # construction.  This prevents an unresolvable alias from becoming a
+    # synthetic candidate merely because it appeared in PDD_CHANGED_MODULES.
+    changed_modules_env_modules = _parse_changed_modules_env(
+        os.environ.get("PDD_CHANGED_MODULES", "")
+    )
+    accepted_changed_modules_env, rejected_changed_modules_env = (
+        _validate_changed_modules_env_aliases(
+            changed_modules_env_modules,
+            architecture,
+            scoped_inventory_modules,
+        )
+        if changed_modules_env_modules
+        else ([], [])
+    )
+    if rejected_changed_modules_env:
+        msg = (
+            "PDD_CHANGED_MODULES contained unresolved module targets: "
+            f"{rejected_changed_modules_env}"
+        )
+        if use_github_state:
+            _post_error_comment(owner, repo, issue_number, msg)
+        return False, msg, 0.0, ""
+
+    # Freeze the complete candidate inventory before any precedence source can
+    # select a module.  Selection, fingerprints, and child scheduling all use
+    # derivatives of this one read-only graph.
+    try:
+        candidate_inventory = _build_issue_candidate_inventory(
+            project_root,
+            architecture,
+            arch_path,
+            context_override=context_override,
+            scoped_modules=scoped_inventory_modules,
+            selection_aliases=accepted_changed_modules_env,
+        )
+    except SyncPlanError as exc:
+        return False, f"SyncPlan inventory validation failed before writes: {exc}", 0.0, ""
+
+    # 8. Establish normal deterministic scope in precedence order.  An
+    # authoritative caller scope wins over local branch-diff heuristics.
     branch_modules = _detect_modules_from_branch_diff(project_root)
     llm_cost = 0.0
     provider = ""
-    deps_valid = True
-    deps_corrections: List[Dict[str, Any]] = []
     changed_modules_env_used = False
-    changed_modules_env_modules: List[str] = []
-
-    if branch_modules:
+    changed_modules_env_modules: List[str] = accepted_changed_modules_env
+    if changed_modules_env_modules:
+        changed_modules_env_used = True
+        modules_to_sync = changed_modules_env_modules
+        if not quiet:
+            console.print(
+                "[green]Using PDD_CHANGED_MODULES for module identification: "
+                f"{modules_to_sync}[/green]"
+            )
+    elif branch_modules:
         if not quiet:
             console.print(f"[green]Detected modules from branch diff: {branch_modules}[/green]")
         modules_to_sync = branch_modules
@@ -2833,146 +3560,83 @@ def run_agentic_sync(
             console.print(f"[green]{msg}[/green]")
         return True, msg, llm_cost, provider
     else:
-        changed_modules_env_modules = _parse_changed_modules_env(
-            os.environ.get("PDD_CHANGED_MODULES", "")
-        )
-        if changed_modules_env_modules:
-            changed_modules_env_used = True
-            modules_to_sync = changed_modules_env_modules
-            if not quiet:
-                console.print(
-                    "[green]Using PDD_CHANGED_MODULES for module identification: "
-                    f"{modules_to_sync}[/green]"
-                )
-        else:
-            # 7b. Fall back to LLM-based module identification
-            prompt_template = load_prompt_template("agentic_sync_identify_modules_LLM")
-            if not prompt_template:
-                return False, "Failed to load agentic_sync_identify_modules_LLM prompt template", 0.0, ""
-
-            # Issue #1664: compact the architecture for the PROMPT COPY ONLY. The
-            # full ``architecture`` object is left untouched for downstream use
-            # (dependency corrections, graph build); only this prompt rendering
-            # drops the ~5KB/entry interface text that blows the input limit.
-            compact_arch = _compact_architecture_for_identification(architecture)
-            arch_json_str = (
-                json.dumps(compact_arch, indent=2)
-                if compact_arch
-                else "No architecture.json available."
+        # No diff-derived source exists.  First use exact, path-aware issue
+        # mentions; this deterministic case never contacts an identification
+        # agent.  The remaining ambiguity protocol is intentionally bounded.
+        candidate_ids = list(candidate_inventory.selected_module_ids)
+        if not candidate_ids:
+            candidate_ids = [candidate.module_id for candidate in candidate_inventory.candidates]
+        issue_text = f"{title}\n{body}".casefold()
+        modules_to_sync = [
+            module for module in candidate_ids
+            if re.search(rf"(?<![A-Za-z0-9_./-]){re.escape(module.casefold())}(?![A-Za-z0-9_./-])", issue_text)
+        ]
+        if not modules_to_sync:
+            if not candidate_ids:
+                # A repository containing only runtime templates has no
+                # language-suffixed unit to generate.  This is a deliberate
+                # deterministic no-op, not an ambiguity-agent failure.
+                if architecture:
+                    return True, "All modules are already synced — nothing to do.", 0.0, ""
+                return False, "No deterministic sync candidates found", 0.0, ""
+            if len(candidate_ids) > 64:
+                return False, "Unresolved sync candidates exceed the V1 ambiguity bound", 0.0, ""
+            ambiguity = ambiguity_request(
+                candidate_inventory,
+                candidate_ids,
+                issue_number=issue_number,
+                issue_title=title,
+                issue_body=body,
             )
-            # Escape braces in dynamic content to prevent .format() from interpreting
-            # code references like {uid} as template placeholders
-            safe_arch_json = arch_json_str.replace("{", "{{").replace("}", "}}")
-
-            def _render(issue_text: str) -> str:
-                return prompt_template.format(
-                    issue_content=issue_text,
-                    architecture_json=safe_arch_json,
-                    issue_number=issue_number,
-                )
-
-            # Size guard (issue #1664): the rendered prompt must stay under the
-            # provider input limit. Trim levers in order of least signal lost:
-            # 1) drop comments entirely, then 2) truncate the issue body. If even a
-            # body-less prompt is over budget the architecture itself is too large
-            # to fit, so surface a REAL input_too_large failure rather than letting
-            # an over-limit call collapse to "no modules to sync".
-            prompt = _render(issue_content)
-            if _provider_prompt_len(prompt) > _IDENTIFY_MODULES_MAX_CHARS:
-                prompt = _render(
-                    _escape_format_braces(_build_identify_issue_content(title, body, None))
-                )
-            if _provider_prompt_len(prompt) > _IDENTIFY_MODULES_MAX_CHARS:
-                base_len = _provider_prompt_len(
-                    _render(
-                        _escape_format_braces(_build_identify_issue_content(title, "", None))
-                    )
-                )
-                body_budget = _IDENTIFY_MODULES_MAX_CHARS - base_len
-                if body_budget > 0:
-                    # The body is brace-escaped (each `{`/`}` doubled) before
-                    # rendering, so the worst case is len(escaped(t)) == 2*len(t).
-                    # Truncate the RAW body to half the budget so the escaped body
-                    # still fits within body_budget even when it is all braces.
-                    prompt = _render(
-                        _escape_format_braces(
-                            _build_identify_issue_content(
-                                title, _truncate_head_tail(body, max(0, body_budget // 2)), None
-                            )
-                        )
-                    )
-            provider_prompt_len = _provider_prompt_len(prompt)
-            if provider_prompt_len > _IDENTIFY_MODULES_MAX_CHARS:
-                msg = (
-                    "LLM failed to identify modules: input_too_large: identify-modules "
-                    f"provider prompt is {provider_prompt_len} chars, over the "
-                    f"{_IDENTIFY_MODULES_MAX_CHARS}-char budget even after compaction; "
-                    "reduce architecture.json scope or split the sync."
-                )
-                if use_github_state:
-                    _post_error_comment(owner, repo, issue_number, msg)
-                return False, msg, 0.0, ""
-
-            if not quiet:
-                console.print("[bold]Identifying modules to sync via LLM...[/bold]")
-
-            # 8. Call LLM
+            instruction = (
+                "Select issue-relevant candidates. Return exactly one compact JSON object "
+                "with the sole key selected_module_ids, whose value is a sorted unique "
+                "subset of candidate_ids. Do not return paths, commands, prose, or edits.\n"
+                + json.dumps(ambiguity, sort_keys=True, separators=(",", ":"))
+            )
             llm_result = run_agentic_task(
-                instruction=prompt,
-                cwd=project_root,
-                verbose=verbose,
-                quiet=quiet,
-                label="agentic_sync_identify_modules",
-                timeout=IDENTIFY_MODULES_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
-                stall_timeout=IDENTIFY_MODULES_STALL_SECONDS,  # Issue #1714: no-progress abort
-                reasoning_time=reasoning_time,
+                instruction=instruction, cwd=project_root, verbose=verbose, quiet=quiet,
+                label="agentic_sync_ambiguity", timeout=IDENTIFY_MODULES_TIMEOUT_SECONDS,
+                stall_timeout=IDENTIFY_MODULES_STALL_SECONDS, reasoning_time=reasoning_time,
                 background_safe=True,
             )
-            llm_success, llm_output, llm_cost, provider = llm_result
-
-            if not llm_success:
-                msg = f"LLM failed to identify modules: {llm_output}"
-                if use_github_state:
-                    _post_error_comment(owner, repo, issue_number, msg)
-                _publish_provider_failure_sink(
-                    provider_failure_sink,
-                    getattr(llm_result, "provider_environment_failure", None),
+            if not isinstance(llm_result, tuple) or len(llm_result) != 4:
+                return (
+                    False,
+                    "Ambiguity selection returned an invalid task result",
+                    0.0,
+                    "",
                 )
-                return False, msg, llm_cost, provider
-
-            # 9. Parse LLM response
-            modules_to_sync, deps_valid, deps_corrections = _parse_llm_response(llm_output)
-
+            llm_success, llm_output, llm_cost, provider = llm_result
+            if not llm_success:
+                return False, f"Ambiguity selection failed: {llm_output}", llm_cost, provider
+            try:
+                selection = json.loads(llm_output)
+                selected = selection.get("selected_module_ids") if isinstance(selection, dict) and set(selection) == {"selected_module_ids"} else None
+                selected_plan = apply_ambiguity_selection(
+                    candidate_inventory, candidate_ids, selected
+                )
+                selected = list(selected_plan.selected_module_ids)
+            except (SyncPlanError, ValueError, TypeError, json.JSONDecodeError):
+                return (
+                    False,
+                    "Ambiguity selection must be a closed candidate-ID JSON response",
+                    llm_cost,
+                    provider,
+                )
+            modules_to_sync = selected
             if not modules_to_sync:
-                # Treat an empty LLM selection as a successful no-op only when the
-                # branch diff is verifiably runtime-template-only. The deterministic
-                # short-circuit in step 7 normally handles that case before the LLM
-                # is called, so reaching this branch implies either a non-prompt
-                # diff, a mixed diff, or LLM/parsing failure. A blanket success
-                # here would silently pass real issues without syncing anything
-                # (issue #1396 review feedback).
-                if _branch_diff_is_runtime_llm_only(project_root):
-                    msg = "All modules are already synced — nothing to do."
-                    if not quiet:
-                        console.print(f"[green]{msg}[/green]")
-                    return True, msg, llm_cost, provider
-                msg = "LLM identified no modules to sync"
-                if use_github_state:
-                    _post_error_comment(owner, repo, issue_number, msg)
-                return False, msg, llm_cost, provider
-
-    # 9.4 Augment architecture with entries from the PR branch (new modules created by pdd-change)
-    architecture = _augment_architecture_from_pr_branch(architecture, project_root, issue_number)
+                return True, "All modules are already synced — nothing to do.", llm_cost, provider
 
     # LLMs sometimes return architecture-style names with language suffixes
-    # (e.g. "crm_models_Python"). Keep exact architecture basenames first so
-    # modules whose real basename ends with a known language word
-    # (e.g. "operation_log") are not shortened to "operation". This must run
-    # after PR-branch architecture augmentation so new modules are protected too.
+    # (e.g. "crm_models_Python").  Normalize before resolving through the
+    # immutable inventory, then make canonical IDs the sole scheduler keys.
+    # This preserves legacy unique leaves but rejects ambiguous nested leaves
+    # before dry-run or any write can occur.
     modules_to_sync = _normalize_modules_for_sync(modules_to_sync, architecture)
 
-    # Hard boundary (Req 9): drop any runtime *_LLM.prompt basename before it can
-    # reach _filter_invalid_basenames or dry-run. These templates are consumed
+    # Hard boundary (Req 9): drop any runtime *_LLM.prompt basename before it
+    # reaches the immutable candidate resolver. These templates are consumed
     # directly by their owning code module and have no language-suffixed sync
     # companion, so pdd sync would always fail on them.
     pre_filter_modules = list(modules_to_sync)
@@ -3000,23 +3664,43 @@ def run_agentic_sync(
             console.print(f"[green]{msg}[/green]")
         return True, msg, llm_cost, provider
 
-    # 9.5 Filter out basenames not in architecture.json (catches LLM hallucinations)
-    modules_to_sync, invalid_basenames = _filter_invalid_basenames(modules_to_sync, architecture)
-    if invalid_basenames:
-        if not quiet:
-            console.print(f"[yellow]Warning: Skipping {len(invalid_basenames)} basenames not found in architecture.json: {invalid_basenames}[/yellow]")
-
-    # 9.5b Drop ambiguous bare basenames (issue #1677) so a short leaf name like
-    # `page` is never dispatched into a child sync job that would silently pick the
-    # wrong module. Path-qualified names from the branch diff already survive.
-    modules_to_sync, ambiguous_basenames = _drop_ambiguous_basenames(modules_to_sync, project_root)
-    if ambiguous_basenames and not quiet:
-        for name, choices in ambiguous_basenames.items():
-            choice_list = ", ".join(choices)
-            console.print(
-                f"[yellow]Skipping ambiguous module '{name}': it maps to multiple "
-                f"architecture entries ({choice_list}). Use a path-qualified name.[/yellow]"
+    invalid_basenames: List[str] = []
+    ambiguous_basenames: Dict[str, List[str]] = {}
+    try:
+        if changed_modules_env_used:
+            # The resolver's public return value is intentionally sorted for
+            # canonical plans.  Resolve one alias at a time here so the plan
+            # remains canonical while the authoritative environment's request
+            # order is retained for execution.
+            resolved_selection = tuple(
+                resolve_selection_aliases([module], candidate_inventory.candidates)[0]
+                for module in modules_to_sync
             )
+        else:
+            resolved_selection = resolve_selection_aliases(
+                modules_to_sync, candidate_inventory.candidates
+            )
+        selected_inventory = build_sync_plan(
+            project_root,
+            candidate_inventory.candidates,
+            resolved_selection,
+            execution_order=(resolved_selection if changed_modules_env_used else None),
+        )
+        if changed_modules_env_used:
+            # ``build_sync_plan`` deliberately canonicalizes its dependency
+            # order.  The environment contract additionally promises callers
+            # that explicitly selected targets execute in their supplied
+            # order.  Keep that stable prefix and append only dependency-closed
+            # members that were not selected directly.
+            modules_to_sync = list(selected_inventory.execution_order)
+        else:
+            modules_to_sync = list(selected_inventory.execution_order)
+    except AmbiguousSyncModuleError as exc:
+        ambiguous_basenames[exc.alias] = list(exc.candidates)
+        modules_to_sync = []
+    except SyncPlanError as exc:
+        invalid_basenames = [str(exc)]
+        modules_to_sync = []
 
     if changed_modules_env_used:
         unresolved = dropped_llm_templates + invalid_basenames + list(ambiguous_basenames.keys())
@@ -3051,47 +3735,19 @@ def run_agentic_sync(
             )
         console.print(f"[green]Modules to sync: {modules_to_sync}[/green]")
 
-    # 10. Apply dependency corrections if needed
-    if not deps_valid and deps_corrections and architecture is not None:
-        if dry_run:
-            if not quiet:
-                console.print(
-                    "[yellow]Dry run: dependency corrections were suggested; "
-                    "architecture.json was not modified.[/yellow]"
-                )
-        elif not quiet:
-            console.print("[yellow]LLM flagged dependency corrections, updating architecture.json...[/yellow]")
-        if not dry_run:
-            architecture = _apply_architecture_corrections(
-                project_root, deps_corrections, architecture, quiet
-            )
-
-    # 11. Build dependency graph (#1675): modules_to_sync are full
-    # repo-root-relative keys, but nested architecture entries are keyed relative
-    # to their own architecture.json, so match each key by its owning-project-
-    # relative target and remap edges back to full keys. Identity for bare/root
-    # keys.
-    if architecture is not None:
-        dep_graph, dep_warnings = _build_targeted_dep_graph(
-            architecture, modules_to_sync, project_root, str(arch_path)
-        )
-        if dep_warnings and not quiet:
-            for w in dep_warnings:
-                console.print(f"[yellow]Warning: {w}[/yellow]")
-        if not quiet and verbose:
-            for w in collect_architecture_include_validation_warnings(project_root):
-                console.print(f"[yellow]Warning: {w}[/yellow]")
-            for w in warnings_for_arch_vs_include_sync_order(
-                dep_graph_from_architecture=dep_graph,
-                modules_to_sync=modules_to_sync,
-                project_root=project_root,
-            ):
-                console.print(f"[yellow]Warning: {w}[/yellow]")
-    else:
-        # Fallback: scan prompt files for <include> tags
-        prompts_dir = project_root / "prompts"
-        full_graph = build_dependency_graph(prompts_dir)
-        dep_graph = {m: [d for d in full_graph.get(m, []) if d in modules_to_sync] for m in modules_to_sync}
+    # The candidate graph was fully validated before selection.  Project its
+    # exact canonical edges onto the already dependency-closed execution scope;
+    # do not rediscover a flattened graph after canonical selection.
+    candidate_by_id = {
+        candidate.module_id: candidate for candidate in candidate_inventory.candidates
+    }
+    dep_graph = {
+        module_id: [
+            dependency for dependency in candidate_by_id[module_id].dependencies
+            if dependency in modules_to_sync
+        ]
+        for module_id in modules_to_sync
+    }
 
     if not quiet:
         console.print(f"[blue]Dependency graph: {dep_graph}[/blue]")
@@ -3153,6 +3809,28 @@ def run_agentic_sync(
             console.print(f"[green]{msg}[/green]")
         return True, msg, llm_cost, provider
 
+    # Freeze one complete, serializable scope before any child sync/generation
+    # can start.  A bad cwd, ambiguous identity, or digest mismatch therefore
+    # fails atomically while this process is still read-only.
+    try:
+        frozen_sync_plan = _freeze_issue_sync_plan(
+            project_root,
+            modules_to_sync,
+            module_cwds,
+            module_targets,
+            dep_graph,
+            context_override=context_override,
+            provenance_source=(
+                "PDD_CHANGED_MODULES" if changed_modules_env_used else "issue_selection"
+            ),
+            inventory=candidate_inventory,
+        )
+    except SyncPlanError as exc:
+        msg = f"SyncPlan validation failed before writes: {exc}"
+        if use_github_state:
+            _post_error_comment(owner, repo, issue_number, msg)
+        return False, msg, llm_cost, provider
+
     if dry_run:
         module_list = ", ".join(modules_to_sync)
         msg = f"Dry run complete: {len(modules_to_sync)} module(s) would sync: {module_list}"
@@ -3174,6 +3852,14 @@ def run_agentic_sync(
         "temperature": temperature,
         "context": context_override,
         "compressed_context": compressed_context,
+        # Cloud and a failed-module-only fallback consume the exact same frozen
+        # candidate set.  The runner treats these values as evidence only; it
+        # cannot broaden or replace the plan.
+        "sync_plan": frozen_sync_plan.to_dict(),
+        "sync_plan_serialized": frozen_sync_plan.serialized(),
+        "sync_plan_digest": frozen_sync_plan.sync_plan_digest,
+        "selection_digest": frozen_sync_plan.selection_digest,
+        "execution_dependency_order": list(frozen_sync_plan.execution_order),
         # Forward --local so child syncs skip PDD-cloud dispatch on argv, not
         # just via the inherited PDD_FORCE_LOCAL env (run_global_sync already
         # forwards this; the issue-URL path previously dropped it).
@@ -3224,6 +3910,7 @@ def run_agentic_sync(
             module_contexts=module_contexts,
             module_units=module_units,
             initial_cost=llm_cost,
+            checkout_identity=_validated_checkout_identity(project_root),
         )
     else:
         runner = AsyncSyncRunner(
@@ -3239,6 +3926,8 @@ def run_agentic_sync(
             module_contexts=module_contexts,
             module_units=module_units,
             initial_cost=llm_cost,
+            project_root=project_root,
+            checkout_identity=_validated_checkout_identity(project_root),
         )
 
     runner_success, runner_msg, total_cost = runner.run()
