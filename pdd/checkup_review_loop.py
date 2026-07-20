@@ -1752,7 +1752,26 @@ def run_checkup_review_loop(
                 else:
                     _mark_reviewer_findings_fixed(state, reviewer)
                     state.reviewer_status[reviewer] = "clean"
-                    break
+                    if config.unbounded_terra_sol:
+                        state.fresh_final_status = "clean"
+                        fresh_findings = _terra_sol_fresh_final_findings(
+                            context=context,
+                            config=config,
+                            state=state,
+                            worktree=worktree,
+                            artifacts_dir=artifacts_dir,
+                            round_number=round_number,
+                            pr_metadata=pr_metadata,
+                            deadline=deadline,
+                            verbose=verbose,
+                            quiet=quiet,
+                        )
+                        if fresh_findings:
+                            fix_findings = fresh_findings
+                        else:
+                            break
+                    else:
+                        break
         else:
             fix_findings = _actionable_findings(state, pending_findings)
             if not fix_findings:
@@ -1777,7 +1796,26 @@ def run_checkup_review_loop(
                     fix_findings = list(gate_findings)
                 else:
                     state.reviewer_status[reviewer] = "clean"
-                    break
+                    if config.unbounded_terra_sol:
+                        state.fresh_final_status = "clean"
+                        fresh_findings = _terra_sol_fresh_final_findings(
+                            context=context,
+                            config=config,
+                            state=state,
+                            worktree=worktree,
+                            artifacts_dir=artifacts_dir,
+                            round_number=round_number,
+                            pr_metadata=pr_metadata,
+                            deadline=deadline,
+                            verbose=verbose,
+                            quiet=quiet,
+                        )
+                        if fresh_findings:
+                            fix_findings = fresh_findings
+                        else:
+                            break
+                    else:
+                        break
 
         state.reviewer_status[reviewer] = "findings"
         # Capture the worktree HEAD BEFORE the primary fixer runs so the
@@ -2291,6 +2329,23 @@ def run_checkup_review_loop(
 
         state.reviewer_status[reviewer] = "clean"
         state.fresh_final_status = "clean"
+        fresh_findings = _terra_sol_fresh_final_findings(
+            context=context,
+            config=config,
+            state=state,
+            worktree=worktree,
+            artifacts_dir=artifacts_dir,
+            round_number=round_number,
+            pr_metadata=pr_metadata,
+            deadline=deadline,
+            verbose=verbose,
+            quiet=quiet,
+        )
+        if fresh_findings:
+            pending_findings = fresh_findings
+            continue
+        if state.fresh_final_status != "clean":
+            break
         state.stop_reason = _clean_stop_reason(
             fresh_final=config.require_final_fresh_review
         )
@@ -2330,6 +2385,50 @@ def run_checkup_review_loop(
     ):
         state.fresh_final_status = "clean"
 
+    if not config.unbounded_terra_sol:
+        _maybe_run_fresh_final_review_override(
+            context=context,
+            config=config,
+            state=state,
+            worktree=worktree,
+            artifacts_dir=artifacts_dir,
+            round_number=round_number,
+            pr_metadata=pr_metadata,
+            deadline=deadline,
+            verbose=verbose,
+            quiet=quiet,
+        )
+
+    report = _finalize(context, state, roles, artifacts_dir)
+    _maybe_write_agentic_artifact(context, config, state)
+    _post_review_loop_report(context, report, use_github_state)
+    return True, report, state.total_cost, state.last_model
+
+
+def _terra_sol_fresh_final_findings(
+    *,
+    context: ReviewLoopContext,
+    config: ReviewLoopConfig,
+    state: ReviewLoopState,
+    worktree: Path,
+    artifacts_dir: Path,
+    round_number: int,
+    pr_metadata: Optional[Dict[str, Any]],
+    deadline: Optional[float],
+    verbose: bool,
+    quiet: bool,
+) -> List[ReviewFinding]:
+    """Return hosted fresh-Sol findings that must re-enter the Terra loop.
+
+    Hosted execution enables ``agentic_mode``, whose generic fresh-final pass
+    can veto an otherwise-clean primary review. Terra/Sol convergence cannot
+    finalize that veto without giving Terra a chance to fix it. Run the fresh
+    Sol session at the clean boundary, mirror its status onto authoritative
+    Sol state, and return actionable findings to the normal fixer/verifier
+    cycle. A failed/degraded/missing fresh Sol pass stays hard-not-clean.
+    """
+    if not config.unbounded_terra_sol or not config.agentic_mode:
+        return []
     _maybe_run_fresh_final_review_override(
         context=context,
         config=config,
@@ -2342,11 +2441,17 @@ def run_checkup_review_loop(
         verbose=verbose,
         quiet=quiet,
     )
-
-    report = _finalize(context, state, roles, artifacts_dir)
-    _maybe_write_agentic_artifact(context, config, state)
-    _post_review_loop_report(context, report, use_github_state)
-    return True, report, state.total_cost, state.last_model
+    if state.fresh_final_status != "clean":
+        state.reviewer_status[state.active_reviewer or TERRA_SOL_REVIEWER] = (
+            state.fresh_final_status
+        )
+    findings = _actionable_findings(state, state.fresh_final_findings)
+    if findings:
+        # The generic override records a terminal stop reason because bounded
+        # agentic mode finalizes here. Terra/Sol instead continues into its
+        # fixer path, so retain the findings but clear the terminal marker.
+        state.stop_reason = ""
+    return findings
 
 
 def _maybe_run_fresh_final_review_override(
@@ -2403,6 +2508,10 @@ def _maybe_run_fresh_final_review_override(
     # fresh-final role must always spin up its own session (see docstring).
     if state.fresh_final_status != "clean":
         return
+    # Each fresh session owns a new result slot. Clear any prior veto before
+    # dispatch so an exception cannot leak stale findings into the current
+    # final artifact or accidentally feed an already-fixed row back to Terra.
+    state.fresh_final_findings = []
     try:
         # Count the session the moment we commit to launching it: a fresh
         # review that raises still consumed an invocation and must be visible

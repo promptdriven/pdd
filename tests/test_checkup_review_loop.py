@@ -14631,6 +14631,16 @@ def test_fresh_final_review_override_runs_override_role(tmp_path):
         reviewer_status={"codex": "clean"},
         active_reviewer="codex",
         fresh_final_status="clean",
+        fresh_final_findings=[
+            crl.ReviewFinding(
+                severity="critical",
+                reviewer="fresh-final",
+                area="code",
+                evidence="prior session",
+                finding="stale prior veto",
+                required_fix="already handled",
+            )
+        ],
     )
     ctx = crl.ReviewLoopContext(
         issue_url="",
@@ -14851,6 +14861,7 @@ def test_fresh_final_review_override_fails_closed_on_exception(tmp_path, capsys)
     assert state.fresh_final_review_invocations == 1
     assert state.fresh_final_status == "failed"
     assert state.fresh_final_status in crl.HARD_NOT_CLEAN_STATES
+    assert state.fresh_final_findings == []
     assert "gemini" not in state.reviewer_status
 
     # The emitted artifact must block (non-zero CLI exit), not pass.
@@ -15809,6 +15820,79 @@ class TestTerraSolUnboundedLoop:
             "max_cost_reached": False,
         }
         assert payload["status"] != "budget_exhausted"
+
+    def test_hosted_fresh_sol_findings_return_to_terra_until_clean(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """A hosted fresh-Sol veto must re-enter Terra/Sol convergence."""
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        labels: List[str] = []
+        fresh_final_calls = 0
+        late_finding = [
+            {
+                "severity": "critical",
+                "finding": "late hosted issue",
+                "required_fix": "repair the late issue",
+                "area": "code",
+            }
+        ]
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            nonlocal fresh_final_calls
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if "fresh-final" in label:
+                fresh_final_calls += 1
+                if fresh_final_calls == 1:
+                    return (
+                        True,
+                        _json("findings", late_finding),
+                        0.01,
+                        "gpt-5.6-sol",
+                    )
+                return True, _json("clean"), 0.01, "gpt-5.6-sol"
+            if "verify" in label:
+                return True, _json("clean"), 0.01, "gpt-5.6-sol"
+            if "fix" in label:
+                return True, _json("clean"), 0.01, "gpt-5.6-sol"
+            return True, _json("clean"), 0.01, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        artifact_path = tmp_path / "hosted-terra-sol.json"
+
+        success, report, _cost, _model = mod.run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(
+                agentic_mode=True,
+                agentic_artifact_path=str(artifact_path),
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert fresh_final_calls == 2
+        assert len([label for label in labels if "fix" in label]) == 1
+        assert len([label for label in labels if "verify" in label]) == 1
+        assert "sol-review-status: clean" in report
+        assert "terra-sol-model: gpt-5.6-sol" in report
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert final_state["sol_review_status"] == "clean"
+        assert final_state["fresh_final_status"] == "clean"
+        assert all(row["status"] != "open" for row in final_state["findings"])
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        assert artifact["status"] == "passed"
 
     def test_terra_sol_state_reflects_mode(
         self, monkeypatch: Any, tmp_path: Path
