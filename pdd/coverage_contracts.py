@@ -237,6 +237,7 @@ def scan_story_evidence(
     stories_dir: Path,
     prompt_path: Path,
     read_errors: Optional[list[str]] = None,
+    project_root: Optional[Path] = None,
 ) -> dict[str, list[str]]:
     """
     Scan story__*.md files (recursively) and return a mapping
@@ -253,7 +254,7 @@ def scan_story_evidence(
         return evidence
 
     prompt_name, allow_prompt_basename = _prompt_reference_scope(
-        prompt_path, stories_dir
+        prompt_path, stories_dir, project_root
     )
 
     for story_path in sorted(stories_dir.rglob("story__*.md")):
@@ -293,6 +294,7 @@ def scan_story_validation_failures(
     stories_dir: Path,
     prompt_path: Path,
     read_errors: Optional[list[str]] = None,
+    project_root: Optional[Path] = None,
 ) -> dict[str, list[str]]:
     """
     Return rule_id -> validation failure descriptions for linked stories.
@@ -307,7 +309,7 @@ def scan_story_validation_failures(
         return failures
 
     prompt_name, allow_prompt_basename = _prompt_reference_scope(
-        prompt_path, stories_dir
+        prompt_path, stories_dir, project_root
     )
 
     for story_path in sorted(stories_dir.rglob("story__*.md")):
@@ -372,18 +374,44 @@ def _normalise_prompt_identity(value: str) -> str:
     return normalised.lower()
 
 
-def _prompt_reference_scope(prompt_path: Path, tests_dir: Path) -> tuple[str, bool]:
+def _prompt_reference_scope(
+    prompt_path: Path,
+    evidence_dir: Path,
+    project_root: Optional[Path] = None,
+) -> tuple[str, bool]:
     """Return project-relative identity and whether basename fallback is unique."""
     # Preserve the caller-visible lexical path (not a symlink-resolved path),
     # because prompt references use project identities such as ``prompts/x``.
     resolved_prompt = Path(os.path.abspath(prompt_path))
-    resolved_tests = Path(os.path.abspath(tests_dir))
-    common_root = Path(os.path.commonpath((resolved_prompt, resolved_tests)))
-    identity = resolved_prompt.relative_to(common_root).as_posix()
+    resolved_evidence = Path(os.path.abspath(evidence_dir))
+    common_root = Path(os.path.commonpath((resolved_prompt, resolved_evidence)))
+    trusted_root: Optional[Path] = None
+    if project_root is not None:
+        candidate_root = Path(os.path.abspath(project_root))
+        if resolved_prompt.is_relative_to(candidate_root):
+            trusted_root = candidate_root
+    else:
+        for candidate_root in (common_root, *common_root.parents):
+            if any(
+                (candidate_root / marker).exists()
+                for marker in (".git", ".pdd", "architecture.json", "pyproject.toml")
+            ):
+                trusted_root = candidate_root
+                break
+        if trusted_root is None and resolved_prompt.parent == common_root:
+            # Legacy flat fixtures/projects can prove uniqueness within their
+            # complete local root. Nested package-local roots cannot.
+            trusted_root = common_root
+
+    identity_root = trusted_root or common_root
+    identity = resolved_prompt.relative_to(identity_root).as_posix()
+    if trusted_root is None:
+        return _normalise_prompt_identity(identity), False
+
     basename = resolved_prompt.name.lower()
     basename_matches = [
         candidate
-        for candidate in common_root.rglob("*.prompt")
+        for candidate in trusted_root.rglob("*.prompt")
         if candidate.name.lower() == basename
     ]
     return _normalise_prompt_identity(identity), len(basename_matches) == 1
@@ -400,12 +428,9 @@ def _prompt_reference_matches(
     normalised_target = _normalise_prompt_identity(prompt_identity)
     if normalised_ref == normalised_target:
         return True
-    if not allow_basename:
-        return False
-    if "/" not in normalised_target:
-        return posixpath.basename(normalised_ref) == normalised_target
     return (
-        "/" not in normalised_ref
+        allow_basename
+        and "/" not in normalised_ref
         and normalised_ref == posixpath.basename(normalised_target)
     )
 
@@ -415,6 +440,7 @@ def scan_test_evidence(
     prompt_path: Optional[Path] = None,
     read_errors: Optional[list[str]] = None,
     require_prompt_qualified: bool = False,
+    project_root: Optional[Path] = None,
 ) -> dict[str, list[str]]:
     """
     Heuristically scan test files for rule ID references.
@@ -433,7 +459,7 @@ def scan_test_evidence(
     allow_prompt_basename = False
     if prompt_path is not None:
         prompt_name, allow_prompt_basename = _prompt_reference_scope(
-            prompt_path, tests_dir
+            prompt_path, tests_dir, project_root
         )
 
     for test_file in sorted(tests_dir.rglob("test_*.py")):
@@ -460,6 +486,7 @@ def scan_test_validation_failures(
     prompt_path: Optional[Path] = None,
     read_errors: Optional[list[str]] = None,
     require_prompt_qualified: bool = False,
+    project_root: Optional[Path] = None,
 ) -> dict[str, list[str]]:
     """
     Return rule_id -> validation failure descriptions for test files.
@@ -477,7 +504,7 @@ def scan_test_validation_failures(
     allow_prompt_basename = False
     if prompt_path is not None:
         prompt_name, allow_prompt_basename = _prompt_reference_scope(
-            prompt_path, tests_dir
+            prompt_path, tests_dir, project_root
         )
 
     for test_file in sorted(tests_dir.rglob("test_*.py")):
@@ -812,6 +839,7 @@ def _linked_story_ids(
     stories_dir: Path,
     prompt_path: Path,
     read_errors: Optional[list[str]] = None,
+    project_root: Optional[Path] = None,
 ) -> list[str]:
     """Return the ``story_id`` of every story file that links to *prompt_path*.
 
@@ -824,7 +852,7 @@ def _linked_story_ids(
     if not stories_dir.exists():
         return []
     prompt_name, allow_prompt_basename = _prompt_reference_scope(
-        prompt_path, stories_dir
+        prompt_path, stories_dir, project_root
     )
     ids: set[str] = set()
     for story_path in sorted(stories_dir.rglob("story__*.md")):
@@ -854,6 +882,7 @@ def _cross_unit_story_partners(
     stories_dir: Path,
     prompt_path: Path,
     read_errors: Optional[list[str]] = None,
+    project_root: Optional[Path] = None,
 ) -> dict[str, list[str]]:
     """Return linked cross-unit story filename -> all declared dev units."""
     if not stories_dir.exists():
@@ -862,7 +891,7 @@ def _cross_unit_story_partners(
     from .user_story_tests import get_all_dev_units_for_story, story_is_cross_unit
 
     prompt_name, allow_prompt_basename = _prompt_reference_scope(
-        prompt_path, stories_dir
+        prompt_path, stories_dir, project_root
     )
     partners: dict[str, list[str]] = {}
     for story_path in sorted(stories_dir.rglob("story__*.md")):
@@ -941,6 +970,7 @@ def build_coverage(
     require_prompt_qualified_tests: bool = False,
     story_map: "Optional[object]" = None,
     global_story_registry: Optional[set[str]] = None,
+    project_root: Optional[Path] = None,
 ) -> CoverageResult:
     """
     Build a coverage matrix for a single prompt file.
@@ -1013,8 +1043,12 @@ def build_coverage(
             )
 
     read_errors: list[str] = []
-    story_evidence = scan_story_evidence(stories_dir, path, read_errors=read_errors)
-    cross_unit_partners = _cross_unit_story_partners(stories_dir, path, read_errors=read_errors)
+    story_evidence = scan_story_evidence(
+        stories_dir, path, read_errors=read_errors, project_root=project_root
+    )
+    cross_unit_partners = _cross_unit_story_partners(
+        stories_dir, path, read_errors=read_errors, project_root=project_root
+    )
     result.cross_unit_stories = sorted(cross_unit_partners)
     story_evidence_for_status, newly_counted_cross_unit = _story_evidence_for_status(
         story_evidence,
@@ -1026,15 +1060,19 @@ def build_coverage(
         prompt_path=path,
         read_errors=read_errors,
         require_prompt_qualified=require_prompt_qualified_tests,
+        project_root=project_root,
     )
     validation_failures: dict[str, list[str]] = {}
     for source in (
-        scan_story_validation_failures(stories_dir, path, read_errors=read_errors),
+        scan_story_validation_failures(
+            stories_dir, path, read_errors=read_errors, project_root=project_root
+        ),
         scan_test_validation_failures(
             tests_dir,
             prompt_path=path,
             read_errors=read_errors,
             require_prompt_qualified=require_prompt_qualified_tests,
+            project_root=project_root,
         ),
     ):
         for rid, messages in source.items():
@@ -1062,7 +1100,9 @@ def build_coverage(
     if global_story_registry is not None:
         global_story_registry.update(newly_counted_cross_unit)
 
-    _attach_story_regression(result, path, stories_dir, tests_dir, story_map)
+    _attach_story_regression(
+        result, path, stories_dir, tests_dir, story_map, project_root
+    )
 
     return result
 
@@ -1073,6 +1113,7 @@ def _attach_story_regression(
     stories_dir: Path,
     tests_dir: Path,
     story_map: "Optional[object]",
+    project_root: Optional[Path],
 ) -> None:
     """Fill the orthogonal per-story ``has_regression_test`` dimension.
 
@@ -1081,7 +1122,12 @@ def _attach_story_regression(
     be supplied by the caller (``build_coverage_directory``) so a directory scan
     does not re-collect per prompt.
     """
-    linked = _linked_story_ids(stories_dir, path, read_errors=result.read_errors)
+    linked = _linked_story_ids(
+        stories_dir,
+        path,
+        read_errors=result.read_errors,
+        project_root=project_root,
+    )
     if not linked and story_map is None:
         return  # nothing story-linked here and no shared map — stay cheap
 
@@ -1163,6 +1209,7 @@ def build_coverage_directory(
                 require_prompt_qualified_tests=True,
                 story_map=shared_story_map,
                 global_story_registry=global_story_registry,
+                project_root=directory.parent,
             )
         )
     return results

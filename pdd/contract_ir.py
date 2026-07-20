@@ -73,7 +73,8 @@ class CoversRef:
     rule_id:
         Canonical uppercase rule ID (e.g. ``"R1"``, ``"R-001"``).
     prompt_filename:
-        Basename of the prompt the reference scopes to, or ``None`` for
+        Normalized path/reference identity of the prompt the reference scopes
+        to (for example ``"prompts/api/foo.prompt"``), or ``None`` for the
         single-prompt format (``- R1: …``).
     line:
         Verbatim source line the reference was parsed from (post lstrip).

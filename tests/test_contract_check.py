@@ -805,6 +805,36 @@ class TestCrossModuleCovers:
         assert issues[0].code == "UNKNOWN_STORY_REF"
         assert issues[0].rule_id == "R99"
 
+    def test_qualified_ref_uses_unique_legacy_basename_map(self):
+        text = self._story("- prompts/foo.prompt#R99: does not exist\n")
+        issues = _check_story_covers(text, {"foo.prompt": {"R1"}})
+        assert len(issues) == 1
+        assert issues[0].code == "UNKNOWN_STORY_REF"
+        assert issues[0].rule_id == "R99"
+
+    def test_qualified_ref_does_not_cross_match_other_same_basename_path(self):
+        text = self._story("- prompts/a/foo.prompt#R1: belongs to A\n")
+        issues = _check_story_covers(
+            text,
+            {
+                "prompts/b/foo.prompt": {"R2"},
+                "prompts/c/foo.prompt": {"R3"},
+            },
+        )
+        assert issues == []
+
+    def test_qualified_ref_checks_exact_path_among_duplicate_basenames(self):
+        text = self._story("- prompts/a/foo.prompt#R99: missing from A\n")
+        issues = _check_story_covers(
+            text,
+            {
+                "prompts/a/foo.prompt": {"R1"},
+                "prompts/b/foo.prompt": {"R99"},
+            },
+        )
+        assert len(issues) == 1
+        assert issues[0].code == "UNKNOWN_STORY_REF"
+
     def test_fixture_cross_module_story_no_issues(self):
         results = check_stories(FIXTURES, FIXTURES)
         cross = next(

@@ -276,7 +276,8 @@ class TestStoryLinkPrompt:
 
     def test_path_variant_matches(self):
         text = "<!-- pdd-story-prompts: prompts/foo_python.prompt -->"
-        assert _story_links_prompt(text, "foo_python.prompt")
+        assert _story_links_prompt(text, "prompts/foo_python.prompt")
+        assert not _story_links_prompt(text, "foo_python.prompt")
 
     def test_case_insensitive_match(self):
         text = "<!-- pdd-story-prompts: FOO_PYTHON.PROMPT -->"
@@ -410,6 +411,59 @@ class TestScanStoryEvidence:
         assert result_a.rules[0].status == STATUS_STORY_ONLY
         assert result_b.rules[0].stories == []
         assert result_b.rules[0].status == STATUS_UNCHECKED
+
+    def test_wrong_qualified_story_path_never_falls_back_to_unique_basename(self, tmp_path):
+        prompt = tmp_path / "prompts" / "a" / "foo.prompt"
+        prompt.parent.mkdir(parents=True)
+        prompt.write_text(
+            "<contract_rules>\nR1a - Specialized\n"
+            "The system MUST specialize.\n</contract_rules>\n",
+            encoding="utf-8",
+        )
+        stories_dir = tmp_path / "stories"
+        stories_dir.mkdir()
+        (stories_dir / "story__wrong.md").write_text(
+            "<!-- pdd-story-prompts: prompts/wrong/foo.prompt -->\n"
+            "## Covers\n- prompts/wrong/foo.prompt#R1a: wrong owner\n\n"
+            "## Acceptance Criteria\n- It works.\n",
+            encoding="utf-8",
+        )
+
+        result = build_coverage(
+            prompt,
+            stories_dir=stories_dir,
+            tests_dir=tmp_path / "none",
+            project_root=tmp_path,
+        )
+        assert result.rules[0].stories == []
+        assert result.rules[0].status == STATUS_UNCHECKED
+
+    def test_package_local_scope_cannot_prove_legacy_basename_unique(self, tmp_path):
+        package_a = tmp_path / "packages" / "a"
+        prompt_a = package_a / "prompts" / "foo.prompt"
+        prompt_b = tmp_path / "packages" / "b" / "prompts" / "foo.prompt"
+        prompt_a.parent.mkdir(parents=True)
+        prompt_b.parent.mkdir(parents=True)
+        contract = (
+            "<contract_rules>\nR1a - Specialized\n"
+            "The system MUST specialize.\n</contract_rules>\n"
+        )
+        prompt_a.write_text(contract, encoding="utf-8")
+        prompt_b.write_text(contract, encoding="utf-8")
+        stories_dir = package_a / "stories"
+        stories_dir.mkdir()
+        (stories_dir / "story__legacy.md").write_text(
+            "<!-- pdd-story-prompts: foo.prompt -->\n"
+            "## Covers\n- R1a: ambiguous legacy owner\n\n"
+            "## Acceptance Criteria\n- It works.\n",
+            encoding="utf-8",
+        )
+
+        result = build_coverage(
+            prompt_a, stories_dir=stories_dir, tests_dir=package_a / "tests"
+        )
+        assert result.rules[0].stories == []
+        assert result.rules[0].status == STATUS_UNCHECKED
 
 
 class TestStoryValidationFailures:

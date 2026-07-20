@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import posixpath
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -613,16 +614,35 @@ def _check_story_covers(
     if not covers_text or linked_prompt_rules is None:
         return issues
 
+    def _prompt_rules_for(reference: str) -> set[str]:
+        normalised_ref = posixpath.normpath(reference.replace("\\", "/")).lower()
+        normalised_map = {
+            posixpath.normpath(key.replace("\\", "/")).lower(): ids
+            for key, ids in linked_prompt_rules.items()
+        }
+        if normalised_ref in normalised_map:
+            return normalised_map[normalised_ref]
+
+        basename = posixpath.basename(normalised_ref)
+        candidates = [
+            (key, ids)
+            for key, ids in normalised_map.items()
+            if posixpath.basename(key) == basename
+        ]
+        if len(candidates) != 1:
+            return set()
+        key, ids = candidates[0]
+        # A basename-only map is legacy and cannot express the qualified path;
+        # accept it only when unique. Never substitute one qualified path for
+        # another merely because their basenames match.
+        if "/" in normalised_ref and "/" in key:
+            return set()
+        return ids
+
     for ref in iter_covers_refs(covers_text):
         if ref.prompt_filename is not None:
             prompt_file = ref.prompt_filename
-            prompt_ids = linked_prompt_rules.get(prompt_file, set())
-            if not prompt_ids:
-                prompt_ids = next(
-                    (ids for k, ids in linked_prompt_rules.items()
-                     if k.endswith(prompt_file)),
-                    set(),
-                )
+            prompt_ids = _prompt_rules_for(prompt_file)
             if prompt_ids and ref.rule_id not in prompt_ids:
                 issues.append(ContractIssue(
                     level="warn",

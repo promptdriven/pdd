@@ -19,6 +19,12 @@
   ASCII letter suffix as canonical explicit IDs everywhere this module validates
   an ID. Normalize the suffix to uppercase and keep `R1` distinct from `R1A`.
 - MUST-NOT coverage check must only treat explicit leading `<coverage>` entries as coverage.
+- Resolve path-qualified `## Covers` prompt identities exactly after POSIX/case
+  normalization. A qualified reference such as `prompts/foo.prompt#R99` may use
+  a unique legacy basename-only rule map entry (`foo.prompt`) and MUST then warn
+  when `R99` is unknown. Never substitute a different qualified prompt path by
+  basename; same-basename paths remain distinct and ambiguous basename matches
+  fail closed.
 - Provide stable JSON-serializable results (`as_dict()`).
 
 % Deliverables
