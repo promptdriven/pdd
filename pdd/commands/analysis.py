@@ -222,17 +222,37 @@ def _mark_command_failed(ctx: click.Context) -> None:
 
 def _structured_failure_for_exception(exception: Exception) -> Tuple[str, str]:
     """Classify provider failures without exposing secret-bearing exception text."""
-    name = type(exception).__name__.lower()
+    raw_name = type(exception).__name__
+    separated_name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", raw_name)
+    separated_name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", separated_name)
+    ordered_name_tokens = [
+        token for token in re.split(r"[^a-z0-9]+", separated_name.lower()) if token
+    ]
+    name_tokens = set(ordered_name_tokens)
+    normalized_name = "".join(ordered_name_tokens)
     message = str(exception).lower()
-    if "timeout" in name or "timed out" in message or "timeout" in message:
+    if "timeout" in normalized_name or "timed out" in message or "timeout" in message:
         return (
             "provider:TIMEOUT",
             "Story detection timed out before producing a complete result.",
         )
-    if any(
+    auth_class = "auth" in name_tokens or any(
+        indicator in normalized_name
+        for indicator in (
+            "authentication",
+            "authorization",
+            "unauthenticated",
+            "credential",
+            "permissiondenied",
+            "unauthorized",
+            "forbidden",
+        )
+    )
+    auth_message = any(
         token in message
         for token in ("auth", "credential", "api key", "unauthorized", "forbidden")
-    ):
+    )
+    if auth_class or auth_message:
         return (
             "auth:NON_INTERACTIVE_CREDENTIALS_MISSING",
             "Non-interactive credentials are missing or invalid.",

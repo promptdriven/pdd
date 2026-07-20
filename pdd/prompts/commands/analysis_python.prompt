@@ -69,6 +69,14 @@
          classified message and appropriate authenticate/retry guidance (unless
          quiet), never raw exception text, and exit 3. Exact-manifest metadata
          mismatch MUST emit a human diagnostic before exiting 3.
+         Authentication classification MUST also recognize normalized exception
+         class-name indicators when the message is generic: exact `auth` tokens
+         and the authentication, authorization, unauthenticated, credential,
+         permission-denied, unauthorized, and forbidden families. Split CamelCase,
+         acronym, underscore, and punctuation boundaries before matching so an
+         unrelated class merely containing letters such as `auth` is not treated
+         as an authentication failure. Timeout classification takes precedence;
+         all other unknown exception types remain provider-unavailable failures.
        - Quiet human story mode MUST capture and discard evaluator-layer stdout,
          stderr, and shared Rich-console output (including preprocessing progress
          emitted before a provider failure). It must preserve the same exit code

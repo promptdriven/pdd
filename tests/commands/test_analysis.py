@@ -535,6 +535,65 @@ def test_detect_stories_real_detector_exception_never_leaks(quiet):
         assert "authenticate with a supported provider" in result.output
 
 
+@pytest.mark.parametrize(
+    ("exception_name", "safe_message", "recovery"),
+    [
+        (
+            "AuthenticationError",
+            "credentials are missing or invalid",
+            "authenticate with a supported provider",
+        ),
+        (
+            "PermissionDenied",
+            "credentials are missing or invalid",
+            "authenticate with a supported provider",
+        ),
+        (
+            "RequestTimeoutError",
+            "timed out",
+            "retry the command",
+        ),
+        (
+            "TransportFailure",
+            "provider is unavailable",
+            "retry the command",
+        ),
+        (
+            "AuthoringError",
+            "provider is unavailable",
+            "retry the command",
+        ),
+    ],
+)
+def test_detect_stories_real_detector_classifies_generic_sdk_exception_names(
+    exception_name, safe_message, recovery
+):
+    """SDK class names classify generic-message failures without leaking text."""
+    runner = CliRunner()
+    secret = "opaque failure marker super-secret-provider-payload"
+    exception_type = type(exception_name, (RuntimeError,), {})
+    with runner.isolated_filesystem():
+        os.makedirs("prompts")
+        os.makedirs("user_stories")
+        Path("prompts/x.prompt").write_text("prompt", encoding="utf-8")
+        Path("user_stories/story__x.md").write_text(
+            "## Story\n<!-- pdd-story-prompts: prompts/x.prompt -->\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.detect_change.llm_invoke", side_effect=exception_type(secret)
+        ) as invoke:
+            result = runner.invoke(detect_change, ["--stories"], obj={})
+
+    assert invoke.call_count == 1
+    assert result.exit_code == 3
+    assert "UNKNOWN:" in result.output
+    assert safe_message in result.output
+    assert recovery in result.output
+    assert secret not in result.output
+    assert "super-secret-provider-payload" not in result.output
+
+
 def test_detect_stories_passing_result_top_level_exits_zero():
     """Passing story mode remains successful through the registered CLI."""
     runner = CliRunner()
