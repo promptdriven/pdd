@@ -8168,6 +8168,22 @@
             "pdd/prompts/operation_log_python.prompt"
           ],
           "required": true
+        },
+        {
+          "obligation_id": "pytest-operation-log",
+          "kind": "test",
+          "validator_id": "pytest",
+          "validator_config_digest": "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+          "requirement_ids": [
+            "CONTRACT-SHA256:370d4f511f320b3db71cb74bb17532a6293d1c48def1a0faebfa8fbb7f00eb12"
+          ],
+          "artifact_paths": [
+            "tests/test_operation_log.py"
+          ],
+          "code_under_test_paths": [
+            "pdd/operation_log.py"
+          ],
+          "required": true
         }
       ]
     },
@@ -9268,6 +9284,22 @@
             "pdd/prompts/server/routes/prompts_python.prompt"
           ],
           "required": true
+        },
+        {
+          "obligation_id": "pytest-server-routes-prompts",
+          "kind": "test",
+          "validator_id": "pytest",
+          "validator_config_digest": "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+          "requirement_ids": [
+            "CONTRACT-SHA256:0cef545efaa9eef5007d338656c0e40e70db314ddbd0e7a00b64f300dba7f342"
+          ],
+          "artifact_paths": [
+            "tests/server/routes/test_prompts.py"
+          ],
+          "code_under_test_paths": [
+            "pdd/server/routes/prompts.py"
+          ],
+          "required": true
         }
       ]
     },
@@ -10146,6 +10178,22 @@
           ],
           "artifact_paths": [
             "pdd/prompts/update_main_python.prompt"
+          ],
+          "required": true
+        },
+        {
+          "obligation_id": "pytest-update-main",
+          "kind": "test",
+          "validator_id": "pytest",
+          "validator_config_digest": "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+          "requirement_ids": [
+            "CONTRACT-SHA256:17fc1c03860bca7d7889ac388e4de26c19b73edb7ead9bea20f6be1016995bb5"
+          ],
+          "artifact_paths": [
+            "tests/test_update_main.py"
+          ],
+          "code_under_test_paths": [
+            "pdd/update_main.py"
           ],
           "required": true
         }

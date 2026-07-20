@@ -44,11 +44,11 @@ _LEGACY_PDD_1989_PROFILE_BYTES = (
 # historical composition, so bind both rotation-policy and profile bytes here.
 _PR1971_COMBINED_SCHEMA_2_HISTORY = (
     "8f423a11f5c25c3042073e733085ad08c5d03a999087cf04d2f6bc7f24fb0d72",
-    "ca4c27b793474fae89dd58e74450db28e36137685f4f0833a74cb7dbf8b32647",
+    "60ce5de439f3e347e3a15fcd6456c64e2325494dede38a1d0c9eafaf60a1510c",
 )
 _PR1971_COMBINED_PROFILE_BYTES = (
     "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
-    "260dee7eb1efde3c3b3cf342d540952b43fb5f41915669dc9dd7483a692a2af2",
+    "2f939cefcefb727c8c8d8705547f0df2d3164daf99814059fef2ef3f41c13ede",
 )
 
 
@@ -420,7 +420,7 @@ _PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
         "e9314dff3064004dafe75821e7aec984cbbec76e4745f6c49e73c50105ecb9c8",
         "370d4f511f320b3db71cb74bb17532a6293d1c48def1a0faebfa8fbb7f00eb12",
         "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
-        "260dee7eb1efde3c3b3cf342d540952b43fb5f41915669dc9dd7483a692a2af2",
+        "2f939cefcefb727c8c8d8705547f0df2d3164daf99814059fef2ef3f41c13ede",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/pin_example_hack_python.prompt",
@@ -428,7 +428,7 @@ _PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
         "7efec65cda40e8357cd08c974abc4b1aebb450d2fe75401e5cc5629e0696feb9",
         "4b45b2744bb856ba48681d3038ba41512353df5e0ed77c3d698928ca89c6cabb",
         "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
-        "260dee7eb1efde3c3b3cf342d540952b43fb5f41915669dc9dd7483a692a2af2",
+        "2f939cefcefb727c8c8d8705547f0df2d3164daf99814059fef2ef3f41c13ede",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/server/routes/prompts_python.prompt",
@@ -436,7 +436,7 @@ _PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
         "8a88807f83d1d4bd5cfa9ccbd465a619a2d00fef9f81c53b84047470c8399293",
         "0cef545efaa9eef5007d338656c0e40e70db314ddbd0e7a00b64f300dba7f342",
         "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
-        "260dee7eb1efde3c3b3cf342d540952b43fb5f41915669dc9dd7483a692a2af2",
+        "2f939cefcefb727c8c8d8705547f0df2d3164daf99814059fef2ef3f41c13ede",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/sync_determine_operation_python.prompt",
@@ -444,7 +444,7 @@ _PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
         "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
         "fd24cdd0df308353e33bfe6d7e004cd3064303c3d1eef536b1adbfc3a67bd1d8",
         "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
-        "260dee7eb1efde3c3b3cf342d540952b43fb5f41915669dc9dd7483a692a2af2",
+        "2f939cefcefb727c8c8d8705547f0df2d3164daf99814059fef2ef3f41c13ede",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/sync_orchestration_python.prompt",
@@ -452,7 +452,7 @@ _PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
         "ca4ad5eff6774715d7a65c73e17a12f79da66cb409c69fe90bf41ae097181266",
         "5420f3f617586ceb3149a9efb557968b25115855ae65275be2d11d55c91f227e",
         "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
-        "260dee7eb1efde3c3b3cf342d540952b43fb5f41915669dc9dd7483a692a2af2",
+        "2f939cefcefb727c8c8d8705547f0df2d3164daf99814059fef2ef3f41c13ede",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/update_main_python.prompt",
@@ -460,7 +460,7 @@ _PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
         "b1042be0dd594c9bbb197a4afe7e5c5a12aaad1574feadf7cb5b26f9bf85bccd",
         "17fc1c03860bca7d7889ac388e4de26c19b73edb7ead9bea20f6be1016995bb5",
         "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
-        "260dee7eb1efde3c3b3cf342d540952b43fb5f41915669dc9dd7483a692a2af2",
+        "2f939cefcefb727c8c8d8705547f0df2d3164daf99814059fef2ef3f41c13ede",
     ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PR1971_COMBINED_REQUIREMENT_TRANSITIONS

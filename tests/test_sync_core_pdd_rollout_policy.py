@@ -40,7 +40,7 @@ PR_2017_PHASE_A_BASE = "c887daba0d171585658f8205e79316e5f36f82c6"
 PR_2017_PROTECTED_BASE = "e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347"
 PR_1971_COMBINED_BASE = "e7735e0f35a0915707142bfd4c767df59f8c3b9e"
 PR_1971_COMBINED_PROFILE_DIGEST = (
-    "260dee7eb1efde3c3b3cf342d540952b43fb5f41915669dc9dd7483a692a2af2"
+    "2f939cefcefb727c8c8d8705547f0df2d3164daf99814059fef2ef3f41c13ede"
 )
 PR_1971_COMBINED_PROMPT_PATHS = {
     "pdd/prompts/operation_log_python.prompt",
@@ -83,6 +83,23 @@ FOUNDATION_OBLIGATIONS = {
     "pytest-signer-process": {
         "tests": ("tests/test_sync_core_trust.py",),
         "code": ("pdd/sync_core/signer_process.py",),
+    },
+}
+PR_1971_PYTEST_OBLIGATIONS = {
+    "pdd/prompts/operation_log_python.prompt": {
+        "obligation_id": "pytest-operation-log",
+        "tests": ("tests/test_operation_log.py",),
+        "code": ("pdd/operation_log.py",),
+    },
+    "pdd/prompts/server/routes/prompts_python.prompt": {
+        "obligation_id": "pytest-server-routes-prompts",
+        "tests": ("tests/server/routes/test_prompts.py",),
+        "code": ("pdd/server/routes/prompts.py",),
+    },
+    "pdd/prompts/update_main_python.prompt": {
+        "obligation_id": "pytest-update-main",
+        "tests": ("tests/test_update_main.py",),
+        "code": ("pdd/update_main.py",),
     },
 }
 LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS = {
@@ -1215,6 +1232,28 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
         for obligation in foundation_pytest.values()
         for path in obligation.code_under_test_paths
     } == FOUNDATION_PROFILE_PATHS
+
+
+
+def test_pr1971_profile_pytest_obligations_are_exact() -> None:
+    """Retain the three required test-to-code bindings for the #1971 units."""
+    policy = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+    profiles = {row["prompt_path"]: row for row in policy["profiles"]}
+
+    for prompt_path, expected_obligation in PR_1971_PYTEST_OBLIGATIONS.items():
+        profile = profiles[prompt_path]
+        obligation = next(
+            item
+            for item in profile["obligations"]
+            if item["obligation_id"] == expected_obligation["obligation_id"]
+        )
+        assert obligation["kind"] == "test"
+        assert obligation["validator_id"] == "pytest"
+        assert obligation["validator_config_digest"] == PYTEST_VALIDATOR_CONFIG_DIGEST
+        assert obligation["required"] is True
+        assert obligation["requirement_ids"] == profile["required_requirement_ids"]
+        assert tuple(obligation["artifact_paths"]) == expected_obligation["tests"]
+        assert tuple(obligation["code_under_test_paths"]) == expected_obligation["code"]
 
 
 def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
