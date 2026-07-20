@@ -459,7 +459,32 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
     assert prompt_digest != STORY_REGRESSION_DORMANT_ROTATION["base_prompt_sha256"]
     assert prompt_digest == STORY_REGRESSION_DORMANT_ROTATION["head_prompt_sha256"]
     assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
-    assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+    assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
+
+    current_profile_authorizations = [
+        authorization
+        for authorization in verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+        if authorization.bindings.head_policy_sha256 == profile_digest
+    ]
+    assert {
+        (
+            authorization.prompt_path.as_posix(),
+            authorization.from_requirement_id,
+            authorization.to_requirement_id,
+        )
+        for authorization in current_profile_authorizations
+    } == {
+        (
+            "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
+            "CONTRACT-SHA256:379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
+            "CONTRACT-SHA256:1c1d2b6f57e191e486cd33dd5540cc27c25b64c88ec4e9a08edf2151f6468d12",
+        ),
+        (
+            "pdd/prompts/agentic_common_python.prompt",
+            "CONTRACT-SHA256:c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
+            "CONTRACT-SHA256:e4b8ea5e9122504817d93e4229ff4328a082cb2fd2ab94ac3b0be2a89096207c",
+        ),
+    }
 
 
 def _requirement_authorization_row(authorization) -> dict[str, str]:
