@@ -353,6 +353,44 @@ authoritative status proves that no attempt was started by the normal authority
 and the safety record explicitly transfers creation authority to the operator.
 Never use both an attempt ID and a full idempotency key.
 
+### Continue after validation-only Veo recovery
+
+Use this path only when GVS/PDS has fixed a failed validation analysis without
+regenerating the provider video. The recovery input must be the exact successful validation-only Veo job
+from the selected release project. Before continuing, save the validation job
+ID and its parent run, project ID, clip IDs, request hashes,
+provider/backend/model provenance, current MP4 hashes, validation metadata
+generations, and release-metadata hash with the release evidence.
+
+Prove the GVS change is deployed, then use a locally built PDS CLI from the exact deployed GVS commit.
+Do not use an older published PDS package or an unreviewed working tree. Reuse
+the saved script and release notes byte-for-byte, and use a new labelled attempt
+because this creates a new downstream release-video run:
+
+```bash
+GVS_DEPLOYED_SHA=<exact-40-character-deployed-GVS-commit>
+test "$(git -C /path/to/gvs rev-parse HEAD)" = "$GVS_DEPLOYED_SHA"
+
+PDS_CLI="node /path/to/gvs/cli/pds/bin/pds --timeout 120s" \
+make release-video \
+  RELEASE_TAG="$RELEASE_TAG" \
+  RELEASE_GIT_SHA="$RELEASE_GIT_SHA" \
+  RELEASE_VIDEO_PROJECT_ID=<selected-release-project-id> \
+  RELEASE_VIDEO_SCRIPT_PATH=".pdd/release-videos/$RELEASE_TAG/release_video_script.md" \
+  RELEASE_VIDEO_RELEASE_NOTES_PATH=".pdd/release-videos/$RELEASE_TAG/release_notes.md" \
+  RELEASE_VIDEO_ATTEMPT_ID=<new-labelled-attempt> \
+  RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID=<exact-validation-only-job-id>
+```
+
+Do not set `RELEASE_VIDEO_FORCE_REGENERATE=1` or pass a metadata replacement
+mode on this path. The wrapper fails before PDS if the selected project is
+missing or force regeneration is requested. PDS independently verifies the job,
+release identity, complete current clip set, lineage, metadata, and hashes. A
+valid recovery does not run Veo generation or reserve Veo spend; it starts a new
+auditable downstream run that skips the already-proven Veo stage and continues
+through stitch, audit, distribution, and publish. Retain the new parent run and
+all downstream immutable receipts separately from the failed attempt.
+
 ## Warnings versus blockers
 
 A warning label is not authority to publish. Use the current immutable audit

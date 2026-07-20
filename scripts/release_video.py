@@ -105,7 +105,7 @@ VISUAL_SAFETY_CHECKS = {
     "brittle_mandatory_motion": "hasNoMandatoryMotionVisuals",
 }
 READABLE_VISUAL_RE = re.compile(
-    r"\b(?:workstation|laptops?|phones?|monitors?|screens?|terminal|console|shell|"
+    r"\b(?:workstation|laptops?|phones?|monitors?|screens?|terminal|console|"
     r"source\s+code|code(?:\s+snippet)?|commands?|makefile|browsers?|web\s+pages?|"
     r"user\s+interface|ui|dashboard|documents?|docs?|changelog|release\s+notes?|"
     r"github(?:\s+page)?|pull\s+requests?|issues?|json|ya?ml|configuration|config|"
@@ -117,6 +117,204 @@ READABLE_VISUAL_RE = re.compile(
     r"ui\s+controls?|(?:input|web|application)\s+forms?|"
     r"(?:graphical|software|application|app)\s+(?:user\s+)?interfaces?)\b",
     flags=re.IGNORECASE,
+)
+UNAMBIGUOUS_SHELL_IMPLEMENTATION_RE = re.compile(
+    r"\b(?:powershell|pwsh|xonsh|zsh|ksh|csh|tcsh)\b",
+    flags=re.IGNORECASE,
+)
+COMMAND_SHELL_NAME_PATTERN = (
+    r"(?:bash|zsh|xonsh|korn|ksh|csh|tcsh|bourne(?:[-\s]+again)?|powershell)"
+)
+SHELL_PROMPT_TARGET_PATTERN = r"prompts?\b(?![-\s]+(?:shaped|like)\b)"
+SHELL_FILE_TARGET_PATTERN = (
+    r"(?:working\s+director(?:y|ies)|directory|directory\s+listings?|"
+    r"file\s+listings?|file\s+names?|filenames?|files?)"
+)
+SHELL_OUTPUT_TARGET_PATTERN = (
+    r"(?:(?:diagnostic|build|command|standard|current)\s+)?outputs?"
+)
+SHELL_SURFACE_TARGET_PATTERN = (
+    rf"(?:{SHELL_PROMPT_TARGET_PATTERN}|"
+    r"(?:blinking\s+)?(?:cursors?|carets?)(?![-\s]+(?:shaped|like)\b)|"
+    r"cli|scripts?|screens?|panes?|transcripts?|"
+    rf"{SHELL_FILE_TARGET_PATTERN}|"
+    r"keystrokes?|stdout|stderr|stdin|"
+    r"technical\s+surfaces?)"
+)
+SHELL_READABLE_TARGET_PATTERN = (
+    rf"(?:{SHELL_SURFACE_TARGET_PATTERN}|{SHELL_OUTPUT_TARGET_PATTERN}|"
+    r"system\s+sessions?|login\s+sessions?)"
+)
+SHELL_DIRECT_TARGET_PATTERN = (
+    rf"(?:{SHELL_SURFACE_TARGET_PATTERN}|sessions?|"
+    r"(?:standard|current|command)\s+outputs?)"
+)
+SHELL_TECHNICAL_ACTION_PREDICATE_PATTERN = (
+    r"(?:hosts?|hosting|contains?|containing|shows?|showing|reads?|reading|"
+    r"lists?|listing|invokes?|invoking|displays?|displaying|presents?|"
+    r"presenting|renders?|rendering|prints?|printing|writes?|writing)"
+)
+SHELL_EVIDENCE_VERB_PATTERN = (
+    rf"(?:is|has|{SHELL_TECHNICAL_ACTION_PREDICATE_PATTERN})"
+)
+SHELL_INPUT_VERB_PATTERN = (
+    r"(?:accepts?|accepting|awaits?|awaiting|receives?|receiving|takes?|"
+    r"taking|waits?\s+for|waiting\s+for)"
+)
+SHELL_INPUT_TARGET_PATTERN = r"(?:keyboard\s+|typed\s+|user\s+)?inputs?"
+SHELL_SUBJECT_PREDICATE_PATTERN = (
+    rf"(?:{SHELL_EVIDENCE_VERB_PATTERN}|{SHELL_INPUT_VERB_PATTERN})"
+)
+SHELL_ADVERB_MORPHOLOGY_PATTERN = r"(?-i:[a-z][\w-]*(?:ly|wards|wise))"
+SHELL_CONTINUATION_PARTICLE_PATTERN = (
+    r"(?:now|then|later|still|again|soon|always|sometimes|often|never)"
+)
+SHELL_TEMPORAL_MODIFIER_PATTERN = (
+    r"(?:after|before)\s+(?:[\w-]+\s+)?(?:brief\s+)?"
+    r"(?:moments?|pauses?|beats?|delays?|intervals?|seconds?|minutes?)"
+)
+SHELL_SAME_SUBJECT_MODIFIER_PATTERN = (
+    rf"(?:{SHELL_ADVERB_MORPHOLOGY_PATTERN}|"
+    rf"{SHELL_CONTINUATION_PARTICLE_PATTERN}|{SHELL_TEMPORAL_MODIFIER_PATTERN})"
+)
+SHELL_SAME_SUBJECT_CONTINUATION_PATTERN = (
+    rf"(?:(?:(?:it|the\s+shell(?:s|-like)?)\s+)?"
+    rf"(?:{SHELL_SAME_SUBJECT_MODIFIER_PATTERN}(?:\s+|,\s*)){{0,3}}"
+    rf"{SHELL_SUBJECT_PREDICATE_PATTERN}\b|"
+    rf"its\s+(?:[\w-]+\s+){{1,3}}{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
+)
+SHELL_NEW_SUBJECT_BOUNDARY_PATTERN = (
+    r"\b(?:and|but|while|whereas|yet|as)\b\s+"
+    rf"(?!{SHELL_SAME_SUBJECT_CONTINUATION_PATTERN})"
+    rf"(?=(?:(?![.!?;]).){{1,50}}\b{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
+)
+SHELL_WITH_OTHER_SUBJECT_BOUNDARY_PATTERN = (
+    r"\bwith\b"
+    rf"(?=(?:(?![.!?;]).){{1,50}}\b{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
+)
+BASH_STRONG_SURFACE_RE = re.compile(
+    r"\bbash\s+(?:history|windows?|"
+    rf"{SHELL_READABLE_TARGET_PATTERN})\b",
+    flags=re.IGNORECASE,
+)
+BASH_SESSION_RE = re.compile(
+    r"\bBash\s+sessions?\b"
+)
+COMMAND_SHELL_PATH_RE = re.compile(
+    rf"(?<!\w)/bin/(?:sh|dash|fish|{COMMAND_SHELL_NAME_PATTERN})\b",
+    flags=re.IGNORECASE,
+)
+NAMED_COMMAND_SHELL_RE = re.compile(
+    rf"(?<!\w)(?:/bin/)?{COMMAND_SHELL_NAME_PATTERN}\s+"
+    rf"(?:{SHELL_PROMPT_TARGET_PATTERN}|{SHELL_OUTPUT_TARGET_PATTERN})\b|"
+    rf"\b(?:{COMMAND_SHELL_NAME_PATTERN}|posix|unix)\s+shell(?:s|-like)?\b|"
+    r"\b(?:root|system|windows?|default|os|terminal|console|interactive|login|"
+    r"command(?:[-\s]+line)?)"
+    r"(?:[\s,-]+(?:driven|based|style|styled|technical|interactive|login|"
+    r"abstract|translucent|protective|geometric|outer|physical|luminous|"
+    r"glowing|transparent|frosted|matte|ceramic|delicate|organic|glass)){0,3}"
+    r"[\s,-]+shell(?:s|-like)?\b",
+    flags=re.IGNORECASE,
+)
+COMMAND_SHELL_EXECUTION_RE = re.compile(
+    rf"\b(?:runs?|executes?|invokes?|launches?|starts?|spawns?)\s+"
+    rf"(?:a\s+|the\s+)?(?:/bin/)?{COMMAND_SHELL_NAME_PATTERN}\b",
+    flags=re.IGNORECASE,
+)
+SHELL_SUBJECT_CONTEXT_PATTERN = (
+    r"(?:(?![.!?;]|\b(?:that|who|which)\b|"
+    r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b|"
+    r"(?:,|:)\s*(?:a|an|the|another)\b|"
+    rf"{SHELL_WITH_OTHER_SUBJECT_BOUNDARY_PATTERN}|"
+    rf"{SHELL_NEW_SUBJECT_BOUNDARY_PATTERN}).){{0,100}}"
+)
+SHELL_TARGET_CONTEXT_PATTERN = (
+    r"(?:(?![.!?;]|\b(?:that|who|which)\b|"
+    r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b|"
+    r"(?:,|:)\s*(?:a|an|the|another)\b|"
+    rf"{SHELL_WITH_OTHER_SUBJECT_BOUNDARY_PATTERN}|"
+    rf"{SHELL_NEW_SUBJECT_BOUNDARY_PATTERN}).){{0,60}}"
+)
+SHELL_WITH_COMPUTING_RE = re.compile(
+    r"\bshell(?:s|-like)?(?:['’]s)?\b\s*,?\s+with\s+"
+    r"(?:a\s+|an\s+|the\s+|its\s+)?"
+    rf"(?:{SHELL_ADVERB_MORPHOLOGY_PATTERN}\s+){{0,2}}"
+    rf"(?:(?!{SHELL_SUBJECT_PREDICATE_PATTERN}\b)[\w-]+\s+)?"
+    rf"(?!(?:panes?)\b)(?:{SHELL_DIRECT_TARGET_PATTERN}|"
+    r"(?:keyboard\s+|typed\s+|user\s+)?inputs?)\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+PANE_COMPUTING_PREDICATE_PATTERN = (
+    rf"(?:(?:(?:is|are|was|were)\s+)?"
+    rf"{SHELL_TECHNICAL_ACTION_PREDICATE_PATTERN})"
+)
+PANE_EXPLICIT_REFERENCE_PATTERN = (
+    r"(?:,?\s+(?:and|but|while|whereas|yet)\s+(?:it|the\s+pane)\s+)"
+)
+PANE_OWNED_PREDICATE_PREFIX_PATTERN = (
+    rf"(?:\s+(?:(?:that|which)\s+)?|{PANE_EXPLICIT_REFERENCE_PATTERN})"
+)
+PANE_READABLE_OBJECT_PATTERN = (
+    r"(?:a\s+|an\s+|the\s+|its\s+)?"
+    rf"(?:(?!{SHELL_SUBJECT_PREDICATE_PATTERN}\b)[\w-]+\s+){{0,2}}"
+    rf"{SHELL_READABLE_TARGET_PATTERN}\b"
+)
+SHELL_WITH_PANE_COMPUTING_RE = re.compile(
+    r"\bshell(?:s|-like)?(?:['’]s)?\b\s*,?\s+with\s+"
+    r"(?:(?![.!?;,]).){0,60}\bpanes?\b"
+    r"(?![-\s]+(?:shaped|like)\b)"
+    rf"{PANE_OWNED_PREDICATE_PREFIX_PATTERN}"
+    rf"(?:{PANE_COMPUTING_PREDICATE_PATTERN}\b\s+"
+    rf"{PANE_READABLE_OBJECT_PATTERN}|"
+    rf"{SHELL_INPUT_VERB_PATTERN}\b\s+{SHELL_INPUT_TARGET_PATTERN}\b|"
+    rf"has\b\s+{PANE_READABLE_OBJECT_PATTERN})",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+SHELL_DIRECT_RELATIVE_COMPUTING_RE = re.compile(
+    r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
+    rf"{SHELL_EVIDENCE_VERB_PATTERN}\s+"
+    r"(?:a\s+|an\s+|the\s+|its\s+)?"
+    rf"{SHELL_READABLE_TARGET_PATTERN}\b|"
+    r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
+    rf"{SHELL_INPUT_VERB_PATTERN}\s+"
+    r"(?:keyboard\s+|typed\s+|user\s+)?inputs?\b",
+    flags=re.IGNORECASE,
+)
+SHELL_OWNED_COMPUTING_RE = re.compile(
+    r"\bshell[-\s]+outputs?\s+windows?\b|"
+    r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
+    rf"{SHELL_DIRECT_TARGET_PATTERN}\b|"
+    r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
+    r"windows?\b(?!\s+of\s+(?:light|glow))|"
+    r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
+    r"interfaces?\b(?!\s+between\b)|"
+    r"\bshell(?:s|-like)?(?:['’]s)?\b"
+    rf"{SHELL_SUBJECT_CONTEXT_PATTERN}\b"
+    rf"{SHELL_EVIDENCE_VERB_PATTERN}\b"
+    rf"{SHELL_TARGET_CONTEXT_PATTERN}\b"
+    rf"(?:{COMMAND_SHELL_NAME_PATTERN}\s+sessions?|"
+    rf"{SHELL_READABLE_TARGET_PATTERN})\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+SHELL_INPUT_INTERACTION_RE = re.compile(
+    r"\bshell(?:s|-like)?(?:['’]s)?\b"
+    rf"{SHELL_SUBJECT_CONTEXT_PATTERN}"
+    rf"\b{SHELL_INPUT_VERB_PATTERN}\b"
+    r"(?:(?![.!?;]).){0,20}\b(?:keyboard\s+|typed\s+|user\s+)?inputs?\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+UNAMBIGUOUS_COMPUTING_SURFACE_RE = re.compile(
+    r"\b(?:a|an|the|its|shell(?:s|['’]s|-like)?)?\s*"
+    r"(?:blinking\s+)?prompts?\s+(?:appears?|blinks?|rests?|waits?|is\b)|"
+    r"\b(?:blinking|visible|onscreen|on[-\s]+screen)\s+"
+    r"(?:cursors?|carets?)(?![-\s]+(?:shaped|like)\b)\b|"
+    r"\b(?:shows?|displays?|presents?|contains?)\s+(?:a\s+|the\s+|its\s+)?"
+    r"(?:cursors?|carets?)\b(?![-\s]+(?:shaped|like)\b)|"
+    r"\btyped\s+inputs?\b|"
+    r"\b(?:stdout|stderr|cli|repl|keystrokes?|command\s+outputs?|"
+    r"standard\s+outputs?|stdin|environment\s+variables?|"
+    r"(?:login|terminal|command|system)\s+sessions?)\b",
+    flags=re.IGNORECASE | re.DOTALL,
 )
 EXACT_GEOMETRY_VISUAL_RE = re.compile(
     r"\b(?:exact(?:ly)?|precise(?:ly)?|perfect(?:ly)?|parallel|"
@@ -185,7 +383,9 @@ MOTION_REQUIRED_PREFIX_RE = re.compile(
 )
 SAFE_TEXT_QUALIFIER_RE = re.compile(
     r"\b(?:text[- ]free|non[- ]textual|unlabeled|without\s+(?:readable\s+)?"
-    r"(?:text|words?|labels?|logos?)|no\s+(?:readable\s+)?(?:text|words?|labels?|logos?))\b",
+    r"(?:text|words?|labels?|logos?)|no\s+(?:readable\s+)?"
+    r"(?:text|words?|labels?|logos?)(?:\s*(?:,|and|or)\s*"
+    r"(?:text|words?|labels?|logos?))*)\b",
     flags=re.IGNORECASE,
 )
 RELEASE_VIDEO_AUDIT_FIX_POLICY_ARGS = (
@@ -498,6 +698,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "release-video project metadata recovery."
         ),
     )
+    parser.add_argument(
+        "--veo-validation-recovery-job-id",
+        default=os.environ.get("RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID", ""),
+        help=(
+            "Continue from an exact successful validation-only Veo job in the "
+            "selected PDS release project."
+        ),
+    )
     parser.add_argument("--project-name", help="PDS project name. Defaults to 'PDD <tag> release'.")
     parser.add_argument("--preset", default=os.environ.get("RELEASE_VIDEO_PRESET", "release-notes"))
     parser.add_argument("--target", default=os.environ.get("RELEASE_VIDEO_TARGET", "publish"))
@@ -567,6 +775,7 @@ def validate_release_video_create_options(args: argparse.Namespace) -> None:
     validate_claude_script_model(args)
     validate_release_video_idempotency_options(args)
     validate_release_video_metadata_conflict_options(args)
+    validate_veo_validation_recovery_options(args)
 
 
 def validate_claude_script_model(args: argparse.Namespace) -> None:
@@ -609,6 +818,24 @@ def validate_release_video_metadata_conflict_options(args: argparse.Namespace) -
 def release_video_metadata_conflict(args: argparse.Namespace) -> str:
     """Return the normalized PDS metadata-conflict recovery mode."""
     return str(args.metadata_conflict or "").strip()
+
+
+def validate_veo_validation_recovery_options(args: argparse.Namespace) -> None:
+    """Fail closed on unsafe validation-only Veo recovery combinations."""
+    recovery_job_id = str(args.veo_validation_recovery_job_id or "").strip()
+    args.veo_validation_recovery_job_id = recovery_job_id
+    if not recovery_job_id:
+        return
+    if not str(args.project_id or "").strip():
+        raise ReleaseVideoError(
+            "Veo validation recovery requires --project-id or "
+            "RELEASE_VIDEO_PROJECT_ID to select the existing release project."
+        )
+    if args.force_regenerate:
+        raise ReleaseVideoError(
+            "Veo validation recovery cannot be combined with --force-regenerate "
+            "or RELEASE_VIDEO_FORCE_REGENERATE=1."
+        )
 
 
 def print_release_video_status(args: argparse.Namespace, repo: Path) -> int:
@@ -2254,6 +2481,16 @@ def add_optional_pds_create_args(
         pds_args.extend(["--claude-model", pds_claude_model])
     if args.force_regenerate:
         pds_args.append("--force-regenerate")
+    recovery_job_id = str(
+        getattr(args, "veo_validation_recovery_job_id", "") or ""
+    ).strip()
+    if recovery_job_id:
+        pds_args.extend(
+            [
+                "--veo-validation-recovery-job-id",
+                recovery_job_id,
+            ]
+        )
     if args.dry_run:
         pds_args.append("--dry-run")
 
@@ -3401,13 +3638,36 @@ def visual_safety_categories(cue: str) -> list[str]:
     """Classify one visual cue using stable, machine-readable categories."""
     categories: list[str] = []
     readable_candidate = SAFE_TEXT_QUALIFIER_RE.sub("", cue)
-    if READABLE_VISUAL_RE.search(readable_candidate):
+    if READABLE_VISUAL_RE.search(readable_candidate) or has_risky_shell_visual(
+        readable_candidate
+    ):
         categories.append("risky_readable_surface")
     if EXACT_GEOMETRY_VISUAL_RE.search(cue):
         categories.append("brittle_exact_geometry")
     if has_unsafe_visual_motion(cue):
         categories.append("brittle_mandatory_motion")
     return categories
+
+
+def has_risky_shell_visual(cue: str) -> bool:
+    """Return whether a cue positively identifies a command/readable surface."""
+    return any(
+        pattern.search(cue)
+        for pattern in (
+            UNAMBIGUOUS_SHELL_IMPLEMENTATION_RE,
+            BASH_STRONG_SURFACE_RE,
+            BASH_SESSION_RE,
+            COMMAND_SHELL_PATH_RE,
+            NAMED_COMMAND_SHELL_RE,
+            COMMAND_SHELL_EXECUTION_RE,
+            SHELL_WITH_COMPUTING_RE,
+            SHELL_WITH_PANE_COMPUTING_RE,
+            SHELL_DIRECT_RELATIVE_COMPUTING_RE,
+            SHELL_OWNED_COMPUTING_RE,
+            SHELL_INPUT_INTERACTION_RE,
+            UNAMBIGUOUS_COMPUTING_SURFACE_RE,
+        )
+    )
 
 
 def has_unsafe_visual_motion(cue: str) -> bool:

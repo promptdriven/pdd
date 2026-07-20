@@ -132,7 +132,13 @@ class LanguageRegistry:
     @classmethod
     def bundled(cls) -> "LanguageRegistry":
         """Load the package-bundled registry in source and wheel installations."""
-        return cls.from_csv(Path(__file__).parents[1] / "data" / "language_format.csv")
+        module = Path(__file__)
+        data = (
+            module.parent / "data"
+            if __package__ == "pdd_sync_checker"
+            else module.parents[1] / "data"
+        )
+        return cls.from_csv(data / "language_format.csv")
 
     def resolve_alias(self, alias: str) -> LanguageSpec:
         """Resolve one explicit language alias to its stable identity."""

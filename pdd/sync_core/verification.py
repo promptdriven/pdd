@@ -204,16 +204,16 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "python",
         "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
         "1c1d2b6f57e191e486cd33dd5540cc27c25b64c88ec4e9a08edf2151f6468d12",
-        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
-        "a1503c4f146191f496c5ebf11ab1040b5a260583fbaa28dcbce1ea7b6fced4dc",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+        "b3886522c0056e872c6d336d2b46c4900467f12b5f66d9f4b21aa2251e1180a3",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_common_python.prompt",
         "python",
         "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
         "e4b8ea5e9122504817d93e4229ff4328a082cb2fd2ab94ac3b0be2a89096207c",
-        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
-        "a1503c4f146191f496c5ebf11ab1040b5a260583fbaa28dcbce1ea7b6fced4dc",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+        "b3886522c0056e872c6d336d2b46c4900467f12b5f66d9f4b21aa2251e1180a3",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_checkup_python.prompt",
@@ -403,6 +403,22 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
         "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37",
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
         "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/get_test_command_python.prompt",
+        "python",
+        "ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
+        "023045865bfe0d5920b5008986106a16e7014b35f09fc80faa43b1f0d42bcd44",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/fix_error_loop_python.prompt",
+        "python",
+        "afffd825b4495819b853fec9a86b0be7644f6fe0468d40548d8b9b2803d183ce",
+        "8f4ef46cf85f9ed8e4ff28732dba2614005a1d50d6793ceb25e15608d5ffb751",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
     ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += (
@@ -660,6 +676,7 @@ class _DuplicateJsonMember(ValueError):
 
 def _strict_policy_json(raw: bytes, source: str) -> dict[str, Any]:
     """Decode policy JSON while rejecting duplicate object members at every level."""
+
     def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         payload: dict[str, Any] = {}
         for key, value in pairs:
@@ -843,9 +860,7 @@ def _parse_requirement_transition_authorizations(
         if type(schema_version) is not int:
             raise TypeError
         if schema_version == 1:
-            _parse_dormant_policy_envelope(
-                raw, source, allow_legacy_protected=True
-            )
+            _parse_dormant_policy_envelope(raw, source, allow_legacy_protected=True)
             return ()
         rows = payload["requirement_rotations"]
         if (
@@ -1445,8 +1460,7 @@ def _validate_retirement_managed_prompt_bytes(
     changed = _managed_prompt_byte_changes(root, manifest, approved_aliases)
     if changed:
         raise VerificationProfileError(
-            "candidate retirement changes managed prompt bytes: "
-            f"{sorted(changed)[0]}"
+            f"candidate retirement changes managed prompt bytes: {sorted(changed)[0]}"
         )
 
 
@@ -2164,10 +2178,8 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
         requirement_authorizations,
         requirement_prompts,
         new_requirement_authorizations,
-    ) = (
-        _load_requirement_transition_authorizations(
-            root, manifest, base, head, approved_aliases
-        )
+    ) = _load_requirement_transition_authorizations(
+        root, manifest, base, head, approved_aliases
     )
     profile_additions = _authorized_profile_additions(root, manifest, base, head)
     if new_requirement_authorizations:

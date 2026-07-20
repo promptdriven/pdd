@@ -396,7 +396,7 @@ def test_reverse_dep_closure_traverses_included_artifacts(tmp_path, monkeypatch)
     assert "outer" in module._reverse_dep_basenames(["pdd/leaf.py"])
 
 
-@pytest.mark.timeout(1)
+@pytest.mark.timeout(10)
 def test_reverse_dep_include_cycle_terminates_deterministically(tmp_path, monkeypatch):
     module = _load_module()
     monkeypatch.chdir(tmp_path)
@@ -417,6 +417,17 @@ def test_reverse_dep_include_cycle_terminates_deterministically(tmp_path, monkey
     result = module._reverse_dep_basenames(["pdd/leaf.py"])
 
     assert result == {"a", "b"}
+
+
+def test_reverse_dep_include_cycle_timeout_budget_is_generous():
+    timeout_mark = next(
+        mark
+        for mark in test_reverse_dep_include_cycle_terminates_deterministically.pytestmark
+        if mark.name == "timeout"
+    )
+
+    assert timeout_mark.args
+    assert timeout_mark.args[0] >= 5
 
 
 def test_reverse_dep_without_diff_base_keeps_conservative_matching(

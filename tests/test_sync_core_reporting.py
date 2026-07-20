@@ -230,6 +230,43 @@ def _options(tmp_path: Path, commit: str) -> CanonicalReportOptions:
     )
 
 
+def _durable_state(root: Path) -> dict[PurePosixPath, bytes]:
+    """Capture checker-owned evidence and fingerprints for no-write assertions."""
+    return {
+        PurePosixPath(path.relative_to(root).as_posix()): path.read_bytes()
+        for directory in (root / ".pdd/evidence/v2", root / ".pdd/meta/v2")
+        if directory.exists()
+        for path in directory.rglob("*")
+        if path.is_file()
+    }
+
+
+def _invalid_candidate_profile(root: Path, mutation: str) -> None:
+    """Commit one invalid protected-profile transition over the trusted base."""
+    profile_path = root / ".pdd/verification-profiles.json"
+    payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile = payload["profiles"][0]
+    if mutation == "removed-protected-obligation":
+        profile["obligations"] = []
+    elif mutation == "changed-requirement":
+        profile["required_requirement_ids"] = ["REQ-2"]
+        profile["obligations"][0]["requirement_ids"] = ["REQ-2"]
+        with (root / "prompts/widget_python.prompt").open("a", encoding="utf-8") as prompt:
+            prompt.write("REQ-2: Reject invalid widgets\n")
+    else:
+        raise ValueError(f"unknown invalid profile mutation: {mutation}")
+    profile_path.write_text(json.dumps(payload), encoding="utf-8")
+    _git(
+        root,
+        "add",
+        "-u",
+        "--",
+        ".pdd/verification-profiles.json",
+        "prompts/widget_python.prompt",
+    )
+    _git(root, "commit", "-q", "-m", f"invalid candidate profile: {mutation}")
+
+
 def test_trusted_transactional_baseline_passes_canonical_predicate(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     _finalize_trusted_baseline(root, commit)
@@ -239,6 +276,40 @@ def test_trusted_transactional_baseline_passes_canonical_predicate(tmp_path) -> 
     assert report["counts"]["trusted_in_sync"] == 1
     assert report["counts"]["unaccounted_tracked_paths"] == 0
     assert report["units"][0]["in_sync"] is True
+
+
+def test_invalid_profile_reconciliation_cannot_reuse_verified_evidence(
+    tmp_path: Path,
+) -> None:
+    """Invalid protected profiles cannot certify with stale attestations."""
+    root, base = _repository(tmp_path)
+    _finalize_trusted_baseline(root, base)
+    _invalid_candidate_profile(root, "removed-protected-obligation")
+    head = _git(root, "rev-parse", "HEAD")
+
+    with patch(
+        "pdd.sync_core.reporting._evidence",
+        side_effect=AssertionError("invalid profile attempted evidence verification"),
+    ):
+        report = build_canonical_report(
+            root,
+            CanonicalReportOptions(
+                base_ref=base,
+                head_ref=head,
+                replay_ledger_path=tmp_path / "external-trust/invalid-profile.json",
+                now=NOW,
+            ),
+        )
+
+    assert report["ok"] is False
+    assert report["counts"]["invalid"] == 1
+    assert report["counts"]["unknown"] == 1
+    assert report["counts"]["trusted_current_evidence"] == 0
+    assert report["counts"]["trusted_in_sync"] == 0
+    assert report["units"][0]["baseline"] == "CORRUPT"
+    assert report["units"][0]["semantic"] == "UNKNOWN"
+    assert report["units"][0]["evidence_complete"] is False
+    assert report["units"][0]["in_sync"] is False
 
 
 def test_managed_waiver_is_counted_and_blocks_certificate_predicate(tmp_path) -> None:
@@ -792,11 +863,21 @@ def test_validate_command_wires_protected_vitest_runner_config(
     external = toolchain / "node_modules/vitest/vitest.py"
     external.parent.mkdir(parents=True)
     external.write_text("print('trusted vitest')\n")
-    launcher = toolchain / "python"
+    launcher = toolchain / "bin/node"
+    launcher.parent.mkdir(parents=True)
     shutil.copy2(os.sys.executable, launcher)
     launcher.chmod(0o755)
     lockfile = toolchain / "package-lock.json"
     lockfile.write_text("{}\n", encoding="utf-8")
+    headers = toolchain / "include/node"
+    headers.mkdir(parents=True)
+    for name in (
+        "node_api.h",
+        "node_api_types.h",
+        "js_native_api.h",
+        "js_native_api_types.h",
+    ):
+        (headers / name).write_text("\n", encoding="utf-8")
     manifest = toolchain / "manifest.json"
     manifest.write_text(
         json.dumps(
@@ -808,6 +889,7 @@ def test_validate_command_wires_protected_vitest_runner_config(
                     "dependencies": str(toolchain / "node_modules"),
                     "native_runtime": [str(launcher)],
                     "lockfile": str(lockfile),
+                    "headers": str(headers),
                 },
             }
         ),
@@ -940,6 +1022,48 @@ def test_trusted_finalizer_rejects_invalid_next_protected_base(tmp_path) -> None
             signer=SIGNER,
             replay_ledger_path=tmp_path / "external-trust/invalid-base.json",
         )
+
+
+@pytest.mark.parametrize(
+    "mutation", ["removed-protected-obligation", "changed-requirement"]
+)
+def test_trusted_finalizer_rejects_invalid_profile_before_trusted_state(
+    tmp_path: Path, mutation: str
+) -> None:
+    """Invalid profile reconciliation stops before all trust/write boundaries."""
+    root, base = _repository(tmp_path)
+    _finalize_trusted_baseline(root, base)
+    before = _durable_state(root)
+    _invalid_candidate_profile(root, mutation)
+    head = _git(root, "rev-parse", "HEAD")
+
+    with patch(
+        "pdd.sync_core.finalize._reusable_result",
+        side_effect=AssertionError("invalid profile attempted evidence reuse"),
+    ) as reusable, patch(
+        "pdd.sync_core.finalize.run_profile",
+        side_effect=AssertionError("invalid profile invoked runner"),
+    ) as runner, patch(
+        "pdd.sync_core.finalize.TransactionManager",
+        side_effect=AssertionError("invalid profile created transaction manager"),
+    ) as transaction_manager:
+        with pytest.raises(
+            ValueError,
+            match="canonical finalization requires valid protected verification profiles",
+        ):
+            finalize_unit(
+                root,
+                PurePosixPath("prompts/widget_python.prompt"),
+                base_ref=base,
+                head_ref=head,
+                signer=SIGNER,
+                replay_ledger_path=tmp_path / f"external-trust/{mutation}.json",
+            )
+
+    reusable.assert_not_called()
+    runner.assert_not_called()
+    transaction_manager.assert_not_called()
+    assert _durable_state(root) == before
 
 
 @pytest.mark.skipif(
