@@ -84,9 +84,27 @@ Waived rules are **never** flagged as gaps and do not affect the exit code.
 
 ---
 
+## Canonical rule IDs
+
+Contract declarations and evidence references accept these explicit ID families:
+
+- `R1` and `R-1`
+- `RULE1` and `RULE-1`
+- Any of the above followed by one ASCII letter suffix, such as `R1a`,
+  `R-1A`, `RULE1b`, or `RULE-1B`
+
+IDs are normalized to uppercase. A suffix is part of the identity, so `R1` and
+`R1A` are distinct rules; neither is collapsed into the other. The full grammar
+is used by `<contract_rules>`, `<coverage>`, story `## Covers` references, and
+prompt-qualified test references. The convenient unqualified shorthands use the
+`R` family: function names use undashed IDs such as `test_R1a_*`, while comments
+and docstrings accept `R1a` or `R-1A` forms.
+
+---
+
 ## Story regression coverage (`has_regression_test`)
 
-The rule statuses above are **rule-keyed** and derive from the `test_R<n>`
+The rule statuses above are **rule-keyed** and derive from the `test_R<n>[suffix]`
 naming heuristic (see "Test file heuristic" below). Story-regression coverage is
 a separate, **story-keyed** dimension and does not change those statuses.
 
@@ -170,6 +188,18 @@ Cross-module format is also supported:
 
 Stories **without** `<!-- pdd-story-prompts: ... -->` apply to the prompt set under evaluation (same convention as `pdd/user_story_tests.py`). Stories **with** metadata are scoped to the listed prompt filenames or paths.
 
+Path-qualified identities are exact after case and path-separator
+normalization. For example, `prompts/a/foo.prompt` and
+`prompts/b/foo.prompt` remain different prompts even though their basenames
+match. A wrong qualified path never falls back to `foo.prompt`.
+
+For compatibility, a basename-only reference such as `foo.prompt` may resolve
+when that basename identifies exactly one prompt inside the trusted project
+root. If the basename is duplicated, or the scanner cannot prove the complete
+project boundary, basename fallback fails closed and contributes no evidence.
+Metadata ownership and `## Covers` ownership are evaluated independently: valid
+legacy metadata does not authorize a mismatched qualified Covers entry.
+
 ### 3. Test file heuristic
 
 Test files (`test_*.py`) are scanned **recursively** in `--tests-dir` using a conservative heuristic.
@@ -181,22 +211,36 @@ Only `test*` functions that **explicitly reference a rule ID** are counted.
 
 ```python
 def test_only_foo():
-    """refund_payment_python.prompt#R1: covers rule"""
+    """prompts/refund_payment_python.prompt#R1a: covers rule"""
 ```
+
+Qualified references use the normalized project-relative prompt path. A
+basename-only form is accepted only under the same unique, trusted-project
+fallback described for stories. Directory scans therefore do not attribute a
+generic `test_R1_*` function—or a reference to another same-basename prompt—to
+every module declaring `R1`.
 
 **Recognised patterns (documented heuristic):**
 
+The unqualified patterns below apply to single-prompt scans. Directory scans
+accept the prompt-qualified signature/docstring form shown above.
+
 | Pattern | Example | Notes |
 |---------|---------|-------|
-| Function name | `def test_R1_rejects_zero():` | Case-insensitive: `test_r1_` also matches |
-| Inline comment | `def test_foo():  # R3: covers rule` | Anywhere on the function definition line |
-| Inline comment | `def test_foo():  # covers R3` | `covers R<N>` or `rule R<N>` prefix |
-| Docstring first line | `"""R5: validates boundary."""` | First 120 chars of the docstring |
+| Function name | `def test_R1a_rejects_zero():` | Case-insensitive; maps to `R1A` |
+| Inline comment | `def test_foo():  # R3a: covers rule` | On or immediately after the function definition |
+| Inline comment | `def test_foo():  # covers R3a` | `covers R<ID>` or `rule R<ID>` prefix |
+| Docstring first line | `"""R5a: validates boundary."""` | First 120 chars; `:` or `-` makes the reference explicit |
 
 Functions that do **not** start with `test` are ignored entirely.
 No semantic analysis of test logic is performed.
 
-Syntax validation is deterministic: if a `test_*.py` file cannot be parsed and it explicitly references `R<N>`, those rules are classified as `failed`.
+Syntax validation is deterministic. In a prompt-qualified directory scan, an
+unparseable file marks a rule `failed` only when an actual `def test_*` or
+`async def test_*` signature/first docstring line carries the matching qualified
+reference. A marker in an unrelated module constant, arbitrary string, or
+assignment after a malformed definition is not qualified evidence. Single-file
+mode retains its broader backward-compatible unqualified scan.
 
 ### 4. `<waivers>` block
 
@@ -220,6 +264,47 @@ The v1 command does not call an LLM and does not execute pytest. It still report
 - A `test_*.py` file has a Python syntax error and explicitly references the rule ID.
 
 Failed rules are gaps and make the command exit `1`, the same as `unchecked`, `story-only`, and `test-only`.
+
+---
+
+## Python API and project roots
+
+The underlying APIs are:
+
+```python
+build_coverage(
+    path,
+    stories_dir=None,
+    tests_dir=None,
+    *,
+    prompt_text=None,
+    require_prompt_qualified_tests=False,
+    story_map=None,
+    global_story_registry=None,
+    project_root=None,
+)
+
+build_coverage_directory(
+    directory,
+    stories_dir=None,
+    tests_dir=None,
+    *,
+    project_root=None,
+)
+```
+
+`build_coverage_directory` recursively scans prompt files, skips
+`*_LLM.prompt`, and enables prompt-qualified test evidence. It uses an explicit
+`project_root` when supplied; otherwise it searches upward for a trusted project
+marker such as `.git`, `.pdd`, `architecture.json`, or `pyproject.toml`. This is
+important for nested layouts such as `pkg/prompts/`: the canonical identity is
+`pkg/prompts/foo.prompt`, not merely `foo.prompt` or `prompts/foo.prompt`.
+
+If no marker is discoverable, `build_coverage_directory` uses
+`directory.parent` as its legacy scope. Pass `project_root` explicitly when the
+prompt directory is nested more deeply or that parent is not the complete
+project; direct single-file scans without a provable boundary disable basename
+fallback rather than risk cross-package attribution.
 
 ---
 
