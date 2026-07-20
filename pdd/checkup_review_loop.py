@@ -2445,6 +2445,11 @@ def _terra_sol_fresh_final_findings(
         state.reviewer_status[state.active_reviewer or TERRA_SOL_REVIEWER] = (
             state.fresh_final_status
         )
+    if state.fresh_final_status in HARD_NOT_CLEAN_STATES:
+        # Partial rows returned with a failed/degraded/missing Sol verdict are
+        # diagnostic only. They are not an authoritative finding set and must
+        # never enter Terra or be laundered by a later clean session.
+        return []
     findings = _actionable_findings(state, state.fresh_final_findings)
     if findings:
         # The generic override records a terminal stop reason because bounded
@@ -2530,6 +2535,7 @@ def _maybe_run_fresh_final_review_override(
             mode="fresh-final",
             pr_metadata=pr_metadata,
             deadline=deadline,
+            artifact_suffix=(f"-invocation-{state.fresh_final_review_invocations}"),
         )
         # Preserve the fresh session as a distinct audit identity. In
         # particular, ``--fresh-final-review codex`` must not overwrite the
@@ -3903,12 +3909,14 @@ def _run_review(
     fix_result: Optional[FixResult] = None,
     pr_metadata: Optional[Dict[str, Any]] = None,
     deadline: Optional[float] = None,
+    artifact_suffix: str = "",
 ) -> ReviewResult:
+    artifact_mode = f"{mode}{artifact_suffix}"
     candidate_findings = _collect_static_analysis_candidate_findings(
         worktree,
         artifacts_dir,
         round_number=round_number,
-        mode=mode,
+        mode=artifact_mode,
         pr_metadata=pr_metadata,
     )
     # Issue #1433 Bug #4: surface companion prompt + architecture entries
@@ -3956,6 +3964,7 @@ def _run_review(
         artifact_payload = {
             "round": round_number,
             "mode": mode,
+            "artifact_identity": artifact_mode,
             "shown_companions": full_eligible,
             "omitted_companions": omitted_full,
             "truncation": (
@@ -3976,7 +3985,7 @@ def _run_review(
         }
         artifact_path = (
             artifacts_dir
-            / f"round-{round_number}-{mode}-companion-source-of-truth.json"
+            / f"round-{round_number}-{artifact_mode}-companion-source-of-truth.json"
         )
         _write_artifact(artifact_path, json.dumps(artifact_payload, indent=2))
         companion_artifact_relpath = artifact_path.name
@@ -3993,7 +4002,7 @@ def _run_review(
         companion_source_of_truth=companion_source_of_truth,
         companion_artifact_path=companion_artifact_relpath,
     )
-    base = f"round-{round_number}-{mode}-{reviewer}"
+    base = f"round-{round_number}-{artifact_mode}-{reviewer}"
     _write_provider_evidence(
         artifacts_dir, base, "prompt", prompt, agentic_mode=config.agentic_mode
     )
@@ -4005,7 +4014,9 @@ def _run_review(
             worktree,
             verbose=verbose,
             quiet=quiet,
-            label=f"checkup-review-loop-{mode}-{reviewer}-round{round_number}",
+            label=(
+                f"checkup-review-loop-{artifact_mode}-{reviewer}-round{round_number}"
+            ),
             timeout=900.0 + config.timeout_adder,
             max_retries=DEFAULT_MAX_RETRIES,
             reasoning_time=config.reasoning_time,
@@ -4017,7 +4028,9 @@ def _run_review(
     state.total_cost += cost
     state.last_model = model or state.last_model
     if not config.agentic_mode:
-        state.raw_outputs.append((f"{mode}:{reviewer}:round{round_number}", output))
+        state.raw_outputs.append(
+            (f"{artifact_mode}:{reviewer}:round{round_number}", output)
+        )
     _write_provider_evidence(
         artifacts_dir, base, "output", output, agentic_mode=config.agentic_mode
     )
@@ -4075,7 +4088,7 @@ def _run_review(
                 verbose=verbose,
                 quiet=quiet,
                 artifacts_dir=artifacts_dir,
-                mode=mode,
+                mode=artifact_mode,
                 deadline=deadline,
             )
             if repaired is not None:

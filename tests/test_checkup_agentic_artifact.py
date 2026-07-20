@@ -730,6 +730,35 @@ def test_build_artifact_fixed_blockers_do_not_fail_clean_final_review():
     assert art.authority == "canonical_pass_agentic_mirror_clean"
 
 
+def test_fresh_final_count_uses_current_session_slot_not_history():
+    """A clean retry must not report the earlier fresh-session veto as current."""
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            reviewer_status={"codex": "clean"},
+            findings=[
+                SimpleNamespace(
+                    severity="critical",
+                    reviewer="fresh-final",
+                    finding="historical fresh veto",
+                    required_fix="fixed by Terra",
+                    location="a.py",
+                    status="fixed",
+                )
+            ],
+            fresh_final_findings=[],
+            fresh_final_status="clean",
+        ),
+        config=_config(fresh_final_review_role="codex"),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+
+    assert art.status == "passed"
+    assert art.fresh_final_review.status == "clean"
+    assert art.fresh_final_review.finding_count == 0
+    assert any(f.reviewer == "fresh-final" for f in art.findings)
+
+
 def test_build_artifact_splits_structured_location_path_and_line():
     art = build_agentic_v1_artifact(
         loop_state=_state(

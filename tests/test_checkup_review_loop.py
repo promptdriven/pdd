@@ -15877,6 +15877,11 @@ class TestTerraSolUnboundedLoop:
         assert fresh_final_calls == 2
         assert len([label for label in labels if "fix" in label]) == 1
         assert len([label for label in labels if "verify" in label]) == 1
+        fresh_labels = [label for label in labels if "fresh-final" in label]
+        assert fresh_labels == [
+            "checkup-review-loop-fresh-final-invocation-1-codex-round1",
+            "checkup-review-loop-fresh-final-invocation-2-codex-round1",
+        ]
         assert "sol-review-status: clean" in report
         assert "terra-sol-model: gpt-5.6-sol" in report
         final_state = json.loads(
@@ -15893,6 +15898,88 @@ class TestTerraSolUnboundedLoop:
         assert all(row["status"] != "open" for row in final_state["findings"])
         artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
         assert artifact["status"] == "passed"
+        assert artifact["fresh_final_review"]["finding_count"] == 0
+        artifacts_dir = tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
+        first_base = "round-1-fresh-final-invocation-1-codex"
+        second_base = "round-1-fresh-final-invocation-2-codex"
+        for base in (first_base, second_base):
+            assert (artifacts_dir / f"{base}.prompt.evidence.json").exists()
+            assert (artifacts_dir / f"{base}.output.evidence.json").exists()
+            assert (artifacts_dir / f"{base}.findings.json").exists()
+        assert (
+            len(
+                json.loads(
+                    (artifacts_dir / f"{first_base}.findings.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+            )
+            == 1
+        )
+        assert (
+            json.loads(
+                (artifacts_dir / f"{second_base}.findings.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            == []
+        )
+
+    def test_failed_fresh_sol_findings_never_reach_terra(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Partial findings from a failed fresh Sol pass are diagnostic only."""
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        labels: List[str] = []
+        partial_finding = [
+            {
+                "severity": "critical",
+                "finding": "partial untrusted issue",
+                "required_fix": "must not reach Terra",
+                "area": "code",
+            }
+        ]
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if "fresh-final" in label:
+                return (
+                    True,
+                    _json("failed", partial_finding),
+                    0.01,
+                    "gpt-5.6-sol",
+                )
+            return True, _json("clean"), 0.01, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        artifact_path = tmp_path / "failed-fresh-sol.json"
+
+        success, report, _cost, _model = mod.run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(
+                agentic_mode=True,
+                agentic_artifact_path=str(artifact_path),
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert not any("fix" in label for label in labels)
+        assert not any("verify" in label for label in labels)
+        assert "sol-review-status: failed" in report
+        assert "fresh-final-review: failed" in report
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        assert artifact["status"] != "passed"
+        assert artifact["fresh_final_review"] == {
+            "provider": "codex",
+            "status": "failed",
+            "finding_count": 1,
+        }
 
     def test_terra_sol_state_reflects_mode(
         self, monkeypatch: Any, tmp_path: Path
