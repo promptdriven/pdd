@@ -501,6 +501,40 @@ def test_detect_stories_human_provider_errors_are_safe_exit_three(
     assert "super-secret" not in result.output
 
 
+@pytest.mark.parametrize("quiet", [False, True])
+def test_detect_stories_real_detector_exception_never_leaks(quiet):
+    """The real detect_change layer must not print provider exception contents."""
+    runner = CliRunner()
+    secret = "api key credential sk-live-super-secret-provider-payload"
+    with runner.isolated_filesystem():
+        os.makedirs("prompts")
+        os.makedirs("user_stories")
+        Path("prompts/x.prompt").write_text("prompt", encoding="utf-8")
+        Path("user_stories/story__x.md").write_text(
+            "## Story\n<!-- pdd-story-prompts: prompts/x.prompt -->\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "pdd.detect_change.llm_invoke", side_effect=RuntimeError(secret)
+        ) as invoke:
+            result = runner.invoke(
+                detect_change,
+                ["--stories"],
+                obj={"quiet": quiet},
+            )
+
+    assert invoke.call_count == 1
+    assert result.exit_code == 3
+    assert secret not in result.output
+    assert "super-secret-provider-payload" not in result.output
+    if quiet:
+        assert result.output == ""
+    else:
+        assert "UNKNOWN:" in result.output
+        assert "credentials are missing or invalid" in result.output
+        assert "authenticate with a supported provider" in result.output
+
+
 def test_detect_stories_passing_result_top_level_exits_zero():
     """Passing story mode remains successful through the registered CLI."""
     runner = CliRunner()

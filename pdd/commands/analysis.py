@@ -579,10 +579,11 @@ def detect_change(
                 obj["force"] = True
                 os.environ["PDD_FORCE"] = "1"
                 os.environ["PDD_ALLOW_INTERACTIVE"] = "0"
-            evaluator_stdout = io.StringIO() if machine_mode else None
-            evaluator_stderr = io.StringIO() if machine_mode else None
+            capture_evaluator_output = machine_mode or quiet_mode
+            evaluator_stdout = io.StringIO() if capture_evaluator_output else None
+            evaluator_stderr = io.StringIO() if capture_evaluator_output else None
             previous_rich_consoles: list[Any] = []
-            if machine_mode:
+            if capture_evaluator_output:
                 # ``rich.print`` captures the process stream when its global
                 # console is initialized, so redirecting sys.stdout alone is
                 # insufficient for provider/evaluator diagnostics. Point the
@@ -600,6 +601,8 @@ def detect_change(
                     rich_console.file = evaluator_stdout
 
             def emit_evaluator_diagnostics() -> None:
+                if quiet_mode:
+                    return
                 if evaluator_stdout is not None and (
                     evaluator_stdout.getvalue()
                     or (evaluator_stderr is not None and evaluator_stderr.getvalue())

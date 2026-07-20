@@ -69,6 +69,10 @@
          classified message and appropriate authenticate/retry guidance (unless
          quiet), never raw exception text, and exit 3. Exact-manifest metadata
          mismatch MUST emit a human diagnostic before exiting 3.
+       - Quiet human story mode MUST capture and discard evaluator-layer stdout,
+         stderr, and shared Rich-console output (including preprocessing progress
+         emitted before a provider failure). It must preserve the same exit code
+         while emitting no human diagnostic or redirected-output notice.
      - For handled non-Click exceptions, mark `ctx.obj["_command_failed"] = True` before calling `handle_error(...)` and returning `None`, so the core result callback exits non-zero even when Click chain mode supplies an empty results list.
   2. **conflicts**: Takes two prompt files. Call `conflicts_main`. Options: `--output`.
   3. **bug**: Takes either a GitHub issue URL (agentic mode) or `--manual` with 5 positional files.
