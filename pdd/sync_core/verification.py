@@ -189,6 +189,22 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
     ),
     _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
+        "python",
+        "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
+        "1c1d2b6f57e191e486cd33dd5540cc27c25b64c88ec4e9a08edf2151f6468d12",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+        "b3886522c0056e872c6d336d2b46c4900467f12b5f66d9f4b21aa2251e1180a3",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_common_python.prompt",
+        "python",
+        "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
+        "e4b8ea5e9122504817d93e4229ff4328a082cb2fd2ab94ac3b0be2a89096207c",
+        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
+        "b3886522c0056e872c6d336d2b46c4900467f12b5f66d9f4b21aa2251e1180a3",
+    ),
+    _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_checkup_python.prompt",
         "python",
         "fef53dad8950c06cc11e41265956a2ee174a90ff9e4985d7f30610f18c47b08b",

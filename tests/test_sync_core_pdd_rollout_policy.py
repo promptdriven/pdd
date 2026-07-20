@@ -478,22 +478,60 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
 
 
 def test_committed_rotations_equal_exact_protected_authority() -> None:
-    """Only exact consumed bootstrap or protected #2204 bindings reach policy."""
+    """Only exact bootstrap bindings reach active protected authority."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = policy["requirement_rotations"]
-    bootstrap_rows = {
-        (row["prompt_path"], row["language_id"]): row
-        for row in map(
+    bootstrap_rows = list(
+        map(
             _requirement_authorization_row,
             verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS,  # pylint: disable=protected-access
         )
+    )
+    parsed_rows = verification._parse_requirement_transition_authorizations(  # pylint: disable=protected-access
+        ROTATION_FILE.read_bytes(), "protected"
+    )
+    parsed_retirements = verification._parse_requirement_transition_retirements(  # pylint: disable=protected-access
+        ROTATION_FILE.read_bytes(), "protected"
+    )
+    active_rows = verification._active_requirement_transition_authorizations(  # pylint: disable=protected-access
+        parsed_rows, parsed_retirements, "protected"
+    )
+    policy_rows = {
+        (row["prompt_path"], row["language_id"]): row
+        for row in map(_requirement_authorization_row, active_rows)
     }
-    policy_rows = {(row["prompt_path"], row["language_id"]): row for row in rows}
-    assert len(rows) == len(policy_rows) == len(bootstrap_rows) == 25
+    consumed_rows = {
+        (
+            "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
+            "CONTRACT-SHA256:fc372c0369c895e42b4bb8f9277560facf086d999233d88bef8401766bccdf34",
+        ),
+        (
+            "pdd/prompts/agentic_common_python.prompt",
+            "CONTRACT-SHA256:86e47992102e2344fe59ee9a3ece4c6cf356025edaadf693c12acac63a5c7490",
+        ),
+    }
+    expected_rows = {
+        (row["prompt_path"], row["language_id"]): row
+        for row in bootstrap_rows
+        if (row["prompt_path"], row["from_requirement_id"]) not in consumed_rows
+    }
+    assert policy["schema_version"] == 2
+    assert len(rows) == 25
+    assert len(bootstrap_rows) == 27
+    assert not parsed_retirements
+    assert len(active_rows) == len(policy_rows) == len(expected_rows) == 25
+    assert not any(
+        (row["prompt_path"], row["from_requirement_id"]) in consumed_rows
+        for row in rows
+    )
+    assert all(
+        row in bootstrap_rows or row == STORY_REGRESSION_DORMANT_ROTATION
+        for row in rows
+    )
     story_identity = (STORY_REGRESSION_DORMANT_ROTATION["prompt_path"], "python")
-    assert bootstrap_rows[story_identity] != STORY_REGRESSION_DORMANT_ROTATION
-    bootstrap_rows[story_identity] = STORY_REGRESSION_DORMANT_ROTATION
-    assert policy_rows == bootstrap_rows
+    assert expected_rows[story_identity] != STORY_REGRESSION_DORMANT_ROTATION
+    expected_rows[story_identity] = STORY_REGRESSION_DORMANT_ROTATION
+    assert policy_rows == expected_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
     assert profile_digest == STORY_REGRESSION_DORMANT_ROTATION["head_policy_sha256"]
@@ -521,9 +559,8 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         if row["head_policy_sha256"]
         == STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
     ]
-    assert len(pdd1989_rows) == 7
+    assert len(pdd1989_rows) == 6
     assert {row["prompt_path"] for row in pdd1989_rows} == {
-        "pdd/prompts/agentic_common_python.prompt",
         "pdd/prompts/commands/checkup_python.prompt",
         "pdd/prompts/generate_model_catalog_python.prompt",
         "pdd/prompts/llm_invoke_python.prompt",
@@ -548,7 +585,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         if row["head_policy_sha256"]
         == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
     ]
-    assert len(pr1790_rows) == 7
+    assert len(pr1790_rows) == 6
     base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
     head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
     assert base_policy_digest == (
