@@ -122,7 +122,12 @@ def iter_covers_refs(covers_text: str) -> list["CoversRef"]:
     return refs
 
 
-def rule_ids_from_covers(covers_text: str, prompt_name: str) -> set[str]:
+def rule_ids_from_covers(
+    covers_text: str,
+    prompt_name: str,
+    *,
+    allow_basename: bool = True,
+) -> set[str]:
     """Return rule IDs from ``## Covers`` scoped to ``prompt_name``.
 
     For cross-module lines, only the matching prompt's IDs are returned;
@@ -137,8 +142,9 @@ def rule_ids_from_covers(covers_text: str, prompt_name: str) -> set[str]:
         else:
             referenced = ref.prompt_filename.lower().removeprefix("./")
             if referenced == target or (
-                "/" not in target
-                and referenced.rsplit("/", 1)[-1] == target
+                allow_basename
+                and "/" not in referenced
+                and referenced == target.rsplit("/", 1)[-1]
             ):
                 ids.add(ref.rule_id)
     return ids

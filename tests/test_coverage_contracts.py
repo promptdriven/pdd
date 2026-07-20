@@ -293,7 +293,7 @@ class TestRuleIdsFromCovers:
 
     def test_cross_module_refs_matching_prompt(self):
         covers = "- prompts/foo.prompt#R3: description"
-        ids = _rule_ids_from_covers(covers, "foo.prompt")
+        ids = _rule_ids_from_covers(covers, "prompts/foo.prompt")
         assert "R3" in ids
 
     def test_cross_module_refs_other_prompt_excluded(self):
@@ -437,6 +437,37 @@ class TestScanStoryEvidence:
         )
         assert result.rules[0].stories == []
         assert result.rules[0].status == STATUS_UNCHECKED
+
+    def test_legacy_metadata_does_not_authorize_wrong_qualified_covers(self, tmp_path):
+        prompt = tmp_path / "prompts" / "a" / "foo.prompt"
+        prompt.parent.mkdir(parents=True)
+        prompt.write_text(
+            "<contract_rules>\nR1a - Specialized\n"
+            "The system MUST specialize.\n</contract_rules>\n",
+            encoding="utf-8",
+        )
+        stories_dir = tmp_path / "stories"
+        stories_dir.mkdir()
+        (stories_dir / "story__wrong_covers.md").write_text(
+            "<!-- pdd-story-prompts: foo.prompt -->\n"
+            "## Covers\n- prompts/wrong/foo.prompt#R1a: wrong owner\n",
+            encoding="utf-8",
+        )
+
+        result = build_coverage(
+            prompt,
+            stories_dir=stories_dir,
+            tests_dir=tmp_path / "none",
+            project_root=tmp_path,
+        )
+        failures = scan_story_validation_failures(
+            stories_dir,
+            prompt,
+            project_root=tmp_path,
+        )
+        assert result.rules[0].stories == []
+        assert result.rules[0].status == STATUS_UNCHECKED
+        assert failures == {}
 
     def test_package_local_scope_cannot_prove_legacy_basename_unique(self, tmp_path):
         package_a = tmp_path / "packages" / "a"
@@ -1176,6 +1207,32 @@ class TestBuildCoverageDirectory:
         )
         results = build_coverage_directory(tmp_path)
         assert len(results) == 1
+
+    def test_nested_prompt_directory_discovers_project_root(self, tmp_path):
+        (tmp_path / ".pdd").mkdir()
+        prompts = tmp_path / "pkg" / "prompts"
+        prompts.mkdir(parents=True)
+        prompt = prompts / "foo.prompt"
+        prompt.write_text(
+            "<contract_rules>\nR1 - Nested\nThe system MUST nest.\n</contract_rules>\n",
+            encoding="utf-8",
+        )
+        stories = tmp_path / "stories"
+        stories.mkdir()
+        (stories / "story__nested.md").write_text(
+            "<!-- pdd-story-prompts: pkg/prompts/foo.prompt -->\n"
+            "## Covers\n- pkg/prompts/foo.prompt#R1: nested owner\n\n"
+            "## Acceptance Criteria\n- It works.\n",
+            encoding="utf-8",
+        )
+
+        results = build_coverage_directory(
+            prompts,
+            stories_dir=stories,
+            tests_dir=tmp_path / "tests",
+        )
+        assert results[0].rules[0].stories == ["story__nested.md"]
+        assert results[0].rules[0].status == STATUS_STORY_ONLY
 
 
 # ===========================================================================

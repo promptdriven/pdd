@@ -25,6 +25,12 @@
   when `R99` is unknown. Never substitute a different qualified prompt path by
   basename; same-basename paths remain distinct and ambiguous basename matches
   fail closed.
+- `check_stories` MUST index prompts by normalized project-relative identity,
+  using the nearest explicit project marker/common project scope. It may add a
+  basename alias only when that basename is unique across all discovered prompts.
+  Story metadata with a qualified prompt path must select that exact prompt;
+  duplicate basenames MUST NOT overwrite one another or empty a valid qualified
+  lookup before `UNKNOWN_STORY_REF` validation runs.
 - Provide stable JSON-serializable results (`as_dict()`).
 
 % Deliverables

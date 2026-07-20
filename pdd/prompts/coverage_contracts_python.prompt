@@ -9,7 +9,7 @@
     ],
     "functions": [
       {"name": "build_coverage", "signature": "(path: Path, stories_dir=None, tests_dir=None, *, prompt_text=None, require_prompt_qualified_tests=False, story_map=None, global_story_registry=None, project_root=None) -> CoverageResult", "returns": "CoverageResult"},
-      {"name": "build_coverage_directory", "signature": "(directory: Path, stories_dir=None, tests_dir=None) -> list[CoverageResult]", "returns": "list[CoverageResult]"}
+      {"name": "build_coverage_directory", "signature": "(directory: Path, stories_dir=None, tests_dir=None, *, project_root=None) -> list[CoverageResult]", "returns": "list[CoverageResult]"}
     ]
   }
 }
@@ -40,7 +40,7 @@
 - Treat prompts without `<contract_rules>` as legacy-safe: return no rules and no error.
 - Directory scans must recurse over `*.prompt` files and skip `*_LLM.prompt`.
 - Expose `build_coverage(path, stories_dir=None, tests_dir=None, *, prompt_text=None, require_prompt_qualified_tests=False, story_map=None, global_story_registry: Optional[set[str]] = None, project_root=None) -> CoverageResult`
-  and `build_coverage_directory(directory, stories_dir=None, tests_dir=None) -> list[CoverageResult]`.
+  and `build_coverage_directory(directory, stories_dir=None, tests_dir=None, *, project_root=None) -> list[CoverageResult]`.
 - Surface a story-keyed `has_regression_test` dimension per discovered user
   story: `true` when at least one collected pytest test claims the story via
   `@pytest.mark.story(story_id="<slug>")`, else `false`. Compute it by querying

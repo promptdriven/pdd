@@ -835,6 +835,49 @@ class TestCrossModuleCovers:
         assert len(issues) == 1
         assert issues[0].code == "UNKNOWN_STORY_REF"
 
+    def test_check_stories_qualified_unknown_rule_warns_end_to_end(self, tmp_path):
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "foo.prompt").write_text(
+            "<contract_rules>\nR1 - Known\nThe system MUST work.\n</contract_rules>\n",
+            encoding="utf-8",
+        )
+        stories = tmp_path / "stories"
+        stories.mkdir()
+        (stories / "story__qualified.md").write_text(
+            "<!-- pdd-story-prompts: prompts/foo.prompt -->\n"
+            "## Covers\n- prompts/foo.prompt#R99: missing\n",
+            encoding="utf-8",
+        )
+
+        results = check_stories(stories, prompts)
+        issues = _issues_for_code(results[0], "UNKNOWN_STORY_REF")
+        assert len(issues) == 1
+        assert issues[0].rule_id == "R99"
+
+    def test_check_stories_duplicate_basenames_keep_qualified_identity(self, tmp_path):
+        prompts = tmp_path / "prompts"
+        for subdir, rule_id in (("a", "R1"), ("b", "R99")):
+            target = prompts / subdir
+            target.mkdir(parents=True)
+            (target / "foo.prompt").write_text(
+                f"<contract_rules>\n{rule_id} - Known\n"
+                "The system MUST work.\n</contract_rules>\n",
+                encoding="utf-8",
+            )
+        stories = tmp_path / "stories"
+        stories.mkdir()
+        (stories / "story__only_a.md").write_text(
+            "<!-- pdd-story-prompts: prompts/a/foo.prompt -->\n"
+            "## Covers\n- prompts/a/foo.prompt#R99: absent from A\n",
+            encoding="utf-8",
+        )
+
+        results = check_stories(stories, prompts)
+        issues = _issues_for_code(results[0], "UNKNOWN_STORY_REF")
+        assert len(issues) == 1
+        assert issues[0].rule_id == "R99"
+
     def test_fixture_cross_module_story_no_issues(self):
         results = check_stories(FIXTURES, FIXTURES)
         cross = next(

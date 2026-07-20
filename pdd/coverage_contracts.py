@@ -276,12 +276,11 @@ def scan_story_evidence(
         if not covers_text:
             continue
 
-        covers_prompt_name = (
-            posixpath.basename(prompt_name)
-            if allow_prompt_basename
-            else prompt_name
+        rule_ids = _rule_ids_from_covers(
+            covers_text,
+            prompt_name,
+            allow_basename=allow_prompt_basename,
         )
-        rule_ids = _rule_ids_from_covers(covers_text, covers_prompt_name)
         for rid in rule_ids:
             evidence.setdefault(rid, [])
             if story_path.name not in evidence[rid]:
@@ -331,12 +330,11 @@ def scan_story_validation_failures(
         if not covers_text:
             continue
 
-        covers_prompt_name = (
-            posixpath.basename(prompt_name)
-            if allow_prompt_basename
-            else prompt_name
+        rule_ids = _rule_ids_from_covers(
+            covers_text,
+            prompt_name,
+            allow_basename=allow_prompt_basename,
         )
-        rule_ids = _rule_ids_from_covers(covers_text, covers_prompt_name)
         if not rule_ids:
             continue
 
@@ -391,13 +389,7 @@ def _prompt_reference_scope(
         if resolved_prompt.is_relative_to(candidate_root):
             trusted_root = candidate_root
     else:
-        for candidate_root in (common_root, *common_root.parents):
-            if any(
-                (candidate_root / marker).exists()
-                for marker in (".git", ".pdd", "architecture.json", "pyproject.toml")
-            ):
-                trusted_root = candidate_root
-                break
+        trusted_root = _discover_project_root(common_root)
         if trusted_root is None and resolved_prompt.parent == common_root:
             # Legacy flat fixtures/projects can prove uniqueness within their
             # complete local root. Nested package-local roots cannot.
@@ -415,6 +407,17 @@ def _prompt_reference_scope(
         if candidate.name.lower() == basename
     ]
     return _normalise_prompt_identity(identity), len(basename_matches) == 1
+
+
+def _discover_project_root(start: Path) -> Optional[Path]:
+    """Find the nearest explicit project boundary at or above *start*."""
+    for candidate in (start, *start.parents):
+        if any(
+            (candidate / marker).exists()
+            for marker in (".git", ".pdd", "architecture.json", "pyproject.toml")
+        ):
+            return candidate
+    return None
 
 
 def _prompt_reference_matches(
@@ -1182,6 +1185,8 @@ def build_coverage_directory(
     directory: Path,
     stories_dir: Optional[Path] = None,
     tests_dir: Optional[Path] = None,
+    *,
+    project_root: Optional[Path] = None,
 ) -> list[CoverageResult]:
     """
     Build coverage matrices for every `*.prompt` file under a directory.
@@ -1194,6 +1199,13 @@ def build_coverage_directory(
 
     shared_story_map = build_story_map(tests_dir if tests_dir is not None else Path("tests"))
     global_story_registry: set[str] = set()
+    effective_project_root = (
+        Path(os.path.abspath(project_root))
+        if project_root is not None
+        else _discover_project_root(Path(os.path.abspath(directory)))
+    )
+    if effective_project_root is None:
+        effective_project_root = directory.parent
 
     results: list[CoverageResult] = []
     for prompt_path in sorted(directory.rglob("*.prompt")):
@@ -1209,7 +1221,7 @@ def build_coverage_directory(
                 require_prompt_qualified_tests=True,
                 story_map=shared_story_map,
                 global_story_registry=global_story_registry,
-                project_root=directory.parent,
+                project_root=effective_project_root,
             )
         )
     return results

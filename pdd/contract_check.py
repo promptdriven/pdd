@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import posixpath
 import re
 from dataclasses import dataclass, field
@@ -854,13 +855,37 @@ def check_stories(  # pylint: disable=too-many-locals,invalid-name
     # Build prompt ID map if prompts_dir given
     prompt_id_map: dict[str, set[str]] = {}
     if prompts_dir and prompts_dir.exists():
+        resolved_prompts = Path(os.path.abspath(prompts_dir))
+        resolved_stories = Path(os.path.abspath(stories_dir))
+        common_root = Path(os.path.commonpath((resolved_prompts, resolved_stories)))
+        project_root = common_root
+        for candidate in (common_root, *common_root.parents):
+            if any(
+                (candidate / marker).exists()
+                for marker in (".git", ".pdd", "architecture.json", "pyproject.toml")
+            ):
+                project_root = candidate
+                break
+
+        parsed_prompts: list[tuple[str, str, set[str]]] = []
         for prompt_path in prompts_dir.rglob("*.prompt"):
             try:
                 parsed = parse_prompt_contracts(prompt_path)
                 if parsed.has_contract_rules:
-                    prompt_id_map[prompt_path.name] = parsed.known_rule_ids
+                    absolute_prompt = Path(os.path.abspath(prompt_path))
+                    identity = absolute_prompt.relative_to(project_root).as_posix().lower()
+                    parsed_prompts.append(
+                        (identity, prompt_path.name.lower(), parsed.known_rule_ids)
+                    )
             except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
                 pass
+        basename_counts: dict[str, int] = {}
+        for _identity, basename, _ids in parsed_prompts:
+            basename_counts[basename] = basename_counts.get(basename, 0) + 1
+        for identity, basename, known_ids in parsed_prompts:
+            prompt_id_map[identity] = known_ids
+            if basename_counts[basename] == 1:
+                prompt_id_map[basename] = known_ids
 
     for story_path in sorted(stories_dir.rglob("story__*.md")):
         result = ContractResult(path=story_path)
@@ -876,8 +901,11 @@ def check_stories(  # pylint: disable=too-many-locals,invalid-name
                 r"<!--\s*pdd-story-prompts:\s*([^>]+)-->", story_text
             )
             if meta_match:
-                names = [n.strip() for n in meta_match.group(1).split(",")]
-                linked = {n: prompt_id_map.get(n, set()) for n in names}
+                names = [
+                    posixpath.normpath(n.strip().replace("\\", "/")).lower()
+                    for n in meta_match.group(1).split(",")
+                ]
+                linked = {name: prompt_id_map.get(name, set()) for name in names}
             else:
                 linked = prompt_id_map  # check against all known prompts
 
