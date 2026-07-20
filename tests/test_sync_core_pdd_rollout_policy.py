@@ -118,6 +118,27 @@ OCI_CHECKER_RUNTIME_LAYER2_PROTECTED_BASE = (
     "e072e09e4cfb7fa0224e75a11fbf1ffbd61ec347"
 )
 OCI_CHECKER_RUNTIME_LAYER2_POLICY_SHA = "51ad58f28858178d02146df2ac75595277a70448"
+C1_GLOBAL_SYNC_GATE6_PARTITION_PREAUTHORIZED_PATHS = {
+    "docs/global_sync_gate6_partition.json",
+}
+C1_GLOBAL_SYNC_GATE6_PARTITION_PROTECTED_BASE = (
+    "a0a8da9e15447c7eb7f4faade5d0792383afa509"
+)
+C1_GLOBAL_SYNC_GATE6_PARTITION_POLICY_SHA = (
+    "57e2c4baa0cb384ebf1112e3262e08d3270ee040"
+)
+C1_GLOBAL_SYNC_GATE6_PARTITION_UNAUTHORIZED_PATHS = {
+    ".pdd/global-sync/oci-checker-modules.json",
+    "docs/global_sync_gate6_partition/c2.json",
+    "docs/global_sync_gate6_partition_c2.json",
+    "docs/global_sync_gate6_partition_c3.json",
+    "docs/global_sync_workstream-c.json",
+    "docs/global_sync_workstream_c.json",
+    "docs/global_sync_workstream_c1.json",
+    "pdd/sync_core/global_sync_gate6_partition.py",
+    "pdd/sync_core/oci_checker.py",
+    "tests/test_sync_core_oci_checker.py",
+}
 STANDALONE_CHECKER_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/standalone-checker-modules.json",
     "pdd/sync_core/standalone_package.py",
@@ -171,6 +192,7 @@ PREAUTHORIZED_CHILD_PATHS = (
     | GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
     | OCI_CHECKER_RUNTIME_LAYER2_PREAUTHORIZED_PATHS
+    | C1_GLOBAL_SYNC_GATE6_PARTITION_PREAUTHORIZED_PATHS
     | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
     | {
@@ -2012,7 +2034,6 @@ def test_oci_checker_runtime_layer2_paths_are_exactly_preauthorized_at_base() ->
         "ci/oci-checker/Dockerfile",
         "ci/sync-checker/Containerfile",
         "ci/sync-checker/Dockerfile.alpine",
-        "docs/global_sync_gate6_partition.json",
         "docs/global_sync_workstream_c.json",
         "pdd/sync_core/oci_checker.py",
         "pdd_cloud/sync_core/oci_runtime.py",
@@ -2090,7 +2111,6 @@ def test_oci_checker_runtime_layer2_composes_clean_manifest_and_fails_closed(
         ".github/workflows/oci-checker-release.yml",
         ".pdd/global-sync/oci-checker-modules.json",
         "ci/sync-checker/Dockerfile.alpine",
-        "docs/global_sync_gate6_partition.json",
         "pdd/sync_core/oci_checker.py",
         "pdd_cloud/sync_core/oci_runtime.py",
         "tests/test_sync_core_oci_checker.py",
@@ -2109,6 +2129,109 @@ def test_oci_checker_runtime_layer2_composes_clean_manifest_and_fails_closed(
     )
     assert {
         f"{path}: tracked path has no ownership rule" for path in rejected_paths
+    } <= set(rejected_manifest.invalid_reasons)
+
+
+def test_c1_global_sync_gate6_partition_is_exactly_preauthorized() -> None:
+    """C1 grants only its reviewed, absent Gate 6 partition artifact."""
+    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    rules = {row["pattern"]: row for row in ownership["rules"]}
+    preauthorized = {
+        row["pattern"]
+        for row in ownership["rules"]
+        if row.get("preauthorize_absent", False)
+    }
+
+    assert C1_GLOBAL_SYNC_GATE6_PARTITION_PREAUTHORIZED_PATHS == {
+        "docs/global_sync_gate6_partition.json"
+    }
+    assert {
+        path: rules.get(path)
+        for path in C1_GLOBAL_SYNC_GATE6_PARTITION_PREAUTHORIZED_PATHS
+    } == {
+        path: {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
+        for path in C1_GLOBAL_SYNC_GATE6_PARTITION_PREAUTHORIZED_PATHS
+    }
+    assert {
+        path
+        for path in preauthorized
+        if path.startswith("docs/global_sync_gate6_partition")
+    } == C1_GLOBAL_SYNC_GATE6_PARTITION_PREAUTHORIZED_PATHS
+    assert preauthorized.isdisjoint(
+        C1_GLOBAL_SYNC_GATE6_PARTITION_UNAUTHORIZED_PATHS | {"pdd/code_generator.py"}
+    )
+    assert all(
+        not path.endswith("/") and not any(token in path for token in ("*", "?", "["))
+        for path in C1_GLOBAL_SYNC_GATE6_PARTITION_PREAUTHORIZED_PATHS
+    )
+    for path in C1_GLOBAL_SYNC_GATE6_PARTITION_PREAUTHORIZED_PATHS:
+        assert subprocess.run(
+            ["git", "cat-file", "-e", f"HEAD:{path}"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+        ).returncode != 0
+
+
+def test_c1_global_sync_gate6_partition_composes_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """Stacked protected policy admits C1's exact artifact and rejects variants."""
+    root = tmp_path / "c1-global-sync-gate6-partition-preauthorization"
+    subprocess.run(
+        ["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(root)],
+        check=True,
+        capture_output=True,
+    )
+    _git(root, "checkout", "--detach", C1_GLOBAL_SYNC_GATE6_PARTITION_POLICY_SHA)
+    protected_base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    assert protected_base == C1_GLOBAL_SYNC_GATE6_PARTITION_POLICY_SHA
+    assert subprocess.check_output(
+        ["git", "rev-parse", "HEAD^"], cwd=root, text=True
+    ).strip() == C1_GLOBAL_SYNC_GATE6_PARTITION_PROTECTED_BASE
+    _git(root, "update-ref", "refs/remotes/origin/main", protected_base)
+
+    exact = next(iter(C1_GLOBAL_SYNC_GATE6_PARTITION_PREAUTHORIZED_PATHS))
+    assert not (root / exact).exists()
+    exact_path = root / exact
+    exact_path.parent.mkdir(parents=True, exist_ok=True)
+    exact_path.write_text("{}\n", encoding="utf-8")
+    _git(root, "add", "-f", exact)
+    exact_head = _commit(root, "compose synthetic C1 Gate 6 partition")
+
+    exact_manifest = build_unit_manifest(
+        root, base_ref="origin/main", head_ref=exact_head
+    )
+    exact_record = next(
+        item
+        for item in exact_manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix() == exact
+    )
+    assert exact_record.inventory.value == "HUMAN_OWNED"
+    assert exact_record.candidate_id.role == "human-maintained"
+    assert exact_record.ownership_provenance == (
+        f"protected-ownership:pdd-maintainers:{exact}"
+    )
+    assert not exact_manifest.unaccounted_tracked_paths
+    assert not exact_manifest.invalid_reasons
+
+    for path in C1_GLOBAL_SYNC_GATE6_PARTITION_UNAUTHORIZED_PATHS:
+        candidate = root / path
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text("unauthorized C1 variant\n", encoding="utf-8")
+    _git(root, "add", "-f", *C1_GLOBAL_SYNC_GATE6_PARTITION_UNAUTHORIZED_PATHS)
+    rejected_head = _commit(root, "attempt C1 sibling authority")
+    rejected_manifest = build_unit_manifest(
+        root, base_ref=exact_head, head_ref=rejected_head
+    )
+    assert {
+        Path(path) for path in C1_GLOBAL_SYNC_GATE6_PARTITION_UNAUTHORIZED_PATHS
+    } <= set(rejected_manifest.unaccounted_tracked_paths)
+    assert {
+        f"{path}: tracked path has no ownership rule"
+        for path in C1_GLOBAL_SYNC_GATE6_PARTITION_UNAUTHORIZED_PATHS
     } <= set(rejected_manifest.invalid_reasons)
 
 
