@@ -1,0 +1,6 @@
+bundled_extension("YAML") == "yml"
+first_row_wins_for_every_duplicated_language
+language not in mapping
+first row wins
+first match wins
+language and language not in mapping

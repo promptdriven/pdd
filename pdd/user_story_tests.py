@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import warnings
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 from rich import print as rprint
 from rich.markup import escape as rich_escape
@@ -980,7 +980,12 @@ def _contract_path_for_story(story_path: Path) -> Path:
     return story_path.parent / CONTRACTS_SUBDIR / f"{slug}{CONTRACT_SUFFIX}"
 
 
-def _compose_story_oracle(story_path: Path, story_content: str) -> str:
+def _compose_story_oracle(
+    story_path: Path,
+    story_content: str,
+    *,
+    contract_path: Optional[Path] = None,
+) -> str:
     """Return the full detection oracle: human Story plus its generated contract.
 
     The human ``story__<slug>.md`` carries the prompt-link metadata and prose; the
@@ -992,7 +997,7 @@ def _compose_story_oracle(story_path: Path, story_content: str) -> str:
     can no-op or under-specify a change that later fails validation. When no
     contract exists yet, the story content is the oracle on its own.
     """
-    contract_path = _contract_path_for_story(story_path)
+    contract_path = contract_path or _contract_path_for_story(story_path)
     if contract_path.exists():
         try:
             return f"{story_content}\n\n{contract_path.read_text(encoding='utf-8')}"
@@ -1517,6 +1522,7 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
     stories_dir: Optional[str] = None,
     story_files: Optional[List[Path]] = None,
     prompt_files: Optional[List[Path]] = None,
+    contract_files: Optional[Mapping[Path, Path]] = None,
     strength: float = 0.2,
     temperature: float = 0.0,
     time: float = 0.25,
@@ -1570,7 +1576,16 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
         # The oracle is the human Story PLUS its generated contract (when present).
         # The human file carries the prompt-link metadata; the contract carries the
         # machine-checkable acceptance criteria the LLM detects against.
-        oracle_content = _compose_story_oracle(story_path, story_content)
+        contract_path = (
+            contract_files.get(story_path.resolve())
+            if contract_files is not None
+            else None
+        )
+        oracle_content = _compose_story_oracle(
+            story_path,
+            story_content,
+            contract_path=contract_path,
+        )
         story_prompt_files = prompt_files
         if metadata_prompt_refs:
             resolved_story_prompts: List[Path] = []

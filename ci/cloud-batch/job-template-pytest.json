@@ -1,0 +1,93 @@
+{
+    "taskGroups": [
+        {
+            "taskSpec": {
+                "runnables": [
+                    {
+                        "container": {
+                            "imageUri": "{{IMAGE_URI}}",
+                            "entrypoint": "/runtime-secrets.py",
+                            "options": "--privileged"
+                        },
+                        "environment": {
+                            "variables": {
+                                "VERTEX_PROJECT": "{{PROJECT_ID}}",
+                                "PDD_TEST_HEADLESS": "1",
+                                "GCS_BUCKET_NAME": "litellm_cache",
+                                "PDD_CLOUD_URL": "https://{{REGION}}-{{PROJECT_ID}}.cloudfunctions.net",
+                                "PDD_ENV": "staging",
+                                "PDD_CLOUD_TIMEOUT": "1200",
+                                "PYTEST_CHUNK_TIMEOUT": "1800",
+                                "PDD_CANDIDATE_SHA": "{{CANDIDATE_SHA}}",
+                                "PDD_CANDIDATE_TREE": "{{CANDIDATE_TREE}}",
+                                "PDD_SOURCE_SHA256": "{{SOURCE_SHA256}}",
+                                "PDD_SOURCE_SIZE": "{{SOURCE_SIZE}}",
+                                "PDD_SOURCE_GCS_BUCKET": "{{SOURCE_GCS_BUCKET}}",
+                                "PDD_SOURCE_GCS_OBJECT": "{{SOURCE_GCS_OBJECT}}",
+                                "PDD_SOURCE_GCS_GENERATION": "{{SOURCE_GCS_GENERATION}}",
+                                "PDD_SOURCE_ARCHIVE": "/mnt/disks/source/pdd-source.tar.gz",
+                                "PDD_IMAGE_DIGEST": "{{IMAGE_DIGEST}}",
+                                "PDD_PACKAGE_VERSION": "{{PDD_PACKAGE_VERSION}}",
+                                "PDD_BATCH_PROJECT": "{{PROJECT_ID}}",
+                                "PDD_BATCH_LOCATION": "{{REGION}}",
+                                "PDD_BATCH_JOB_NAME": "{{BATCH_JOB_NAME}}",
+                                "GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE": "{{GCS_HMAC_ACCESS_KEY_ID_SECRET_RESOURCE}}",
+                                "GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE": "{{GCS_HMAC_SECRET_ACCESS_KEY_SECRET_RESOURCE}}",
+                                "OPENAI_API_KEY_SECRET_RESOURCE": "{{OPENAI_API_KEY_SECRET_RESOURCE}}",
+                                "FIREBASE_API_KEY_SECRET_RESOURCE": "{{FIREBASE_API_KEY_SECRET_RESOURCE}}",
+                                "GITHUB_CLIENT_ID_SECRET_RESOURCE": "{{GITHUB_CLIENT_ID_SECRET_RESOURCE}}",
+                                "PDD_REFRESH_TOKEN_SECRET_RESOURCE": "{{PDD_REFRESH_TOKEN_SECRET_RESOURCE}}",
+                                "CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE": "{{CLAUDE_CODE_OAUTH_TOKEN_SECRET_RESOURCE}}"
+                            }
+                        }
+                    }
+                ],
+                "volumes": [
+                    {
+                        "gcs": {
+                            "remotePath": "{{RESULTS_GCS_PATH}}"
+                        },
+                        "mountPath": "/mnt/disks/results"
+                    },
+                    {
+                        "gcs": {
+                            "remotePath": "{{SOURCE_GCS_PATH}}"
+                        },
+                        "mountPath": "/mnt/disks/source"
+                    }
+                ],
+                "maxRetryCount": 3,
+                "maxRunDuration": "5400s",
+                "lifecyclePolicies": [
+                    {
+                        "action": "RETRY_TASK",
+                        "actionCondition": {
+                            "exitCodes": [50001, 50002, 50003, 50006]
+                        }
+                    }
+                ]
+            },
+            "taskCount": "32",
+            "parallelism": "32"
+        }
+    ],
+    "allocationPolicy": {
+        "instances": [
+            {
+                "policy": {
+                    "machineType": "e2-standard-8",
+                    "provisioningModel": "{{SPOT_PROVISIONING_MODEL}}"
+                }
+            }
+        ],
+        "serviceAccount": {
+            "email": "pdd-ci-batch@{{PROJECT_ID}}.iam.gserviceaccount.com"
+        },
+        "location": {
+            "allowedLocations": ["regions/{{REGION}}"]
+        }
+    },
+    "logsPolicy": {
+        "destination": "CLOUD_LOGGING"
+    }
+}

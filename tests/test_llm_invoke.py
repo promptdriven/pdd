@@ -3,6 +3,7 @@
 import copy
 import pytest
 import os
+import re
 import pandas as pd
 
 # Cap per-test runtime for this real-LLM heavy module. Individual hot tests
@@ -593,6 +594,246 @@ def test_llm_invoke_valid_input(mock_load_models, mock_set_llm_cache):
                  call_args, call_kwargs = mock_completion.call_args
                  assert call_kwargs['model'] == 'gpt-5-nano'
                  assert call_kwargs['messages'] == [{"role": "user", "content": "Valid prompt about cats"}]
+
+
+def test_hosted_command_budget_sets_provider_token_cap_and_disables_retries(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """The hosted adapter must bound the actual LiteLLM request, not ledger it later."""
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-token-cap")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), \
+         patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        mock_completion.return_value = create_mock_litellm_response(
+            "bounded", model_name="cheap-model", prompt_tokens=10, completion_tokens=10
+        )
+        with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.0001}):
+            response = llm_invoke("short prompt", {}, strength=0.1, verbose=False)
+
+    assert response["result"] == "bounded"
+    mock_completion.assert_called_once()
+    kwargs = mock_completion.call_args.kwargs
+    assert kwargs["num_retries"] == 0
+    assert 0 < kwargs["max_tokens"] <= 666_666
+
+
+def test_hosted_command_budget_bounds_openai_responses_api(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """GPT-5 Responses requests must use the same pre-dispatch hard cap."""
+    import pdd.llm_invoke as llm_mod
+
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    # Deliberately leave the token ceiling above the USD-derived maximum so
+    # the assertion proves the cost admission, not only env passthrough.
+    monkeypatch.setenv("PDD_COMMAND_MAX_OUTPUT_TOKENS", "1000000")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-responses")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), \
+         patch("pdd.llm_invoke.litellm.responses") as mock_responses, \
+         patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        mock_responses.return_value = create_mock_openai_responses_api_response(
+            "bounded", input_tokens=2, output_tokens=3
+        )
+        response = llm_invoke("short prompt", {}, strength=0.5, verbose=False)
+
+    assert response["result"] == "bounded"
+    mock_responses.assert_called_once()
+    mock_completion.assert_not_called()
+    derived_cap = mock_responses.call_args.kwargs["max_output_tokens"]
+    assert 0 < derived_cap < 1_000_000
+    assert derived_cap <= 333_333
+    assert llm_mod._HOSTED_BUDGET_RESERVED_USD > 0
+
+
+def test_hosted_command_budget_rejects_invalid_cap_before_provider(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "not-a-number")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        with pytest.raises(RuntimeError, match="PDD_COMMAND_MAX_COST_USD"):
+            llm_invoke("short prompt", {}, strength=0.1, verbose=False)
+    mock_completion.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("trigger", "content", "kwargs"),
+    [
+        ("none", None, {}),
+        ("malformed_json", '{"code":"' + "\\n" * 100, {}),
+        (
+            "invalid_python",
+            '{"code":"def broken(:\\n    pass"}',
+            {
+                "language": "python",
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"code": {"type": "string"}},
+                    "required": ["code"],
+                },
+            },
+        ),
+    ],
+)
+def test_hosted_command_budget_never_retries_provider_dispatch(
+    mock_load_models, mock_set_llm_cache, monkeypatch, trigger, content, kwargs
+):
+    """Every concrete bounded retry trigger must stop after its admitted call."""
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", f"test-budget-no-retry-{trigger}")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), patch(
+        "pdd.llm_invoke.litellm.completion"
+    ) as mock_completion:
+        mock_completion.return_value = create_mock_litellm_response(
+            content, model_name="cheap-model", prompt_tokens=2, completion_tokens=2
+        )
+        try:
+            llm_invoke("short prompt", {}, strength=0.1, verbose=False, **kwargs)
+        except RuntimeError:
+            # Schema failures remain failures; this contract only proves they
+            # cannot buy a second provider dispatch under the hard USD cap.
+            pass
+
+    assert mock_completion.call_count == 1
+    assert mock_completion.call_args.kwargs["num_retries"] == 0
+
+
+def test_hosted_command_budget_does_not_retry_temperature_thinking_provider_error(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """A bounded admission cannot spend output-token slack on a corrected retry.
+
+    The temperature/thinking recovery changes the request and normally retries
+    the same Claude model.  Even where the hard USD ceiling has room for a
+    second request, that request was not admitted and must never dispatch.
+    """
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    # This deliberately leaves nearly the entire USD budget unreserved after
+    # the first one-token admission. Before the guard, that slack admitted the
+    # temperature-correction retry and caused a second provider dispatch.
+    monkeypatch.setenv("PDD_COMMAND_MAX_OUTPUT_TOKENS", "1")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-temperature-retry")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "fake_key_value"}), patch(
+        "pdd.llm_invoke.litellm.completion",
+        side_effect=RuntimeError(
+            "temperature must not be 1 when thinking is disabled"
+        ),
+    ) as mock_completion:
+        with pytest.raises(RuntimeError, match="All candidate models failed"):
+            llm_invoke(
+                "short prompt",
+                {},
+                strength=1.0,
+                temperature=1,
+                verbose=False,
+            )
+
+    # The one-token output cap leaves USD slack for another admission, so one
+    # call proves the fail-closed policy rather than reservation exhaustion.
+    assert mock_completion.call_count == 1
+    assert mock_completion.call_args.kwargs["model"] == "claude-3"
+    assert mock_completion.call_args.kwargs["max_tokens"] == 1
+    assert mock_completion.call_args.kwargs["num_retries"] == 0
+
+
+def test_hosted_command_budget_does_not_retry_newly_acquired_key_after_auth_error(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """A newly acquired key cannot re-dispatch after bounded admission."""
+    import pdd.llm_invoke as llm_mod
+
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_MAX_OUTPUT_TOKENS", "1")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-auth-retry")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    mock_request = MagicMock(spec=httpx.Request)
+    mock_request.url = "https://api.openai.com/v1/chat/completions"
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.request = mock_request
+    mock_response.status_code = 401
+    mock_response.headers = {"content-type": "application/json"}
+    auth_error = openai.AuthenticationError(
+        message="invalid newly supplied key",
+        response=mock_response,
+        body={"error": "invalid newly supplied key"},
+    )
+
+    def acquire_new_key(model_info, newly_acquired_keys, verbose):
+        newly_acquired_keys[model_info["api_key"]] = True
+        return True
+
+    with patch.object(llm_mod, "_ensure_api_key", side_effect=acquire_new_key), patch(
+        "pdd.llm_invoke.litellm.completion", side_effect=auth_error
+    ) as mock_completion:
+        with pytest.raises(RuntimeError, match="All candidate models failed"):
+            llm_invoke("short prompt", {}, strength=0.1, verbose=False)
+
+    assert mock_completion.call_count == 1
+    assert mock_completion.call_args.kwargs["num_retries"] == 0
+
+
+def test_hosted_command_budget_rejects_multi_item_batch_before_provider(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """A bounded command cannot treat one batch admission as per-item budget."""
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-batch")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch("pdd.llm_invoke.litellm.batch_completion") as mock_batch:
+        with pytest.raises(RuntimeError, match="does not permit batch"):
+            llm_invoke(
+                "short prompt",
+                [{"item": "one"}, {"item": "two"}],
+                strength=0.1,
+                verbose=False,
+                use_batch_mode=True,
+            )
+    mock_batch.assert_not_called()
+
+
+def test_unbounded_command_retains_cache_bypass_retry(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """The fail-closed hosted policy does not alter normal interactive retries."""
+    monkeypatch.delenv("PDD_COMMAND_MAX_COST_USD", raising=False)
+    monkeypatch.delenv("PDD_COMMAND_BUDGET_ID", raising=False)
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), patch(
+        "pdd.llm_invoke.litellm.completion",
+        side_effect=[
+            create_mock_litellm_response(None, model_name="cheap-model"),
+            create_mock_litellm_response("retried", model_name="cheap-model"),
+        ],
+    ) as mock_completion:
+        response = llm_invoke("short prompt", {}, strength=0.1, verbose=False)
+
+    assert response["result"] == "retried"
+    assert mock_completion.call_count == 2
+
+
+def test_hosted_budget_allows_nested_calls_until_shared_reservation_exhausts(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """Generation continuation/extraction calls share one process budget."""
+    monkeypatch.setenv("PDD_COMMAND_MAX_COST_USD", "0.01")
+    monkeypatch.setenv("PDD_COMMAND_MAX_OUTPUT_TOKENS", "10")
+    monkeypatch.setenv("PDD_COMMAND_BUDGET_ID", "test-budget-nested")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_value"}), \
+         patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        mock_completion.return_value = create_mock_litellm_response(
+            "bounded", model_name="cheap-model", prompt_tokens=2, completion_tokens=2
+        )
+        with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.0001}):
+            llm_invoke("first", {}, strength=0.1, verbose=False)
+            llm_invoke("second", {}, strength=0.1, verbose=False)
+
+    assert mock_completion.call_count == 2
+    assert all(call.kwargs["num_retries"] == 0 for call in mock_completion.call_args_list)
 
 
 def test_llm_invoke_estimate_only_skips_provider_call(mock_load_models, mock_set_llm_cache, monkeypatch):
@@ -5314,32 +5555,20 @@ class TestSelectModelCandidates:
         (GOOGLE_APPLICATION_CREDENTIALS → ANTHROPIC_API_KEY) and the API
         endpoint, defeating the deployment's intent."""
         df = self._make_cross_provider_df(llm_mod, tmp_path)
-        candidates = llm_mod._select_model_candidates(
-            0.5, "vertex_ai/claude-opus-4-6", df
-        )
-        # CSV has no `Google Vertex AI,claude-opus-4-6` row → strip-attempt
-        # constrained to provider="Google Vertex AI" finds nothing → falls
-        # through to surrogate-base = first row (AWS Bedrock).
-        assert candidates[0]["model"] != "claude-opus-4-6", (
-            "vertex_ai/ prefix must not silently match direct Anthropic row"
-        )
-        assert candidates[0]["model"] == "anthropic.claude-opus-4-6-v1"
+        with pytest.raises(ValueError, match="refusing to select a surrogate"):
+            llm_mod._select_model_candidates(
+                0.5, "vertex_ai/claude-opus-4-6", df
+            )
 
     def test_vertex_prefix_does_not_match_gemini_direct_row(self, llm_mod, tmp_path):
         """Provider-boundary regression: vertex_ai/gemini-3-flash-preview
         must NOT silently resolve to a `gemini/`-prefixed Direct Gemini API
         row. Different provider, different credentials, different endpoint."""
         df = self._make_cross_provider_df(llm_mod, tmp_path)
-        candidates = llm_mod._select_model_candidates(
-            0.5, "vertex_ai/gemini-3-flash-preview", df
-        )
-        # CSV has no `Google Vertex AI,gemini-3-flash-preview` (bare) row.
-        # The `Google Gemini,gemini/gemini-3-flash-preview` row exists but
-        # is from a different provider. Provider-aware alias should NOT
-        # match it. Surrogate-base fires.
-        assert candidates[0]["model"] != "gemini/gemini-3-flash-preview", (
-            "vertex_ai/ prefix must not silently match direct Gemini row"
-        )
+        with pytest.raises(ValueError, match="Google Vertex AI"):
+            llm_mod._select_model_candidates(
+                0.5, "vertex_ai/gemini-3-flash-preview", df
+            )
 
     def test_vertex_prefix_resolves_correctly_when_vertex_row_exists(self, llm_mod, tmp_path):
         """Positive companion to the negative tests: when the configured
@@ -5420,6 +5649,9 @@ class TestInteractiveOnlyFilter:
 
     def test_interactive_included_with_opt_in(self, llm_mod, tmp_path, monkeypatch):
         monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "1")
+        # This test isolates the interactive opt-in. PR auto-heal deliberately
+        # exports PDD_SKIP_LOCAL_MODELS, which is a separate stronger policy.
+        monkeypatch.delenv("PDD_SKIP_LOCAL_MODELS", raising=False)
         df = self._make_df(llm_mod, tmp_path)
         candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
         names = [c["model"] for c in candidates]
@@ -5469,6 +5701,8 @@ class TestInteractiveOnlyFilter:
         # Backward compatibility: a pre-migration CSV has no column. Nothing is
         # treated as interactive and no row is dropped.
         monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+        # A caller-level local-model ban is orthogonal to legacy CSV parsing.
+        monkeypatch.delenv("PDD_SKIP_LOCAL_MODELS", raising=False)
         df = self._make_df(llm_mod, tmp_path, with_column=False)
         assert int(df["interactive_only"].sum()) == 0
         candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
@@ -5495,6 +5729,21 @@ class TestAlternativeBaseLookups:
         assert llm_mod._alternative_base_lookups(
             "gemini/gemini-3.1-pro-preview"
         ) == [("gemini-3.1-pro-preview", "Google Gemini")]
+
+    def test_strips_openai_prefix_with_provider(self, llm_mod):
+        assert llm_mod._alternative_base_lookups(
+            "openai/gpt-5.6"
+        ) == [("gpt-5.6", "OpenAI")]
+
+    def test_strips_azure_openai_prefix_with_provider(self, llm_mod):
+        assert llm_mod._alternative_base_lookups(
+            "azure/gpt-5.6"
+        ) == [("gpt-5.6", "Azure OpenAI")]
+
+    def test_strips_chatgpt_prefix_with_provider(self, llm_mod):
+        assert llm_mod._alternative_base_lookups(
+            "chatgpt/gpt-5.6-sol"
+        ) == [("gpt-5.6-sol", "OpenAI ChatGPT")]
 
     def test_bare_name_emits_each_provider_pair(self, llm_mod):
         alts = llm_mod._alternative_base_lookups("gemini-3.1-pro-preview")
@@ -6564,6 +6813,109 @@ class TestReasoningParameters:
 
         assert "reasoning_effort" in captured_kwargs
         assert captured_kwargs["reasoning_effort"] == "high"
+
+    def test_gpt5_responses_honors_explicit_xhigh_effort(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        csv_path = self._make_csv_with_reasoning(
+            tmp_path, "effort", "OpenAI", "gpt-5.6"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("PDD_REASONING_EFFORT", "xhigh")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "gpt-5.6")
+
+        mock_response = MagicMock()
+        mock_response.output_text = "result"
+        mock_response.output = []
+        mock_response.usage = MagicMock(input_tokens=1, output_tokens=1)
+        captured_kwargs = {}
+
+        def capture_response(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        with patch.object(llm_mod.litellm, "responses", side_effect=capture_response):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.8,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs["reasoning"] == {
+            "effort": "xhigh",
+            "summary": "auto",
+        }
+
+    def test_gpt5_responses_rejects_invalid_explicit_effort(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        csv_path = self._make_csv_with_reasoning(
+            tmp_path, "effort", "OpenAI", "gpt-5.6"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("PDD_REASONING_EFFORT", "turbo")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "gpt-5.6")
+
+        with pytest.raises(ValueError, match="is not supported by OpenAI model gpt-5.6"):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.8,
+                use_cloud=False,
+            )
+
+    @pytest.mark.parametrize(
+        ("model_name", "accepted", "rejected"),
+        [
+            ("gpt-5.6", "none", "minimal"),
+            ("gpt-5.5", "none", "max"),
+            ("gpt-5.4", "xhigh", "minimal"),
+            ("gpt-5", "minimal", "none"),
+        ],
+    )
+    def test_gpt5_effort_contract_is_model_specific(
+        self, llm_mod, tmp_path, monkeypatch, model_name, accepted, rejected
+    ):
+        csv_path = self._make_csv_with_reasoning(
+            tmp_path, "effort", "OpenAI", model_name
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", model_name)
+        mock_response = MagicMock(
+            output_text="result",
+            output=[],
+            usage=MagicMock(input_tokens=1, output_tokens=1),
+        )
+
+        monkeypatch.setenv("PDD_REASONING_EFFORT", accepted)
+        with patch.object(llm_mod.litellm, "responses", return_value=mock_response) as call:
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.8,
+                use_cloud=False,
+            )
+        assert call.call_args.kwargs["reasoning"]["effort"] == accepted
+
+        monkeypatch.setenv("PDD_REASONING_EFFORT", rejected)
+        with pytest.raises(ValueError, match=f"OpenAI model {re.escape(model_name)}"):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.8,
+                use_cloud=False,
+            )
 
     def test_adaptive_reasoning_anthropic(self, llm_mod, tmp_path, monkeypatch):
         """`reasoning_type=adaptive` on an Anthropic row must send the new

@@ -448,7 +448,12 @@ def test_decision_fix_on_test_failures(mock_construct, pdd_test_environment):
 
 @patch('sync_determine_operation.construct_paths')
 @patch('sync_determine_operation.get_pdd_file_paths')
-def test_decision_test_on_low_coverage(mock_get_pdd_paths, mock_construct, pdd_test_environment):
+def test_decision_test_on_low_coverage(
+    mock_get_pdd_paths, mock_construct, pdd_test_environment, monkeypatch
+):
+    # Exercise the normal coverage decision independently of the PR
+    # auto-heal scope guard inherited from the surrounding process.
+    monkeypatch.delenv("PDD_DISABLE_TEST_EXTEND", raising=False)
     tmp_path = pdd_test_environment
 
     # Create test file and code file on disk so existence checks pass
@@ -3390,13 +3395,16 @@ class TestFalsePositiveSuccessBugRegression:
             "Expected: False (tests need to run)"
         )
 
-    def test_sync_returns_test_operation_when_tests_not_run(self, pdd_test_environment):
+    def test_sync_returns_test_operation_when_tests_not_run(
+        self, pdd_test_environment, monkeypatch
+    ):
         """
         When skip_verify=True but tests haven't been run, sync should return 'test' or 'crash'
         operation, NOT 'nothing'.
 
         This reproduces the exact scenario from GitHub issue #210.
         """
+        monkeypatch.delenv("PDD_DISABLE_TEST_EXTEND", raising=False)
         tmp_path = pdd_test_environment
 
         Path("src").mkdir(exist_ok=True)
@@ -4032,13 +4040,16 @@ class TestZeroCoverageBugIssue573:
             "(likely due to sys.modules stub masking broken imports)."
         )
 
-    def test_sync_determine_operation_returns_test_extend_for_zero_coverage(self, pdd_test_environment):
+    def test_sync_determine_operation_returns_test_extend_for_zero_coverage(
+        self, pdd_test_environment, monkeypatch
+    ):
         """
         Bug #573 (Test 5): sync_determine_operation should return 'test_extend'
         when tests pass but coverage is 0.0. This validates that the detection
         side works correctly (it does — the bug is in the orchestration layer
         that overrides this signal).
         """
+        monkeypatch.delenv("PDD_DISABLE_TEST_EXTEND", raising=False)
         tmp_path = pdd_test_environment
         prompts_dir = tmp_path / "prompts"
         prompts_dir.mkdir(exist_ok=True)
@@ -4187,6 +4198,69 @@ class TestFingerprintIncludeDependencies:
             "stored deps should contribute to the composite hash"
         )
 
+    def test_legacy_include_hash_uses_prompt_dir_then_process_cwd(
+        self, pdd_test_environment, monkeypatch
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        dependency = pdd_test_environment / "shared.py"
+        create_file(dependency, "VALUE = 1\n")
+        create_file(prompt, "Build it.\n<include>shared.py</include>\n")
+        expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
+        hashes = []
+        for cwd in (pdd_test_environment, pdd_test_environment.parent):
+            monkeypatch.chdir(cwd)
+            hashes.append(calculate_prompt_hash(prompt))
+        assert hashes == [expected, hashlib.sha256(prompt.read_bytes()).hexdigest()]
+
+    def test_legacy_include_hash_sorts_and_deduplicates_dependencies(
+        self, pdd_test_environment
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        first = pdd_test_environment / "a.py"
+        second = pdd_test_environment / "b.py"
+        create_file(first, "A = 1\n")
+        create_file(second, "B = 1\n")
+        create_file(
+            prompt,
+            "Build.\n<include>b.py</include>\n<include>a.py</include>\n"
+            "<include>a.py</include>\n",
+        )
+        expected = hashlib.sha256(
+            prompt.read_bytes() + first.read_bytes() + second.read_bytes()
+        ).hexdigest()
+        assert calculate_prompt_hash(prompt, hash_version=1) == expected
+
+    def test_legacy_v1_preserves_pre_versioned_include_grammar_and_missing_files(
+        self, pdd_test_environment
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        body_dep = prompt.parent / "body.py"
+        attr_dep = prompt.parent / "attribute.py"
+        create_file(body_dep, "BODY = 1\n")
+        create_file(attr_dep, "ATTRIBUTE = 1\n")
+        create_file(
+            prompt,
+            "<include path=\"attribute.py\">body.py</include>\n"
+            "<include path=\"attribute.py\"/>\n"
+            "<include-many>*.py</include-many>\n"
+            "<include>missing.py</include>\n",
+        )
+        expected = hashlib.sha256(prompt.read_bytes() + body_dep.read_bytes()).hexdigest()
+        assert calculate_prompt_hash(prompt, hash_version=1) == expected
+
+    def test_legacy_v1_stored_dependencies_skip_missing_and_keep_key_order(
+        self, pdd_test_environment
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        first = pdd_test_environment / "a.py"
+        second = pdd_test_environment / "b.py"
+        create_file(prompt, "No includes.\n")
+        create_file(first, "A = 1\n")
+        create_file(second, "B = 1\n")
+        stored = {str(second): "old", str(pdd_test_environment / "missing.py"): "old", str(first): "old"}
+        expected = hashlib.sha256(prompt.read_bytes() + first.read_bytes() + second.read_bytes()).hexdigest()
+        assert calculate_prompt_hash(prompt, stored_deps=stored, hash_version=1) == expected
+
     def test_calculate_prompt_hash_detects_dep_change_via_stored_deps(self, pdd_test_environment):
         """When a stored dep file changes, the composite hash must change."""
         prompts_dir = pdd_test_environment / "prompts"
@@ -4208,6 +4282,36 @@ class TestFingerprintIncludeDependencies:
             "Composite prompt hash must change when a stored dependency file changes, "
             "even when the prompt itself has no <include> tags"
         )
+
+    def test_calculate_prompt_hash_anchors_relative_stored_deps_to_explicit_root(
+        self, pdd_test_environment, monkeypatch
+    ):
+        """Stored relative dependency keys must not be interpreted from process CWD."""
+        prompts_dir = pdd_test_environment / "prompts"
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        create_file(prompt_path, "Create a helper using project docs.\n")
+        project_dep = pdd_test_environment / "docs" / "contract.md"
+        create_file(project_dep, "trusted project dependency\n")
+
+        nested = pdd_test_environment / "nested"
+        alternate_dep = nested / "docs" / "contract.md"
+        create_file(alternate_dep, "wrong nested dependency\n")
+        monkeypatch.chdir(nested)
+
+        stored_deps = {"docs/contract.md": calculate_sha256(project_dep)}
+        anchored_hash = calculate_prompt_hash(
+            prompt_path,
+            stored_deps=stored_deps,
+            dependency_root=pdd_test_environment,
+        )
+        create_file(alternate_dep, "changed wrong nested dependency\n")
+        anchored_hash_after_alternate_change = calculate_prompt_hash(
+            prompt_path,
+            stored_deps=stored_deps,
+            dependency_root=pdd_test_environment,
+        )
+
+        assert anchored_hash == anchored_hash_after_alternate_change
 
     def test_fingerprint_stores_include_deps(self, pdd_test_environment):
         """Fingerprint dataclass should correctly store and serialize include_deps."""
@@ -5506,3 +5610,159 @@ class TestIssue551CanonicalExtensionInGetPddFilePaths:
             f"FM1: generation writes {written.suffix!r} but sync expects "
             f"{expected.suffix!r} (PDD_PATH unset) -> #551 regeneration loop"
         )
+
+
+def test_v1_hash_matches_base_whitespace_cwd_and_invalid_utf8(tmp_path, monkeypatch):
+    prompt_dir = tmp_path / "prompts"
+    cwd = tmp_path / "cwd"
+    prompt_dir.mkdir()
+    cwd.mkdir()
+    dependency = cwd / "shared.bin"
+    dependency.write_bytes(b"dependency\xff")
+    prompt = prompt_dir / "widget.prompt"
+    prompt.write_bytes(b"<include>  shared.bin  </include>\ninvalid:\xff\n")
+    monkeypatch.chdir(cwd)
+    expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
+    assert calculate_prompt_hash(prompt, hash_version=1) == expected
+
+
+def test_v1_hash_resolves_stored_relative_keys_from_cwd(tmp_path, monkeypatch):
+    prompt_dir = tmp_path / "prompts"
+    cwd = tmp_path / "cwd"
+    prompt_dir.mkdir()
+    cwd.mkdir()
+    dependency = cwd / "stored.txt"
+    dependency.write_bytes(b"stored")
+    prompt = prompt_dir / "widget.prompt"
+    prompt.write_bytes(b"no includes\n")
+    monkeypatch.chdir(cwd)
+    expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
+    assert calculate_prompt_hash(
+        prompt, {"stored.txt": "ignored"}, hash_version=1
+    ) == expected
+
+
+def test_v1_old_grammar_ignores_self_closing_and_path_attributes(tmp_path):
+    prompt = tmp_path / "widget.prompt"
+    prompt.write_text(
+        '<include path="missing.txt"/>\n<include-many>missing.txt</include-many>\n'
+    )
+    assert calculate_prompt_hash(prompt, hash_version=1) == hashlib.sha256(
+        prompt.read_bytes()
+    ).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        '<include path="dep.txt"/>',
+        '<include-many>dep.txt</include-many>',
+    ],
+)
+def test_v1_new_grammar_save_reload_rerun_does_not_self_drift(
+    tmp_path, monkeypatch, markup
+):
+    monkeypatch.chdir(tmp_path)
+    prompt = tmp_path / "widget.prompt"
+    prompt.write_text(markup, encoding="utf-8")
+    (tmp_path / "dep.txt").write_text("dependency", encoding="utf-8")
+
+    first = calculate_prompt_hash(prompt, hash_version=1)
+    persisted = extract_include_deps(prompt, version=1)
+    reloaded = json.loads(json.dumps(persisted))
+    second = calculate_prompt_hash(prompt, reloaded, hash_version=1)
+
+    assert persisted == {}
+    assert second == first
+
+
+@pytest.mark.parametrize("policy_mutation", [None, "delete", "rename"])
+def test_sync_classifier_preserves_nested_prompt_alias_identity(
+    tmp_path, monkeypatch, policy_mutation
+):
+    """Architecture, include closure, and hashing use the approved logical path."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "sync@example.com"], cwd=root, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Sync Test"], cwd=root, check=True
+    )
+    (root / "prompts/nested").mkdir(parents=True)
+    (root / "canonical-prompts").mkdir()
+    (root / ".pdd").mkdir()
+    (root / "src/nested").mkdir(parents=True)
+    canonical_prompt = root / "canonical-prompts/widget_python.prompt"
+    canonical_prompt.write_text("Build widget\n<include>contract.md</include>\n")
+    logical_prompt = root / "prompts/nested/widget_python.prompt"
+    logical_prompt.symlink_to("../../canonical-prompts/widget_python.prompt")
+    contract = root / "prompts/nested/contract.md"
+    contract.write_text("logical contract\n")
+    code = root / "src/nested/widget.py"
+    code.write_text("value = 1\n")
+    wrong_code = root / "wrong/nested/widget.py"
+    wrong_code.parent.mkdir(parents=True)
+    wrong_code.write_text("wrong = True\n")
+    (root / "architecture.json").write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "widget_python.prompt",
+                    "filepath": "wrong/nested/widget.py",
+                },
+                {
+                    "filename": "nested/widget_python.prompt",
+                    "filepath": "src/nested/widget.py",
+                }
+            ]
+        )
+    )
+    (root / ".pdd/repository-id").write_text(
+        "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0\n"
+    )
+    (root / ".pdd/sync-policy.json").write_text(
+        json.dumps({"schema_version": 1, "enforcement": "active"})
+    )
+    (root / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [
+                    {
+                        "alias_path": "prompts/nested/widget_python.prompt",
+                        "canonical_path": "canonical-prompts/widget_python.prompt",
+                    }
+                ],
+            }
+        )
+    )
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "nested prompt alias"], cwd=root, check=True
+    )
+    policy = root / ".pdd/sync-policy.json"
+    if policy_mutation == "delete":
+        policy.unlink()
+    elif policy_mutation == "rename":
+        policy.rename(policy.with_suffix(".disabled"))
+    monkeypatch.chdir(root)
+    monkeypatch.delenv("PDD_SYNC_PROTECTED_BASE_SHA", raising=False)
+
+    paths = get_pdd_file_paths("nested/widget", "python", "prompts")
+    deps = extract_include_deps(paths["prompt"])
+    digest_before = calculate_prompt_hash(paths["prompt"])
+    contract.write_text("changed logical contract\n")
+    digest_after = calculate_prompt_hash(paths["prompt"])
+
+    assert paths["prompt"] == Path("prompts/nested/widget_python.prompt")
+    assert paths["code"].resolve() == code.resolve()
+    assert deps == {
+        "prompts/nested/contract.md": hashlib.sha256(
+            b"logical contract\n"
+        ).hexdigest()
+    }
+    assert digest_before is not None
+    assert digest_after is not None
+    assert digest_after != digest_before

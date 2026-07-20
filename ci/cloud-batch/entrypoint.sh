@@ -3,39 +3,54 @@ set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────────
 # Support multi-group jobs: FIXED_TASK_INDEX overrides BATCH_TASK_INDEX
-# (used by dedicated STANDARD groups), TASK_INDEX_OFFSET maps a serial group
-# onto a contiguous task range, and SKIP_INDEXES lets the main group skip
-# dedicated task indexes while preserving the global task numbering.
+# (used by dedicated STANDARD groups). Otherwise TASK_INDEX_OFFSET selects a
+# group's starting index and SKIP_INDEXES omits indexes owned by other groups,
+# preserving the global 0-76 result numbering.
+RAW_TASK_INDEX="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
 if [ -n "${FIXED_TASK_INDEX:-}" ]; then
     TASK_INDEX="${FIXED_TASK_INDEX}"
-elif [ -n "${TASK_INDEX_OFFSET:-}" ]; then
-    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
-    TASK_INDEX=$((_RAW + TASK_INDEX_OFFSET))
-elif [ -n "${SKIP_INDEXES:-}" ]; then
-    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
-    TASK_INDEX="${_RAW}"
-    IFS=',' read -r -a _SKIP_INDEXES <<< "${SKIP_INDEXES}"
-    for _SKIP_INDEX in "${_SKIP_INDEXES[@]}"; do
-        [ -n "${_SKIP_INDEX}" ] || continue
-        if [ "${_SKIP_INDEX}" -le "${TASK_INDEX}" ]; then
-            TASK_INDEX=$((TASK_INDEX + 1))
-        fi
-    done
-elif [ -n "${SKIP_INDEX:-}" ]; then
-    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
-    if [ "${_RAW}" -ge "${SKIP_INDEX}" ]; then
-        TASK_INDEX=$((_RAW + 1))
-    else
-        TASK_INDEX="${_RAW}"
-    fi
 else
-    TASK_INDEX="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
+    _RAW="${RAW_TASK_INDEX}"
+    TASK_INDEX=$((_RAW + ${TASK_INDEX_OFFSET:-0}))
+    if [ -n "${SKIP_INDEXES:-}" ]; then
+        IFS=',' read -r -a _SKIP_INDEXES <<< "${SKIP_INDEXES}"
+        for _SKIP_INDEX in "${_SKIP_INDEXES[@]}"; do
+            [ -n "${_SKIP_INDEX}" ] || continue
+            if [ "${_SKIP_INDEX}" -le "${TASK_INDEX}" ]; then
+                TASK_INDEX=$((TASK_INDEX + 1))
+            fi
+        done
+    elif [ -n "${SKIP_INDEX:-}" ] && [ "${SKIP_INDEX}" -le "${TASK_INDEX}" ]; then
+        TASK_INDEX=$((TASK_INDEX + 1))
+    fi
 fi
 RESULTS_DIR="/mnt/disks/results"
-SOURCE_DIR="/mnt/disks/source"
 WORK_DIR="/workspace"
 RESULT_JSON="${RESULTS_DIR}/task_${TASK_INDEX}.json"
 RESULT_LOG="${RESULTS_DIR}/task_${TASK_INDEX}.log"
+
+: "${PDD_CANDIDATE_SHA:?candidate SHA not set}"
+: "${PDD_CANDIDATE_TREE:?candidate tree not set}"
+: "${PDD_SOURCE_SHA256:?source SHA not set}"
+: "${PDD_SOURCE_SIZE:?source size not set}"
+: "${PDD_SOURCE_GCS_GENERATION:?source generation not set}"
+: "${PDD_IMAGE_DIGEST:?image digest not set}"
+: "${PDD_BATCH_PROJECT:?Batch project not set}"
+: "${PDD_BATCH_LOCATION:?Batch location not set}"
+: "${PDD_BATCH_JOB_NAME:?Batch job name not set}"
+for _HASH in "${PDD_CANDIDATE_SHA}" "${PDD_CANDIDATE_TREE}"; do
+    [[ "${_HASH}" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+done
+[[ "${PDD_SOURCE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+[[ "${PDD_IMAGE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+[[ "${PDD_SOURCE_SIZE}" =~ ^[1-9][0-9]*$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+[[ "${PDD_SOURCE_GCS_GENERATION}" =~ ^[1-9][0-9]*$ ]] || { echo "FATAL: candidate identity invalid"; exit 78; }
+[[ "${RAW_TASK_INDEX}" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "FATAL: task identity invalid"; exit 78; }
+[[ "${PDD_BATCH_PROJECT}" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || { echo "FATAL: task identity invalid"; exit 78; }
+[[ "${PDD_BATCH_LOCATION}" =~ ^[a-z0-9-]+$ ]] || { echo "FATAL: task identity invalid"; exit 78; }
+[[ "${PDD_BATCH_JOB_NAME}" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || { echo "FATAL: task identity invalid"; exit 78; }
+TASK_GROUP="group0"
+TASK_RESOURCE="projects/${PDD_BATCH_PROJECT}/locations/${PDD_BATCH_LOCATION}/jobs/${PDD_BATCH_JOB_NAME}/taskGroups/${TASK_GROUP}/tasks/${RAW_TASK_INDEX}"
 
 # ── Pre-create result file so SPOT preemption is visible ──────────────────
 # Cloud Batch SPOT VMs receive SIGTERM then SIGKILL ~30s later when preempted.
@@ -58,6 +73,17 @@ cat > "${RESULT_JSON}" <<JSON
     "status": "preempted",
     "duration_seconds": 0,
     "setup_seconds": 0,
+    "identity": {
+        "candidate_sha": "${PDD_CANDIDATE_SHA}",
+        "candidate_tree": "${PDD_CANDIDATE_TREE}",
+        "source_sha256": "${PDD_SOURCE_SHA256}",
+        "source_generation": "${PDD_SOURCE_GCS_GENERATION}",
+        "image_digest": "${PDD_IMAGE_DIGEST}",
+        "job_name": "${PDD_BATCH_JOB_NAME}",
+        "task_group": "${TASK_GROUP}",
+        "raw_task_index": ${RAW_TASK_INDEX},
+        "task_resource": "${TASK_RESOURCE}"
+    },
     "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSON
@@ -100,6 +126,17 @@ write_result() {
     "status": "${status}",
     "duration_seconds": ${duration},
     "setup_seconds": ${SETUP_SECONDS:-0},
+    "identity": {
+        "candidate_sha": "${PDD_CANDIDATE_SHA}",
+        "candidate_tree": "${PDD_CANDIDATE_TREE}",
+        "source_sha256": "${PDD_SOURCE_SHA256}",
+        "source_generation": "${PDD_SOURCE_GCS_GENERATION}",
+        "image_digest": "${PDD_IMAGE_DIGEST}",
+        "job_name": "${PDD_BATCH_JOB_NAME}",
+        "task_group": "${TASK_GROUP}",
+        "raw_task_index": ${RAW_TASK_INDEX},
+        "task_resource": "${TASK_RESOURCE}"
+    },
     "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSONEOF
@@ -142,28 +179,87 @@ trap trap_handler EXIT
 
 # ── Extract source code ───────────────────────────────────────────────────
 SETUP_START=$(date +%s)
-echo "=== Task ${TASK_INDEX}: extracting source ==="
-mkdir -p "${WORK_DIR}"
-tar xzf "${SOURCE_DIR}/pdd-source.tar.gz" -C "${WORK_DIR}"
+echo "=== Task ${TASK_INDEX}: verifying exact candidate source ==="
+unset PDD_CLOUD_SOURCE_IDENTITY_MODE
+if ! python3 /source-identity.py verify --work-dir "${WORK_DIR}"; then
+    echo "FATAL: candidate source identity verification failed"
+    write_result "error" "0" "preflight" "candidate source identity mismatch"
+    exit 78
+fi
+export PDD_CLOUD_SOURCE_IDENTITY_MODE="candidate-tree-v1"
 cd "${WORK_DIR}"
 
-# Tarball excludes .git, so setuptools-scm cannot infer a version. submit.sh
-# stamps the host's `git describe` value into .pdd-package-version; export it
-# so the editable install below succeeds without the .git tree.
-if [ -f "${WORK_DIR}/.pdd-package-version" ]; then
-    export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI="$(tr -d '\n' < "${WORK_DIR}/.pdd-package-version")"
-fi
+# Tarball excludes .git; submit.sh derives this value from exact candidate HEAD.
+export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI="${PDD_PACKAGE_VERSION:?package version not set}"
 
 # Install package in dev mode (deps already in image, --no-deps is fast ~5s)
 pip install -e ".[dev]" --no-deps --quiet 2>/dev/null || pip install -e . --no-deps --quiet
 SETUP_END=$(date +%s)
 SETUP_SECONDS=$((SETUP_END - SETUP_START))
 
+# Pytest includes the protected verifier. Run those shards as a dedicated
+# non-root user so RLIMIT_NPROC cannot be bypassed by UID 0. Setup remains
+# trusted/root because it owns source extraction and the editable install.
+PYTEST_SANDBOX_USER="pdd"
+PYTEST_USER_COMMAND=()
+if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] &&
+   [ "${TASK_INDEX}" -le "${PYTEST_END}" ]; then
+    chown -R pdd:pdd "${WORK_DIR}" "${RESULTS_DIR}"
+    PYTEST_USER_COMMAND=(
+        setpriv --reuid=pdd --regid=pdd --init-groups --
+        env HOME=/home/pdd USER=pdd LOGNAME=pdd
+    )
+fi
+
 # ── Phantom-contract preflight ────────────────────────────────────────────
+preflight_protected_sandbox() {
+    # Protected Linux runner contract: the inner verifier deliberately fails
+    # closed unless every namespace/bind-staging tool is present and sudo is
+    # noninteractive. Report this as an image prerequisite failure instead of
+    # an opaque nested pytest COLLECTION_ERROR.
+    local command
+    local -a missing_sandbox_commands=()
+    for command in bwrap sudo setpriv mount umount; do
+        command -v "${command}" >/dev/null 2>&1 || \
+            missing_sandbox_commands+=("${command}")
+    done
+    if [ "${#missing_sandbox_commands[@]}" -ne 0 ] ||
+       ! "${PYTEST_USER_COMMAND[@]}" sudo -n true; then
+        echo "FATAL: missing protected sandbox prerequisites: ${missing_sandbox_commands[*]:-passwordless sudo}"
+        write_result "failed" "${SETUP_SECONDS}" "preflight" "missing protected sandbox prerequisites"
+        exit 1
+    fi
+
+    # The runner stages private bind mounts before entering bubblewrap.
+    # Exercise that capability explicitly because container runtimes can
+    # expose the tools while withholding the required mount capability.
+    local sandbox_preflight_dir
+    sandbox_preflight_dir=$("${PYTEST_USER_COMMAND[@]}" mktemp -d)
+    "${PYTEST_USER_COMMAND[@]}" mkdir \
+        "${sandbox_preflight_dir}/source" "${sandbox_preflight_dir}/target"
+    if ! "${PYTEST_USER_COMMAND[@]}" sudo -n mount --bind \
+        "${sandbox_preflight_dir}/source" "${sandbox_preflight_dir}/target"; then
+        echo "FATAL: protected sandbox bind-mount capability is unavailable"
+        rm -rf "${sandbox_preflight_dir}"
+        write_result "failed" "${SETUP_SECONDS}" "preflight" "protected sandbox mount unavailable"
+        exit 1
+    fi
+    "${PYTEST_USER_COMMAND[@]}" sudo -n umount "${sandbox_preflight_dir}/target"
+    "${PYTEST_USER_COMMAND[@]}" rm -rf "${sandbox_preflight_dir}"
+}
+
+# Only pytest shards execute the protected verifier. Other regression jobs do
+# not receive SYS_ADMIN and must not require its mount preflight.
+if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] &&
+   [ "${TASK_INDEX}" -le "${PYTEST_END}" ]; then
+    preflight_protected_sandbox
+fi
+
 # Image plugin contract: confirm pytest plugins required by markers in tests/
 # are actually importable. Catches a stale image, or someone bumping
 # requirements.txt without updating Dockerfile's explicit plugin install.
-python -c "import pytest_timeout, xdist, pytest_mock, pytest_asyncio, pytest_cov, testmon" || {
+"${PYTEST_USER_COMMAND[@]}" python -c \
+    "import pytest_timeout, xdist, pytest_mock, pytest_asyncio, pytest_cov, testmon" || {
     echo "FATAL: image missing expected pytest plugins"
     write_result "failed" "${SETUP_SECONDS}" "preflight" "missing pytest plugins"
     exit 1
@@ -175,7 +271,9 @@ python -c "import pytest_timeout, xdist, pytest_mock, pytest_asyncio, pytest_cov
 # -k __nonexistent__ filter selects zero tests on purpose, so collection
 # exercises config parsing and marker registration without running anything.
 PREFLIGHT_EXIT=0
-python -m pytest --collect-only --quiet --strict-markers --strict-config tests/ -k __nonexistent__ >/dev/null 2>&1 || PREFLIGHT_EXIT=$?
+"${PYTEST_USER_COMMAND[@]}" python -m pytest --collect-only --quiet \
+    --strict-markers --strict-config tests/ -k __nonexistent__ \
+    >/dev/null 2>&1 || PREFLIGHT_EXIT=$?
 if [ "$PREFLIGHT_EXIT" -ne 0 ] && [ "$PREFLIGHT_EXIT" -ne 5 ]; then
     echo "FATAL: pytest config or marker registration is broken (exit=$PREFLIGHT_EXIT)"
     write_result "failed" "${SETUP_SECONDS}" "preflight" "pytest config invalid"
@@ -217,7 +315,8 @@ elif [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTES
 fi
 
 if [ "${NEEDS_PDD_JWT}" = "1" ] && [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FIREBASE_API_KEY:-}" ]; then
-    JWT_MAX_ATTEMPTS=4
+    JWT_MAX_ATTEMPTS=6
+    JWT_QUOTA_BACKOFF_SECONDS=30
     JWT_ATTEMPT=0
     JWT_LAST_ERROR=""
     JWT_INITIAL_DELAY=$(( (TASK_INDEX * 7) % 30 + RANDOM % 5 ))
@@ -228,18 +327,14 @@ if [ "${NEEDS_PDD_JWT}" = "1" ] && [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FI
     while [ "${JWT_ATTEMPT}" -lt "${JWT_MAX_ATTEMPTS}" ]; do
         JWT_ATTEMPT=$((JWT_ATTEMPT + 1))
 
-        # Capture curl's rc separately so transport errors (DNS, TLS, timeout)
-        # stay visible. The 2>&1 merges curl -S diagnostics into JWT_RESPONSE
-        # for inclusion in JWT_ERROR when the assignment "fails" — bash treats
-        # the assignment as exempt from set -e, but the || captures the rc.
-        JWT_CURL_RC=0
-        JWT_RESPONSE=$(curl -sS --max-time 15 \
-            "https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "grant_type=refresh_token&refresh_token=${PDD_REFRESH_TOKEN}" 2>&1) || JWT_CURL_RC=$?
+        # Keep both inherited credentials out of command arguments. The helper
+        # builds the HTTPS request in memory and suppresses exception details
+        # because provider URLs can contain credential material.
+        JWT_EXCHANGE_RC=0
+        JWT_RESPONSE=$(python3 /firebase-token-exchange.py 2>/dev/null) || JWT_EXCHANGE_RC=$?
 
-        if [ "${JWT_CURL_RC}" -ne 0 ]; then
-            JWT_ERROR="curl_failed(rc=${JWT_CURL_RC}): $(printf '%s' "${JWT_RESPONSE}" | tr '\n' ' ' | cut -c1-200)"
+        if [ "${JWT_EXCHANGE_RC}" -ne 0 ]; then
+            JWT_ERROR="token_exchange_transport_failed(rc=${JWT_EXCHANGE_RC})"
         else
             # Parse the JSON body. Capture python's stderr separately so a
             # heredoc bug, missing python3, or import failure produces a
@@ -253,17 +348,23 @@ if [ "${NEEDS_PDD_JWT}" = "1" ] && [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FI
 import sys, json
 try:
     d = json.load(sys.stdin)
-except Exception as e:
-    print('parse_failed: ' + str(e))
+except Exception:
+    print('parse_failed')
     sys.exit(0)
 if not isinstance(d, dict):
     print('non_dict_response: ' + type(d).__name__)
     sys.exit(0)
 err = d.get('error', {})
 if isinstance(err, dict):
-    print(err.get('message', ''))
+    message = str(err.get('message', ''))
 elif err:
-    print(err)
+    message = str(err)
+else:
+    message = ''
+if 'QUOTA_EXCEEDED' in message:
+    print('QUOTA_EXCEEDED')
+elif message:
+    print('provider_rejected')
 else:
     print('')
 " 2>"${JWT_PARSE_STDERR}") || JWT_PARSE_RC=$?
@@ -299,9 +400,15 @@ else:
 
         JWT_LAST_ERROR="${JWT_ERROR}"
         if [ "${JWT_ATTEMPT}" -lt "${JWT_MAX_ATTEMPTS}" ]; then
-            # Backoff 2/4/8s base + 0-2s jitter to scatter concurrent retries
-            # across sibling Cloud Batch tasks (avoids re-creating the herd).
-            JWT_BACKOFF=$((2 ** JWT_ATTEMPT + RANDOM % 3))
+            # Firebase quota exhaustion needs a longer cooldown than ordinary
+            # transport/parser transients. Keep jitter so overlapping release
+            # gates do not retry on the same boundary.
+            if [ "${JWT_ERROR}" = "QUOTA_EXCEEDED" ]; then
+                JWT_BACKOFF=$((JWT_QUOTA_BACKOFF_SECONDS + RANDOM % 6))
+            else
+                # Generic backoff: 2/4/8/16/32s base + 0-2s jitter.
+                JWT_BACKOFF=$((2 ** JWT_ATTEMPT + RANDOM % 3))
+            fi
             echo "WARNING: JWT exchange attempt ${JWT_ATTEMPT}/${JWT_MAX_ATTEMPTS} failed (${JWT_ERROR}); retrying in ${JWT_BACKOFF}s"
             sleep "${JWT_BACKOFF}"
         fi
@@ -335,7 +442,7 @@ elif [ "${TASK_INDEX}" -ge "${CLOUD_REGRESSION_START}" ] && [ "${TASK_INDEX}" -l
 fi
 
 # ── Claude Code OAuth ──────────────────────────────────────────────────
-# CLAUDE_CODE_OAUTH_TOKEN is injected by Cloud Batch secretVariables.
+# CLAUDE_CODE_OAUTH_TOKEN is loaded in-process by runtime-secrets.py.
 # Do NOT set a dummy ANTHROPIC_API_KEY here — it causes LiteLLM auth
 # failures when non-agentic tests try to use it for direct API calls.
 
@@ -389,10 +496,17 @@ run_test() {
 
 if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_END}" ]; then
     # ── Pytest chunk ──────────────────────────────────────────────────
-    if [ "${PDD_BATCH_ENABLE_PYTEST_CLOUD_E2E:-}" != "1" ]; then
+    if [ "${PDD_BATCH_ENABLE_PYTEST_CLOUD_E2E:-}" = "1" ]; then
+        unset PDD_FORCE_LOCAL
+        echo "=== Pytest shard cloud E2E: inherited PDD_FORCE_LOCAL cleared; PDD_MODEL_DEFAULT/PDD_JWT_TOKEN preserved ==="
+    else
         export PDD_FORCE_LOCAL=1
+        # Unit-test shards must not inherit the release lane's provider-bound
+        # default model; many tests intentionally load tiny mock catalogs that
+        # reject cross-provider surrogate matches fail-closed.
+        unset PDD_MODEL_DEFAULT
         unset PDD_JWT_TOKEN
-        echo "=== Pytest shard forced local: PDD_FORCE_LOCAL=1, PDD_JWT_TOKEN unset ==="
+        echo "=== Pytest shard forced local: PDD_FORCE_LOCAL=1, PDD_MODEL_DEFAULT/PDD_JWT_TOKEN unset ==="
     fi
 
     CHUNK_INDEX="${TASK_INDEX}"
@@ -451,9 +565,10 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
 
     JUNIT_XML="${RESULTS_DIR}/task_${TASK_INDEX}_junit.xml"
     PYTEST_CHUNK_TIMEOUT="${PYTEST_CHUNK_TIMEOUT:-1200}"
+    chown -R pdd:pdd "${WORK_DIR}" "${RESULTS_DIR}"
     run_test "pytest" "chunk_${CHUNK_INDEX}" \
         run_with_timeout "${PYTEST_CHUNK_TIMEOUT}" \
-        python -m pytest -vv \
+        "${PYTEST_USER_COMMAND[@]}" python -m pytest -vv \
         --junitxml="${JUNIT_XML}" "${CHUNK_TESTS[@]}"
 
 elif [ "${TASK_INDEX}" -ge "${REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${REGRESSION_END}" ]; then

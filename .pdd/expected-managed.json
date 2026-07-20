@@ -1,0 +1,1877 @@
+{
+  "schema_version": 1,
+  "units": [
+    {
+      "language_id": "makefile",
+      "prompt_path": "pdd/prompts/Makefile_makefile.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/_keyring_timeout_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step10_completeness_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step11_sync_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step12_deps_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step13_fix_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step1_analyze_prd_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step1b_complexity_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step2_analyze_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step2b_codebase_scan_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step3_research_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step4_data_model_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step5_design_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step5b_completeness_gate_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step5b_fix_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step6_research_deps_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step7_generate_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step7b_review_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step8_5_context_docs_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step8_pddrc_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step9_prompts_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_arch_step9b_cross_audit_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_architecture_orchestrator_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_architecture_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_bug_orchestrator_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_bug_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_bug_step10_verify_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_bug_step11_e2e_test_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_bug_step12_pr_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_bug_step1_duplicate_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_bug_step2_docs_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_bug_step3_triage_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_bug_step4_api_research_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_bug_step5_reproduce_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_bug_step6_root_cause_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_bug_step7_prompt_classification_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_bug_step8_test_plan_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_bug_step9_generate_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_change_orchestrator_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_change_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_change_step10_architecture_update_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_change_step11_identify_issues_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_change_step12_fix_issues_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_change_step13_create_pr_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_change_step1_duplicate_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_change_step2_docs_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_change_step3_research_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_change_step4_clarify_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_change_step5_docs_change_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_change_step6_devunits_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_change_step7_architecture_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_change_step8_analyze_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_change_step9_implement_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_checkup_orchestrator_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_checkup_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_checkup_step1_discover_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_checkup_step2_deps_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_checkup_step3_build_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_checkup_step4_interfaces_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_checkup_step5_test_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_checkup_step6_1_fix_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_checkup_step6_2_regression_tests_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_checkup_step6_3_e2e_tests_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_checkup_step7_verify_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_checkup_step8_create_pr_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_common_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_common_worktree_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_crash_explore_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_crash_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_e2e_fix_orchestrator_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_e2e_fix_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_e2e_fix_step10_ci_validation_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_e2e_fix_step11_code_cleanup_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_e2e_fix_step1_unit_tests_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_e2e_fix_step2_e2e_tests_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_e2e_fix_step3_root_cause_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_e2e_fix_step4_fix_e2e_tests_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_e2e_fix_step5_identify_devunits_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_e2e_fix_step6_create_unit_tests_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_e2e_fix_step7_verify_tests_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_e2e_fix_step8_run_pdd_fix_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_e2e_fix_step9_verify_all_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_fix_explore_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_fix_nonpython_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_fix_primary_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_fix_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_issue_route_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_langtest_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_multishot_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_split_orchestrator_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_split_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_split_step0_intent_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_split_step1_survey_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_split_step2_diagnose_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_split_step3_investigate_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_split_step4_propose_options_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_split_step6_extract_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_split_step6a_phase_extract_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_split_step7_assess_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_split_step8_repair_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_split_step9_refine_check_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_sync_fix_dry_run_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_sync_identify_modules_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_sync_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_sync_runner_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_generate_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_test_generate_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_test_orchestrator_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_test_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step10_validate_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step11_loop_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step15_plan_validation_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step16_run_tests_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step1_duplicate_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step2_docs_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step3_clarify_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step4_detect_frontend_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step5_test_plan_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step5b_enhance_plan_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step6_coverage_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step6_generate_tests_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step7_checklist_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step7_run_tests_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step8_fix_iterate_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step8_manual_test_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step9_regression_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_test_step9_submit_pr_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_update_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_update_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/agentic_verify_explore_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/agentic_verify_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/api_contract_slicer_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/api_key_scanner_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/architecture_include_validation_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/architecture_registry_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/architecture_sync_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/arrange_graph_layout_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/auth_service_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/auto_deps_architecture_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/auto_deps_main_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/auto_include_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/auto_include_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/auto_update_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/bug_main_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/bug_to_unit_test_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/bug_to_unit_test_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/change_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/change_main_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/change_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_agent_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_agentic_artifact_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_file_selection_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_gates_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_interactive_main_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_interactive_session_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_planner_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_prompt_apply_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_prompt_main_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_report_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_review_loop_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_simplify_claude_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_simplify_engines_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/checkup_simplify_invoke_claude_code_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/checkup_simplify_invoke_codex_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/checkup_simplify_invoke_gemini_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/checkup_simplify_invoke_opencode_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_simplify_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/checkup_simplify_workflow_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/checkup_tools_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/ci_detect_changed_modules_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/ci_drift_heal_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/ci_validation_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/cli_branding_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/cli_detector_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/cli_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/cli_status_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/cli_theme_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/cmd_test_main_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/code_generator_main_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/code_generator_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/code_patcher_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/codex_subscription_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/__init___python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/analysis_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/auth_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/checkup_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/checkup_simplify_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/connect_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/context_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/contracts_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/firecrawl_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/fix_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/gate_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/generate_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/maintenance_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/misc_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/modify_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/prompt_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/replay_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/report_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/sessions_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/story_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/templates_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/utility_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/commands/which_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/comment_line_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/compressed_sync_context_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/config_resolution_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/conflict_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/conflicts_in_prompts_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/conflicts_main_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/construct_paths_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/content_selector_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/context_audit_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/context_generator_main_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/context_generator_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/context_snapshot_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/continue_generation_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/continue_generation_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/contract_check_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/contract_ir_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/core/cli_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/core/cloud_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/core/dump_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/core/duplicate_cli_guard_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/core/errors_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/core/remote_session_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/core/utils_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/core_dump_requirements_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/core_dump_smoke_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/coverage_contracts_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/crash_main_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/cross_issue_reconcile_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/detect_change_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/detect_change_main_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/detect_change_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/diff_analyzer_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/durable_sync_runner_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/edit_file_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/embed_retrieve_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/evidence_manifest_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/evidence_store_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/example_generator_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/extract_code_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/extract_conflict_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/extract_detect_change_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/extract_program_code_fix_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/extract_prompt_change_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/extract_prompt_split_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/extract_prompt_update_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/extract_promptline_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/extract_unit_code_fix_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/extract_xml_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/extracts_prune_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/failure_classification_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/find_section_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/find_verification_errors_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/firecrawl_cache_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/fix_code_loop_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/fix_code_module_errors_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/fix_code_module_errors_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/fix_error_loop_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/fix_errors_from_unit_tests_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/fix_errors_from_unit_tests_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/fix_focus_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/fix_main_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/fix_verification_errors_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/fix_verification_errors_loop_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/fix_verification_errors_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/fix_verification_main_python.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/App_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescript",
+      "prompt_path": "pdd/prompts/frontend/api_typescript.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/AddModuleModal_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/AddToQueueModal_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/ArchitectureView_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/AuthStatusIndicator_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/BatchFilterDropdown_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/BugModal_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/ChangeModal_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/CommandForm_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/CommandOutput_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/CreatePromptModal_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/DependencyViewer_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/DeviceIndicator_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/ErrorBoundary_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/ExecutionModeToggle_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/FileBrowser_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/FilePickerInput_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/GeneratedCommand_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/GenerationProgressModal_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/GraphToolbar_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/GuidanceSidebar_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/Header_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/Icon_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/InputField_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/JobCard_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/JobDashboard_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/JobOutputPanel_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/ModelSelector_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/ModelSliders_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/ModuleEditModal_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/ModuleNode_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/ProjectSettings_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/PromptCodeDiffModal_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/PromptEditor_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/PromptMetricsBar_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/PromptOrderModal_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/PromptSelector_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/PromptSpace_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/ReauthModal_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/RemoteSessionSelector_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/SyncFromPromptModal_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/SyncOptionsModal_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/SyncStatusBadge_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/Tabs_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/TaskQueueControls_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/TaskQueueItem_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/TaskQueuePanel_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/TextAreaField_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/Toast_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/components/Tooltip_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescript",
+      "prompt_path": "pdd/prompts/frontend/constants_typescript.prompt"
+    },
+    {
+      "language_id": "typescript",
+      "prompt_path": "pdd/prompts/frontend/hooks/useArchitectureHistory_typescript.prompt"
+    },
+    {
+      "language_id": "typescript",
+      "prompt_path": "pdd/prompts/frontend/hooks/useAudioNotification_typescript.prompt"
+    },
+    {
+      "language_id": "typescript",
+      "prompt_path": "pdd/prompts/frontend/hooks/useJobs_typescript.prompt"
+    },
+    {
+      "language_id": "typescript",
+      "prompt_path": "pdd/prompts/frontend/hooks/useTaskQueue_typescript.prompt"
+    },
+    {
+      "language_id": "typescriptreact",
+      "prompt_path": "pdd/prompts/frontend/index_typescriptreact.prompt"
+    },
+    {
+      "language_id": "typescript",
+      "prompt_path": "pdd/prompts/frontend/types_typescript.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/gate_policy_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/gate_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/generate_model_catalog_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/generate_output_paths_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/generate_story_contract_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/generate_test_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/generate_test_from_example_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/generate_test_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/generate_user_story_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/generation_completion_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/get_comment_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/get_extension_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/get_jwt_token_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/get_language_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/get_lint_commands_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/get_run_command_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/get_test_command_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/git_porcelain_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/git_update_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/grounding_policy_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/include_query_extractor_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/include_query_extractor_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/increase_tests_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/increase_tests_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/incremental_code_generator_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/incremental_prd_architecture_patch_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/incremental_prd_architecture_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/insert_includes_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/insert_includes_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/install_completion_python.prompt"
+    },
+    {
+      "language_id": "csv",
+      "prompt_path": "pdd/prompts/language_format_csv.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/llm_invoke_python.prompt"
+    },
+    {
+      "language_id": "csv",
+      "prompt_path": "pdd/prompts/llm_model_csv.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/load_prompt_template_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/logo_animation_python.prompt"
+    },
+    {
+      "language_id": "prompt",
+      "prompt_path": "pdd/prompts/main_gen_prompt.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/metadata_sync_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/model_tester_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/one_session_agent_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/one_session_sync_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/operation_log_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/path_resolution_python.prompt"
+    },
+    {
+      "language_id": "bash",
+      "prompt_path": "pdd/prompts/pdd_completion_bash.prompt"
+    },
+    {
+      "language_id": "fish",
+      "prompt_path": "pdd/prompts/pdd_completion_fish.prompt"
+    },
+    {
+      "language_id": "zsh",
+      "prompt_path": "pdd/prompts/pdd_completion_zsh.prompt"
+    },
+    {
+      "language_id": "json",
+      "prompt_path": "pdd/prompts/pdd_theme_json.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/pddrc_initializer_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/pin_example_hack_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/post_gen_verify_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/postprocess_0_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/postprocess_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/pre_checkup_gate_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/preprocess_main_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/preprocess_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/process_csv_change_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/prompt_code_diff_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/prompt_diff_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/prompt_lint_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/prompt_lint_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/prompt_repair_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/prompt_tester_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/provider_manager_python.prompt"
+    },
+    {
+      "language_id": "restructuredtext",
+      "prompt_path": "pdd/prompts/pypi_description_restructuredtext.prompt"
+    },
+    {
+      "language_id": "toml",
+      "prompt_path": "pdd/prompts/pyproject_toml.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/pytest_output_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/pytest_slicer_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/python_env_detector_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/reasoning_python.prompt"
+    },
+    {
+      "language_id": "log",
+      "prompt_path": "pdd/prompts/regression_analysis_log.prompt"
+    },
+    {
+      "language_id": "bash",
+      "prompt_path": "pdd/prompts/regression_bash.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/release_video_script_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/remote_session_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/render_mermaid_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/resolved_sync_unit_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/resurface_check_Python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/routing_policy_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/run_generated_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/__init___python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/app_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/click_executor_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/executor_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/jobs_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/models_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/routes/__init___python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/routes/architecture_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/routes/auth_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/routes/commands_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/routes/config_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/routes/extracts_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/routes/files_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/routes/prompts_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/routes/session_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/routes/websocket_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/security_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/terminal_spawner_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/server/token_counter_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/setup_tool_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/split_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/split_main_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/split_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/split_validation_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/src/clients/github_client_Python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/src/pdd_issue_runner_job_Python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/src/services/pdd_issue_completion_evidence_Python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/story_coverage_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/story_detection_result_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/story_regression_gate_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/story_regression_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/story_test_generator_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/summarize_directory_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/summarize_file_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/sync_analysis_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/sync_animation_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/sync_determine_operation_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/sync_main_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/sync_orchestration_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/sync_order_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/sync_tui_python.prompt"
+    },
+    {
+      "language_id": "csv",
+      "prompt_path": "pdd/prompts/task_routing_csv.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/template_expander_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/template_registry_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/test_context_packer_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/trace_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/trace_main_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/trace_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/track_cost_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/trim_results_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/trim_results_start_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/unfinished_prompt_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/unfinished_prompt_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/update_main_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/update_model_costs_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/update_prompt_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/update_prompt_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/user_story_tests_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/validate_prompt_includes_python.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/xml/change_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/xml/split_LLM.prompt"
+    },
+    {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/xml_convertor_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/xml_tagger_python.prompt"
+    }
+  ]
+}

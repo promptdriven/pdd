@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -18,6 +19,7 @@ from pdd.ci_drift_heal import (
     _git_add_pathspecs,
     _git_relative_path_candidates,
     _has_symlinked_ancestor,
+    _has_non_eol_whitespace_git_diff,
     _run_pdd_command,
     _get_git_changed_files,
     detect_drift,
@@ -217,6 +219,66 @@ class TestDetectDrift:
         assert len(prompt_drifts) == 1
         assert len(example_drifts) == 0
 
+    def test_module_filter_accepts_canonical_root_and_nested_cli_targets(self):
+        """Issue #2059: detector output must survive the drift-heal boundary."""
+        files = [
+            Path("prompts/cli_python.prompt"),
+            Path("prompts/core/cli_python.prompt"),
+        ]
+
+        def fake_infer(path):
+            prompt_path = Path(path)
+            basename = prompt_path.stem.rsplit("_", 1)[0]
+            if prompt_path.parent.name == "core":
+                basename = f"core/{basename}"
+            return basename, "python"
+
+        no_op = MagicMock(operation="nothing", reason="clean")
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=fake_infer), \
+             patch(
+                 "pdd.sync_determine_operation.sync_determine_operation",
+                 return_value=no_op,
+             ) as mock_sync:
+            prompt_drifts, example_drifts = detect_drift(
+                modules=["pdd/cli", "core/cli"]
+            )
+
+        assert prompt_drifts == []
+        assert example_drifts == []
+        assert {call.args[0] for call in mock_sync.call_args_list} == {
+            "pdd/cli",
+            "core/cli",
+        }
+
+    def test_canonical_selector_resolution_is_bounded_by_unique_languages(
+        self, tmp_path
+    ):
+        from pdd.ci_drift_heal import _select_requested_modules
+
+        discovered = [
+            (f"python/mod_{index}", "python", tmp_path / f"prompts/mod_{index}.prompt")
+            for index in range(100)
+        ]
+        discovered.extend(
+            (
+                f"typescript/mod_{index}",
+                "typescript",
+                tmp_path / f"prompts/mod_{index}.prompt",
+            )
+            for index in range(20)
+        )
+
+        def fake_resolve(requested, language):
+            leaf = requested.rsplit("/", 1)[-1]
+            return {"prompt": tmp_path / "prompts" / f"{leaf}_{language}.prompt"}
+
+        with patch("pdd.ci_drift_heal._repo_root", return_value=tmp_path), \
+             patch("pdd.ci_drift_heal._resolve_paths", side_effect=fake_resolve) as resolve:
+            _select_requested_modules(["pdd/cli", "core/cli"], discovered)
+
+        assert resolve.call_count == 4
+
     def test_module_filter_detects_code_without_prompt(self):
         """A requested module with code but no prompt still becomes update drift."""
         code_path = MagicMock()
@@ -242,20 +304,19 @@ class TestDetectDrift:
         mock_sync.assert_not_called()
 
     def test_infer_identity_error_skips_module(self):
-        """Modules that fail identity inference are skipped gracefully."""
+        """Modules that fail identity inference fail closed."""
         mock_files = [Path("prompts/bad_python.prompt")]
 
         with patch("pdd.user_story_tests.discover_prompt_files", return_value=mock_files), \
              patch("pdd.operation_log.infer_module_identity", side_effect=ValueError("bad")), \
              patch("pdd.sync_determine_operation.sync_determine_operation") as mock_sync:
-            prompt_drifts, example_drifts = detect_drift()
+            with pytest.raises(RuntimeError, match="module identity failed"):
+                detect_drift()
 
-        assert len(prompt_drifts) == 0
-        assert len(example_drifts) == 0
         mock_sync.assert_not_called()
 
-    def test_sync_determine_error_skips_module(self):
-        """Modules that fail sync_determine_operation are skipped."""
+    def test_sync_determine_error_fails_closed(self):
+        """Modules that fail sync_determine_operation block CI."""
         mock_files = [Path("prompts/mod_python.prompt")]
 
         def fake_infer(path):
@@ -264,10 +325,8 @@ class TestDetectDrift:
         with patch("pdd.user_story_tests.discover_prompt_files", return_value=mock_files), \
              patch("pdd.operation_log.infer_module_identity", side_effect=fake_infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=RuntimeError("fail")):
-            prompt_drifts, example_drifts = detect_drift()
-
-        assert len(prompt_drifts) == 0
-        assert len(example_drifts) == 0
+            with pytest.raises(RuntimeError, match="classification failed"):
+                detect_drift()
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +370,18 @@ class TestGetGitChangedFiles:
 
         assert "prompts/auth_python.prompt" in candidates
         assert "pdd/prompts/auth_python.prompt" in candidates
+
+    def test_non_eol_whitespace_git_diff_false_for_ignored_diff(self):
+        mock_result = MagicMock(returncode=0)
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as run:
+            assert _has_non_eol_whitespace_git_diff("origin/main", "pdd/auth.py") is False
+        assert "--ignore-space-at-eol" in run.call_args.args[0]
+
+    def test_non_eol_whitespace_git_diff_true_for_real_diff_or_error(self):
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=MagicMock(returncode=1)):
+            assert _has_non_eol_whitespace_git_diff("origin/main", "pdd/auth.py") is True
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=MagicMock(returncode=128)):
+            assert _has_non_eol_whitespace_git_diff("origin/main", "pdd/auth.py") is True
 
 
 # ---------------------------------------------------------------------------
@@ -549,7 +620,8 @@ class TestDetectDriftWithDiffBase:
              patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
              patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
-             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files), \
+             patch("pdd.ci_drift_heal._has_non_eol_whitespace_git_diff", return_value=True):
             prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
 
         assert len(prompt_drifts) == 1
@@ -572,7 +644,8 @@ class TestDetectDriftWithDiffBase:
              patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
              patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
-             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files), \
+             patch("pdd.ci_drift_heal._has_non_eol_whitespace_git_diff", return_value=True):
             prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
 
         assert len(prompt_drifts) == 0
@@ -580,6 +653,25 @@ class TestDetectDriftWithDiffBase:
         assert example_drifts[0].operation == "conflict"
         assert example_drifts[0].prompt_path == "prompts/auth_python.prompt"
         assert example_drifts[0].code_path == "pdd/auth.py"
+
+    def test_auto_deps_with_prompt_and_eol_whitespace_code_change_is_example(self):
+        """Whitespace-only code cleanup must not force manual conflict handling."""
+        decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
+        files, infer, sync = self._setup_mocks({"auth": decision})
+        changed_files = {"pdd/auth.py", "pdd/prompts/auth_python.prompt"}
+        mock_paths = {"code": Path("pdd/auth.py"), "prompt": Path("prompts/auth_python.prompt")}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files), \
+             patch("pdd.ci_drift_heal._has_non_eol_whitespace_git_diff", return_value=False):
+            prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main")
+
+        assert prompt_drifts == []
+        assert len(example_drifts) == 1
+        assert example_drifts[0].operation == "example"
 
     def test_auto_deps_without_code_or_prompt_change_is_skipped(self):
         """Clean-CI auto-deps false positives should not fan out to every module."""
@@ -596,7 +688,8 @@ class TestDetectDriftWithDiffBase:
              patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
              patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
-             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files), \
+             patch("pdd.ci_drift_heal._has_non_eol_whitespace_git_diff", return_value=True):
             prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
 
         assert prompt_drifts == []
@@ -615,7 +708,8 @@ class TestDetectDriftWithDiffBase:
              patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
              patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
-             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files), \
+             patch("pdd.ci_drift_heal._has_non_eol_whitespace_git_diff", return_value=True):
             prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
 
         assert len(prompt_drifts) == 1
@@ -667,7 +761,8 @@ class TestDetectDriftWithDiffBase:
              patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
              patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
-             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files), \
+             patch("pdd.ci_drift_heal._has_non_eol_whitespace_git_diff", return_value=True):
             prompt_drifts, example_drifts = detect_drift(modules=["api"], diff_base="origin/main...HEAD")
 
         assert len(prompt_drifts) == 1
@@ -685,7 +780,8 @@ class TestDetectDriftWithDiffBase:
              patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
              patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
-             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files), \
+             patch("pdd.ci_drift_heal._has_non_eol_whitespace_git_diff", return_value=True):
             prompt_drifts, example_drifts = detect_drift(modules=["api"], diff_base="origin/main...HEAD")
 
         assert len(prompt_drifts) == 0
@@ -1079,6 +1175,245 @@ class TestHealModule:
             ],
         ]
 
+    def test_update_preserves_protected_base_human_owned_example(
+        self, tmp_path, monkeypatch
+    ):
+        """A candidate heal cannot regenerate an exact protected human-owned example."""
+        repo = tmp_path / "repo"
+        (repo / ".pdd").mkdir(parents=True)
+        (repo / ".pdd" / "meta").mkdir()
+        (repo / "prompts").mkdir()
+        (repo / "context").mkdir()
+        (repo / "tests").mkdir()
+        (repo / ".pddrc").write_text(
+            "contexts:\n"
+            "  default:\n"
+            "    paths: ['**']\n"
+            "    defaults:\n"
+            '      test_output_path: "tests/"\n'
+            '      example_output_path: "context/"\n',
+            encoding="utf-8",
+        )
+        prompt = repo / "prompts" / "widget_python.prompt"
+        code = repo / "widget.py"
+        example = repo / "context" / "widget_example.py"
+        prompt.write_text("% Goal\nKeep widget safe.\n", encoding="utf-8")
+        code.write_text("def widget():\n    return True\n", encoding="utf-8")
+        protected_bytes = b"# reviewed provider-free example\n"
+        example.write_bytes(protected_bytes)
+        primary_test = repo / "tests" / "test_widget.py"
+        contract_test = repo / "tests" / "test_widget_contract.py"
+        primary_test.write_text("def test_widget(): pass\n", encoding="utf-8")
+        contract_test.write_text("def test_contract(): pass\n", encoding="utf-8")
+        fingerprint = repo / ".pdd" / "meta" / "widget_python.json"
+        fingerprint.write_text(
+            json.dumps(
+                {
+                    "command": "fix",
+                    "code_hash": "old",
+                    "example_hash": "old",
+                    "test_hash": "old",
+                    "test_files": {
+                        primary_test.name: "old",
+                        contract_test.name: "old",
+                    },
+                    "include_deps": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+        run_report = repo / ".pdd" / "meta" / "widget_python_run.json"
+        run_report_bytes = b'{"exit_code": 0, "coverage": 83.0}\n'
+        run_report.write_bytes(run_report_bytes)
+        (repo / ".pdd" / "sync-ownership.json").write_text(
+            json.dumps(
+                {
+                    "rules": [
+                        {
+                            "inventory": "HUMAN_OWNED",
+                            "owner": "pdd-maintainers",
+                            "pattern": "context/widget_example.py",
+                            "role": "human-maintained",
+                        },
+                        {
+                            "inventory": "HUMAN_OWNED",
+                            "owner": "pdd-maintainers",
+                            "pattern": ".pdd/meta/widget_python.json",
+                            "role": "human-maintained",
+                        },
+                        {
+                            "inventory": "HUMAN_OWNED",
+                            "owner": "pdd-maintainers",
+                            "pattern": ".pdd/meta/widget_python_run.json",
+                            "role": "human-maintained",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "pdd-test@example.com"],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "PDD Test"], cwd=repo, check=True
+        )
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, check=True)
+        candidate_bytes = b"# intentional candidate review edit\n"
+        example.write_bytes(candidate_bytes)
+        monkeypatch.chdir(repo)
+
+        drift = DriftInfo(
+            "widget",
+            "python",
+            "update",
+            "changed",
+            code_path=str(code),
+            prompt_path=str(prompt),
+            example_path=str(example),
+            diff_base="HEAD...HEAD",
+        )
+        commands = []
+
+        def run_command(command, env, label):
+            del env, label
+            commands.append(command)
+            if "example" in command:
+                example.write_text("# unsafe regenerated example\n", encoding="utf-8")
+            return True
+
+        def finalize_metadata(prompt_path, code_path):
+            del prompt_path, code_path
+            fingerprint.write_text(
+                json.dumps(
+                    {
+                        "command": "example",
+                        "code_hash": "new",
+                        "example_hash": "unsafe",
+                        "test_hash": "primary-only",
+                        "test_files": {primary_test.name: "primary-only"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            run_report.unlink()
+            return True
+
+        with patch(
+            "pdd.ci_drift_heal._run_pdd_command", side_effect=run_command
+        ), patch(
+            "pdd.ci_drift_heal._enforce_prompt_churn_gate", return_value=True
+        ), patch(
+            "pdd.ci_drift_heal._enforce_structural_invariants", return_value=True
+        ), patch(
+            "pdd.ci_drift_heal._run_metadata_sync_safe", side_effect=finalize_metadata
+        ):
+            result = heal_module(drift, self._make_env())
+
+        assert result is True
+        assert commands == [
+            ["pdd", "--force", "--strength", "0.5", "update", str(code)]
+        ]
+        assert example.read_bytes() == candidate_bytes
+        refreshed = json.loads(fingerprint.read_text(encoding="utf-8"))
+        assert set(refreshed["test_files"]) == {
+            primary_test.name,
+            contract_test.name,
+        }
+        assert refreshed["example_hash"] == "old"
+        assert run_report.read_bytes() == run_report_bytes
+
+
+    @staticmethod
+    def _repo(tmp_path, monkeypatch, *, example_exists=True):
+        repo = tmp_path / "repo"
+        (repo / ".pdd" / "meta").mkdir(parents=True)
+        (repo / "context").mkdir()
+        example = repo / "context" / "widget_example.py"
+        if example_exists:
+            example.write_bytes(b"base\n")
+        (repo / ".pdd" / "sync-ownership.json").write_text(
+            json.dumps(
+                {
+                    "rules": [
+                        {
+                            "inventory": "HUMAN_OWNED",
+                            "owner": "pdd-maintainers",
+                            "pattern": "context/widget_example.py",
+                            "role": "human-maintained",
+                            **({"preauthorize_absent": True} if not example_exists else {}),
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=repo, check=True)
+        monkeypatch.chdir(repo)
+        drift = DriftInfo(
+            "widget", "python", "example", "stale",
+            prompt_path=str(repo / "prompts/widget_python.prompt"),
+            code_path=str(repo / "widget.py"),
+            example_path=str(example),
+            diff_base="HEAD...HEAD",
+        )
+        return repo, example, drift
+
+    def test_rejects_protected_leaf_symlink_before_subprocess(
+        self, tmp_path, monkeypatch
+    ):
+        _repo, example, drift = self._repo(tmp_path, monkeypatch)
+        external = tmp_path / "external.py"
+        external.write_bytes(b"external\n")
+        example.unlink()
+        example.symlink_to(external)
+        with patch("pdd.ci_drift_heal._heal_module_mutating") as mutate:
+            assert heal_module(drift, {}) is False
+        mutate.assert_not_called()
+        assert external.read_bytes() == b"external\n"
+
+    @pytest.mark.parametrize("raises", [False, True])
+    def test_restores_candidate_bytes_on_failure_and_exception(
+        self, tmp_path, monkeypatch, raises
+    ):
+        _repo, example, drift = self._repo(tmp_path, monkeypatch)
+        example.write_bytes(b"candidate\n")
+
+        def mutate(*_args):
+            example.write_bytes(b"generated\n")
+            if raises:
+                raise RuntimeError("boom")
+            return False
+
+        with patch("pdd.ci_drift_heal._heal_module_mutating", side_effect=mutate):
+            if raises:
+                with pytest.raises(RuntimeError, match="boom"):
+                    heal_module(drift, {})
+            else:
+                assert heal_module(drift, {}) is False
+        assert example.read_bytes() == b"candidate\n"
+
+    def test_restores_protected_absence(self, tmp_path, monkeypatch):
+        _repo, example, drift = self._repo(
+            tmp_path, monkeypatch, example_exists=False
+        )
+
+        def mutate(*_args):
+            example.write_bytes(b"generated\n")
+            return True
+
+        with patch("pdd.ci_drift_heal._heal_module_mutating", side_effect=mutate):
+            assert heal_module(drift, {}) is True
+        assert not example.exists()
+
     def test_update_skip_env_runs_update_but_skips_follow_up_example(self):
         """Explicit skip env still bypasses the follow-up example step for operational recovery.
 
@@ -1301,6 +1636,18 @@ class TestHealModule:
             assert result is True, f"failed for op={op}"
             pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
             assert pdd_cmds == [["pdd", "--force", "--strength", "0.5", "sync", "mod"]], f"unexpected cmds for op={op}: {pdd_cmds}"
+
+    @pytest.mark.parametrize("op", ["conflict", "fail_and_request_manual_merge"])
+    def test_manual_resolution_ops_are_skipped(self, op, capsys):
+        """Manual terminal sync states are not auto-healable CI failures."""
+        drift = DriftInfo("agentic_common", "python", op, "manual review required")
+
+        with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            result = heal_module(drift, self._make_env())
+
+        assert result is None
+        mock_run.assert_not_called()
+        assert f"manual resolution required for agentic_common: {op}" in capsys.readouterr().out
 
     @pytest.mark.parametrize("op", ["verify", "generate", "test", "crash"])
     def test_pr_scope_guard_env_reaches_broad_sync_fallback_ops(self, op):
@@ -1787,8 +2134,6 @@ class TestCommitAndPush:
 
     def test_commit_failure(self):
         """Returns False when git commit fails."""
-        call_count = [0]
-
         def mock_run(cmd, **kwargs):
             r = MagicMock()
             if cmd == ["git", "diff", "--cached", "--quiet"]:
@@ -2056,6 +2401,35 @@ class TestMain:
             result = main()
 
         assert result == 1
+
+    def test_pr_mode_manual_resolution_only_skips_without_failure_or_commit(self, capsys):
+        """PR CI can pass when every drift is a non-auto-healable manual state."""
+        drifts = (
+            [],
+            [
+                DriftInfo("agentic_checkup", "python", "conflict", "manual conflict"),
+                DriftInfo(
+                    "agentic_split_orchestrator",
+                    "python",
+                    "fail_and_request_manual_merge",
+                    "manual merge required",
+                ),
+            ],
+        )
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(diff_base="origin/main...HEAD")
+
+        assert result == 0
+        mock_commit.assert_not_called()
+        out = capsys.readouterr().out
+        assert "Auto-heal summary: healed=0 failed=0 skipped=2" in out
+        assert "unknown operation" not in out
 
     def test_commit_failure_returns_one(self):
         """Failed commit returns 1."""
@@ -3966,7 +4340,7 @@ class TestMetadataFinalizationBoundary:
                 return True
             raise AssertionError(f"Unexpected command: {cmd}")
 
-        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])) as mock_detect, \
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), \
              patch("pdd.ci_drift_heal._run_pdd_command", side_effect=run_pdd_side_effect), \
              patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=False):
             result = main(skip_ci=True)
@@ -4311,7 +4685,7 @@ class TestIssue1021CommitAndPushNoBlanketAdd:
 
 class TestMainDryRunJson:
     def test_dry_run_json_outputs_report(self, capsys):
-        """--dry-run with --json prints the report as JSON and exits based on ok."""
+        """--dry-run with --json emits only its stable summary schema."""
         report = {
             "ok": True,
             "summary": {
@@ -4326,7 +4700,12 @@ class TestMainDryRunJson:
         assert result == 0
         out = capsys.readouterr().out
         parsed = json.loads(out)
-        assert parsed == report
+        assert parsed == {
+            "ok": True,
+            "consumer": "ci-heal",
+            "summary": report["summary"],
+            "units": [],
+        }
 
     def test_dry_run_json_returns_one_when_not_ok(self, capsys):
         report = {
@@ -4342,10 +4721,71 @@ class TestMainDryRunJson:
             result = main(dry_run=True, as_json=True)
         assert result == 1
 
+    def test_dry_run_json_excludes_exception_bearing_failure_data(self, capsys):
+        """The output sink cannot receive candidate-controlled failure values."""
+        secret = "candidate exception text: ssh-private-key"
+        report = {
+            "ok": False,
+            "summary": {
+                "metadata_stale": 0,
+                "conflicts": 0,
+                "unbaselined": 0,
+                "failures": 1,
+            },
+            "failures": [secret],
+        }
+        with patch("pdd.continuous_sync.build_report", return_value=report):
+            result = main(dry_run=True, as_json=True)
+
+        assert result == 1
+        output = capsys.readouterr().out
+        assert secret not in output
+        assert json.loads(output) == {
+            "ok": False,
+            "consumer": "ci-heal",
+            "summary": report["summary"],
+            "units": [],
+        }
+
+    def test_dry_run_json_retains_value_free_unit_classifications(self, capsys):
+        """CI consumers can compare classifications without receiving paths or errors."""
+        report = {
+            "ok": False,
+            "summary": {
+                "metadata_stale": 1,
+                "conflicts": 0,
+                "unbaselined": 0,
+                "failures": 0,
+            },
+            "units": [
+                {
+                    "basename": "widget",
+                    "language": "python",
+                    "classification": "CODE_CHANGED",
+                    "paths": {"code": "/candidate/private/widget.py"},
+                    "reason": "candidate-controlled diagnostic",
+                }
+            ],
+        }
+        with patch("pdd.continuous_sync.build_report", return_value=report):
+            result = main(dry_run=True, as_json=True)
+
+        assert result == 1
+        output = json.loads(capsys.readouterr().out)
+        assert output["units"] == [
+            {
+                "basename": "widget",
+                "language": "python",
+                "classification": "CODE_CHANGED",
+            }
+        ]
+        assert "paths" not in output["units"][0]
+        assert "reason" not in output["units"][0]
+
 
 class TestHealModuleConflict:
-    def test_conflict_operation_returns_false(self):
-        """conflict is not a healable operation; heal_module must refuse."""
+    def test_conflict_operation_returns_none(self):
+        """conflict is a manual terminal state, not an auto-heal failure."""
         drift = DriftInfo(
             "auth", "python", "conflict",
             "Code and prompt changed together; manual conflict resolution required",
@@ -4354,7 +4794,20 @@ class TestHealModuleConflict:
         )
         with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
             result = heal_module(drift, {"PDD_FORCE": "1"})
-        assert result is False
+        assert result is None
+        mock_run.assert_not_called()
+
+    def test_manual_merge_terminal_operation_is_skipped_not_unknown(self):
+        """fail_and_request_manual_merge is a known terminal manual-conflict state."""
+        drift = DriftInfo(
+            "auth", "python", "fail_and_request_manual_merge",
+            "Prompt and derived artifacts changed; manual conflict resolution required",
+            code_path="/repo/auth.py",
+            prompt_path="/repo/prompts/auth_python.prompt",
+        )
+        with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            result = heal_module(drift, {"PDD_FORCE": "1"})
+        assert result is None
         mock_run.assert_not_called()
 
 

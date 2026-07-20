@@ -237,6 +237,73 @@ def _next_step(current: Union[int, float]) -> Union[int, float]:
         return STEP_ORDER[-1]
 
 
+_CHECKUP_STEP_STATE_KEYS: Dict[Union[int, float], str] = {
+    step: str(step).replace(".", "_") for step in STEP_ORDER
+}
+
+
+def _prune_rewound_checkup_state(
+    state: Dict[str, Any],
+    actual_last_success: Union[int, float],
+) -> None:
+    """Drop cached checkup state that is no longer reachable after a rewind.
+
+    Cached-state validation can lower ``last_completed_step`` when an earlier
+    output is missing or starts with ``FAILED:``. Any later step output,
+    telemetry entry, and loop metadata then belongs to an execution path the
+    resumed run must not trust.
+    """
+    try:
+        actual_idx = STEP_ORDER.index(actual_last_success)
+    except ValueError:
+        actual_idx = -1
+
+    completed_step_keys = {
+        _CHECKUP_STEP_STATE_KEYS[step] for step in STEP_ORDER[: actual_idx + 1]
+    }
+    step_outputs = state.get("step_outputs")
+    if isinstance(step_outputs, dict):
+        for key in list(step_outputs):
+            if (
+                key in _CHECKUP_STEP_STATE_KEYS.values()
+                and key not in completed_step_keys
+            ):
+                del step_outputs[key]
+        if actual_last_success < 7:
+            step_outputs.pop("pr_push", None)
+
+    step_by_id = {step_id: step for step, step_id in STEP_ID_MAP.items()}
+
+    def _telemetry_step(entry: Any) -> Optional[Union[int, float]]:
+        if not isinstance(entry, dict):
+            return None
+        raw_step = entry.get("internal_step")
+        if isinstance(raw_step, (int, float)):
+            return raw_step
+        if isinstance(raw_step, str):
+            try:
+                return float(raw_step) if "." in raw_step else int(raw_step)
+            except ValueError:
+                pass
+        raw_step_id = entry.get("step_id")
+        if isinstance(raw_step_id, str):
+            return step_by_id.get(raw_step_id)
+        return None
+
+    telemetry = state.get("step_telemetry")
+    if isinstance(telemetry, list):
+        state["step_telemetry"] = [
+            entry
+            for entry in telemetry
+            if (step := _telemetry_step(entry)) is None
+            or step in STEP_ORDER[: actual_idx + 1]
+        ]
+
+    if actual_last_success < 7:
+        state["fix_verify_iteration"] = 0
+        state["previous_fixes"] = ""
+
+
 # ---------------------------------------------------------------------------
 # Git helpers
 # ---------------------------------------------------------------------------
@@ -1953,6 +2020,24 @@ _EXPANSION_CAUSAL_KEYWORDS = (
 )
 
 
+_STEP5_FAILURE_PATH_RE = re.compile(
+    r"(?:tests?/|pdd/|src/|scripts/|backend/|frontend/|extensions/)[\w/._-]+\.py"
+)
+
+
+def _extract_step5_failure_paths(step5_output: str) -> set:
+    """Return repo-local Python paths named by Step 5 failure evidence.
+
+    The scope guard permits causally named failure files without an
+    ``EXPANSION_ITEMS`` marker, but only for paths surfaced by Step 5 and
+    only under ordinary source/test/tooling roots. This keeps the guard
+    strict while allowing a failing harness to name its own helper script.
+    """
+    if not step5_output.startswith("FAILED:"):
+        return set()
+    return set(_STEP5_FAILURE_PATH_RE.findall(step5_output))
+
+
 def _parse_expansion_items(step6_output: str) -> Tuple[set, set]:
     """Parse the ``EXPANSION_ITEMS:`` allowlist from Step 6 output.
 
@@ -2068,6 +2153,17 @@ def _parse_expansion_items(step6_output: str) -> Tuple[set, set]:
             justified_paths.update(marker_paths)
 
     return paths, justified_paths
+
+
+def _parse_step6_expansion_items(step_outputs: Dict[str, str]) -> Tuple[set, set]:
+    """Parse justified expansion paths from every Step 6 substep output."""
+    all_paths: set = set()
+    all_justified_paths: set = set()
+    for step_key in ("6_1", "6_2", "6_3"):
+        paths, justified_paths = _parse_expansion_items(step_outputs.get(step_key, ""))
+        all_paths.update(paths)
+        all_justified_paths.update(justified_paths)
+    return all_paths, all_justified_paths
 
 
 _FAILURE_SIGNAL_REQUIRED_KEYS = (
@@ -3319,6 +3415,7 @@ def _run_single_step(
         max_retries=CHECKUP_STEP_MAX_RETRIES.get(step_num, DEFAULT_MAX_RETRIES),
         reasoning_time=reasoning_time,
         steers=steers,
+        set_git_work_tree=False,
     )
     return (success, output, cost, model)
 
@@ -3660,6 +3757,7 @@ def _run_agentic_checkup_orchestrator_inner(
                         f"(found FAILED steps in cache)[/yellow]"
                     )
                 last_completed_step = actual_last_success
+                _prune_rewound_checkup_state(state, actual_last_success)
 
         # External review (PR #1215) Finding 2: a loaded state whose run
         # already COMPLETED (last_completed_step is the terminal step) must NOT
@@ -5589,9 +5687,14 @@ def _run_agentic_checkup_orchestrator_inner(
                     # out-of-scope refusal — a fixer cannot list an
                     # unrelated path on one marker line and let a sibling
                     # marker's justification cover for it.
-                    step6_out = step_outputs.get("6_1", "")
-                    _, justified_paths_set = (
-                        _parse_expansion_items(step6_out)
+                    #
+                    # Issue #1912: Step 6 is split into code-fix, regression
+                    # test, and e2e/integration substeps. Test-writing can be
+                    # the substep that introduces a justified out-of-PR-scope
+                    # path, so the guard must honor markers from all three
+                    # substeps rather than only Step 6.1.
+                    _, justified_paths_set = _parse_step6_expansion_items(
+                        step_outputs
                     )
                     # Codex round-8 Finding 3: the Step 6 prompt
                     # explicitly permits the fixer to edit failing test
@@ -5605,12 +5708,9 @@ def _run_agentic_checkup_orchestrator_inner(
                     # between fixer files and the OK-set), so genuinely
                     # unrelated edits remain blocked.
                     step5_for_scope = step_outputs.get("5", "")
-                    scope_failure_paths: set = set()
-                    if step5_for_scope.startswith("FAILED:"):
-                        scope_failure_paths = set(_re.findall(
-                            r"(?:tests?/|pdd/|src/)[\w/._-]+\.py",
-                            step5_for_scope,
-                        ))
+                    scope_failure_paths = _extract_step5_failure_paths(
+                        step5_for_scope
+                    )
                     # Issue #2047: admit the owning prompt + architecture entry
                     # for any code file already in the PR diff so a source-of-
                     # truth repair (edit the prompt that owns a PR-changed code
@@ -5638,7 +5738,10 @@ def _run_agentic_checkup_orchestrator_inner(
                                 f"{out_of_scope}. Justified expansion paths: "
                                 f"{sorted(justified_paths_set)}."
                             )
-                        elif "EXPANSION_ITEMS:" in step6_out:
+                        elif any(
+                            "EXPANSION_ITEMS:" in step_outputs.get(k, "")
+                            for k in ("6_1", "6_2", "6_3")
+                        ):
                             scope_refusal = (
                                 "Scope guard: fixer emitted an EXPANSION_ITEMS "
                                 "marker but no listed path carried its own "
@@ -5679,10 +5782,7 @@ def _run_agentic_checkup_orchestrator_inner(
                     # fixed by editing ``pdd/main.py``.
                     step5_out = step_outputs.get("5", "")
                     if step5_out.startswith("FAILED:"):
-                        failure_paths = set(_re.findall(
-                            r"(?:tests?/|pdd/|src/)[\w/._-]+\.py",
-                            step5_out,
-                        ))
+                        failure_paths = _extract_step5_failure_paths(step5_out)
                         # Codex round-5 Finding 3: reuse the per-path
                         # justified expansion set from the scope check;
                         # only paths whose OWN marker carried a causal

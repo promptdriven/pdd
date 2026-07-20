@@ -99,7 +99,7 @@ pdd setup
 
 The wizard will:
 - **Scan your environment** for existing API keys from all sources (shell, .env, ~/.pdd files) and detect stored agentic CLI OAuth/subscription/config credentials
-- **Present an interactive menu** to add/fix keys, configure local LLMs, or manage providers. OAuth-only users are not forced to add `ANTHROPIC_API_KEY`; setup explains that direct prompt/LiteLLM commands need one of an API key, a Codex (ChatGPT) subscription login (the `chatgpt/` model family — no API key; `codex login` then `PDD_MODEL_DEFAULT=chatgpt/gpt-5.3-codex`; this is a LOCAL-route path, so on a cloud-enabled install also pass `--local`), or a configured PDD Cloud login.
+- **Present an interactive menu** to add/fix keys, configure local LLMs, or manage providers. OAuth-only users are not forced to add `ANTHROPIC_API_KEY`; setup explains that direct prompt/LiteLLM commands need one of an API key, a Codex (ChatGPT) subscription login (the `chatgpt/` model family — no API key; `codex login` then `PDD_MODEL_DEFAULT=chatgpt/gpt-5.6-sol`; this is a LOCAL-route path, so on a cloud-enabled install also pass `--local`), or a configured PDD Cloud login.
 - **Validate API keys** with real test requests to ensure they work
 - **Show cost transparency** for different model tiers
 - **Create .pddrc** configuration for your project
@@ -258,7 +258,7 @@ pdd fix https://github.com/owner/repo/issues/456
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your Claude Max/Pro OAuth login from `claude auth login` if present, otherwise `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
    - **Antigravity CLI (`agy`, preferred)**: install via `curl -fsSL https://antigravity.google/cli/install.sh | bash` (uses Antigravity OAuth or keyring-backed Google subscription sign-in if present, otherwise `ANTIGRAVITY_API_KEY`/`GOOGLE_API_KEY`, Vertex AI env auth, or PDD's compatibility bridge from `GEMINI_API_KEY`). Set `PDD_AGENTIC_PROVIDER=antigravity` to pin Antigravity, or `PDD_GOOGLE_CLI=agy|gemini|auto` to control binary selection (`auto` prefers `agy` when credentialed, but keeps legacy `gemini` for legacy-OAuth-only setups).
    - **Gemini CLI (legacy, rollback)**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth login if present, otherwise `GEMINI_API_KEY` or `GOOGLE_API_KEY`). Google announced consumer-tier Gemini CLI cutoff on **2026-06-18**; set `PDD_GOOGLE_CLI=gemini` only when you intentionally need the old binary.
-   - **Codex CLI**: `npm install -g @openai/codex` (uses `~/.codex/auth.json` ChatGPT login from `codex login` if present, otherwise `OPENAI_API_KEY`)
+   - **Codex CLI**: `npm install -g @openai/codex@latest` (GPT-5.6 requires Codex CLI 0.144.0 or newer; uses `~/.codex/auth.json` ChatGPT login from `codex login` if present, otherwise `OPENAI_API_KEY`)
    - **OpenCode CLI**: `npm install -g opencode-ai` (uses OpenCode provider auth from `opencode auth login`, OpenCode JSON config, or provider env vars; set `OPENCODE_MODEL=provider/model`)
 
 ### Manual Prompt Workflow
@@ -695,15 +695,27 @@ git commit -m "docs: update documentation"
 
 **Cut a release (maintainers only):**
 
+Use the [canonical release runbook](contributors/pdd-cli-release-process.md)
+for cloud testing, PR/review gates, production publication, release-video
+verification/recovery, Discord, and final evidence. The commands below are only
+a quick entrypoint reference and do not replace its safety and closeout checks.
+
 The version is derived from git tags via setuptools-scm. To release, on `main`:
 
 ```bash
-make release-local             # patch bump with local SOPS release secrets
-make release-local BUMP=minor  # minor bump
-make release-local BUMP=major  # major bump
+RELEASE_VIDEO=0 make release-local             # patch bump; CI owns video creation
+RELEASE_VIDEO=0 make release-local BUMP=minor  # minor bump
+RELEASE_VIDEO=0 make release-local BUMP=major  # major bump
 ```
 
-`make release-local` injects release secrets from SOPS, tags `HEAD` with the next `vX.Y.Z`, pushes the tag, then runs `make release-video`. By default it looks for `../secrets/pdd_cloud/shared.prod.sops.env`; set `SOPS_RELEASE_ENV_FILE` if your `pdd_cloud` checkout is elsewhere. The local wrapper maps `CLAUDE_CODE_OAUTH_TOKEN` from `shared.staging.sops.env`, `shared.staging2.sops.env`, and `shared.prod.sops.env` into Claude Code rotation slots `_1`, `_2`, and `_3` at process runtime. The release-video step asks Claude Code to turn the release diff/notes into a short video script and calls the Prompt Driven Studio CLI (`pds release-video create --target publish --platform youtube --privacy unlisted --wait`) to create and upload an unlisted YouTube video. GitHub Actions then builds the wheel, waits for the `gltanaka` approval on the `pypi-publish` environment, publishes to PyPI via OIDC, and creates a GitHub Release with auto-generated notes.
+`RELEASE_VIDEO=0 make release-local` injects release secrets from SOPS, tags
+`HEAD` with the derived next `vX.Y.Z`, and pushes the tag while disabling the
+local video-create path. The tag-triggered GitHub Actions job is the sole normal
+release-video authority after its protected `pypi-publish` approval and package
+publication. By default the local wrapper looks for
+`../secrets/pdd_cloud/shared.prod.sops.env`; set `SOPS_RELEASE_ENV_FILE` if your
+`pdd_cloud` checkout is elsewhere. See the canonical runbook for approval
+ordering, recovery, and final evidence.
 
 Release-video diagnostics and recovery:
 
@@ -715,7 +727,12 @@ Release-video diagnostics and recovery:
 - For PDS project metadata mismatch recovery, reuse the generated script and original release notes, then run `make release-video RELEASE_TAG=<tag> RELEASE_VIDEO_PROJECT_ID=<project-id> RELEASE_VIDEO_SCRIPT_PATH=.pdd/release-videos/<tag>/release_video_script.md RELEASE_VIDEO_RELEASE_NOTES_PATH=.pdd/release-videos/<tag>/release_notes.md RELEASE_VIDEO_METADATA_CONFLICT=replace RELEASE_VIDEO_FORCE_REGENERATE=1 RELEASE_VIDEO_ATTEMPT_ID=<timestamp-or-label>`. Use `RELEASE_VIDEO_METADATA_CONFLICT=use-existing` when PDS says to preserve existing metadata.
 - For PDS publish retries, inspect the previous run first. Exact retries should reuse the original idempotency key; start a new attempt only after confirming the old run should not be reused, with `make release-video RELEASE_TAG=<tag> RELEASE_VIDEO_ATTEMPT_ID=<timestamp-or-label>` or a full `RELEASE_VIDEO_IDEMPOTENCY_KEY=<key>`.
 - If a release video is recovered after the release workflow already posted to Discord, run the **Backfill release video Discord post** workflow with the release tag and YouTube URL. Local equivalent: `DISCORD_WEBHOOK_URL=<webhook> make release-video-discord-backfill RELEASE_TAG=<tag> RELEASE_VIDEO_YOUTUBE_URL=<youtube-url>`.
-- Set `PDS_CLI` if `pds` is not on `PATH`. Use `RELEASE_VIDEO=0` only for an emergency release that must skip paid video generation/upload.
+- Set `PDS_CLI` if `pds` is not on `PATH`. `RELEASE_VIDEO=0` is mandatory for
+  normal local tag creation: it disables the local create and leaves the
+  tag-triggered Actions video path enabled as the sole authority. Omit it only
+  after the canonical runbook proves no Actions attempt started and records an
+  exceptional manual authority transfer; an emergency no-video outcome uses
+  the explicit skip/recovery path instead.
 
 ### 9. Troubleshooting Development Setup
 

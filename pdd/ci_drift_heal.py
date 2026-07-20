@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -55,6 +57,47 @@ _AUTO_HEAL_SUCCESS_TRAILER = "PDD-Auto-Heal-Checkpoint: success"
 
 _PROTECTED_PATHS = [".pdd/meta", "project_dependencies.csv"]
 _INVARIANT_KEYS = {"include", "pdd_tags", "percent_markers", "fenced_blocks"}
+_MANUAL_RESOLUTION_OPERATIONS = {"conflict", "fail_and_request_manual_merge"}
+
+
+def _dry_run_json_summary(report: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the fixed dry-run schema without paths or diagnostic payloads."""
+    summary = report.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
+
+    def count(name: str) -> int:
+        value = summary.get(name)
+        valid_count = (
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        )
+        return value if valid_count else 0
+
+    units = report.get("units")
+    if not isinstance(units, list):
+        units = []
+    projected_units = []
+    for unit in units:
+        if not isinstance(unit, dict):
+            continue
+        identity = {
+            name: unit.get(name)
+            for name in ("basename", "language", "classification")
+        }
+        if all(isinstance(value, str) and value for value in identity.values()):
+            projected_units.append(identity)
+
+    return {
+        "ok": report.get("ok") is True,
+        "consumer": "ci-heal",
+        "summary": {
+            "metadata_stale": count("metadata_stale"),
+            "conflicts": count("conflicts"),
+            "unbaselined": count("unbaselined"),
+            "failures": count("failures"),
+        },
+        "units": projected_units,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +252,29 @@ def _get_git_changed_files(diff_base: str) -> Set[str]:
     return {line.strip() for line in stdout.splitlines() if line.strip()}
 
 
+def _has_non_eol_whitespace_git_diff(diff_base: str, path: Any) -> bool:
+    """Return True when *path* has changes beyond end-of-line whitespace."""
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "diff",
+                "--quiet",
+                "--ignore-space-at-eol",
+                diff_base,
+                "--",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return True
+    # git diff --quiet: 0 = no diff, 1 = diff, >1 = error. Treat errors as
+    # changed so we do not accidentally suppress a real code/prompt conflict.
+    return result.returncode != 0
+
+
 def _numstat_line_counts(args: List[str]) -> Optional[Tuple[int, int]]:
     """Run `git diff --numstat <args>` and return (added, deleted) totals."""
     try:
@@ -276,25 +342,29 @@ def _discover_modules() -> List[Tuple[str, str, Any]]:
     """Discover (basename, language, prompt_path) tuples."""
     try:
         from pdd.user_story_tests import discover_prompt_files
-    except ImportError:
-        return []
+    except ImportError as exc:
+        raise RuntimeError("cannot import prompt discovery") from exc
     try:
         prompt_files = discover_prompt_files()
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("prompt discovery failed") from exc
 
     try:
         from pdd.operation_log import infer_module_identity
-    except ImportError:
-        return []
+    except ImportError as exc:
+        raise RuntimeError("cannot import canonical module identity") from exc
 
     out: List[Tuple[str, str, Any]] = []
+    failures: List[str] = []
     for entry in prompt_files:
         try:
             basename, language = infer_module_identity(str(entry))
-        except Exception:
+        except Exception as exc:
+            failures.append(f"{entry}: {exc}")
             continue
         out.append((basename, language, entry))
+    if failures:
+        raise RuntimeError("module identity failed: " + "; ".join(failures))
     return out
 
 
@@ -371,6 +441,63 @@ def _extract_reason(decision: Any) -> Optional[str]:
     return None
 
 
+def _same_path(left: Any, right: Any, repo_root: Path) -> bool:
+    """Compare resolved paths while accepting repository-relative discovery paths."""
+    if left is None or right is None:
+        return False
+    try:
+        left_path = Path(str(left))
+        right_path = Path(str(right))
+        if not left_path.is_absolute():
+            left_path = repo_root / left_path
+        if not right_path.is_absolute():
+            right_path = repo_root / right_path
+        return left_path.resolve() == right_path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _select_requested_modules(
+    parsed: List[str], discovered: List[Tuple[str, str, Any]]
+) -> List[Tuple[str, str, Any]]:
+    """Preserve path-qualified selectors while matching discovered prompts.
+
+    A root module such as ``pdd/cli`` deliberately differs from its prompt
+    identity ``cli`` because the extra path component disambiguates it from
+    ``core/cli``. Match that selector through its resolved canonical prompt,
+    then keep the selector for classification instead of collapsing it.
+    """
+    repo_root = _repo_root()
+    selected: List[Tuple[str, str, Any]] = []
+    resolved_prompts: Dict[Tuple[str, str], Any] = {}
+    for requested in parsed:
+        exact = [unit for unit in discovered if unit[0] == requested]
+        if exact:
+            selected.extend(exact)
+            continue
+
+        matches: List[Tuple[str, str, Any]] = []
+        for _basename, language, prompt_path in discovered:
+            cache_key = (requested, language)
+            if cache_key not in resolved_prompts:
+                try:
+                    resolved_prompts[cache_key] = _resolve_paths(
+                        requested, language
+                    ).get("prompt")
+                except (OSError, RuntimeError, ValueError):
+                    resolved_prompts[cache_key] = None
+            resolved_prompt = resolved_prompts[cache_key]
+            if _same_path(resolved_prompt, prompt_path, repo_root):
+                matches.append((requested, language, prompt_path))
+        if len(matches) > 1:
+            choices = ", ".join(sorted(str(unit[2]) for unit in matches))
+            raise RuntimeError(
+                f"ambiguous requested module {requested!r}: matched {choices}"
+            )
+        selected.extend(matches)
+    return selected
+
+
 def detect_drift(
     modules: Optional[List[str]] = None,
     diff_base: Optional[str] = None,
@@ -389,9 +516,10 @@ def detect_drift(
         changed_files = _get_git_changed_files(diff_base)
 
     discovered = _discover_modules()
+    if not discovered and parsed is None:
+        raise RuntimeError("no synchronization units were discovered")
     if parsed is not None:
-        wanted = set(parsed)
-        discovered = [t for t in discovered if t[0] in wanted]
+        discovered = _select_requested_modules(parsed, discovered)
 
     try:
         from pdd.sync_determine_operation import sync_determine_operation
@@ -436,8 +564,10 @@ def detect_drift(
             decision = sync_determine_operation(
                 basename, language, target_coverage=90.0, log_mode=True
             )
-        except Exception:
-            continue
+        except Exception as exc:
+            raise RuntimeError(
+                f"classification failed for {basename}/{language}: {exc}"
+            ) from exc
 
         op = _extract_op(decision)
         if not op or op in ("nothing", "synced"):
@@ -457,7 +587,7 @@ def detect_drift(
             code_in_changes = False
             for c in _git_relative_path_candidates(code_path_raw, repo_root):
                 if c in changed_files:
-                    code_in_changes = True
+                    code_in_changes = _has_non_eol_whitespace_git_diff(diff_base, c)
                     break
             prompt_in_changes = False
             if prompt_from_paths is not None:
@@ -1393,6 +1523,221 @@ def _heal_skip_modules() -> Set[str]:
     return {p.strip() for p in raw.split(",") if p.strip()}
 
 
+def _protected_human_owned_paths(diff_base: Optional[str]) -> Set[str]:
+    """Load strict exact human-owned paths only from the protected diff base."""
+    if not diff_base:
+        return set()
+    base_ref = diff_base.split("...", 1)[0].split("..", 1)[0]
+    try:
+        result = subprocess.run(
+            ["git", "show", f"{base_ref}:.pdd/sync-ownership.json"],
+            cwd=_repo_root(),
+            capture_output=True,
+            check=False,
+        )
+    except (OSError, ValueError):
+        return set()
+    if result.returncode != 0:
+        return set()
+    try:
+        payload = json.loads(result.stdout)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return set()
+    rows = payload.get("rules") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return set()
+    allowed_keys = {"pattern", "inventory", "role", "owner", "preauthorize_absent"}
+    protected: Set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict) or set(row) - allowed_keys:
+            continue
+        pattern = row.get("pattern")
+        if (
+            row.get("inventory") != "HUMAN_OWNED"
+            or row.get("owner") != "pdd-maintainers"
+            or row.get("role") not in {"human-maintained", "excluded-project"}
+            or not isinstance(pattern, str)
+            or not pattern
+            or pattern.startswith("/")
+            or "\\" in pattern
+            or any(token in pattern for token in ("*", "?", "["))
+            or any(part in {"", ".", ".."} for part in PurePosixPath(pattern).parts)
+            or PurePosixPath(pattern).as_posix() != pattern
+        ):
+            continue
+        protected.add(pattern)
+    return protected
+
+
+def _protected_relpath(path: Optional[str], protected: Set[str]) -> Optional[str]:
+    """Return the exact protected repo-relative spelling for *path*."""
+    if not path:
+        return None
+    candidates = _git_relative_path_candidates(path, _repo_root())
+    return next((candidate for candidate in sorted(candidates) if candidate in protected), None)
+
+
+def _lexical_protected_path(root: Path, value: str) -> Optional[Path]:
+    """Return an in-root lexical path without following links."""
+    path = Path(value)
+    try:
+        candidate = path if path.is_absolute() else root / path
+        candidate.relative_to(root)
+    except (TypeError, ValueError):
+        return None
+    return candidate
+
+
+def _protected_ancestors_are_safe(root: Path, path: Path) -> bool:
+    """Validate every lexical ancestor without following candidate links."""
+    try:
+        relative = path.relative_to(root)
+        current = root
+        for part in relative.parts[:-1]:
+            current = current / part
+            info = current.lstat()
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                return False
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+@dataclass(frozen=True)
+class _ProtectedCandidateState:
+    """Exact pre-heal candidate bytes; ``None`` means the leaf was absent."""
+
+    root: Path
+    files: Dict[Path, Optional[bytes]]
+
+
+def _snapshot_protected_candidate_state(
+    drift: DriftInfo,
+) -> Optional[_ProtectedCandidateState]:
+    """Snapshot protected module artifacts without following candidate links."""
+    protected = _protected_human_owned_paths(drift.diff_base)
+    if not protected:
+        return _ProtectedCandidateState(root=_repo_root(), files={})
+    root = _repo_root()
+    relpaths: Set[str] = set()
+    for value in (drift.prompt_path, drift.code_path, drift.example_path):
+        rel = _protected_relpath(value, protected)
+        if rel:
+            relpaths.add(rel)
+    _arch, fingerprint_rel, run_report_rel = _metadata_snapshot_paths(
+        drift.basename, drift.language
+    )
+    for rel in (fingerprint_rel, run_report_rel):
+        if rel in protected:
+            relpaths.add(rel)
+
+    fingerprint_path = root / fingerprint_rel
+    fingerprint_regular = False
+    if fingerprint_rel in relpaths:
+        if not _protected_ancestors_are_safe(root, fingerprint_path):
+            return None
+        try:
+            fingerprint_info = fingerprint_path.lstat()
+            if stat.S_ISLNK(fingerprint_info.st_mode) or not stat.S_ISREG(
+                fingerprint_info.st_mode
+            ):
+                return None
+            fingerprint_regular = True
+        except FileNotFoundError:
+            fingerprint_regular = False
+        except OSError:
+            return None
+    if fingerprint_regular:
+        try:
+            payload = json.loads(fingerprint_path.read_bytes())
+            declared = payload.get("test_files") if isinstance(payload, dict) else None
+            if isinstance(declared, dict):
+                for name in declared:
+                    rel = PurePosixPath(str(name))
+                    if rel.is_absolute() or any(part in {"", ".", ".."} for part in rel.parts):
+                        return None
+                    choices = [rel.as_posix(), f"tests/{rel.as_posix()}"]
+                    matches = [choice for choice in choices if choice in protected]
+                    if len(matches) == 1:
+                        relpaths.add(matches[0])
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+
+    files: Dict[Path, Optional[bytes]] = {}
+    for rel in sorted(relpaths):
+        path = _lexical_protected_path(root, rel)
+        if path is None:
+            return None
+        # Distinguish absence from unsafe state explicitly.
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            try:
+                parent = path.parent
+                parent.relative_to(root)
+                current = root
+                for part in path.relative_to(root).parts[:-1]:
+                    current = current / part
+                    ancestor = current.lstat()
+                    if stat.S_ISLNK(ancestor.st_mode) or not stat.S_ISDIR(ancestor.st_mode):
+                        return None
+            except (OSError, ValueError):
+                return None
+            files[path] = None
+            continue
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            return None
+        try:
+            files[path] = path.read_bytes()
+        except OSError:
+            return None
+    return _ProtectedCandidateState(root=root, files=files)
+
+
+def _restore_protected_candidate_state(state: _ProtectedCandidateState) -> bool:
+    """Atomically restore exact candidate bytes/absence with no-follow checks."""
+    for path, content in state.files.items():
+        root = state.root
+        try:
+            relative = path.relative_to(root)
+            current = root
+            for part in relative.parts[:-1]:
+                current = current / part
+                info = current.lstat()
+                if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                    return False
+            try:
+                leaf = path.lstat()
+            except FileNotFoundError:
+                leaf = None
+            if leaf is not None and (
+                stat.S_ISLNK(leaf.st_mode) or not stat.S_ISREG(leaf.st_mode)
+            ):
+                return False
+            if content is None:
+                if leaf is not None:
+                    path.unlink()
+                continue
+            fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(content)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, path)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+            final = path.lstat()
+            if stat.S_ISLNK(final.st_mode) or not stat.S_ISREG(final.st_mode):
+                return False
+            if path.read_bytes() != content:
+                return False
+        except (OSError, ValueError):
+            return False
+    return True
+
+
 def _auto_deps_directory(drift: Any) -> str:
     """Resolve the directory passed to `pdd auto-deps`."""
     dep_dir = getattr(drift, "dependency_dir", None)
@@ -1407,6 +1752,8 @@ def _heal_update(drift: DriftInfo, env: Dict[str, str], skip_set: Set[str]) -> O
         console.print(f"[red]heal failed for {drift.basename}: code_path unresolved[/red]")
         return False
 
+    protected = _protected_human_owned_paths(drift.diff_base)
+    protected_example = _protected_relpath(drift.example_path, protected)
     if not _run_pdd_command(
         ["pdd", "--force", "--strength", "0.5", "update", str(code_path)],
         env=env,
@@ -1491,10 +1838,10 @@ def _heal_update(drift: DriftInfo, env: Dict[str, str], skip_set: Set[str]) -> O
     drift.metadata_finalized = True
 
     # Optional follow-up: skip when module bypassed via env.
-    if drift.basename in skip_set:
+    if drift.basename in skip_set or protected_example:
         console.print(
             f"[dim]skipping follow-up pdd example for {drift.basename} "
-            f"(PDD_HEAL_SYNC_SKIP_MODULES)[/dim]"
+            f"(protected human-owned example)[/dim]"
         )
         return True
 
@@ -1571,8 +1918,8 @@ def _heal_auto_deps(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
     return ok if ok else False
 
 
-def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
-    """Heal a single module. Returns True/False/None (skipped)."""
+def _heal_module_mutating(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
+    """Dispatch one heal after the protected transaction is prepared."""
     skip_set = _heal_skip_modules()
     op = getattr(drift, "operation", "")
 
@@ -1593,9 +1940,40 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
             label=f"pdd sync {drift.basename}",
         )
         return ok if ok else False
+    if op in _MANUAL_RESOLUTION_OPERATIONS:
+        console.print(
+            f"[yellow]manual resolution required for {drift.basename}: {op}[/yellow]"
+        )
+        return None
 
     console.print(f"[red]unknown operation '{op}' for {drift.basename}[/red]")
     return False
+
+
+def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
+    """Heal one module while restoring protected candidate state on every exit."""
+    # Legacy/unit-callers without a comparison ref cannot have a protected
+    # base policy.  Keep their dispatch path side-effect compatible and avoid
+    # an unnecessary repository lookup before the heal subprocess.
+    if not getattr(drift, "diff_base", None):
+        return _heal_module_mutating(drift, env)
+
+    state = _snapshot_protected_candidate_state(drift)
+    if state is None:
+        console.print(f"[red]unsafe protected artifact for {drift.basename}[/red]")
+        return False
+    result: Optional[bool] = False
+    error: Optional[BaseException] = None
+    try:
+        result = _heal_module_mutating(drift, env)
+    except BaseException as exc:  # restoration must also cover interrupts/exceptions
+        error = exc
+    restored = _restore_protected_candidate_state(state)
+    if error is not None:
+        if not restored:
+            raise RuntimeError("protected artifact restoration failed") from error
+        raise error
+    return result if restored else False
 
 
 # ---------------------------------------------------------------------------
@@ -1825,13 +2203,43 @@ def main(
     as_json: bool = False,
 ) -> int:
     """Detect drift, heal modules, and commit healed changes."""
+    from pdd.continuous_sync import canonical_sync_enabled
+
+    if canonical_sync_enabled(Path.cwd()) and not dry_run:
+        from pdd.sync_core import CanonicalReportOptions, build_canonical_report
+
+        base_ref = (
+            diff_base.split("...", 1)[0]
+            if diff_base and "..." in diff_base
+            else "HEAD"
+        )
+        try:
+            canonical = build_canonical_report(
+                _repo_root(),
+                CanonicalReportOptions(
+                    base_ref=base_ref,
+                    head_ref="HEAD",
+                    modules=tuple(modules or ()),
+                ),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            console.print(f"[red]canonical sync check failed: {exc}[/red]")
+            return 1
+        if not canonical["ok"]:
+            if as_json:
+                print(json.dumps(canonical, indent=2, sort_keys=True))
+            else:
+                console.print("[red]canonical sync predicate failed[/red]")
+                for error in canonical.get("errors", []):
+                    console.print(f"[red]- {error}[/red]")
+            return 1
+        return 0
     if dry_run:
         from pdd.continuous_sync import build_report
-        import json as _json
 
         report = build_report(consumer="ci-heal", modules=modules)
         if as_json:
-            print(_json.dumps(report, indent=2, sort_keys=True))
+            print(json.dumps(_dry_run_json_summary(report), indent=2, sort_keys=True))
         else:
             summary = report["summary"]
             console.print(

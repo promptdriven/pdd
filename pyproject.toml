@@ -37,6 +37,7 @@ dependencies = [
     "Requests==2.34.2",
     "aiofiles==25.1.0",
     "click==8.4.1",
+    "cryptography>=46,<50",
     "firecrawl-py==4.28.0",
     "firebase_admin==7.4.0",
     "httpx==0.28.1",
@@ -76,6 +77,9 @@ dependencies = [
     "websockets>=13.0",
     "watchdog>=4.0.0",
     "tiktoken>=0.7.0",
+    "tree-sitter==0.25.2",
+    "tree-sitter-javascript==0.25.0",
+    "tree-sitter-typescript==0.23.2",
     "filelock>=3.12"]
 requires-python = ">=3.12"
 
@@ -86,9 +90,11 @@ Issue-Tracker = "https://github.com/promptdriven/pdd/issues"
 
 [project.scripts]
 pdd = "pdd.cli:cli"
+pdd-sync-checker = "pdd.sync_core.released_checker:main"
+pdd-sync-verify = "pdd.sync_core.certificate_verifier:main"
 
 [tool.setuptools]
-packages = ["pdd", "pdd.commands", "pdd.core", "pdd.server", "pdd.server.routes"]
+packages = ["pdd", "pdd.commands", "pdd.core", "pdd.server", "pdd.server.routes", "pdd.sync_core"]
 
 [tool.setuptools.package-data]
 "pdd" = [
@@ -102,11 +108,18 @@ packages = ["pdd", "pdd.commands", "pdd.core", "pdd.server", "pdd.server.routes"
     "*.fish",
     "*.sh",
     "frontend/dist/**",
-    "frontend/dist/*"
+    "frontend/dist/*",
+    "sync_core/native/*.c",
 ]
+
+[tool.setuptools.exclude-package-data]
+"pdd" = ["sync_core/native/*.node"]
 
 [project.optional-dependencies]
 dev = [
+    "setuptools>=64",
+    "setuptools-scm>=8",
+    "wheel",
     "pytest-cov",
     "pytest-testmon",
     "pytest-xdist",

@@ -2,6 +2,7 @@ import pytest
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -19,6 +20,7 @@ from pdd.agentic_common import (
     get_available_agents,
     get_agent_provider_preference,
     run_agentic_task,
+    run_exact_agentic_task,
     select_harness_for_task,
     _normalize_token_buckets,
     _meets_usage_contract,
@@ -27,6 +29,7 @@ from pdd.agentic_common import (
     _calculate_anthropic_cost,
     _calculate_gemini_cost,
     _calculate_codex_cost,
+    _codex_pricing_for_model,
     _build_claude_interactive_command,
     _claude_code_interactive_enabled,
     _claude_interactive_needs_trust_confirmation,
@@ -38,6 +41,7 @@ from pdd.agentic_common import (
     _extract_json_from_output,
     _find_cli_binary,
     _is_permanent_error,
+    _is_structured_provider_json_prefix,
     _parse_claude_interactive_reply,
     _run_claude_interactive_with_mcp,
     _run_interactive_pty_until_reply,
@@ -54,6 +58,17 @@ from pdd.agentic_common import (
     TASK_CLASS_REPO_SCALE,
     TASK_CLASS_SINGLE_FILE,
 )
+
+
+def test_structured_provider_json_prefix_requires_known_first_top_level_key():
+    assert _is_structured_provider_json_prefix(
+        '  \n { "type" : "result", "result": "quoted UI"'
+    )
+    assert not _is_structured_provider_json_prefix(
+        '{"message":"echoes \\\"result\\\": and ^[[2K Auto-update",'
+        '"type":"result"}'
+    )
+
 
 # ---------------------------------------------------------------------------
 # Z3 Formal Verification
@@ -195,7 +210,7 @@ def test_z3_pricing_properties():
     solver = z3.Solver()
 
     # --- Codex Pricing Verification ---
-    # Pricing: Input $1.50/M, Output $6.00/M, Cached Input 75% discount (multiplier 0.25)
+    # Default GPT-5.6 pricing: $5/M input, $30/M output, cached input 90% off.
     
     # Variables (Tokens are non-negative integers)
     input_t = z3.Int('input_t')
@@ -209,9 +224,9 @@ def test_z3_pricing_properties():
     solver.add(cached_t <= input_t)
 
     # Pricing Constants (per million)
-    p_in = 1.50
-    p_out = 6.00
-    p_cached_mult = 0.25
+    p_in = CODEX_PRICING.input_per_million
+    p_out = CODEX_PRICING.output_per_million
+    p_cached_mult = CODEX_PRICING.cached_input_multiplier
 
     # Python logic implementation in Z3 Real arithmetic
     # new_input = max(input - cached, 0) -> since cached <= input, this is just input - cached
@@ -2313,6 +2328,30 @@ def test_run_with_provider_interactive_uses_mcp_bridge_not_subprocess_run(
     assert kwargs["env"]["PDD_CLAUDE_CODE_MODE"] == "interactive"
 
 
+def test_run_with_provider_background_safe_bypasses_interactive_mcp(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_path.write_text("Do work", encoding="utf-8")
+    mock_env["PDD_CLAUDE_CODE_MODE"] = "interactive"
+    mock_env["ANTHROPIC_API_KEY"] = "key"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(
+        {"result": "background reply", "total_cost_usd": 0.01}
+    )
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.agentic_common._run_claude_interactive_with_mcp") as bridge:
+        success, output, _, _ = _run_with_provider(
+            "anthropic", prompt_path, mock_cwd, background_safe=True
+        )
+
+    assert success and output == "background reply"
+    bridge.assert_not_called()
+    assert "-p" in mock_subprocess.call_args.args[0]
+
+
 def test_run_agentic_task_accepts_short_zero_cost_interactive_reply(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
 ):
@@ -2817,7 +2856,7 @@ def test_meets_usage_contract_gate():
     comparable = AgenticTaskResult(
         True, "ok", 0.4, "openai", None,
         usage_source="pricing_table_estimate",
-        estimate_method="token_delta_x_pricing_csv",
+        estimate_method="token_delta_x_model_pricing",
     )
     assert _meets_usage_contract(comparable) is True
 
@@ -2937,6 +2976,62 @@ def test_get_provider_cli_version_probes_binary(monkeypatch):
     assert _get_provider_cli_version("opencode") == ""
 
 
+@pytest.mark.parametrize("model", ["gpt-5.6", "gpt-5.6-sol"])
+def test_known_old_codex_cli_fails_before_gpt_5_6(model):
+    import pdd.agentic_common as ac
+
+    message = ac._codex_gpt_5_6_version_error(model, "codex-cli 0.143.9")
+
+    assert message is not None
+    assert ">= 0.144.0" in message
+    assert "@openai/codex@latest" in message
+
+
+@pytest.mark.parametrize(
+    ("model", "version"),
+    [
+        ("gpt-5.6-sol", "codex-cli 0.144.0"),
+        ("gpt-5.6-sol", "codex 1.2.3"),
+        ("gpt-5.6-sol", "company-codex-wrapper"),
+        ("gpt-5.5", "codex-cli 0.143.9"),
+    ],
+)
+def test_codex_cli_version_gate_allows_supported_or_unrelated_models(model, version):
+    import pdd.agentic_common as ac
+
+    assert ac._codex_gpt_5_6_version_error(model, version) is None
+
+
+def test_codex_old_cli_gate_prevents_inference_subprocess(tmp_path, monkeypatch):
+    import pdd.agentic_common as ac
+
+    prompt = tmp_path / "task.prompt"
+    prompt.write_text("Do the task", encoding="utf-8")
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+    monkeypatch.setattr(
+        ac,
+        "_get_provider_cli_version",
+        lambda provider: "codex-cli 0.143.9",
+    )
+
+    def _unexpected_inference(*args, **kwargs):
+        raise AssertionError("old Codex CLI must be rejected before inference")
+
+    monkeypatch.setattr(ac, "_subprocess_run_spooled", _unexpected_inference)
+
+    success, message, cost, model = ac._run_with_provider(
+        "openai",
+        prompt,
+        tmp_path,
+        cli_path="/bin/codex",
+    )
+
+    assert success is False
+    assert ">= 0.144.0" in message
+    assert cost == 0.0
+    assert model is None
+
+
 def test_provider_cli_binary_name_mapping():
     assert _provider_cli_binary_name("anthropic") == "claude"
     assert _provider_cli_binary_name("openai") == "codex"
@@ -2988,7 +3083,7 @@ def test_run_agentic_task_routing_policy_selects_initial_config(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
     monkeypatch.setattr("pdd.agentic_common.get_agent_provider_preference", lambda: ["google", "anthropic"])
-    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier, provider=None: f"tier-{tier}-model")
 
     calls = []
 
@@ -3017,6 +3112,171 @@ def test_run_agentic_task_routing_policy_selects_initial_config(
     assert payload["verifier_result"] == "pass"
 
 
+def test_apply_routing_model_env_only_sets_provider_compatible_models(monkeypatch):
+    """The real resolver never writes a foreign model into a provider env.
+
+    The other routing tests inject a one-arg ``resolve_model_for_tier`` stub, so
+    this is the only coverage of the production two-arg
+    ``resolve_model_for_tier(tier, provider=provider)`` call inside
+    ``_apply_routing_model_env`` and the provider-scoping invariant it enforces.
+    """
+    from pdd.agentic_common import (
+        _apply_routing_model_env,
+        _restore_routing_model_env,
+    )
+    from pdd.routing_policy import RoutingConfig
+    from pdd.routing_policy import CODEX_MODEL_DEFAULT
+
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+
+    # openai harness at tier 1 -> Codex platform default (gpt-5.6-sol) in CODEX_MODEL.
+    originals_openai: dict = {}
+    _apply_routing_model_env(
+        "openai", RoutingConfig(harness="openai", model_tier=1), originals_openai
+    )
+    assert os.environ.get("CODEX_MODEL") == CODEX_MODEL_DEFAULT == "gpt-5.6-sol"
+    _restore_routing_model_env(originals_openai)
+
+    # Rank 1 is OpenAI-only, so Anthropic keeps its provider-owned default.
+    originals_anthropic: dict = {}
+    _apply_routing_model_env(
+        "anthropic", RoutingConfig(harness="anthropic", model_tier=1), originals_anthropic
+    )
+    assert os.environ.get("CLAUDE_MODEL") is None
+    _restore_routing_model_env(originals_anthropic)
+
+    # Anthropic's exact global rank is still applied when requested.
+    originals_anthropic = {}
+    _apply_routing_model_env(
+        "anthropic", RoutingConfig(harness="anthropic", model_tier=3), originals_anthropic
+    )
+    assert os.environ.get("CLAUDE_MODEL") == "claude-opus-4-7"
+    _restore_routing_model_env(originals_anthropic)
+
+    # Google likewise keeps its provider-owned default for an OpenAI rank.
+    originals_google: dict = {}
+    _apply_routing_model_env(
+        "google", RoutingConfig(harness="google", model_tier=2), originals_google
+    )
+    assert os.environ.get("GEMINI_MODEL") is None
+    _restore_routing_model_env(originals_google)
+
+
+def test_run_agentic_task_routing_preserves_explicit_codex_model(
+    mock_cwd,
+    monkeypatch,
+):
+    """A routed OpenAI config must preserve an explicit CODEX_MODEL override."""
+    from pdd.routing_policy import RoutingConfig, RoutingPolicy, RoutingPolicyRow
+
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.setenv("CODEX_MODEL", "o3-pro")
+    monkeypatch.setattr(
+        "pdd.agentic_common.get_available_agents", lambda: ["openai"]
+    )
+    monkeypatch.setattr(
+        "pdd.agentic_common.get_agent_provider_preference", lambda: ["openai"]
+    )
+
+    calls = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        calls.append((provider, os.environ.get("CODEX_MODEL")))
+        return (True, "done", 0.1, "o3-pro", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+    policy = RoutingPolicy(
+        rows={
+            "bug-fix": RoutingPolicyRow(
+                initial_config=RoutingConfig(
+                    harness="openai", model_tier=1, thinking_effort="high"
+                )
+            )
+        }
+    )
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=policy,
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert calls == [("openai", "o3-pro")]
+    assert os.environ["CODEX_MODEL"] == "o3-pro"
+
+
+def test_run_agentic_task_same_provider_model_tier_escalation_replaces_routed_model(
+    mock_cwd,
+    monkeypatch,
+):
+    """A route-owned model must not masquerade as a caller override.
+
+    The initial OpenAI tier-2 value remains in the process environment until
+    routing escalation begins.  A same-harness model-tier promotion must
+    replace that PDD-owned value with tier 1 while still preserving genuine
+    caller-supplied ``CODEX_MODEL`` values in the test above.
+    """
+    from pdd.routing_policy import (
+        EscalationStep,
+        RoutingConfig,
+        RoutingPolicy,
+        RoutingPolicyRow,
+    )
+
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.setattr(
+        "pdd.agentic_common.get_available_agents", lambda: ["openai"]
+    )
+    monkeypatch.setattr(
+        "pdd.agentic_common.get_agent_provider_preference", lambda: ["openai"]
+    )
+    monkeypatch.setattr(
+        "pdd.agentic_common.resolve_model_for_tier",
+        lambda tier, provider=None: f"tier-{tier}-model",
+    )
+
+    models = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        models.append(os.environ.get("CODEX_MODEL"))
+        if len(models) == 1:
+            return (False, "tier 2 failed", 0.1, models[-1], None)
+        return (True, "tier 1 passed", 0.2, models[-1], None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+    policy = RoutingPolicy(
+        rows={
+            "bug-fix": RoutingPolicyRow(
+                initial_config=RoutingConfig(harness="openai", model_tier=2),
+                escalation_steps=[
+                    EscalationStep(
+                        axis="model_tier",
+                        value=1,
+                        reason="promote model tier",
+                    )
+                ],
+            )
+        }
+    )
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=policy,
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert result.output_text == "tier 1 passed"
+    assert models == ["tier-2-model", "tier-1-model"]
+    assert os.environ.get("CODEX_MODEL") is None
+
+
 def test_run_agentic_task_routing_policy_selected_harness_unavailable_uses_feasible_provider(
     mock_cwd,
     monkeypatch,
@@ -3028,7 +3288,7 @@ def test_run_agentic_task_routing_policy_selected_harness_unavailable_uses_feasi
     monkeypatch.setenv("GEMINI_API_KEY", "key")
     monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["google"])
     monkeypatch.setattr("pdd.agentic_common.get_agent_provider_preference", lambda: ["google"])
-    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier, provider=None: f"tier-{tier}-model")
 
     calls = []
 
@@ -3109,7 +3369,7 @@ def test_run_agentic_task_routing_policy_escalates_after_failure(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     monkeypatch.setenv("GEMINI_API_KEY", "key")
     monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
-    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier, provider=None: f"tier-{tier}-model")
 
     providers = []
 
@@ -3149,7 +3409,7 @@ def test_run_agentic_task_routing_escalation_preserves_before_attempt(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     monkeypatch.setenv("GEMINI_API_KEY", "key")
     monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
-    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier, provider=None: f"tier-{tier}-model")
 
     before_attempts = []
 
@@ -3230,7 +3490,7 @@ def test_run_agentic_task_routing_escalation_skips_infeasible_harness_and_falls_
         "pdd.agentic_common.get_available_agents", lambda: ["anthropic", "openai"]
     )
     monkeypatch.setattr(
-        "pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model"
+        "pdd.agentic_common.resolve_model_for_tier", lambda tier, provider=None: f"tier-{tier}-model"
     )
 
     providers = []
@@ -4036,8 +4296,8 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
     os.environ["OPENAI_API_KEY"] = "key"
 
     # Mock subprocess output (JSONL stream)
-    # Pricing: $1.50/M input, $6.00/M output
-    # 1M input, 1M output -> 1.5 + 6.0 = 7.5
+    # No observed model: price the requested/default GPT-5.6 model.
+    # 100K input, 100K output -> 0.5 + 3.0 = 3.5
     # Note: Implementation extracts 'output' from result object, not 'content' from message objects
     jsonl_output = [
         json.dumps({"type": "init"}),
@@ -4046,8 +4306,8 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
             "type": "result",
             "output": "Codex output.",
             "usage": {
-                "input_tokens": 1000000,
-                "output_tokens": 1000000,
+                "input_tokens": 100000,
+                "output_tokens": 100000,
                 "cached_input_tokens": 0
             }
         })
@@ -4060,7 +4320,7 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
     assert success
     assert provider == "openai"
     assert "Codex output." in msg
-    assert abs(cost - 7.50) < 0.0001
+    assert abs(cost - 3.5) < 0.0001
 
     # Verify command - now uses full path from _find_cli_binary
     args, kwargs = mock_subprocess.call_args
@@ -4212,21 +4472,21 @@ def test_gemini_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock
 def test_codex_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """
     Specific test for Codex cached token logic.
-    Pricing: Input $1.50, Cached Multiplier 0.25 (75% discount).
+    Default GPT-5.6 cached input is $0.50/M (10% of $5/M).
     """
     mock_shutil_which.return_value = "/bin/codex"
     os.environ["OPENAI_API_KEY"] = "key"
     with patch('pdd.agentic_common.get_agent_provider_preference', return_value=["openai"]):
-        # 1M cached tokens.
-        # Cost should be 1M * 1.50 * 0.25 = $0.375
+        # 100K cached tokens.
+        # Cost should be 100K * 5.00 * 0.10 = $0.05
         jsonl_output = [
             json.dumps({
                 "type": "result",
                 "output": "Task completed successfully with cached tokens used for cost calculation test.",
                 "usage": {
-                    "input_tokens": 1000000,
+                    "input_tokens": 100000,
                     "output_tokens": 0,
-                    "cached_input_tokens": 1000000
+                    "cached_input_tokens": 100000
                 }
             })
         ]
@@ -4234,7 +4494,7 @@ def test_codex_cached_cost_logic(mock_cwd, mock_env, mock_load_model_data, mock_
         mock_subprocess.return_value.stdout = "\n".join(jsonl_output)
 
         success, _, cost, _ = run_agentic_task("instr", mock_cwd)
-        assert abs(cost - 0.375) < 0.0001
+        assert abs(cost - 0.05) < 0.0001
 
 
 # ---------------------------------------------------------------------------
@@ -4666,20 +4926,108 @@ def test_calculate_gemini_cost_cached():
     assert cost == pytest.approx(expected)
 
 def test_calculate_codex_cost():
-    """Test cost calculation for Codex."""
+    """The unset model uses GPT-5.6 Sol's current direct-API rates."""
     usage = {
-        "input_tokens": 2000,
-        "output_tokens": 1000,
-        "cached_input_tokens": 1000
+        "input_tokens": 200_000,
+        "output_tokens": 100_000,
+        "cached_input_tokens": 100_000,
     }
     cost = _calculate_codex_cost(usage)
-    
-    pricing = CODEX_PRICING
-    # 1000 new input + 1000 cached input + 1000 output
-    expected = (1000 * pricing.input_per_million / 1e6) + \
-               (1000 * pricing.input_per_million * pricing.cached_input_multiplier / 1e6) + \
-               (1000 * pricing.output_per_million / 1e6)
-    assert cost == pytest.approx(expected)
+
+    assert (
+        CODEX_PRICING.input_per_million,
+        CODEX_PRICING.output_per_million,
+        CODEX_PRICING.cached_input_multiplier,
+    ) == (5.0, 30.0, 0.1)
+    assert cost == pytest.approx(3.55)  # $0.50 fresh + $0.05 cached + $3 output
+
+
+@pytest.mark.parametrize(
+    "cache_write_key",
+    ["cache_creation_input_tokens", "cache_write_tokens"],
+)
+def test_calculate_codex_cost_prices_gpt_5_6_cache_writes(cache_write_key):
+    usage = {
+        "input_tokens": 200_000,
+        "output_tokens": 100_000,
+        "cached_input_tokens": 50_000,
+        cache_write_key: 20_000,
+    }
+
+    # Writes are part of total input: $0.65 fresh + $0.025 cached +
+    # $0.125 cache write (1.25x) + $3 output.
+    assert _calculate_codex_cost(usage, "gpt-5.6-sol") == pytest.approx(3.8)
+
+
+def test_calculate_codex_cost_applies_gpt_5_6_long_context_uplift():
+    usage = {
+        "input_tokens": 280_000,
+        "output_tokens": 100_000,
+        "cached_input_tokens": 60_000,
+        "cache_creation_input_tokens": 20_000,
+    }
+
+    # Above 272K, every input bucket is 2x and output is 1.5x:
+    # 2 * ($1 fresh + $0.03 cached + $0.125 cache write) + 1.5 * $3 output.
+    assert _calculate_codex_cost(usage, "gpt-5.6-sol") == pytest.approx(6.81)
+
+
+def test_calculate_codex_cost_keeps_standard_rates_at_long_context_boundary():
+    usage = {
+        "input_tokens": 272_000,
+        "output_tokens": 100_000,
+        "cached_input_tokens": 20_000,
+        "cache_creation_input_tokens": 20_000,
+    }
+
+    assert _calculate_codex_cost(usage, "gpt-5.6-sol") == pytest.approx(4.295)
+
+
+@pytest.mark.parametrize("model", ["gpt-5.5", "gpt-5.4"])
+def test_calculate_codex_cost_applies_long_context_uplift_to_older_large_models(model):
+    usage = {
+        "input_tokens": 272_001,
+        "output_tokens": 100_000,
+        "cached_input_tokens": 0,
+    }
+    pricing = _codex_pricing_for_model(model)
+    expected = (
+        2 * 272_001 * pricing.input_per_million / 1_000_000
+        + 1.5 * 100_000 * pricing.output_per_million / 1_000_000
+    )
+
+    assert _calculate_codex_cost(usage, model) == pytest.approx(expected)
+
+
+def test_calculate_codex_cost_uses_explicit_older_model_catalog_rates():
+    usage = {
+        "input_tokens": 200_000,
+        "output_tokens": 100_000,
+        "cached_input_tokens": 100_000,
+    }
+
+    assert _calculate_codex_cost(usage, "gpt-5.4") == pytest.approx(1.775)
+
+
+def test_parse_codex_cost_prefers_provider_observed_model_over_requested():
+    from pdd.agentic_common import _parse_provider_json
+
+    data = {
+        "model": "gpt-5.4",
+        "result": "done",
+        "usage": {
+            "input_tokens": 200_000,
+            "output_tokens": 100_000,
+            "cached_input_tokens": 100_000,
+        },
+    }
+
+    success, output, cost, model = _parse_provider_json(
+        "openai", data, requested_model="gpt-5.6-sol"
+    )
+
+    assert (success, output, model) == (True, "done", "gpt-5.4")
+    assert cost == pytest.approx(1.775)
 
 
 # --- Tests for _calculate_anthropic_cost (Issue #686) ---
@@ -4822,7 +5170,7 @@ def test_anthropic_cost_all_tokens_cached():
 
 # --- Tests for run_agentic_task ---
 
-def test_run_agentic_task_anthropic_success_env_check(mock_shutil_which, mock_subprocess_run, mock_console, tmp_path):
+def test_run_agentic_task_anthropic_success_env_check(mock_shutil_which, mock_subprocess_run, mock_console, mock_env, tmp_path):
     """Test successful execution with Anthropic."""
     # Setup availability
     mock_shutil_which.side_effect = lambda cmd: "/bin/claude" if cmd == "claude" else None
@@ -4919,7 +5267,7 @@ def test_run_agentic_task_false_positive(mock_shutil_which, mock_subprocess_run,
     # Cost should include the 0.0 from the first attempt + the cost from the second
     assert cost > 0.0
 
-def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_run, tmp_path):
+def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_run, mock_env, tmp_path):
     """Test that the temp prompt file is created and then cleaned up."""
     mock_shutil_which.return_value = "/bin/claude"
     mock_subprocess_run.return_value.returncode = 0
@@ -4944,7 +5292,7 @@ def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_r
     temp_files = list(tmp_path.glob(".agentic_prompt_*.txt"))
     assert len(temp_files) == 0
 
-def test_suspicious_file_detection(mock_shutil_which, mock_subprocess_run, mock_console, tmp_path):
+def test_suspicious_file_detection(mock_shutil_which, mock_subprocess_run, mock_console, mock_env, tmp_path):
     """Test that suspicious files (C, E, T) are detected and logged."""
     mock_shutil_which.return_value = "/bin/claude"
     mock_subprocess_run.return_value.returncode = 0
@@ -4965,7 +5313,7 @@ def test_suspicious_file_detection(mock_shutil_which, mock_subprocess_run, mock_
     assert "- C" in combined_output
     assert "- E" in combined_output
 
-def test_run_agentic_task_timeout_override(mock_shutil_which, mock_subprocess_run, tmp_path):
+def test_run_agentic_task_timeout_override(mock_shutil_which, mock_subprocess_run, mock_env, tmp_path):
     """Test that explicit timeout overrides default."""
     mock_shutil_which.return_value = "/bin/claude"
     mock_subprocess_run.return_value.returncode = 0
@@ -5006,7 +5354,7 @@ def test_run_agentic_task_retries_on_failure(mock_shutil_which, mock_subprocess_
 
     mock_subprocess_run.side_effect = [fail_response, fail_response, success_response]
 
-    with patch("pdd.agentic_common.time.sleep"):  # Don't actually sleep
+    with patch("pdd.agentic_common._retry_sleep"):  # Don't actually sleep
         success, msg, cost, provider = run_agentic_task("Do work", tmp_path, max_retries=3)
 
     assert success
@@ -5037,7 +5385,7 @@ def test_run_agentic_task_retry_backoff(mock_shutil_which, mock_subprocess_run, 
 
     mock_subprocess_run.side_effect = [fail_response, fail_response, success_response]
 
-    with patch("pdd.agentic_common.time.sleep") as mock_sleep:
+    with patch("pdd.agentic_common._retry_sleep") as mock_sleep:
         run_agentic_task("Do work", tmp_path, max_retries=3, retry_delay=5)
 
     # Verify exponential backoff: 5s after attempt 1, 10s after attempt 2 (with jitter)
@@ -5072,7 +5420,7 @@ def test_run_agentic_task_moves_to_next_after_max_retries(mock_shutil_which, moc
     # Anthropic fails 3 times (max_retries), then Google succeeds
     mock_subprocess_run.side_effect = [fail_response, fail_response, fail_response, success_response]
 
-    with patch("pdd.agentic_common.time.sleep"):
+    with patch("pdd.agentic_common._retry_sleep"):
         success, msg, cost, provider = run_agentic_task("Do work", tmp_path, max_retries=3)
 
     assert success
@@ -5441,6 +5789,34 @@ class TestCliDiscovery:
 
         result = _find_cli_binary("claude")
         assert result == str(fake_claude)
+
+    def test_find_cli_binary_skips_inaccessible_common_path(
+        self, monkeypatch, tmp_path
+    ):
+        """An unreadable common prefix should not abort later CLI discovery."""
+        from pdd import agentic_common
+
+        blocked = Path("/usr/local/bin/claude")
+        available = tmp_path / "bin" / "claude"
+        available.parent.mkdir()
+        available.write_text("#!/bin/sh\nexit 0\n")
+        available.chmod(0o755)
+        original_exists = Path.exists
+
+        def permission_guard(path: Path) -> bool:
+            if path == blocked:
+                raise PermissionError(13, "Permission denied", str(path))
+            return original_exists(path)
+
+        monkeypatch.setattr("shutil.which", lambda _name: None)
+        monkeypatch.setattr(Path, "exists", permission_guard)
+        monkeypatch.setattr(
+            agentic_common,
+            "_iter_common_cli_paths",
+            lambda _name: iter((blocked, available)),
+        )
+
+        assert agentic_common._find_cli_binary("claude", config={}) == str(available)
 
     def test_find_cli_binary_pddrc_override(self, monkeypatch, tmp_path):
         """.pddrc agentic.claude_path should take precedence."""
@@ -6022,7 +6398,7 @@ class TestAgenticDebugLogging:
         from itertools import count
         time_iter = iter(count(start=1000.0, step=200.0))  # each call advances 200s
         with patch("pdd.agentic_common.time.time", side_effect=lambda: next(time_iter)), \
-             patch("pdd.agentic_common.time.sleep"):
+             patch("pdd.agentic_common._retry_sleep"):
             run_agentic_task(
                 "step prompt",
                 tmp_path,
@@ -6063,7 +6439,7 @@ class TestAgenticDebugLogging:
         fail_resp = MagicMock(returncode=1, stdout="", stderr="500 Internal Server Error")
         mock_subprocess_run.side_effect = [fail_resp, fail_resp, fail_resp]
         # Skip real backoff sleeps so the test is fast
-        with patch("pdd.agentic_common.time.sleep"):
+        with patch("pdd.agentic_common._retry_sleep"):
             run_agentic_task(
                 "step prompt",
                 tmp_path,
@@ -6157,7 +6533,9 @@ class TestAgenticDebugLogging:
         assert fp_records, f"Expected false_positive record, got: {records}"
         fp = fp_records[0]
         assert fp["success"] is False
-        assert fp["response"] == "Done."  # bodies present for FP records
+        assert "prompt" not in fp
+        assert "response" not in fp
+        assert fp["response_length"] == len("Done.")
 
     def test_session_id_format(self, tmp_path):
         """Session ID should follow YYYYMMDD_HHMMSS format."""
@@ -6329,13 +6707,13 @@ def test_gemini_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_
 # CODEX_MODEL environment variable tests
 # ---------------------------------------------------------------------------
 
-def test_codex_model_env_var_passed_to_cli(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
-    """When CODEX_MODEL env var is set, --model flag is added to codex CLI command."""
+def test_codex_gpt_5_6_model_env_var_passed_to_cli(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """CODEX_MODEL=gpt-5.6 is passed as a top-level Codex CLI flag."""
     def which_side_effect(cmd):
         return "/bin/codex" if cmd == "codex" else None
     mock_shutil_which.side_effect = which_side_effect
     os.environ["OPENAI_API_KEY"] = "key"
-    os.environ["CODEX_MODEL"] = "o3-pro"
+    os.environ["CODEX_MODEL"] = "gpt-5.6"
 
     jsonl_output = [
         json.dumps({"type": "init"}),
@@ -6358,13 +6736,17 @@ def test_codex_model_env_var_passed_to_cli(mock_cwd, mock_env, mock_load_model_d
     cmd = args[0]
     assert "--model" in cmd, f"Expected --model in command, got: {cmd}"
     model_idx = cmd.index("--model")
-    assert cmd[model_idx + 1] == "o3-pro", (
-        f"Expected 'o3-pro' after --model, got: {cmd[model_idx + 1]}"
+    assert cmd[model_idx + 1] == "gpt-5.6", (
+        f"Expected 'gpt-5.6' after --model, got: {cmd[model_idx + 1]}"
+    )
+    assert model_idx < cmd.index("exec"), (
+        f"Expected --model to be a top-level flag before exec, got: {cmd}"
     )
 
 
-def test_codex_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
-    """When CODEX_MODEL env var is NOT set, no --model flag in codex CLI command."""
+def test_codex_no_model_env_var_uses_gpt_5_6_default(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """When CODEX_MODEL is unset, PDD pins the shared Codex default
+    (``gpt-5.6-sol``, the slug the Codex CLI/ChatGPT backend accepts)."""
     def which_side_effect(cmd):
         return "/bin/codex" if cmd == "codex" else None
     mock_shutil_which.side_effect = which_side_effect
@@ -6383,14 +6765,273 @@ def test_codex_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_m
     mock_subprocess.return_value.stdout = "\n".join(jsonl_output)
     mock_subprocess.return_value.stderr = ""
 
-    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+    result = run_agentic_task("Fix the bug", mock_cwd)
+    success, msg, cost, provider = result
 
     assert success
     assert provider == "openai"
 
     args, kwargs = mock_subprocess.call_args
     cmd = args[0]
-    assert "--model" not in cmd, f"Did not expect --model in command, got: {cmd}"
+    model_idx = cmd.index("--model")
+    assert cmd[model_idx + 1] == "gpt-5.6-sol"
+    assert model_idx < cmd.index("exec")
+    assert result.model_id == "", (
+        "requested CODEX_MODEL must not masquerade as provider-observed model provenance"
+    )
+
+
+def test_codex_jsonl_thread_id_resolves_provider_owned_session_model(tmp_path):
+    import pdd.agentic_common as ac
+
+    thread_id = "019f59fb-ae90-7411-b105-94d1d68445ea"
+    session_dir = tmp_path / "sessions" / "2026" / "07" / "12"
+    session_dir.mkdir(parents=True)
+    transcript = session_dir / f"rollout-test-{thread_id}.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {
+                            "id": thread_id,
+                            "model_provider": "openai",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "turn_context",
+                        "payload": {"model": "gpt-5.6-sol"},
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    parsed = ac._parse_codex_jsonl(
+        [
+            json.dumps({"type": "thread.started", "thread_id": thread_id}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "done"},
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+    )
+
+    assert parsed["thread_id"] == thread_id
+    assert ac._extract_codex_session_model(thread_id, {"CODEX_HOME": str(tmp_path)}) == (
+        "gpt-5.6-sol"
+    )
+
+
+def test_codex_provider_returns_model_from_correlated_session_transcript(tmp_path):
+    import pdd.agentic_common as ac
+
+    thread_id = "019f59fb-ae90-7411-b105-94d1d68445ea"
+    session_dir = tmp_path / "codex-home" / "sessions" / "2026" / "07" / "12"
+    session_dir.mkdir(parents=True)
+    (session_dir / f"rollout-test-{thread_id}.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {"id": thread_id, "model_provider": "openai"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "turn_context",
+                        "payload": {"model": "gpt-5.6-sol"},
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    ndjson_output = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": thread_id}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "done"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 10,
+                        "cached_input_tokens": 0,
+                    },
+                }
+            ),
+        ]
+    )
+    prompt_file = tmp_path / ".agentic_prompt_test.txt"
+    prompt_file.write_text("test prompt", encoding="utf-8")
+
+    with patch.dict(
+        os.environ,
+        {
+            "OPENAI_API_KEY": "test-key",
+            "CODEX_HOME": str(tmp_path / "codex-home"),
+            "CODEX_MODEL": "gpt-5.6-sol",
+        },
+        clear=False,
+    ), patch.object(ac, "_find_cli_binary", return_value="/usr/bin/codex"), patch.object(
+        ac, "_get_provider_cli_version", return_value="codex-cli 0.144.1"
+    ), patch.object(ac, "_subprocess_run_spooled") as mock_run_spooled:
+        mock_run_spooled.return_value = MagicMock(
+            returncode=0,
+            stdout=ndjson_output,
+            stderr="",
+        )
+        success, output, _cost, model = ac._run_with_provider(
+            "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=False
+        )
+
+    assert success is True
+    assert output == "done"
+    assert model == "gpt-5.6-sol"
+
+
+def test_codex_session_model_rejects_uncorrelated_or_non_openai_transcript(tmp_path):
+    import pdd.agentic_common as ac
+
+    thread_id = "019f59fb-ae90-7411-b105-94d1d68445ea"
+    session_dir = tmp_path / "sessions"
+    session_dir.mkdir()
+    transcript = session_dir / f"rollout-test-{thread_id}.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {"id": thread_id, "model_provider": "azure"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "turn_context",
+                        "payload": {"model": "gpt-5.6-sol"},
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert ac._extract_codex_session_model(thread_id, {"CODEX_HOME": str(tmp_path)}) is None
+
+
+# gpt-5.6-sol is the runtime-verified GPT-5.6 slug on Codex 0.144.1; the bare
+# gpt-5.6 slug is rejected by the Codex ChatGPT-account backend (HTTP 400) and
+# must never be the shared default (PR #1989 review, blocker 1 & 3).
+_CODEX_BACKEND_REJECTED_SLUGS = {"gpt-5.6"}
+
+
+def test_codex_model_default_is_runtime_verified_slug():
+    """Blocker guard: the shared Codex default forwarded to ``codex --model``
+    must be the runtime-verified GPT-5.6 slug ``gpt-5.6-sol`` and must NOT be a
+    slug the Codex ChatGPT-account backend rejects (bare ``gpt-5.6`` -> HTTP 400
+    "model is not supported ... with a ChatGPT account"). Mocked-argv tests
+    alone cannot catch a backend model rejection; see the opt-in live smoke
+    ``test_codex_default_model_live_smoke`` for real-backend proof."""
+    from pdd.routing_policy import CODEX_MODEL_DEFAULT
+    assert CODEX_MODEL_DEFAULT == "gpt-5.6-sol", CODEX_MODEL_DEFAULT
+    assert CODEX_MODEL_DEFAULT not in _CODEX_BACKEND_REJECTED_SLUGS
+
+
+@pytest.mark.skipif(
+    not (
+        shutil.which("codex")
+        and os.environ.get("PDD_CODEX_LIVE_SMOKE")
+        and os.environ.get("PDD_CODEX_LIVE_CODEX_HOME")
+    ),
+    reason=(
+        "live Codex smoke needs the codex CLI, PDD_CODEX_LIVE_SMOKE=1, "
+        "and an explicit PDD_CODEX_LIVE_CODEX_HOME containing real auth"
+    ),
+)
+@pytest.mark.uses_real_cli_detector
+def test_codex_default_model_live_smoke(tmp_path, monkeypatch):
+    """Run default and explicit Codex models through PDD's production entrypoint.
+
+    This opt-in test deliberately overrides pytest's fake ``CODEX_HOME`` only
+    for this test, using an explicit caller-provided auth directory.  Ordinary
+    tests retain the repository-wide home isolation.  Both calls enter through
+    ``run_agentic_task`` so provider discovery, PDD argv construction, Codex
+    JSONL parsing, model provenance, and explicit override handling are all
+    exercised against the real backend.
+    """
+    from pdd.routing_policy import CODEX_MODEL_DEFAULT
+
+    live_codex_home = Path(os.environ["PDD_CODEX_LIVE_CODEX_HOME"]).expanduser()
+    auth_path = live_codex_home / "auth.json"
+    assert auth_path.is_file(), f"real Codex auth file not found: {auth_path}"
+
+    override_model = (
+        os.environ.get("PDD_CODEX_LIVE_OVERRIDE_MODEL") or "gpt-5.4"
+    ).strip()
+    assert override_model
+    assert override_model != CODEX_MODEL_DEFAULT, (
+        "PDD_CODEX_LIVE_OVERRIDE_MODEL must differ from the default so the "
+        "live run proves explicit override preservation"
+    )
+
+    monkeypatch.setenv("CODEX_HOME", str(live_codex_home))
+    monkeypatch.setenv("PDD_CODEX_AUTH_AVAILABLE", "1")
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "openai")
+    monkeypatch.setenv("CODEX_SANDBOX_MODE", "read-only")
+    monkeypatch.setenv("CODEX_REASONING_EFFORT", "low")
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+
+    # Production PDD agentic workflows run inside a repository.  Give the
+    # isolated smoke cwd that same invariant so Codex's trusted-directory gate
+    # is exercised normally instead of bypassed with --skip-git-repo-check.
+    subprocess.run(
+        ["git", "init", "-q"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    default_sentinel = "PDD_DEFAULT_SMOKE_OK_MODEL_GPT_5_6_SOL"
+    default_result = run_agentic_task(
+        f"Reply with exactly: {default_sentinel}",
+        tmp_path,
+        timeout=240,
+        single_provider_attempt=True,
+        label="codex-live-default",
+    )
+    assert default_result.success, default_result.output_text
+    assert default_result.output_text.strip() == default_sentinel
+    assert default_result.provider == "openai"
+    assert default_result.model_id == CODEX_MODEL_DEFAULT
+
+    monkeypatch.setenv("CODEX_MODEL", override_model)
+    override_sentinel = "PDD_EXPLICIT_OVERRIDE_SMOKE_OK"
+    override_result = run_agentic_task(
+        f"Reply with exactly: {override_sentinel}",
+        tmp_path,
+        timeout=240,
+        single_provider_attempt=True,
+        label="codex-live-explicit-override",
+    )
+    assert override_result.success, override_result.output_text
+    assert override_result.output_text.strip() == override_sentinel
+    assert override_result.provider == "openai"
+    assert override_result.model_id == override_model
 
 
 # ---------------------------------------------------------------------------
@@ -8084,7 +8725,7 @@ def test_deadline_skips_attempt_when_insufficient_time(tmp_path):
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
-         patch("time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         mock_run.return_value = MagicMock(
             returncode=1, stdout="", stderr="fail"
         )
@@ -8099,13 +8740,13 @@ def test_deadline_skips_attempt_when_insufficient_time(tmp_path):
     mock_run.assert_not_called()
 
 
-def test_deadline_caps_per_attempt_timeout(tmp_path):
+def test_deadline_caps_per_attempt_timeout(mock_env, tmp_path):
     """Per-attempt timeout is capped to remaining budget minus margin."""
     deadline = time.time() + 300  # 300s left; after 120s margin → 180s available
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
-         patch("time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=json.dumps({"result": "ok", "total_cost_usd": 0.01}),
@@ -8125,12 +8766,12 @@ def test_deadline_caps_per_attempt_timeout(tmp_path):
     assert actual_timeout <= 185  # 300 - 120 + small tolerance
 
 
-def test_no_deadline_preserves_default_timeout(tmp_path):
+def test_no_deadline_preserves_default_timeout(mock_env, tmp_path):
     """Without deadline, default timeout is used."""
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
-         patch("time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=json.dumps({"result": "ok", "total_cost_usd": 0.01}),
@@ -8156,7 +8797,7 @@ def test_deadline_from_env_used_when_param_not_passed(tmp_path):
     }, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
-         patch("time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         mock_run.return_value = MagicMock(
             returncode=1, stdout="", stderr="fail"
         )
@@ -8590,7 +9231,7 @@ def test_issue557_full_chain_modern_codex_false_positive(tmp_path):
          patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
          patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled, \
-         patch("time.sleep"):  # Skip retry delays
+         patch("pdd.agentic_common._retry_sleep"):  # Skip retry delays
         # Issue #1646: openai routes through the spooled runner.
         mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
@@ -8644,7 +9285,7 @@ def test_codex_turn_completed_usage_parsed_for_cost(tmp_path):
          patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
          patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled, \
-         patch("time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         # Issue #1646: openai routes through the spooled runner.
         mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
@@ -9525,6 +10166,76 @@ def test_git_work_tree_matches_subprocess_cwd(mock_cwd, mock_env, mock_load_mode
         f"GIT_WORK_TREE ({env_passed['GIT_WORK_TREE']}) != cwd ({cwd_passed})"
     )
 
+
+def test_run_agentic_task_can_strip_git_worktree_env_for_nested_repo_tests(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+):
+    """Checkup can disable git env inheritance so nested `git init` tests work."""
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ["GIT_WORK_TREE"] = "/some/other/repo"
+    os.environ["GIT_DIR"] = "/some/other/repo/.git"
+    os.environ["GIT_INDEX_FILE"] = "/some/other/repo/.git/index"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    run_agentic_task("instruction", mock_cwd, set_git_work_tree=False)
+
+    _args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    assert "GIT_WORK_TREE" not in env_passed
+    assert "GIT_DIR" not in env_passed
+    assert "GIT_INDEX_FILE" not in env_passed
+
+
+def test_run_agentic_task_combines_background_safe_with_stripped_git_env(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+):
+    """The two keyword policies remain independent after their merge."""
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ["PDD_CLAUDE_CODE_MODE"] = "interactive"
+    os.environ["GIT_WORK_TREE"] = "/some/other/repo"
+    os.environ["GIT_DIR"] = "/some/other/repo/.git"
+    os.environ["GIT_INDEX_FILE"] = "/some/other/repo/.git/index"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.agentic_common._run_claude_interactive_with_mcp") as bridge:
+        result = run_agentic_task(
+            "instruction",
+            mock_cwd,
+            set_git_work_tree=False,
+            background_safe=True,
+        )
+
+    assert result.success is True
+    bridge.assert_not_called()
+    _args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    assert "GIT_WORK_TREE" not in env_passed
+    assert "GIT_DIR" not in env_passed
+    assert "GIT_INDEX_FILE" not in env_passed
+
+
 # -----------------------------------------------------------------------------
 # Scope Guard Tests (_revert_out_of_scope_changes)
 # -----------------------------------------------------------------------------
@@ -10397,7 +11108,7 @@ class TestProviderLimitMarker:
             "pdd.agentic_common.get_available_agents",
             return_value=["anthropic"],
         ), patch(
-            "pdd.agentic_common.time.sleep",
+            "pdd.agentic_common._retry_sleep",
         ), patch(
             "pdd.agentic_common._run_with_provider",
             return_value=(False, "Error: api_error_status: 429 rate limit exceeded", 0.0, "claude-opus-4-8", None),
@@ -10425,7 +11136,7 @@ class TestProviderLimitMarker:
             "pdd.agentic_common.get_available_agents",
             return_value=["anthropic"],
         ), patch(
-            "pdd.agentic_common.time.sleep",
+            "pdd.agentic_common._retry_sleep",
         ), patch(
             "pdd.agentic_common._run_with_provider",
             side_effect=attempts,
@@ -10501,6 +11212,10 @@ class TestIssue1072FailureLogging:
         assert entry["success"] is False, (
             f"Expected failure log entry, got success={entry['success']}"
         )
+        assert "prompt" not in entry
+        assert "response" not in entry
+        assert entry["prompt_length"] > 0
+        assert entry["response_length"] > 0
 
     # Issue #1376 update: success now ALSO writes a record without --verbose,
     # but as a summary (no full prompt/response bodies). Inverts the original
@@ -10622,7 +11337,7 @@ def test_false_positive_retries_in_single_provider_config(mock_cwd, mock_env, mo
         MagicMock(returncode=0, stdout=real_response, stderr=""),
     ]
 
-    with patch("pdd.agentic_common.time.sleep") as mock_sleep:
+    with patch("pdd.agentic_common._retry_sleep") as mock_sleep:
         success, msg, cost, provider = run_agentic_task(
             "Fix the bug",
             mock_cwd,
@@ -10678,7 +11393,7 @@ def test_false_positive_falls_through_in_multi_provider_config(mock_cwd, mock_en
         MagicMock(returncode=0, stdout=real_google, stderr=""),
     ]
 
-    with patch("pdd.agentic_common.time.sleep"):
+    with patch("pdd.agentic_common._retry_sleep"):
         success, msg, cost, provider = run_agentic_task(
             "Fix the bug",
             mock_cwd,
@@ -10756,6 +11471,144 @@ def test_codex_without_effort_env_unchanged(
     cmd = _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, None)
     assert "-c" not in cmd
     assert "model_reasoning_effort" not in " ".join(cmd)
+
+
+def test_exact_agentic_task_observes_model_usage_and_effort_at_codex_boundary(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Exact selectors reach one OAuth Codex invocation with no API-key fallback."""
+    mock_env["OPENAI_API_KEY"] = "sk-must-not-reach-codex"
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value = MagicMock(
+        returncode=0,
+        stdout=json.dumps({
+            "type": "result",
+            "result": "Exact repair output",
+            "model": "gpt-5.6-sol",
+            "usage": {
+                "input_tokens": 101,
+                "output_tokens": 23,
+                "cached_input_tokens": 11,
+            },
+        }),
+        stderr="",
+    )
+
+    with patch(
+        "pdd.agentic_common._codex_gpt_5_6_version_error", return_value=None
+    ), patch(
+        "pdd.agentic_common._get_provider_cli_version", return_value="0.144.0"
+    ), patch(
+        "pdd.codex_subscription.has_codex_subscription_auth", return_value=True
+    ):
+        result = run_exact_agentic_task(
+            "repair this prompt",
+            mock_cwd,
+            provider="openai",
+            model="gpt-5.6-sol",
+            effort="xhigh",
+            quiet=True,
+        )
+
+    assert result.success is True
+    assert result.model_id == "gpt-5.6-sol"
+    assert result.cost_usd == 0.0
+    assert result.usage == {
+        "input_tokens": 101,
+        "output_tokens": 23,
+        "cached_input_tokens": 11,
+    }
+    cmd = mock_subprocess.call_args.args[0]
+    subprocess_env = mock_subprocess.call_args.kwargs["env"]
+    assert cmd[cmd.index("--model") + 1] == "gpt-5.6-sol"
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=xhigh"
+    assert cmd[cmd.index("--sandbox") + 1] == "read-only"
+    assert "--skip-git-repo-check" in cmd
+    assert subprocess_env["CODEX_MODEL"] == "gpt-5.6-sol"
+    assert subprocess_env["CODEX_REASONING_EFFORT"] == "xhigh"
+    assert "OPENAI_API_KEY" not in subprocess_env
+
+
+def test_exact_agentic_task_without_subscription_auth_fails_before_inference(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    mock_env["OPENAI_API_KEY"] = "sk-api-only"
+    with patch(
+        "pdd.codex_subscription.has_codex_subscription_auth", return_value=False
+    ):
+        result = run_exact_agentic_task(
+            "repair",
+            mock_cwd,
+            provider="openai",
+            model="gpt-5.6-sol",
+            effort="high",
+            quiet=True,
+        )
+
+    assert result.success is False
+    assert "requires staged ChatGPT subscription OAuth" in result.output_text
+    mock_subprocess.assert_not_called()
+
+
+def test_exact_agentic_task_fails_when_provider_observes_different_model(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value = MagicMock(
+        returncode=0,
+        stdout=json.dumps({
+            "type": "result",
+            "result": "output",
+            "model": "gpt-5.5",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }),
+        stderr="",
+    )
+    with patch(
+        "pdd.agentic_common._codex_gpt_5_6_version_error", return_value=None
+    ), patch(
+        "pdd.agentic_common._get_provider_cli_version", return_value="0.144.0"
+    ), patch(
+        "pdd.codex_subscription.has_codex_subscription_auth", return_value=True
+    ):
+        result = run_exact_agentic_task(
+            "repair",
+            mock_cwd,
+            provider="openai",
+            model="gpt-5.6-sol",
+            effort="high",
+            quiet=True,
+        )
+
+    assert result.success is False
+    assert result.model_id == "gpt-5.5"
+    assert "requested gpt-5.6-sol, provider observed gpt-5.5" in result.output_text
+
+
+def test_ambient_cost_mode_cannot_zero_ordinary_codex_execution(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Only the route-owned argument can select subscription billing semantics."""
+    mock_env["PDD_CODEX_COST_MODE"] = "subscription"
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value = MagicMock(
+        returncode=0,
+        stdout=json.dumps({
+            "type": "result",
+            "result": "ordinary output",
+            "model": "gpt-5.5",
+            "usage": {"input_tokens": 100, "output_tokens": 50},
+        }),
+        stderr="",
+    )
+    prompt = mock_cwd / "prompt.txt"
+    prompt.write_text("hello", encoding="utf-8")
+
+    result = _run_with_provider(
+        "openai", prompt, mock_cwd, cli_path="/bin/codex", quiet=True
+    )
+
+    assert result[2] > 0.0
 
 
 def test_codex_invalid_effort_value_ignored(
@@ -11335,7 +12188,7 @@ def test_issue1232_substantive_output_with_error_substring_not_demoted(
     mock_subprocess.return_value.stderr = ""
 
     with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
-         patch("pdd.agentic_common.time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         success, msg, cost, provider = run_agentic_task(
             "instruction", mock_cwd, max_retries=1
         )
@@ -11389,7 +12242,7 @@ def test_issue1232_multi_provider_does_not_fall_through_for_substantive_openai_o
 
     with patch("pdd.agentic_common.get_agent_provider_preference",
                return_value=["openai", "anthropic"]), \
-         patch("pdd.agentic_common.time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         success, msg, cost, provider = run_agentic_task(
             "instruction", mock_cwd, max_retries=1
         )
@@ -11435,7 +12288,7 @@ def test_issue1232_long_output_with_error_substring_still_passes(
     mock_subprocess.return_value.stderr = ""
 
     with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
-         patch("pdd.agentic_common.time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         success, msg, cost, provider = run_agentic_task(
             "instruction", mock_cwd, max_retries=1
         )
@@ -11466,7 +12319,7 @@ def test_issue1232_empty_output_branch_still_detects_false_positive(
     mock_subprocess.return_value.stderr = ""
 
     with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["anthropic"]), \
-         patch("pdd.agentic_common.time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         success, msg, _cost, provider = run_agentic_task(
             "instruction", mock_cwd, max_retries=1
         )
@@ -11502,7 +12355,7 @@ def test_issue1232_zero_cost_short_output_branch_still_detects_false_positive(
     mock_subprocess.return_value.stderr = ""
 
     with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["anthropic"]), \
-         patch("pdd.agentic_common.time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         success, msg, _cost, provider = run_agentic_task(
             "instruction", mock_cwd, max_retries=1
         )
@@ -11542,7 +12395,7 @@ def test_issue1232_leading_error_prefix_response_still_detects_false_positive(
     mock_subprocess.return_value.stderr = ""
 
     with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
-         patch("pdd.agentic_common.time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         success, msg, _cost, provider = run_agentic_task(
             "instruction", mock_cwd, max_retries=1
         )
@@ -11592,7 +12445,7 @@ def test_issue1232_substantive_finding_starting_with_error_prefix_not_demoted(
     mock_subprocess.return_value.stderr = ""
 
     with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
-         patch("pdd.agentic_common.time.sleep"):
+         patch("pdd.agentic_common._retry_sleep"):
         success, msg, cost, provider = run_agentic_task(
             "instruction", mock_cwd, max_retries=1
         )
@@ -12275,7 +13128,7 @@ class TestIssue814BillingErrorsPermanent:
 
         mock_subprocess_run.side_effect = [anthropic_failure, google_success]
 
-        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+        with patch("pdd.agentic_common._retry_sleep") as sleep_mock:
             success, msg, cost, provider = run_agentic_task(
                 "Do work", tmp_path, max_retries=3, retry_delay=5
             )
@@ -12319,7 +13172,7 @@ class TestIssue814BillingErrorsPermanent:
 
         mock_subprocess_run.side_effect = [anthropic_failure, google_success]
 
-        with patch("pdd.agentic_common.time.sleep"):
+        with patch("pdd.agentic_common._retry_sleep"):
             success, *_ = run_agentic_task(
                 "Do work", tmp_path, max_retries=3, retry_delay=5
             )
@@ -12387,7 +13240,7 @@ class TestIssue814BillingErrorsPermanent:
 
         mock_subprocess_run.side_effect = [anthropic_failure, google_success]
 
-        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+        with patch("pdd.agentic_common._retry_sleep") as sleep_mock:
             success, _output, _cost, provider = run_agentic_task(
                 "Do work", tmp_path, max_retries=3, retry_delay=5, quiet=True
             )
@@ -12474,7 +13327,7 @@ class TestIssue814BillingErrorsPermanent:
         real_console = RealConsole(file=capture, force_terminal=False, no_color=True)
 
         with patch("pdd.agentic_common.console", real_console), \
-                patch("pdd.agentic_common.time.sleep"):
+                patch("pdd.agentic_common._retry_sleep"):
             success, _output, _cost, provider = run_agentic_task(
                 "Do work", tmp_path, max_retries=3, retry_delay=5
             )
@@ -12554,7 +13407,7 @@ class TestIssue814BillingErrorsPermanent:
 
         mock_subprocess_run.side_effect = [anthropic_400, google_success]
 
-        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+        with patch("pdd.agentic_common._retry_sleep") as sleep_mock:
             success, msg, cost, provider = run_agentic_task(
                 "Do work", tmp_path, max_retries=3, retry_delay=5
             )
@@ -13251,8 +14104,9 @@ def test_openai_codex_jsonl_spooled_parses_large_transcript(tmp_path, mock_env):
     assert success is True, text
     assert text == "Final answer."
     assert actual_model == "gpt-5"
-    # 1M input + 1M output at $1.50/$6.00 per M -> 7.50
-    assert abs(cost - 7.50) < 0.0001
+    # Provider-observed GPT-5 wins over the GPT-5.6 request/default fallback:
+    # 1M input + 1M output at $1.25/$10.00 per M -> 11.25.
+    assert abs(cost - 11.25) < 0.0001
 
 
 def test_openai_codex_spooled_error_extracted(tmp_path, mock_env):

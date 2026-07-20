@@ -1,0 +1,45 @@
+{
+  "scenario_id": "pdd-failure-classification",
+  "schema_version": 1,
+  "language": "python",
+  "purpose": "real PDD pilot scenario 2/3 (design §4.1.0): dependency-sliced pdd.failure_classification with a seeded triage-precedence defect",
+  "upstream": {
+    "repo": "github.com/promptdriven/pdd",
+    "pinned_commit": "4056cfecab558cf6a8e29072e4f3796ddda6fa7b",
+    "target_upstream_path": "pdd/failure_classification.py",
+    "visible_tests_upstream_path": "tests/test_failure_classification.py",
+    "subsystem": "fix-loop failure triage (pdd.fix_error_loop consumer)"
+  },
+  "core_path": "core",
+  "pool_path": "pool",
+  "target_files": ["src/pdd/failure_classification.py"],
+  "allowed_edit_globs": ["src/pdd/**"],
+  "task_brief_path": "task.md",
+  "visible_tests": {
+    "command": ["{python}", "-m", "pytest", "tests/visible", "-q"],
+    "expected_exit_code": 0
+  },
+  "hidden_verifier": {
+    "path": "hidden",
+    "command": ["{python}", "-m", "pytest", ".", "-q"],
+    "mounted_into_agent_sandbox": false
+  },
+  "oracle_edit": {
+    "file": "src/pdd/failure_classification.py",
+    "old": "    if _SYNTAX_IMPORT_PATTERN.search(text):\n        return FailureKind.SYNTAX_IMPORT\n    if _TIMEOUT_PATTERN.search(lowered):\n        return FailureKind.TIMEOUT_FLAKY",
+    "new": "    if _TIMEOUT_PATTERN.search(lowered):\n        return FailureKind.TIMEOUT_FLAKY\n    if _SYNTAX_IMPORT_PATTERN.search(text):\n        return FailureKind.SYNTAX_IMPORT"
+  },
+  "seed": {
+    "target_site": "src/pdd/failure_classification.py:classify_failure (marker-precedence cascade)",
+    "bug_class": "precedence_inversion",
+    "description": "syntax/import markers are checked before timeout markers, so logs containing both (a run that times out during import/collection) misclassify as SYNTAX_IMPORT; visible tests exercise only single-marker logs"
+  },
+  "leak_denylist": [
+    "classify_failure(text) == FailureKind.TIMEOUT_FLAKY",
+    "timeout wins",
+    "wins over",
+    "ERROR collecting tests/test_slow.py",
+    "No module named 'heavy_dep'",
+    "deadline exceeded while importing"
+  ]
+}

@@ -274,8 +274,57 @@ pdd detect --stories --include-llm       # also validate against *_llm.prompt ru
 ```
 
 Story mode prints PASS/FAIL for each story and exits non-zero if any story
-fails. `--output` is not supported with `--stories`; use `--evidence` when CI
-needs a machine-readable run manifest.
+fails. `--output` is the standard detector's CSV option and is not supported
+with `--stories`. Hosted and CI callers should use the explicit structured form:
+
+```bash
+pdd detect --stories \
+  --stories-dir user_stories \
+  --prompts-dir prompts \
+  --include-llm \
+  --no-fail-fast \
+  --json
+
+# Or atomically replace an explicit result artifact, with no JSON on stdout:
+pdd detect --stories --stories-dir user_stories --prompts-dir prompts \
+  --no-fail-fast --json-output /tmp/story-result.json
+```
+
+For hosted or monorepo validation where directory discovery would be too broad,
+use an exact scope manifest. The manifest is resolved relative to the project
+root and must use schema `pdd.detect.stories.scope.v1`:
+
+```json
+{
+  "schema_version": "pdd.detect.stories.scope.v1",
+  "stories": [
+    {
+      "story": "user_stories/story__refund.md",
+      "contract": "user_stories/contracts/refund.contract.md",
+      "prompts": ["extensions/payments/prompts/refund_python.prompt"]
+    }
+  ]
+}
+```
+
+Run it with `pdd detect --stories --scope-manifest .pdd/story-scope.json
+--json`. Manifest mode is always read-only and non-interactive (even without
+`--json`), evaluates exactly the listed regular files, and does not
+discover additional stories or prompts. Absolute paths, `..` traversal,
+symlink escapes (including otherwise in-root symlinks), duplicate stories,
+contracts, or prompts, duplicate JSON keys, unknown fields, missing files,
+empty prompt sets, and non-regular files are rejected with configuration exit 2.
+Story prompt metadata must resolve to the
+manifest's listed prompt set, otherwise the result is `UNKNOWN` and fails
+closed.
+
+Structured mode emits schema `pdd.detect.stories.v1`, implies `--read-only` and
+`--non-interactive`, and never uses `.pdd/core_dumps` as its result channel.
+Each scoped story has one `PASS`, `FAIL`, or `UNKNOWN` verdict. `UNKNOWN` is
+fail-closed and means evaluation could not establish a trustworthy semantic
+answer. Exit codes are stable: 0 all pass, 1 semantic story failure, 2 invalid
+scope/configuration, and 3 authentication/provider/timeout failure. Human
+output remains the default when neither structured-output option is present.
 
 When a story fails, the output names every linked prompt that was evaluated,
 describes the missing or stale behavior, and suggests the exact command to

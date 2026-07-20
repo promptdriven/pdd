@@ -103,6 +103,7 @@ RELEASE_VIDEO_ATTEMPT_ID ?=
 RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT ?= 0
 RELEASE_VIDEO_FORCE_REGENERATE ?= 0
 RELEASE_VIDEO_METADATA_CONFLICT ?=
+RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID ?=
 RELEASE_VIDEO_STATUS_QUERY ?= 0
 RELEASE_VIDEO_YOUTUBE_URL ?=
 RELEASE_VIDEO_SKIP_REASON ?=
@@ -110,7 +111,7 @@ RELEASE_VIDEO_PDS_CREATE_TIMEOUT ?= 1800
 RELEASE_VIDEO_CLAUDE_MODEL ?= claude-opus-4-8
 RELEASE_VIDEO_PDS_CLAUDE_MODEL ?= glm-5.2
 CLAUDE_CLI ?= claude
-PDS_CLI ?= npx -y @promptdriven/pds@0.1.7 --timeout 120s
+PDS_CLI ?= npx -y @promptdriven/pds@0.1.11 --timeout 120s
 ifeq ($(strip $(RELEASE_VIDEO_CLAUDE_MODEL)),)
 override RELEASE_VIDEO_CLAUDE_MODEL := claude-opus-4-8
 endif
@@ -118,7 +119,7 @@ ifeq ($(strip $(CLAUDE_CLI)),)
 override CLAUDE_CLI := claude
 endif
 ifeq ($(strip $(PDS_CLI)),)
-override PDS_CLI := npx -y @promptdriven/pds@0.1.7 --timeout 120s
+override PDS_CLI := npx -y @promptdriven/pds@0.1.11 --timeout 120s
 endif
 PDS_API_URL ?= https://video.promptdriven.ai
 SOPS ?= sops
@@ -607,8 +608,13 @@ GCS_BUCKET ?= pdd-stg-ci-results
 AR_IMAGE := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/pdd-ci/pdd-test
 
 # Files baked into the Docker image — changes to these require a rebuild
-CLOUD_IMAGE_DEPS := requirements.txt pyproject.toml $(CLOUD_BATCH_DIR)/entrypoint.sh $(CLOUD_BATCH_DIR)/Dockerfile
+CLOUD_IMAGE_DEPS := requirements.txt pyproject.toml $(CLOUD_BATCH_DIR)/entrypoint.sh $(CLOUD_BATCH_DIR)/runtime-secrets.py $(CLOUD_BATCH_DIR)/firebase-token-exchange.py $(CLOUD_BATCH_DIR)/source-identity.py $(CLOUD_BATCH_DIR)/Dockerfile
 CLOUD_IMAGE_HASH_FILE := .cloud-image-hash
+CLOUD_IMAGE_HASH ?= $(shell cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1)
+
+.PHONY: cloud-image-hash
+cloud-image-hash:
+	@cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1
 
 # Smart run: auto-detects whether image rebuild is needed
 cloud-test:
@@ -616,7 +622,7 @@ cloud-test:
 	STORED_HASH=$$(cat $(CLOUD_IMAGE_HASH_FILE) 2>/dev/null || echo "none"); \
 	if [ "$$CURRENT_HASH" != "$$STORED_HASH" ]; then \
 		echo "Image deps changed — rebuilding via Cloud Build"; \
-		$(MAKE) cloud-test-build; \
+		$(MAKE) cloud-test-build CLOUD_IMAGE_HASH=$$CURRENT_HASH; \
 	else \
 		echo "Image deps unchanged — skipping rebuild"; \
 	fi
@@ -633,7 +639,7 @@ cloud-test-build:
 	@echo "Submitting build to Cloud Build"
 	@gcloud builds submit \
 		--config=$(CLOUD_BATCH_DIR)/cloudbuild.yaml \
-		--substitutions=_AR_IMAGE=$(AR_IMAGE) \
+		--substitutions=_AR_IMAGE=$(AR_IMAGE),_IMAGE_TAG=deps-$(CLOUD_IMAGE_HASH) \
 		--project=$(GCP_PROJECT_ID) \
 		.
 	@cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1 > $(CLOUD_IMAGE_HASH_FILE)
@@ -882,6 +888,7 @@ release-video:
 	RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT="$(RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT)" \
 	RELEASE_VIDEO_FORCE_REGENERATE="$(RELEASE_VIDEO_FORCE_REGENERATE)" \
 	RELEASE_VIDEO_METADATA_CONFLICT="$(RELEASE_VIDEO_METADATA_CONFLICT)" \
+	RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID="$(RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID)" \
 	RELEASE_VIDEO_PDS_CREATE_TIMEOUT="$(RELEASE_VIDEO_PDS_CREATE_TIMEOUT)" \
 	RELEASE_VIDEO_RELEASE_NOTES_PATH="$(RELEASE_VIDEO_RELEASE_NOTES_PATH)" \
 	python scripts/release_video.py \

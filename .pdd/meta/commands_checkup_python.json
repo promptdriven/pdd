@@ -1,22 +1,22 @@
 {
-  "pdd_version": "0.0.288.dev0",
-  "timestamp": "2026-06-26T22:58:40.738135+00:00",
+  "pdd_version": "0.0.305.dev0",
+  "timestamp": "2026-07-13T20:59:22.041197+00:00",
   "command": "test",
-  "prompt_hash": "f26cc513b81c467f58c2bbf0b79d1186904a48d7d801faa69302ac59eba64f39",
-  "code_hash": "0b7936aabeb40dd4eb0bde84d3693b8df3b5f423b3514b740b4fa4140a64ee6e",
+  "prompt_hash": "b453bb71475123c5545a37dd23bbff9f057d960b775c0e977151ee98a9b976e0",
+  "code_hash": "030d743206850aceb003eaff9a92c6efb40c12e84404ea1eeb2c67c90e85f70a",
   "example_hash": "847008502198ff360190831172d5d6cc6de6e5e76d3782d2b53823297a5b1349",
-  "test_hash": "790c9e6532de75e9b2b4b1912a61c4fdcea229568cd40572245f06a1985be628",
+  "test_hash": "1550d2a6275603bb7fd35178f7d150b893434105d645639b720db4b19eb02bb0",
   "test_files": {
-    "test_checkup.py": "790c9e6532de75e9b2b4b1912a61c4fdcea229568cd40572245f06a1985be628",
+    "test_checkup.py": "1550d2a6275603bb7fd35178f7d150b893434105d645639b720db4b19eb02bb0",
     "test_checkup_contracts.py": "084bbe8a423e7b2aa151bc5138837ade7f8e77790e8f7222baa4b37ba0dd6279",
     "test_checkup_interactive_demo.py": "77a9127e209175c38189e1cfd6476994493dc428bdf0054412e7476ba782cfb6",
     "test_checkup_simplify.py": "2a80956f21f2873e3eb48a113c6f756019db9e9b74b8a5e91e9052648caf8707"
   },
   "include_deps": {
-    "context/agentic_checkup_orchestrator_example.py": "295a9ae294e22224d3c447f13c462854bfe4e526cebc89bcbba417ea514c7ef2",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
-    "context/agentic_sync_example.py": "9bcc2f199a1463e8c424d8210ea6d5f34ad6fb5fcb1022aa879a9ecba0f8d5d6",
     "context/architecture_sync_example.py": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
-    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+    "context/agentic_checkup_orchestrator_example.py": "295a9ae294e22224d3c447f13c462854bfe4e526cebc89bcbba417ea514c7ef2",
+    "context/agentic_sync_example.py": "aa9683f1a26841f3cae854e72cce38636f0859d8dd2f7672fa14e412afdef884"
   }
 }

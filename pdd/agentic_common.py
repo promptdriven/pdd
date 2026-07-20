@@ -5,6 +5,7 @@ import functools
 import errno
 import hashlib
 import importlib.resources
+import io
 import logging
 import os
 import signal
@@ -14,6 +15,7 @@ import secrets
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 import re
@@ -21,13 +23,14 @@ import random
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 from enum import Enum
 
 from rich.console import Console
 
 from pdd.routing_policy import (
+    CODEX_MODEL_DEFAULT,
     RoutingConfig,
     RoutingPolicy,
     RoutingRecord,
@@ -37,14 +40,69 @@ from pdd.routing_policy import (
     select_config,
 )
 
+# Bind once so retry tests can patch this seam without replacing the
+# process-wide ``time.sleep`` used by unrelated worker threads.
+_retry_sleep: Callable[[float], None] = time.sleep
+
 _steer_logger = logging.getLogger(__name__ + ".steer")
 
-AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
+AgenticUsage = Optional[Dict[str, Any]]
 ClaudePolicy = Dict[str, Any]
 UsageSource = str
 _HARNESS_CAPABILITIES_CACHE: Optional[Dict[str, Any]] = None
 TaskClass = Literal["single_file", "multi_file", "repo_scale", "high_isolation"]
 _FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
+_PROVIDER_FAILURE_SINK_ENV = "PDD_PROVIDER_FAILURE_SINK"
+_PROVIDER_FAILURE_TOKEN_ENV = "PDD_PROVIDER_FAILURE_TOKEN"
+_PROVIDER_FAILURE_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,256}")
+
+
+def _consume_provider_failure_sink() -> Optional[Tuple[Path, str]]:
+    raw_path = os.environ.pop(_PROVIDER_FAILURE_SINK_ENV, "")
+    token = os.environ.pop(_PROVIDER_FAILURE_TOKEN_ENV, "")
+    path = Path(raw_path) if raw_path else None
+    if (
+        path is None
+        or not path.is_absolute()
+        or path.exists()
+        or not path.parent.is_dir()
+        or not _PROVIDER_FAILURE_TOKEN_RE.fullmatch(token)
+    ):
+        return None
+    return path, token
+
+
+def _publish_provider_failure_sink(
+    sink: Optional[Tuple[Path, str]], failure: object
+) -> None:
+    if sink is None or not isinstance(failure, tuple) or len(failure) != 2:
+        return
+    path, token = sink
+    provider, reason = failure
+    if provider not in _PROVIDER_ENVIRONMENT_PROVIDERS:
+        return
+    if reason not in _PROVIDER_ENVIRONMENT_REASONS:
+        return
+    temp_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    payload = {
+        "version": 1,
+        "kind": "provider_environment_failure",
+        "token": token,
+        "provider": provider,
+        "reason": reason,
+    }
+    try:
+        descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, separators=(",", ":"), ensure_ascii=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, path)
+    except OSError:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 class EffortCapability(str, Enum):
@@ -199,6 +257,7 @@ def _provider_harness_id(provider: str) -> str:
 
 
 _PROVIDER_CLI_VERSION_CACHE: Dict[str, str] = {}
+_CODEX_GPT_5_6_MIN_VERSION: Tuple[int, int, int] = (0, 144, 0)
 
 
 def _provider_cli_binary_name(provider: str) -> Optional[str]:
@@ -247,6 +306,33 @@ def _get_provider_cli_version(provider: str) -> str:
             version = ""
     _PROVIDER_CLI_VERSION_CACHE[provider] = version
     return version
+
+
+def _codex_gpt_5_6_version_error(
+    model: str,
+    version_output: Optional[str] = None,
+) -> Optional[str]:
+    """Return an upgrade diagnostic when a known-old Codex CLI selects GPT-5.6."""
+    if not str(model or "").strip().lower().startswith("gpt-5.6"):
+        return None
+    raw_version = (
+        _get_provider_cli_version("openai")
+        if version_output is None
+        else str(version_output)
+    )
+    match = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", raw_version)
+    if match is None:
+        # Custom wrappers may not expose a parseable version. Preserve their
+        # existing runtime behavior and let the CLI surface any model error.
+        return None
+    installed = tuple(int(part) for part in match.groups())
+    if installed >= _CODEX_GPT_5_6_MIN_VERSION:
+        return None
+    return (
+        f"GPT-5.6 requires Codex CLI >= 0.144.0, but '{raw_version.strip()}' "
+        "is installed. Upgrade with `npm install -g @openai/codex@latest` "
+        "and retry."
+    )
 
 
 def _publish_agentic_model_provenance(
@@ -1165,6 +1251,7 @@ class AgenticTaskResult(tuple):
         cli_version: str = "",
         model_id: Optional[str] = None,
         cumulative_cost_usd: Optional[float] = None,
+        provider_environment_failure: Optional[Tuple[str, str]] = None,
     ) -> "AgenticTaskResult":
         result = tuple.__new__(
             cls,
@@ -1176,6 +1263,7 @@ class AgenticTaskResult(tuple):
         result._cli_version = cli_version
         result._model_id = model_id
         result._cumulative_cost_usd = cost_usd if cumulative_cost_usd is None else cumulative_cost_usd
+        result._provider_environment_failure = provider_environment_failure
         return result
 
     def __iter__(self):
@@ -1225,6 +1313,11 @@ class AgenticTaskResult(tuple):
     def cumulative_cost_usd(self) -> float:
         return float(getattr(self, "_cumulative_cost_usd", self.cost_usd))
 
+    @property
+    def provider_environment_failure(self) -> Optional[Tuple[str, str]]:
+        """Trusted in-process provider/runtime classification, when present."""
+        return getattr(self, "_provider_environment_failure", None)
+
     def meets_usage_contract(self) -> bool:
         """True when this result has comparable cost/usage for E[pass]-λ·cost routing."""
         return _meets_usage_contract(self)
@@ -1260,8 +1353,22 @@ class _ProviderRunResult(tuple):
         usage: AgenticUsage = None,
         requested_effort: Optional[str] = None,
         effective_effort: Optional[str] = None,
+        provider_environment_reason: Optional[str] = None,
     ) -> "_ProviderRunResult":
-        return tuple.__new__(cls, (success, output_text, cost_usd, model, usage, requested_effort, effective_effort))
+        result = tuple.__new__(
+            cls,
+            (
+                success,
+                output_text,
+                cost_usd,
+                model,
+                usage,
+                requested_effort,
+                effective_effort,
+            ),
+        )
+        result._provider_environment_reason = provider_environment_reason
+        return result
 
     def __iter__(self):
         return (tuple.__getitem__(self, i) for i in range(4))
@@ -1277,6 +1384,10 @@ class _ProviderRunResult(tuple):
     @property
     def effective_effort(self) -> Optional[str]:
         return tuple.__getitem__(self, 6)
+
+    @property
+    def provider_environment_reason(self) -> Optional[str]:
+        return getattr(self, "_provider_environment_reason", None)
 
 
 @dataclass
@@ -2681,6 +2792,7 @@ def _parse_codex_jsonl(lines) -> Dict[str, Any]:
     agent_message_data: Optional[Dict[str, Any]] = None
     session_end: Optional[Dict[str, Any]] = None
     last_json: Optional[Dict[str, Any]] = None
+    thread_id: Optional[str] = None
     for line in lines:
         line = line.strip()
         if not line:
@@ -2695,6 +2807,10 @@ def _parse_codex_jsonl(lines) -> Dict[str, Any]:
         # Legacy Codex format: single event contains both text and usage.
         if item.get("type") == "result":
             return item
+        if item.get("type") == "thread.started":
+            candidate_thread_id = item.get("thread_id")
+            if isinstance(candidate_thread_id, str) and candidate_thread_id:
+                thread_id = candidate_thread_id
         # Modern Codex CLI (0.104.0+): text in item.completed agent_message.
         if (item.get("type") == "item.completed"
                 and isinstance(item.get("item"), dict)
@@ -2716,13 +2832,85 @@ def _parse_codex_jsonl(lines) -> Dict[str, Any]:
                 merged["usage"] = session_end.get("usage", {})
             if "model" in session_end:
                 merged["model"] = session_end.get("model")
+            if thread_id:
+                merged["thread_id"] = thread_id
             return merged
+        if thread_id:
+            return {**agent_message_data, "thread_id": thread_id}
         return agent_message_data
     if session_end is not None:
+        if thread_id:
+            return {**session_end, "thread_id": thread_id}
         return session_end
     if last_json is not None:
         return last_json
     return {}
+
+
+_CODEX_THREAD_ID_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+
+
+def _extract_codex_session_model(
+    thread_id: str,
+    env: Mapping[str, str],
+) -> Optional[str]:
+    """Read the provider-owned Codex session transcript for an observed model.
+
+    Codex CLI 0.144 emits a ``thread.started`` ID on ``exec --json`` but omits
+    the model from its stdout ``turn.completed`` event. Its persisted rollout
+    transcript binds that same ID to ``session_meta.model_provider=openai`` and
+    ``turn_context.model``. Use only that correlated provider evidence; never
+    substitute the requested ``CODEX_MODEL`` and call it observed provenance.
+    """
+    normalized_thread_id = str(thread_id or "").strip().lower()
+    if _CODEX_THREAD_ID_RE.fullmatch(normalized_thread_id) is None:
+        return None
+    codex_home = Path(env.get("CODEX_HOME") or (Path.home() / ".codex"))
+    sessions_root = codex_home / "sessions"
+    try:
+        candidates = sorted(
+            sessions_root.rglob(f"*{normalized_thread_id}.jsonl"),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )
+    except OSError:
+        return None
+    for candidate in candidates[:2]:
+        observed_provider = ""
+        observed_session_id = ""
+        observed_model = ""
+        try:
+            with candidate.open(encoding="utf-8", errors="replace") as handle:
+                for index, raw_line in enumerate(handle):
+                    if index >= 64:
+                        break
+                    if len(raw_line) > 1_000_000:
+                        continue
+                    try:
+                        event = json.loads(raw_line)
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    payload = event.get("payload")
+                    if not isinstance(payload, dict):
+                        continue
+                    if event.get("type") == "session_meta":
+                        observed_provider = str(payload.get("model_provider") or "").lower()
+                        observed_session_id = str(payload.get("id") or "").lower()
+                    elif event.get("type") == "turn_context":
+                        model = payload.get("model")
+                        if isinstance(model, str) and model.strip():
+                            observed_model = model.strip()
+                    if (
+                        observed_provider == "openai"
+                        and observed_session_id == normalized_thread_id
+                        and observed_model
+                    ):
+                        return observed_model
+        except OSError:
+            continue
+    return None
 
 
 def _is_codex_stdin_notice(text: str) -> bool:
@@ -2805,8 +2993,27 @@ GEMINI_PRICING_BY_FAMILY = {
     "pro": Pricing(3.50, 10.50, 0.5), # Placeholder for Pro
 }
 
-# Codex: Based on test expectations ($1.50/$6.00, Cached 25%)
-CODEX_PRICING = Pricing(1.50, 6.00, 0.25)
+# Codex direct-API fallback pricing. Provider-observed model identity wins over
+# the requested model; the GPT-5.6 platform default is the final fallback.
+CODEX_PRICING = Pricing(5.00, 30.00, 0.10)
+CODEX_PRICING_BY_MODEL_PREFIX = {
+    "gpt-5.6": CODEX_PRICING,
+    "gpt-5.5": Pricing(5.00, 30.00, 0.10),
+    "gpt-5.4": Pricing(2.50, 15.00, 0.10),
+    "gpt-5.3": Pricing(1.75, 14.00, 0.10),
+    "gpt-5.2": Pricing(1.75, 14.00, 0.10),
+    "gpt-5.1": Pricing(1.25, 10.00, 0.10),
+    "gpt-5": Pricing(1.25, 10.00, 0.10),
+}
+
+# Direct-API pricing adjustments published for the large-context GPT families.
+# The threshold is strict: a request at exactly 272K prompt tokens keeps the
+# standard rate, while a request above it receives the uplift for the full
+# request. GPT-5.6 has a separately priced cache-write bucket when reported.
+CODEX_LONG_CONTEXT_THRESHOLD = 272_000
+CODEX_LONG_CONTEXT_MODEL_PREFIXES = ("gpt-5.6", "gpt-5.5", "gpt-5.4")
+CODEX_CACHE_WRITE_MODEL_PREFIXES = ("gpt-5.6",)
+CODEX_CACHE_WRITE_MULTIPLIER = 1.25
 
 # Anthropic Claude: Token-based fallback pricing when total_cost_usd is unavailable
 # Cache read is 90% discount, cache write is 25% premium over input
@@ -2838,14 +3045,16 @@ _PROVIDER_MODEL_ENV: Dict[str, str] = {
 def _get_provider_model(provider: str) -> Optional[str]:
     """Return the requested model for *provider* from its env var.
 
-    Returns ``None`` when the env var is unset, empty, or the provider is
-    unknown, signalling "provider default" in the audit log.
+    Codex falls back to PDD's shared platform default when its override is
+    unset; other providers return ``None`` to signal provider-owned defaults.
     """
     env_var = _PROVIDER_MODEL_ENV.get(provider)
     if not env_var:
         return None
     value = os.environ.get(env_var) or ""
-    return value.strip() or None
+    if value.strip():
+        return value.strip()
+    return CODEX_MODEL_DEFAULT if provider == "openai" else None
 
 
 def _routing_effort_to_reasoning_time(effort: str) -> float:
@@ -2870,7 +3079,13 @@ def _apply_routing_model_env(
         return
     if env_var not in originals:
         originals[env_var] = os.environ.get(env_var)
-    model = resolve_model_for_tier(config.model_tier)
+    # An explicit provider model is a user-level override and must take
+    # precedence over the tier-derived routing default.  In particular, a
+    # routed OpenAI config must not replace CODEX_MODEL=o3-pro (or another
+    # explicitly selected Codex model) with the model for its tier.
+    if (os.environ.get(env_var) or "").strip():
+        return
+    model = resolve_model_for_tier(config.model_tier, provider=provider)
     if model:
         os.environ[env_var] = model
 
@@ -3196,6 +3411,14 @@ def _load_agentic_config() -> Dict[str, Any]:
     return {}
 
 
+def _is_executable_cli_path(path: Path) -> bool:
+    """Return whether ``path`` is executable without trusting prefix access."""
+    try:
+        return path.exists() and os.access(path, os.X_OK)
+    except OSError:
+        return False
+
+
 def _find_cli_binary(name: str, config: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """
     Find a CLI binary using multiple strategies.
@@ -3224,7 +3447,7 @@ def _find_cli_binary(name: str, config: Optional[Dict[str, Any]] = None) -> Opti
     config_key = f"{name}_path"
     if config_key in config:
         custom_path = Path(config[config_key])
-        if custom_path.exists() and os.access(custom_path, os.X_OK):
+        if _is_executable_cli_path(custom_path):
             return str(custom_path)
 
     # Strategy 2: Standard PATH lookup
@@ -3243,11 +3466,11 @@ def _find_cli_binary(name: str, config: Optional[Dict[str, Any]] = None) -> Opti
             try:
                 for version_dir in path.glob("*/bin"):
                     cli_path = version_dir / name
-                    if cli_path.exists() and os.access(cli_path, os.X_OK):
+                    if _is_executable_cli_path(cli_path):
                         return str(cli_path)
             except Exception:
                 pass
-        elif path.exists() and os.access(path, os.X_OK):
+        elif _is_executable_cli_path(path):
             return str(path)
 
     return None
@@ -4419,22 +4642,76 @@ def _calculate_gemini_cost(stats: Dict[str, Any]) -> float:
         
     return total_cost
 
-def _calculate_codex_cost(usage: Dict[str, Any]) -> float:
-    """Calculates cost for Codex based on usage stats."""
+def _codex_pricing_for_model(model_name: Optional[str]) -> Pricing:
+    """Resolve direct Codex pricing from the canonical model catalog."""
+    normalized_model = (model_name or CODEX_MODEL_DEFAULT).strip().lower()
+    catalog_model = "gpt-5.6" if normalized_model.startswith("gpt-5.6") else normalized_model
+    try:
+        df = _load_model_data(None)
+        if df is not None and not getattr(df, "empty", True):
+            matches = df[
+                (df["provider"].astype(str).str.lower() == "openai")
+                & (df["model"].astype(str).str.lower() == catalog_model)
+            ]
+            if not matches.empty:
+                row = matches.iloc[0]
+                return Pricing(float(row["input"]), float(row["output"]), 0.10)
+    except Exception:  # pylint: disable=broad-except
+        # Cost estimation must never turn an otherwise successful provider
+        # response into a failed run because a local catalog is unavailable.
+        pass
+
+    return next(
+        (
+            candidate
+            for prefix, candidate in CODEX_PRICING_BY_MODEL_PREFIX.items()
+            if normalized_model.startswith(prefix)
+        ),
+        CODEX_PRICING,
+    )
+
+
+def _calculate_codex_cost(
+    usage: Dict[str, Any], model_name: Optional[str] = None
+) -> float:
+    """Calculate direct Codex cost using the selected model's catalog rates."""
     input_tokens = usage.get("input_tokens", 0)
     output_tokens = usage.get("output_tokens", 0)
     cached_tokens = usage.get("cached_input_tokens", 0)
+    cache_write_tokens = usage.get(
+        "cache_creation_input_tokens", usage.get("cache_write_tokens", 0)
+    )
+    normalized_model = (model_name or CODEX_MODEL_DEFAULT).strip().lower()
+    supports_cache_write = normalized_model.startswith(
+        CODEX_CACHE_WRITE_MODEL_PREFIXES
+    )
+    if not supports_cache_write:
+        cache_write_tokens = 0
     
-    pricing = CODEX_PRICING
+    pricing = _codex_pricing_for_model(model_name)
     
-    # Logic: new_input = max(0, input - cached)
-    new_input = max(0, input_tokens - cached_tokens)
+    # Cache read/write counters are subsets of the provider's total input
+    # counter, so remove both before applying the uncached-input rate.
+    new_input = max(0, input_tokens - cached_tokens - cache_write_tokens)
     
     input_cost = (new_input / 1_000_000) * pricing.input_per_million
     cached_cost = (cached_tokens / 1_000_000) * pricing.input_per_million * pricing.cached_input_multiplier
+    cache_write_cost = 0.0
+    if supports_cache_write:
+        cache_write_cost = (
+            (cache_write_tokens / 1_000_000)
+            * pricing.input_per_million
+            * CODEX_CACHE_WRITE_MULTIPLIER
+        )
     output_cost = (output_tokens / 1_000_000) * pricing.output_per_million
-    
-    return input_cost + cached_cost + output_cost
+
+    if (
+        normalized_model.startswith(CODEX_LONG_CONTEXT_MODEL_PREFIXES)
+        and input_tokens > CODEX_LONG_CONTEXT_THRESHOLD
+    ):
+        return 2.0 * (input_cost + cached_cost + cache_write_cost) + 1.5 * output_cost
+
+    return input_cost + cached_cost + cache_write_cost + output_cost
 
 
 def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
@@ -4894,8 +5171,11 @@ def run_agentic_task(
     claude_policy: Optional[ClaudePolicy] = None,
     routing_policy: Optional[RoutingPolicy] = None,
     task_class: Optional[str] = None,
+    set_git_work_tree: bool = True,
     before_attempt: Optional[Callable[[str, int], None]] = None,
     single_provider_attempt: bool = False,
+    background_safe: bool = False,
+    include_log_bodies: bool = True,
 ) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
@@ -4931,6 +5211,11 @@ def run_agentic_task(
             providers (harness selection) and, when ``routing_policy`` is
             supplied, also keys the routing-policy lookup. ``None`` preserves
             the existing provider cascade.
+        set_git_work_tree: When true, provider subprocesses receive
+            ``GIT_WORK_TREE=cwd`` for legacy worktree isolation. Checkup steps
+            disable this because agents run repository tests that create nested
+            temporary git repos; inherited git worktree variables make
+            ``git init`` fail inside those tests.
         before_attempt: Optional callback invoked immediately before each
             provider attempt. Used by artifact-producing workflows to clear
             per-attempt sidecar files before internal retries.
@@ -4944,6 +5229,7 @@ def run_agentic_task(
         Four-value unpacking remains supported for legacy callers; structured
         consumers can read ``result.usage`` or ``result[4]``.
     """
+    provider_failure_sink = _consume_provider_failure_sink()
     normalized_claude_policy = (
         validate_claude_policy(
             claude_policy,
@@ -5054,6 +5340,7 @@ def run_agentic_task(
                 )
 
         provider_errors: List[str] = []
+        provider_environment_failure: Optional[Tuple[str, str]] = None
         harness_capabilities = _load_harness_capabilities()
         total_cost = 0.0
 
@@ -5122,7 +5409,17 @@ def run_agentic_task(
                     reasoning_time=reasoning_time,
                     claude_policy=normalized_claude_policy,
                     stall_timeout=stall_timeout,
+                    set_git_work_tree=set_git_work_tree,
+                    background_safe=background_safe,
                 )
+                environment_reason = getattr(
+                    provider_result, "provider_environment_reason", None
+                )
+                if (
+                    isinstance(environment_reason, str)
+                    and environment_reason in _PROVIDER_ENVIRONMENT_REASONS
+                ):
+                    provider_environment_failure = (provider, environment_reason)
                 success = bool(provider_result[0])
                 output = str(provider_result[1])
                 cost = float(provider_result[2])
@@ -5131,16 +5428,19 @@ def run_agentic_task(
                 actual_model = provider_result[3]
                 usage = provider_result[4] if len(provider_result) > 4 else None
                 last_output = output
-                # Issue #1376: prefer the model the provider actually reported;
-                # fall back to the requested model from env vars when the JSON
-                # didn't surface one (e.g. early-error returns).
+                # Keep requested/effective routing separate from provider-observed
+                # provenance. A successful result's model_id must never be filled
+                # from CODEX_MODEL merely because the CLI omitted model evidence.
                 effective_model = actual_model or _get_provider_model(provider)
                 harness_id = _provider_harness_id(provider)
                 capability = harness_capabilities.get(harness_id, {})
                 identity_observable = bool(capability.get("identity_observable", True))
-                model_id = str(effective_model or "") if identity_observable else ""
+                model_id = str(actual_model or "") if identity_observable else ""
                 cli_version = _get_provider_cli_version(provider)
-                if usage:
+                if provider == "openai" and usage:
+                    usage_source = "pricing_table_estimate"
+                    estimate_method = "token_delta_x_model_pricing"
+                elif usage:
                     usage_source = "provider_reported" if cost > 0 else "pricing_table_estimate"
                     estimate_method = "provider_usage"
                 elif cost > 0:
@@ -5222,6 +5522,7 @@ def run_agentic_task(
                                 cwd=cwd,
                                 model=effective_model,
                                 false_positive=True,
+                                include_bodies=verbose and include_log_bodies,
                                 requested_effort=requested_effort,
                                 effective_effort=effective_effort,
                             ),
@@ -5258,7 +5559,7 @@ def run_agentic_task(
                                     )
                             if not quiet:
                                 console.print(f"[dim]Single-provider config: retrying in {backoff:.0f}s...[/dim]")
-                            time.sleep(backoff)
+                            _retry_sleep(backoff)
                             continue
                         break
                     else:
@@ -5288,7 +5589,7 @@ def run_agentic_task(
                                 duration=time.time() - task_start_time,
                                 cwd=cwd,
                                 model=effective_model,
-                                include_bodies=verbose,
+                                include_bodies=verbose and include_log_bodies,
                                 requested_effort=requested_effort,
                                 effective_effort=effective_effort,
                             )
@@ -5328,7 +5629,7 @@ def run_agentic_task(
                             duration=time.time() - task_start_time,
                             cwd=cwd,
                             model=effective_model,
-                            include_bodies=verbose,
+                            include_bodies=verbose and include_log_bodies,
                             requested_effort=requested_effort,
                             effective_effort=effective_effort,
                         )
@@ -5375,6 +5676,7 @@ def run_agentic_task(
                             duration=time.time() - task_start_time,
                             cwd=cwd,
                             model=effective_model,
+                            include_bodies=verbose and include_log_bodies,
                             requested_effort=requested_effort,
                             effective_effort=effective_effort,
                         ),
@@ -5428,7 +5730,7 @@ def run_agentic_task(
 
                     if verbose:
                         console.print(f"[dim]Waiting {backoff:.1f}s before retry...[/dim]")
-                    time.sleep(backoff)
+                    _retry_sleep(backoff)
 
             # All retries exhausted (or deadline budget exhausted) for this provider
             provider_errors.append(f"{provider}: {last_output[:MAX_ERROR_SNIPPET_LENGTH]}")
@@ -5463,6 +5765,7 @@ def run_agentic_task(
                     duration=time.time() - task_start_time,
                     cwd=cwd,
                     model=effective_model,
+                    include_bodies=verbose and include_log_bodies,
                     requested_effort=requested_effort if 'requested_effort' in locals() else None,
                     effective_effort=effective_effort if 'effective_effort' in locals() else None,
                 )
@@ -5471,13 +5774,18 @@ def run_agentic_task(
                 break
 
         failure_cost = total_cost if routing_policy is not None else 0.0
+        if provider_environment_failure is not None:
+            failure_output = _provider_environment_marker(*provider_environment_failure)
+        else:
+            failure_output = f"All agent providers failed: {'; '.join(provider_errors)}"
         failure_result = AgenticTaskResult(
             False,
-            f"All agent providers failed: {'; '.join(provider_errors)}",
+            failure_output,
             failure_cost,
             "",
             None,
             cumulative_cost_usd=cumulative_cost_usd,
+            provider_environment_failure=provider_environment_failure,
         )
 
         _emit_routing_outcome(
@@ -5489,6 +5797,14 @@ def run_agentic_task(
         )
 
         if routing_policy is not None and routing_record is not None:
+            # The initial routed attempt may have populated a provider model
+            # env var from its tier.  Restore the caller's environment before
+            # entering the escalation ladder so a later same-provider config
+            # can apply its own tier instead of mistaking the previous
+            # route-owned value for an explicit user override.  Genuine
+            # caller-supplied overrides are restored here and therefore remain
+            # authoritative in every escalated attempt.
+            _restore_routing_model_env(routing_model_env_originals)
             current_record = routing_record
             last_result = failure_result
             # Providers already exercised by this task (the initial routed/
@@ -5576,8 +5892,15 @@ def run_agentic_task(
                 )
                 if fallback_result is not None:
                     last_result = fallback_result
+            _publish_provider_failure_sink(
+                provider_failure_sink,
+                getattr(last_result, "provider_environment_failure", None),
+            )
             return last_result
 
+        _publish_provider_failure_sink(
+            provider_failure_sink, provider_environment_failure
+        )
         return failure_result
 
     finally:
@@ -5588,6 +5911,151 @@ def run_agentic_task(
                 os.remove(prompt_path)
             except OSError:
                 pass
+
+
+def run_exact_agentic_task(
+    instruction: str,
+    cwd: Path,
+    *,
+    provider: str,
+    model: str,
+    effort: Optional[str] = None,
+    timeout: Optional[float] = None,
+    verbose: bool = False,
+    quiet: bool = False,
+    label: str = "exact-agentic-task",
+) -> AgenticTaskResult:
+    """Run one provider attempt with exact model and effort semantics.
+
+    This bypasses the provider cascade. It currently supports only the Codex
+    subscription runtime, where selectors map to explicit CLI arguments and the
+    effective model is recovered from provider session evidence. Unsupported
+    selector combinations raise before a provider subprocess starts.
+    """
+    normalized_provider = provider.strip().lower()
+    normalized_model = model.strip()
+    normalized_effort = (effort or "").strip().lower() or None
+    if normalized_provider != "openai":
+        raise AgenticUnsupportedSemanticsError(
+            "Exact agentic routing currently supports only the openai Codex provider"
+        )
+    if not normalized_model or not normalized_model.startswith("gpt-"):
+        raise AgenticUnsupportedSemanticsError(
+            "Exact Codex routing requires a concrete gpt-* model identifier"
+        )
+    if normalized_effort not in {None, "low", "medium", "high", "xhigh"}:
+        raise AgenticUnsupportedSemanticsError(
+            "Exact Codex reasoning effort must be one of low, medium, high, or xhigh"
+        )
+
+    from .codex_subscription import (  # pylint: disable=import-outside-toplevel
+        has_codex_subscription_auth,
+    )
+
+    if not has_codex_subscription_auth():
+        return AgenticTaskResult(
+            False,
+            "Exact Codex routing requires staged ChatGPT subscription OAuth auth; "
+            "refusing API-key fallback before inference",
+            0.0,
+            normalized_provider,
+            None,
+            model_id=None,
+        )
+
+    cli_path = _find_cli_binary(CLI_COMMANDS[normalized_provider])
+    if not cli_path:
+        return AgenticTaskResult(
+            False,
+            "Codex CLI is not installed or available on PATH",
+            0.0,
+            normalized_provider,
+            None,
+            model_id=None,
+        )
+    version_error = _codex_gpt_5_6_version_error(normalized_model)
+    if version_error:
+        return AgenticTaskResult(
+            False,
+            version_error,
+            0.0,
+            normalized_provider,
+            None,
+            cli_version=_get_provider_cli_version(normalized_provider),
+            model_id=None,
+        )
+
+    workdir = Path(cwd).resolve()
+    if not workdir.is_dir():
+        raise ValueError(f"Exact agentic task working directory does not exist: {workdir}")
+    prompt_path = workdir / f".exact_agentic_prompt_{uuid.uuid4().hex[:8]}.txt"
+    prompt_path.write_text(instruction, encoding="utf-8")
+    env_overrides = {
+        "CODEX_MODEL": normalized_model,
+        "CODEX_SANDBOX_MODE": "read-only",
+    }
+    if normalized_effort:
+        env_overrides["CODEX_REASONING_EFFORT"] = normalized_effort
+
+    try:
+        provider_result = _run_with_provider(
+            normalized_provider,
+            prompt_path,
+            workdir,
+            timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS,
+            verbose,
+            quiet,
+            cli_path=cli_path,
+            label=label,
+            env_overrides=env_overrides,
+            env_removals={
+                "OPENAI_API_KEY",
+                "OPENAI_BASE_URL",
+                "OPENAI_ORG_ID",
+                "OPENAI_ORGANIZATION",
+                "OPENAI_PROJECT",
+            },
+            codex_subscription_billing=True,
+            codex_skip_git_repo_check=True,
+        )
+    finally:
+        try:
+            prompt_path.unlink()
+        except OSError:
+            pass
+
+    success = bool(provider_result[0])
+    output = str(provider_result[1])
+    cost = float(provider_result[2])
+    actual_model = provider_result[3]
+    usage = provider_result[4] if len(provider_result) > 4 else None
+    cli_version = _get_provider_cli_version(normalized_provider)
+    if success and actual_model != normalized_model:
+        observed = actual_model or "unavailable"
+        return AgenticTaskResult(
+            False,
+            "Exact Codex model verification failed: "
+            f"requested {normalized_model}, provider observed {observed}",
+            cost,
+            normalized_provider,
+            usage,
+            usage_source="provider_reported" if usage else "unavailable",
+            estimate_method="provider_usage" if usage else "unavailable",
+            cli_version=cli_version,
+            model_id=actual_model,
+        )
+
+    return AgenticTaskResult(
+        success,
+        output,
+        cost,
+        normalized_provider,
+        usage,
+        usage_source="provider_reported" if usage else "unavailable",
+        estimate_method="provider_usage" if usage else "unavailable",
+        cli_version=cli_version,
+        model_id=actual_model,
+    )
 
 
 import logging as _logging
@@ -5883,6 +6351,109 @@ def _strip_anthropic_creds_for_claude_subprocess(
     return True
 
 
+_PROVIDER_ENVIRONMENT_MARKER = "PDD_PROVIDER_ENVIRONMENT_FAILURE_V1"
+_PROVIDER_ENVIRONMENT_PROVIDERS = frozenset({
+    "claude", "anthropic", "codex", "openai", "gemini", "google", "agy",
+    "opencode", "unknown",
+})
+_PROVIDER_ENVIRONMENT_REASONS = frozenset({
+    "interactive_ui", "trust_prompt", "permission_prompt", "update_prompt",
+    "authentication", "update_required", "non_interactive_required",
+    "runtime_unavailable",
+})
+
+
+def _provider_environment_marker(provider: str, reason: str) -> str:
+    """Return the strict, producer-owned provider-environment marker line."""
+    safe_provider = (
+        provider if provider in _PROVIDER_ENVIRONMENT_PROVIDERS else "unknown"
+    )
+    safe_reason = (
+        reason if reason in _PROVIDER_ENVIRONMENT_REASONS else "runtime_unavailable"
+    )
+    return _PROVIDER_ENVIRONMENT_MARKER + ":" + json.dumps(
+        {"provider": safe_provider, "reason": safe_reason},
+        separators=(",", ":"),
+    )
+
+
+_INTERACTIVE_PROVIDER_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+    (
+        "trust_prompt",
+        re.compile(
+            r"(?:trust|approve)\s+(?:this\s+)?(?:workspace|folder|repository)",
+            re.I,
+        ),
+    ),
+    (
+        "permission_prompt",
+        re.compile(
+            r"(?:permission\s+required|allow\s+(?:this|access)|"
+            r"press\s+enter\s+to\s+continue)",
+            re.I,
+        ),
+    ),
+    (
+        "update_prompt",
+        re.compile(
+            r"(?:auto[- ]?update|update\s+(?:available|now)|restart\s+to\s+update)",
+            re.I,
+        ),
+    ),
+    (
+        "authentication",
+        re.compile(
+            r"(?:authentication\s+required|sign\s+in\s+to\s+continue|run\s+/login)",
+            re.I,
+        ),
+    ),
+    (
+        "non_interactive_required",
+        re.compile(
+            r"(?:requires?\s+(?:a\s+)?tty|interactive\s+(?:mode|required)|"
+            r"cannot\s+run\s+headless)",
+            re.I,
+        ),
+    ),
+)
+
+
+def _interactive_provider_reason(text: str) -> Optional[str]:
+    """Classify trusted subprocess bytes that prove a provider opened UI."""
+    terminal_structure = bool(
+        re.search(
+            r"(?:\x1b(?:\[|\])|\^\[\[|\\033\[|[\u2800-\u28ff\u2500-\u257f\u2700-\u27bf])",
+            text,
+        )
+    )
+    if not terminal_structure:
+        return None
+    for reason, pattern in _INTERACTIVE_PROVIDER_PATTERNS:
+        if pattern.search(text):
+            return reason
+    return None
+
+
+_STRUCTURED_PROVIDER_JSON_KEY_RE = re.compile(
+    r'^\{\s*"(?:type|subtype|is_error|result|total_cost_usd|usage|modelUsage)"\s*:'
+)
+
+
+def _is_structured_provider_json_prefix(text: str) -> bool:
+    """Recognize a provider JSON result frame without trusting its value text.
+
+    Claude's captured ``--output-format json`` result may arrive in arbitrary
+    chunks and may contain leading whitespace. Once an object frame exposes a
+    known provider-result key as its first top-level key, its quoted values are
+    data, not terminal UI. JSON-looking text inside an earlier untrusted value
+    cannot bless the frame.
+    """
+    stripped = (text or "").lstrip()
+    if not stripped.startswith("{"):
+        return False
+    return bool(_STRUCTURED_PROVIDER_JSON_KEY_RE.search(stripped[:8192]))
+
+
 def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False,
                     text=False, timeout=None, start_new_session=False, **kwargs):
     """Wrapper around subprocess that uses Popen for proper process group cleanup.
@@ -5900,6 +6471,105 @@ def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False
         text=text,
         start_new_session=start_new_session,
     )
+    # Background provider calls need to react to an interactive prompt while
+    # the child is still running. Reader threads keep both pipes drained and
+    # expose only a producer-owned reason attribute; provider-authored text is
+    # never itself accepted as the structured failure marker.
+    real_capture_pipes = (
+        isinstance(proc.stdout, (io.TextIOBase, io.BufferedIOBase, io.RawIOBase))
+        and isinstance(proc.stderr, (io.TextIOBase, io.BufferedIOBase, io.RawIOBase))
+    )
+    if capture_output and start_new_session and real_capture_pipes:
+        stdout_chunks: List[Any] = []
+        stderr_chunks: List[Any] = []
+        interactive_reason: List[str] = []
+        interactive_seen = threading.Event()
+
+        def _read_pipe(
+            pipe: Any, chunks: List[Any], *, allow_structured_json: bool = False
+        ) -> None:
+            tail = ""
+            stream_prefix = ""
+            structured_json_frame = False
+            while True:
+                raw_chunk = (
+                    pipe.buffer.read1(4096)
+                    if text and hasattr(pipe, "buffer")
+                    else pipe.read1(4096)
+                    if hasattr(pipe, "read1")
+                    else pipe.read(4096)
+                )
+                if not raw_chunk:
+                    break
+                chunk = (
+                    raw_chunk.decode("utf-8", errors="replace")
+                    if text and isinstance(raw_chunk, bytes)
+                    else raw_chunk
+                )
+                chunks.append(chunk)
+                decoded = (
+                    chunk
+                    if isinstance(chunk, str)
+                    else chunk.decode("utf-8", errors="replace")
+                )
+                if allow_structured_json and not structured_json_frame:
+                    stream_prefix = (stream_prefix + decoded)[:8192]
+                    structured_json_frame = _is_structured_provider_json_prefix(
+                        stream_prefix
+                    )
+                tail = (tail + decoded)[-8192:]
+                reason = (
+                    None
+                    if structured_json_frame
+                    else _interactive_provider_reason(tail)
+                )
+                if reason and not interactive_seen.is_set():
+                    interactive_reason.append(reason)
+                    interactive_seen.set()
+
+        if proc.stdin is not None:
+            if input is not None:
+                proc.stdin.write(input)
+            proc.stdin.close()
+        readers = [
+            threading.Thread(
+                target=_read_pipe,
+                args=(proc.stdout, stdout_chunks),
+                kwargs={"allow_structured_json": True},
+                daemon=True,
+            ),
+            threading.Thread(
+                target=_read_pipe, args=(proc.stderr, stderr_chunks), daemon=True
+            ),
+        ]
+        for reader in readers:
+            reader.start()
+        deadline = None if timeout is None else time.monotonic() + timeout
+        timed_out = False
+        while proc.poll() is None:
+            if interactive_seen.wait(0.05):
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
+                break
+        if proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            proc.kill()
+        proc.wait(timeout=5)
+        for reader in readers:
+            reader.join(timeout=1)
+        stdout = ("" if text else b"").join(stdout_chunks)
+        stderr = ("" if text else b"").join(stderr_chunks)
+        if timed_out:
+            raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
+        result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+        if interactive_reason:
+            result.pdd_provider_environment_reason = interactive_reason[0]
+        return result
+
     try:
         stdout, stderr = proc.communicate(input=input, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -7118,6 +7788,12 @@ def _run_with_provider(
     reasoning_time: Optional[float] = None,
     claude_policy: Optional[ClaudePolicy] = None,
     stall_timeout: Optional[float] = None,
+    env_overrides: Optional[Mapping[str, str]] = None,
+    env_removals: Optional[Set[str]] = None,
+    codex_subscription_billing: bool = False,
+    codex_skip_git_repo_check: bool = False,
+    set_git_work_tree: bool = True,
+    background_safe: bool = False,
 ) -> Union[Tuple[bool, str, float, Optional[str]], _ProviderRunResult]:
     """
     Internal helper to run a specific provider's CLI.
@@ -7146,17 +7822,42 @@ def _run_with_provider(
             ``None`` means "fall back to env" so unplumbed call sites
             keep receiving the signal via the global variable set by
             ``pdd/core/cli.py``.
+        env_overrides: Optional subprocess-only environment values. Exact-routing
+            callers use this to bind model, effort, and sandbox semantics without
+            mutating process-global environment.
+        env_removals: Optional subprocess-only environment keys to remove.
+        codex_subscription_billing: Route-owned signal that preserves Codex usage
+            while reporting zero marginal provider charge for ChatGPT subscription
+            execution. Ambient environment cannot enable this behavior.
+        codex_skip_git_repo_check: Route-owned opt-in for isolated temporary
+            directories that are intentionally not Git repositories.
+        set_git_work_tree: When true, set ``GIT_WORK_TREE`` to ``cwd`` for
+            legacy worktree isolation. When false, remove inherited Git
+            worktree/index variables so nested repositories work normally.
+        background_safe: Force captured non-interactive provider execution,
+            including when Claude interactive mode is enabled globally.
     """
 
     # Prepare Environment
     env = os.environ.copy()
+    if env_overrides:
+        env.update({str(key): str(value) for key, value in env_overrides.items()})
+    for key in env_removals or set():
+        env.pop(key, None)
     env["TERM"] = "dumb"
     env["NO_COLOR"] = "1"
     env["CI"] = "1"
     env.pop("PDD_OUTPUT_COST_PATH", None)
-    # Force CLI agents to stay in the worktree instead of following
-    # the .git file pointer back to the main repo (Issue #894).
-    env["GIT_WORK_TREE"] = str(cwd)
+    if set_git_work_tree:
+        # Force CLI agents to stay in the worktree instead of following
+        # the .git file pointer back to the main repo (Issue #894).
+        env["GIT_WORK_TREE"] = str(cwd)
+    else:
+        # Checkup agents run repository test suites that may create nested
+        # temporary git repos. Inherited git worktree state makes plain
+        # `git init` fail there, so strip the full git env family for this mode.
+        for git_env_key in ("GIT_WORK_TREE", "GIT_DIR", "GIT_INDEX_FILE"):
+            env.pop(git_env_key, None)
 
     # Issue #813: under CI=1 the claude CLI prefers ANTHROPIC_API_KEY over the
     # user's stored OAuth (Max/Pro) credential. Drop a stale key only when an
@@ -7210,7 +7911,11 @@ def _run_with_provider(
 
     # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
-        if _claude_code_interactive_enabled(env):
+        effective_background_safe = background_safe or (
+            env.get("PDD_AGENTIC_BACKGROUND_SAFE", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        if _claude_code_interactive_enabled(env) and not effective_background_safe:
             if reasoning_effort:
                 env = dict(env)
                 env["CLAUDE_CODE_EFFORT_LEVEL"] = reasoning_effort
@@ -7338,11 +8043,15 @@ def _run_with_provider(
             cmd.extend(["-c", f"model_reasoning_effort={effective_codex_effort}"])
         # Codex --model is a top-level flag; keep it before the subcommand so
         # the final "-" remains the explicit stdin prompt operand.
-        codex_model = env.get("CODEX_MODEL")
-        if codex_model:
-            cmd.extend(["--model", codex_model])
+        codex_model = env.get("CODEX_MODEL") or CODEX_MODEL_DEFAULT
+        codex_version_error = _codex_gpt_5_6_version_error(codex_model)
+        if codex_version_error:
+            return False, codex_version_error, 0.0, None
+        cmd.extend(["--model", codex_model])
+        cmd.append("exec")
+        if codex_skip_git_repo_check:
+            cmd.append("--skip-git-repo-check")
         cmd.extend([
-            "exec",
             "--sandbox", sandbox_mode,
             "--json",
             "-"
@@ -7438,6 +8147,21 @@ def _run_with_provider(
 
     result_is_spooled = isinstance(result, _SpooledCompletedProcess)
     try:
+        provider_environment_reason = getattr(
+            result, "pdd_provider_environment_reason", None
+        )
+        if (
+            isinstance(result, subprocess.CompletedProcess)
+            and isinstance(provider_environment_reason, str)
+            and provider_environment_reason in _PROVIDER_ENVIRONMENT_REASONS
+        ):
+            return _ProviderRunResult(
+                False,
+                "Provider runtime requires interactive configuration.",
+                0.0,
+                None,
+                provider_environment_reason=provider_environment_reason,
+            )
         if result.returncode != 0:
             if provider == "openai":
                 if result_is_spooled:
@@ -7563,7 +8287,18 @@ def _run_with_provider(
                 except json.JSONDecodeError:
                     data = _extract_json_from_output(output_str)
 
-            success, text, cost, actual_model = _parse_provider_json(provider, data)
+            requested_model = (
+                (env.get("CODEX_MODEL") or CODEX_MODEL_DEFAULT).strip()
+                if provider == "openai"
+                else None
+            )
+            success, text, cost, actual_model = _parse_provider_json(
+                provider, data, requested_model=requested_model
+            )
+            if provider == "openai" and actual_model is None:
+                thread_id = data.get("thread_id") if isinstance(data, dict) else None
+                if isinstance(thread_id, str):
+                    actual_model = _extract_codex_session_model(thread_id, env)
             if cost == 0.0 and verbose and isinstance(data, dict):
                 console.print(
                     f"[dim]Warning: {provider} returned $0 cost. "
@@ -7579,6 +8314,22 @@ def _run_with_provider(
                         data,
                         actual_model=actual_model,
                     ),
+                )
+            if provider == "openai":
+                raw_usage = data.get("usage") if isinstance(data, dict) else None
+                # Exact subscription routes use ChatGPT/Codex OAuth. Preserve
+                # provider-reported token usage, but never apply direct OpenAI API
+                # rates to subscription work with zero marginal provider charge.
+                if codex_subscription_billing:
+                    cost = 0.0
+                return _ProviderRunResult(
+                    success,
+                    text,
+                    cost,
+                    actual_model,
+                    raw_usage if isinstance(raw_usage, dict) else None,
+                    effective_codex_effort,
+                    effective_codex_effort,
                 )
             return success, text, cost, actual_model
         except json.JSONDecodeError:
@@ -7706,7 +8457,9 @@ def _extract_provider_model_from_data(provider: str, data: Dict[str, Any]) -> Op
 
 
 def _parse_provider_json(
-    provider: str, data: Dict[str, Any]
+    provider: str,
+    data: Dict[str, Any],
+    requested_model: Optional[str] = None,
 ) -> Tuple[bool, str, float, Optional[str]]:
     """
     Extracts (success, text_response, cost_usd, actual_model) from provider JSON.
@@ -7751,7 +8504,7 @@ def _parse_provider_json(
 
         elif provider == "openai":
             usage = data.get("usage", {})
-            cost = _calculate_codex_cost(usage)
+            cost = _calculate_codex_cost(usage, actual_model or requested_model)
             # Modern Codex CLI (0.104.0+): text at data["item"]["text"]
             item = data.get("item", {})
             if isinstance(item, dict) and item.get("type") == "agent_message":

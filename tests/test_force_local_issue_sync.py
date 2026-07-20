@@ -14,6 +14,7 @@ Two defects found by mocked agentic-sync E2E runs:
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -108,10 +109,8 @@ class TestDryRunValidationLocal:
     @patch("pdd.agentic_sync.subprocess.run")
     @patch("pdd.agentic_sync._prompt_contract_errors_for_module", return_value=[])
     @patch("pdd.agentic_sync._resolve_module_cwd_and_target")
-    @patch("pdd.agentic_sync._find_pdd_executable", return_value="/mock/bin/pdd")
     def test_local_true_reaches_validation_subprocess_command_and_env(
         self,
-        mock_find_pdd,
         mock_resolve,
         mock_contract_errors,
         mock_subprocess_run,
@@ -131,12 +130,13 @@ class TestDryRunValidationLocal:
         assert module_targets == {"foo": "foo"}
         assert errors == []
         assert cost == 0.0
-        assert mock_find_pdd.called
         assert mock_contract_errors.call_args.args == ("foo", tmp_path, tmp_path)
         cmd = mock_subprocess_run.call_args.args[0]
         env = mock_subprocess_run.call_args.kwargs["env"]
         assert cmd == [
-            "/mock/bin/pdd",
+            sys.executable,
+            "-m",
+            "pdd",
             "--force",
             "--local",
             "sync",

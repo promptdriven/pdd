@@ -49,6 +49,23 @@ TERMINAL_PDS_STATUSES = {
     "timed_out",
     "timeout",
 }
+FAILED_PDS_STATUSES = {
+    "canceled",
+    "cancelled",
+    "error",
+    "errored",
+    "failed",
+    "failure",
+    "timed_out",
+    "timeout",
+}
+PDS_PROVIDER_QUOTA_CODES = {
+    "provider_quota",
+    "spec_generation_provider_quota",
+    "component_generation_provider_quota",
+}
+PDS_AUDIT_GATE_CODES = {"audit_failed"}
+PDS_REQUEST_HASH_CODES = {"request_hash_mismatch"}
 SENSITIVE_COMMAND_OPTIONS = {
     "--access-token",
     "--api-key",
@@ -77,11 +94,310 @@ DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_sc
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
 DEFAULT_PDS_CLAUDE_MODEL = "glm-5.2"
 DEFAULT_RELEASE_VIDEO_OUTPUT_DIR = ".pdd/release-videos"
-MIN_PDS_CLI_VERSION = (0, 1, 7)
+MIN_PDS_CLI_VERSION = (0, 1, 11)
 MIN_PDS_CLI_VERSION_TEXT = ".".join(str(part) for part in MIN_PDS_CLI_VERSION)
 PDS_VERSION_RE = re.compile(r"(?<!\d)(?P<version>\d+\.\d+\.\d+)(?!\d)")
 PDS_VERSION_PROBE_TIMEOUT_SECONDS = 10.0
 DEFAULT_PDS_CREATE_TIMEOUT_SECONDS = 1800.0
+VISUAL_SAFETY_CHECKS = {
+    "risky_readable_surface": "hasNoReadableSurfaceVisuals",
+    "brittle_exact_geometry": "hasNoExactGeometryVisuals",
+    "brittle_mandatory_motion": "hasNoMandatoryMotionVisuals",
+}
+READABLE_VISUAL_RE = re.compile(
+    r"\b(?:workstation|laptops?|phones?|monitors?|screens?|terminal|console|"
+    r"source\s+code|code(?:\s+snippet)?|commands?|makefile|browsers?|web\s+pages?|"
+    r"user\s+interface|ui|dashboard|documents?|docs?|changelog|release\s+notes?|"
+    r"github(?:\s+page)?|pull\s+requests?|issues?|json|ya?ml|configuration|config|"
+    r"readable|text|words?|labels?|logos?|ides?|editors?|spreadsheets?|charts?|"
+    r"graphs?|captions?|subtitles?|menus?|toolbars?|web\s+apps?|"
+    r"(?:application|app|browser|editor)\s+windows?|data\s+tables?|"
+    r"(?:data|comparison|status)\s+tables?|table\s+(?:of|with)\s+"
+    r"(?:data|rows?|columns?|cells?|values?|text)|column\s+headers?|"
+    r"ui\s+controls?|(?:input|web|application)\s+forms?|"
+    r"(?:graphical|software|application|app)\s+(?:user\s+)?interfaces?)\b",
+    flags=re.IGNORECASE,
+)
+UNAMBIGUOUS_SHELL_IMPLEMENTATION_RE = re.compile(
+    r"\b(?:powershell|pwsh|xonsh|zsh|ksh|csh|tcsh)\b",
+    flags=re.IGNORECASE,
+)
+COMMAND_SHELL_NAME_PATTERN = (
+    r"(?:bash|zsh|xonsh|korn|ksh|csh|tcsh|bourne(?:[-\s]+again)?|powershell)"
+)
+SHELL_PROMPT_TARGET_PATTERN = r"prompts?\b(?![-\s]+(?:shaped|like)\b)"
+SHELL_FILE_TARGET_PATTERN = (
+    r"(?:working\s+director(?:y|ies)|directory|directory\s+listings?|"
+    r"file\s+listings?|file\s+names?|filenames?|files?)"
+)
+SHELL_OUTPUT_TARGET_PATTERN = (
+    r"(?:(?:diagnostic|build|command|standard|current)\s+)?outputs?"
+)
+SHELL_SURFACE_TARGET_PATTERN = (
+    rf"(?:{SHELL_PROMPT_TARGET_PATTERN}|"
+    r"(?:blinking\s+)?(?:cursors?|carets?)(?![-\s]+(?:shaped|like)\b)|"
+    r"cli|scripts?|screens?|panes?|transcripts?|"
+    rf"{SHELL_FILE_TARGET_PATTERN}|"
+    r"keystrokes?|stdout|stderr|stdin|"
+    r"technical\s+surfaces?)"
+)
+SHELL_READABLE_TARGET_PATTERN = (
+    rf"(?:{SHELL_SURFACE_TARGET_PATTERN}|{SHELL_OUTPUT_TARGET_PATTERN}|"
+    r"system\s+sessions?|login\s+sessions?)"
+)
+SHELL_DIRECT_TARGET_PATTERN = (
+    rf"(?:{SHELL_SURFACE_TARGET_PATTERN}|sessions?|"
+    r"(?:standard|current|command)\s+outputs?)"
+)
+SHELL_TECHNICAL_ACTION_PREDICATE_PATTERN = (
+    r"(?:hosts?|hosting|contains?|containing|shows?|showing|reads?|reading|"
+    r"lists?|listing|invokes?|invoking|displays?|displaying|presents?|"
+    r"presenting|renders?|rendering|prints?|printing|writes?|writing)"
+)
+SHELL_EVIDENCE_VERB_PATTERN = (
+    rf"(?:is|has|{SHELL_TECHNICAL_ACTION_PREDICATE_PATTERN})"
+)
+SHELL_INPUT_VERB_PATTERN = (
+    r"(?:accepts?|accepting|awaits?|awaiting|receives?|receiving|takes?|"
+    r"taking|waits?\s+for|waiting\s+for)"
+)
+SHELL_INPUT_TARGET_PATTERN = r"(?:keyboard\s+|typed\s+|user\s+)?inputs?"
+SHELL_SUBJECT_PREDICATE_PATTERN = (
+    rf"(?:{SHELL_EVIDENCE_VERB_PATTERN}|{SHELL_INPUT_VERB_PATTERN})"
+)
+SHELL_ADVERB_MORPHOLOGY_PATTERN = r"(?-i:[a-z][\w-]*(?:ly|wards|wise))"
+SHELL_CONTINUATION_PARTICLE_PATTERN = (
+    r"(?:now|then|later|still|again|soon|always|sometimes|often|never)"
+)
+SHELL_TEMPORAL_MODIFIER_PATTERN = (
+    r"(?:after|before)\s+(?:[\w-]+\s+)?(?:brief\s+)?"
+    r"(?:moments?|pauses?|beats?|delays?|intervals?|seconds?|minutes?)"
+)
+SHELL_SAME_SUBJECT_MODIFIER_PATTERN = (
+    rf"(?:{SHELL_ADVERB_MORPHOLOGY_PATTERN}|"
+    rf"{SHELL_CONTINUATION_PARTICLE_PATTERN}|{SHELL_TEMPORAL_MODIFIER_PATTERN})"
+)
+SHELL_SAME_SUBJECT_CONTINUATION_PATTERN = (
+    rf"(?:(?:(?:it|the\s+shell(?:s|-like)?)\s+)?"
+    rf"(?:{SHELL_SAME_SUBJECT_MODIFIER_PATTERN}(?:\s+|,\s*)){{0,3}}"
+    rf"{SHELL_SUBJECT_PREDICATE_PATTERN}\b|"
+    rf"its\s+(?:[\w-]+\s+){{1,3}}{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
+)
+SHELL_NEW_SUBJECT_BOUNDARY_PATTERN = (
+    r"\b(?:and|but|while|whereas|yet|as)\b\s+"
+    rf"(?!{SHELL_SAME_SUBJECT_CONTINUATION_PATTERN})"
+    rf"(?=(?:(?![.!?;]).){{1,50}}\b{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
+)
+SHELL_WITH_OTHER_SUBJECT_BOUNDARY_PATTERN = (
+    r"\bwith\b"
+    rf"(?=(?:(?![.!?;]).){{1,50}}\b{SHELL_SUBJECT_PREDICATE_PATTERN}\b)"
+)
+BASH_STRONG_SURFACE_RE = re.compile(
+    r"\bbash\s+(?:history|windows?|"
+    rf"{SHELL_READABLE_TARGET_PATTERN})\b",
+    flags=re.IGNORECASE,
+)
+BASH_SESSION_RE = re.compile(
+    r"\bBash\s+sessions?\b"
+)
+COMMAND_SHELL_PATH_RE = re.compile(
+    rf"(?<!\w)/bin/(?:sh|dash|fish|{COMMAND_SHELL_NAME_PATTERN})\b",
+    flags=re.IGNORECASE,
+)
+NAMED_COMMAND_SHELL_RE = re.compile(
+    rf"(?<!\w)(?:/bin/)?{COMMAND_SHELL_NAME_PATTERN}\s+"
+    rf"(?:{SHELL_PROMPT_TARGET_PATTERN}|{SHELL_OUTPUT_TARGET_PATTERN})\b|"
+    rf"\b(?:{COMMAND_SHELL_NAME_PATTERN}|posix|unix)\s+shell(?:s|-like)?\b|"
+    r"\b(?:root|system|windows?|default|os|terminal|console|interactive|login|"
+    r"command(?:[-\s]+line)?)"
+    r"(?:[\s,-]+(?:driven|based|style|styled|technical|interactive|login|"
+    r"abstract|translucent|protective|geometric|outer|physical|luminous|"
+    r"glowing|transparent|frosted|matte|ceramic|delicate|organic|glass)){0,3}"
+    r"[\s,-]+shell(?:s|-like)?\b",
+    flags=re.IGNORECASE,
+)
+COMMAND_SHELL_EXECUTION_RE = re.compile(
+    rf"\b(?:runs?|executes?|invokes?|launches?|starts?|spawns?)\s+"
+    rf"(?:a\s+|the\s+)?(?:/bin/)?{COMMAND_SHELL_NAME_PATTERN}\b",
+    flags=re.IGNORECASE,
+)
+SHELL_SUBJECT_CONTEXT_PATTERN = (
+    r"(?:(?![.!?;]|\b(?:that|who|which)\b|"
+    r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b|"
+    r"(?:,|:)\s*(?:a|an|the|another)\b|"
+    rf"{SHELL_WITH_OTHER_SUBJECT_BOUNDARY_PATTERN}|"
+    rf"{SHELL_NEW_SUBJECT_BOUNDARY_PATTERN}).){{0,100}}"
+)
+SHELL_TARGET_CONTEXT_PATTERN = (
+    r"(?:(?![.!?;]|\b(?:that|who|which)\b|"
+    r"\b(?:beside|near|alongside)\s+(?:a|an|the)\b|"
+    r"(?:,|:)\s*(?:a|an|the|another)\b|"
+    rf"{SHELL_WITH_OTHER_SUBJECT_BOUNDARY_PATTERN}|"
+    rf"{SHELL_NEW_SUBJECT_BOUNDARY_PATTERN}).){{0,60}}"
+)
+SHELL_WITH_COMPUTING_RE = re.compile(
+    r"\bshell(?:s|-like)?(?:['’]s)?\b\s*,?\s+with\s+"
+    r"(?:a\s+|an\s+|the\s+|its\s+)?"
+    rf"(?:{SHELL_ADVERB_MORPHOLOGY_PATTERN}\s+){{0,2}}"
+    rf"(?:(?!{SHELL_SUBJECT_PREDICATE_PATTERN}\b)[\w-]+\s+)?"
+    rf"(?!(?:panes?)\b)(?:{SHELL_DIRECT_TARGET_PATTERN}|"
+    r"(?:keyboard\s+|typed\s+|user\s+)?inputs?)\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+PANE_COMPUTING_PREDICATE_PATTERN = (
+    rf"(?:(?:(?:is|are|was|were)\s+)?"
+    rf"{SHELL_TECHNICAL_ACTION_PREDICATE_PATTERN})"
+)
+PANE_EXPLICIT_REFERENCE_PATTERN = (
+    r"(?:,?\s+(?:and|but|while|whereas|yet)\s+(?:it|the\s+pane)\s+)"
+)
+PANE_OWNED_PREDICATE_PREFIX_PATTERN = (
+    rf"(?:\s+(?:(?:that|which)\s+)?|{PANE_EXPLICIT_REFERENCE_PATTERN})"
+)
+PANE_READABLE_OBJECT_PATTERN = (
+    r"(?:a\s+|an\s+|the\s+|its\s+)?"
+    rf"(?:(?!{SHELL_SUBJECT_PREDICATE_PATTERN}\b)[\w-]+\s+){{0,2}}"
+    rf"{SHELL_READABLE_TARGET_PATTERN}\b"
+)
+SHELL_WITH_PANE_COMPUTING_RE = re.compile(
+    r"\bshell(?:s|-like)?(?:['’]s)?\b\s*,?\s+with\s+"
+    r"(?:(?![.!?;,]).){0,60}\bpanes?\b"
+    r"(?![-\s]+(?:shaped|like)\b)"
+    rf"{PANE_OWNED_PREDICATE_PREFIX_PATTERN}"
+    rf"(?:{PANE_COMPUTING_PREDICATE_PATTERN}\b\s+"
+    rf"{PANE_READABLE_OBJECT_PATTERN}|"
+    rf"{SHELL_INPUT_VERB_PATTERN}\b\s+{SHELL_INPUT_TARGET_PATTERN}\b|"
+    rf"has\b\s+{PANE_READABLE_OBJECT_PATTERN})",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+SHELL_DIRECT_RELATIVE_COMPUTING_RE = re.compile(
+    r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
+    rf"{SHELL_EVIDENCE_VERB_PATTERN}\s+"
+    r"(?:a\s+|an\s+|the\s+|its\s+)?"
+    rf"{SHELL_READABLE_TARGET_PATTERN}\b|"
+    r"\bshell(?:s|-like)?(?:['’]s)?\s+(?:that|which)\s+"
+    rf"{SHELL_INPUT_VERB_PATTERN}\s+"
+    r"(?:keyboard\s+|typed\s+|user\s+)?inputs?\b",
+    flags=re.IGNORECASE,
+)
+SHELL_OWNED_COMPUTING_RE = re.compile(
+    r"\bshell[-\s]+outputs?\s+windows?\b|"
+    r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
+    rf"{SHELL_DIRECT_TARGET_PATTERN}\b|"
+    r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
+    r"windows?\b(?!\s+of\s+(?:light|glow))|"
+    r"\bshell(?:s|-like)?(?:['’]s)?(?:\s*[-:—]\s*|\s+)"
+    r"interfaces?\b(?!\s+between\b)|"
+    r"\bshell(?:s|-like)?(?:['’]s)?\b"
+    rf"{SHELL_SUBJECT_CONTEXT_PATTERN}\b"
+    rf"{SHELL_EVIDENCE_VERB_PATTERN}\b"
+    rf"{SHELL_TARGET_CONTEXT_PATTERN}\b"
+    rf"(?:{COMMAND_SHELL_NAME_PATTERN}\s+sessions?|"
+    rf"{SHELL_READABLE_TARGET_PATTERN})\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+SHELL_INPUT_INTERACTION_RE = re.compile(
+    r"\bshell(?:s|-like)?(?:['’]s)?\b"
+    rf"{SHELL_SUBJECT_CONTEXT_PATTERN}"
+    rf"\b{SHELL_INPUT_VERB_PATTERN}\b"
+    r"(?:(?![.!?;]).){0,20}\b(?:keyboard\s+|typed\s+|user\s+)?inputs?\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+UNAMBIGUOUS_COMPUTING_SURFACE_RE = re.compile(
+    r"\b(?:a|an|the|its|shell(?:s|['’]s|-like)?)?\s*"
+    r"(?:blinking\s+)?prompts?\s+(?:appears?|blinks?|rests?|waits?|is\b)|"
+    r"\b(?:blinking|visible|onscreen|on[-\s]+screen)\s+"
+    r"(?:cursors?|carets?)(?![-\s]+(?:shaped|like)\b)\b|"
+    r"\b(?:shows?|displays?|presents?|contains?)\s+(?:a\s+|the\s+|its\s+)?"
+    r"(?:cursors?|carets?)\b(?![-\s]+(?:shaped|like)\b)|"
+    r"\btyped\s+inputs?\b|"
+    r"\b(?:stdout|stderr|cli|repl|keystrokes?|command\s+outputs?|"
+    r"standard\s+outputs?|stdin|environment\s+variables?|"
+    r"(?:login|terminal|command|system)\s+sessions?)\b",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+EXACT_GEOMETRY_VISUAL_RE = re.compile(
+    r"\b(?:exact(?:ly)?|precise(?:ly)?|perfect(?:ly)?|parallel|"
+    r"align(?:ed|ment|s|ing)?|symmetr(?:y|ic|ical|ically)|split[- ]screen|"
+    r"side[- ]by[- ]side|grid|x[- ]shap(?:e|ed)|cross(?:es|ed|ing)?|"
+    r"non[- ]crossing|(?:left|right|top|bottom)\s+(?:side|panel|orb|strand))\b",
+    flags=re.IGNORECASE,
+)
+CAMERA_MOTION_VISUAL_RE = re.compile(
+    r"\b(?:push(?:es|ed|ing)?[- ]in|zoom(?!ed[- ]out)(?:s|ing|ed(?:[- ]in)?)?|"
+    r"pan(?:s|ned|ning)?|orbit(?:s|ed|ing)?|track(?:s|ed|ing)?|"
+    r"doll(?:y|ies|ied|ying)|tilt(?:s|ed|ing)?|crane(?:s|d|ing)?|"
+    r"roll(?:s|ed|ing)?|rack[- ]focus(?:es|ed|ing)?|drift(?:s|ed|ing)?|"
+    r"transition(?:s|ed|ing)?|moves?)\b",
+    flags=re.IGNORECASE,
+)
+IMPLICIT_CAMERA_ACTION_RE = re.compile(
+    r"\b(?:push(?:es|ed|ing)?[- ]in|zoom(?!ed[- ]out)|pan|orbit|track|doll|"
+    r"tilt|crane|rack[- ]focus)",
+    flags=re.IGNORECASE,
+)
+SEMANTIC_MOTION_VISUAL_RE = re.compile(
+    r"\b(?:cross(?:es|ed|ing)?|align(?:s|ed|ing)?|merge(?:s|d|ing)?|"
+    r"morph(?:s|ed|ing)?|transform(?:s|ed|ing)?|"
+    r"mov(?:e|es|ed|ing)\s+into|rotat(?:e|es|ed|ing)|spin(?:s|ning)?)\b",
+    flags=re.IGNORECASE,
+)
+FRAME_EXACT_MOTION_RE = re.compile(
+    r"(?:\b(?:at|after|by|on)\s+(?:the\s+)?(?:exactly\s+)?"
+    r"(?:(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten)"
+    r"[- ]?(?:seconds?|secs?|s)(?:\s+mark)?|(?:frame|second)\s+"
+    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten))\b|"
+    r"\b(?:frame|second)\s+(?:\d+|one|two|three|four|five|six|seven|eight|"
+    r"nine|ten)\b|\b\d+(?:st|nd|rd|th)\s+(?:frame|second)\b|"
+    r"\b(?:at|after|by)\s+\d{1,2}:\d{2}\b|\bframe[- ]by[- ]frame\b)",
+    flags=re.IGNORECASE,
+)
+VISUAL_CLAUSE_SPLIT_RE = re.compile(
+    r"[;,.!?]+|\b(?:while|whereas|but|and\s+then|then)\b|"
+    r"\b(?:as|with)(?=\s+(?:the\s+)?camera\b)|"
+    r"\band(?=\s+(?:the\s+)?camera\b)",
+    flags=re.IGNORECASE,
+)
+MOTION_OPTIONAL_PREFIX_RE = re.compile(
+    r"\boptional(?:ly)?(?:\s+(?:gentle|slow|subtle|soft|smooth|slight|"
+    r"transform[- ]safe|camera)){0,5}\s*$",
+    flags=re.IGNORECASE,
+)
+CAMERA_MODAL_PREFIX_RE = re.compile(
+    r"\bcamera\s+(?:may|can|could)(?:\s+\w+){0,3}\s*$",
+    flags=re.IGNORECASE,
+)
+IMPLICIT_CAMERA_MODAL_PREFIX_RE = re.compile(
+    r"^(?:the\s+)?(?:view\s+)?(?:may|can|could)(?:\s+\w+){0,3}\s*$",
+    flags=re.IGNORECASE,
+)
+MOTION_OPTIONAL_SUFFIX_RE = re.compile(
+    r"^(?:\s+\w+){0,4}\s+(?:(?:may|can|could)\s+be\s+used|"
+    r"if\s+(?:available|supported|desired))\b",
+    flags=re.IGNORECASE,
+)
+MOTION_REQUIRED_PREFIX_RE = re.compile(
+    r"\b(?:must|required\s+to|has\s+to|needs\s+to|should|will)"
+    r"(?:\s+\w+){0,3}\s*$",
+    flags=re.IGNORECASE,
+)
+SAFE_TEXT_QUALIFIER_RE = re.compile(
+    r"\b(?:text[- ]free|non[- ]textual|unlabeled|without\s+(?:readable\s+)?"
+    r"(?:text|words?|labels?|logos?)|no\s+(?:readable\s+)?"
+    r"(?:text|words?|labels?|logos?)(?:\s*(?:,|and|or)\s*"
+    r"(?:text|words?|labels?|logos?))*)\b",
+    flags=re.IGNORECASE,
+)
+RELEASE_VIDEO_AUDIT_FIX_POLICY_ARGS = (
+    "--audit-fix-max-passes",
+    "2",
+    "--audit-fix-max-annotations-per-pass",
+    "3",
+    "--audit-fix-max-spend-pddc",
+    "24",
+    "--audit-fix-source-approval",
+    "not-required",
+)
 CLAUDE_OAUTH_TOKEN_ENV_VARS = (
     "CLAUDE_CODE_OAUTH_TOKEN_1",
     "CLAUDE_CODE_OAUTH_TOKEN_2",
@@ -125,6 +441,10 @@ CLAUDE_FAILURE_CLASSES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "auth",
         (
+            r"(?m)^[ \t]*(?:error:[ \t]*)?your\s+organization\s+has\s+disabled\s+"
+            r"claude\s+subscription\s+access\s+for\s+claude\s+code(?:[.!]?[ \t]*|"
+            r"[.!]?[ \t]+·[ \t]+use\s+an\s+anthropic\s+api\s+key\s+instead,\s+or\s+ask\s+"
+            r"your\s+admin\s+to\s+enable\s+access[.!]?[ \t]*)$",
             r"authentication[_\s]error",
             r"authentication\s+failed",
             r"failed\s+to\s+authenticate",
@@ -378,6 +698,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "release-video project metadata recovery."
         ),
     )
+    parser.add_argument(
+        "--veo-validation-recovery-job-id",
+        default=os.environ.get("RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID", ""),
+        help=(
+            "Continue from an exact successful validation-only Veo job in the "
+            "selected PDS release project."
+        ),
+    )
     parser.add_argument("--project-name", help="PDS project name. Defaults to 'PDD <tag> release'.")
     parser.add_argument("--preset", default=os.environ.get("RELEASE_VIDEO_PRESET", "release-notes"))
     parser.add_argument("--target", default=os.environ.get("RELEASE_VIDEO_TARGET", "publish"))
@@ -447,6 +775,7 @@ def validate_release_video_create_options(args: argparse.Namespace) -> None:
     validate_claude_script_model(args)
     validate_release_video_idempotency_options(args)
     validate_release_video_metadata_conflict_options(args)
+    validate_veo_validation_recovery_options(args)
 
 
 def validate_claude_script_model(args: argparse.Namespace) -> None:
@@ -491,6 +820,24 @@ def release_video_metadata_conflict(args: argparse.Namespace) -> str:
     return str(args.metadata_conflict or "").strip()
 
 
+def validate_veo_validation_recovery_options(args: argparse.Namespace) -> None:
+    """Fail closed on unsafe validation-only Veo recovery combinations."""
+    recovery_job_id = str(args.veo_validation_recovery_job_id or "").strip()
+    args.veo_validation_recovery_job_id = recovery_job_id
+    if not recovery_job_id:
+        return
+    if not str(args.project_id or "").strip():
+        raise ReleaseVideoError(
+            "Veo validation recovery requires --project-id or "
+            "RELEASE_VIDEO_PROJECT_ID to select the existing release project."
+        )
+    if args.force_regenerate:
+        raise ReleaseVideoError(
+            "Veo validation recovery cannot be combined with --force-regenerate "
+            "or RELEASE_VIDEO_FORCE_REGENERATE=1."
+        )
+
+
 def print_release_video_status(args: argparse.Namespace, repo: Path) -> int:
     """Print the locally persisted PDS run handle for a release tag."""
     tag = resolve_status_release_tag(repo, args.tag or os.environ.get("RELEASE_TAG"))
@@ -530,6 +877,9 @@ def print_release_video_status(args: argparse.Namespace, repo: Path) -> int:
     status_note = release_video_status_note(metadata)
     if status_note:
         print(f"status-note: {status_note}")
+    terminal_failure_hint = pds_terminal_failure_hint_from_status(metadata)
+    if terminal_failure_hint:
+        print(f"status-note: {terminal_failure_hint}")
     return 0
 
 
@@ -598,9 +948,17 @@ def query_pds_release_video_status(
                 completed=completed,
                 pds_cli=args.pds_cli,
             )
-        raise ReleaseVideoError(
+        message = (
             f"PDS release-video status failed: {redacted_process_details(completed)}"
         )
+        hint = pds_failure_hint(
+            completed,
+            expected_run_id=run_id,
+            allow_unscoped=False,
+        )
+        if hint:
+            message += f" {hint}"
+        raise ReleaseVideoError(message)
     return persist_status_query_success(
         metadata=metadata,
         path=run_metadata_path,
@@ -2061,7 +2419,15 @@ def create_release_video(
             f"{rendered_command} failed: "
             f"{process_details(completed)}"
         )
-        hint = pds_failure_hint(completed)
+        persisted_metadata = load_persisted_pds_run_metadata(
+            persisted_run_metadata_path
+        )
+        persisted_run_id = str(persisted_metadata.get("runId") or "").strip()
+        hint = pds_failure_hint(
+            completed,
+            expected_run_id=persisted_run_id or None,
+            allow_unscoped=not bool(persisted_run_id),
+        )
         if hint:
             message += f" {hint}"
         if persisted_run_metadata_path:
@@ -2101,6 +2467,7 @@ def add_optional_pds_create_args(
     changelog_path: Path,
 ) -> None:
     """Append optional PDS release-video create flags in-place."""
+    pds_args.extend(RELEASE_VIDEO_AUDIT_FIX_POLICY_ARGS)
     changelog_full_path = repo / changelog_path
     if changelog_full_path.exists():
         pds_args.extend(["--changelog", str(changelog_full_path)])
@@ -2114,6 +2481,16 @@ def add_optional_pds_create_args(
         pds_args.extend(["--claude-model", pds_claude_model])
     if args.force_regenerate:
         pds_args.append("--force-regenerate")
+    recovery_job_id = str(
+        getattr(args, "veo_validation_recovery_job_id", "") or ""
+    ).strip()
+    if recovery_job_id:
+        pds_args.extend(
+            [
+                "--veo-validation-recovery-job-id",
+                recovery_job_id,
+            ]
+        )
     if args.dry_run:
         pds_args.append("--dry-run")
 
@@ -2561,15 +2938,298 @@ def refresh_pds_recovery_commands(metadata: dict[str, Any], pds_cli: str) -> Non
     metadata["watchCommand"] = watch_command
 
 
-def pds_failure_hint(completed: subprocess.CompletedProcess[str]) -> str:
-    combined = f"{completed.stderr}\n{completed.stdout}".lower()
-    if "request_hash_mismatch" not in combined:
+def pds_failure_hint(
+    completed: subprocess.CompletedProcess[str],
+    *,
+    expected_run_id: str | None = None,
+    allow_unscoped: bool = True,
+) -> str:
+    """Return fixed, redacted recovery guidance for a terminal PDS failure."""
+    payloads = pds_authoritative_failure_payloads(
+        completed.stderr,
+        completed.stdout,
+        expected_run_id=expected_run_id,
+        allow_unscoped=allow_unscoped,
+    )
+    return pds_terminal_failure_hint(*payloads)
+
+
+def pds_terminal_failure_hint_from_status(metadata: dict[str, Any]) -> str:
+    """Classify a refreshed failed-run sidecar without trusting stale history."""
+    status = str(metadata.get("status") or "").strip().lower()
+    if status not in FAILED_PDS_STATUSES:
         return ""
-    return (
-        "PDS reported request_hash_mismatch: the same idempotency key was "
-        "reused with a different request body. Retry with a distinct "
-        "RELEASE_VIDEO_ATTEMPT_ID, RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE, or "
-        "explicit RELEASE_VIDEO_IDEMPOTENCY_KEY."
+    last_query = metadata.get("lastStatusQuery")
+    if not isinstance(last_query, dict) or last_query.get("ok") is not True:
+        return ""
+    run_id = str(metadata.get("runId") or "").strip()
+    query_run_id = str(last_query.get("runId") or "").strip()
+    if not run_id or query_run_id != run_id:
+        return ""
+    response = last_query.get("response")
+    payloads = pds_authoritative_failure_payloads(
+        response,
+        expected_run_id=run_id,
+        allow_unscoped=False,
+    )
+    return pds_terminal_failure_hint(*payloads)
+
+
+def pds_authoritative_failure_payloads(
+    *values: Any,
+    expected_run_id: str | None,
+    allow_unscoped: bool,
+) -> list[Any]:
+    """Select failure payloads owned by the current command or exact run."""
+    payloads: list[Any] = []
+    for value in values:
+        if isinstance(value, (dict, list)):
+            payloads.extend(
+                pds_authoritative_json_failure_payloads(
+                    value,
+                    expected_run_id=expected_run_id,
+                    allow_unscoped=allow_unscoped,
+                )
+            )
+            continue
+        if not isinstance(value, str):
+            continue
+        parsed_spans = list(iter_json_value_spans(value))
+        for parsed, _, _ in parsed_spans:
+            payloads.extend(
+                pds_authoritative_json_failure_payloads(
+                    parsed,
+                    expected_run_id=expected_run_id,
+                    allow_unscoped=allow_unscoped,
+                )
+            )
+        plain_text = text_without_json_spans(value, parsed_spans)
+        if expected_run_id:
+            payloads.extend(
+                pds_plain_failure_segments_for_run(plain_text, expected_run_id)
+            )
+        elif allow_unscoped and not PDS_RUN_HANDLE_LINE_RE.search(plain_text):
+            payloads.append(plain_text)
+    return payloads
+
+
+def pds_authoritative_json_failure_payloads(
+    value: Any,
+    *,
+    expected_run_id: str | None,
+    allow_unscoped: bool,
+) -> list[Any]:
+    """Select a history-pruned JSON payload under explicit authority rules."""
+    if not isinstance(value, dict):
+        return []
+    current = pds_current_status_failure_payload(value)
+    if not isinstance(current, dict):
+        return []
+    run_id = response_pds_run_id(current)
+    if expected_run_id:
+        return [current] if run_id == expected_run_id else []
+    if not allow_unscoped:
+        return []
+    return [current] if not run_id else []
+
+
+def text_without_json_spans(
+    text: str,
+    spans: list[tuple[Any, int, int]],
+) -> str:
+    """Remove parsed JSON while preserving line boundaries for plain parsing."""
+    characters = list(text)
+    for _, start, end in spans:
+        for index in range(start, end):
+            if characters[index] != "\n":
+                characters[index] = " "
+    return "".join(characters)
+
+
+def pds_plain_failure_segments_for_run(text: str, run_id: str) -> list[str]:
+    """Return only diagnostic segments introduced by a matching run handle."""
+    matches = list(PDS_RUN_HANDLE_LINE_RE.finditer(text))
+    segments: list[str] = []
+    for index, match in enumerate(matches):
+        fields = {
+            field.group("key"): field.group("value")
+            for field in PDS_RUN_HANDLE_FIELD_RE.finditer(match.group("fields"))
+        }
+        if fields.get("runId") != run_id:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        segments.append(text[match.start():end])
+    return segments
+
+
+def pds_current_status_failure_payload(value: Any) -> Any:
+    """Remove historical run collections before classifying current status."""
+    if isinstance(value, list):
+        return [pds_current_status_failure_payload(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    current: dict[str, Any] = {}
+    for key, nested in value.items():
+        normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+        if normalized_key in {
+            "attempts",
+            "events",
+            "history",
+            "previous",
+            "previousruns",
+            "runs",
+        }:
+            continue
+        current[key] = pds_current_status_failure_payload(nested)
+    return current
+
+
+def pds_terminal_failure_hint(*values: Any) -> str:
+    """Classify stable PDS terminal signals and return payload-free guidance."""
+    failure_class = classify_pds_terminal_failure(*values)
+    if failure_class == "request_hash_mismatch":
+        return (
+            "PDS reported request_hash_mismatch: the same idempotency key was "
+            "reused with a different request body. Retry with a distinct "
+            "RELEASE_VIDEO_ATTEMPT_ID, RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE, or "
+            "explicit RELEASE_VIDEO_IDEMPOTENCY_KEY."
+        )
+    if failure_class == "provider_quota":
+        return (
+            "PDS/GVS provider quota interrupted release-video generation. "
+            "No YouTube URL is expected from this run. Do not rerun "
+            "package/tag/PyPI release steps. Recover or switch the upstream "
+            "provider, then retry release-video with a new attempt id; if the "
+            "team intentionally abandons the historical video, use "
+            "make release-video-skip with an explicit reason."
+        )
+    if failure_class == "audit_gate":
+        return (
+            "The PDS/GVS distribution audit gate blocked safe video publish. "
+            "No YouTube URL is expected from this run. Do not rerun "
+            "package/tag/PyPI release steps or fabricate a video URL. Repair "
+            "the upstream audit failure, then retry release-video with a fresh "
+            "RELEASE_VIDEO_ATTEMPT_ID; if the team "
+            "intentionally abandons the historical video, use "
+            "make release-video-skip with an explicit reason."
+        )
+    return ""
+
+
+def classify_pds_terminal_failure(*values: Any) -> str | None:
+    """Return a stable terminal class from structured codes or bounded text."""
+    for value in values:
+        for structured in pds_structured_failure_values(value):
+            failure_class = classify_pds_failure_signal(structured, plain=False)
+            if failure_class:
+                return failure_class
+
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        for line in value.splitlines():
+            failure_class = classify_pds_failure_signal(line, plain=True)
+            if failure_class:
+                return failure_class
+    return None
+
+
+def classify_pds_failure_signal(signal: str, *, plain: bool) -> str | None:
+    """Classify one structured value or code-shaped diagnostic line."""
+    normalized = signal.strip().lower()
+    if not normalized or len(normalized) > 512:
+        return None
+    if normalized == "distribution audit gate failed" or (
+        plain and pds_plain_audit_gate_failure(normalized)
+    ):
+        return "audit_gate"
+    if normalized in PDS_REQUEST_HASH_CODES or (
+        plain and pds_plain_failure_code(normalized, PDS_REQUEST_HASH_CODES)
+    ):
+        return "request_hash_mismatch"
+    if normalized in PDS_AUDIT_GATE_CODES or (
+        plain and pds_plain_failure_code(normalized, PDS_AUDIT_GATE_CODES)
+    ):
+        return "audit_gate"
+    if normalized in PDS_PROVIDER_QUOTA_CODES or (
+        plain and pds_plain_failure_code(normalized, PDS_PROVIDER_QUOTA_CODES)
+    ):
+        return "provider_quota"
+    return "provider_quota" if pds_provider_429_line(normalized) else None
+
+
+def pds_structured_failure_values(value: Any) -> list[str]:
+    """Extract only authoritative failure fields from JSON-like PDS output."""
+    if isinstance(value, str):
+        parsed_values = list(iter_json_values(value))
+        extracted: list[str] = []
+        for parsed in parsed_values:
+            extracted.extend(pds_structured_failure_values(parsed))
+        return extracted
+    if isinstance(value, list):
+        extracted = []
+        for nested in value:
+            extracted.extend(pds_structured_failure_values(nested))
+        return extracted
+    if not isinstance(value, dict):
+        return []
+
+    extracted = []
+    for key, nested in value.items():
+        normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+        if isinstance(nested, str) and normalized_key in {
+            "code",
+            "error",
+            "errorcode",
+            "failurecode",
+            "reason",
+            "type",
+            "message",
+        }:
+            extracted.append(nested)
+        if isinstance(nested, (dict, list)):
+            extracted.extend(pds_structured_failure_values(nested))
+    return extracted
+
+
+def pds_plain_failure_code(line: str, codes: set[str]) -> bool:
+    """Accept a code-shaped diagnostic line, not an arbitrary prose mention."""
+    if line in codes:
+        return True
+    if not any(code in line for code in codes):
+        return False
+    return bool(
+        re.match(r"^(?:\[pds\]\s*)?(?:error|code|reason|failure|failed)\b", line)
+        or (line.startswith("{") and line.endswith("}"))
+    )
+
+
+def pds_plain_audit_gate_failure(line: str) -> bool:
+    """Recognize the stable audit phrase with a compact diagnostic prefix."""
+    return bool(
+        re.fullmatch(
+            r"(?:\[pds\]\s*)?(?:error|failed|failure|reason):?\s*"
+            r"distribution audit gate failed[.!]?",
+            line,
+        )
+    )
+
+
+def pds_provider_429_line(line: str) -> bool:
+    """Recognize only compact provider-request HTTP 429 diagnostics."""
+    if len(line) > 240:
+        return False
+    return bool(
+        re.search(
+            r"\bprovider(?:\s+request)?\s+(?:failed|error(?:ed)?)\b.{0,32}"
+            r"\b(?:http\s*)?429\b",
+            line,
+        )
+        or re.search(
+            r"\bprovider\b.{0,16}\b(?:http\s*)?429\b.{0,48}"
+            r"\b(?:error|exhausted|failed|limit|quota)\b",
+            line,
+        )
     )
 
 
@@ -2952,6 +3612,98 @@ def is_collapsible_visual_cue_line(line: str) -> bool:
     )
 
 
+def visual_safety_findings(script: str) -> list[dict[str, Any]]:
+    """Return deterministic safety findings for release-video visual cues."""
+    findings: list[dict[str, Any]] = []
+    cue_index = 0
+    for line_number, line in enumerate(script.splitlines(), start=1):
+        cue = visual_cue_text(line)
+        if not cue:
+            continue
+        cue_index += 1
+        categories = visual_safety_categories(cue)
+        findings.extend(
+            {
+                "category": category,
+                "check": VISUAL_SAFETY_CHECKS[category],
+                "cueIndex": cue_index,
+                "line": line_number,
+            }
+            for category in categories
+        )
+    return findings
+
+
+def visual_safety_categories(cue: str) -> list[str]:
+    """Classify one visual cue using stable, machine-readable categories."""
+    categories: list[str] = []
+    readable_candidate = SAFE_TEXT_QUALIFIER_RE.sub("", cue)
+    if READABLE_VISUAL_RE.search(readable_candidate) or has_risky_shell_visual(
+        readable_candidate
+    ):
+        categories.append("risky_readable_surface")
+    if EXACT_GEOMETRY_VISUAL_RE.search(cue):
+        categories.append("brittle_exact_geometry")
+    if has_unsafe_visual_motion(cue):
+        categories.append("brittle_mandatory_motion")
+    return categories
+
+
+def has_risky_shell_visual(cue: str) -> bool:
+    """Return whether a cue positively identifies a command/readable surface."""
+    return any(
+        pattern.search(cue)
+        for pattern in (
+            UNAMBIGUOUS_SHELL_IMPLEMENTATION_RE,
+            BASH_STRONG_SURFACE_RE,
+            BASH_SESSION_RE,
+            COMMAND_SHELL_PATH_RE,
+            NAMED_COMMAND_SHELL_RE,
+            COMMAND_SHELL_EXECUTION_RE,
+            SHELL_WITH_COMPUTING_RE,
+            SHELL_WITH_PANE_COMPUTING_RE,
+            SHELL_DIRECT_RELATIVE_COMPUTING_RE,
+            SHELL_OWNED_COMPUTING_RE,
+            SHELL_INPUT_INTERACTION_RE,
+            UNAMBIGUOUS_COMPUTING_SURFACE_RE,
+        )
+    )
+
+
+def has_unsafe_visual_motion(cue: str) -> bool:
+    """Return whether a cue requires timed, semantic, or mandatory motion."""
+    if FRAME_EXACT_MOTION_RE.search(cue) or SEMANTIC_MOTION_VISUAL_RE.search(cue):
+        return True
+    for clause in visual_motion_clauses(cue):
+        for match in CAMERA_MOTION_VISUAL_RE.finditer(clause):
+            if not camera_motion_is_locally_optional(clause, match):
+                return True
+    return False
+
+
+def visual_motion_clauses(cue: str) -> list[str]:
+    """Split a cue at boundaries that separate independently required actions."""
+    return [part.strip() for part in VISUAL_CLAUSE_SPLIT_RE.split(cue) if part.strip()]
+
+
+def camera_motion_is_locally_optional(clause: str, match: re.Match[str]) -> bool:
+    """Return whether the matched camera action has local optional grammar."""
+    before = clause[: match.start()]
+    after = clause[match.end() :]
+    if MOTION_REQUIRED_PREFIX_RE.search(before):
+        return False
+    camera_context = bool(re.search(r"\bcamera\b", clause, flags=re.IGNORECASE))
+    camera_context = camera_context or bool(IMPLICIT_CAMERA_ACTION_RE.match(match.group(0)))
+    if not camera_context:
+        return False
+    return bool(
+        MOTION_OPTIONAL_PREFIX_RE.search(before)
+        or CAMERA_MODAL_PREFIX_RE.search(before)
+        or IMPLICIT_CAMERA_MODAL_PREFIX_RE.search(before)
+        or MOTION_OPTIONAL_SUFFIX_RE.search(after)
+    )
+
+
 def validate_release_video_script(
     *,
     script: str,
@@ -2959,6 +3711,11 @@ def validate_release_video_script(
     source: str,
     changes: list[str],
 ) -> dict[str, Any]:
+    safety_findings = visual_safety_findings(script)
+    safety_categories = {
+        str(finding["category"])
+        for finding in safety_findings
+    }
     checks = {
         "minLength": len(script.strip()) >= 200,
         "hasSection": bool(re.search(r"(?m)^##\s+\S", script)),
@@ -2968,6 +3725,10 @@ def validate_release_video_script(
         "hasNoDuplicateNarratorLabels": not has_duplicate_narrator_labels(script),
         "hasNoLabelOnlyVisualCues": not has_label_only_visual_cues(script),
         "hasNoMarkdownFences": not has_markdown_fence_line(script),
+        **{
+            check: category not in safety_categories
+            for category, check in VISUAL_SAFETY_CHECKS.items()
+        },
     }
     errors = [name for name, passed in checks.items() if not passed]
     return {
@@ -2977,6 +3738,7 @@ def validate_release_video_script(
         "changes": changes,
         "checks": checks,
         "errors": errors,
+        "visualSafetyFindings": safety_findings,
     }
 
 
