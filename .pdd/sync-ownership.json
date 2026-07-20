@@ -251,7 +251,6 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/architecture_sync_python_run.json",
-      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -1919,14 +1918,12 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "context/contract_check_example.py",
-      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "context/contract_ir_example.py",
-      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -2005,7 +2002,6 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "context/coverage_contracts_example.py",
-      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -2626,7 +2622,6 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "context/story_test_generator_example.py",
-      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
