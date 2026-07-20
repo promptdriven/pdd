@@ -10,6 +10,10 @@ from unittest.mock import patch
 import pytest
 
 from pdd.agentic_sync_runner import AsyncSyncRunner
+from pdd.agentic_sync import (
+    GlobalSyncModule,
+    _build_issue_candidate_inventory,
+)
 from pdd.durable_sync_runner import (
     DurableSyncRunner,
     _parse_checkpoint_trailer,
@@ -358,6 +362,69 @@ def test_durable_runner_rejects_child_output_outside_frozen_plan(tmp_path: Path)
     assert "out-of-scope path(s): outside-contract.txt" in message
     log = _git(repo, "log", "sync/issue-1328", "--format=%B").stdout
     assert "PDD-Sync-Checkpoint-V2: issue=1328 module=foo" not in log
+
+
+def test_durable_allowlist_consumes_production_exact_candidate_paths(
+    tmp_path: Path,
+) -> None:
+    """The real planner and durable gate agree on prompt/code/test boundaries."""
+    repo = _init_repo_with_remote(tmp_path)
+    for directory in ("pdd", "tests", "context", "prompts"):
+        (repo / directory).mkdir()
+    prompt = repo / "prompts" / "foo_python.prompt"
+    prompt.write_text("foo", encoding="utf-8")
+    (repo / ".pddrc").write_text(
+        """contexts:
+  pdd_cli:
+    paths: ["pdd/**", "prompts/**"]
+    defaults:
+      prompts_dir: "prompts"
+      generate_output_path: "pdd"
+      test_output_path: "tests"
+      example_output_path: "context"
+      default_language: "python"
+""",
+        encoding="utf-8",
+    )
+    entry = {
+        "filename": "foo_python.prompt",
+        "filepath": "pdd/foo.py",
+        "dependencies": [],
+    }
+    architecture_path = repo / "architecture.json"
+    architecture_path.write_text(json.dumps([entry]), encoding="utf-8")
+    scoped = [GlobalSyncModule("foo", "foo", repo, architecture_path, entry)]
+    with patch(
+        "pdd.agentic_sync._run_readonly_sync_determine_in_cwd",
+        return_value=type("Decision", (), {"operation": "generate"})(),
+    ):
+        inventory = _build_issue_candidate_inventory(
+            repo, [entry], architecture_path, scoped_modules=scoped
+        )
+    plan = build_sync_plan(repo, inventory.candidates, ["foo"])
+    runner = _runner(
+        repo,
+        sync_options={
+            "sync_plan": plan.to_dict(),
+            "sync_plan_digest": plan.sync_plan_digest,
+            "selection_digest": plan.selection_digest,
+            "execution_selected_module_ids": ["foo"],
+            "execution_dependency_order": ["foo"],
+        },
+    )
+
+    assert runner._out_of_scope_output_paths(
+        "foo",
+        [
+            "prompts/foo_python.prompt",
+            "pdd/foo.py",
+            "tests/test_foo.py",
+            "context/foo_example.py",
+        ],
+    ) == []
+    assert runner._out_of_scope_output_paths(
+        "foo", ["pdd/unrelated.py"]
+    ) == ["pdd/unrelated.py"]
 
 
 def test_nested_module_metadata_is_force_added_for_module_cwd(tmp_path: Path):

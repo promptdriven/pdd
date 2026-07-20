@@ -512,9 +512,17 @@ class DurableSyncRunner(AsyncSyncRunner):
             None,
         )
         outputs = candidate.get("output_paths") if isinstance(candidate, dict) else None
-        if not isinstance(outputs, list) or any(not isinstance(path, str) for path in outputs):
+        prompts = candidate.get("prompt_paths") if isinstance(candidate, dict) else None
+        if (
+            not isinstance(outputs, list)
+            or not isinstance(prompts, list)
+            or any(not isinstance(path, str) for path in (*outputs, *prompts))
+        ):
             return sorted(paths)
-        allowed = {path.replace("\\", "/").strip("/") for path in outputs}
+        allowed = {
+            path.replace("\\", "/").strip("/")
+            for path in (*outputs, *prompts)
+        }
         metadata = self._metadata_paths(basename, paths)
         return sorted(
             path for path in paths

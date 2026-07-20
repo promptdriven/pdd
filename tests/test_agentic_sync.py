@@ -60,6 +60,7 @@ from pdd.agentic_sync_runner import (
     build_dep_graph_from_architecture,
 )
 from pdd.resolved_sync_unit import ResolvedSyncUnit
+from pdd.sync_determine_operation import get_pdd_file_paths
 
 
 def test_agentic_sync_error_sanitizer_removes_exact_interactive_ui_fragments():
@@ -249,6 +250,122 @@ def test_issue_inventory_preserves_real_nested_architecture_origins(
     assert [candidate.module_id for candidate in inventory.candidates] == [
         "apps/a/page", "apps/b/page"
     ]
+
+
+def test_issue_inventory_freezes_exact_output_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production inventory expands advisory directories into exact child files."""
+    (tmp_path / "pdd").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "context").mkdir()
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "sync_plan_python.prompt").write_text("plan", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        """contexts:
+  pdd_cli:
+    paths: ["pdd/**", "prompts/**"]
+    defaults:
+      prompts_dir: "prompts"
+      generate_output_path: "pdd"
+      test_output_path: "tests"
+      example_output_path: "context"
+      default_language: "python"
+""",
+        encoding="utf-8",
+    )
+    entry = {
+        "filename": "sync_plan_python.prompt",
+        "filepath": "pdd/sync_plan.py",
+        "dependencies": [],
+    }
+    architecture_path = tmp_path / "architecture.json"
+    architecture_path.write_text(json.dumps([entry]), encoding="utf-8")
+    scoped = [
+        GlobalSyncModule(
+            "sync_plan", "sync_plan", tmp_path, architecture_path, entry
+        )
+    ]
+
+    with patch(
+        "pdd.agentic_sync._run_readonly_sync_determine_in_cwd",
+        return_value=SimpleNamespace(operation="generate"),
+    ):
+        inventory = _build_issue_candidate_inventory(
+            tmp_path,
+            [entry],
+            architecture_path,
+            scoped_modules=scoped,
+        )
+
+    candidate = inventory.candidates[0]
+    assert candidate.prompt_paths == (prompts / "sync_plan_python.prompt",)
+    assert set(candidate.output_paths) == {
+        tmp_path / "pdd" / "sync_plan.py",
+        tmp_path / "tests" / "test_sync_plan.py",
+        tmp_path / "context" / "sync_plan_example.py",
+    }
+    assert not any(path.is_dir() for path in candidate.output_paths)
+    monkeypatch.chdir(tmp_path)
+    production_paths = get_pdd_file_paths(
+        "sync_plan", "python", prompts_dir=str(prompts), context_override="pdd_cli"
+    )
+    assert set(candidate.output_paths) == {
+        production_paths["code"].resolve(),
+        production_paths["example"].resolve(),
+        *(path.resolve() for path in production_paths["test_files"]),
+    }
+
+
+def test_issue_inventory_matches_partial_output_templates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Template layouts retain the configured code path when code is omitted."""
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "foo_python.prompt").write_text("foo", encoding="utf-8")
+    (tmp_path / "spec").mkdir()
+    (tmp_path / "spec" / "test_foo_edge.py").write_text("", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        """contexts:
+  pdd_cli:
+    paths: ["foo", "prompts/**"]
+    defaults:
+      prompts_dir: "prompts"
+      generate_output_path: "src/"
+      default_language: "python"
+      outputs:
+        example:
+          path: "samples/{name}_example.{ext}"
+        test:
+          path: "spec/test_{name}.{ext}"
+""",
+        encoding="utf-8",
+    )
+
+    with patch(
+        "pdd.agentic_sync._run_readonly_sync_determine_in_cwd",
+        return_value=SimpleNamespace(operation="generate"),
+    ):
+        inventory = _build_issue_candidate_inventory(tmp_path, None, None)
+
+    candidate = inventory.candidates[0]
+    assert candidate.prompt_paths == (prompts / "foo_python.prompt",)
+    assert set(candidate.output_paths) == {
+        tmp_path / "src" / "foo.py",
+        tmp_path / "spec" / "test_foo_edge.py",
+        tmp_path / "samples" / "foo_example.py",
+    }
+    monkeypatch.chdir(tmp_path)
+    production_paths = get_pdd_file_paths(
+        "foo", "python", prompts_dir=str(prompts), context_override="pdd_cli"
+    )
+    assert set(candidate.output_paths) == {
+        production_paths["code"].resolve(),
+        production_paths["example"].resolve(),
+        *(path.resolve() for path in production_paths["test_files"]),
+    }
 
 
 def test_production_planner_keeps_identical_nested_architecture_filepaths(
@@ -3849,7 +3966,7 @@ class TestRuntimeLlmTemplateNoop:
         mock_dry_run,
         mock_runner_cls,
     ):
-        """An explicit empty closed ambiguity selection is a no-op."""
+        """An explicit empty ambiguity selection fails closed before writes."""
         issue_data = {"title": "Test", "body": "Real change", "comments_url": ""}
         mock_gh_cmd.return_value = (True, json.dumps(issue_data))
         mock_load_arch.return_value = (
@@ -3867,8 +3984,11 @@ class TestRuntimeLlmTemplateNoop:
             "https://github.com/owner/repo/issues/1396", quiet=True
         )
 
-        assert success is True
-        assert "already synced" in msg.lower()
+        assert success is False
+        assert "non-empty" in msg.lower()
+        assert "at least one candidate" in msg.lower()
+        assert cost == 0.04
+        assert model == "anthropic"
         mock_dry_run.assert_not_called()
         mock_runner_cls.assert_not_called()
 
