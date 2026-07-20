@@ -1565,6 +1565,260 @@ def test_get_pdd_file_paths_architecture_filepath_uses_basename_context(tmp_path
     assert paths["test"] == tmp_path / "context_tests" / "test_agentic_architecture.py"
 
 
+# --- Issue #2237: Architecture branch must overlay explicit .pddrc outputs ---
+
+def test_get_pdd_file_paths_architecture_with_explicit_outputs_example_uses_pddrc_path(tmp_path, monkeypatch):
+    """Issue #2237: explicit .pddrc outputs.example.path must win over the architecture-derived path.
+
+    When architecture.json supplies the code filepath AND .pddrc declares an explicit
+    outputs.example.path, the explicit mapping must be honored for the example artifact.
+    Before the fix, the architecture branch returns immediately after
+    _architecture_artifact_paths() without consulting defaults.outputs, so the explicit
+    mapping is silently ignored and auto-heal loops endlessly on a non-existent derived path.
+
+    Reproduces the exact scenario from the issue: cloudbuild_github_app_ci with
+    outputs.example.path mapped to the code file itself.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    # .pddrc with explicit outputs.example.path that differs from the architecture-derived path.
+    # This is the exact .pddrc structure from the issue's reproduction scenario:
+    # outputs.example is mapped to the code file (cloudbuild-github-app-ci.yaml),
+    # not to the derived examples/ directory path.
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      example_output_path: "examples/"\n'
+        '      test_output_path: "tests/"\n'
+        '      outputs:\n'
+        '        example:\n'
+        '          path: "cloudbuild-github-app-ci.yaml"\n'
+    )
+
+    # architecture.json supplies the code filepath (authoritative for code path resolution)
+    (tmp_path / "architecture.json").write_text(json.dumps({
+        "modules": [{
+            "filename": "cloudbuild_github_app_ci_yaml.prompt",
+            "filepath": "cloudbuild-github-app-ci.yaml",
+        }]
+    }))
+
+    paths = get_pdd_file_paths("cloudbuild_github_app_ci", "yaml", "prompts")
+
+    # The explicit outputs.example.path must be used, NOT the architecture-derived path.
+    # Buggy behavior: returns examples/cloudbuild-github-app-ci_example.yml (directory default)
+    # Fixed behavior: returns cloudbuild-github-app-ci.yaml (explicit .pddrc mapping)
+    assert paths["example"] == tmp_path / "cloudbuild-github-app-ci.yaml", (
+        f"Expected explicit .pddrc outputs.example.path 'cloudbuild-github-app-ci.yaml' "
+        f"anchored to project root, but got: {paths['example']}. "
+        f"The architecture branch must overlay explicit .pddrc outputs after calling "
+        f"_architecture_artifact_paths(), not return immediately with the derived path."
+    )
+
+
+def test_get_pdd_file_paths_architecture_with_explicit_outputs_test_uses_pddrc_path(tmp_path, monkeypatch):
+    """Issue #2237: explicit .pddrc outputs.test.path must win over the architecture-derived test path.
+
+    Mirrors the example test but for the test artifact. The architecture branch of
+    get_pdd_file_paths() must overlay explicit outputs.test from .pddrc so that
+    drift-heal uses the tracked test file rather than a derived (wrong) path.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    # .pddrc with explicit outputs.test.path pointing to a specific test file.
+    # Without the fix, this mapping is ignored and the architecture branch returns
+    # tests/test_cloudbuild-github-app-ci.yml (derived from the architecture filepath stem).
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      example_output_path: "examples/"\n'
+        '      test_output_path: "tests/"\n'
+        '      outputs:\n'
+        '        test:\n'
+        '          path: "tests/test_cloudbuild_github_app_ci.py"\n'
+    )
+
+    (tmp_path / "architecture.json").write_text(json.dumps({
+        "modules": [{
+            "filename": "cloudbuild_github_app_ci_yaml.prompt",
+            "filepath": "cloudbuild-github-app-ci.yaml",
+        }]
+    }))
+
+    paths = get_pdd_file_paths("cloudbuild_github_app_ci", "yaml", "prompts")
+
+    # Buggy behavior: returns tests/test_cloudbuild-github-app-ci.yml (architecture stem)
+    # Fixed behavior: returns tests/test_cloudbuild_github_app_ci.py (explicit .pddrc mapping)
+    assert paths["test"] == tmp_path / "tests" / "test_cloudbuild_github_app_ci.py", (
+        f"Expected explicit .pddrc outputs.test.path 'tests/test_cloudbuild_github_app_ci.py' "
+        f"anchored to project root, but got: {paths['test']}. "
+        f"The architecture branch must overlay explicit .pddrc outputs.test."
+    )
+
+
+def test_get_pdd_file_paths_architecture_code_path_not_overridden_by_outputs_example(tmp_path, monkeypatch):
+    """Issue #2237: architecture is authoritative for code; explicit outputs.example/test win for those artifacts.
+
+    After the fix, the architecture branch must:
+    - Keep architecture.json as the source of truth for paths["code"]
+    - Overlay explicit .pddrc outputs.example and outputs.test for those artifact paths
+
+    This verifies the fix boundary: architecture wins for code, explicit .pddrc outputs win
+    for example and test.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "pdd").mkdir()
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context_tests").mkdir()
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    # .pddrc with BOTH directory defaults AND explicit outputs for the pdd_cli context.
+    # Without the fix, the explicit outputs are ignored and the directory defaults apply.
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      test_output_path: "tests/"\n'
+        '      example_output_path: "examples/"\n'
+        '  pdd_cli:\n'
+        '    paths: ["pdd/**"]\n'
+        '    defaults:\n'
+        '      test_output_path: "context_tests/"\n'
+        '      example_output_path: "context/"\n'
+        '      outputs:\n'
+        '        example:\n'
+        '          path: "context/custom_example.py"\n'
+        '        test:\n'
+        '          path: "context_tests/custom_test.py"\n'
+    )
+
+    # architecture.json supplies the code filepath for pdd/agentic_architecture.py
+    (tmp_path / "architecture.json").write_text(json.dumps({
+        "modules": [{
+            "filename": "agentic_architecture_python.prompt",
+            "filepath": "pdd/agentic_architecture.py",
+        }]
+    }))
+
+    paths = get_pdd_file_paths("agentic_architecture", "python", "prompts")
+
+    # Architecture must remain authoritative for code path (this is correct in both buggy and fixed code)
+    assert paths["code"] == tmp_path / "pdd" / "agentic_architecture.py", (
+        f"Architecture must be authoritative for code path; got: {paths['code']}"
+    )
+    # Explicit outputs.example.path must override the directory-default derived path.
+    # Buggy behavior: returns context/agentic_architecture_example.py (from example_output_path)
+    # Fixed behavior: returns context/custom_example.py (from explicit outputs.example.path)
+    assert paths["example"] == tmp_path / "context" / "custom_example.py", (
+        f"Expected explicit .pddrc outputs.example.path 'context/custom_example.py'; "
+        f"got: {paths['example']}. Directory-default path would be "
+        f"context/agentic_architecture_example.py — if that is returned, the fix is missing."
+    )
+    # Explicit outputs.test.path must override the directory-default derived path.
+    # Buggy behavior: returns context_tests/test_agentic_architecture.py (from test_output_path)
+    # Fixed behavior: returns context_tests/custom_test.py (from explicit outputs.test.path)
+    assert paths["test"] == tmp_path / "context_tests" / "custom_test.py", (
+        f"Expected explicit .pddrc outputs.test.path 'context_tests/custom_test.py'; "
+        f"got: {paths['test']}. Directory-default path would be "
+        f"context_tests/test_agentic_architecture.py — if that is returned, the fix is missing."
+    )
+
+
+def test_get_pdd_file_paths_architecture_with_explicit_outputs_is_idempotent(tmp_path, monkeypatch):
+    """Issue #2237: get_pdd_file_paths returns the same paths on consecutive calls (no nondeterminism).
+
+    Two consecutive calls with identical arguments must return identical paths.
+    With the fix, both calls return the explicit .pddrc outputs.example.path.
+    Without the fix, both calls return the wrong derived path (but consistently wrong),
+    which causes auto-heal to loop because it generates a nondeterministic LLM example
+    at the wrong path each time and commits only the fingerprint metadata.
+
+    This test fails on the buggy code because the expected value (the explicit mapping)
+    does not match the actual value (the directory-derived mapping) on either call.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      example_output_path: "examples/"\n'
+        '      test_output_path: "tests/"\n'
+        '      outputs:\n'
+        '        example:\n'
+        '          path: "cloudbuild-github-app-ci.yaml"\n'
+        '        test:\n'
+        '          path: "tests/test_cloudbuild_github_app_ci.py"\n'
+    )
+
+    (tmp_path / "architecture.json").write_text(json.dumps({
+        "modules": [{
+            "filename": "cloudbuild_github_app_ci_yaml.prompt",
+            "filepath": "cloudbuild-github-app-ci.yaml",
+        }]
+    }))
+
+    # First call
+    paths_first = get_pdd_file_paths("cloudbuild_github_app_ci", "yaml", "prompts")
+    # Second call with identical arguments — must produce identical results
+    paths_second = get_pdd_file_paths("cloudbuild_github_app_ci", "yaml", "prompts")
+
+    expected_example = tmp_path / "cloudbuild-github-app-ci.yaml"
+    expected_test = tmp_path / "tests" / "test_cloudbuild_github_app_ci.py"
+
+    # Both calls must return the explicit .pddrc example path (not the derived path)
+    assert paths_first["example"] == expected_example, (
+        f"First call: expected explicit example path {expected_example}; "
+        f"got {paths_first['example']}"
+    )
+    assert paths_second["example"] == expected_example, (
+        f"Second call: expected explicit example path {expected_example}; "
+        f"got {paths_second['example']}"
+    )
+    # Idempotency: both calls must agree
+    assert paths_first["example"] == paths_second["example"], (
+        f"Non-idempotent: first call returned {paths_first['example']}, "
+        f"second call returned {paths_second['example']}"
+    )
+    assert paths_first["test"] == expected_test, (
+        f"First call: expected explicit test path {expected_test}; "
+        f"got {paths_first['test']}"
+    )
+    assert paths_second["test"] == expected_test, (
+        f"Second call: expected explicit test path {expected_test}; "
+        f"got {paths_second['test']}"
+    )
+
+
 # --- Part 6: Auto-deps Infinite Loop Regression Tests ---
 
 class TestAutoDepsInfiniteLoopFix:

@@ -2013,6 +2013,61 @@ class TestHealModule:
         for call in pdd_calls:
             assert call[1].get("env") is env
 
+    def test_heal_example_fails_closed_when_example_file_absent_after_pdd_command(self, tmp_path):
+        """Issue #2237: _heal_example must return False when pdd example reports success
+        but drift.example_path is absent from disk.
+
+        Before the fix, _heal_example returns True (trusting the subprocess exit code) even
+        when the example file does not exist at drift.example_path. This is the compounding
+        condition that produces endless metadata-only commit churn: auto-heal commits a
+        fingerprint whose example_hash describes an untracked/missing derived artifact.
+        The three durable commits (1f30c1ef2, 5e509d875, cbf55959a) in pdd_cloud PR #3147
+        each changed only the example_hash while prompt and code hashes stayed identical —
+        the exact nondeterminism this fail-close must prevent.
+
+        The test uses the exact drift reason string from the issue's reproduction logs so
+        that any future message change is caught immediately.
+        """
+        from pdd.ci_drift_heal import _heal_example
+
+        # drift.example_path points to a path that genuinely does not exist on disk.
+        # This represents the scenario where architecture.json derives the wrong example path
+        # (e.g. examples/cloudbuild-github-app-ci_example.yaml) while the explicit .pddrc
+        # mapping points to cloudbuild-github-app-ci.yaml — but the architecture branch bug
+        # means get_pdd_file_paths() resolves to the wrong path, the pdd example subprocess
+        # writes to that wrong path, and drift.example_path never exists post-heal.
+        absent_example = tmp_path / "examples" / "cloudbuild-github-app-ci_example.yaml"
+        # Deliberately do NOT create the file — it must remain absent.
+        assert not absent_example.exists(), "Pre-condition: example file must not exist"
+
+        drift = DriftInfo(
+            "cloudbuild_github_app_ci",
+            "yaml",
+            "example",
+            "Example file missing - regenerate example",
+            prompt_path="/repo/prompts/cloudbuild_github_app_ci_yaml.prompt",
+            code_path="/repo/cloudbuild-github-app-ci.yaml",
+            example_path=str(absent_example),
+        )
+
+        # pdd example subprocess reports success (returncode=0), but it wrote the example
+        # to a path different from drift.example_path (e.g. because get_pdd_file_paths
+        # returned the wrong derived path). The file at drift.example_path remains absent.
+        with patch("pdd.ci_drift_heal._run_pdd_command", return_value=True):
+            result = _heal_example(drift, env={})
+
+        # Buggy behavior: returns True — blindly trusts the subprocess success report.
+        # This causes auto-heal to commit a fingerprint with a nondeterministic example_hash
+        # and repeat the same wrong heal on every subsequent CI run.
+        # Fixed behavior: verifies drift.example_path exists on disk after the subprocess;
+        # returns False when it doesn't, preventing the metadata-only commit.
+        assert result is False, (
+            "_heal_example returned True even though drift.example_path is absent from disk "
+            "after pdd example reported success. This is the exact condition that produces "
+            "endless metadata-only commit churn (issue #2237). After the fix, _heal_example "
+            "must verify drift.example_path.exists() before returning True."
+        )
+
 
 # ---------------------------------------------------------------------------
 # commit_and_push tests
