@@ -61,6 +61,14 @@
        - Stable exits are 0 for explicit all-pass, 1 for semantic story failure,
          2 for invocation/scope/configuration error, and 3 for auth/provider/timeout
          or incomplete infrastructure failure.
+       - Apply those same classifications in human mode. Missing, invalid, or
+         empty story/prompt scopes MUST print a corrective configuration
+         diagnostic (unless quiet) and exit 2. Incomplete story rows (including
+         partially or fully unresolved prompt metadata) MUST exit 3.
+         Authentication/provider/timeout exceptions MUST print only a safe
+         classified message and appropriate authenticate/retry guidance (unless
+         quiet), never raw exception text, and exit 3. Exact-manifest metadata
+         mismatch MUST emit a human diagnostic before exiting 3.
      - For handled non-Click exceptions, mark `ctx.obj["_command_failed"] = True` before calling `handle_error(...)` and returning `None`, so the core result callback exits non-zero even when Click chain mode supplies an empty results list.
   2. **conflicts**: Takes two prompt files. Call `conflicts_main`. Options: `--output`.
   3. **bug**: Takes either a GitHub issue URL (agentic mode) or `--manual` with 5 positional files.

@@ -1,4 +1,5 @@
 """User story discovery, validation, generation, and prompt-fix helpers."""
+
 # pylint: disable=too-many-lines
 from __future__ import annotations
 
@@ -70,7 +71,9 @@ def _resolve_stories_dir(
     ``PDD_USER_STORIES_DIR``) are anchored to it so that callers invoked from
     outside the project directory still find the right location.
     """
-    resolved = stories_dir or os.environ.get("PDD_USER_STORIES_DIR") or DEFAULT_STORIES_DIR
+    resolved = (
+        stories_dir or os.environ.get("PDD_USER_STORIES_DIR") or DEFAULT_STORIES_DIR
+    )
     p = Path(resolved)
     if root is not None and not p.is_absolute():
         return root / p
@@ -96,7 +99,9 @@ def discover_story_files(stories_dir: Optional[str] = None) -> List[Path]:
     base_dir = _resolve_stories_dir(stories_dir)
     if not base_dir.exists() or not base_dir.is_dir():
         return []
-    return sorted(p for p in base_dir.rglob(f"{STORY_PREFIX}*{STORY_SUFFIX}") if p.is_file())
+    return sorted(
+        p for p in base_dir.rglob(f"{STORY_PREFIX}*{STORY_SUFFIX}") if p.is_file()
+    )
 
 
 def discover_prompt_files(
@@ -202,6 +207,29 @@ def _format_story_change(
     return f"{prompt_label}: {instructions}"
 
 
+def _render_incomplete_story_evaluation(
+    story_path: Path,
+    evaluated_prompts: Iterable[Path],
+    unresolved_refs: Iterable[str],
+) -> None:
+    """Render metadata resolution failures without implying semantic drift."""
+    rprint(f"[bold]UNKNOWN[/bold] {rich_escape(str(story_path))}")
+    rprint("")
+    rprint("  Story was not successfully evaluated:")
+    rprint("  One or more pdd-story-prompts references could not be resolved.")
+    rprint("  Evaluated prompts:")
+    evaluated = list(evaluated_prompts)
+    if evaluated:
+        for prompt_path in evaluated:
+            rprint(f"  - {rich_escape(str(prompt_path))}")
+    else:
+        rprint("  - none")
+    rprint("  Unresolved prompt references:")
+    for ref in unresolved_refs:
+        rprint(f"  - {rich_escape(ref)}")
+    rprint("  Next step: repair the pdd-story-prompts metadata, then retry.")
+
+
 def _parse_story_prompt_metadata(story_content: str) -> List[str]:
     """Extract prompt references from optional pdd-story-prompts metadata."""
     match = STORY_PROMPTS_METADATA_RE.search(story_content)
@@ -228,7 +256,9 @@ def get_all_dev_units_for_story(story_text: str) -> list[str]:
     """Return all dev units/prompts declared for a story, preserving order."""
     refs: list[str] = []
     seen: set[str] = set()
-    for ref in parse_story_dev_unit_metadata(story_text) + _parse_story_prompt_metadata(story_text):
+    for ref in parse_story_dev_unit_metadata(story_text) + _parse_story_prompt_metadata(
+        story_text
+    ):
         key = ref.lower()
         if key in seen:
             continue
@@ -249,7 +279,9 @@ def _dev_unit_ref_matches_prompt(ref: str, prompt_name: str) -> bool:
     return left == right or left.endswith("/" + right)
 
 
-def get_cross_unit_stories_for_prompt(prompt_name: str, stories_dir: Path | str) -> list[dict]:
+def get_cross_unit_stories_for_prompt(
+    prompt_name: str, stories_dir: Path | str
+) -> list[dict]:
     """Return cross-unit stories that include *prompt_name* in their metadata."""
     root = Path(stories_dir)
     if not root.exists():
@@ -277,7 +309,9 @@ def get_cross_unit_stories_for_prompt(prompt_name: str, stories_dir: Path | str)
     return matches
 
 
-def _prompt_reference_for_metadata(prompt_path: Path, prompts_dir: Optional[Path]) -> str:
+def _prompt_reference_for_metadata(
+    prompt_path: Path, prompts_dir: Optional[Path]
+) -> str:
     """Return a stable metadata reference for a prompt path."""
     if prompts_dir:
         try:
@@ -302,8 +336,7 @@ def _upsert_story_prompt_metadata(
         return False
 
     metadata_refs = [
-        _prompt_reference_for_metadata(pf, prompts_dir)
-        for pf in unique_sorted
+        _prompt_reference_for_metadata(pf, prompts_dir) for pf in unique_sorted
     ]
     metadata_line = f"<!-- {STORY_PROMPTS_METADATA_KEY}: {', '.join(metadata_refs)} -->"
     if STORY_PROMPTS_METADATA_RE.search(story_content):
@@ -312,11 +345,15 @@ def _upsert_story_prompt_metadata(
         updated = f"{metadata_line}\n\n{story_content}"
 
     if len(metadata_refs) >= 2:
-        dev_units_line = f"<!-- {STORY_DEV_UNITS_METADATA_KEY}: {', '.join(metadata_refs)} -->"
+        dev_units_line = (
+            f"<!-- {STORY_DEV_UNITS_METADATA_KEY}: {', '.join(metadata_refs)} -->"
+        )
         if STORY_DEV_UNITS_METADATA_RE.search(updated):
             updated = STORY_DEV_UNITS_METADATA_RE.sub(dev_units_line, updated, count=1)
         else:
-            updated = updated.replace(metadata_line, f"{metadata_line}\n{dev_units_line}", 1)
+            updated = updated.replace(
+                metadata_line, f"{metadata_line}\n{dev_units_line}", 1
+            )
 
     if updated == story_content:
         return False
@@ -445,12 +482,16 @@ def _select_story_prompt_links(
     3) all prompt files (full-project fallback)
     """
     if changes_list is not None:
-        linked_from_changes = _linked_prompts_from_changes(changes_list, prompt_files, prompts_root)
+        linked_from_changes = _linked_prompts_from_changes(
+            changes_list, prompt_files, prompts_root
+        )
         if linked_from_changes:
             return linked_from_changes, "detect_change"
 
     story_refs = _extract_prompt_refs_from_story_text(story_content)
-    linked_from_story = _resolve_prompt_refs_to_paths(story_refs, prompt_files, prompts_root)
+    linked_from_story = _resolve_prompt_refs_to_paths(
+        story_refs, prompt_files, prompts_root
+    )
     if linked_from_story:
         return linked_from_story, "story_content"
 
@@ -517,7 +558,9 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
                     resolved = prompts_root / ref
             if resolved:
                 existing_paths.append(resolved)
-        linked_prompt_paths = _dedupe_prompt_paths(existing_paths + explicit_prompt_files)
+        linked_prompt_paths = _dedupe_prompt_paths(
+            existing_paths + explicit_prompt_files
+        )
         updated = _upsert_story_prompt_metadata(
             story_path,
             story_content,
@@ -545,7 +588,9 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
         for ref in existing_refs:
             resolved = _resolve_prompt_path(ref, prompt_files, prompts_root)
             if resolved:
-                resolved_refs.append(_prompt_reference_for_metadata(resolved, prompts_root))
+                resolved_refs.append(
+                    _prompt_reference_for_metadata(resolved, prompts_root)
+                )
             else:
                 unresolved_refs.append(ref)
         if resolved_refs and not unresolved_refs:
@@ -568,7 +613,9 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
             verbose=verbose,
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        logger.warning("Story prompt detection failed; using deterministic links: %s", exc)
+        logger.warning(
+            "Story prompt detection failed; using deterministic links: %s", exc
+        )
         changes_list = None
         cost = 0.0
         model = ""
@@ -612,7 +659,13 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
                 model,
                 linked_refs,
             )
-        return True, "Story prompt metadata linked to full prompt set.", cost, model, linked_refs
+        return (
+            True,
+            "Story prompt metadata linked to full prompt set.",
+            cost,
+            model,
+            linked_refs,
+        )
     if detection_error:
         return (
             True,
@@ -623,7 +676,13 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
             linked_refs,
         )
     if link_source == "detect_change":
-        return True, "Story prompt metadata already up to date.", cost, model, linked_refs
+        return (
+            True,
+            "Story prompt metadata already up to date.",
+            cost,
+            model,
+            linked_refs,
+        )
     if link_source == "story_content":
         return (
             True,
@@ -685,7 +744,9 @@ def _story_title_from_prompts(prompt_paths: List[Path]) -> str:
 
 def _story_slug_from_prompts(prompt_paths: List[Path]) -> str:
     """Build a filesystem-safe slug from prompt file names."""
-    topic_names = [_slugify_story_name(_prompt_topic_name(path)) for path in prompt_paths]
+    topic_names = [
+        _slugify_story_name(_prompt_topic_name(path)) for path in prompt_paths
+    ]
     merged = "_".join(name for name in topic_names[:3] if name)
     return merged or "generated_story"
 
@@ -805,9 +866,7 @@ _STORY_CONTRACT_PROMPT_NAME = "generate_story_contract_LLM"
 # generation instead of writing a deterministic substitute, because a shallow
 # deterministic story can miss prompt behavior and pass mutation tests that
 # should fail.
-_REQUIRED_STORY_SECTIONS = (
-    "## Story",
-)
+_REQUIRED_STORY_SECTIONS = ("## Story",)
 # The generated contract file carries the machine-checkable sections plus a
 # ``## Candidate Prompts`` list of other prompts the story could run against.
 # These are top-level ``##`` headings because the contract is now its own file
@@ -828,7 +887,9 @@ _PLACEHOLDER_TOKEN_RE = re.compile(
     r"forbidden outcome[^>\n]*|what this story[^>\n]*)\s*>",
     re.IGNORECASE,
 )
-_PDD_METADATA_TAG_RE = re.compile(r"</?\s*pdd-(?:reason|interface|dependency)\b", re.IGNORECASE)
+_PDD_METADATA_TAG_RE = re.compile(
+    r"</?\s*pdd-(?:reason|interface|dependency)\b", re.IGNORECASE
+)
 _CODE_FENCE_RE = re.compile(
     r"^\s*```[A-Za-z0-9_-]*\s*\n(?P<body>.*?)\n```\s*$",
     re.DOTALL,
@@ -846,8 +907,7 @@ def _strip_markdown_code_fence(text: str) -> str:
 def _contains_placeholder_tokens(markdown: str) -> bool:
     """Return True when model output still contains template placeholders."""
     return bool(
-        _PLACEHOLDER_TOKEN_RE.search(markdown)
-        or _PDD_METADATA_TAG_RE.search(markdown)
+        _PLACEHOLDER_TOKEN_RE.search(markdown) or _PDD_METADATA_TAG_RE.search(markdown)
     )
 
 
@@ -923,7 +983,9 @@ def _llm_generate_story_markdown(  # pylint: disable=too-many-arguments,too-many
         return None, cost, model
 
     markdown = _strip_markdown_code_fence(raw)
-    missing = [section for section in _REQUIRED_STORY_SECTIONS if section not in markdown]
+    missing = [
+        section for section in _REQUIRED_STORY_SECTIONS if section not in markdown
+    ]
     if missing:
         logger.debug("LLM story missing required sections %s.", missing)
         return None, cost, model
@@ -944,14 +1006,16 @@ _CONTRACT_HEADER_RE = re.compile(
     r"<!--\s*pdd-story-contract\b(?P<attrs>.*?)-->",
     flags=re.IGNORECASE | re.DOTALL,
 )
-_CONTRACT_ATTR_RE = re.compile(r"(?P<key>[a-z0-9_-]+)\s*=\s*\"(?P<val>[^\"]*)\"", re.IGNORECASE)
+_CONTRACT_ATTR_RE = re.compile(
+    r"(?P<key>[a-z0-9_-]+)\s*=\s*\"(?P<val>[^\"]*)\"", re.IGNORECASE
+)
 
 
 def _slug_from_story_path(story_path: Path) -> str:
     """Return the ``<slug>`` portion of a ``story__<slug>.md`` filename."""
     name = story_path.name
     if name.startswith(STORY_PREFIX):
-        name = name[len(STORY_PREFIX):]
+        name = name[len(STORY_PREFIX) :]
     if name.endswith(STORY_SUFFIX):
         name = name[: -len(STORY_SUFFIX)]
     return name
@@ -1042,7 +1106,9 @@ def _prompt_inventory_descriptor(prompt_path: Path) -> str:
         text = prompt_path.read_text(encoding="utf-8")
     except OSError:
         return ""
-    reason = re.search(r"<pdd-reason>\s*(.*?)\s*</pdd-reason>", text, re.DOTALL | re.IGNORECASE)
+    reason = re.search(
+        r"<pdd-reason>\s*(.*?)\s*</pdd-reason>", text, re.DOTALL | re.IGNORECASE
+    )
     if reason:
         snippet = " ".join(reason.group(1).split())
     else:
@@ -1081,7 +1147,9 @@ def _scan_prompt_inventory(
                 continue
             found[str(candidate.resolve()).lower()] = candidate
     for candidate in extra_paths or []:
-        if candidate.is_file() and (include_llm or not candidate.name.lower().endswith("_llm.prompt")):
+        if candidate.is_file() and (
+            include_llm or not candidate.name.lower().endswith("_llm.prompt")
+        ):
             found.setdefault(str(candidate.resolve()).lower(), candidate)
 
     base = prompts_dir.resolve() if prompts_dir else None
@@ -1128,9 +1196,12 @@ def _llm_generate_story_contract(  # pylint: disable=too-many-arguments,too-many
         logger.debug("Meta-prompt %s not found.", _STORY_CONTRACT_PROMPT_NAME)
         return None, 0.0, ""
 
-    inventory_block = "\n".join(
-        f"- {rel}" + (f" — {desc}" if desc else "") for rel, desc in inventory
-    ) or "- (no other prompts found in the codebase)"
+    inventory_block = (
+        "\n".join(
+            f"- {rel}" + (f" — {desc}" if desc else "") for rel, desc in inventory
+        )
+        or "- (no other prompts found in the codebase)"
+    )
     primary_block = "\n".join(f"- {ref}" for ref in primary_refs) or "- (none)"
 
     processed = preprocess(
@@ -1283,7 +1354,13 @@ def sync_user_story_contract(  # pylint: disable=too-many-arguments,too-many-loc
     if contract_p.exists():
         header = _parse_contract_header(contract_p.read_text(encoding="utf-8"))
         if not force and header.get("story-hash") == current_hash:
-            return False, "Contract already aligned with the Story.", 0.0, "", str(contract_p)
+            return (
+                False,
+                "Contract already aligned with the Story.",
+                0.0,
+                "",
+                str(contract_p),
+            )
         issue_ref = issue or header.get("issue-ref")
 
     if not issue_ref:
@@ -1329,8 +1406,20 @@ def sync_user_story_contract(  # pylint: disable=too-many-arguments,too-many-loc
         verbose=verbose,
     )
     if contract_path is None:
-        return False, f"Contract regeneration failed: {error}", cost, model, str(contract_p)
-    return True, f"Regenerated contract: {contract_path}", cost, model, str(contract_path)
+        return (
+            False,
+            f"Contract regeneration failed: {error}",
+            cost,
+            model,
+            str(contract_p),
+        )
+    return (
+        True,
+        f"Regenerated contract: {contract_path}",
+        cost,
+        model,
+        str(contract_path),
+    )
 
 
 def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements,too-many-return-statements,unused-argument
@@ -1369,7 +1458,14 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
         if not prompt_path.exists() or not prompt_path.is_file():
             return False, f"Prompt file not found: {prompt_file}", 0.0, "", "", []
         if prompt_path.suffix.lower() != ".prompt":
-            return False, f"Story generation requires .prompt files: {prompt_file}", 0.0, "", "", []
+            return (
+                False,
+                f"Story generation requires .prompt files: {prompt_file}",
+                0.0,
+                "",
+                "",
+                [],
+            )
         key = str(prompt_path.resolve()).lower()
         if key in seen_keys:
             continue
@@ -1479,20 +1575,24 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
     # Record a re-resolvable issue reference so the contract can be regenerated
     # later (sync) from any working directory: absolutize a local issue path,
     # otherwise keep the URL/number form the user supplied.
-    durable_issue_ref = os.path.abspath(issue) if issue and os.path.exists(issue) else issue
-    contract_path, contract_cost, contract_model, contract_error = _generate_and_write_contract(
-        story_path=output_path,
-        story_text=human_story_text,
-        title=title,
-        issue_text=issue_text,
-        issue_ref=durable_issue_ref,
-        prompts_root=prompts_root,
-        extra_prompt_paths=[p.resolve() for p in resolved_paths],
-        primary_refs=linked_refs,
-        strength=strength,
-        temperature=temperature,
-        time=time,
-        verbose=verbose,
+    durable_issue_ref = (
+        os.path.abspath(issue) if issue and os.path.exists(issue) else issue
+    )
+    contract_path, contract_cost, contract_model, contract_error = (
+        _generate_and_write_contract(
+            story_path=output_path,
+            story_text=human_story_text,
+            title=title,
+            issue_text=issue_text,
+            issue_ref=durable_issue_ref,
+            prompts_root=prompts_root,
+            extra_prompt_paths=[p.resolve() for p in resolved_paths],
+            primary_refs=linked_refs,
+            strength=strength,
+            temperature=temperature,
+            time=time,
+            verbose=verbose,
+        )
     )
     total_cost += contract_cost
     # The human Story is the primary artifact; report its model. Fall back to the
@@ -1587,9 +1687,9 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
             contract_path=contract_path,
         )
         story_prompt_files = prompt_files
+        unresolved_prompt_refs: List[str] = []
         if metadata_prompt_refs:
             resolved_story_prompts: List[Path] = []
-            unresolved_prompt_refs: List[str] = []
             for ref in metadata_prompt_refs:
                 resolved = _resolve_prompt_path(ref, prompt_files, prompts_root)
                 if resolved:
@@ -1597,12 +1697,6 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                 else:
                     unresolved_prompt_refs.append(ref)
 
-            if unresolved_prompt_refs and not quiet:
-                rprint(
-                    "[yellow]Warning:[/yellow] Unresolved prompts in "
-                    f"{rich_escape(str(story_path))}: "
-                    f"{rich_escape(', '.join(unresolved_prompt_refs))}"
-                )
             if resolved_story_prompts:
                 story_prompt_files = _dedupe_prompt_paths(resolved_story_prompts)
             else:
@@ -1612,21 +1706,15 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                         "story": str(story_path),
                         "passed": False,
                         "changes": [],
+                        "evaluation_status": "incomplete",
+                        "evaluated_prompts": [],
+                        "unresolved_prompts": unresolved_prompt_refs,
                         "error": "No prompts from pdd-story-prompts metadata could be resolved.",
                     }
                 )
                 if not quiet:
-                    rprint(f"[bold]FAIL[/bold] {rich_escape(str(story_path))}")
-                    rprint("")
-                    rprint("  Linked prompts:")
-                    rprint("  - none resolved from pdd-story-prompts metadata")
-                    for _ref in unresolved_prompt_refs:
-                        rprint(f"  - unresolved: {rich_escape(_ref)}")
-                    rprint("  Missing or stale behavior:")
-                    rprint(f"  - {rich_escape(str(results[-1]['error']))}")
-                    rprint(
-                        "  Next step:  pdd fix "
-                        f"{rich_escape(_story_fix_target(story_path))}"
+                    _render_incomplete_story_evaluation(
+                        story_path, (), unresolved_prompt_refs
                     )
                 if fail_fast:
                     break
@@ -1642,14 +1730,25 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
         )
         total_cost += cost
         model_name = model or model_name
-        passed = len(changes_list) == 0
+        evaluation_incomplete = bool(unresolved_prompt_refs)
+        passed = len(changes_list) == 0 and not evaluation_incomplete
         if not passed:
             all_passed = False
-        results.append({
+        result_row = {
             "story": str(story_path),
             "passed": passed,
             "changes": changes_list,
-        })
+        }
+        if evaluation_incomplete:
+            result_row.update(
+                {
+                    "evaluation_status": "incomplete",
+                    "evaluated_prompts": [str(path) for path in story_prompt_files],
+                    "unresolved_prompts": unresolved_prompt_refs,
+                    "error": "Some pdd-story-prompts references could not be resolved.",
+                }
+            )
+        results.append(result_row)
 
         if cache_story_prompt_links and not metadata_prompt_refs:
             linked_prompt_paths, _ = _select_story_prompt_links(
@@ -1668,11 +1767,16 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                 logger.info("Updated story prompt metadata links for %s", story_path)
 
         if not quiet:
-            status = "PASS" if passed else "FAIL"
-            rprint(f"[bold]{status}[/bold] {rich_escape(str(story_path))}")
-            if not passed:
+            if evaluation_incomplete:
+                _render_incomplete_story_evaluation(
+                    story_path, story_prompt_files, unresolved_prompt_refs
+                )
+            else:
+                status = "PASS" if passed else "FAIL"
+                rprint(f"[bold]{status}[/bold] {rich_escape(str(story_path))}")
+            if not evaluation_incomplete and not passed:
                 rprint("")
-                rprint("  Linked prompts:")
+                rprint("  Evaluated prompts:")
                 for _p in story_prompt_files:
                     rprint(f"  - {rich_escape(str(_p))}")
                 rprint("  Missing or stale behavior:")
@@ -1680,10 +1784,7 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                     formatted_change = _format_story_change(
                         _change, story_prompt_files, prompts_root
                     )
-                    rprint(
-                        "  - "
-                        f"{rich_escape(formatted_change)}"
-                    )
+                    rprint(f"  - {rich_escape(formatted_change)}")
                 rprint(
                     "  Next step:  pdd fix "
                     f"{rich_escape(_story_fix_target(story_path))}"
@@ -1742,7 +1843,13 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     )
 
     if not changes_list:
-        return True, "No prompt changes needed for this user story.", detect_cost, detect_model, []
+        return (
+            True,
+            "No prompt changes needed for this user story.",
+            detect_cost,
+            detect_model,
+            [],
+        )
 
     total_cost = detect_cost
     model_name = detect_model
@@ -1846,4 +1953,10 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
             changed_files,
         )
 
-    return True, "User story prompts updated successfully.", total_cost, model_name, changed_files
+    return (
+        True,
+        "User story prompts updated successfully.",
+        total_cost,
+        model_name,
+        changed_files,
+    )

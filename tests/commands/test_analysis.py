@@ -101,8 +101,13 @@ def test_detect_stories_success(runner, mock_context_obj):
         assert kwargs["cache_story_prompt_links"] is True
 
 
-def test_detect_stories_options(runner, mock_context_obj):
+def test_detect_stories_options(runner, mock_context_obj, tmp_path, monkeypatch):
     """Test 'detect --stories' forwards options."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "stories").mkdir()
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "stories" / "story__x.md").write_text("story", encoding="utf-8")
+    (tmp_path / "prompts" / "x.prompt").write_text("prompt", encoding="utf-8")
     with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
         mock_runner.return_value = (True, [], 0.0, "gpt-4")
         result = runner.invoke(
@@ -200,9 +205,10 @@ def test_issue_1872_reproduction_fatal_story_exception_exits_nonzero():
 
         result = runner.invoke(pdd_cli, ["--no-core-dump", "detect", "--stories"])
 
-    assert result.exit_code == 1
-    assert "Error during 'detect' command" in result.output
-    assert "provider auth failed" in result.output
+    assert result.exit_code == 3
+    assert "Non-interactive credentials are missing or invalid." in result.output
+    assert "authenticate with a supported provider" in result.output
+    assert "provider auth failed" not in result.output
 
 
 def test_issue_1872_reproduction_passing_stories_exit_zero():
@@ -279,7 +285,9 @@ def test_detect_stories_cli_failure_output_e2e_with_mocked_llm():
             handle.write("Render the provider queue page.")
         with open("prompts/queue_panel_python.prompt", "w", encoding="utf-8") as handle:
             handle.write("Render provider queue rows.")
-        with open("user_stories/story__provider_queue.md", "w", encoding="utf-8") as handle:
+        with open(
+            "user_stories/story__provider_queue.md", "w", encoding="utf-8"
+        ) as handle:
             handle.write(
                 "## Story\n"
                 "As an operator, I can see provider queue slot state changes.\n"
@@ -292,7 +300,10 @@ def test_detect_stories_cli_failure_output_e2e_with_mocked_llm():
                 "change_instructions": "Show available, in-use, and rate-limited slot states.",
             }
         ]
-        with patch("pdd.user_story_tests.detect_change", return_value=(changes, 0.12, "gpt-test")) as mock_detect:
+        with patch(
+            "pdd.user_story_tests.detect_change",
+            return_value=(changes, 0.12, "gpt-test"),
+        ) as mock_detect:
             result = runner.invoke(
                 pdd_cli,
                 ["--no-core-dump", "detect", "--stories", "--no-fail-fast"],
@@ -302,7 +313,7 @@ def test_detect_stories_cli_failure_output_e2e_with_mocked_llm():
     assert mock_detect.call_count == 1
     output = result.output.replace("\n", "")
     assert "FAIL user_stories/story__provider_queue.md" in output
-    assert "Linked prompts:" in output
+    assert "Evaluated prompts:" in output
     assert "prompts/queue_page_python.prompt" in output
     assert "prompts/queue_panel_python.prompt" in output
     assert "Missing or stale behavior:" in output
@@ -324,7 +335,9 @@ def test_detect_stories_quiet_failure_suppresses_diagnostic_and_onboarding():
         os.makedirs("user_stories")
         with open("prompts/queue_panel_python.prompt", "w", encoding="utf-8") as handle:
             handle.write("Render provider queue rows.")
-        with open("user_stories/story__provider_queue.md", "w", encoding="utf-8") as handle:
+        with open(
+            "user_stories/story__provider_queue.md", "w", encoding="utf-8"
+        ) as handle:
             handle.write(
                 "## Story\n"
                 "As an operator, I can see provider queue slot state changes.\n"
@@ -337,10 +350,13 @@ def test_detect_stories_quiet_failure_suppresses_diagnostic_and_onboarding():
                 "change_instructions": "Show slot states.",
             }
         ]
-        with patch("pdd.core.cli._should_show_onboarding_reminder", return_value=True), patch(
-            "pdd.user_story_tests.detect_change",
-            return_value=(changes, 0.12, "gpt-test"),
-        ) as mock_detect:
+        with (
+            patch("pdd.core.cli._should_show_onboarding_reminder", return_value=True),
+            patch(
+                "pdd.user_story_tests.detect_change",
+                return_value=(changes, 0.12, "gpt-test"),
+            ) as mock_detect,
+        ):
             result = runner.invoke(
                 pdd_cli,
                 ["--no-core-dump", "--quiet", "detect", "--stories", "--no-fail-fast"],
@@ -352,6 +368,137 @@ def test_detect_stories_quiet_failure_suppresses_diagnostic_and_onboarding():
     assert "Linked prompts:" not in result.output
     assert "Missing or stale behavior:" not in result.output
     assert "Next step:" not in result.output
+
+
+def test_detect_stories_fully_unresolved_metadata_is_unknown_exit_three():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        os.makedirs("prompts")
+        os.makedirs("user_stories")
+        Path("prompts/other.prompt").write_text("prompt", encoding="utf-8")
+        Path("user_stories/story__broken.md").write_text(
+            "## Story\n<!-- pdd-story-prompts: prompts/missing.prompt -->\n",
+            encoding="utf-8",
+        )
+        result = runner.invoke(detect_change, ["--stories"], obj={})
+
+    assert result.exit_code == 3
+    assert "UNKNOWN user_stories/story__broken.md" in result.output
+    assert "Story was not successfully evaluated" in result.output
+    assert "Unresolved prompt references:" in result.output
+    assert "prompts/missing.prompt" in result.output
+    assert "Missing or stale behavior:" not in result.output
+    assert "pdd fix" not in result.output
+
+
+def test_detect_stories_partial_unresolved_metadata_is_unknown_and_json_only():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        os.makedirs("prompts")
+        os.makedirs("user_stories/contracts")
+        Path("prompts/resolved.prompt").write_text("prompt", encoding="utf-8")
+        Path("user_stories/story__partial.md").write_text(
+            "## Story\n<!-- pdd-story-prompts: prompts/resolved.prompt, prompts/missing.prompt -->\n",
+            encoding="utf-8",
+        )
+        Path("user_stories/contracts/partial.contract.md").write_text(
+            "## Contract\n", encoding="utf-8"
+        )
+        with patch(
+            "pdd.user_story_tests.detect_change", return_value=([], 0.1, "model-safe")
+        ) as detector:
+            result = runner.invoke(detect_change, ["--stories", "--json"], obj={})
+
+    assert result.exit_code == 3
+    payload = json.loads(result.output)
+    assert payload["outcome"] == "INCOMPLETE"
+    assert payload["results"][0]["verdict"] == "UNKNOWN"
+    assert detector.call_args.args[0] == ["prompts/resolved.prompt"]
+    assert "Story was not successfully evaluated" not in result.output
+    assert "Missing or stale behavior" not in result.output
+
+
+def test_detect_stories_quiet_incomplete_suppresses_human_diagnostic():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        os.makedirs("prompts")
+        os.makedirs("user_stories")
+        Path("prompts/other.prompt").write_text("prompt", encoding="utf-8")
+        Path("user_stories/story__broken.md").write_text(
+            "<!-- pdd-story-prompts: prompts/missing.prompt -->\n", encoding="utf-8"
+        )
+        result = runner.invoke(detect_change, ["--stories"], obj={"quiet": True})
+
+    assert result.exit_code == 3
+    assert "UNKNOWN" not in result.output
+    assert "Next step:" not in result.output
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("missing_stories", "stories directory does not exist"),
+        ("empty_stories", "story scope is empty"),
+        ("missing_prompts", "prompts directory does not exist"),
+        ("empty_prompts", "prompt scope is empty"),
+    ],
+)
+def test_detect_stories_human_scope_errors_exit_two(case, expected):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        if case != "missing_stories":
+            os.makedirs("stories")
+        if case not in {"missing_prompts"}:
+            os.makedirs("prompts")
+        if case in {"missing_prompts", "empty_prompts"}:
+            Path("stories/story__x.md").write_text("story", encoding="utf-8")
+        if case in {"missing_stories", "empty_stories"}:
+            Path("prompts/x.prompt").write_text("prompt", encoding="utf-8")
+        result = runner.invoke(
+            detect_change,
+            ["--stories", "--stories-dir", "stories", "--prompts-dir", "prompts"],
+            obj={},
+        )
+
+    assert result.exit_code == 2
+    assert "Configuration error:" in result.output
+    assert expected in result.output
+    assert "Next step:" in result.output
+
+
+@pytest.mark.parametrize(
+    ("exception", "safe_message", "recovery"),
+    [
+        (
+            RuntimeError("api key super-secret"),
+            "credentials are missing or invalid",
+            "authenticate",
+        ),
+        (TimeoutError("super-secret timed out"), "timed out", "retry the command"),
+        (
+            RuntimeError("provider exploded super-secret"),
+            "provider is unavailable",
+            "retry the command",
+        ),
+    ],
+)
+def test_detect_stories_human_provider_errors_are_safe_exit_three(
+    exception, safe_message, recovery
+):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        os.makedirs("prompts")
+        os.makedirs("user_stories")
+        Path("prompts/x.prompt").write_text("prompt", encoding="utf-8")
+        Path("user_stories/story__x.md").write_text("story", encoding="utf-8")
+        with patch("pdd.commands.analysis.run_user_story_tests", side_effect=exception):
+            result = runner.invoke(detect_change, ["--stories"], obj={})
+
+    assert result.exit_code == 3
+    assert "UNKNOWN:" in result.output
+    assert safe_message in result.output
+    assert recovery in result.output
+    assert "super-secret" not in result.output
 
 
 def test_detect_stories_passing_result_top_level_exits_zero():
@@ -378,8 +525,9 @@ def test_detect_stories_fatal_exception_top_level_exits_nonzero():
 
         result = runner.invoke(pdd_cli, ["--no-core-dump", "detect", "--stories"])
 
-    assert result.exit_code == 1
-    assert "provider auth failed" in result.output
+    assert result.exit_code == 3
+    assert "Non-interactive credentials are missing or invalid." in result.output
+    assert "provider auth failed" not in result.output
 
 
 def test_detect_stories_evidence_written_before_failed_story_exit(
@@ -928,7 +1076,9 @@ def _write_scope_manifest(tmp_path, *, prompt_ref="prompts/a.prompt"):
     return stories, prompts, story, manifest
 
 
-def test_scope_manifest_preserves_exact_scope_and_rejects_discovery(tmp_path, monkeypatch):
+def test_scope_manifest_preserves_exact_scope_and_rejects_discovery(
+    tmp_path, monkeypatch
+):
     """Manifest mode passes only explicitly authorized files to the evaluator."""
     stories, prompts, story, manifest = _write_scope_manifest(tmp_path)
     (stories / "story__extra.md").write_text("## Story\nExtra", encoding="utf-8")
@@ -1122,7 +1272,9 @@ analysis.run_user_story_tests = _controlled_story_runner
     assert not list(tmp_path.glob(f".{output.name}.*"))
 
 
-def test_scope_manifest_plain_mode_is_read_only_and_noninteractive(tmp_path, monkeypatch):
+def test_scope_manifest_plain_mode_is_read_only_and_noninteractive(
+    tmp_path, monkeypatch
+):
     stories, prompts, story, manifest = _write_scope_manifest(tmp_path)
     monkeypatch.chdir(tmp_path)
     with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
@@ -1141,7 +1293,9 @@ def test_scope_manifest_plain_mode_is_read_only_and_noninteractive(tmp_path, mon
     assert mock_runner.call_args.kwargs["cache_story_prompt_links"] is False
 
 
-def test_scope_manifest_plain_mode_fails_closed_on_metadata_mismatch(tmp_path, monkeypatch):
+def test_scope_manifest_plain_mode_fails_closed_on_metadata_mismatch(
+    tmp_path, monkeypatch
+):
     stories, prompts, story, manifest = _write_scope_manifest(tmp_path)
     story.write_text("## Story\nNo prompt metadata", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -1158,6 +1312,10 @@ def test_scope_manifest_plain_mode_fails_closed_on_metadata_mismatch(tmp_path, m
             obj={},
         )
     assert result.exit_code == 3
+    assert "UNKNOWN:" in result.output
+    assert "not successfully evaluated" in result.output
+    assert "does not match the exact scope manifest" in result.output
+    assert "repair the pdd-story-prompts metadata or manifest" in result.output
     mock_runner.assert_not_called()
 
 
@@ -1229,7 +1387,9 @@ def test_scope_manifest_rejects_traversal_and_absolute_paths(
     assert json.loads(result.output)["errors"][0]["code"] == error_code
 
 
-def test_scope_manifest_rejects_duplicate_prompt_and_symlink_escape(tmp_path, monkeypatch):
+def test_scope_manifest_rejects_duplicate_prompt_and_symlink_escape(
+    tmp_path, monkeypatch
+):
     stories, prompts, _story, manifest = _write_scope_manifest(tmp_path)
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     payload["stories"][0]["prompts"] = ["prompts/a.prompt", "prompts/a.prompt"]
@@ -1268,10 +1428,7 @@ def test_scope_manifest_rejects_duplicate_prompt_and_symlink_escape(tmp_path, mo
         obj={},
     )
     assert parent_symlink.exit_code == 2
-    assert (
-        json.loads(parent_symlink.output)["errors"][0]["code"]
-        == "scope:PATH_ESCAPE"
-    )
+    assert json.loads(parent_symlink.output)["errors"][0]["code"] == "scope:PATH_ESCAPE"
 
 
 def test_scope_manifest_rejects_unknown_fields(tmp_path, monkeypatch):
@@ -1286,7 +1443,9 @@ def test_scope_manifest_rejects_unknown_fields(tmp_path, monkeypatch):
         obj={},
     )
     assert result.exit_code == 2
-    assert json.loads(result.output)["errors"][0]["code"] == "scope:MANIFEST_UNKNOWN_FIELD"
+    assert (
+        json.loads(result.output)["errors"][0]["code"] == "scope:MANIFEST_UNKNOWN_FIELD"
+    )
 
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     payload["stories"][0]["unexpected"] = True

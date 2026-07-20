@@ -273,9 +273,10 @@ pdd detect --stories --no-fail-fast      # report all failures, don't stop at th
 pdd detect --stories --include-llm       # also validate against *_llm.prompt runtime templates
 ```
 
-Story mode prints PASS/FAIL for each story and exits non-zero if any story
-fails. `--output` is the standard detector's CSV option and is not supported
-with `--stories`. Hosted and CI callers should use the explicit structured form:
+Story mode prints PASS, FAIL, or UNKNOWN for each story and exits non-zero if
+any story does not pass. `--output` is the standard detector's CSV option and
+is not supported with `--stories`. Hosted and CI callers should use the explicit
+structured form:
 
 ```bash
 pdd detect --stories \
@@ -316,24 +317,25 @@ contracts, or prompts, duplicate JSON keys, unknown fields, missing files,
 empty prompt sets, and non-regular files are rejected with configuration exit 2.
 Story prompt metadata must resolve to the
 manifest's listed prompt set, otherwise the result is `UNKNOWN` and fails
-closed.
+closed and prints the metadata recovery needed in human mode.
 
 Structured mode emits schema `pdd.detect.stories.v1`, implies `--read-only` and
 `--non-interactive`, and never uses `.pdd/core_dumps` as its result channel.
 Each scoped story has one `PASS`, `FAIL`, or `UNKNOWN` verdict. `UNKNOWN` is
 fail-closed and means evaluation could not establish a trustworthy semantic
 answer. Exit codes are stable: 0 all pass, 1 semantic story failure, 2 invalid
-scope/configuration, and 3 authentication/provider/timeout failure. Human
+scope/configuration, and 3 authentication/provider/timeout or incomplete
+evaluation. Human
 output remains the default when neither structured-output option is present.
 
-When a story fails, the output names every linked prompt that was evaluated,
-describes the missing or stale behavior, and suggests the exact command to
-repair it:
+When a completed semantic evaluation fails, the output names every prompt that
+was evaluated, describes the missing or stale behavior, and suggests the exact
+command to repair it:
 
 ```
 FAIL user_stories/story__my_feature.md
 
-  Linked prompts:
+  Evaluated prompts:
   - prompts/my_feature_python.prompt
   Missing or stale behavior:
   - prompts/my_feature_python.prompt: The prompt no longer guarantees the user receives a confirmation message after the action completes.
@@ -342,6 +344,15 @@ FAIL user_stories/story__my_feature.md
 
 Run the `pdd fix` command shown in the output to apply the story back to the
 prompts and re-validate.
+
+That repair command is shown only for a completed semantic failure. If one or
+more `pdd-story-prompts` links cannot be resolved, PDD reports `UNKNOWN`, lists
+both the prompts it did evaluate and the unresolved references, and tells you
+to repair the metadata before retrying. It does not call that condition missing
+or stale behavior and does not recommend `pdd fix`. Invalid or empty directory
+scope is a configuration error (exit 2); provider/authentication/timeout errors
+and incomplete evaluations are `UNKNOWN` (exit 3) with safe retry or
+authentication guidance.
 
 `pdd change` also runs story validation after a prompt modification, so stories
 act as a regression gate during normal development.
