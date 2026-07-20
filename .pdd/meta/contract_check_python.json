@@ -1,10 +1,10 @@
 {
   "pdd_version": "0.0.305.dev0",
-  "timestamp": "2026-07-20T21:20:27.340781+00:00",
-  "command": "sync",
+  "timestamp": "2026-07-20T22:14:54.252860+00:00",
+  "command": "sync-repair-2233",
   "prompt_hash": "5d64db4dba8b8f1b8ce7dc1812c1f88a5a60549e00e8b692d0257e7290b0cb94",
   "code_hash": "ea57bd46da51e69b8ee6fd27693eb326cd423b455346a940b38d1e80fcd5a4ce",
-  "example_hash": null,
+  "example_hash": "e7549418a7cff2a23f8966f82a7b5c961d1e225be898d9202cbe15d53cab8a9c",
   "test_hash": "3d8468f5c94f3e323fb274bab453cc009fbf2fc584363728a97c99f45675260e",
   "test_files": {
     "test_contract_check.py": "3d8468f5c94f3e323fb274bab453cc009fbf2fc584363728a97c99f45675260e"
