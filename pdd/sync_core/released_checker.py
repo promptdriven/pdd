@@ -1,10 +1,11 @@
 """Entrypoint and releaseable evidence wrapper for released checker wheels."""
+# pylint: disable=cyclic-import
 
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
-import importlib
 import json
 import os
 import re
@@ -612,30 +613,81 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _verify_installed_package(wheel: Path, installed_package: Path) -> None:
-    """Compare every installed PDD member byte-for-byte with the pinned wheel."""
+def _verify_standalone_wheel_record(archive: zipfile.ZipFile) -> None:
+    """Reject a standalone archive whose RECORD does not bind every regular member."""
+    members = [item for item in archive.infolist() if not item.is_dir()]
+    names = [item.filename for item in members]
+    if len(names) != len(set(names)) or any(
+        "\\" in name or name.startswith("/") or ".." in PurePosixPath(name).parts
+        for name in names
+    ):
+        raise ReleasedCheckerError("released checker wheel has unsafe members")
+    record_names = [name for name in names if name.endswith(".dist-info/RECORD")]
+    if len(record_names) != 1:
+        raise ReleasedCheckerError("released checker wheel RECORD is invalid")
+    try:
+        parsed_rows = [
+            line.split(",")
+            for line in archive.read(record_names[0]).decode("ascii").splitlines()
+        ]
+    except (KeyError, UnicodeDecodeError):
+        raise ReleasedCheckerError("released checker wheel RECORD is invalid") from None
+    if any(len(parts) != 3 for parts in parsed_rows):
+        raise ReleasedCheckerError("released checker wheel RECORD is invalid")
+    rows = {parts[0]: (parts[1], parts[2]) for parts in parsed_rows}
+    if (
+        set(rows) != set(names)
+        or len(rows) != len(names)
+        or len(rows) != len(parsed_rows)
+    ):
+        raise ReleasedCheckerError("released checker wheel RECORD is not closed")
+    for name in names:
+        encoded, size = rows[name]
+        if name == record_names[0]:
+            if encoded or size:
+                raise ReleasedCheckerError("released checker wheel RECORD is invalid")
+            continue
+        content = archive.read(name)
+        hash_value = base64.urlsafe_b64encode(
+            hashlib.sha256(content).digest()
+        ).rstrip(b"=").decode("ascii")
+        if encoded != f"sha256={hash_value}" or size != str(len(content)):
+            raise ReleasedCheckerError("released checker wheel RECORD does not match bytes")
+
+
+def _verify_installed_package(  # pylint: disable=too-many-locals
+    wheel: Path, installed_package: Path
+) -> None:
+    """Compare every installed checker member byte-for-byte with the pinned wheel."""
     package_parts = installed_package.parts
-    package_index = max(
-        index for index, part in enumerate(package_parts) if part == "pdd"
-    )
+    package_name = "pdd_sync_checker" if "pdd_sync_checker" in package_parts else "pdd"
+    package_index = max(index for index, part in enumerate(package_parts) if part == package_name)
     site_packages = Path(*package_parts[:package_index])
     try:
         with zipfile.ZipFile(wheel) as archive:
+            if package_name == "pdd_sync_checker":
+                _verify_standalone_wheel_record(archive)
+                if any(name.startswith("pdd/") for name in archive.namelist()):
+                    raise ReleasedCheckerError("released checker wheel contains the pdd package")
             wheel_members = {
                 name: archive.read(name)
                 for name in archive.namelist()
-                if name.startswith("pdd/") and not name.endswith("/")
+                if name.startswith(f"{package_name}/") and not name.endswith("/")
             }
     except (OSError, zipfile.BadZipFile, KeyError) as exc:
         raise ReleasedCheckerError("released checker wheel cannot be inspected") from exc
     if not wheel_members:
-        raise ReleasedCheckerError("released checker wheel contains no PDD package")
+        raise ReleasedCheckerError("released checker wheel contains no checker package")
     for member, expected in wheel_members.items():
         installed = site_packages / PurePosixPath(member)
         if installed.is_symlink() or not installed.is_file():
             raise ReleasedCheckerError(f"installed checker member is unsafe: {member}")
         if installed.read_bytes() != expected:
             raise ReleasedCheckerError(f"installed checker member differs from wheel: {member}")
+    if package_name == "pdd_sync_checker":
+        from .standalone_package import installed_checker_runtime_lock  # pylint: disable=import-outside-toplevel
+
+        installed_checker_runtime_lock(wheel, installed_package)
 
 
 def validate_released_checker_runtime(
@@ -716,14 +768,10 @@ def _evidence_main(arguments: Sequence[str]) -> None:
 
 
 def main() -> None:
-    """Verify released provenance before running either checker entrypoint."""
-    if len(sys.argv) > 1 and sys.argv[1] == "release-pin-evidence":
-        _evidence_main(sys.argv[2:])
-        return
-    _validated_runtime_identity()
-    os.environ["PDD_RELEASED_CHECKER_EXECUTION"] = "1"
-    cli = importlib.import_module("pdd.cli").cli
-    cli.main(args=["certify", *sys.argv[1:]], prog_name="pdd-sync-checker", standalone_mode=True)
+    """Run the direct checker CLI without importing the PDD command graph."""
+    from .checker_cli import main as checker_main  # pylint: disable=import-outside-toplevel
+
+    raise SystemExit(checker_main(sys.argv[1:]))
 
 
 if __name__ == "__main__":
