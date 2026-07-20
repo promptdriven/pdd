@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import os
 import re
 import textwrap
@@ -38,6 +39,10 @@ except ImportError:  # pragma: no cover
 # Rich console for error reporting, themed by the central PDD color system
 # (pdd/cli_theme.py) so commands, tags, and states render consistently.
 console = get_console()
+
+# Stdlib logger so warnings surface in automated/cloud flows where the Rich
+# console is quiet (issue #1903).
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +482,256 @@ def _sibling_test_paths(module_path: Path) -> list[Path]:
     if module_path.parent.name != "tests":
         candidates.append(module_path.parent.parent / "tests" / f"test_{stem}.py")
     return [path for path in candidates if path.is_file()]
+
+
+# JS/TS code suffixes and the co-located test directories jest/vitest/Next.js
+# projects use. Kept separate from the Python helper above so the language
+# branches stay independent (issue #1903).
+_JS_TS_CODE_SUFFIXES = frozenset({".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"})
+_JS_TS_TEST_DIRS = ("__test__", "__tests__", "tests")
+# Python code suffixes: only these use the ``_sibling_test_paths`` fallback, so
+# an unsupported-language module (e.g. ``foo.go``) next to an unrelated
+# ``test_foo.py`` cannot produce a false shadow sibling (issue #1903).
+_PY_CODE_SUFFIXES = frozenset({".py", ".pyi"})
+
+
+def _safe_is_file(path: Path) -> bool:
+    """``Path.is_file()`` that never raises on a malformed path."""
+    try:
+        return path.is_file()
+    except (OSError, ValueError):
+        return False
+
+
+def _safe_resolve(path: Path) -> Path:
+    """``Path.resolve()`` that degrades to *path* on a malformed path."""
+    try:
+        return path.resolve()
+    except (OSError, ValueError):
+        return path
+
+
+def _js_ts_test_candidates(code_path: Path) -> list[Path]:
+    """Sibling jest/vitest test candidates for a JS/TS module (issue #1903)."""
+    stem = code_path.stem
+    parent = code_path.parent
+    candidates: list[Path] = []
+    for ext in sorted(_JS_TS_CODE_SUFFIXES):
+        candidates.append(parent / f"{stem}.test{ext}")
+        candidates.append(parent / f"{stem}.spec{ext}")
+        for test_dir in _JS_TS_TEST_DIRS:
+            candidates.append(parent / test_dir / f"{stem}.test{ext}")
+            candidates.append(parent / test_dir / f"{stem}.spec{ext}")
+    return candidates
+
+
+def find_module_test_siblings(code_file: str | Path) -> list[Path]:
+    """Existing test files already covering *code_file*'s module.
+
+    Language-agnostic companion to :func:`_sibling_test_paths` (issue #1903):
+    finds tests a project's runner already collects for both Python and
+    JS/TS (jest/vitest/Next.js) conventions, so callers can warn before PDD
+    writes a parallel "shadow" test to a different canonical path.
+
+    Returns only existing files, de-duplicated by resolved path and excluding
+    the module file itself. Pure (no writes); never raises on a bad path.
+    """
+    path = Path(code_file)
+    if path.suffix in _JS_TS_CODE_SUFFIXES:
+        candidates = _js_ts_test_candidates(path)
+    elif path.suffix in _PY_CODE_SUFFIXES:
+        try:
+            candidates = _sibling_test_paths(path)
+        except (OSError, ValueError):
+            candidates = []
+    else:
+        candidates = []  # unsupported language: no shadow detection (avoids false positives)
+
+    module_resolved = _safe_resolve(path)
+    siblings: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not _safe_is_file(candidate):
+            continue
+        resolved = _safe_resolve(candidate)
+        if resolved == module_resolved:
+            continue
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        siblings.append(candidate)
+    return siblings
+
+
+def _effective_test_write_target(
+    output_path: str | None,
+    merge: bool,
+    existing_tests: list[str] | None,
+    *,
+    agentic: bool = False,
+) -> str | None:
+    """The path ``cmd_test_main`` will actually write the generated test to.
+
+    Only *native* merge appends to ``existing_tests[0]``. The agentic branch
+    (which handles every non-Python case, including non-Python ``--merge``) and
+    all non-merge cases write the canonical ``output_path``. The shadow-test
+    check must compare siblings against the real write target to avoid both a
+    false warning on native merge and a missed warning on agentic merge
+    (issue #1903).
+    """
+    if merge and existing_tests and not agentic:
+        return existing_tests[0]
+    return output_path
+
+
+def _greenfield_uncollected_message(
+    code_file: str,
+    output_test_path: str | None,
+) -> str | None:
+    """Warn when a brand-new JS/TS module's test would be written outside the
+    module's own directory, where a co-located runner (jest/vitest/Next.js) may
+    not collect it — uncollected from creation (issue #1903). JS/TS only; a
+    central ``tests/`` dir is idiomatic for Python, so stay silent there."""
+    if not output_test_path:
+        return None
+    path = Path(code_file)
+    if path.suffix not in _JS_TS_CODE_SUFFIXES:
+        return None
+    out = _safe_resolve(Path(output_test_path))
+    module_dir = _safe_resolve(path.parent)
+    try:
+        out.relative_to(module_dir)
+        return None  # under the module dir → co-located → collected
+    except ValueError:
+        pass
+    stem = path.stem
+    ext = path.suffix
+    return (
+        f"Uncollected test warning (issue #1903): no test yet exists for '{code_file}', "
+        f"and PDD would write it to:\n  - {output_test_path}\n"
+        f"That path is outside the module's directory ({module_dir}); a co-located "
+        f"JS/TS test runner (jest/vitest/Next.js) may not collect it, so the test could "
+        f"be uncollected from creation. Consider co-locating it — e.g. set "
+        f"'test_output_path' in .pddrc or pass --output {module_dir}/__test__/{stem}.test{ext} . "
+        f"If your runner is configured to collect the path above, you can ignore this warning."
+    )
+
+
+# Warning keys already surfaced by ``_warn_on_shadow_test`` so churn/target-
+# coverage retry loops that re-invoke the caller don't repeat the warning; the
+# key differs between the fork and greenfield shapes so both emit once (#1903).
+_SHADOW_WARNING_PRINTED: set[tuple[str, str, tuple[str, ...]]] = set()
+
+
+def _warn_on_shadow_test(
+    code_file: str,
+    output_test_path: str | None,
+    *,
+    quiet: bool,
+) -> str | None:
+    """Warn when PDD would write a module's test to a path its runner may not collect.
+
+    Two shapes of the issue-#1903 problem are surfaced:
+
+    * **Fork** — a test the runner already collects lives beside the module
+      (e.g. ``__test__/page.test.tsx``) while PDD's canonical
+      ``test_output_path`` points elsewhere, so PDD would maintain a second,
+      parallel "shadow" test that drifts from the real one (a false-green).
+    * **Greenfield** — a brand-new JS/TS module whose test would be written
+      outside the module's own directory, where a co-located runner
+      (jest/vitest/Next.js) may not collect it (uncollected from creation).
+
+    Never overwrites anything. Returns the warning message (for tests/telemetry),
+    or ``None`` when there is nothing to warn about (including when the write
+    target IS one of the detected siblings, even if others exist), and acts at
+    most once per identical situation. Surfaces, by reliability: ALWAYS one
+    self-sufficient ``MANUAL_REVIEW:`` stdout line (naming the source module and
+    output path, plus for a fork the existing sibling path) — the always-on
+    surface incl. ``--quiet``, best-effort collectable by the change orchestrator
+    (reliable PR-body propagation is a tracked follow-up); the full human message
+    to the Rich console when not quiet; and a best-effort ``logger.warning``
+    (SUPPRESSED under ``--quiet`` because the CLI raises the ``pdd`` logger to
+    ERROR). Wraps all filesystem access so it can never raise into the caller.
+    """
+    try:
+        siblings = find_module_test_siblings(code_file)
+        resolved_output: Optional[Path] = None
+        if output_test_path:
+            resolved_output = _safe_resolve(Path(output_test_path))
+        resolved_output_str = str(resolved_output) if resolved_output is not None else None
+        sibling_strs = {str(_safe_resolve(sibling)) for sibling in siblings}
+        shadow = output_test_path or "(default test output path)"
+        if resolved_output_str is not None and resolved_output_str in sibling_strs:
+            # PDD writes to a collected test — fine even if OTHER siblings exist
+            # (e.g. both widget.test.tsx and widget.spec.tsx). No fork.
+            return None
+        if siblings:
+            # Fork: collected test(s) exist and the write target isn't one of them.
+            existing = siblings
+            existing_list = "\n".join(f"  - {path}" for path in existing)
+            message = (
+                "Shadow test warning (issue #1903): a test already exists for "
+                f"'{code_file}':\n{existing_list}\n"
+                f"PDD would generate the test at a different path:\n  - {shadow}\n"
+                "Your test runner may not collect that path, so PDD's copy can pass "
+                "while the real test drifts or breaks. PDD will NOT overwrite the "
+                "existing test. To target it, set 'test_output_path' in .pddrc or pass "
+                "--output pointing at the existing test."
+            )
+            # Self-sufficient one-line marker: under `--quiet` the log is
+            # suppressed and the console gated, so this line — naming the source
+            # module and the existing sibling path(s) — is the only surviving
+            # actionable surface.
+            existing_joined = ", ".join(str(path) for path in existing)
+            marker = (
+                f"MANUAL_REVIEW: {shadow} — a collected test already exists for "
+                f"'{code_file}' ({existing_joined}); PDD would write a different "
+                "(shadow) path (issue #1903); set test_output_path/--output to "
+                "target the existing test"
+            )
+        else:
+            # Greenfield: no test yet. Warn only for a JS/TS module whose test
+            # would land outside its own directory (co-located runners may not
+            # collect it); Python and co-located outputs stay silent.
+            message = _greenfield_uncollected_message(code_file, output_test_path)
+            if message is None:
+                return None
+            marker = (
+                f"MANUAL_REVIEW: {shadow} — brand-new JS/TS test for '{code_file}' "
+                "would be written outside its module directory and may be "
+                "uncollected (issue #1903); co-locate via test_output_path/--output"
+            )
+    except Exception:
+        return None
+
+    # Emit once per unique situation. The MANUAL_REVIEW stdout line is the
+    # always-on surface (including under --quiet); logger.warning is best-effort
+    # and suppressed under --quiet; the Rich console fires only when not quiet.
+    # Including ``siblings`` in the key makes the fork (siblings non-empty) and
+    # greenfield (siblings empty) shapes distinct so each emits independently,
+    # while retry loops don't spam any sink.
+    key = (
+        str(_safe_resolve(Path(code_file))),
+        str(resolved_output) if resolved_output is not None else "",
+        tuple(sorted(str(_safe_resolve(p)) for p in siblings)),
+    )
+    if key not in _SHADOW_WARNING_PRINTED:
+        _SHADOW_WARNING_PRINTED.add(key)
+        # Full human message: console when not quiet; the log is best-effort and
+        # is SUPPRESSED under `--quiet` (the `pdd` logger is raised to ERROR by
+        # the CLI), so it can't be relied on as the quiet-mode surface.
+        logger.warning(message)
+        if not quiet:
+            console.print(message, style="bold yellow", markup=False)
+        # ALWAYS emit one self-sufficient MANUAL_REVIEW: line to stdout, even
+        # under --quiet — a deliberate exception so shadow/uncollected forks
+        # still reach reviewers and CI logs. The change orchestrator's
+        # ``_collect_manual_review_lines()`` MAY scrape it into the PR body, but
+        # reliable PR-body propagation on the change (JSON-first Step 9) and
+        # issue-sync-runner paths is a tracked follow-up.
+        print(marker)
+    return message
 
 
 def discover_sibling_patch_targets(file_path: str | Path) -> set[str]:

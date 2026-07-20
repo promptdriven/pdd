@@ -31,6 +31,7 @@ from .code_generator_main import (
     _verify_public_surface_regression,
     _verify_test_churn,
 )
+from .content_selector import _warn_on_shadow_test
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 
@@ -588,6 +589,18 @@ def run_one_session_sync(
             existing_test_content = test_path.read_text(encoding="utf-8")
         except OSError:
             existing_test_content = None
+
+    # Warn when a real test already exists at a path the runner collects but
+    # the canonical pdd_files['test'] differs. One-session sync is the default
+    # issue-sync path and writes code/test directly (never through
+    # cmd_test_main), so without this it would be the one path where the
+    # shadow/false-green fork (issue #1903) goes unwarned. Advisory only —
+    # nothing is overwritten here.
+    _warn_on_shadow_test(
+        str(code_path),
+        str(test_path) if test_path else None,
+        quiet=quiet,
+    )
 
     # Snapshot the pre-session code content (#1012, P1.A) so the
     # public-surface regression gate can run after the agentic session
