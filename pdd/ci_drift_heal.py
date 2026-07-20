@@ -45,7 +45,7 @@ _HEAL_FAILURE_SIGNAL_RE = re.compile(
 )
 _ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 _UNSAFE_CONTROL_RE = re.compile(
-    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]"
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]"
 )
 _NOISY_DIAGNOSTIC_RE = re.compile(r"(?i)\b(?:warning|debug|retry(?:ing)?)\b")
 _HOME_PATH_PATTERNS = (
@@ -65,7 +65,8 @@ _HEAL_SECRET_PATTERNS = (
         r"sk-[A-Za-z0-9_-]{10,})\b"
     ),
     re.compile(
-        r"\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"
+        r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\."
+        r"[A-Za-z0-9_-]+(?![A-Za-z0-9_-])"
     ),
 )
 

@@ -3084,6 +3084,25 @@ class TestRunPddCommandDiagnostics:
             assert secret not in printed
         assert printed.count("[REDACTED]") >= 8
 
+    def test_compact_jwt_is_redacted_without_hiding_dotted_versions(self):
+        compact_jwt = "eyJhbGciOiJub25lIn0.e30.signature123"
+        failed = MagicMock(
+            returncode=1,
+            stdout=f"AuthenticationError received {compact_jwt}; cli-version=0.0.307",
+            stderr="",
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=failed), \
+             patch("pdd.ci_drift_heal.console.print") as mock_print:
+            _run_pdd_command(
+                ["pdd", "example", "demo.prompt", "demo.py"], {}, "Heal demo"
+            )
+
+        printed = self._printed(mock_print)
+        assert compact_jwt not in printed
+        assert "[REDACTED]" in printed
+        assert "0.0.307" in printed
+
     def test_early_auth_and_provider_signals_survive_long_cleanup_tail(self):
         signals = (
             "AuthenticationError: OAuth login expired\n"
@@ -3138,7 +3157,7 @@ class TestRunPddCommandDiagnostics:
     def test_failure_strips_unsafe_controls_and_bidi_overrides(self):
         failed = MagicMock(
             returncode=1,
-            stdout="Error:\x00 unsafe\x07 text \u202esecret.exe\u2066 done",
+            stdout="Error:\x00 unsafe\x07 text \u061c\u202esecret.exe\u2066 done",
             stderr="failed\x85with control",
         )
 
@@ -3149,7 +3168,7 @@ class TestRunPddCommandDiagnostics:
             )
 
         printed = self._printed(mock_print)
-        for unsafe in ("\x00", "\x07", "\x85", "\u202e", "\u2066"):
+        for unsafe in ("\x00", "\x07", "\x85", "\u061c", "\u202e", "\u2066"):
             assert unsafe not in printed
         assert "secret.exe" in printed
 
