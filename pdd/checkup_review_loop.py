@@ -1394,8 +1394,18 @@ def run_checkup_review_loop(
         state.stop_reason = f"Failed to set up PR worktree: {setup_error}"
         state.reviewer_status[reviewer] = "failed"
         report = _finalize(context, state, roles, artifacts_dir)
+        _publish_terra_sol_progress(
+            artifacts_dir,
+            config,
+            state,
+            round_number=0,
+            phase="terminal",
+            terminal_reason=state.stop_reason,
+        )
         _maybe_write_agentic_artifact(context, config, state)
         _post_review_loop_report(context, report, use_github_state)
+        if config.terra_sol:
+            clear_agentic_progress()
         return True, report, state.total_cost, state.last_model
 
     # Issue #1092: gates need the PR's actual base_ref so
@@ -1576,8 +1586,18 @@ def run_checkup_review_loop(
             "in the loop's worktree.\n",
         )
         report = _finalize(context, state, roles, artifacts_dir)
+        _publish_terra_sol_progress(
+            artifacts_dir,
+            config,
+            state,
+            round_number=0,
+            phase="terminal",
+            terminal_reason=state.stop_reason,
+        )
         _maybe_write_agentic_artifact(context, config, state)
         _post_review_loop_report(context, report, use_github_state)
+        if config.terra_sol:
+            clear_agentic_progress()
         return True, report, state.total_cost, state.last_model
 
     if not quiet:
@@ -2678,6 +2698,13 @@ def _terra_sol_fresh_final_findings(
     """
     if not config.terra_sol or not config.agentic_mode:
         return []
+    _publish_terra_sol_progress(
+        artifacts_dir,
+        config,
+        state,
+        round_number=round_number,
+        phase="review",
+    )
     _maybe_run_fresh_final_review_override(
         context=context,
         config=config,
@@ -8467,7 +8494,10 @@ def _attempt_source_of_truth_repair(
         ),
     )
     state.total_cost += cost
-    observed_model = str(model or "")
+    # The strict gate above already rejected surrounding whitespace. Normalize
+    # whitespace-only evidence to the canonical missing value for artifacts;
+    # otherwise a failed call can persist visually ambiguous model evidence.
+    observed_model = str(model or "").strip()
     details["fixer_model"] = observed_model
     details["fixer_cost"] = float(cost or 0.0)
     _record_terra_sol_model_observation(

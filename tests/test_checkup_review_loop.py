@@ -16421,6 +16421,82 @@ class TestTerraSolBoundedLoop:
             "terminal_reason": "max_rounds_reached",
         }
 
+    def test_terra_sol_publishes_terminal_progress_on_worktree_setup_failure(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """A setup early return still leaves a terminal watchdog artifact."""
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *_a, **_k: (None, "clone failed")
+        )
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *_a, **_k: None)
+
+        mod.run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        progress = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "terra-sol-progress.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert progress["phase"] == "terminal"
+        assert progress["current_round"] == 0
+        assert progress["terminal"] is True
+        assert "Failed to set up PR worktree" in progress["terminal_reason"]
+
+    def test_terra_sol_publishes_terminal_progress_on_preflight_conflict(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """A conflict early return still leaves a terminal watchdog artifact."""
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *_a, **_k: {
+                "base_ref": "main",
+                "base_local_ref": "refs/remotes/pdd-checkup/pr-1/base",
+            },
+        )
+        monkeypatch.setattr(
+            mod,
+            "_detect_pr_base_merge_conflict",
+            lambda *_a, **_k: "CONFLICT (content): shared.py",
+        )
+
+        mod.run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(enable_gates=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        progress = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "terra-sol-progress.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert progress["phase"] == "terminal"
+        assert progress["current_round"] == 0
+        assert progress["terminal"] is True
+        assert "Pre-flight base-merge conflict" in progress["terminal_reason"]
+
     def test_missing_sol_model_never_inherits_valid_terra_model(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
@@ -16674,6 +16750,7 @@ class TestTerraSolBoundedLoop:
 
         self._patch_io(monkeypatch, tmp_path)
         labels: List[str] = []
+        fresh_progress_phases: List[str] = []
         fresh_final_calls = 0
         late_finding = [
             {
@@ -16689,6 +16766,16 @@ class TestTerraSolBoundedLoop:
             label = kwargs.get("label", "")
             labels.append(label)
             if "fresh-final" in label:
+                progress_path = (
+                    tmp_path
+                    / ".pdd"
+                    / "checkup-review-loop"
+                    / "issue-2-pr-1"
+                    / "terra-sol-progress.json"
+                )
+                fresh_progress_phases.append(
+                    json.loads(progress_path.read_text(encoding="utf-8"))["phase"]
+                )
                 fresh_final_calls += 1
                 if fresh_final_calls == 1:
                     return (
@@ -16720,6 +16807,7 @@ class TestTerraSolBoundedLoop:
 
         assert success is True
         assert fresh_final_calls == 2
+        assert fresh_progress_phases == ["review", "review"]
         assert len([label for label in labels if "fix" in label]) == 1
         assert len([label for label in labels if "verify" in label]) == 1
         fresh_labels = [label for label in labels if "fresh-final" in label]

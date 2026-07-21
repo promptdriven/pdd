@@ -1024,6 +1024,49 @@ class TestRunAgenticCheckup:
         assert "GitHub CLI" in message
         assert not stale_path.exists()
 
+    def test_terra_sol_clears_stale_state_before_hosted_reservation_failure(
+        self, monkeypatch, tmp_path
+    ):
+        """A failed hosted reservation cannot preserve the prior local PASS."""
+        import pdd.agentic_checkup as mod
+
+        stale_path = (
+            tmp_path
+            / ".pdd"
+            / "checkup-review-loop"
+            / "issue-2-pr-2"
+            / "final-state.json"
+        )
+        stale_path.parent.mkdir(parents=True)
+        stale_path.write_text('{"fresh_final_status":"clean"}', encoding="utf-8")
+        monkeypatch.setattr(mod, "_find_project_root", lambda _cwd: tmp_path)
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(tmp_path / "agentic.json")
+        )
+
+        def fail_reservation(*_args, **_kwargs):
+            assert not stale_path.exists()
+            return None
+
+        monkeypatch.setattr(mod, "_prepare_hosted_agentic_artifact", fail_reservation)
+        check_gh = MagicMock(side_effect=AssertionError("must stop before gh I/O"))
+        monkeypatch.setattr(mod, "_check_gh_cli", check_gh)
+
+        success, message, cost, model = mod.run_agentic_checkup(
+            "https://github.com/owner/repo/issues/2",
+            pr_url="https://github.com/owner/repo/pull/2",
+            terra_sol=True,
+            cwd=tmp_path,
+        )
+
+        assert success is False
+        assert "hosted agentic artifact provenance" in message
+        assert cost == 0.0
+        assert model == ""
+        assert not stale_path.exists()
+        check_gh.assert_not_called()
+
     @pytest.mark.parametrize(
         "model",
         [

@@ -1554,42 +1554,14 @@ def run_agentic_checkup(
     # never trigger prompt edits or prompt-repair audit artifacts.
     effective_prompt_repair = "off" if (no_fix or review_only) else prompt_repair
 
-    # Establish hosted artifact provenance before any validation/network early
-    # return. This guarantees a retry cannot leave a prior passing artifact at
-    # the caller-controlled path when the current invocation fails early.
+    # Resolve artifact paths without reserving hosted provenance yet. Terra/Sol
+    # owns its local verdict slot as soon as the request identities are valid,
+    # so stale local state must be invalidated before this fallible reservation.
     project_root = _find_project_root(cwd if cwd is not None else Path.cwd())
     hosted_agentic_artifact_path = _hosted_agentic_artifact_path(project_root)
     standalone_agentic_artifact_path = (
         str(agentic_artifact_path or "").strip() or None
         if agentic_review_loop
-        else None
-    )
-    preview_pr = _parse_pr_url(pr_url) if pr_url else None
-    hosted_artifact_reservation = (
-        _prepare_hosted_agentic_artifact(
-            hosted_agentic_artifact_path,
-            pr_owner=preview_pr[0] if preview_pr else "",
-            pr_repo=preview_pr[1] if preview_pr else "",
-            pr_number=preview_pr[2] if preview_pr else 0,
-            receipt_key_hex=hosted_receipt_key_hex,
-            receipt_run_id=str(os.environ.get(_HOSTED_RECEIPT_RUN_ID_ENV, "")),
-            receipt_expected_head_sha=str(os.environ.get(_HOSTED_EXPECTED_HEAD_ENV, ""))
-            .strip()
-            .lower(),
-        )
-        if hosted_agentic_artifact_path is not None
-        else None
-    )
-    if hosted_agentic_artifact_path is not None and hosted_artifact_reservation is None:
-        return (
-            False,
-            "Failed to establish current hosted agentic artifact provenance.",
-            0.0,
-            "",
-        )
-    effective_agentic_artifact_path = standalone_agentic_artifact_path or (
-        str(hosted_artifact_reservation.private_path)
-        if hosted_artifact_reservation is not None
         else None
     )
 
@@ -1646,6 +1618,38 @@ def run_agentic_checkup(
                 0.0,
                 "",
             )
+
+    # Establish hosted public-placeholder provenance after Terra/Sol has
+    # invalidated its prior local verdict, but before any network/project I/O.
+    # A reservation failure therefore blocks the run without leaving either a
+    # stale local clean verdict or a stale public PASS authoritative.
+    hosted_artifact_reservation = (
+        _prepare_hosted_agentic_artifact(
+            hosted_agentic_artifact_path,
+            pr_owner=pr_owner or "",
+            pr_repo=pr_repo or "",
+            pr_number=pr_number or 0,
+            receipt_key_hex=hosted_receipt_key_hex,
+            receipt_run_id=str(os.environ.get(_HOSTED_RECEIPT_RUN_ID_ENV, "")),
+            receipt_expected_head_sha=str(os.environ.get(_HOSTED_EXPECTED_HEAD_ENV, ""))
+            .strip()
+            .lower(),
+        )
+        if hosted_agentic_artifact_path is not None
+        else None
+    )
+    if hosted_agentic_artifact_path is not None and hosted_artifact_reservation is None:
+        return (
+            False,
+            "Failed to establish current hosted agentic artifact provenance.",
+            0.0,
+            "",
+        )
+    effective_agentic_artifact_path = standalone_agentic_artifact_path or (
+        str(hosted_artifact_reservation.private_path)
+        if hosted_artifact_reservation is not None
+        else None
+    )
 
     # 3. Check gh only after stale Terra/Sol state has been invalidated.
     if not _check_gh_cli():
