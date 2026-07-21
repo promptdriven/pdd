@@ -45,6 +45,7 @@ CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
 PR_2017_PHASE_A_BASE = "c887daba0d171585658f8205e79316e5f36f82c6"
 PR_2017_PHASE_A_HEAD = "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
 REPLAY_PROTECTED_BASE = "e10bd9b3d0d5ac94d1a56af88f5abf07cf8af775"
+REPLAY_PROTECTED_HEAD = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
 PR_1971_COMBINED_BASE = "ee9fcff457b23fb7123bb7e15666c9287409ad0f"
 PR_1971_COMBINED_HEAD = REPLAY_PROTECTED_BASE
 PR_1971_COMBINED_PROFILE_DIGEST = (
@@ -1476,8 +1477,10 @@ def test_pr2017_phase_a_is_dormant_on_current_protected_base() -> None:
 
 
 def test_replay_transitions_cover_the_actual_protected_base() -> None:
-    """The replay transitions must load a complete exact-base profile set."""
-    manifest = build_unit_manifest(ROOT, base_ref=REPLAY_PROTECTED_BASE, head_ref="HEAD")
+    """The historical replay must load its exact protected profile set."""
+    manifest = build_unit_manifest(
+        ROOT, base_ref=REPLAY_PROTECTED_BASE, head_ref=REPLAY_PROTECTED_HEAD
+    )
     profiles = load_verification_profiles(ROOT, manifest)
 
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
