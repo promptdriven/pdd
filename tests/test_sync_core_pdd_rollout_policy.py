@@ -47,6 +47,7 @@ PR_2017_PHASE_A_HEAD = "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
 REPLAY_PROTECTED_BASE = "e10bd9b3d0d5ac94d1a56af88f5abf07cf8af775"
 PR_1971_COMBINED_BASE = "ee9fcff457b23fb7123bb7e15666c9287409ad0f"
 PR_1971_COMBINED_HEAD = REPLAY_PROTECTED_BASE
+PDD_1875_PROTECTED_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
 PR_1971_COMBINED_PROFILE_DIGEST = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
 )
@@ -570,10 +571,11 @@ def test_pdd1875_composed_reconciliation_is_exact(mutated_input: str) -> None:
     """The #2260 gate rejects a byte mutation on every reviewed boundary."""
     inputs = {
         "base_policy": _git_blob(
-            "upstream/main", ROOT / ".pdd/verification-profile-rotations.json"
+            PDD_1875_PROTECTED_BASE,
+            ROOT / ".pdd/verification-profile-rotations.json",
         ),
         "candidate_policy": ROTATION_FILE.read_bytes(),
-        "base_profile": _git_blob("upstream/main", PROFILE_FILE),
+        "base_profile": _git_blob(PDD_1875_PROTECTED_BASE, PROFILE_FILE),
         "candidate_profile": PROFILE_FILE.read_bytes(),
     }
 
@@ -599,9 +601,9 @@ def test_pdd1875_composed_reconciliation_is_exact(mutated_input: str) -> None:
 )
 def test_pdd1875_composed_reconciliation_binds_prompt_bytes(authorization) -> None:
     """Each reviewed profile transition remains bound to its exact prompt pair."""
-    base_profile = _git_blob("upstream/main", PROFILE_FILE)
+    base_profile = _git_blob(PDD_1875_PROTECTED_BASE, PROFILE_FILE)
     candidate_profile = PROFILE_FILE.read_bytes()
-    base_prompt = _git_blob("upstream/main", ROOT / authorization.prompt_path)
+    base_prompt = _git_blob(PDD_1875_PROTECTED_BASE, ROOT / authorization.prompt_path)
     candidate_prompt = (ROOT / authorization.prompt_path).read_bytes()
 
     assert verification._transition_bytes_match(  # pylint: disable=protected-access
@@ -705,7 +707,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
             [
                 "git",
                 "show",
-                "upstream/main:.pdd/verification-profile-rotations.json",
+                f"{PDD_1875_PROTECTED_BASE}:.pdd/verification-profile-rotations.json",
             ],
             cwd=ROOT,
             text=True,
@@ -723,7 +725,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
                 "git",
                 "diff",
                 "--name-only",
-                f"{REPLAY_PROTECTED_BASE}...upstream/main",
+                f"{REPLAY_PROTECTED_BASE}...{PDD_1875_PROTECTED_BASE}",
                 "--",
                 "pdd/prompts",
             ],
@@ -740,7 +742,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     } == replay_prompt_changes
     assert {row["prompt_path"] for row in replay_rows} == replay_prompt_changes
     for row in replay_rows:
-        prompt = _git_blob("upstream/main", ROOT / row["prompt_path"])
+        prompt = _git_blob(PDD_1875_PROTECTED_BASE, ROOT / row["prompt_path"])
         assert hashlib.sha256(prompt).hexdigest() == (row["head_prompt_sha256"])
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
 
@@ -1422,7 +1424,9 @@ def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
 
 def test_pr2017_phase_a_is_dormant_on_current_protected_base() -> None:
     """The prerequisite installs authority without consuming protected bytes."""
-    manifest = build_unit_manifest(ROOT, base_ref="upstream/main", head_ref="HEAD")
+    manifest = build_unit_manifest(
+        ROOT, base_ref=PDD_1875_PROTECTED_BASE, head_ref="HEAD"
+    )
 
     profiles = load_verification_profiles(ROOT, manifest)
 
@@ -1436,7 +1440,7 @@ def test_pr2017_phase_a_is_dormant_on_current_protected_base() -> None:
 def test_replay_transitions_cover_the_actual_protected_base() -> None:
     """The replay transitions must load a complete exact-base profile set."""
     manifest = build_unit_manifest(
-        ROOT, base_ref=REPLAY_PROTECTED_BASE, head_ref="upstream/main"
+        ROOT, base_ref=REPLAY_PROTECTED_BASE, head_ref=PDD_1875_PROTECTED_BASE
     )
     profiles = load_verification_profiles(ROOT, manifest)
 
