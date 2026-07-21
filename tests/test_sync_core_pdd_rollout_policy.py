@@ -48,7 +48,7 @@ REPLAY_PROTECTED_BASE = "e10bd9b3d0d5ac94d1a56af88f5abf07cf8af775"
 TERRA_SOL_PHASE_A_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
 REPLAY_REVIEWED_HEAD = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
 TERRA_SOL_PHASE_A_TARGET_PROFILE = (
-    "7bab95b144218327e3dee6a834819a2e3e61419d41df612094bb40aed9578bb0"
+    "fed436316c49f6b248c6b5ed79a8e835357abe675128659b808798889d889e1d"
 )
 TERRA_SOL_PHASE_A_REPLACEMENTS = (
     (
@@ -59,7 +59,7 @@ TERRA_SOL_PHASE_A_REPLACEMENTS = (
     (
         "pdd/prompts/checkup_review_loop_python.prompt",
         "c5ec02fb049e1359da107067d65e725b3ad0a8cca4da6fd31328821f6b6d1c73",
-        "eedea3f07e724cff1092b314e3611f738e758637d0bab853e99ea53dcbd4e48f",
+        "222c8740b291e885303f29c9a3268de27c258c5e386041796df76862edb5c085",
     ),
     (
         "pdd/prompts/commands/checkup_python.prompt",
@@ -70,6 +70,11 @@ TERRA_SOL_PHASE_A_REPLACEMENTS = (
         "pdd/prompts/checkup_agentic_artifact_python.prompt",
         "dc4db042ae408dcd90c0dcfe4fb9607421e331f024f56de8e22ca1272d0df1f7",
         "460c5c8f6ec93da5aa0d3ee30d41d5dfbda05e4631c79354c1a16e6818b45a16",
+    ),
+    (
+        "pdd/prompts/agentic_common_python.prompt",
+        "e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c",
+        "11aa8636691deb2c6e1dd1051ba46cb06947bb1a65335914868647e8240cede9",
     ),
 )
 PR_1971_COMBINED_BASE = "ee9fcff457b23fb7123bb7e15666c9287409ad0f"
@@ -610,7 +615,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     )
 
     assert len(protected_rows) == 54
-    assert len(surviving_rows) == 51
+    assert len(surviving_rows) == 50
     assert len(rows) == 55
     assert rows[: len(surviving_rows)] == surviving_rows
     assert candidate_tokens[: len(surviving_tokens)] == surviving_tokens
