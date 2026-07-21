@@ -1983,6 +1983,71 @@ class TestSyncOneModule:
         assert "- Foo.run" in second_env["PDD_REPAIR_DIRECTIVE"]
 
     @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner.os.pipe")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="pdd.exe")
+    def test_windows_launch_omits_posix_nonce_fd_and_fails_closed(
+        self, mock_find, mock_pipe, mock_popen, mock_cost, mock_unlink,
+        monkeypatch,
+    ):
+        """Windows must remain runnable without exposing the nonce to tests."""
+        monkeypatch.setattr(
+            "pdd.agentic_sync_runner._CHURN_NONCE_PASS_FDS_SUPPORTED", False
+        )
+        monkeypatch.setenv("PDD_CHURN_NONCE_FD", "hostile-inherited-value")
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\n", exit_code=0
+        )
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, _, error, _, _ = runner._run_attempt("foo")
+
+        assert success is True
+        assert error == ""
+        mock_pipe.assert_not_called()
+        launch = mock_popen.call_args.kwargs
+        assert "pass_fds" not in launch
+        assert "PDD_CHURN_NONCE_FD" not in launch["env"]
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_posix_launch_preserves_private_nonce_fd(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, monkeypatch
+    ):
+        """The supported private-FD channel remains present on POSIX."""
+        monkeypatch.setattr(
+            "pdd.agentic_sync_runner._CHURN_NONCE_PASS_FDS_SUPPORTED", True
+        )
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\n", exit_code=0
+        )
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, _, error, _, _ = runner._run_attempt("foo")
+
+        assert success is True
+        assert error == ""
+        launch = mock_popen.call_args.kwargs
+        assert launch["pass_fds"] == (
+            int(launch["env"]["PDD_CHURN_NONCE_FD"]),
+        )
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
     @patch("pdd.agentic_sync_runner.subprocess.Popen")
