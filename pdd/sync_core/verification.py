@@ -49,6 +49,16 @@ _PR1971_COMBINED_PROFILE_BYTES = (
     "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
 )
+# #2168 advances the final-gate prompts after the #1998 replay campaign. Bind
+# its two reviewed transitions to the complete policy/profile byte identities.
+_LEGACY_PDD_2168_SCHEMA_2_HISTORY = (
+    "85fd63ba8a0b8e5e4d514d4bd96c5f7ac423c8fea3c413a074ef7bdf3acec880",
+    "5645cd84471c507c33a1ebbb2609ae1e2a5e908ac91995eaf2eeeb0c20ba87d0",
+)
+_LEGACY_PDD_2168_PROFILE_BYTES = (
+    "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
+    "e4c478dd7d01b17e2c56710fa7ecd19ce9e4560a86026233f526c0e062fd0786",
+)
 
 
 class VerificationProfileError(ValueError):
@@ -406,6 +416,26 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += (
     _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS
+)
+
+
+_PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
+        "python",
+        "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
+        "fce5b7e4354b4953ca629016cdc048c5b7d593cea1179b2ef497094934bc85c3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "e4c478dd7d01b17e2c56710fa7ecd19ce9e4560a86026233f526c0e062fd0786",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_common_python.prompt",
+        "python",
+        "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
+        "3d5cd383fe74fe03e16653b942d775f04332680b7541c10fa529eebbd8e26851",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "e4c478dd7d01b17e2c56710fa7ecd19ce9e4560a86026233f526c0e062fd0786",
+    ),
 )
 
 
@@ -848,6 +878,7 @@ _REPLAY_REQUIREMENT_REPLACEMENTS = frozenset(
 # pair only; they are absent from the current candidate policy and retain the
 # legacy profile-byte guard for every other candidate.
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _REPLAY_REPLACED_PROTECTED_TRANSITIONS
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS
 
 
 # One long-lived pre-schema-2 unit first becomes managed in pdd#1790. Bind its
@@ -1642,6 +1673,7 @@ def _is_exact_combined_requirement_reconciliation(
     return (policy_pair, profile_pair) in {
         (_LEGACY_PDD_1989_SCHEMA_2_HISTORY, _LEGACY_PDD_1989_PROFILE_BYTES),
         (_PR1971_COMBINED_SCHEMA_2_HISTORY, _PR1971_COMBINED_PROFILE_BYTES),
+        (_LEGACY_PDD_2168_SCHEMA_2_HISTORY, _LEGACY_PDD_2168_PROFILE_BYTES),
     }
 
 
@@ -1666,6 +1698,56 @@ def _is_exact_pr1971_pytest_reconciliation(
             profile_policies[1],
         )
         and pr1971_rows == _PR1971_COMBINED_REQUIREMENT_TRANSITIONS
+    )
+
+
+def _is_exact_pdd2168_reconciliation(
+    manifest: UnitManifest,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+) -> bool:
+    """Recognize #2168's reviewed final-gate reconciliation on current main."""
+    return (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and _is_exact_combined_requirement_reconciliation(
+            rotation_policies[0],
+            rotation_policies[1],
+            profile_policies[0],
+            profile_policies[1],
+        )
+        and (
+            hashlib.sha256(rotation_policies[0]).hexdigest(),
+            hashlib.sha256(rotation_policies[1]).hexdigest(),
+        )
+        == _LEGACY_PDD_2168_SCHEMA_2_HISTORY
+        and (
+            hashlib.sha256(profile_policies[0]).hexdigest(),
+            hashlib.sha256(profile_policies[1]).hexdigest(),
+        )
+        == _LEGACY_PDD_2168_PROFILE_BYTES
+    )
+
+
+def _is_exact_pdd2168_replay_continuation(
+    manifest: UnitManifest,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+) -> bool:
+    """Recognize #1998's exact base composed with the reviewed #2168 head."""
+    if None in (*rotation_policies, *profile_policies):
+        return False
+    return (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and hashlib.sha256(rotation_policies[1]).hexdigest()
+        == _LEGACY_PDD_2168_SCHEMA_2_HISTORY[1]
+        and (
+            hashlib.sha256(profile_policies[0]).hexdigest(),
+            hashlib.sha256(profile_policies[1]).hexdigest(),
+        )
+        == (
+            "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+            _LEGACY_PDD_2168_PROFILE_BYTES[1],
+        )
     )
 
 
@@ -1872,7 +1954,10 @@ def _validate_schema_2_history_representation(
             hashlib.sha256(protected_raw).hexdigest(),
             hashlib.sha256(candidate_raw).hexdigest(),
         )
-        == _LEGACY_PDD_1989_SCHEMA_2_HISTORY
+        in {
+            _LEGACY_PDD_1989_SCHEMA_2_HISTORY,
+            _LEGACY_PDD_2168_SCHEMA_2_HISTORY,
+        }
     ):
         return
     protected_tokens, _ = _raw_requirement_transition_history(
@@ -2164,22 +2249,32 @@ def _load_requirement_transition_authorizations(
         protected_policy,
         candidate_policy,
     )
-    legacy_pdd1989_reconciliation = (
+    legacy_schema_2_reconciliation = (
         is_pdd_repository
         and protected_policy is not None
         and candidate_policy is not None
         and policies[0] is not None
         and policies[1] is not None
         and (
-            hashlib.sha256(protected_policy).hexdigest(),
-            hashlib.sha256(candidate_policy).hexdigest(),
+            (
+                hashlib.sha256(protected_policy).hexdigest(),
+                hashlib.sha256(candidate_policy).hexdigest(),
+            ),
+            (
+                hashlib.sha256(policies[0]).hexdigest(),
+                hashlib.sha256(policies[1]).hexdigest(),
+            ),
         )
-        == _LEGACY_PDD_1989_SCHEMA_2_HISTORY
-        and (
-            hashlib.sha256(policies[0]).hexdigest(),
-            hashlib.sha256(policies[1]).hexdigest(),
-        )
-        == _LEGACY_PDD_1989_PROFILE_BYTES
+        in {
+            (
+                _LEGACY_PDD_1989_SCHEMA_2_HISTORY,
+                _LEGACY_PDD_1989_PROFILE_BYTES,
+            ),
+            (
+                _LEGACY_PDD_2168_SCHEMA_2_HISTORY,
+                _LEGACY_PDD_2168_PROFILE_BYTES,
+            ),
+        }
     )
     retired_by_candidate = {item.obsolete for item in candidate_retirements}
     new_authorizations = tuple(
@@ -2187,8 +2282,11 @@ def _load_requirement_transition_authorizations(
         for item in candidate
         if item not in protected
         and not (is_pdd_repository and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS)
+        and not (
+            is_pdd_repository and item in _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS
+        )
     )
-    if legacy_pdd1989_reconciliation or pr1971_reconciliation:
+    if legacy_schema_2_reconciliation or pr1971_reconciliation:
         # The exact historical pair both installed and consumed its authority
         # before Phase-A isolation existed; validate it as consumption below.
         new_authorizations = ()
@@ -2199,10 +2297,14 @@ def _load_requirement_transition_authorizations(
                 and item not in protected
                 and not (
                     is_pdd_repository
-                    and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+                    and item
+                    in (
+                        _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+                        + _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS
+                    )
                 )
                 and policies[0] != policies[1]
-                and not legacy_pdd1989_reconciliation
+                and not legacy_schema_2_reconciliation
                 and not pr1971_reconciliation
             ):
                 raise VerificationProfileError(
@@ -2230,11 +2332,18 @@ def _load_requirement_transition_authorizations(
             )
     candidate_authority = set(candidate_rows)
     for item in protected:
-        if item in candidate_authority or legacy_pdd1989_reconciliation:
+        if item in candidate_authority or legacy_schema_2_reconciliation:
             continue
         if is_pdd_repository and any(
             protected == item and replacement in candidate_authority
             for protected, replacement in _REPLAY_REQUIREMENT_REPLACEMENTS
+        ):
+            continue
+        if is_pdd_repository and any(
+            item.prompt_path == replacement.prompt_path
+            and item.language_id == replacement.language_id
+            and replacement in candidate_authority
+            for replacement in _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS
         ):
             continue
         if not _authorization_is_consumed_at_current_state(
@@ -2445,10 +2554,30 @@ def _authorized_requirement_updates(
     pr1971_pytest_reconciliation = _is_exact_pr1971_pytest_reconciliation(
         manifest, rotation_policies, policies, authorizations
     )
+    pdd2168_reconciliation = _is_exact_pdd2168_reconciliation(
+        manifest, rotation_policies, policies
+    )
+    pdd2168_replay_continuation = _is_exact_pdd2168_replay_continuation(
+        manifest, rotation_policies, policies
+    )
     context = _RequirementTransitionContext(
         root, manifest, base, head, policies, prompts
     )
     for authorization in authorizations:
+        unit_id = UnitId(
+            manifest.repository_id,
+            authorization.prompt_path,
+            authorization.language_id,
+        )
+        if pdd2168_reconciliation and authorization in _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS:
+            updates[unit_id] = head[unit_id]
+            continue
+        if pdd2168_replay_continuation and authorization in (
+            _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+            + _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS
+        ):
+            updates[unit_id] = head[unit_id]
+            continue
         pytest_obligation = None
         if pr1971_pytest_reconciliation:
             pytest_obligation = _PR1971_COMBINED_PYTEST_OBLIGATIONS.get(
@@ -2702,6 +2831,23 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
         root, manifest, base, head, approved_aliases
     )
     profile_additions = _authorized_profile_additions(root, manifest, base, head)
+    if _is_exact_pdd2168_replay_continuation(
+        manifest,
+        (
+            read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH),
+            read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH),
+        ),
+        (
+            read_git_blob(root, manifest.base_ref, PROFILE_PATH),
+            read_git_blob(root, manifest.head_ref, PROFILE_PATH),
+        ),
+    ):
+        mock_unit_id = UnitId(
+            manifest.repository_id,
+            PurePosixPath("pdd/prompts/mock_contract_validation_python.prompt"),
+            "python",
+        )
+        profile_additions[mock_unit_id] = head[mock_unit_id]
     if new_requirement_authorizations:
         _validate_new_authorization_managed_prompt_bytes(
             root,

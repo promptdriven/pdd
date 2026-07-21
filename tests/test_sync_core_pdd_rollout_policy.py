@@ -598,10 +598,10 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         if json.dumps(row, sort_keys=True) not in replaced_protected_rows
     ]
     candidate_rows = [
-        row for row in bootstrap_rows if row in rows and row not in protected_rows
+        row for row in rows if row in bootstrap_rows and row not in protected_rows
     ]
     assert len(protected_rows) == 31
-    assert len(bootstrap_rows) == 58
+    assert len(bootstrap_rows) == 60
     assert len(surviving_rows) == 23
     assert len(candidate_rows) == 31
     assert len(rows) == 54
@@ -614,7 +614,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
     assert (
         profile_digest
-        == "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3"
+        == "e4c478dd7d01b17e2c56710fa7ecd19ce9e4560a86026233f526c0e062fd0786"
     )
     pr2017_phase_a_rows = [
         row
@@ -653,14 +653,18 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
             text=True,
         ).splitlines()
     )
-    # The mock-contract prompt is a new unit, authorized by the separate exact
-    # profile-addition tuple. Every modified protected prompt needs a transition.
+    # The mock-contract prompt is a new unit, while #2168 advances the two
+    # final-gate prompts after the #1998 replay profile has already landed.
     replay_prompt_changes.remove("pdd/prompts/mock_contract_validation_python.prompt")
+    final_gate_prompt_changes = {
+        "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
+        "pdd/prompts/agentic_common_python.prompt",
+    }
     assert {
         item.prompt_path.as_posix()
         for item in verification._REPLAY_PROFILE_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
     } == replay_prompt_changes
-    assert {row["prompt_path"] for row in current_rows} == replay_prompt_changes
+    assert {row["prompt_path"] for row in current_rows} == final_gate_prompt_changes
     for row in current_rows:
         prompt = ROOT / row["prompt_path"]
         assert (
