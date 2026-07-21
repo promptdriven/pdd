@@ -39,16 +39,15 @@ _LEGACY_PDD_1989_PROFILE_BYTES = (
     "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
     "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
 )
-# #2168 was already in review when schema-2 representation locking landed on
-# main. Bind its one reviewed reconciliation to the complete protected and
-# candidate policy identities; every other candidate remains append-only.
-_LEGACY_PDD_2168_SCHEMA_2_HISTORY = (
-    "09bc30376c6ee5a836bef24f9123759e039dbe4a5b18d1f46b5cae513972edad",
-    "7f6e22e14a14fd1b9aa06409809b2e37379a9bc992bad02df3a05e3c08667ca1",
+# PR #1971 consumed six prompt/profile transitions in one reviewed candidate.
+# Retain its exact historical byte binding; it is not replay authority.
+_PR1971_COMBINED_SCHEMA_2_HISTORY = (
+    "8f423a11f5c25c3042073e733085ad08c5d03a999087cf04d2f6bc7f24fb0d72",
+    "2b96e538280ebb79db86d0dece4791d80f46dadcc93ba6ab4ad81182b9491d5f",
 )
-_LEGACY_PDD_2168_PROFILE_BYTES = (
-    "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
-    "a1503c4f146191f496c5ebf11ab1040b5a260583fbaa28dcbce1ea7b6fced4dc",
+_PR1971_COMBINED_PROFILE_BYTES = (
+    "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+    "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
 )
 
 
@@ -194,26 +193,10 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
         "python",
-        "fc372c0369c895e42b4bb8f9277560facf086d999233d88bef8401766bccdf34",
         "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
-        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
-    ),
-    _exact_bootstrap_requirement_transition(
-        "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
-        "python",
-        "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
-        "1c1d2b6f57e191e486cd33dd5540cc27c25b64c88ec4e9a08edf2151f6468d12",
-        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
-        "b3886522c0056e872c6d336d2b46c4900467f12b5f66d9f4b21aa2251e1180a3",
-    ),
-    _exact_bootstrap_requirement_transition(
-        "pdd/prompts/agentic_common_python.prompt",
-        "python",
-        "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
-        "e4b8ea5e9122504817d93e4229ff4328a082cb2fd2ab94ac3b0be2a89096207c",
-        "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6",
-        "b3886522c0056e872c6d336d2b46c4900467f12b5f66d9f4b21aa2251e1180a3",
+        "08e0c842d842974340b7ed3424f71fa20379c6922aaa6cfbca232d7d83a9a255",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_checkup_python.prompt",
@@ -250,18 +233,18 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/checkup_review_loop_python.prompt",
         "python",
-        "c44fbaf6b0c1ceb5c52cf514684a72e866bdc08d4bf0b948d978dec65afb0719",
         "a7fd72cadb0644d4d20d09868cc8e908e3122478e6127b3943de32b711d76c02",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
-        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
+        "c5ec02fb049e1359da107067d65e725b3ad0a8cca4da6fd31328821f6b6d1c73",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/ci_drift_heal_python.prompt",
         "python",
-        "e12dc6b48f34111182afb4a73b9ba66596617b9a6d8e393766d2cd6b847562ec",
         "fc595464ceb1bac758864cd66a87fd1ba4f72bae79660a1dd334e060cbb861f7",
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
-        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
+        "54f1c25a8cdbf5d1a724981f6fe9f9b6fbe5b20988f30fd2183c24b60d932d88",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/story_regression_python.prompt",
@@ -280,10 +263,10 @@ _PDD_1989_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_common_python.prompt",
         "python",
-        "86e47992102e2344fe59ee9a3ece4c6cf356025edaadf693c12acac63a5c7490",
         "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
-        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+        "e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c",
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/commands/checkup_python.prompt",
@@ -360,10 +343,10 @@ _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/evidence_manifest_python.prompt",
         "python",
-        "3b50a00e8deca49c70b127540a2e589aa3715a498b775ab4ddb482adb65eac6f",
         "55f2de2533a461b1d26f4c7641edd6c2c7c05858dc98102ed6f9df04d552e24d",
-        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
-        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+        "2592f4de642e97d39c3ed3f9ee068af9c5bb80f0fca027e7f476ac0eb8787de9",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/get_jwt_token_python.prompt",
@@ -400,9 +383,9 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
         "pdd/prompts/core/cli_python.prompt",
         "python",
         "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724",
-        "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37",
+        "779a19a53bdbb3c7ad5dbf4afb9fb29cf3f04b56e9bfc488552ed0eff823f46e",
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
-        "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/get_test_command_python.prompt",
@@ -426,6 +409,447 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS += (
 )
 
 
+# #1998 reconciles every remaining replay-modified prompt with its exact
+# protected profile bytes. These entries authorize only the reviewed base/head
+# pairs; no candidate may self-authorize a different profile transition.
+_REPLAY_PROMPT_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_architecture_orchestrator_python.prompt",
+        "python",
+        "970bd3a10391c1ed87995920e3c25ee3a67844db4796c3e6104573774f47dee4",
+        "24086f8a716d9bf49d291f6eecab9d6ab0594f2388610609497aa9a6870be4a1",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_bug_orchestrator_python.prompt",
+        "python",
+        "80577f381e7185bd9a77f32b8be81079166b5881e5ca148cdab020dcb7069e11",
+        "dfbaabe591842937fd2141208b1b3c4104b7b89bf32d261d96a61830cc7fc872",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_change_orchestrator_python.prompt",
+        "python",
+        "868b316bb60d886ebf0be7f52fb940296abd11804606bde83b841f812bf660d8",
+        "a5f609c2aa21b86d5b1bdb1ef7b36207c40326fc85b617c8b7d7b99dc5b23b9c",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_e2e_fix_orchestrator_python.prompt",
+        "python",
+        "179b3c8cba5ce703f943a0ebcf6f7c540d34d23e50506e7456d0aebec640726c",
+        "91bc4b2ab37fca4aeb1c8ed135f694fd9b75273e50a482563ae674bc4124619f",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_e2e_fix_step9_verify_all_LLM.prompt",
+        "llm",
+        "228b06c686e6e8c416e2ab753791b4d4d63ae23fb14c810e9433870e34d0ed0e",
+        "ec4e7456f445fa227a7bfeb58e55d2ef1fbec9cd3bd7cc51222a5d5474bdf27d",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_split_orchestrator_python.prompt",
+        "python",
+        "9c24971f6866c8432a6ae7102eb5777e1c7a36952c3321c577c520f7c8088d39",
+        "0436452e88c77dd034d4aa00c20f8d8361830ca8196a5e8ec9c8f69666fc38a6",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_sync_python.prompt",
+        "python",
+        "aa67cf6c09fdd10aa2670a0c8c2dba3b01630b8c18c86c34d3f1ec213b45aad8",
+        "5d9f8b0462c925413c1941286ae28c952ba8e5355f01cab3131d9a6e3c0a1659",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_sync_runner_python.prompt",
+        "python",
+        "99010afb8c3a52d2f1a1af15b8fa2c786d5fdcaaddb04b61e8c0ae719f7f23a1",
+        "66b8a98d7f8a7d5b82093178be8196f6287125072e888356341f7691f6b66d57",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_test_orchestrator_python.prompt",
+        "python",
+        "068328249e60cfca625096866a6886de55c344e68539b5489e0b57ffdddb9593",
+        "9f8e9ba75d0324d83aae431254ed78c8bfb9e73e800cbf06712de780a1c3fe25",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/ci_validation_python.prompt",
+        "python",
+        "9e2e7d49234d6edebc86bc0701de53df732c7c5b52621a4be0d25d69e6f9635f",
+        "fe775e3133d44e7903ff4b19a18bda48de29d3cd82a9a1526536241e4495d885",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/cmd_test_main_python.prompt",
+        "python",
+        "9a96654683807432182c978b529ad6804db23591a602cab866fe592364e012e4",
+        "1bc51147fc08fe0f79a6b361ba91378a81b51e6f7262d50c7534f8fa62240063",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/code_generator_main_python.prompt",
+        "python",
+        "8d0a51822aaa2c64e1b71579d0cb6e41460b90734441e0b6ec3ec146402495fe",
+        "51ec006a5b7faeb397be9c1b8e61205e97459fdc08cd9e90e7f0692ccf55a1d5",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/fix_python.prompt",
+        "python",
+        "3e180110a579e905ed0e7eeead2f5b8145a5cbbeed781942b6aaad1e713c3ec6",
+        "9665945341cf2ac1860c535d6867cd0082f0184d462765ec277d3887cfaae583",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/maintenance_python.prompt",
+        "python",
+        "5f50939cf7cd9dd3cf1269d20cef4ba1e3bbe8c242bd33ccfc4fdeef51d0cda6",
+        "d745f41791cabdae9e76dbf21896f3a1dcba3435b6f599ffb9c67c0a8789c9b3",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/modify_python.prompt",
+        "python",
+        "8d103ee748926ef9683ba4e0ab70ecfd32b91e9437eaf435767bb42d0beda647",
+        "34ec165260531e0fd13b721a7fb9bb2ae5fe70275166044ddd204166adf660be",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/content_selector_python.prompt",
+        "python",
+        "df9a157338364189552d43732ed4a565eb5368d4a460a7b249962ff2a2b3a8ad",
+        "b2f4bcb592f87c6bb782329df151acbd7045d0562bcf0805b00246d4f1ba0096",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/durable_sync_runner_python.prompt",
+        "python",
+        "fb45ad84ba8adb320baadeb47cac7917626dfd0e44916e8ffd6709cd13ccb72e",
+        "5bfd76d356efbb0848b013c208909d1d6fc16b1dd7d7ef215457fd14debcf259",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/fix_main_python.prompt",
+        "python",
+        "f4b5f47aaeda04805ddf44d2ea465dace78206ef18bca05141156ff15de3d3ac",
+        "c238141a397d86e9053d30413e6063d32f26194ad53148109c39ab5648998ecc",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/metadata_sync_python.prompt",
+        "python",
+        "c9dee496de479efe665cc44767871a5530bb09cdbcc797d8603fd6e3191d5561",
+        "6ab860b38af47df67f30c5281e89df9a5dad98116fe41a7b21d630a06b028bfc",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/one_session_sync_python.prompt",
+        "python",
+        "907be3fbc932baf1b2373e831e9784a69fc91fd98bde925139bd89487a5ec419",
+        "90edaa24ea338961a00053bc11e5254e4887af38d8b7aa304d852f656ee2963e",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_determine_operation_python.prompt",
+        "python",
+        "fd24cdd0df308353e33bfe6d7e004cd3064303c3d1eef536b1adbfc3a67bd1d8",
+        "c84ef0e33d0759ffcf6920e5cd14951045b43d2e6d4d93e8b5b9fb31f8215ed7",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "9caf55f5a1366c9e439b5ac4394f8192b3131102be4c648ab4bc3e89c42c5550",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_main_python.prompt",
+        "python",
+        "f112de7cfda339c31245f82a1670cf75ff1a1afddac0d8bbcd176f1929bfa7ba",
+        "fd8ff15f34913e59c0e9a167739916021bf6b0406b651a8603614139f0bf282f",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_orchestration_python.prompt",
+        "python",
+        "5420f3f617586ceb3149a9efb557968b25115855ae65275be2d11d55c91f227e",
+        "7cfd6ea5b6a182e1de3ac97ac8554ade69c7c486a2127faafec644438762b78a",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_tui_python.prompt",
+        "python",
+        "a610a1cc0c82bde12f6e133b7e505c343ded9e8eb6fcd39a657263257d254515",
+        "e13629d81b22d27148983600507273e1492101f3ccbd8e8203c39f7f799045ee",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/architecture_sync_python.prompt",
+        "python",
+        "754f44ef1cab69a0a1fc70b321333ec68476e2b5432e5b5e6be3a3e382c32e29",
+        "a5fd7095f26859503d4f2a2c30b49b1a0fe834b78d55536f69eae26006fb9fb7",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+    ),
+)
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS += _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS
+
+# PR #1971's six historical prompt/profile transitions remain exact protected
+# evidence.  They deliberately are not appended to replay bootstrap authority.
+_PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/operation_log_python.prompt",
+        "python",
+        "e9314dff3064004dafe75821e7aec984cbbec76e4745f6c49e73c50105ecb9c8",
+        "370d4f511f320b3db71cb74bb17532a6293d1c48def1a0faebfa8fbb7f00eb12",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/pin_example_hack_python.prompt",
+        "python",
+        "7efec65cda40e8357cd08c974abc4b1aebb450d2fe75401e5cc5629e0696feb9",
+        "4b45b2744bb856ba48681d3038ba41512353df5e0ed77c3d698928ca89c6cabb",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/server/routes/prompts_python.prompt",
+        "python",
+        "8a88807f83d1d4bd5cfa9ccbd465a619a2d00fef9f81c53b84047470c8399293",
+        "0cef545efaa9eef5007d338656c0e40e70db314ddbd0e7a00b64f300dba7f342",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_determine_operation_python.prompt",
+        "python",
+        "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
+        "fd24cdd0df308353e33bfe6d7e004cd3064303c3d1eef536b1adbfc3a67bd1d8",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_orchestration_python.prompt",
+        "python",
+        "ca4ad5eff6774715d7a65c73e17a12f79da66cb409c69fe90bf41ae097181266",
+        "5420f3f617586ceb3149a9efb557968b25115855ae65275be2d11d55c91f227e",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/update_main_python.prompt",
+        "python",
+        "b1042be0dd594c9bbb197a4afe7e5c5a12aaad1574feadf7cb5b26f9bf85bccd",
+        "17fc1c03860bca7d7889ac388e4de26c19b73edb7ead9bea20f6be1016995bb5",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+)
+
+_PR1971_COMBINED_PYTEST_OBLIGATIONS = {
+    (
+        PurePosixPath("pdd/prompts/operation_log_python.prompt"),
+        "python",
+    ): VerificationObligation(
+        "pytest-operation-log",
+        "test",
+        "pytest",
+        "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+        (
+            "CONTRACT-SHA256:370d4f511f320b3db71cb74bb17532a6293d1c48def1a0faebfa8fbb7f00eb12",
+        ),
+        (PurePosixPath("tests/test_operation_log.py"),),
+        True,
+        (PurePosixPath("pdd/operation_log.py"),),
+    ),
+    (
+        PurePosixPath("pdd/prompts/server/routes/prompts_python.prompt"),
+        "python",
+    ): VerificationObligation(
+        "pytest-server-routes-prompts",
+        "test",
+        "pytest",
+        "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+        (
+            "CONTRACT-SHA256:0cef545efaa9eef5007d338656c0e40e70db314ddbd0e7a00b64f300dba7f342",
+        ),
+        (PurePosixPath("tests/server/routes/test_prompts.py"),),
+        True,
+        (PurePosixPath("pdd/server/routes/prompts.py"),),
+    ),
+    (
+        PurePosixPath("pdd/prompts/update_main_python.prompt"),
+        "python",
+    ): VerificationObligation(
+        "pytest-update-main",
+        "test",
+        "pytest",
+        "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+        (
+            "CONTRACT-SHA256:17fc1c03860bca7d7889ac388e4de26c19b73edb7ead9bea20f6be1016995bb5",
+        ),
+        (PurePosixPath("tests/test_update_main.py"),),
+        True,
+        (PurePosixPath("pdd/update_main.py"),),
+    ),
+}
+
+# Eight replay-modified prompts already have protected transition rows: six
+# historical bootstrap rows and two rows merged by #1971. Their reviewed
+# replacements, together with the 23 otherwise-new replay rows above, are the
+# only bootstrap authority allowed to carry a changed profile policy.
+_REPLAY_REPLACED_PROMPT_PATHS = frozenset(
+    {
+        PurePosixPath("pdd/prompts/agentic_checkup_orchestrator_python.prompt"),
+        PurePosixPath("pdd/prompts/agentic_common_python.prompt"),
+        PurePosixPath("pdd/prompts/checkup_review_loop_python.prompt"),
+        PurePosixPath("pdd/prompts/ci_drift_heal_python.prompt"),
+        PurePosixPath("pdd/prompts/core/cli_python.prompt"),
+        PurePosixPath("pdd/prompts/evidence_manifest_python.prompt"),
+    }
+)
+# The replay now starts after main's story-regression rotation.  Rebind only its
+# reviewed candidate transitions to that immutable base; older bootstrap rows
+# retain their historical policy pairs and cannot authorize a new candidate.
+_REPLAY_BASE_PROFILE_SHA256 = (
+    "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
+)
+_REPLAY_HEAD_PROFILE_SHA256 = (
+    "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3"
+)
+_REPLAY_PROFILE_REQUIREMENT_TRANSITIONS = tuple(
+    replace(
+        item,
+        bindings=replace(
+            item.bindings,
+            base_policy_sha256=_REPLAY_BASE_PROFILE_SHA256,
+            head_policy_sha256=_REPLAY_HEAD_PROFILE_SHA256,
+        ),
+    )
+    for item in (
+        _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS
+        + tuple(
+            item
+            for item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
+            if item.prompt_path in _REPLAY_REPLACED_PROMPT_PATHS
+        )
+    )
+)
+_REPLAY_TRANSITION_BY_IDENTITY = {
+    (item.prompt_path, item.language_id): item
+    for item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+}
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS = tuple(
+    _REPLAY_TRANSITION_BY_IDENTITY.get((item.prompt_path, item.language_id), item)
+    for item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
+)
+_REPLAY_REPLACED_PROTECTED_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_orchestration_python.prompt",
+        "python",
+        "ca4ad5eff6774715d7a65c73e17a12f79da66cb409c69fe90bf41ae097181266",
+        "5420f3f617586ceb3149a9efb557968b25115855ae65275be2d11d55c91f227e",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_determine_operation_python.prompt",
+        "python",
+        "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
+        "fd24cdd0df308353e33bfe6d7e004cd3064303c3d1eef536b1adbfc3a67bd1d8",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
+        "python",
+        "fc372c0369c895e42b4bb8f9277560facf086d999233d88bef8401766bccdf34",
+        "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/checkup_review_loop_python.prompt",
+        "python",
+        "c44fbaf6b0c1ceb5c52cf514684a72e866bdc08d4bf0b948d978dec65afb0719",
+        "a7fd72cadb0644d4d20d09868cc8e908e3122478e6127b3943de32b711d76c02",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/ci_drift_heal_python.prompt",
+        "python",
+        "e12dc6b48f34111182afb4a73b9ba66596617b9a6d8e393766d2cd6b847562ec",
+        "fc595464ceb1bac758864cd66a87fd1ba4f72bae79660a1dd334e060cbb861f7",
+        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_common_python.prompt",
+        "python",
+        "86e47992102e2344fe59ee9a3ece4c6cf356025edaadf693c12acac63a5c7490",
+        "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/evidence_manifest_python.prompt",
+        "python",
+        "3b50a00e8deca49c70b127540a2e589aa3715a498b775ab4ddb482adb65eac6f",
+        "55f2de2533a461b1d26f4c7641edd6c2c7c05858dc98102ed6f9df04d552e24d",
+        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/core/cli_python.prompt",
+        "python",
+        "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724",
+        "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37",
+        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
+        "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18",
+    ),
+)
+_REPLAY_REQUIREMENT_REPLACEMENTS = frozenset(
+    (
+        protected,
+        next(
+            candidate
+            for candidate in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+            if candidate.prompt_path == protected.prompt_path
+            and candidate.language_id == protected.language_id
+        ),
+    )
+    for protected in _REPLAY_REPLACED_PROTECTED_TRANSITIONS
+)
+# The exact historical rows remain authority for the immutable #1989 replay
+# pair only; they are absent from the current candidate policy and retain the
+# legacy profile-byte guard for every other candidate.
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS += _REPLAY_REPLACED_PROTECTED_TRANSITIONS
+
+
 # One long-lived pre-schema-2 unit first becomes managed in pdd#1790. Bind its
 # initial profile to the exact candidate policy and prompt bytes so the merged
 # protected checker can authorize that addition without granting a general
@@ -444,6 +868,13 @@ _BOOTSTRAP_PROFILE_ADDITIONS = (
         "CONTRACT-SHA256:dd66389e2ec13002ff56ae34625443f463164a4fcadf51af6a98982c49ae01c3",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
         "dd66389e2ec13002ff56ae34625443f463164a4fcadf51af6a98982c49ae01c3",
+    ),
+    (
+        PurePosixPath("pdd/prompts/mock_contract_validation_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:34624bde64048913f0c05a3ce2d7faab89997cf46c97f81e4ae27a603e5ed506",
+        "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
+        "34624bde64048913f0c05a3ce2d7faab89997cf46c97f81e4ae27a603e5ed506",
     ),
 )
 
@@ -1184,6 +1615,60 @@ def _validate_dormant_policy_installation(
         )
 
 
+def _is_exact_combined_requirement_reconciliation(
+    protected_policy: bytes | None,
+    candidate_policy: bytes | None,
+    protected_profile: bytes | None,
+    candidate_profile: bytes | None,
+) -> bool:
+    """Recognize only the reviewed same-candidate policy/profile byte pairs."""
+    if None in (
+        protected_policy,
+        candidate_policy,
+        protected_profile,
+        candidate_profile,
+    ):
+        return False
+    assert protected_policy is not None and candidate_policy is not None
+    assert protected_profile is not None and candidate_profile is not None
+    policy_pair = (
+        hashlib.sha256(protected_policy).hexdigest(),
+        hashlib.sha256(candidate_policy).hexdigest(),
+    )
+    profile_pair = (
+        hashlib.sha256(protected_profile).hexdigest(),
+        hashlib.sha256(candidate_profile).hexdigest(),
+    )
+    return (policy_pair, profile_pair) in {
+        (_LEGACY_PDD_1989_SCHEMA_2_HISTORY, _LEGACY_PDD_1989_PROFILE_BYTES),
+        (_PR1971_COMBINED_SCHEMA_2_HISTORY, _PR1971_COMBINED_PROFILE_BYTES),
+    }
+
+
+def _is_exact_pr1971_pytest_reconciliation(
+    manifest: UnitManifest,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+    authorizations: tuple[_RequirementTransitionAuthorization, ...],
+) -> bool:
+    """Recognize only #1971's complete reviewed profile-obligation addition."""
+    pr1971_rows = tuple(
+        item
+        for item in authorizations
+        if item.bindings.head_policy_sha256 == _PR1971_COMBINED_PROFILE_BYTES[1]
+    )
+    return (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and _is_exact_combined_requirement_reconciliation(
+            rotation_policies[0],
+            rotation_policies[1],
+            profile_policies[0],
+            profile_policies[1],
+        )
+        and pr1971_rows == _PR1971_COMBINED_REQUIREMENT_TRANSITIONS
+    )
+
+
 def _candidate_authorization_is_strictly_dormant(
     manifest: UnitManifest,
     base: Mapping[UnitId, _ProfileInput],
@@ -1372,6 +1857,7 @@ def _validate_retirement_history_representation(
 
 
 def _validate_schema_2_history_representation(
+    manifest: UnitManifest,
     protected_raw: bytes | None,
     candidate_raw: bytes | None,
     protected_rows: tuple[_RequirementTransitionAuthorization, ...],
@@ -1379,16 +1865,14 @@ def _validate_schema_2_history_representation(
 ) -> None:
     """Keep surviving schema-2 row tokens exact and ahead of new rows."""
     if (
-        protected_raw is not None
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and protected_raw is not None
         and candidate_raw is not None
         and (
             hashlib.sha256(protected_raw).hexdigest(),
             hashlib.sha256(candidate_raw).hexdigest(),
         )
-        in {
-            _LEGACY_PDD_1989_SCHEMA_2_HISTORY,
-            _LEGACY_PDD_2168_SCHEMA_2_HISTORY,
-        }
+        == _LEGACY_PDD_1989_SCHEMA_2_HISTORY
     ):
         return
     protected_tokens, _ = _raw_requirement_transition_history(
@@ -1486,6 +1970,7 @@ def _validate_consumed_managed_prompt_bytes(
     approved_aliases: Mapping[PurePosixPath, PurePosixPath],
     authorizations: tuple[_RequirementTransitionAuthorization, ...],
     updates: Mapping[UnitId, _ProfileInput],
+    profile_addition_paths: set[PurePosixPath],
 ) -> None:
     """Limit Phase B prompt drift to exact protected rows consumed in this candidate."""
     consumed = {
@@ -1499,7 +1984,9 @@ def _validate_consumed_managed_prompt_bytes(
         in updates
     }
     unauthorized = (
-        _managed_prompt_byte_changes(root, manifest, approved_aliases) - consumed
+        _managed_prompt_byte_changes(root, manifest, approved_aliases)
+        - consumed
+        - profile_addition_paths
     )
     if unauthorized:
         raise VerificationProfileError(
@@ -1529,6 +2016,7 @@ def _validate_candidate_retirements(
     candidate_schema = _policy_schema_version(candidate_policy, "candidate")
     if protected_schema == 2 and candidate_schema == 2:
         _validate_schema_2_history_representation(
+            manifest,
             protected_policy,
             candidate_policy,
             protected_rows,
@@ -1626,13 +2114,21 @@ def _load_requirement_transition_authorizations(
     candidate = _active_requirement_transition_authorizations(
         candidate_rows, candidate_retirements, "candidate"
     )
+    is_pdd_repository = manifest.repository_id == _PDD_REPOSITORY_ID
     authority = set(protected)
-    if manifest.repository_id == _PDD_REPOSITORY_ID:
+    if is_pdd_repository:
         authority.update(_BOOTSTRAP_REQUIREMENT_TRANSITIONS)
     policies = (
         read_git_blob(root, manifest.base_ref, PROFILE_PATH),
         read_git_blob(root, manifest.head_ref, PROFILE_PATH),
     )
+    pr1971_reconciliation = _is_exact_pr1971_pytest_reconciliation(
+        manifest, (protected_policy, candidate_policy), policies, candidate
+    )
+    if pr1971_reconciliation:
+        # Historical #1971 is accepted only as its complete, byte-bound
+        # reconciliation; it is never installed as general replay authority.
+        authority.update(_PR1971_COMBINED_REQUIREMENT_TRANSITIONS)
     prompt_paths = {item.prompt_path for item in (*protected_rows, *candidate_rows)}
     prompts = {
         prompt_path: (
@@ -1668,35 +2164,31 @@ def _load_requirement_transition_authorizations(
         protected_policy,
         candidate_policy,
     )
-    legacy_schema_2_reconciliation = (
-        protected_policy is not None
+    legacy_pdd1989_reconciliation = (
+        is_pdd_repository
+        and protected_policy is not None
         and candidate_policy is not None
         and policies[0] is not None
         and policies[1] is not None
         and (
-            (
-                hashlib.sha256(protected_policy).hexdigest(),
-                hashlib.sha256(candidate_policy).hexdigest(),
-            ),
-            (
-                hashlib.sha256(policies[0]).hexdigest(),
-                hashlib.sha256(policies[1]).hexdigest(),
-            ),
+            hashlib.sha256(protected_policy).hexdigest(),
+            hashlib.sha256(candidate_policy).hexdigest(),
         )
-        in {
-            (
-                _LEGACY_PDD_1989_SCHEMA_2_HISTORY,
-                _LEGACY_PDD_1989_PROFILE_BYTES,
-            ),
-            (
-                _LEGACY_PDD_2168_SCHEMA_2_HISTORY,
-                _LEGACY_PDD_2168_PROFILE_BYTES,
-            ),
-        }
+        == _LEGACY_PDD_1989_SCHEMA_2_HISTORY
+        and (
+            hashlib.sha256(policies[0]).hexdigest(),
+            hashlib.sha256(policies[1]).hexdigest(),
+        )
+        == _LEGACY_PDD_1989_PROFILE_BYTES
     )
     retired_by_candidate = {item.obsolete for item in candidate_retirements}
-    new_authorizations = tuple(item for item in candidate if item not in protected)
-    if legacy_schema_2_reconciliation:
+    new_authorizations = tuple(
+        item
+        for item in candidate
+        if item not in protected
+        and not (is_pdd_repository and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS)
+    )
+    if legacy_pdd1989_reconciliation or pr1971_reconciliation:
         # The exact historical pair both installed and consumed its authority
         # before Phase-A isolation existed; validate it as consumption below.
         new_authorizations = ()
@@ -1705,8 +2197,13 @@ def _load_requirement_transition_authorizations(
             if (
                 item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
                 and item not in protected
+                and not (
+                    is_pdd_repository
+                    and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+                )
                 and policies[0] != policies[1]
-                and not legacy_schema_2_reconciliation
+                and not legacy_pdd1989_reconciliation
+                and not pr1971_reconciliation
             ):
                 raise VerificationProfileError(
                     "candidate legacy bootstrap requirement transition changes "
@@ -1733,7 +2230,12 @@ def _load_requirement_transition_authorizations(
             )
     candidate_authority = set(candidate_rows)
     for item in protected:
-        if item in candidate_authority or legacy_schema_2_reconciliation:
+        if item in candidate_authority or legacy_pdd1989_reconciliation:
+            continue
+        if is_pdd_repository and any(
+            protected == item and replacement in candidate_authority
+            for protected, replacement in _REPLAY_REQUIREMENT_REPLACEMENTS
+        ):
             continue
         if not _authorization_is_consumed_at_current_state(
             manifest, base, head, prompts[item.prompt_path], item
@@ -1773,6 +2275,7 @@ def _expected_requirement_update(
     authorization: _RequirementTransitionAuthorization,
     protected: _ProfileInput,
     candidate: _ProfileInput,
+    pytest_obligation: VerificationObligation | None = None,
 ) -> tuple[_ProfileInput | None, str | None]:
     """Return the sole permitted profile delta for one exact prompt transition."""
     obligations = {item.obligation_id: item for item in protected.obligations}
@@ -1805,6 +2308,8 @@ def _expected_requirement_update(
         )
         for obligation_id, obligation in obligations.items()
     }
+    if pytest_obligation is not None:
+        obligations[pytest_obligation.obligation_id] = pytest_obligation
     expected = _ProfileInput(
         (authorization.to_requirement_id,), tuple(sorted(obligations.values()))
     )
@@ -1864,6 +2369,7 @@ def _matches_unchanged_requirement_state(
 def _evaluate_requirement_authorization(
     context: _RequirementTransitionContext,
     authorization: _RequirementTransitionAuthorization,
+    pytest_obligation: VerificationObligation | None = None,
 ) -> tuple[UnitId, _ProfileInput | None, str | None]:
     """Evaluate one rule as dormant, consumed, exact, or invalid."""
     unit_id = UnitId(
@@ -1911,7 +2417,9 @@ def _evaluate_requirement_authorization(
         prompts[1],
     ):
         return unit_id, None, "requirement transition bindings mismatch"
-    result, reason = _expected_requirement_update(authorization, protected, candidate)
+    result, reason = _expected_requirement_update(
+        authorization, protected, candidate, pytest_obligation
+    )
     return unit_id, result, reason
 
 
@@ -1930,12 +2438,24 @@ def _authorized_requirement_updates(
         read_git_blob(root, manifest.base_ref, PROFILE_PATH),
         read_git_blob(root, manifest.head_ref, PROFILE_PATH),
     )
+    rotation_policies = (
+        read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH),
+        read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH),
+    )
+    pr1971_pytest_reconciliation = _is_exact_pr1971_pytest_reconciliation(
+        manifest, rotation_policies, policies, authorizations
+    )
     context = _RequirementTransitionContext(
         root, manifest, base, head, policies, prompts
     )
     for authorization in authorizations:
+        pytest_obligation = None
+        if pr1971_pytest_reconciliation:
+            pytest_obligation = _PR1971_COMBINED_PYTEST_OBLIGATIONS.get(
+                (authorization.prompt_path, authorization.language_id)
+            )
         unit_id, result, reason = _evaluate_requirement_authorization(
-            context, authorization
+            context, authorization, pytest_obligation
         )
         if reason is not None:
             invalid.append(f"{authorization.prompt_path}: {reason}")
@@ -2207,6 +2727,10 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
             approved_aliases,
             requirement_authorizations,
             requirement_updates,
+            {
+                _canonical_prompt_path(unit_id.prompt_relpath, approved_aliases)
+                for unit_id in profile_additions
+            },
         )
     invalid.extend(requirement_invalid)
     requirement_updates = {**profile_additions, **requirement_updates}

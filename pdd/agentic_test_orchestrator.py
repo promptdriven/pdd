@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from .agentic_common import (
+    provider_failure_workflow,
     branch_checked_out_worktree,
     clean_restart_fallback_branch,
     current_worktree_branch,
@@ -388,6 +389,7 @@ def _poll_parallel_results(results_path: Path, timeout: float) -> Optional[str]:
     return None
 
 
+@provider_failure_workflow
 def run_agentic_test_orchestrator(
     issue_url: str,
     issue_content: str,

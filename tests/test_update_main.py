@@ -2198,18 +2198,20 @@ class TestIsCodeChanged:
 
         code_file = tmp_path / "module.py"
         code_file.write_text("def foo(): pass\n")
-        current_hash = calculate_sha256(code_file)
+        current_hash = calculate_sha256(code_file, tmp_path)
 
         mock_fp = MagicMock()
         mock_fp.code_hash = current_hash
         mock_fp.include_deps = {}
 
-        with patch("pdd.update_main.read_fingerprint", return_value=mock_fp):
+        with patch("pdd.update_main.read_fingerprint", return_value=mock_fp), \
+             patch("pdd.update_main.calculate_sha256", wraps=calculate_sha256) as hash_fn:
             changed, reason = is_code_changed(
                 str(code_file), str(tmp_path), set()
             )
         assert changed is False
         assert "matches" in reason
+        hash_fn.assert_called_once_with(code_file, tmp_path)
 
     def test_fingerprint_code_hash_differs(self, tmp_path):
         """Fingerprint with different code hash -> changed=True."""
@@ -2233,7 +2235,7 @@ class TestIsCodeChanged:
 
         code_file = tmp_path / "module.py"
         code_file.write_text("def foo(): pass\n")
-        current_hash = calculate_sha256(code_file)
+        current_hash = calculate_sha256(code_file, tmp_path)
 
         dep_file = tmp_path / "preamble.md"
         dep_file.write_text("updated preamble content\n")
@@ -2242,12 +2244,17 @@ class TestIsCodeChanged:
         mock_fp.code_hash = current_hash
         mock_fp.include_deps = {str(dep_file): "old_hash_of_preamble"}
 
-        with patch("pdd.update_main.read_fingerprint", return_value=mock_fp):
+        with patch("pdd.update_main.read_fingerprint", return_value=mock_fp), \
+             patch("pdd.update_main.calculate_sha256", wraps=calculate_sha256) as hash_fn:
             changed, reason = is_code_changed(
                 str(code_file), str(tmp_path), set()
             )
         assert changed is True
         assert "include dependency changed" in reason
+        assert [hash_call.args for hash_call in hash_fn.call_args_list] == [
+            (code_file, tmp_path),
+            (dep_file, tmp_path),
+        ]
 
     def test_uses_prompt_file_path_for_identity(self, tmp_path):
         """When prompt_file_path is provided, uses infer_module_identity."""
@@ -4577,3 +4584,61 @@ def test_prd_sync_failure(
     out = capsys.readouterr().out
     assert "old PRD content" in prd_file.read_text(), "PRD file should remain unchanged on failure."
     assert "API Limit reached" in out, "Failure reason should be in the output."
+
+
+def test_cli_single_file_update_failure_exits_non_zero(tmp_path):
+    """A single-file `pdd update` whose update_main returns None must exit != 0.
+
+    Codex review (PR #1998): update_main returns None on failure. If the CLI
+    converts that to exit 0, the change orchestrator's Step 8.5 preflight heal —
+    which runs `pdd update --git ...` as a subprocess and only inspects the exit
+    code — records an unchanged, still-stale prompt as "healed". The single-file
+    boundary must fail closed.
+    """
+    from click.testing import CliRunner
+    from pdd.commands.modify import update
+
+    prompt_file = tmp_path / "mod_Python.prompt"
+    prompt_file.write_text("stale prompt\n", encoding="utf-8")
+    code_file = tmp_path / "mod.py"
+    code_file.write_text("def foo(): return 1\n", encoding="utf-8")
+
+    runner = CliRunner()
+    with patch("pdd.commands.modify.update_main", return_value=None):
+        result = runner.invoke(
+            update,
+            ["--git", str(prompt_file), str(code_file)],
+            obj={"quiet": True, "force": True, "verbose": False, "time": 1.0,
+                 "strength": 0.5, "temperature": 0.0, "context": None},
+            standalone_mode=True,
+        )
+
+    assert result.exit_code != 0, (
+        f"single-file update failure must yield non-zero exit; got "
+        f"{result.exit_code}. stdout={result.stdout!r}"
+    )
+
+
+def test_cli_repo_mode_update_no_op_none_exits_zero(tmp_path):
+    """Repo-wide mode returns None for a legitimate 'everything in sync' no-op.
+
+    That no-op must remain exit 0 — only single-file None (a failure) fails
+    closed (Codex review, PR #1998).
+    """
+    from click.testing import CliRunner
+    from pdd.commands.modify import update
+
+    runner = CliRunner()
+    with patch("pdd.commands.modify.update_main", return_value=None):
+        result = runner.invoke(
+            update,
+            ["--all"],
+            obj={"quiet": True, "force": True, "verbose": False, "time": 1.0,
+                 "strength": 0.5, "temperature": 0.0, "context": None},
+            standalone_mode=True,
+        )
+
+    assert result.exit_code == 0, (
+        f"repo-mode no-op (None) must stay exit 0; got {result.exit_code}. "
+        f"stdout={result.stdout!r}"
+    )

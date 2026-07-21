@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 from rich.console import Console
 
 from .agentic_common import (
+    provider_failure_workflow,
     DEFAULT_MAX_RETRIES,
     _sanitize_comment_body,
     clear_workflow_state,
@@ -6300,6 +6301,7 @@ def _run_agentic_checkup_orchestrator_inner(
     )
 
 
+@provider_failure_workflow
 def run_agentic_checkup_orchestrator(
     issue_url: str,
     issue_content: str,

@@ -23,6 +23,7 @@ from sync_determine_operation import (
     RunReport,
     SyncDecision,
     calculate_sha256,
+    calculate_current_hashes,
     calculate_prompt_hash,
     extract_include_deps,
     read_fingerprint,
@@ -37,7 +38,13 @@ from sync_determine_operation import (
     validate_expected_files,
     _handle_missing_expected_files,
     _is_workflow_complete,
-    get_pdd_file_paths
+    get_pdd_file_paths,
+    _safe_architecture_prompt_filename,
+    _contained_architecture_code_path,
+    _find_prompt_file,
+    _safe_report_include,
+    UnsafePromptPathError,
+    UnsafeOutputPathError,
 )
 
 # --- Test Plan ---
@@ -103,11 +110,9 @@ LANGUAGE = "python"
 TARGET_COVERAGE = 90.0
 
 @pytest.fixture
-def pdd_test_environment(tmp_path):
-    """Creates a temporary, isolated PDD project structure for testing."""
-    # Change to tmp_path
-    original_cwd = Path.cwd()
-    os.chdir(tmp_path)
+def pdd_test_environment(tmp_path, monkeypatch):
+    """Create an isolated PDD project without leaking its working directory."""
+    monkeypatch.chdir(tmp_path)
     
     # Create directories
     Path(".pdd/meta").mkdir(parents=True, exist_ok=True)
@@ -122,19 +127,11 @@ def pdd_test_environment(tmp_path):
     
     yield tmp_path
 
-    # Restore original working directory
-    os.chdir(original_cwd)
-    
-    # Update constants again
-    pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
-    pdd_module.META_DIR = pdd_module.get_meta_dir()
-    pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
-
 def create_file(path: Path, content: str = "") -> str:
     """Creates a file with given content and returns its SHA256 hash."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-    return calculate_sha256(path)
+    return calculate_sha256(path, path.parent)
 
 def create_fingerprint_file(path: Path, data: dict):
     """Creates a fingerprint JSON file."""
@@ -247,10 +244,12 @@ class TestFileUtilities:
         content = "hello world"
         expected_hash = hashlib.sha256(content.encode()).hexdigest()
         create_file(file_path, content)
-        assert calculate_sha256(file_path) == expected_hash
+        assert calculate_sha256(file_path, pdd_test_environment) == expected_hash
 
     def test_calculate_sha256_not_exists(self, pdd_test_environment):
-        assert calculate_sha256(pdd_test_environment / "nonexistent.txt") is None
+        assert calculate_sha256(
+            pdd_test_environment / "nonexistent.txt", pdd_test_environment
+        ) is None
 
     def test_read_fingerprint_success(self, pdd_test_environment):
         fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
@@ -1565,14 +1564,2885 @@ def test_get_pdd_file_paths_architecture_filepath_uses_basename_context(tmp_path
     assert paths["test"] == tmp_path / "context_tests" / "test_agentic_architecture.py"
 
 
+def _write_nested_architecture_project(
+    root: Path,
+    *,
+    prompts_dir: str,
+    architecture_filename: str,
+    architecture_filepath: str,
+) -> None:
+    prompt_dir = root / prompts_dir
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "credits_Python.prompt").write_text(
+        "% endpoint test mixin for the credits endpoints\n",
+        encoding="utf-8",
+    )
+    (root / ".pdd" / "meta").mkdir(parents=True)
+    (root / ".pdd" / "locks").mkdir(parents=True)
+    (root / ".pddrc").write_text(
+        'contexts:\n'
+        '  backend:\n'
+        f'    paths: ["backend/**", "{prompts_dir}/**"]\n'
+        '    defaults:\n'
+        f'      prompts_dir: "{prompts_dir}"\n'
+        '      generate_output_path: "backend/functions/"\n'
+        '      outputs:\n'
+        '        code:\n'
+        '          path: "backend/functions/{name}.py"\n'
+        '        example:\n'
+        '          path: "custom_usage/{name}_usage.py"\n'
+        '        test:\n'
+        '          path: "custom_specs/{name}_spec.py"\n',
+        encoding="utf-8",
+    )
+    (root / "architecture.json").write_text(
+        json.dumps({
+            "modules": [{
+                "filename": architecture_filename,
+                "filepath": architecture_filepath,
+            }]
+        }),
+        encoding="utf-8",
+    )
+
+
+def test_get_pdd_file_paths_matches_prompt_root_symlink_alias(tmp_path, monkeypatch):
+    """A trusted prompt-root symlink keeps architecture ownership identity."""
+    monkeypatch.chdir(tmp_path)
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="pdd/prompts",
+        architecture_filename="credits_Python.prompt",
+        architecture_filepath="backend/tests/endpoint_tests/tests/credits.py",
+    )
+    try:
+        (tmp_path / "prompts").symlink_to("pdd/prompts", target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts",
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "tests" / "endpoint_tests" / "tests" / "credits.py"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_architecture_filepath_with_custom_prompt_root_and_outputs(
+    tmp_path,
+    monkeypatch,
+):
+    """A custom prompt root resolves from one architecture lookup."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    real_code = tmp_path / "backend" / "tests" / "endpoint_tests" / "tests" / "credits.py"
+    real_code.parent.mkdir(parents=True)
+    real_code.write_text("class CreditsTestsMixin:\n    pass\n", encoding="utf-8")
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="specs/backend",
+        architecture_filename="backend/credits_Python.prompt",
+        architecture_filepath="backend/tests/endpoint_tests/tests/credits.py",
+    )
+    architecture_lookups = 0
+    original_lookup = sync_determine_module._get_filepath_from_architecture
+
+    def counting_lookup(*args, **kwargs):
+        nonlocal architecture_lookups
+        architecture_lookups += 1
+        return original_lookup(*args, **kwargs)
+
+    monkeypatch.setattr(
+        sync_determine_module,
+        "_get_filepath_from_architecture",
+        counting_lookup,
+    )
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="specs/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"] == real_code
+    assert paths["example"] == tmp_path / "custom_usage" / "credits_usage.py"
+    assert paths["test"] == tmp_path / "custom_specs" / "credits_spec.py"
+    assert architecture_lookups == 1
+
+
+def test_get_pdd_file_paths_matches_canonical_filepath_derived_architecture_filename(
+    tmp_path,
+    monkeypatch,
+):
+    """Issue #617 normalized filenames can differ from the physical prompt path."""
+    monkeypatch.chdir(tmp_path)
+    real_code = tmp_path / "backend" / "tests" / "endpoint_tests" / "tests" / "credits.py"
+    real_code.parent.mkdir(parents=True)
+    real_code.write_text("class CreditsTestsMixin:\n    pass\n", encoding="utf-8")
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="backend/tests/endpoint_tests/tests/credits_Python.prompt",
+        architecture_filepath="backend/tests/endpoint_tests/tests/credits.py",
+    )
+
+    def fail_recursive_scan(*_args, **_kwargs):
+        pytest.fail("canonical architecture ownership must not scan the prompt tree")
+
+    monkeypatch.setattr(Path, "rglob", fail_recursive_scan)
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"] == real_code
+
+
+def test_get_pdd_file_paths_does_not_borrow_nested_same_leaf_architecture_entry(
+    tmp_path,
+    monkeypatch,
+):
+    """A flat prompt cannot inherit a nested sibling's architecture filepath."""
+    monkeypatch.chdir(tmp_path)
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="backend/utils/credits_Python.prompt",
+        architecture_filepath="backend/functions/utils/credits.py",
+    )
+    nested_prompt = tmp_path / "prompts" / "backend" / "utils" / "credits_Python.prompt"
+    nested_prompt.parent.mkdir(parents=True)
+    nested_prompt.write_text("% nested credits helper\n", encoding="utf-8")
+    nested_code = tmp_path / "backend" / "functions" / "utils" / "credits.py"
+    nested_code.parent.mkdir(parents=True)
+    nested_code.write_text("def nested_credits():\n    pass\n", encoding="utf-8")
+
+    flat_paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+    nested_paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend/utils",
+        context_override="backend",
+    )
+
+    assert flat_paths["code"].resolve() == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve()
+    assert nested_paths["code"] == nested_code
+
+
+def test_get_pdd_file_paths_does_not_borrow_sibling_context_architecture_entry(
+    tmp_path,
+    monkeypatch,
+):
+    """A narrowed backend root cannot inherit a frontend prompt's module."""
+    monkeypatch.chdir(tmp_path)
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="frontend/credits_Python.prompt",
+        architecture_filepath="frontend/credits.py",
+    )
+    frontend_prompt = tmp_path / "prompts" / "frontend" / "credits_Python.prompt"
+    frontend_prompt.parent.mkdir(parents=True)
+    frontend_prompt.write_text("% frontend credits\n", encoding="utf-8")
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_does_not_borrow_stale_sibling_context_entry(
+    tmp_path,
+    monkeypatch,
+):
+    """A deleted sibling prompt's surviving architecture row must not be borrowed.
+
+    Regression: when the frontend prompt no longer exists, its ``frontend`` entry
+    has no physical owner. The same-leaf ``backend`` prompt must still fall back to
+    its own configured output, never inherit the foreign module's ``frontend``
+    filepath and silently overwrite another context's code.
+    """
+    monkeypatch.chdir(tmp_path)
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="frontend/credits_Python.prompt",
+        architecture_filepath="frontend/credits.py",
+    )
+    # NOTE: the frontend prompt is intentionally NOT created — the entry is stale.
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
+    assert paths["code"].resolve(strict=False) != (
+        tmp_path / "frontend" / "credits.py"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_does_not_alias_prompt_named_module_by_filepath_stem(
+    tmp_path,
+    monkeypatch,
+):
+    """A billing prompt whose code stem is credits remains the billing module."""
+    monkeypatch.chdir(tmp_path)
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="frontend/billing_Python.prompt",
+        architecture_filepath="frontend/credits.py",
+    )
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
+
+
+@pytest.mark.parametrize(
+    "unsafe_filepath",
+    ["../../outside.py", "/tmp/pdd-sync-outside.py", "..\\..\\outside.py"],
+)
+def test_get_pdd_file_paths_rejects_unsafe_architecture_filepath(
+    tmp_path,
+    monkeypatch,
+    unsafe_filepath,
+):
+    """Architecture metadata cannot make sync write outside the project."""
+    monkeypatch.chdir(tmp_path)
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="backend/credits_Python.prompt",
+        architecture_filepath=unsafe_filepath,
+    )
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
+
+
+@pytest.mark.parametrize(
+    "unsafe_filename",
+    [
+        "../../credits_Python.prompt",
+        "/tmp/credits_Python.prompt",
+        "..\\..\\credits_Python.prompt",
+    ],
+)
+def test_get_pdd_file_paths_rejects_unsafe_architecture_filename(
+    tmp_path,
+    monkeypatch,
+    unsafe_filename,
+):
+    """Architecture prompt identities cannot probe outside the prompt root."""
+    monkeypatch.chdir(tmp_path)
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename=unsafe_filename,
+        architecture_filepath="backend/tests/endpoint_tests/tests/credits.py",
+    )
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
+
+
+@pytest.mark.parametrize(
+    "drive_filename",
+    [
+        "D:/credits_Python.prompt",
+        "D:credits_Python.prompt",
+        "C:/nested/credits_Python.prompt",
+    ],
+)
+def test_safe_architecture_prompt_filename_rejects_windows_drive(drive_filename):
+    """Drive-qualified prompt metadata is POSIX-relative but escapes on Windows.
+
+    ``PurePosixPath`` treats ``D:/x`` as relative, so the earlier absolute/`..`
+    checks pass it through; joining it on Windows yields a drive-relative path
+    outside ``prompts_root``. The validator must reject it on every platform.
+    """
+    assert _safe_architecture_prompt_filename(drive_filename) is None
+
+
+@pytest.mark.parametrize(
+    "drive_filepath",
+    [
+        "D:/credits.py",
+        "D:credits.py",
+        "C:/nested/credits.py",
+    ],
+)
+def test_contained_architecture_code_path_rejects_windows_drive(tmp_path, drive_filepath):
+    """Drive-qualified output metadata must not resolve to a code path."""
+    assert _contained_architecture_code_path(tmp_path, drive_filepath) is None
+
+
+def test_get_pdd_file_paths_rejects_unsafe_filename_when_prompt_is_missing(
+    tmp_path,
+    monkeypatch,
+):
+    """A missing internal prompt cannot make discovery follow an external hint."""
+    monkeypatch.chdir(tmp_path)
+    external_dir = tmp_path.parent / f"{tmp_path.name}-external-prompts"
+    external_dir.mkdir()
+    external_prompt = external_dir / "credits_Python.prompt"
+    external_prompt.write_text("% external prompt\n", encoding="utf-8")
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename=str(external_prompt),
+        architecture_filepath="backend/tests/endpoint_tests/tests/credits.py",
+    )
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").unlink()
+
+    unsafe_filenames = (
+        str(external_prompt),
+        f"../../../{external_dir.name}/credits_Python.prompt",
+    )
+    for unsafe_filename in unsafe_filenames:
+        (tmp_path / "architecture.json").write_text(
+            json.dumps({
+                "modules": [{
+                    "filename": unsafe_filename,
+                    "filepath": "backend/tests/endpoint_tests/tests/credits.py",
+                }]
+            }),
+            encoding="utf-8",
+        )
+
+        paths = get_pdd_file_paths(
+            "credits",
+            "python",
+            prompts_dir="prompts/backend",
+            context_override="backend",
+        )
+
+        assert paths["prompt"].resolve(strict=False) != external_prompt.resolve()
+        assert paths["prompt"].resolve(strict=False).is_relative_to(
+            (tmp_path / "prompts" / "backend").resolve()
+        )
+        assert paths["code"].resolve(strict=False) == (
+            tmp_path / "backend" / "functions" / "credits.py"
+        ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_rejects_symlink_prompt_discovery_escape(
+    tmp_path,
+    monkeypatch,
+):
+    """Architecture prompt discovery cannot escape through a directory symlink."""
+    monkeypatch.chdir(tmp_path)
+    external_dir = tmp_path.parent / f"{tmp_path.name}-external-symlink-prompts"
+    external_dir.mkdir()
+    external_prompt = external_dir / "credits_Python.prompt"
+    external_prompt.write_text("% external prompt\n", encoding="utf-8")
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="linked/credits_Python.prompt",
+        architecture_filepath="backend/tests/endpoint_tests/tests/credits.py",
+    )
+    internal_prompt = tmp_path / "prompts" / "backend" / "credits_Python.prompt"
+    internal_prompt.unlink()
+    try:
+        (tmp_path / "prompts" / "backend" / "linked").symlink_to(
+            external_dir,
+            target_is_directory=True,
+        )
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) != external_prompt.resolve()
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_rejects_same_leaf_file_symlink_discovery_escape(
+    tmp_path,
+    monkeypatch,
+):
+    """Recursive discovery must not return a same-leaf FILE symlink that escapes root.
+
+    The directory-symlink test above does not cover this route: ``rglob`` does not
+    descend into symlinked directories, but it DOES yield a file symlink, and
+    ``is_file()`` follows the link. Architecture names a safe-but-missing prompt so
+    resolution falls through to the recursive scan (Step 3c / Step 4); a same-leaf
+    in-root file symlink points outside the repo. Returning it would let an update
+    write through the link and overwrite the external file.
+    """
+    monkeypatch.chdir(tmp_path)
+    external_dir = tmp_path.parent / f"{tmp_path.name}-external-file-symlink"
+    external_dir.mkdir()
+    external_prompt = external_dir / "credits_Python.prompt"
+    external_prompt.write_text("% external prompt (must not be written through)\n", encoding="utf-8")
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="missing/credits_Python.prompt",
+        architecture_filepath="backend/tests/endpoint_tests/tests/credits.py",
+    )
+    # Remove the real internal prompt so discovery must fall through to recursion.
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").unlink()
+    nested = tmp_path / "prompts" / "backend" / "sub"
+    nested.mkdir()
+    try:
+        (nested / "credits_Python.prompt").symlink_to(external_prompt)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+
+    with pytest.raises(UnsafePromptPathError, match="resolves outside prompts root"):
+        get_pdd_file_paths(
+            "credits",
+            "python",
+            prompts_dir="prompts/backend",
+            context_override="backend",
+        )
+
+    assert external_prompt.read_text(encoding="utf-8") == (
+        "% external prompt (must not be written through)\n"
+    )
+
+
+def test_get_pdd_file_paths_context_isolation_holds_from_parent_cwd(
+    tmp_path,
+    monkeypatch,
+):
+    """Context territory must hold when resolution runs outside the project CWD.
+
+    Sync is frequently driven from a parent/sibling directory with an absolute
+    prompts root. The territory guard must anchor its ``.pddrc`` lookup at the
+    project (``architecture.json``'s directory), not the process CWD — a CWD-based
+    lookup finds no ``.pddrc`` and fails open, re-opening the stale sibling-context
+    borrow it exists to block.
+    """
+    project = tmp_path / "project"
+    project.mkdir()
+    _write_nested_architecture_project(
+        project,
+        prompts_dir="prompts/backend",
+        architecture_filename="frontend/credits_Python.prompt",
+        architecture_filepath="frontend/credits.py",
+    )
+    # No frontend prompt is created — the entry is stale.
+    monkeypatch.chdir(tmp_path)  # PARENT of the project; no .pddrc here.
+    abs_prompts = str((project / "prompts" / "backend").resolve())
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir=abs_prompts,
+        context_override="backend",
+    )
+
+    code = paths["code"].resolve(strict=False).as_posix()
+    assert not code.endswith("frontend/credits.py")
+    assert code.endswith("backend/functions/credits.py")
+
+
+def test_find_prompt_file_direct_fast_path_rejects_escaping_symlink(tmp_path):
+    """The direct/case-insensitive fast path must not return an escaping symlink.
+
+    The exact expected prompt (``prompts/backend/credits_Python.prompt``) can itself
+    be a file symlink to a target outside the root. `_find_prompt_file` must not
+    return it — otherwise a later update opens it with ``"w"`` and truncates the
+    external file. Containment must gate Step 1 too, not only recursive candidates.
+    """
+    prompts_root = tmp_path / "prompts" / "backend"
+    prompts_root.mkdir(parents=True)
+    external_dir = tmp_path / "outside"
+    external_dir.mkdir()
+    external = external_dir / "credits_Python.prompt"
+    external.write_text("% external (must not be written through)\n", encoding="utf-8")
+    try:
+        (prompts_root / "credits_Python.prompt").symlink_to(external)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+
+    with pytest.raises(UnsafePromptPathError, match="resolves outside prompts root"):
+        _find_prompt_file(
+            "credits", "python", prompts_root, tmp_path / "architecture.json"
+        )
+
+
+def test_find_prompt_file_preserves_in_root_symlink_alias(tmp_path):
+    """An in-root symlink alias (target inside the root) must still resolve."""
+    prompts_root = tmp_path / "prompts"
+    prompts_root.mkdir()
+    real = prompts_root / "real_credits_Python.prompt"
+    real.write_text("% real in-root prompt\n", encoding="utf-8")
+    try:
+        (prompts_root / "credits_Python.prompt").symlink_to(real)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+
+    result = _find_prompt_file("credits", "python", prompts_root, tmp_path / "architecture.json")
+
+    assert result is not None
+    assert Path(result).resolve().is_relative_to(prompts_root.resolve())
+
+
+def test_get_pdd_file_paths_broad_root_context_selection_from_parent_cwd(
+    tmp_path,
+    monkeypatch,
+):
+    """Same-leaf prompts in sibling contexts must resolve by requested context, not CWD.
+
+    With a broad, project-level prompts root, two contexts owning a same-leaf prompt,
+    and resolution driven from the project's parent directory, `_find_prompt_file`
+    must load the context prefix (anchored at the prompts root, not the CWD) so the
+    Step-4 tie-break picks the requested context — not the shallowest/lexicographic
+    first match (backend).
+    """
+    project = tmp_path / "project"
+    for ctx in ("backend", "frontend"):
+        d = project / "prompts" / ctx
+        d.mkdir(parents=True)
+        (d / "credits_Python.prompt").write_text(f"% {ctx} credits\n", encoding="utf-8")
+    (project / ".pdd" / "meta").mkdir(parents=True)
+    (project / ".pdd" / "locks").mkdir(parents=True)
+    (project / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "  frontend:\n    paths: [\"frontend/**\", \"prompts/frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/frontend\"\n"
+        "      generate_output_path: \"frontend/src/\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)  # PARENT of the project.
+    abs_prompts = str((project / "prompts").resolve())  # BROAD root spanning both contexts.
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir=abs_prompts,
+        context_override="frontend",
+    )
+
+    resolved = paths["prompt"].resolve(strict=False).as_posix()
+    assert "/prompts/frontend/" in resolved
+    assert "/prompts/backend/" not in resolved
+
+
+def test_get_pdd_file_paths_parses_architecture_once(tmp_path, monkeypatch):
+    """Prompt discovery and code-path selection must share ONE architecture snapshot.
+
+    Parsing architecture.json separately per phase opens a window where an atomic
+    rewrite between phases pairs a prompt from the old registry with a code target
+    from the new one (torn pair). The nested prompt below forces the architecture
+    hint (Step 3) AND the code-path lookup, both of which previously reparsed the
+    file; a single snapshot means exactly one parse.
+    """
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    pdir = tmp_path / "prompts" / "backend" / "deep"
+    pdir.mkdir(parents=True)
+    (pdir / "credits_Python.prompt").write_text("% nested credits\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "      outputs:\n        code:\n          path: \"backend/functions/{name}.py\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "deep/credits_Python.prompt", "filepath": "backend/functions/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+
+    parses = {"n": 0}
+    original = sync_determine_module.extract_modules
+
+    def counting(arch):
+        parses["n"] += 1
+        return original(arch)
+
+    monkeypatch.setattr(sync_determine_module, "extract_modules", counting)
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert parses["n"] == 1
+    assert paths["prompt"].resolve(strict=False).as_posix().endswith(
+        "prompts/backend/deep/credits_Python.prompt"
+    )
+    assert paths["code"].resolve(strict=False).as_posix().endswith(
+        "backend/functions/credits.py"
+    )
+
+
+def test_get_pdd_file_paths_no_torn_pair_on_concurrent_architecture_rewrite(tmp_path, monkeypatch):
+    """A single resolution must draw prompt AND code from ONE architecture.json
+    version, even if the registry is atomically rewritten part-way through.
+
+    This is the observable R12 guarantee, expressed behaviorally rather than as a
+    parse count: the reader is made to return a DIFFERENT registry on any read after
+    the first. If the resolver re-read architecture.json mid-resolution it would pair
+    the version-A prompt with a version-B code target (a torn pair), so the returned
+    code path must still match version A — proving one consistent snapshot.
+    """
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    pdir = tmp_path / "prompts" / "backend" / "deep"
+    pdir.mkdir(parents=True)
+    (pdir / "credits_Python.prompt").write_text("% nested credits\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "      outputs:\n        code:\n          path: \"backend/functions/{name}.py\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "deep/credits_Python.prompt", "filepath": "backend/functions/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+
+    version_a = [{"filename": "deep/credits_Python.prompt", "filepath": "backend/functions/credits.py"}]
+    version_b = [{"filename": "deep/credits_Python.prompt", "filepath": "backend/functions/credits_v2.py"}]
+    reads = {"n": 0}
+
+    def rewriting(arch):
+        reads["n"] += 1
+        # First read sees version A; any later read sees the "rewritten" version B.
+        source = version_a if reads["n"] == 1 else version_b
+        return [dict(m) for m in source]
+
+    monkeypatch.setattr(sync_determine_module, "extract_modules", rewriting)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir="prompts/backend", context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False).as_posix().endswith(
+        "backend/functions/credits.py"
+    ), f"torn pair: code path came from a re-read architecture version: {paths['code']!r}"
+    assert not paths["code"].as_posix().endswith("credits_v2.py")
+
+
+def test_find_named_file_case_collision_is_deterministic(tmp_path):
+    """A case-fold collision for an artifact lookup resolves to a stable pick,
+    independent of directory iteration order (matching the resolver's determinism
+    guarantee elsewhere), instead of the first `iterdir()` entry.
+    """
+    import sync_determine_operation as sync_determine_module
+
+    a = tmp_path / "Foo_example.py"
+    b = tmp_path / "FOO_example.py"
+    a.write_text("", encoding="utf-8")
+    b.write_text("", encoding="utf-8")
+    if a.samefile(b):
+        pytest.skip("filesystem is case-insensitive")
+
+    # Exact-cased target is absent; both files match case-insensitively. The stable
+    # (name, path) sort picks 'FOO_example.py' ('F'..'O' sort before 'oo').
+    found = sync_determine_module._find_named_file(tmp_path, "foo_example.py")
+    assert found is not None and found.name == "FOO_example.py"
+
+
+def test_get_pdd_file_paths_construct_paths_failure_anchors_fallback_at_subproject(tmp_path, monkeypatch):
+    """When construct_paths raises for a new module, the convention fallback anchors
+    code/example/test under the resolved subproject (.pddrc dir), not the parent CWD."""
+    import sync_determine_operation as sync_determine_module
+
+    project = tmp_path / "project"
+    (project / "prompts").mkdir(parents=True)
+    (project / ".pdd" / "meta").mkdir(parents=True)
+    (project / ".pdd" / "locks").mkdir(parents=True)
+    (project / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n    defaults:\n      prompts_dir: \"prompts\"\n",
+        encoding="utf-8",
+    )
+    (project / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # PARENT of the subproject.
+
+    def boom(*_a, **_k):
+        raise RuntimeError("construct_paths failed")
+
+    monkeypatch.setattr(sync_determine_module, "construct_paths", boom)
+
+    paths = get_pdd_file_paths(
+        "widget", "python", prompts_dir=str((project / "prompts").resolve()),
+    )
+
+    assert str(paths["code"].resolve(strict=False)).startswith(str(project.resolve()))
+    assert str(paths["test"].resolve(strict=False)).startswith(str(project.resolve()))
+
+
+def test_get_pdd_file_paths_path_qualified_two_suffix_aligned_outputs_raise_ambiguous(tmp_path, monkeypatch):
+    """A PATH-QUALIFIED basename that suffix-aligns with two distinct valid outputs is
+    ambiguous and MUST raise, not resolve by architecture row order (R11)."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "app/login/page_Python.prompt", "filepath": "app/login/page.py"},
+            {"filename": "src/app/login/page_Python.prompt", "filepath": "src/app/login/page.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("app/login/page", "python", prompts_dir="prompts")
+
+
+def test_get_pdd_file_paths_package_root_cli_identity_disambiguates(
+    tmp_path, monkeypatch
+):
+    """A package-root code identity such as pdd/cli must not be stripped to cli.
+
+    The broad pdd_cli context strips the pdd/ prefix for template expansion, but
+    ambiguity detection must preserve an explicit architecture code identity so
+    pdd/cli.py does not collide with pdd/core/cli.py.
+    """
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "core").mkdir(parents=True)
+    (tmp_path / "prompts" / "cli_python.prompt").write_text("% root\n", encoding="utf-8")
+    (tmp_path / "prompts" / "core" / "cli_python.prompt").write_text(
+        "% core\n", encoding="utf-8"
+    )
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  core:\n'
+        '    paths: ["pdd/core/**", "prompts/core/**"]\n'
+        '    defaults:\n'
+        '      prompts_dir: "prompts/core"\n'
+        '      generate_output_path: "pdd/core"\n'
+        '  pdd_cli:\n'
+        '    paths: ["pdd/**", "prompts/**", "tests/**"]\n'
+        '    defaults:\n'
+        '      prompts_dir: "prompts"\n'
+        '      generate_output_path: "pdd"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps(
+            {
+                "modules": [
+                    {"filename": "cli_python.prompt", "filepath": "pdd/cli.py"},
+                    {
+                        "filename": "core/cli_python.prompt",
+                        "filepath": "pdd/core/cli.py",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    root_paths = get_pdd_file_paths("pdd/cli", "python", prompts_dir="prompts")
+    assert root_paths["prompt"] == tmp_path / "prompts" / "cli_python.prompt"
+    assert root_paths["code"] == tmp_path / "pdd" / "cli.py"
+
+    core_paths = get_pdd_file_paths("core/cli", "python", prompts_dir="prompts")
+    assert core_paths["prompt"] == tmp_path / "prompts" / "core" / "cli_python.prompt"
+    assert core_paths["code"] == tmp_path / "pdd" / "core" / "cli.py"
+
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("cli", "python", prompts_dir="prompts")
+
+
+def test_get_pdd_file_paths_external_absolute_prompt_root_finds_project_architecture(tmp_path, monkeypatch):
+    """An absolute custom prompt root OUTSIDE any project must not make architecture/config
+    discovery start from that external root and silently miss the caller's project's
+    authoritative mapping — config discovery falls back to the project (CWD)."""
+    project = tmp_path / "project"
+    (project / ".pdd" / "meta").mkdir(parents=True)
+    (project / ".pdd" / "locks").mkdir(parents=True)
+    (project / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "widget_Python.prompt", "filepath": "src/widget.py"}]}),
+        encoding="utf-8",
+    )
+    external = tmp_path / "external_prompts"  # OUTSIDE the project; no config up-tree.
+    external.mkdir()
+    monkeypatch.chdir(project)
+
+    paths = get_pdd_file_paths("widget", "python", prompts_dir=str(external.resolve()))
+    assert paths["code"].as_posix().endswith("src/widget.py")
+
+
+@pytest.mark.parametrize("bad_content", ["{ not valid json ", "42", "\"a string\"", "{\"modules\": \"notalist\"}", "{\"modules\": [{\"filename\": \"x\"}, 42]}"])
+def test_get_pdd_file_paths_malformed_architecture_json_fails_closed(tmp_path, monkeypatch, bad_content):
+    """A present-but-malformed architecture.json — unparseable JSON, a top-level scalar,
+    or a non-list ``modules`` — fails closed with a path-resolution error rather than
+    silently resolving at convention fallback paths (R1)."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(bad_content, encoding="utf-8")
+
+    with pytest.raises(sync_determine_module.MalformedArchitectureError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+
+
+def test_get_pdd_file_paths_empty_registry_dict_is_not_malformed(tmp_path, monkeypatch):
+    """A dict registry that legitimately has no modules (``{"modules": []}`` or a dict
+    omitting the key) is NOT malformed — resolution falls back to configured paths."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "prompts" / "widget_Python.prompt").write_text("% widget\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+
+    paths = get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+    assert paths["code"].name == "widget.py"
+
+
+def test_get_pdd_file_paths_context_prefixed_qualified_ambiguity_uses_stripped_basename(tmp_path, monkeypatch):
+    """Path-qualified ambiguity detection uses the SAME context-relative basename as
+    final resolution: a context-prefixed qualified basename whose STRIPPED form
+    suffix-aligns with two distinct outputs must raise, not evade under the raw prefix."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"**\"]\n    defaults:\n      prompts_dir: \"prompts/backend\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "app/login/page_Python.prompt", "filepath": "app/login/page.py"},
+            {"filename": "src/app/login/page_Python.prompt", "filepath": "src/app/login/page.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths(
+            "backend/login/page", "python",
+            prompts_dir="prompts/backend", context_override="backend",
+        )
+
+
+def test_get_pdd_file_paths_whitespace_filename_row_does_not_inflate_ambiguity(tmp_path, monkeypatch):
+    """A whitespace-only architecture filename (ineligible in selection) must not count
+    toward ambiguity and falsely block a valid uniquely-named module."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "app/login/page_Python.prompt", "filepath": "app/login/page.py"},
+            {"filename": "   ", "filepath": "src/app/login/page.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    paths = get_pdd_file_paths("app/login/page", "python", prompts_dir="prompts")
+    assert paths["code"].as_posix().endswith("app/login/page.py")
+
+
+def test_get_pdd_file_paths_noncanonical_architecture_metadata_rejected_end_to_end(tmp_path, monkeypatch):
+    """End-to-end (public API): a noncanonical architecture output filepath (dot segments)
+    is not used as an authoritative mapping; resolution falls back to a canonical path (R10)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "prompts" / "widget_Python.prompt").write_text("% widget\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "widget_Python.prompt", "filepath": "src/./widget.py"}]}),
+        encoding="utf-8",
+    )
+
+    paths = get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+    assert "/./" not in paths["code"].as_posix()
+    assert paths["code"].name == "widget.py"
+
+
+def test_get_pdd_file_paths_qualified_foreign_named_suffix_row_no_false_ambiguity(tmp_path, monkeypatch):
+    """A row whose FILEPATH suffix-aligns with a path-qualified basename but whose PROMPT
+    filename names a DIFFERENT module must not count toward ambiguity; the uniquely named
+    row resolves without a false AmbiguousModuleError."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "app/login/page_Python.prompt", "filepath": "app/login/page.py"},
+            {"filename": "other_Python.prompt", "filepath": "src/app/login/page.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    paths = get_pdd_file_paths("app/login/page", "python", prompts_dir="prompts")
+    assert paths["code"].as_posix().endswith("app/login/page.py")
+
+
+def test_get_pdd_file_paths_path_qualified_unsafe_filename_row_does_not_block(tmp_path, monkeypatch):
+    """A row with an unsafe architecture FILENAME must not count toward path-qualified
+    ambiguity and falsely block a valid mapping."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "../../evil_Python.prompt", "filepath": "src/app/login/page.py"},
+            {"filename": "app/login/page_Python.prompt", "filepath": "app/login/page.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    # The unsafe-filename row is excluded, so only one valid output remains -> no ambiguity.
+    paths = get_pdd_file_paths("app/login/page", "python", prompts_dir="prompts")
+    assert paths["code"].as_posix().endswith("app/login/page.py")
+
+
+def test_get_pdd_file_paths_trailing_space_output_does_not_block_valid_row(tmp_path, monkeypatch):
+    """A trailing-space (noncanonical) output row — which resolution rejects — must not be
+    canonicalized in ambiguity counting and falsely conflict with a valid distinct row."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "prompts" / "widget_Python.prompt").write_text("% widget\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "widget_Python.prompt", "filepath": "src/foo.py "},  # trailing space
+            {"filename": "widget_Python.prompt", "filepath": "src/bar.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    # The trailing-space row is unsafe (excluded), so only ONE valid output remains.
+    paths = get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+    assert paths["code"].as_posix().endswith("src/bar.py")
+
+
+def test_get_pdd_file_paths_exact_missing_prompt_row_shared_target_honored(tmp_path, monkeypatch):
+    """An exact architecture row that names the requested module (prompt not created yet)
+    with a SAFE shared/unowned target is honored, not rejected into a fallback path just
+    because eligibility would otherwise require context ownership or a physical prompt."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)  # prompt MISSING (new module)
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n      generate_output_path: \"backend/functions/\"\n"
+        "  frontend:\n    paths: [\"frontend/**\"]\n    defaults:\n      prompts_dir: \"prompts/frontend\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "credits_Python.prompt", "filepath": "shared/credits.py"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python",
+        prompts_dir=str((tmp_path / "prompts" / "backend").resolve()), context_override="backend",
+    )
+    assert paths["code"].as_posix().endswith("shared/credits.py")
+
+
+def test_get_pdd_file_paths_auxiliary_root_symlink_escape_does_not_invalidate_active_owner(tmp_path, monkeypatch):
+    """An escaping same-leaf symlink in an UNRELATED auxiliary prompt root must not
+    invalidate the unique contained owner in the ACTIVE prompt root, whose authoritative
+    architecture mapping is retained."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "frontend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    external = tmp_path / "external.prompt"
+    external.write_text("% external\n", encoding="utf-8")
+    try:
+        (tmp_path / "prompts" / "frontend" / "credits_Python.prompt").symlink_to(external)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unsupported")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "  frontend:\n    paths: [\"frontend/**\", \"prompts/frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/frontend\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "credits_Python.prompt", "filepath": "backend/credits.py"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python",
+        prompts_dir=str((tmp_path / "prompts" / "backend").resolve()), context_override="backend",
+    )
+    assert paths["code"].as_posix().endswith("backend/credits.py")
+
+
+def test_get_pdd_file_paths_no_override_none_context_denies_foreign_sibling_borrow(tmp_path, monkeypatch):
+    """With no context_override and a basename that does not encode the context (resolved
+    context None), a FOREIGN heuristic row (filepath-stem match, not naming this module)
+    targeting a named sibling context must be denied, not paired with this prompt."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n      generate_output_path: \"backend/functions/\"\n"
+        "  frontend:\n    paths: [\"frontend/**\"]\n    defaults:\n      prompts_dir: \"prompts/frontend\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "credits.tsx", "filepath": "frontend/credits.py"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir=str((tmp_path / "prompts" / "backend").resolve()),
+    )
+    assert not paths["code"].as_posix().endswith("frontend/credits.py")
+
+
+def test_get_pdd_file_paths_malformed_pddrc_denies_heuristic_borrow(tmp_path, monkeypatch):
+    """When the .pddrc defining context territory is present but UNPARSEABLE, a heuristic
+    (non-proven) architecture borrow cannot be confined and is denied (fail closed) rather
+    than falling open to permit a sibling-context target."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text("contexts: {[ not valid yaml", encoding="utf-8")
+    # Non-prompt filename -> heuristic (filepath-stem) borrow targeting a sibling path.
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "credits.tsx", "filepath": "frontend/credits.py"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python",
+        prompts_dir=str((tmp_path / "prompts" / "backend").resolve()),
+        context_override="backend",
+    )
+    assert not paths["code"].as_posix().endswith("frontend/credits.py")
+
+
+def test_get_pdd_file_paths_unaligned_escaping_symlink_does_not_block_qualified_creation(tmp_path, monkeypatch):
+    """An escaping same-leaf symlink under an UNRELATED directory must not hard-fail a
+    path-qualified new-module creation whose basename it does not align with."""
+    (tmp_path / "prompts" / "unrelated").mkdir(parents=True)
+    external = tmp_path / "external_page.prompt"
+    external.write_text("% external\n", encoding="utf-8")
+    try:
+        (tmp_path / "prompts" / "unrelated" / "page_Python.prompt").symlink_to(external)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unsupported")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+
+    # New path-qualified module backend/foo/page; the unrelated escaping symlink (leaf
+    # 'page') must not hard-fail it.
+    paths = get_pdd_file_paths(
+        "backend/foo/page", "python", prompts_dir=str((tmp_path / "prompts").resolve()),
+    )
+    assert paths["prompt"].name.lower() == "page_python.prompt"
+
+
+def test_get_pdd_file_paths_bare_basename_two_valid_outputs_raise_ambiguous(tmp_path, monkeypatch):
+    """A bare basename that architecture.json maps to two DISTINCT valid outputs MUST
+    raise AmbiguousModuleError before any prompt/fallback resolution (positive R11)."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "page_Python.prompt", "filepath": "a/page.py"},
+            {"filename": "page_Python.prompt", "filepath": "b/page.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("page", "python", prompts_dir="prompts")
+
+
+def test_get_pdd_file_paths_case_variant_stem_outputs_raise_ambiguous(tmp_path, monkeypatch):
+    """Two case-variant filepath-stem outputs for a bare basename are BOTH counted
+    (case-insensitively, matching resolution) and raise AmbiguousModuleError; a
+    case-sensitive count would undercount and let the module silently fall through."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "A.tsx", "filepath": "a/foo.py"},
+            {"filename": "B.tsx", "filepath": "b/Foo.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("foo", "python", prompts_dir="prompts")
+
+
+def test_get_pdd_file_paths_non_string_filepath_does_not_block_valid_module(tmp_path, monkeypatch):
+    """A malformed row with a non-string filepath is ignored, not stringified into a
+    bogus distinct output that would falsely raise AmbiguousModuleError for a valid row."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "prompts" / "page_Python.prompt").write_text("% page\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "page_Python.prompt", "filepath": 123},
+            {"filename": "page_Python.prompt", "filepath": "src/page.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    paths = get_pdd_file_paths("page", "python", prompts_dir="prompts")
+    assert paths["code"].as_posix().endswith("src/page.py")
+
+
+def test_filepath_matches_context_handles_windows_drive_config():
+    """A Windows drive-qualified context path (``C:/proj/frontend/**``) is not
+    POSIX-absolute; it must still be relativized against the project so sibling
+    territory is detected instead of being treated as a non-matching literal."""
+    import sync_determine_operation as sync_determine_module
+
+    project_root = Path("C:/proj")
+    ctx = {"paths": ["C:/proj/frontend/**"]}
+    assert sync_determine_module._filepath_matches_context(
+        "frontend/credits.py", ctx, project_root, repo_root_output_matches=False
+    ) is True
+    assert sync_determine_module._filepath_matches_context(
+        "backend/credits.py", ctx, project_root, repo_root_output_matches=False
+    ) is not True
+
+
+@pytest.mark.parametrize("bad_filename", [123, 4.5, True, ["x"], {"k": "v"}])
+def test_get_pdd_file_paths_non_string_filename_uses_filepath(tmp_path, monkeypatch, bad_filename):
+    """A non-string architecture filename (number, bool, list, object) is treated as
+    ABSENT, so the module resolves by its filepath stem instead of a stringified name
+    or an AttributeError swallowed into a wrong default (R13)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  api:\n    paths: [\"src/**\", \"prompts/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "prompts" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": bad_filename, "filepath": "src/foo.py"}]}),
+        encoding="utf-8",
+    )
+
+    paths = get_pdd_file_paths("foo", "python", prompts_dir="prompts", context_override="api")
+    assert paths["code"].as_posix().endswith("src/foo.py")
+
+
+def test_filepath_matches_context_windows_paths_are_case_insensitive():
+    """When the project root is a Windows (drive-qualified) path, territory matching is
+    case-insensitive, so a drive/dir casing difference between .pddrc and the resolved
+    project root cannot hide sibling ownership. POSIX roots stay case-sensitive."""
+    import sync_determine_operation as sync_determine_module
+
+    # Config uses ``C:/Proj`` while the resolved project root is ``c:/proj`` (Windows is
+    # case-insensitive); ``Frontend/foo.py`` must still be recognized as frontend's.
+    ctx = {"paths": ["C:/Proj/Frontend/**"]}
+    assert sync_determine_module._filepath_matches_context(
+        "frontend/foo.py", ctx, Path("c:/proj"), repo_root_output_matches=False
+    ) is True
+    # A POSIX root keeps case-sensitive semantics: a case-variant glob does NOT match.
+    ctx_posix = {"paths": ["Frontend/**"]}
+    assert sync_determine_module._filepath_matches_context(
+        "frontend/foo.py", ctx_posix, Path("/proj"), repo_root_output_matches=False
+    ) is not True
+
+
+def test_filepath_matches_context_normalizes_dot_slash_glob():
+    """A ``./frontend/**`` context glob is normalized so it matches the normalized
+    project-relative architecture filepath instead of silently missing (territory
+    detection for R5/R6)."""
+    import sync_determine_operation as sync_determine_module
+
+    ctx = {"paths": ["./frontend/**"]}
+    assert sync_determine_module._filepath_matches_context(
+        "frontend/foo.py", ctx, Path("/proj"), repo_root_output_matches=False
+    ) is True
+    assert sync_determine_module._filepath_matches_context(
+        "backend/foo.py", ctx, Path("/proj"), repo_root_output_matches=False
+    ) is not True
+
+
+@pytest.mark.parametrize("bad_language", ["CON", "aux.txt", "lpt1", "foo bar", "foo."])
+def test_get_pdd_file_paths_rejects_nonportable_language(tmp_path, monkeypatch, bad_language):
+    """A reserved-device / whitespace / trailing-dot language component fails closed
+    rather than being interpolated into prompt or artifact paths (R9)."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("foo", bad_language, prompts_dir="prompts")
+
+
+def test_get_pdd_file_paths_filepath_stem_match_is_case_insensitive(tmp_path, monkeypatch):
+    """A filepath-stem architecture match (non-prompt filename) must resolve for a
+    case-variant basename too, consistent with case-insensitive prompt discovery (R4)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  api:\n    paths: [\"src/**\", \"prompts/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "prompts" / "Foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    # Non-prompt filename -> module is identified by its filepath stem ('foo').
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "Foo.tsx", "filepath": "src/foo.py"}]}),
+        encoding="utf-8",
+    )
+
+    paths = get_pdd_file_paths("Foo", "python", prompts_dir="prompts", context_override="api")
+    assert paths["code"].as_posix().endswith("src/foo.py")
+
+
+def _write_two_context_pddrc(root):
+    (root / ".pdd" / "meta").mkdir(parents=True)
+    (root / ".pdd" / "locks").mkdir(parents=True)
+    (root / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "      outputs:\n        code:\n          path: \"backend/functions/{name}.py\"\n"
+        "  frontend:\n    paths: [\"frontend/**\", \"prompts/frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/frontend\"\n"
+        "      generate_output_path: \"frontend/src/\"\n",
+        encoding="utf-8",
+    )
+
+
+def test_get_pdd_file_paths_arch_hint_respects_context_from_broad_root(tmp_path, monkeypatch):
+    """A broad-root backend resolution must not borrow a sibling frontend arch row.
+
+    With the project-level prompts root, `_find_prompt_file`'s architecture hint runs
+    a bare-leaf lookup. If it ignores context ownership it returns the frontend row's
+    prompt (and code) via the direct join, before the context-aware recursive fallback
+    runs — so `pdd sync credits` in the backend context overwrites frontend/credits.py.
+    The hint must reject a row whose filepath is outside the resolving context.
+    """
+    for ctx in ("backend", "frontend"):
+        d = tmp_path / "prompts" / ctx
+        d.mkdir(parents=True)
+        (d / "credits_Python.prompt").write_text(f"% {ctx} credits\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    # Only a frontend row exists (no backend row => no ambiguity error).
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "frontend/credits_Python.prompt", "filepath": "frontend/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python",
+        prompts_dir=str((tmp_path / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert "/prompts/backend/" in paths["prompt"].resolve(strict=False).as_posix()
+    assert not paths["code"].resolve(strict=False).as_posix().endswith("frontend/credits.py")
+
+
+def test_get_pdd_file_paths_unsafe_same_leaf_row_does_not_block_valid_module(tmp_path, monkeypatch):
+    """An unsafe same-leaf architecture row must not raise AmbiguousModuleError.
+
+    A valid ``foo_Python.prompt`` row plus an unsafe ``../../foo_Python.prompt`` row
+    share the leaf ``foo``. The unsafe row is rejected before generation; it must also
+    be excluded from ambiguity counting, otherwise its collision with the valid row
+    blocks a legitimate module instead of resolving to the safe target.
+    """
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n      generate_output_path: \"src/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "foo_Python.prompt", "filepath": "src/foo.py"},
+            {"filename": "../../foo_Python.prompt", "filepath": "escaped/foo.py"},
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("foo", "python", prompts_dir="prompts")  # must NOT raise
+
+    assert paths["code"].resolve(strict=False).as_posix().endswith("src/foo.py")
+
+
+def test_get_pdd_file_paths_null_filename_uses_architecture_filepath(tmp_path, monkeypatch):
+    """A module with ``"filename": null`` must resolve to its architecture filepath.
+
+    Coercing the null filename avoids ``None.lower()`` (an AttributeError the broad
+    fallback swallows into a cwd-relative default); the module is then matched by its
+    filepath stem and resolves to the architecture-declared ``src/foo.py``.
+    """
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n      generate_output_path: \"src/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": None, "filepath": "src/foo.py"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("foo", "python", prompts_dir="prompts")
+
+    assert paths["code"].resolve(strict=False).as_posix().endswith("src/foo.py")
+
+
+def test_get_pdd_file_paths_flat_legacy_row_respects_context_territory(tmp_path, monkeypatch):
+    """A FLAT legacy same-leaf row must not bypass context ownership.
+
+    The leaf-match and filepath-stem borrows already apply territory, but the
+    basename+language match loop did not. A stale sibling row with a flat
+    ``credits_Python.prompt`` filename pointing at ``frontend/credits.py`` could be
+    borrowed by a backend resolution, overwriting sibling-context code.
+    """
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "frontend/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python",
+        prompts_dir=str((tmp_path / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert not paths["code"].resolve(strict=False).as_posix().endswith("frontend/credits.py")
+
+
+def test_get_pdd_file_paths_canonical_target_resolves_from_parent_cwd(tmp_path, monkeypatch):
+    """A path-qualified canonical target must resolve when run from a parent CWD.
+
+    `_get_filepath_from_architecture` re-detected the context and stripped the
+    basename prefix via a CWD-based `.pddrc` lookup. From the project's parent with an
+    absolute prompts root, that missed the context, so the canonical
+    ``backend/services/foo.py`` row failed to align with ``backend/foo`` and resolution
+    fell back to the default ``backend/functions/foo.py``. The lookup must anchor at
+    the project and prefer the resolved context.
+    """
+    project = tmp_path / "project"
+    (project / "prompts" / "backend").mkdir(parents=True)
+    (project / "prompts" / "backend" / "foo_Python.prompt").write_text("% backend foo\n", encoding="utf-8")
+    _write_two_context_pddrc(project)
+    (project / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "backend/services/foo_Python.prompt", "filepath": "backend/services/foo.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)  # PARENT of the project.
+
+    paths = get_pdd_file_paths(
+        "backend/foo", "python",
+        prompts_dir=str((project / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False).as_posix().endswith("backend/services/foo.py")
+
+
+@pytest.mark.parametrize(
+    "unsafe_filepath",
+    ["../../outside/foo.py", "/tmp/pdd-outside-foo.py", "D:/outside/foo.py"],
+)
+def test_get_pdd_file_paths_unsafe_filepath_row_does_not_block_valid_module(
+    tmp_path, monkeypatch, unsafe_filepath
+):
+    """An unsafe OUTPUT path on a same-filename row must not cause false ambiguity.
+
+    A valid ``foo_Python.prompt -> src/foo.py`` row plus a same-filename row targeting
+    an unsafe filepath (absolute, ``..``, or Windows drive) must not read as two
+    distinct targets — the unsafe row is rejected before generation and must be
+    excluded from ambiguity counting so the valid module still resolves.
+    """
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n      generate_output_path: \"src/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "foo_Python.prompt", "filepath": "src/foo.py"},
+            {"filename": "foo_Python.prompt", "filepath": unsafe_filepath},
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("foo", "python", prompts_dir="prompts")  # must NOT raise
+
+    assert paths["code"].resolve(strict=False).as_posix().endswith("src/foo.py")
+
+
+def test_get_pdd_file_paths_context_inferred_from_parent_cwd_without_override(tmp_path, monkeypatch):
+    """Context must be inferable from a parent CWD even with NO explicit override.
+
+    ``_resolve_context_name_for_basename`` searched from the process CWD, so a
+    path-qualified ``backend/foo`` run from the project's parent (no override) failed to
+    detect the backend context and missed the canonical ``backend/services/foo.py``,
+    falling back to ``backend/functions/foo.py``. The lookup must anchor at the prompts
+    root.
+    """
+    project = tmp_path / "project"
+    (project / "prompts" / "backend").mkdir(parents=True)
+    (project / "prompts" / "backend" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    _write_two_context_pddrc(project)
+    (project / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "backend/services/foo_Python.prompt", "filepath": "backend/services/foo.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)  # PARENT; note: NO context_override below.
+
+    paths = get_pdd_file_paths(
+        "backend/foo", "python", prompts_dir=str((project / "prompts").resolve()),
+    )
+
+    assert paths["code"].resolve(strict=False).as_posix().endswith("backend/services/foo.py")
+
+
+def test_get_pdd_file_paths_custom_root_finds_existing_prompt_from_parent_cwd(tmp_path, monkeypatch):
+    """Custom-root prompt discovery must strip the context prefix from a parent CWD.
+
+    `_find_prompt_file` built its basename candidates and did prefix stripping via a
+    CWD-based `.pddrc` lookup. From a parent CWD with a custom prompt root, the context
+    prefix was not stripped, so an existing ``specs/services/utils/foo_Python.prompt``
+    was missed and a duplicated ``specs/services/backend/utils/foo_Python.prompt`` was
+    returned (risking a duplicate prompt). The anchor must reach candidate building.
+    """
+    project = tmp_path / "project"
+    (project / "specs" / "services" / "utils").mkdir(parents=True)
+    existing = project / "specs" / "services" / "utils" / "foo_Python.prompt"
+    existing.write_text("% existing\n", encoding="utf-8")
+    (project / ".pdd" / "meta").mkdir(parents=True)
+    (project / ".pdd" / "locks").mkdir(parents=True)
+    (project / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"specs/services/**\"]\n"
+        "    defaults:\n      prompts_dir: \"specs/services\"\n"
+        "      generate_output_path: \"backend/functions/\"\n",
+        encoding="utf-8",
+    )
+    (project / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # PARENT.
+
+    paths = get_pdd_file_paths(
+        "backend/utils/foo", "python",
+        prompts_dir=str((project / "specs" / "services").resolve()),
+        context_override="backend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) == existing.resolve()
+
+
+def test_get_pdd_file_paths_example_test_templates_not_duplicated_from_parent_cwd(tmp_path, monkeypatch):
+    """Example/test artifact paths must not duplicate the context prefix from a parent CWD.
+
+    ``construct_paths_basename`` was stripped via a CWD-based `.pddrc` lookup, so from a
+    parent CWD a path-qualified ``backend/foo`` kept its ``backend/`` prefix and produced
+    ``backend/examples/backend/foo_example.py``. Anchoring the strip yields the
+    configured, non-duplicated paths.
+    """
+    project = tmp_path / "project"
+    (project / "prompts" / "backend").mkdir(parents=True)
+    (project / "prompts" / "backend" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    (project / ".pdd" / "meta").mkdir(parents=True)
+    (project / ".pdd" / "locks").mkdir(parents=True)
+    # Exact example/test TEMPLATES with {category}: the category is the basename's
+    # directory part, which duplicates the `backend/` prefix if the basename is not
+    # stripped to `foo` (which requires the CWD-independent .pddrc anchor).
+    (project / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "      outputs:\n"
+        "        example:\n          path: \"backend/examples/{category}/{name}_example.py\"\n"
+        "        test:\n          path: \"backend/tests/{category}/test_{name}.py\"\n",
+        encoding="utf-8",
+    )
+    (project / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "backend/foo_Python.prompt", "filepath": "backend/functions/foo.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)  # PARENT.
+
+    paths = get_pdd_file_paths(
+        "backend/foo", "python", prompts_dir=str((project / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert "examples/backend/" not in paths["example"].resolve(strict=False).as_posix()
+    assert "tests/backend/" not in paths["test"].resolve(strict=False).as_posix()
+
+
+def test_architecture_module_choices_defers_containment_to_matches(tmp_path, monkeypatch):
+    """Ambiguity counting must not filesystem-resolve every module's filepath.
+
+    Containment resolution is O(filesystem) and must run only for the handful of rows
+    whose filename/stem actually matches the requested basename, not for every module —
+    otherwise a large architecture makes each lookup many times slower.
+    """
+    import sync_determine_operation as sync_determine_module
+
+    modules = [
+        {"filename": f"m{i}_Python.prompt", "filepath": f"src/m{i}.py"} for i in range(300)
+    ]
+    modules.append({"filename": "foo_Python.prompt", "filepath": "src/foo.py"})
+    (tmp_path / "architecture.json").write_text(json.dumps({"modules": modules}), encoding="utf-8")
+
+    calls = {"n": 0}
+    original = sync_determine_module._contained_architecture_code_path
+
+    def counting(project_root, filepath):
+        calls["n"] += 1
+        return original(project_root, filepath)
+
+    monkeypatch.setattr(sync_determine_module, "_contained_architecture_code_path", counting)
+
+    choices = sync_determine_module._architecture_module_choices(
+        tmp_path / "architecture.json", "foo", "python", modules=modules
+    )
+
+    assert choices == ["src/foo.py"]
+    assert calls["n"] <= 5  # only the matching row(s), not all 301 modules.
+
+
+def test_get_pdd_file_paths_new_module_outputs_under_subproject_from_parent_cwd(tmp_path, monkeypatch):
+    """A NEW module's outputs must resolve under the subproject, not the parent CWD.
+
+    The missing-prompt branch called construct_paths with no anchoring input and
+    forced ``path_resolution_mode="cwd"``, so from the project's parent the code/test
+    paths resolved under the parent (``<parent>/backend/foo.py``). Passing the prompt
+    path as a hint lets construct_paths find the subproject ``.pddrc`` and resolve
+    against it.
+    """
+    project = tmp_path / "project"
+    (project / "prompts" / "backend").mkdir(parents=True)  # NOTE: no foo prompt (new module)
+    _write_two_context_pddrc(project)
+    (project / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # PARENT.
+
+    paths = get_pdd_file_paths(
+        "foo", "python",
+        prompts_dir=str((project / "prompts" / "backend").resolve()),
+        context_override="backend",
+    )
+
+    code = paths["code"].resolve(strict=False)
+    assert str(code).startswith(str(project.resolve()))
+    assert code.as_posix().endswith("backend/functions/foo.py")
+
+
+def test_get_pdd_file_paths_non_architecture_templates_not_duplicated_from_parent_cwd(tmp_path, monkeypatch):
+    """Existing-prompt template paths (no architecture entry) must not duplicate the prefix.
+
+    The non-architecture template branch recomputed the basename without the project
+    anchor, so from a parent CWD a `{category}` template duplicated the context prefix
+    (`backend/examples/backend/foo_example.py`).
+    """
+    project = tmp_path / "project"
+    (project / "prompts" / "backend").mkdir(parents=True)
+    (project / "prompts" / "backend" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    (project / ".pdd" / "meta").mkdir(parents=True)
+    (project / ".pdd" / "locks").mkdir(parents=True)
+    (project / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "      outputs:\n"
+        "        example:\n          path: \"backend/examples/{category}/{name}_example.py\"\n"
+        "        test:\n          path: \"backend/tests/{category}/test_{name}.py\"\n",
+        encoding="utf-8",
+    )
+    # No architecture entry for foo — exercise the non-architecture template branch.
+    (project / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # PARENT.
+
+    paths = get_pdd_file_paths(
+        "backend/foo", "python", prompts_dir=str((project / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert "examples/backend/" not in paths["example"].resolve(strict=False).as_posix()
+    assert "tests/backend/" not in paths["test"].resolve(strict=False).as_posix()
+
+
+def test_get_pdd_file_paths_proven_owner_honored_for_shared_target(tmp_path, monkeypatch):
+    """A PROVEN-owner architecture row keeps a shared, no-context code target.
+
+    When an architecture row's physical prompt owner IS the resolved prompt (proven,
+    explicit mapping), its authoritative code target must be honored even when it lies
+    outside the context's own globs — as long as it belongs to NO sibling context
+    (an intentionally shared path). Territory only guards heuristic borrows.
+    """
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "backend/foo_Python.prompt", "filepath": "shared/foo.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "foo", "python", prompts_dir="prompts/backend", context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False).as_posix().endswith("shared/foo.py")
+
+
+def test_get_pdd_file_paths_proven_owner_still_rejects_sibling_context_target(tmp_path, monkeypatch):
+    """The proven-owner exception must NOT extend to a SIBLING context's territory.
+
+    A stale flat row (`credits_Python.prompt` -> `frontend/credits.py`) leaf-collides
+    with the backend prompt and thus proves ownership, but its target is owned by the
+    frontend context — it must still be rejected, or backend sync overwrites frontend
+    code. This locks in the round-5 behavior against the round-7 proven-owner relaxation.
+    """
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "frontend/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir=str((tmp_path / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert not paths["code"].resolve(strict=False).as_posix().endswith("frontend/credits.py")
+
+
+def test_get_pdd_file_paths_flat_same_leaf_in_two_roots_not_proven(tmp_path, monkeypatch):
+    """A flat architecture filename that matches distinct same-leaf prompts in TWO
+    context roots is ambiguously owned: it must not be classified as a proven owner and
+    borrowed into a shared code target (both contexts would otherwise claim one file).
+    """
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "frontend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    (tmp_path / "prompts" / "frontend" / "credits_Python.prompt").write_text("% frontend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "shared/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python",
+        prompts_dir=str((tmp_path / "prompts" / "backend").resolve()),
+        context_override="backend",
+    )
+
+    assert not paths["code"].resolve(strict=False).as_posix().endswith("shared/credits.py")
+
+
+def test_get_pdd_file_paths_rejects_symlinked_code_path_into_sibling_context(tmp_path, monkeypatch):
+    """A code filepath that resolves THROUGH an in-project symlink into a sibling
+    context's territory must be rejected, even though it is lexically inside the
+    resolving context and stays within the project root.
+
+    ``backend/link`` -> ``frontend``, and architecture.json targets
+    ``backend/link/credits.py``. Lexically that is backend territory and passes
+    project containment, but it physically lands in the frontend sibling context.
+    Sibling ownership is checked against the resolved identity, so the borrow is
+    rejected and a backend sync cannot overwrite frontend code through the alias.
+    """
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "frontend").mkdir()
+    (tmp_path / "backend").mkdir()
+    os.symlink(tmp_path / "frontend", tmp_path / "backend" / "link")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "backend/link/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir=str((tmp_path / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    resolved = paths["code"].resolve(strict=False).as_posix()
+    assert not resolved.endswith("frontend/credits.py"), (
+        f"symlinked code path leaked into the frontend sibling context: {resolved!r}"
+    )
+
+
+def test_get_pdd_file_paths_existing_prompt_template_anchored_from_parent_cwd(tmp_path, monkeypatch):
+    """An EXISTING prompt's template outputs must anchor at the subproject too.
+
+    Round 7 anchored only the missing-prompt template branch; the existing-prompt
+    branch still returned project-relative paths, so from a parent CWD an existing
+    prompt's example/test resolved under the parent.
+    """
+    project = tmp_path / "project"
+    (project / "prompts" / "backend").mkdir(parents=True)
+    (project / "prompts" / "backend" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    (project / ".pdd" / "meta").mkdir(parents=True)
+    (project / ".pdd" / "locks").mkdir(parents=True)
+    (project / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "      outputs:\n"
+        "        example:\n          path: \"backend/examples/{name}_example.py\"\n"
+        "        test:\n          path: \"backend/tests/test_{name}.py\"\n",
+        encoding="utf-8",
+    )
+    (project / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # PARENT.
+
+    paths = get_pdd_file_paths(
+        "backend/foo", "python", prompts_dir=str((project / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert str(paths["example"].resolve(strict=False)).startswith(str(project.resolve()))
+    assert str(paths["test"].resolve(strict=False)).startswith(str(project.resolve()))
+
+
+def test_get_pdd_file_paths_absolute_sibling_output_path_still_isolates(tmp_path, monkeypatch):
+    """A sibling context with an ABSOLUTE output path must still own its code.
+
+    `_filepath_matches_context` compared raw config prefixes against the project-relative
+    architecture value, so an absolute `generate_output_path` never matched and the
+    sibling context stopped owning its code — a stale flat row targeting `frontend/`
+    was then accepted by a backend resolution. Absolute config paths are now
+    re-expressed relative to the project before comparison.
+    """
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    abs_frontend = (tmp_path / "frontend").resolve().as_posix()
+    # Frontend's relative paths do NOT cover frontend/credits.py; only its ABSOLUTE
+    # generate_output_path does.
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "  frontend:\n    paths: [\"frontend/src/**\"]\n"
+        f"    defaults:\n      prompts_dir: \"prompts/frontend\"\n      generate_output_path: \"{abs_frontend}/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "frontend/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir=str((tmp_path / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert not paths["code"].resolve(strict=False).as_posix().endswith("frontend/credits.py")
+
+
+def test_get_pdd_file_paths_flat_hint_selects_requested_context_prompt(tmp_path, monkeypatch):
+    """A legacy FLAT architecture hint must resolve the prompt in the REQUESTED context.
+
+    When a flat architecture filename matches the same leaf in two context subdirs,
+    `_resolve_prompt_path_from_architecture` sorted the recursive matches without
+    context and returned the shallowest/lexicographic first — so a `frontend` request
+    got the `backend` prompt while code resolved under `frontend` (a torn pair). The
+    recursive search now prefers the resolving context's prefix.
+    """
+    for ctx in ("backend", "frontend"):
+        d = tmp_path / "prompts" / ctx
+        d.mkdir(parents=True)
+        (d / "credits_Python.prompt").write_text(f"% {ctx}\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "frontend/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir=str((tmp_path / "prompts").resolve()),
+        context_override="frontend",
+    )
+
+    resolved = paths["prompt"].resolve(strict=False).as_posix()
+    assert "/prompts/frontend/" in resolved
+    assert "/prompts/backend/" not in resolved
+
+
+def test_get_pdd_file_paths_exact_flat_row_respects_sibling_territory(tmp_path, monkeypatch):
+    """An exact flat filename row cannot redirect a narrowed root to sibling code."""
+    backend_prompts = tmp_path / "prompts" / "backend"
+    backend_prompts.mkdir(parents=True)
+    (backend_prompts / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "frontend/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir="prompts/backend", context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_context_prefix_matches_path_components(tmp_path, monkeypatch):
+    """The backend context must not select a lexicographically earlier a-backend prompt."""
+    for context in ("a-backend", "backend"):
+        prompt_dir = tmp_path / "prompts" / context
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "credits_Python.prompt").write_text(
+            f"% {context}\n", encoding="utf-8"
+        )
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "backend/functions/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir="prompts", context_override="backend",
+    )
+
+    resolved = paths["prompt"].resolve(strict=False).as_posix()
+    assert "/prompts/backend/" in resolved
+    assert "/prompts/a-backend/" not in resolved
+
+
+def test_get_pdd_file_paths_absolute_sibling_prompt_root_establishes_owner(
+    tmp_path,
+    monkeypatch,
+):
+    """Contained absolute sibling prompt roots participate in ownership discovery."""
+    backend_root = tmp_path / "apps" / "backend" / "specs"
+    frontend_root = tmp_path / "apps" / "frontend" / "specs"
+    backend_root.mkdir(parents=True)
+    (frontend_root / "frontend").mkdir(parents=True)
+    (backend_root / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    (frontend_root / "frontend" / "credits_Python.prompt").write_text(
+        "% frontend\n", encoding="utf-8"
+    )
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n    paths: [\"backend/**\"]\n"
+        f"    defaults:\n      prompts_dir: \"{backend_root.as_posix()}\"\n"
+        "      generate_output_path: \"backend/generated/\"\n"
+        "  frontend:\n    paths: [\"frontend/**\"]\n"
+        f"    defaults:\n      prompts_dir: \"{frontend_root.as_posix()}\"\n"
+        "      generate_output_path: \"frontend/generated/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "frontend/credits_Python.prompt",
+            "filepath": "backend/foreign/credits.py",
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir=str(backend_root), context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "generated" / "credits.py"
+    ).resolve(strict=False)
+    assert not paths["code"].resolve(strict=False).as_posix().endswith(
+        "backend/foreign/credits.py"
+    )
+
+
+def test_get_pdd_file_paths_repo_root_output_still_rejects_sibling_target(
+    tmp_path,
+    monkeypatch,
+):
+    """A repo-root current output cannot override explicit sibling ownership."""
+    backend_prompts = tmp_path / "prompts" / "backend"
+    backend_prompts.mkdir(parents=True)
+    (backend_prompts / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n    paths: [\"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"./\"\n"
+        "  frontend:\n    paths: [\"frontend/**\", \"prompts/frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/frontend\"\n"
+        "      generate_output_path: \"frontend/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "credits_Python.prompt",
+            "filepath": "frontend/credits.py",
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir="prompts/backend", context_override="backend",
+    )
+
+    assert not paths["code"].resolve(strict=False).as_posix().endswith(
+        "frontend/credits.py"
+    )
+
+
+def test_get_pdd_file_paths_custom_context_prefix_is_relative_to_active_root(
+    tmp_path,
+    monkeypatch,
+):
+    """A custom broad root scopes context matches by its root-relative suffix."""
+    for context in ("backend", "frontend"):
+        prompt_dir = tmp_path / "specs" / context
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "credits_Python.prompt").write_text(
+            f"% {context}\n", encoding="utf-8"
+        )
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n    paths: [\"backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"specs/backend\"\n"
+        "      generate_output_path: \"backend/\"\n"
+        "  frontend:\n    paths: [\"frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"specs/frontend\"\n"
+        "      generate_output_path: \"frontend/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "credits_Python.prompt",
+            "filepath": "frontend/credits.py",
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir="specs", context_override="frontend",
+    )
+
+    resolved = paths["prompt"].resolve(strict=False).as_posix()
+    assert "/specs/frontend/" in resolved
+    assert "/specs/backend/" not in resolved
+
+
+def test_get_pdd_file_paths_does_not_reconstruct_escaping_direct_symlink(
+    tmp_path,
+    monkeypatch,
+):
+    """Fallback must not return a direct symlink rejected by prompt discovery."""
+    prompts_root = tmp_path / "prompts"
+    prompts_root.mkdir()
+    external = tmp_path / "external.prompt"
+    original = "% external (must remain unchanged)\n"
+    external.write_text(original, encoding="utf-8")
+    try:
+        (prompts_root / "credits_Python.prompt").symlink_to(external)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="resolves outside prompts root"):
+        get_pdd_file_paths("credits", "python", prompts_dir="prompts")
+
+    assert external.read_text(encoding="utf-8") == original
+
+
+def test_get_pdd_file_paths_missing_custom_module_keeps_context_root(
+    tmp_path,
+    monkeypatch,
+):
+    """A path-qualified new module lands under its custom context prompt root."""
+    (tmp_path / "specs").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  frontend:\n    paths: [\"frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"specs/frontend\"\n"
+        "      generate_output_path: \"frontend/\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "frontend/foo", "python", prompts_dir="specs", context_override="frontend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "specs" / "frontend" / "foo_python.prompt"
+    ).resolve(strict=False)
+    code = paths["code"].resolve(strict=False).as_posix()
+    assert code.endswith("/frontend/foo.py")
+    assert "/frontend/frontend/" not in code
+
+
+def test_get_pdd_file_paths_sibling_root_output_does_not_veto_current_target(
+    tmp_path,
+    monkeypatch,
+):
+    """A sibling ``./`` output does not claim a current-context architecture path."""
+    backend_prompts = tmp_path / "prompts" / "backend"
+    backend_prompts.mkdir(parents=True)
+    (backend_prompts / "foo_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "  frontend:\n    paths: [\"prompts/frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/frontend\"\n"
+        "      generate_output_path: \"./\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "foo_Python.prompt",
+            "filepath": "backend/special/foo.py",
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "foo", "python", prompts_dir="prompts/backend", context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "special" / "foo.py"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_nested_escaping_symlink_is_hard_failure(
+    tmp_path,
+    monkeypatch,
+):
+    """An unsafe recursive match cannot be downgraded to a new-module fallback."""
+    prompts_root = tmp_path / "prompts"
+    nested = prompts_root / "nested"
+    nested.mkdir(parents=True)
+    external = tmp_path / "external.prompt"
+    original = "% external (must remain unchanged)\n"
+    external.write_text(original, encoding="utf-8")
+    try:
+        (nested / "credits_Python.prompt").symlink_to(external)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="resolves outside prompts root"):
+        get_pdd_file_paths("credits", "python", prompts_dir="prompts")
+
+    assert external.read_text(encoding="utf-8") == original
+
+
+def test_get_pdd_file_paths_loads_territory_config_once_for_duplicate_rows(
+    tmp_path,
+    monkeypatch,
+):
+    """Matching architecture rows share one context-territory config snapshot."""
+    import sync_determine_operation as sync_determine_module
+
+    backend_prompts = tmp_path / "prompts" / "backend"
+    backend_prompts.mkdir(parents=True)
+    (backend_prompts / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    rows = [
+        {
+            "filename": "stale/credits_Python.prompt",
+            "filepath": "frontend/credits.py",
+        }
+        for _ in range(500)
+    ]
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": rows}), encoding="utf-8"
+    )
+    original_load = sync_determine_module._load_pddrc_config
+    original_owner = sync_determine_module._architecture_prompt_owner
+    loads = {"count": 0}
+    ownership_checks = {"count": 0}
+
+    def counting_load(path):
+        loads["count"] += 1
+        return original_load(path)
+
+    def counting_owner(*args, **kwargs):
+        ownership_checks["count"] += 1
+        return original_owner(*args, **kwargs)
+
+    monkeypatch.setattr(sync_determine_module, "_load_pddrc_config", counting_load)
+    monkeypatch.setattr(
+        sync_determine_module, "_architecture_prompt_owner", counting_owner
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir="prompts/backend", context_override="backend",
+    )
+
+    assert not paths["code"].resolve(strict=False).as_posix().endswith(
+        "frontend/credits.py"
+    )
+    assert loads["count"] <= 10
+    assert ownership_checks["count"] <= 1
+
+
+def test_get_pdd_file_paths_rejects_missing_basename_traversal(tmp_path, monkeypatch):
+    """A missing module basename cannot escape prompt/output roots via ``..``."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="Unsafe prompt path"):
+        get_pdd_file_paths("../outside/foo", "python", prompts_dir="prompts")
+
+    assert not (tmp_path / "outside" / "foo_python.prompt").exists()
+
+
+def test_get_pdd_file_paths_nested_missing_custom_module_keeps_context_root(
+    tmp_path,
+    monkeypatch,
+):
+    """Nested path-qualified new modules retain both context and nested segments."""
+    (tmp_path / "specs").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  frontend:\n    paths: [\"frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"specs/frontend\"\n"
+        "      generate_output_path: \"frontend/\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "frontend/utils/foo",
+        "python",
+        prompts_dir="specs",
+        context_override="frontend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "specs" / "frontend" / "utils" / "foo_python.prompt"
+    ).resolve(strict=False)
+    code = paths["code"].resolve(strict=False).as_posix()
+    assert code.endswith("/frontend/utils/foo.py")
+    assert "/frontend/frontend/" not in code
+    test_path = paths["test"].resolve(strict=False).as_posix()
+    assert test_path.endswith("/utils/test_foo.py")
+    assert "/utils/utils/" not in test_path
+
+
+def test_get_pdd_file_paths_ignores_unsafe_symlink_in_sibling_context(
+    tmp_path,
+    monkeypatch,
+):
+    """An unsafe frontend candidate cannot block an explicit backend new module."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    frontend = tmp_path / "prompts" / "frontend"
+    frontend.mkdir()
+    external = tmp_path / "external.prompt"
+    original = "% external (must remain unchanged)\n"
+    external.write_text(original, encoding="utf-8")
+    try:
+        (frontend / "foo_Python.prompt").symlink_to(external)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+    _write_two_context_pddrc(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "foo", "python", prompts_dir="prompts", context_override="backend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "prompts" / "backend" / "foo_python.prompt"
+    ).resolve(strict=False)
+    assert external.read_text(encoding="utf-8") == original
+
+
+def test_get_pdd_file_paths_rejects_language_traversal(tmp_path, monkeypatch):
+    """Language is one filename component and cannot traverse artifact roots."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="Unsafe prompt path"):
+        get_pdd_file_paths("foo", "../../../outside", prompts_dir="prompts")
+
+    assert not (tmp_path.parent / "outside").exists()
+
+
+def test_get_pdd_file_paths_active_unsafe_prompt_beats_safe_sibling(
+    tmp_path,
+    monkeypatch,
+):
+    """A safe frontend prompt cannot mask an unsafe requested backend prompt."""
+    backend = tmp_path / "prompts" / "backend"
+    frontend = tmp_path / "prompts" / "frontend"
+    backend.mkdir(parents=True)
+    frontend.mkdir()
+    external = tmp_path / "external.prompt"
+    original = "% external (must remain unchanged)\n"
+    external.write_text(original, encoding="utf-8")
+    try:
+        (backend / "foo_Python.prompt").symlink_to(external)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+    (frontend / "foo_Python.prompt").write_text("% frontend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="resolves outside prompts root"):
+        get_pdd_file_paths(
+            "foo", "python", prompts_dir="prompts", context_override="backend",
+        )
+
+    assert external.read_text(encoding="utf-8") == original
+
+
+def test_get_pdd_file_paths_explicit_context_does_not_borrow_safe_sibling(
+    tmp_path,
+    monkeypatch,
+):
+    """A lone safe frontend prompt is not a fallback for explicit backend creation."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    frontend = tmp_path / "prompts" / "frontend"
+    frontend.mkdir()
+    (frontend / "foo_Python.prompt").write_text("% frontend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "foo", "python", prompts_dir="prompts", context_override="backend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "prompts" / "backend" / "foo_python.prompt"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_flat_arch_hint_aligns_path_qualified_basename(
+    tmp_path,
+    monkeypatch,
+):
+    """A flat hint cannot pair an unrelated directory's prompt with canonical code."""
+    wrong = tmp_path / "prompts" / "afoo"
+    wrong.mkdir(parents=True)
+    (wrong / "page_Python.prompt").write_text("% wrong afoo page\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n"
+        "      generate_output_path: \"src/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "page_Python.prompt",
+            "filepath": "foo/page.py",
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("foo/page", "python", prompts_dir="prompts")
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "prompts" / "foo" / "page_python.prompt"
+    ).resolve(strict=False)
+    assert "/prompts/afoo/" not in paths["prompt"].resolve(strict=False).as_posix()
+
+
+def test_get_pdd_file_paths_direct_fast_path_respects_explicit_context(
+    tmp_path,
+    monkeypatch,
+):
+    """A root-level prompt is not a direct-path fallback for explicit backend."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "foo_Python.prompt").write_text(
+        "% root-level sibling\n", encoding="utf-8"
+    )
+    _write_two_context_pddrc(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "foo", "python", prompts_dir="prompts", context_override="backend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "prompts" / "backend" / "foo_python.prompt"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_misaligned_direct_arch_join_is_not_returned(
+    tmp_path,
+    monkeypatch,
+):
+    """A rejected flat direct join cannot be returned again as the helper fallback."""
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "page_Python.prompt").write_text(
+        "% wrong root page\n", encoding="utf-8"
+    )
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n"
+        "      generate_output_path: \"src/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "page_Python.prompt",
+            "filepath": "foo/page.py",
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("foo/page", "python", prompts_dir="prompts")
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "prompts" / "foo" / "page_python.prompt"
+    ).resolve(strict=False)
+    assert paths["prompt"].resolve(strict=False) != (
+        tmp_path / "prompts" / "page_Python.prompt"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_nested_exact_arch_filename_still_aligns_filepath(
+    tmp_path,
+    monkeypatch,
+):
+    """An exact nested filename cannot bypass path-qualified filepath alignment."""
+    prompt = tmp_path / "prompts" / "foo" / "page_Python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% foo page\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n"
+        "      generate_output_path: \"src/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "foo/page_Python.prompt",
+            "filepath": "bar/page.py",
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("foo/page", "python", prompts_dir="prompts")
+
+    assert paths["prompt"].resolve(strict=False) == prompt.resolve(strict=False)
+    assert not paths["code"].resolve(strict=False).as_posix().endswith("bar/page.py")
+
+
+def test_get_pdd_file_paths_nested_directories_match_case_insensitively(
+    tmp_path,
+    monkeypatch,
+):
+    """Linux nested lookup reuses an existing differently-cased directory path."""
+    prompt = tmp_path / "prompts" / "foo" / "page_Python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% foo page\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("Foo/Page", "python", prompts_dir="prompts")
+
+    assert paths["prompt"].resolve(strict=False) == prompt.resolve(strict=False)
+    assert paths["prompt"].parts[-2:] == ("foo", "page_Python.prompt")
+
+
+@pytest.mark.parametrize(
+    ("basename", "language"),
+    [
+        (" foo", "python"),
+        ("foo ", "python"),
+        ("foo\x00bar", "python"),
+        ("foo", " python"),
+        ("foo", "python "),
+        ("foo", "py\x00thon"),
+        ("foo", "py\nthon"),
+        ("foo\u202ebar", "python"),
+        ("foo", "py\u2066thon"),
+        ("foo\u2028bar", "python"),
+        ("foo", "py\u2029thon"),
+    ],
+)
+def test_get_pdd_file_paths_rejects_noncanonical_or_control_input(
+    tmp_path,
+    monkeypatch,
+    basename,
+    language,
+):
+    """Validation rejects controls and whitespace the caller would otherwise retain."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="Unsafe prompt path"):
+        get_pdd_file_paths(basename, language, prompts_dir="prompts")
+
+
+def test_get_pdd_file_paths_unsafe_root_direct_candidate_does_not_block_context(
+    tmp_path,
+    monkeypatch,
+):
+    """Containment is not evaluated for a direct candidate outside explicit context."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    external = tmp_path / "external.prompt"
+    original = "% external (must remain unchanged)\n"
+    external.write_text(original, encoding="utf-8")
+    try:
+        (tmp_path / "prompts" / "foo_Python.prompt").symlink_to(external)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+    _write_two_context_pddrc(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "foo", "python", prompts_dir="prompts", context_override="backend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "prompts" / "backend" / "foo_python.prompt"
+    ).resolve(strict=False)
+    assert external.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize("basename", [".", "./", "foo/", "foo/.", "./foo", "foo//bar"])
+def test_get_pdd_file_paths_rejects_degenerate_basename(
+    tmp_path,
+    monkeypatch,
+    basename,
+):
+    """Noncanonical or empty normalized basenames cannot create hidden artifacts."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="Unsafe prompt path"):
+        get_pdd_file_paths(basename, "python", prompts_dir="prompts")
+
+
+@pytest.mark.parametrize("basename", ["foo\nFORGED", "foo\rFORGED", "foo\x1b[31m"])
+def test_get_pdd_file_paths_validates_before_logging_raw_input(
+    tmp_path,
+    monkeypatch,
+    caplog,
+    basename,
+):
+    """Rejected control characters never reach the INFO log record."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+    caplog.set_level("INFO", logger="sync_determine_operation")
+
+    with pytest.raises(UnsafePromptPathError, match="Unsafe prompt path"):
+        get_pdd_file_paths(basename, "python", prompts_dir="prompts")
+
+    assert not caplog.records
+
+
+@pytest.mark.parametrize("bad_language", ["py\ninjected", "py\x1b[31mred", "py\r\nx", "py\x07"])
+def test_get_pdd_file_paths_validates_language_before_logging(tmp_path, monkeypatch, caplog, bad_language):
+    """A control/newline/ANSI-bearing language never reaches an INFO log record before
+    it is rejected (log-injection guard for the language input, R14)."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+    caplog.set_level("INFO", logger="sync_determine_operation")
+
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("foo", bad_language, prompts_dir="prompts")
+
+    assert not caplog.records
+
+
+def test_get_pdd_file_paths_rejects_control_bearing_prompts_dir_before_logging(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    """A control-bearing prompt root is neither resolved nor emitted into INFO logs."""
+    monkeypatch.chdir(tmp_path)
+    caplog.set_level("INFO", logger="sync_determine_operation")
+
+    with pytest.raises(UnsafePromptPathError, match="Unsafe prompt path"):
+        get_pdd_file_paths("foo", "python", prompts_dir="prompts\nFORGED")
+
+    assert not caplog.records
+
+
+@pytest.mark.parametrize(
+    "basename",
+    [
+        "foo:bar", "foo?bar", "foo*bar", "foo|bar", 'foo"bar',
+        "foo<bar", "foo>bar", "CON", "NUL", "COM1", "LPT9.txt",
+        "COM¹", "COM².txt", "LPT³", "dir/PRN.py", "AUX",
+    ],
+)
+def test_get_pdd_file_paths_rejects_windows_device_or_ads_basename(
+    tmp_path,
+    monkeypatch,
+    basename,
+):
+    """Portable module identities cannot address NTFS streams or device names."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="Unsafe prompt path"):
+        get_pdd_file_paths(basename, "python", prompts_dir="prompts")
+
+
+def test_directory_index_case_collision_fallback_is_deterministic(tmp_path):
+    """Case-fold collisions have a stable fallback independent of scandir order."""
+    import sync_determine_operation as sync_determine_module
+
+    lower = tmp_path / "foo"
+    upper = tmp_path / "Foo"
+    lower.mkdir()
+    try:
+        upper.mkdir()
+    except FileExistsError:
+        pytest.skip("filesystem does not support case-distinct sibling directories")
+    if lower.samefile(upper):
+        pytest.skip("filesystem is case-insensitive")
+
+    found = sync_determine_module._indexed_directory_child(
+        tmp_path, "FOO", directory=True
+    )
+
+    assert found == upper
+
+
+@pytest.mark.parametrize(
+    "architecture_filepath",
+    [
+        "CON.py",
+        "src/NUL.txt",
+        "src/foo:bar.py",
+        "src/foo?.py",
+        "src/foo|bar.py",
+        "src/foo\u202ebar.py",
+        "src/foo\u2028bar.py",
+        "src/COM¹.py",
+        "LPT³.txt",
+    ],
+)
+def test_contained_architecture_code_path_rejects_nonportable_components(
+    tmp_path,
+    architecture_filepath,
+):
+    """Architecture outputs obey the same portable component rules as prompts."""
+    assert _contained_architecture_code_path(tmp_path, architecture_filepath) is None
+
+
+@pytest.mark.parametrize(
+    "noncanonical",
+    ["./foo_Python.prompt", "a//foo_Python.prompt", "a/./foo_Python.prompt", "foo_Python.prompt/", "."],
+)
+def test_safe_architecture_prompt_filename_rejects_noncanonical(noncanonical):
+    """A non-canonical architecture prompt filename (dot segments, duplicate/trailing
+    separators, or no components) is rejected so an alias cannot pass as a valid name and
+    a regenerated implementation cannot accept it while satisfying R1-R15 (R10)."""
+    import sync_determine_operation as sync_determine_module
+
+    assert sync_determine_module._safe_architecture_prompt_filename(noncanonical) is None
+
+
+@pytest.mark.parametrize(
+    "noncanonical",
+    [".", "./foo.py", "src/./foo.py", "src//foo.py", "src/foo/", "foo/."],
+)
+def test_contained_architecture_code_path_rejects_noncanonical(tmp_path, noncanonical):
+    """A non-canonical architecture output filepath (dot segments, duplicate/trailing
+    separators, or no components) is rejected so it cannot count as a valid distinct
+    output (R10 extended to output filepaths)."""
+    assert _contained_architecture_code_path(tmp_path, noncanonical) is None
+
+
+def test_get_pdd_file_paths_unsafe_duplicate_does_not_shadow_valid_arch_row(
+    tmp_path,
+    monkeypatch,
+):
+    """An unsafe first duplicate is skipped so a later valid mapping remains authoritative."""
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "foo_Python.prompt").write_text(
+        "% foo\n", encoding="utf-8"
+    )
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n"
+        "      generate_output_path: \"fallback/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "foo_Python.prompt", "filepath": "CON.py"},
+            {"filename": "foo_Python.prompt", "filepath": "src/foo.py"},
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("foo", "python", prompts_dir="prompts")
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "src" / "foo.py"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_does_not_info_log_raw_unsafe_arch_filepath(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    """Raw invalid architecture output is never emitted through the INFO path log."""
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "foo_Python.prompt").write_text(
+        "% foo\n", encoding="utf-8"
+    )
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n"
+        "      generate_output_path: \"fallback/\"\n",
+        encoding="utf-8",
+    )
+    unsafe = "src/foo\u2028FORGED.py"
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "foo_Python.prompt", "filepath": unsafe,
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    caplog.set_level("INFO", logger="sync_determine_operation")
+
+    paths = get_pdd_file_paths("foo", "python", prompts_dir="prompts")
+
+    assert not paths["code"].resolve(strict=False).as_posix().endswith(
+        "foo\u2028FORGED.py"
+    )
+    assert all(unsafe not in record.getMessage() for record in caplog.records)
+
+
+def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
+    """A relative architecture path cannot escape through an existing symlink."""
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    try:
+        (tmp_path / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="backend/credits_Python.prompt",
+        architecture_filepath="linked/credits.py",
+    )
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
+
+
 # --- Part 6: Auto-deps Infinite Loop Regression Tests ---
 
 class TestAutoDepsInfiniteLoopFix:
     """Test the auto-deps infinite loop fix implemented to prevent continuous auto-deps operations."""
-    
+
     def test_auto_deps_to_generate_progression(self, pdd_test_environment):
         """Test that after auto-deps completes, sync decides to run generate (not auto-deps again)."""
-        
+
         # Create prompt file with dependencies
         prompts_dir = pdd_test_environment / "prompts"
         prompts_dir.mkdir(exist_ok=True)
@@ -1586,7 +4456,7 @@ Requirements:
 - Use the config and models from included dependencies
 """
         prompt_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
-        
+
         # Create fingerprint showing auto-deps was just completed
         fingerprint_data = {
             "pdd_version": "0.0.46",
@@ -1599,19 +4469,19 @@ Requirements:
         }
         fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
         create_fingerprint_file(fp_path, fingerprint_data)
-        
+
         # Test the decision logic
         decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
-        
+
         # CRITICAL: Should decide 'generate', not 'auto-deps' again
         assert decision.operation == 'generate'
         assert 'Auto-deps completed' in decision.reason
         assert decision.details['previous_command'] == 'auto-deps'
         assert decision.details['code_exists'] == False
-    
+
     def test_auto_deps_infinite_loop_before_fix_scenario(self, pdd_test_environment):
         """Test the exact scenario that caused infinite loop before the fix."""
-        
+
         # Create prompt file with dependencies (like youtube_client_python.prompt)
         prompts_dir = pdd_test_environment / "prompts"
         prompts_dir.mkdir(exist_ok=True)
@@ -1634,10 +4504,10 @@ Requirements:
 - Process metadata for each video
 """
         prompt_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
-        
+
         # Simulate the exact state from the sync log: auto-deps completed but code file missing
         fingerprint_data = {
-            "pdd_version": "0.0.46", 
+            "pdd_version": "0.0.46",
             "timestamp": "2025-08-04T05:07:29.753906+00:00",
             "command": "auto-deps",
             "prompt_hash": prompt_hash,  # Use actual calculated hash
@@ -1647,20 +4517,20 @@ Requirements:
         }
         fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
         create_fingerprint_file(fp_path, fingerprint_data)
-        
+
         # Before the fix: this would return 'auto-deps' and cause infinite loop
         # After the fix: this should return 'generate'
         decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
-        
+
         # Verify the fix
         assert decision.operation == 'generate', f"Expected 'generate', got '{decision.operation}' - infinite loop fix failed"
         assert decision.operation != 'auto-deps', "Should not return auto-deps again (infinite loop)"
         assert 'Auto-deps completed' in decision.reason
         assert decision.confidence == 0.90  # High confidence since this is deterministic
-    
+
     def test_auto_deps_without_dependencies_still_works(self, pdd_test_environment):
         """Test that normal auto-deps logic still works when prompt has no dependencies."""
-        
+
         # Create prompt file WITHOUT dependencies
         prompts_dir = pdd_test_environment / "prompts"
         prompts_dir.mkdir(exist_ok=True)
@@ -1672,20 +4542,20 @@ Requirements:
 - Return: sum of a and b
 """
         create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
-        
+
         # No fingerprint (new unit scenario)
         # Code file doesn't exist
-        
+
         decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
-        
+
         # Should go directly to generate since no dependencies detected
         assert decision.operation == 'generate'
         assert 'New prompt ready' in decision.reason
         assert decision.details.get('has_dependencies', True) == False  # No dependencies
-    
+
     def test_auto_deps_first_time_with_dependencies(self, pdd_test_environment):
         """Test that auto-deps is correctly chosen for new prompts with dependencies."""
-        
+
         # Create prompt file WITH dependencies
         prompts_dir = pdd_test_environment / "prompts"
         prompts_dir.mkdir(exist_ok=True)
@@ -1699,12 +4569,12 @@ Requirements:
 - Fetch API documentation from web
 """
         create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", prompt_content)
-        
+
         # No fingerprint (new unit scenario)
         # Code file doesn't exist
-        
+
         decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
-        
+
         # Should choose auto-deps for first time with dependencies
         assert decision.operation == 'auto-deps'
         assert 'New prompt with dependencies detected' in decision.reason
@@ -1916,7 +4786,7 @@ Requirements:
 
 class TestValidateExpectedFiles:
     """Test the validate_expected_files function."""
-    
+
     def test_validate_with_no_fingerprint(self):
         """Test validation when no fingerprint is provided."""
         paths = {
@@ -1924,27 +4794,27 @@ class TestValidateExpectedFiles:
             'example': Path('test_example.py'),
             'test': Path('test_test.py')
         }
-        
+
         result = validate_expected_files(None, paths)
         assert result == {}
-    
+
     def test_validate_all_files_exist(self, tmp_path):
         """Test validation when all expected files exist."""
         # Create test files
         code_file = tmp_path / "test.py"
         example_file = tmp_path / "test_example.py"
         test_file = tmp_path / "test_test.py"
-        
+
         code_file.write_text("print('hello')")
         example_file.write_text("from test import *")
         test_file.write_text("def test_func(): pass")
-        
+
         paths = {
             'code': code_file,
             'example': example_file,
             'test': test_file
         }
-        
+
         fingerprint = Fingerprint(
             pdd_version="0.0.41",
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -1954,31 +4824,31 @@ class TestValidateExpectedFiles:
             example_hash="example789",
             test_hash="test012"
         )
-        
+
         result = validate_expected_files(fingerprint, paths)
-        
+
         assert result == {
             'code': True,
             'example': True,
             'test': True
         }
-    
+
     def test_validate_missing_files(self, tmp_path):
         """Test validation when expected files are missing."""
         # Create only code file
         code_file = tmp_path / "test.py"
         example_file = tmp_path / "test_example.py"
         test_file = tmp_path / "test_test.py"
-        
+
         code_file.write_text("print('hello')")
         # Don't create example and test files
-        
+
         paths = {
             'code': code_file,
             'example': example_file,
             'test': test_file
         }
-        
+
         fingerprint = Fingerprint(
             pdd_version="0.0.41",
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -1988,9 +4858,9 @@ class TestValidateExpectedFiles:
             example_hash="example789",
             test_hash="test012"
         )
-        
+
         result = validate_expected_files(fingerprint, paths)
-        
+
         assert result == {
             'code': True,
             'example': False,
@@ -2000,19 +4870,19 @@ class TestValidateExpectedFiles:
 
 class TestHandleMissingExpectedFiles:
     """Test the _handle_missing_expected_files function."""
-    
+
     def test_missing_code_file_with_prompt(self, tmp_path):
         """Test recovery when code file is missing but prompt exists."""
         prompt_file = tmp_path / "test_python.prompt"
         prompt_file.write_text("Create a simple function")
-        
+
         paths = {
             'prompt': prompt_file,
             'code': tmp_path / "test.py",
             'example': tmp_path / "test_example.py",
             'test': tmp_path / "test_test.py"
         }
-        
+
         fingerprint = Fingerprint(
             pdd_version="0.0.41",
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -2022,7 +4892,7 @@ class TestHandleMissingExpectedFiles:
             example_hash=None,
             test_hash=None
         )
-        
+
         decision = _handle_missing_expected_files(
             missing_files=['code'],
             paths=paths,
@@ -2031,7 +4901,7 @@ class TestHandleMissingExpectedFiles:
             language="python",
             prompts_dir="prompts"
         )
-        
+
         assert decision.operation == 'generate'
         assert 'Code file missing' in decision.reason
         # The confidence value is set to 1.0 because the decision to generate
@@ -2042,17 +4912,17 @@ class TestHandleMissingExpectedFiles:
         """Test recovery when test file is missing and skip_tests is True."""
         code_file = tmp_path / "test.py"
         example_file = tmp_path / "test_example.py"
-        
+
         code_file.write_text("def add(a, b): return a + b")
         example_file.write_text("from test import add; print(add(1, 2))")
-        
+
         paths = {
             'prompt': tmp_path / "test_python.prompt",
             'code': code_file,
             'example': example_file,
             'test': tmp_path / "test_test.py"
         }
-        
+
         fingerprint = Fingerprint(
             pdd_version="0.0.41",
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -2062,7 +4932,7 @@ class TestHandleMissingExpectedFiles:
             example_hash="example789",
             test_hash="test012"
         )
-        
+
         decision = _handle_missing_expected_files(
             missing_files=['test'],
             paths=paths,
@@ -2072,23 +4942,23 @@ class TestHandleMissingExpectedFiles:
             prompts_dir="prompts",
             skip_tests=True
         )
-        
+
         assert decision.operation == 'nothing'
         assert 'skip-tests specified' in decision.reason
         assert decision.details['skip_tests'] is True
-    
+
     def test_missing_example_file(self, tmp_path):
         """Test recovery when example file is missing but code exists."""
         code_file = tmp_path / "test.py"
         code_file.write_text("def add(a, b): return a + b")
-        
+
         paths = {
             'prompt': tmp_path / "test_python.prompt",
             'code': code_file,
             'example': tmp_path / "test_example.py",
             'test': tmp_path / "test_test.py"
         }
-        
+
         fingerprint = Fingerprint(
             pdd_version="0.0.41",
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -2098,7 +4968,7 @@ class TestHandleMissingExpectedFiles:
             example_hash="example789",
             test_hash=None
         )
-        
+
         decision = _handle_missing_expected_files(
             missing_files=['example'],
             paths=paths,
@@ -2107,49 +4977,49 @@ class TestHandleMissingExpectedFiles:
             language="python",
             prompts_dir="prompts"
         )
-        
+
         assert decision.operation == 'example'
         assert 'Example file missing' in decision.reason
 
 
 class TestIsWorkflowComplete:
     """Test the _is_workflow_complete function."""
-    
+
     def test_workflow_complete_without_skip_flags(self, tmp_path):
         """Test workflow completion when all files exist and no skip flags."""
         code_file = tmp_path / "test.py"
         example_file = tmp_path / "test_example.py"
         test_file = tmp_path / "test_test.py"
-        
+
         # Create all files
         code_file.write_text("def add(a, b): return a + b")
         example_file.write_text("from test import add")
         test_file.write_text("def test_add(): pass")
-        
+
         paths = {
             'code': code_file,
             'example': example_file,
             'test': test_file
         }
-        
+
         assert _is_workflow_complete(paths) is True
         assert _is_workflow_complete(paths, skip_tests=False) is True
-    
+
     def test_workflow_complete_with_skip_tests(self, tmp_path):
         """Test workflow completion when test file missing but skip_tests=True."""
         code_file = tmp_path / "test.py"
         example_file = tmp_path / "test_example.py"
-        
+
         # Create only code and example files
         code_file.write_text("def add(a, b): return a + b")
         example_file.write_text("from test import add")
-        
+
         paths = {
             'code': code_file,
             'example': example_file,
             'test': tmp_path / "test_test.py"  # Doesn't exist
         }
-        
+
         assert _is_workflow_complete(paths) is False  # Requires test file
         assert _is_workflow_complete(paths, skip_tests=True) is True  # Skip test requirement
 
@@ -2175,46 +5045,46 @@ class TestIsWorkflowComplete:
             basename="test",
             language="python",
         ) is True
-    
+
     def test_workflow_incomplete(self, tmp_path):
         """Test workflow is incomplete when required files are missing."""
         code_file = tmp_path / "test.py"
         code_file.write_text("def add(a, b): return a + b")
-        
+
         paths = {
             'code': code_file,
             'example': tmp_path / "test_example.py",  # Doesn't exist
             'test': tmp_path / "test_test.py"  # Doesn't exist
         }
-        
+
         assert _is_workflow_complete(paths) is False
         assert _is_workflow_complete(paths, skip_tests=True) is False  # Still needs example
 
 
 class TestSyncDetermineOperationRegressionScenarios:
     """Additional regression tests for sync_determine_operation edge cases."""
-    
+
     def test_missing_files_with_metadata_regression_scenario(self, tmp_path):
         """Test the exact regression scenario: files deleted but metadata remains."""
         # Change to temp directory for the test
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            
+
             # Create directory structure
             (tmp_path / "prompts").mkdir()
             (tmp_path / ".pdd" / "meta").mkdir(parents=True)
-            
+
             # Create prompt file
             prompt_file = tmp_path / "prompts" / "simple_math_python.prompt"
             prompt_file.write_text("""Create a Python module with a simple math function.
 
 Requirements:
 - Function name: add
-- Parameters: a, b (both numbers)  
+- Parameters: a, b (both numbers)
 - Return: sum of a and b
 """)
-            
+
             # Create metadata (simulating previous successful sync)
             meta_file = tmp_path / ".pdd" / "meta" / "simple_math_python.json"
             meta_file.write_text(json.dumps({
@@ -2226,9 +5096,9 @@ Requirements:
                 "example_hash": "ghi789",
                 "test_hash": "jkl012"
             }, indent=2))
-            
+
             # Files are deliberately missing (deleted like in regression test)
-            
+
             # Test sync_determine_operation behavior
             decision = sync_determine_operation(
                 basename="simple_math",
@@ -2240,30 +5110,30 @@ Requirements:
                 skip_tests=True,
                 skip_verify=False
             )
-            
+
             # Should NOT return analyze_conflict anymore
             assert decision.operation != 'analyze_conflict'
-            
+
             # Should return appropriate recovery operation
             assert decision.operation in ['generate', 'auto-deps']
             assert 'missing' in decision.reason.lower() or 'regenerate' in decision.reason.lower()
-            
+
         finally:
             os.chdir(original_cwd)
-    
+
     def test_skip_flags_integration(self, tmp_path):
         """Test that skip flags are properly integrated throughout the decision logic."""
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            
+
             # Create directory structure
             (tmp_path / "prompts").mkdir()
-            
+
             # Create prompt file
             prompt_file = tmp_path / "prompts" / "test_python.prompt"
             prompt_file.write_text("Create a simple function")
-            
+
             # Test with skip_tests=True
             decision = sync_determine_operation(
                 basename="test",
@@ -2275,27 +5145,27 @@ Requirements:
                 skip_tests=True,
                 skip_verify=False
             )
-            
+
             # Should start normal workflow
             assert decision.operation in ['generate', 'auto-deps']
-            
+
         finally:
             os.chdir(original_cwd)
 
 
 class TestGetPddFilePaths:
     """Test get_pdd_file_paths function to prevent path resolution regression."""
-    
+
     def test_get_pdd_file_paths_respects_pddrc_when_prompt_missing(self, tmp_path, monkeypatch):
         """Test that get_pdd_file_paths uses .pddrc configuration even when prompt doesn't exist.
-        
+
         This test prevents regression of the bug where test files were looked for in the
         current directory instead of the configured tests/ subdirectory.
         """
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            
+
             # Create .pddrc configuration file
             pddrc_content = """version: "1.0"
 contexts:
@@ -2307,12 +5177,12 @@ contexts:
       default_language: "python"
 """
             (tmp_path / ".pddrc").write_text(pddrc_content)
-            
+
             # Create directory structure
             (tmp_path / "prompts").mkdir()
             (tmp_path / "tests").mkdir()
             (tmp_path / "examples").mkdir()
-            
+
             # Mock construct_paths to return configured paths
             def mock_construct_paths(
                 input_file_paths,
@@ -2335,26 +5205,26 @@ contexts:
                     {},  # output_paths is empty when called with empty input_file_paths
                     "python"
                 )
-            
+
             monkeypatch.setattr('sync_determine_operation.construct_paths', mock_construct_paths)
-            
+
             # Test when prompt file doesn't exist - this is the regression scenario
             basename = "test_unit"
             language = "python"
             paths = get_pdd_file_paths(basename, language, "prompts")
-            
+
             # Verify paths respect configuration, not hardcoded to current directory
             # The bug was that test file was "test_test_unit.py" instead of "tests/test_test_unit.py"
             assert str(paths['test']) == "tests/test_test_unit.py", f"Test path should be in tests/ subdirectory, got: {paths['test']}"
             assert str(paths['example']) == "examples/test_unit_example.py", f"Example path should be in examples/ subdirectory, got: {paths['example']}"
             assert str(paths['code']) == "test_unit.py", f"Code path can be in current directory, got: {paths['code']}"
-            
+
             # Verify the paths are Path objects
             assert isinstance(paths['test'], Path)
             assert isinstance(paths['example'], Path)
             assert isinstance(paths['code'], Path)
             assert isinstance(paths['prompt'], Path)
-            
+
         finally:
             os.chdir(original_cwd)
 
@@ -2404,45 +5274,45 @@ contexts:
         assert paths["prompt"].resolve() == prompt_path.resolve()
         assert paths["code"].as_posix() == "frontend/src/components/marketplace/AssetCard/AssetCard.tsx"
         assert paths["example"].as_posix() == "context/frontend/AssetCard_example.tsx"
-    
+
     def test_get_pdd_file_paths_fallback_without_construct_paths(self, tmp_path, monkeypatch):
         """Test that paths use configured directories even without .pddrc when prompt is missing.
-        
+
         After the fix, even without .pddrc, construct_paths should provide
         sensible defaults based on the PDD context detection.
         """
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            
+
             # Create directory structure
             (tmp_path / "prompts").mkdir()
-            
+
             # Don't create the prompt file - trigger the fallback logic
             basename = "test_unit"
             language = "python"
-            
+
             # Get paths without mocking - this uses construct_paths now
             paths = get_pdd_file_paths(basename, language, "prompts")
-            
+
             # After fix: paths should use PDD's default directory structure
             # The exact paths depend on whether construct_paths detects a context
             # In a bare directory, it might still use current directory as fallback
             # But with .pddrc present, it should use configured paths
-            
+
             # For a bare directory without .pddrc, current behavior is acceptable
             # The important fix is that WITH .pddrc, paths are respected
             assert isinstance(paths['test'], Path)
             assert isinstance(paths['example'], Path)
             assert isinstance(paths['code'], Path)
-            
+
         finally:
             os.chdir(original_cwd)
-    
+
     @patch('sync_determine_operation.construct_paths')
     def test_sync_operation_with_missing_prompt_respects_test_path(self, mock_construct, tmp_path):
         """Test that sync_determine_operation doesn't fail when test file is in configured directory.
-        
+
         This simulates the exact regression scenario where sync fails with
         "No such file or directory: 'test_simple_math.py'" because it's looking
         in the wrong directory.
@@ -2450,14 +5320,14 @@ contexts:
         original_cwd = os.getcwd()
         try:
             os.chdir(tmp_path)
-            
+
             # Create directory structure as per .pddrc
             (tmp_path / ".pdd" / "meta").mkdir(parents=True)
             (tmp_path / ".pdd" / "locks").mkdir(parents=True)
             (tmp_path / "prompts").mkdir()
             (tmp_path / "tests").mkdir()
             (tmp_path / "examples").mkdir()
-            
+
             # Create .pddrc file
             pddrc_content = """version: "1.0"
 contexts:
@@ -2468,7 +5338,7 @@ contexts:
       example_output_path: "examples/"
 """
             (tmp_path / ".pddrc").write_text(pddrc_content)
-            
+
             # Mock construct_paths to return .pddrc-configured paths
             mock_construct.return_value = (
                 {"test_output_path": "tests/"},
@@ -2481,10 +5351,10 @@ contexts:
                 },
                 "python"
             )
-            
+
             # Don't create prompt file - this simulates the regression scenario
             # The sync should still work and not look for test_simple_math.py in current dir
-            
+
             decision = sync_determine_operation(
                 basename="simple_math",
                 language="python",
@@ -2495,37 +5365,37 @@ contexts:
                 skip_tests=False,
                 skip_verify=False
             )
-            
+
             # Verify no FileNotFoundError is raised
             # The decision should handle missing files gracefully
             assert isinstance(decision, SyncDecision)
             # Should return an operation that makes sense for missing prompt
             assert decision.operation in ['nothing', 'auto-deps', 'generate']
-            
+
         finally:
             os.chdir(original_cwd)
-    
+
     def test_file_path_lookup_regression(self, tmp_path, monkeypatch):
         """Test the exact regression scenario: file lookup after verify completes.
-        
+
         This test simulates the exact error seen in sync regression where
         after verify completes, something tries to read 'test_simple_math.py'
         from the current directory instead of 'tests/test_simple_math.py'.
         """
         original_cwd = os.getcwd()
-        
+
         # Store original module constants to restore them later
         pdd_module = sys.modules['sync_determine_operation']
         original_pdd_dir = pdd_module.PDD_DIR
         original_meta_dir = pdd_module.META_DIR
         original_locks_dir = pdd_module.LOCKS_DIR
-        
+
         try:
             os.chdir(tmp_path)
-            
+
             # Set PDD_PATH environment variable for get_language function
             monkeypatch.setenv("PDD_PATH", str(tmp_path))
-            
+
             # Create language mapping CSV files that get_language function needs
             language_csv_content = """extension,language
 .py,python
@@ -2569,28 +5439,28 @@ contexts:
 .move,move
 """
             (tmp_path / "language_extension_mapping.csv").write_text(language_csv_content)
-            
+
             # Create data directory and language_format.csv
             (tmp_path / "data").mkdir()
             (tmp_path / "data" / "language_format.csv").write_text(language_csv_content)
-            
+
             # Update module constants after changing directory
             pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
             pdd_module.META_DIR = pdd_module.get_meta_dir()
             pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
-            
+
             # Create directory structure matching regression test
             (tmp_path / "prompts").mkdir()
             (tmp_path / "tests").mkdir()
             (tmp_path / "examples").mkdir()
             (tmp_path / ".pdd" / "meta").mkdir(parents=True)
-            
+
             # Create the files that exist after verify completes
             (tmp_path / "prompts" / "simple_math_python.prompt").write_text("Create add function")
             (tmp_path / "simple_math.py").write_text("def add(a, b): return a + b")
             (tmp_path / "examples" / "simple_math_example.py").write_text("from simple_math import add")
             (tmp_path / "simple_math_verify_results.log").write_text("Success")
-            
+
             # Create .pddrc that specifies test path
             pddrc_content = """version: "1.0"
 contexts:
@@ -2601,25 +5471,25 @@ contexts:
       example_output_path: "examples/"
 """
             (tmp_path / ".pddrc").write_text(pddrc_content)
-            
+
             # The test file should be in tests/ directory according to .pddrc
             # but the error shows it's being looked for in current directory
-            
+
             # Use the already imported get_pdd_file_paths to avoid module conflicts
             # get_pdd_file_paths was imported at the top of the file
-            
+
             # Get file paths - this should respect .pddrc
             paths = get_pdd_file_paths("simple_math", "python", "prompts")
-            
+
             # This demonstrates the bug: trying to check if test file exists
             # in the wrong location would cause the error
             test_path = paths['test']
-            
+
             # The fix is now in place, so we should always get the correct path
             # Verify that the path respects the .pddrc configuration
             assert "tests/test_simple_math.py" in str(test_path) or "tests\\test_simple_math.py" in str(test_path), \
                 f"Expected test path to be in tests/ subdirectory as per .pddrc, but got: {test_path}"
-            
+
             # Verify the file lookup fails with the correct path (file doesn't exist)
             try:
                 with open(test_path, 'r') as f:
@@ -2629,13 +5499,13 @@ contexts:
                 error_msg = str(e)
                 assert "tests/test_simple_math.py" in error_msg or "tests\\test_simple_math.py" in error_msg, \
                     f"Expected error to reference 'tests/test_simple_math.py', but got: {error_msg}"
-                
+
             # After fix, the path should be 'tests/test_simple_math.py'
             # and this error wouldn't occur if the file existed there
-            
+
         finally:
             os.chdir(original_cwd)
-            
+
             # Restore original module constants
             pdd_module.PDD_DIR = original_pdd_dir
             pdd_module.META_DIR = original_meta_dir
@@ -2919,10 +5789,10 @@ class TestAllFilesExistWorkflowIncomplete:
             "pdd_version": "1.0.0",
             "timestamp": "2025-01-01T00:00:00+00:00",
             "command": command,
-            "prompt_hash": calculate_sha256(env['prompt']),
-            "code_hash": calculate_sha256(env['code']),
-            "example_hash": calculate_sha256(env['example']),
-            "test_hash": calculate_sha256(env['test'])
+            "prompt_hash": calculate_sha256(env['prompt'], env['tmp_path']),
+            "code_hash": calculate_sha256(env['code'], env['tmp_path']),
+            "example_hash": calculate_sha256(env['example'], env['tmp_path']),
+            "test_hash": calculate_sha256(env['test'], env['tmp_path'])
         }))
 
     def _create_run_report(self, env, exit_code=0):
@@ -4187,7 +7057,9 @@ class TestFingerprintIncludeDependencies:
         prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
         create_file(prompt_path, "Create a helper using User class.\n")
 
-        stored_deps = {str(dep_file): calculate_sha256(dep_file)}
+        stored_deps = {
+            str(dep_file): calculate_sha256(dep_file, pdd_test_environment)
+        }
 
         # Hash with stored deps should differ from hash without
         hash_without = calculate_prompt_hash(prompt_path)
@@ -4270,7 +7142,9 @@ class TestFingerprintIncludeDependencies:
         prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
         create_file(prompt_path, "Create a helper using User class.\n")
 
-        stored_deps = {str(dep_file): calculate_sha256(dep_file)}
+        stored_deps = {
+            str(dep_file): calculate_sha256(dep_file, pdd_test_environment)
+        }
         hash_before = calculate_prompt_hash(prompt_path, stored_deps=stored_deps)
 
         # Change the dependency file
@@ -4298,7 +7172,11 @@ class TestFingerprintIncludeDependencies:
         create_file(alternate_dep, "wrong nested dependency\n")
         monkeypatch.chdir(nested)
 
-        stored_deps = {"docs/contract.md": calculate_sha256(project_dep)}
+        stored_deps = {
+            "docs/contract.md": calculate_sha256(
+                project_dep, pdd_test_environment
+            )
+        }
         anchored_hash = calculate_prompt_hash(
             prompt_path,
             stored_deps=stored_deps,
@@ -4312,6 +7190,172 @@ class TestFingerprintIncludeDependencies:
         )
 
         assert anchored_hash == anchored_hash_after_alternate_change
+
+    @pytest.mark.parametrize(
+        ("key_kind", "is_trusted"),
+        [
+            ("relative_traversal", False),
+            ("external_absolute", False),
+            ("contained_absolute", True),
+            ("contained_relative", True),
+        ],
+    )
+    def test_stored_dependency_keys_respect_project_boundary(
+        self, tmp_path, key_kind, is_trusted
+    ):
+        """Stored keys affect hashes and metadata only when contained by the project."""
+        project = tmp_path / "project"
+        prompt = project / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        contained = project / "docs" / "contract.md"
+        external = tmp_path / "outside.txt"
+        create_file(prompt, "No live include remains.\n")
+        create_file(contained, "contained v1\n")
+        create_file(external, "external v1\n")
+
+        keys = {
+            "relative_traversal": "../outside.txt",
+            "external_absolute": str(external),
+            "contained_absolute": str(contained),
+            "contained_relative": "docs/contract.md",
+        }
+        key = keys[key_kind]
+        stored = {key: "previous digest"}
+        prompt_only_hash = hashlib.sha256(prompt.read_bytes()).hexdigest()
+        before = calculate_prompt_hash(
+            prompt, stored_deps=stored, dependency_root=project
+        )
+
+        target = contained if is_trusted else external
+        target.write_text("changed\n", encoding="utf-8")
+        after = calculate_prompt_hash(
+            prompt, stored_deps=stored, dependency_root=project
+        )
+        hashes = calculate_current_hashes(
+            {"prompt": prompt},
+            stored_include_deps=stored,
+            dependency_root=project,
+        )
+
+        if is_trusted:
+            assert before != after
+            assert hashes["include_deps"] == {
+                key: calculate_sha256(target, project)
+            }
+        else:
+            assert before == after == prompt_only_hash
+            assert hashes["include_deps"] == {}
+
+    def test_stored_dependency_rejects_symlink_that_escapes_project(
+        self, tmp_path
+    ):
+        """An in-project stored key must not read through a symlink to an external file."""
+        project = tmp_path / "project"
+        prompt = project / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        external = tmp_path / "outside.txt"
+        create_file(prompt, "No live include remains.\n")
+        create_file(external, "external v1\n")
+        link = project / "docs" / "contract.md"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(external)
+        stored = {"docs/contract.md": "previous digest"}
+        prompt_only_hash = hashlib.sha256(prompt.read_bytes()).hexdigest()
+
+        before = calculate_prompt_hash(
+            prompt, stored_deps=stored, dependency_root=project
+        )
+        external.write_text("external v2\n", encoding="utf-8")
+        after = calculate_prompt_hash(
+            prompt, stored_deps=stored, dependency_root=project
+        )
+        hashes = calculate_current_hashes(
+            {"prompt": prompt},
+            stored_include_deps=stored,
+            dependency_root=project,
+        )
+
+        assert before == after == prompt_only_hash
+        assert hashes["include_deps"] == {}
+
+    def test_sync_anchors_stripped_stored_deps_to_nested_project_root(
+        self, tmp_path, monkeypatch
+    ):
+        """Decision hashing must resolve stored deps from the nested project, not CWD."""
+        project = tmp_path / "nested_project"
+        prompts_dir = project / "prompts"
+        (project / ".pdd" / "meta").mkdir(parents=True)
+        (project / ".pdd" / "locks").mkdir(parents=True)
+        prompts_dir.mkdir(parents=True)
+        (project / ".pddrc").write_text(
+            "contexts:\n"
+            "  default:\n"
+            "    paths: [\"**\"]\n"
+            "    defaults:\n"
+            "      prompts_dir: \"prompts\"\n",
+            encoding="utf-8",
+        )
+        (project / "architecture.json").write_text(
+            json.dumps({"modules": []}), encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        paths = get_pdd_file_paths(
+            BASENAME, LANGUAGE, prompts_dir=str(prompts_dir.resolve())
+        )
+        create_file(paths["prompt"], "Create a helper using project docs.\n")
+        dependency = project / "docs" / "contract.md"
+        dependency_hash = create_file(dependency, "trusted dependency v1\n")
+        stored_deps = {"docs/contract.md": dependency_hash}
+        prompt_hash = calculate_prompt_hash(
+            paths["prompt"],
+            stored_deps=stored_deps,
+            dependency_root=project,
+        )
+        code_hash = create_file(paths["code"], "def value():\n    return 1\n")
+        example_hash = create_file(paths["example"], "print(value())\n")
+        test_hash = create_file(paths["test"], "def test_value():\n    assert True\n")
+        create_fingerprint_file(
+            project / ".pdd" / "meta" / f"{BASENAME}_{LANGUAGE}.json",
+            {
+                "pdd_version": "test",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "command": "test",
+                "prompt_hash": prompt_hash,
+                "code_hash": code_hash,
+                "example_hash": example_hash,
+                "test_hash": test_hash,
+                "test_files": {paths["test"].name: test_hash},
+                "include_deps": stored_deps,
+            },
+        )
+        create_run_report_file(
+            project / ".pdd" / "meta" / f"{BASENAME}_{LANGUAGE}_run.json",
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "exit_code": 0,
+                "tests_passed": 1,
+                "tests_failed": 0,
+                "coverage": 100.0,
+                "test_hash": test_hash,
+                "test_files": {paths["test"].name: test_hash},
+            },
+        )
+
+        unchanged = sync_determine_operation(
+            BASENAME,
+            LANGUAGE,
+            TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir.resolve()),
+        )
+        assert unchanged.operation == "nothing"
+
+        dependency.write_text("trusted dependency v2\n", encoding="utf-8")
+        changed = sync_determine_operation(
+            BASENAME,
+            LANGUAGE,
+            TARGET_COVERAGE,
+            prompts_dir=str(prompts_dir.resolve()),
+        )
+        assert changed.operation == "generate"
 
     def test_fingerprint_stores_include_deps(self, pdd_test_environment):
         """Fingerprint dataclass should correctly store and serialize include_deps."""
@@ -5612,6 +8656,1295 @@ class TestIssue551CanonicalExtensionInGetPddFilePaths:
         )
 
 
+# ---------------------------------------------------------------------------
+# R16: configured .pddrc output paths (generate_output_path,
+# example/test_output_path, outputs.*.path) are held to the same project
+# containment as architecture code filepaths (R7). An escaping configured output
+# must fail closed (UnsafeOutputPathError) and must never materialize a file or
+# directory outside the project during resolution — not even in dry-run.
+# Regression for the independent-review finding that R7-R10 containment was
+# applied only to architecture metadata, not to .pddrc-derived destinations.
+# ---------------------------------------------------------------------------
+
+
+def _write_escape_pddrc_project(root: Path, defaults_yaml: str, *, with_arch: bool) -> None:
+    """A minimal project whose .pddrc `backend` context carries `defaults_yaml`."""
+    (root / "prompts").mkdir(parents=True)
+    (root / "prompts" / "widget_python.prompt").write_text(
+        "% widget\n", encoding="utf-8"
+    )
+    (root / ".pdd" / "meta").mkdir(parents=True)
+    (root / ".pdd" / "locks").mkdir(parents=True)
+    (root / ".pddrc").write_text(
+        'contexts:\n'
+        '  backend:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        + defaults_yaml,
+        encoding="utf-8",
+    )
+    if with_arch:
+        (root / "architecture.json").write_text(
+            json.dumps({"modules": [
+                {"filename": "widget_python.prompt", "filepath": "widget.py"}
+            ]}),
+            encoding="utf-8",
+        )
+
+
+def test_get_pdd_file_paths_rejects_pddrc_example_test_output_escape(tmp_path, monkeypatch):
+    """R16: escaping example_output_path/test_output_path fail closed (arch branch)."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      example_output_path: "../../../escape_ex/"\n'
+        '      test_output_path: "../../escape_test/"\n',
+        with_arch=True,
+    )
+    with pytest.raises(UnsafeOutputPathError, match="resolves outside project root"):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+    assert not (tmp_path.parent.parent.parent / "escape_ex").exists()
+    assert not (tmp_path.parent.parent / "escape_test").exists()
+
+
+def test_get_pdd_file_paths_rejects_pddrc_generate_output_escape(tmp_path, monkeypatch):
+    """R16: an escaping generate_output_path cannot redirect the code target out of tree."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "../../escape_gen/"\n',
+        with_arch=True,
+    )
+    with pytest.raises(UnsafeOutputPathError, match="resolves outside project root"):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+    assert not (tmp_path.parent.parent / "escape_gen").exists()
+
+
+def test_get_pdd_file_paths_rejects_pddrc_outputs_template_escape(tmp_path, monkeypatch):
+    """R16: escaping outputs.*.path templates fail closed (arch branch)."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      outputs:\n'
+        '        example:\n          path: "../../../escape_out/{name}_example.py"\n'
+        '        test:\n          path: "../../escape_out/test_{name}.py"\n',
+        with_arch=True,
+    )
+    with pytest.raises(UnsafeOutputPathError, match="resolves outside project root"):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+    assert not (tmp_path.parent.parent.parent / "escape_out").exists()
+
+
+def test_get_pdd_file_paths_non_arch_generate_escape_creates_nothing_out_of_tree(tmp_path, monkeypatch):
+    """R16: without architecture.json, an escaping generate_output_path must not
+    mkdir/touch a probe file outside the project during resolution and must fail closed."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "../../escape_gen/"\n',
+        with_arch=False,
+    )
+    outside = tmp_path.parent.parent / "escape_gen"
+    with pytest.raises(UnsafeOutputPathError, match="resolves outside project root"):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+    # The pre-existing temp-probe mkdir/touch must not have leaked out of tree.
+    assert not outside.exists()
+
+
+def test_get_pdd_file_paths_generate_output_external_hop_never_probes(tmp_path, monkeypatch):
+    """R16: a generate_output_path that leaves and re-enters the project is rejected
+    without ever creating the missing code file, even transiently."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "link/back/"\n',
+        with_arch=False,
+    )
+    (tmp_path / "src").mkdir()
+    outside = tmp_path.parent / "external-hop"
+    outside.mkdir()
+    try:
+        (outside / "back").symlink_to(tmp_path / "src", target_is_directory=True)
+        (tmp_path / "link").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    touched = []
+    real_touch = Path.touch
+
+    def recording_touch(path, *args, **kwargs):
+        if path.name == "widget.py":
+            touched.append(path)
+        return real_touch(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "touch", recording_touch)
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths(
+            "widget", "python", prompts_dir="prompts", context_override="backend"
+        )
+
+    assert touched == []
+    assert not (tmp_path / "src" / "widget.py").exists()
+
+
+def test_get_pdd_file_paths_external_output_is_rejected_before_construct_paths_reads(
+    tmp_path, monkeypatch
+):
+    """An escaping output must be contained before its existing file is read.
+
+    `construct_paths` reads existing input files. A generated code path that leaves the
+    project through a symlink and re-enters must therefore fail before it can be supplied
+    as the code_file input for example/test path derivation.
+    """
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "link/back/"\n',
+        with_arch=False,
+    )
+    (tmp_path / "src").mkdir()
+    existing_code = tmp_path / "src" / "widget.py"
+    existing_code.write_text("SECRET = 'must not be read'\n", encoding="utf-8")
+    outside = tmp_path.parent / "external-read-hop"
+    outside.mkdir()
+    try:
+        (outside / "back").symlink_to(tmp_path / "src", target_is_directory=True)
+        (tmp_path / "link").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    import pdd.construct_paths as construct_paths_module
+
+    reads = []
+    real_read_file = construct_paths_module._read_file
+
+    def record_read(path):
+        reads.append(Path(path))
+        return real_read_file(path)
+
+    monkeypatch.setattr(construct_paths_module, "_read_file", record_read)
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths(
+            "widget", "python", prompts_dir="prompts", context_override="backend"
+        )
+
+    assert reads == []
+
+
+def test_get_pdd_file_paths_probe_retarget_cannot_touch_or_unlink_external(
+    tmp_path, monkeypatch
+):
+    """R16: retargeting an ancestor after a containment result cannot redirect a
+    resolver-side creation or make cleanup unlink an unrelated external empty file."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "link/"\n',
+        with_arch=False,
+    )
+    inside = tmp_path / "inside"
+    inside.mkdir()
+    outside = tmp_path.parent / "retarget-outside"
+    outside.mkdir()
+    external_file = outside / "widget.py"
+    external_file.write_bytes(b"")
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(inside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    import sync_determine_operation as sync_determine_module
+
+    real_within_root = sync_determine_module._output_path_within_root
+    retargeted = False
+
+    def retarget_after_check(path, project_root):
+        nonlocal retargeted
+        result = real_within_root(path, project_root)
+        if not retargeted and Path(path).name == "widget.py":
+            link.unlink()
+            link.symlink_to(outside, target_is_directory=True)
+            retargeted = True
+        return result
+
+    monkeypatch.setattr(
+        sync_determine_module, "_output_path_within_root", retarget_after_check
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths(
+            "widget", "python", prompts_dir="prompts", context_override="backend"
+        )
+
+    assert retargeted
+    assert external_file.exists()
+    assert external_file.read_bytes() == b""
+    assert not (inside / "widget.py").exists()
+
+
+def test_get_pdd_file_paths_missing_code_construction_is_read_only(tmp_path, monkeypatch):
+    """R16 positive control: ordinary missing-code path construction keeps its
+    configured destinations while leaving every derived artifact absent."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "src/lib/"\n'
+        '      example_output_path: "examples/"\n'
+        '      test_output_path: "tests/"\n',
+        with_arch=False,
+    )
+
+    paths = get_pdd_file_paths(
+        "widget", "python", prompts_dir="prompts", context_override="backend"
+    )
+
+    assert paths["code"].resolve(strict=False) == tmp_path / "src/lib/widget.py"
+    assert paths["example"].resolve(strict=False) == tmp_path / "examples/widget_example.py"
+    assert paths["test"].resolve(strict=False) == tmp_path / "tests/test_widget.py"
+    assert all(not paths[key].exists() for key in ("code", "example", "test"))
+    assert not (tmp_path / "src").exists()
+
+
+def test_get_pdd_file_paths_pddrc_within_project_outputs_allowed(tmp_path, monkeypatch):
+    """R16 neighboring positive control: custom BUT in-project output dirs still resolve
+    (the containment guard must not over-reject legitimate non-default layouts)."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      example_output_path: "custom/usage/"\n'
+        '      test_output_path: "custom/specs/"\n'
+        '      generate_output_path: "src/lib/"\n',
+        with_arch=True,
+    )
+    paths = get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+    root = tmp_path.resolve()
+    for key in ("code", "example", "test"):
+        assert paths[key].resolve(strict=False).is_relative_to(root), (
+            f"{key}={paths[key]} should stay within {root}"
+        )
+    assert paths["example"].resolve(strict=False) == (root / "custom" / "usage" / "widget_example.py")
+    assert paths["test"].resolve(strict=False) == (root / "custom" / "specs" / "test_widget.py")
+
+
+def test_pdd_sync_dry_run_cli_resolves_nested_context(tmp_path, monkeypatch):
+    """Finding-3 boundary test: the REAL `pdd sync <module> --dry-run --json` Click
+    entrypoint (context discovery + prompts_dir rewrite in sync_main) resolves a
+    nested-context, path-qualified architecture unit to its prefix-retained prompt
+    and code — not just the get_pdd_file_paths helper in isolation."""
+    from click.testing import CliRunner
+    from pdd.cli import cli
+
+    proj = tmp_path
+    (proj / "prompts" / "commands").mkdir(parents=True)
+    (proj / "prompts" / "commands" / "checkup_python.prompt").write_text("% checkup\n", encoding="utf-8")
+    (proj / "pdd" / "commands").mkdir(parents=True)
+    (proj / "pdd" / "commands" / "checkup.py").write_text("x = 1\n", encoding="utf-8")
+    (proj / ".pdd" / "meta").mkdir(parents=True)
+    (proj / ".pdd" / "locks").mkdir(parents=True)
+    (proj / ".pddrc").write_text(
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      generate_output_path: "pdd/"\n',
+        encoding="utf-8",
+    )
+    (proj / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "commands/checkup_python.prompt", "filepath": "pdd/commands/checkup.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(proj)
+    result = CliRunner().invoke(cli, ["sync", "commands/checkup", "--dry-run", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    unit = payload["units"][0]
+    assert unit["paths"]["prompt"].replace("\\", "/").endswith("prompts/commands/checkup_python.prompt")
+    assert unit["paths"]["code"].replace("\\", "/").endswith("pdd/commands/checkup.py")
+
+
+def test_pdd_sync_cli_refuses_escaping_pddrc_output(tmp_path, monkeypatch):
+    """Finding-3 negative CLI control: a malicious .pddrc artifact path routed through
+    the real `pdd sync --dry-run` entrypoint must not create or write anything outside
+    the project tree."""
+    from click.testing import CliRunner
+    from pdd.cli import cli
+
+    proj = tmp_path / "proj"
+    _write_escape_pddrc_project(
+        proj,
+        '      generate_output_path: "../../escape_cli/"\n',
+        with_arch=True,
+    )
+    outside = tmp_path.parent / "escape_cli"
+    monkeypatch.chdir(proj)
+    result = CliRunner().invoke(cli, ["sync", "widget", "--dry-run", "--json"])
+    # It must NOT have materialized an out-of-tree target...
+    assert not outside.exists(), f"CLI dry-run created out-of-tree {outside}"
+    assert not (tmp_path.parent / "escape_cli").exists()
+    # ...AND it must surface the unsafe config as a hard failure, not silently
+    # accept it: the run is not ok and the offending unit is reported failed with
+    # an out-of-tree path-resolution reason.
+    payload = json.loads(result.output)
+    assert payload["ok"] is False, result.output
+    reported = payload.get("failures", []) + payload.get("units", [])
+    assert any(
+        u.get("classification") == "FAILURE"
+        and "resolves outside" in (u.get("reason") or "")
+        for u in reported
+    ), result.output
+
+
+# --- Additional tests appended ---
+
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+class TestEstimateOperationCost:
+    """Tests for estimate_operation_cost pricing map."""
+
+    def test_known_operations_return_positive_cost(self):
+        from sync_determine_operation import estimate_operation_cost
+        for op in ('generate', 'auto-deps', 'example', 'crash', 'verify', 'test', 'test_extend', 'fix', 'update'):
+            assert estimate_operation_cost(op) > 0.0, f"{op} should have positive cost"
+
+    def test_no_op_operations_return_zero_cost(self):
+        from sync_determine_operation import estimate_operation_cost
+        for op in ('nothing', 'all_synced', 'error', 'fail_and_request_manual_merge'):
+            assert estimate_operation_cost(op) == 0.0
+
+    def test_unknown_operation_returns_zero(self):
+        from sync_determine_operation import estimate_operation_cost
+        assert estimate_operation_cost('bogus_never_defined_op') == 0.0
+
+    def test_generate_costs_more_than_update(self):
+        from sync_determine_operation import estimate_operation_cost
+        assert estimate_operation_cost('generate') > estimate_operation_cost('update')
+
+
+class TestCheckForDependencies:
+    """Tests for check_for_dependencies content scanning."""
+
+    def test_detects_include_xml_tag(self):
+        from sync_determine_operation import check_for_dependencies
+        assert check_for_dependencies("some prompt <include>foo.py</include> more") is True
+
+    def test_detects_web_xml_tag(self):
+        from sync_determine_operation import check_for_dependencies
+        assert check_for_dependencies("look up <web>https://example.com</web>") is True
+
+    def test_detects_shell_xml_tag(self):
+        from sync_determine_operation import check_for_dependencies
+        assert check_for_dependencies("run <shell>ls -la</shell>") is True
+
+    def test_detects_explicit_mention_case_insensitive(self):
+        from sync_determine_operation import check_for_dependencies
+        assert check_for_dependencies("This prompt REQUIRES DEPENDENCIES to work.") is True
+        assert check_for_dependencies("Use auto-deps to resolve.") is True
+        assert check_for_dependencies("include dependencies here") is True
+
+    def test_no_dependencies_in_plain_prompt(self):
+        from sync_determine_operation import check_for_dependencies
+        assert check_for_dependencies("Just write a simple add function.") is False
+
+    def test_empty_string_no_deps(self):
+        from sync_determine_operation import check_for_dependencies
+        assert check_for_dependencies("") is False
+
+
+class TestSyncDecisionDataclass:
+    """SyncDecision default values and construction."""
+
+    def test_defaults(self):
+        d = SyncDecision(operation='nothing', reason='r')
+        assert d.confidence == 1.0
+        assert d.estimated_cost == 0.0
+        assert d.details is None
+        assert d.prerequisites is None
+
+    def test_full_construction(self):
+        d = SyncDecision(
+            operation='generate', reason='r', confidence=0.5,
+            estimated_cost=0.25, details={'k': 'v'}, prerequisites=['test']
+        )
+        assert d.confidence == 0.5
+        assert d.estimated_cost == 0.25
+        assert d.details == {'k': 'v'}
+        assert d.prerequisites == ['test']
+
+
+class TestFingerprintAndRunReportOptionals:
+    """Verify optional fields on Fingerprint/RunReport."""
+
+    def test_fingerprint_optional_fields_default_none(self):
+        fp = Fingerprint(
+            pdd_version="1.0", timestamp="t", command="generate",
+            prompt_hash=None, code_hash=None, example_hash=None, test_hash=None,
+        )
+        assert fp.test_files is None
+        assert fp.include_deps is None
+
+    def test_run_report_optional_fields_default_none(self):
+        rr = RunReport(
+            timestamp="t", exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
+        )
+        assert rr.test_hash is None
+        assert rr.test_files is None
+
+
+class TestReadFingerprintAndRunReportMissing:
+    """Missing metadata files return None."""
+
+    def test_read_fingerprint_missing_returns_none(self, pdd_test_environment):
+        assert read_fingerprint("nonexistent_module_xyz", "python") is None
+
+    def test_read_run_report_missing_returns_none(self, pdd_test_environment):
+        assert read_run_report("nonexistent_module_xyz", "python") is None
+
+    def test_read_run_report_invalid_json_returns_none(self, pdd_test_environment):
+        rr_path = get_meta_dir() / "bad_python_run.json"
+        rr_path.write_text("{ not valid json ")
+        assert read_run_report("bad", "python") is None
+
+
+class TestCalculateSha256EdgeCases:
+    """calculate_sha256 additional edge cases."""
+
+    def test_empty_file_returns_known_hash(self, tmp_path):
+        f = tmp_path / "empty.txt"
+        f.write_text("")
+        # SHA256 of empty string
+        assert calculate_sha256(
+            f, trusted_roots=tmp_path
+        ) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+    def test_directory_path_returns_none(self, tmp_path):
+        # Passing a directory should not raise; returns None (IOError branch)
+        assert calculate_sha256(tmp_path, tmp_path) is None
+
+
+def test_trusted_directory_probes_reject_outside_root_and_hash_inside(tmp_path):
+    """Directory scans cannot use a caller path outside their declared root."""
+    import sync_determine_operation as sync_determine_module
+
+    root = tmp_path / "project"
+    root.mkdir()
+    inside = root / "inside.txt"
+    inside.write_text("inside", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+
+    assert sync_determine_module._directory_entry_for_path(inside, root) == inside
+    assert sync_determine_module._existing_regular_path(inside, root) == inside
+    assert calculate_sha256(inside, trusted_roots=root) == hashlib.sha256(
+        b"inside"
+    ).hexdigest()
+    assert sync_determine_module._directory_entry_for_path(outside, root) is None
+    assert sync_determine_module._existing_regular_path(outside, root) is None
+    assert calculate_sha256(outside, trusted_roots=root) is None
+
+
+def test_trusted_symlink_probe_handles_in_root_hop_and_retarget(tmp_path):
+    """Lexical trusted-root probes inspect an in-root link without scanning outside."""
+    import sync_determine_operation as sync_determine_module
+
+    root = tmp_path / "project"
+    root.mkdir()
+    target = root / "target.txt"
+    target.write_text("ok", encoding="utf-8")
+    link = root / "link.txt"
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    assert sync_determine_module._symlink_target_from_directory_entry(link, root) == (
+        True,
+        str(target),
+    )
+    assert sync_determine_module._symlink_chain_within_root(link, root) is True
+    link.unlink()
+    link.symlink_to(outside)
+    assert sync_determine_module._symlink_target_from_directory_entry(link, root) == (
+        True,
+        str(outside),
+    )
+    assert sync_determine_module._symlink_chain_within_root(link, root) is False
+
+
+def test_trusted_hash_probes_cache_one_directory_enumeration(tmp_path, monkeypatch):
+    """Hashing many sibling files reuses the trusted directory index."""
+    import sync_determine_operation as sync_determine_module
+
+    root = tmp_path / "project"
+    root.mkdir()
+    files = []
+    for index in range(128):
+        file_path = root / f"artifact_{index}.txt"
+        file_path.write_text(str(index), encoding="utf-8")
+        files.append(file_path)
+
+    sync_determine_module._directory_entry_index.cache_clear()
+    original_scandir = sync_determine_module.os.scandir
+    scanned_directories = []
+
+    def count_scandir(directory):
+        scanned_directories.append(Path(directory))
+        return original_scandir(directory)
+
+    monkeypatch.setattr(sync_determine_module.os, "scandir", count_scandir)
+    assert all(calculate_sha256(file_path, root) for file_path in files)
+    assert scanned_directories == [root]
+
+
+def test_absolute_project_hashes_and_fingerprints_work_from_sibling_cwd(
+    tmp_path, monkeypatch
+):
+    """Known project roots, not CWD, authorize fingerprint hashing and changes."""
+    from pdd.operation_log import save_fingerprint
+    from pdd.update_main import is_code_changed
+
+    project = tmp_path / "project"
+    sibling = tmp_path / "sibling"
+    project.mkdir()
+    sibling.mkdir()
+    (project / ".pddrc").write_text("{}\n", encoding="utf-8")
+    paths = {
+        "prompt": project / "prompts" / "widget_python.prompt",
+        "code": project / "src" / "widget.py",
+        "example": project / "context" / "widget_example.py",
+        "test": project / "tests" / "test_widget.py",
+    }
+    for path in paths.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("value = 1\n", encoding="utf-8")
+    paths["test_files"] = [paths["test"]]
+
+    monkeypatch.chdir(sibling)
+    initial = calculate_current_hashes(paths)
+    assert initial["code_hash"] == calculate_sha256(paths["code"], project)
+    save_fingerprint("widget", "python", "test", paths)
+    fingerprint_path = project / ".pdd" / "meta" / "widget_python.json"
+    assert json.loads(fingerprint_path.read_text(encoding="utf-8"))["code_hash"] == initial[
+        "code_hash"
+    ]
+    assert is_code_changed(
+        str(paths["code"]), str(project), set(), str(paths["prompt"])
+    ) == (
+        False,
+        "code hash matches fingerprint",
+    )
+
+    paths["code"].write_text("value = 2\n", encoding="utf-8")
+    changed, reason = is_code_changed(
+        str(paths["code"]), str(project), set(), str(paths["prompt"])
+    )
+    assert changed is True
+    assert reason == "code hash differs from fingerprint"
+
+
+def test_safe_report_include_tries_contained_root_alias_after_prompt_escape(tmp_path):
+    """A committed ``prompts`` alias may sit outside its nested PDD root."""
+    project = tmp_path / "project"
+    root = project / "pdd"
+    prompt = project / "prompts" / "nested" / "widget_python.prompt"
+    dependency = root / "prompts" / "shared.py"
+    prompt.parent.mkdir(parents=True)
+    dependency.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text("<include>prompts/shared.py</include>\n", encoding="utf-8")
+    dependency.write_text("VALUE = 1\n", encoding="utf-8")
+
+    assert _safe_report_include("prompts/shared.py", prompt, root) == dependency
+
+
+def test_safe_report_include_skips_missing_contained_alias_after_prompt_escape(
+    tmp_path,
+):
+    """A missing safe root-relative include stays optional for an external prompt alias."""
+    root = tmp_path / "project" / "pdd"
+    prompt = tmp_path / "project" / "prompts" / "widget_python.prompt"
+    root.mkdir(parents=True)
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("<include>nonexistent.prompt</include>\n", encoding="utf-8")
+
+    assert _safe_report_include("nonexistent.prompt", prompt, root) is None
+
+
+def test_safe_report_include_rejects_when_every_candidate_escapes(tmp_path):
+    """A missing include is not optional when every possible spelling traverses out."""
+    root = tmp_path / "project" / "pdd"
+    prompt = tmp_path / "project" / "prompts" / "widget_python.prompt"
+    root.mkdir(parents=True)
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("<include>../../outside.txt</include>\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="include path escapes project"):
+        _safe_report_include("../../outside.txt", prompt, root)
+
+
+def test_safe_report_include_accepts_contained_prompts_symlink_alias(tmp_path):
+    """The tracked ``prompts -> pdd/prompts`` alias remains hashable."""
+    root = tmp_path / "project"
+    prompt = root / "pdd" / "prompts" / "nested" / "widget_python.prompt"
+    dependency = root / "pdd" / "prompts" / "shared.py"
+    prompt.parent.mkdir(parents=True)
+    dependency.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text("<include>prompts/shared.py</include>\n", encoding="utf-8")
+    dependency.write_text("VALUE = 1\n", encoding="utf-8")
+    try:
+        (root / "prompts").symlink_to("pdd/prompts", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+
+    assert _safe_report_include("prompts/shared.py", prompt, root) == dependency
+
+
+class TestSyncLockReleaseWithoutAcquire:
+    """SyncLock.release is safe when nothing was acquired."""
+
+    def test_release_without_acquire_is_noop(self, pdd_test_environment):
+        lock = SyncLock(BASENAME, LANGUAGE)
+        # Should not raise
+        lock.release()
+        assert not (get_locks_dir() / f"{BASENAME}_{LANGUAGE}.lock").exists()
+
+
+class TestReadOnlySkipsLock:
+    """read_only=True should bypass SyncLock just like log_mode."""
+
+    @patch('sync_determine_operation.construct_paths')
+    def test_read_only_skips_lock(self, mock_construct, pdd_test_environment):
+        with patch('sync_determine_operation.SyncLock') as mock_lock:
+            sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, read_only=True)
+            mock_lock.assert_not_called()
+
+# ---------------------------------------------------------------------------
+# Round-2 review hardening: lock-name confinement (SyncLock) and portable/
+# canonical validation of .pddrc output destinations (R16 / R9 parity).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "malicious_language",
+    [
+        "/../../../../tmp/pdd-victim",
+        "..\\..\\pdd-victim",
+        "python/../../../etc/pdd",
+    ],
+)
+def test_sync_lock_language_cannot_escape_locks_dir(tmp_path, monkeypatch, malicious_language):
+    """A traversal/separator-bearing language must not let the lock file escape.
+
+    `SyncLock` is constructed from raw basename/language BEFORE get_pdd_file_paths
+    validates them. The lock filename must be a sanitized, separator-free token so
+    it always resolves under the locks directory (no out-of-tree mkdir/touch/unlink).
+    """
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    locks_dir = sync_determine_module.get_locks_dir().resolve(strict=False)
+    lock = sync_determine_module.SyncLock("safe", malicious_language)
+    resolved = lock.lock_file.resolve(strict=False)
+    assert locks_dir in resolved.parents, f"{resolved} escaped {locks_dir}"
+    assert "/" not in lock.lock_file.name and "\\" not in lock.lock_file.name
+
+
+def test_sync_determine_operation_malicious_language_writes_nothing_out_of_tree(tmp_path, monkeypatch):
+    """Mutable entrypoint: the SyncLock the real (non-read-only) path constructs from a
+    traversal-bearing language — before input validation — must resolve inside the locks
+    directory. Captures the constructed lock path so the assertion is load-bearing
+    regardless of lock-file cleanup timing."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+
+    captured = {}
+    original_init = sync_determine_module.SyncLock.__init__
+
+    def _spy_init(self, basename, language):
+        original_init(self, basename, language)
+        captured["lock_file"] = self.lock_file
+
+    monkeypatch.setattr(sync_determine_module.SyncLock, "__init__", _spy_init)
+    try:
+        # Not read-only/log: this path acquires SyncLock before validation.
+        sync_determine_module.sync_determine_operation(
+            "safe", "/../../tmp-pdd-victim", 90.0, budget=1.0,
+        )
+    except Exception:
+        pass  # a hard validation error downstream is acceptable; the write is not
+    assert "lock_file" in captured, "the mutable path must construct a SyncLock"
+    locks_dir = sync_determine_module.get_locks_dir().resolve(strict=False)
+    resolved_lock = captured["lock_file"].resolve(strict=False)
+    assert locks_dir in resolved_lock.parents, (
+        f"lock {resolved_lock} escaped locks dir {locks_dir}"
+    )
+    assert "/" not in captured["lock_file"].name and "\\" not in captured["lock_file"].name
+
+
+@pytest.mark.parametrize(
+    "defaults_yaml",
+    [
+        '      generate_output_path: "CON/"\n',           # reserved device dir
+        '      example_output_path: "custom/usage/"\n',   # SAFE custom in-project dir (sanity)
+        '      outputs:\n        example:\n          path: "src/file:stream.py"\n',  # NTFS ADS colon
+        '      outputs:\n        test:\n          path: "C:/victim.py"\n',           # drive marker
+        '      outputs:\n        example:\n          path: "src/../other.py"\n',     # normalized-away ..
+        '      outputs:\n        code:\n          path: "sub/CON/x.py"\n',           # device mid-path
+    ],
+)
+def test_get_pdd_file_paths_rejects_nonportable_or_traversal_pddrc_output(tmp_path, monkeypatch, defaults_yaml):
+    """R16/R9 parity: .pddrc output destinations get the same portable/canonical
+    validation as architecture code filepaths — CWD-independent and before resolve()."""
+    monkeypatch.chdir(tmp_path)
+    # The 'custom/usage/' case is intentionally SAFE (a plain in-project dir); no raise.
+    expect_safe = "custom/usage" in defaults_yaml
+    _write_escape_pddrc_project(tmp_path, defaults_yaml, with_arch=True)
+    if expect_safe:
+        paths = get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+        assert paths["example"].resolve(strict=False).is_relative_to(tmp_path.resolve())
+    else:
+        with pytest.raises(UnsafeOutputPathError):
+            get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+# ---------------------------------------------------------------------------
+# Round-3 review hardening: outputs.prompt.path containment (R8), single
+# provenance-based output root (R16, no CWD authority), nearer-.pddrc portable
+# validation, and fail-closed missing-prompt fallback.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "prompt_template",
+    ['/tmp/foreign/{name}_{language}.prompt', '../../../foreign/{name}_{language}.prompt'],
+)
+def test_get_pdd_file_paths_rejects_outputs_prompt_path_escape(tmp_path, monkeypatch, prompt_template):
+    """R8/R16: an `outputs.prompt.path` template must not return a prompt outside the
+    prompts root (a later `update` would overwrite that foreign file)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir(parents=True)
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      outputs:\n        prompt:\n          path: "' + prompt_template + '"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises((UnsafePromptPathError, UnsafeOutputPathError)):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+def test_get_pdd_file_paths_parent_cwd_sibling_output_stays_under_project(tmp_path, monkeypatch):
+    """R16: a benign relative `.pddrc` output (no `..`) resolved from a PARENT CWD must
+    land UNDER the governing project, not beside it — CWD does not widen the boundary."""
+    parent = tmp_path
+    project = parent / "project"
+    (project / "prompts").mkdir(parents=True)
+    (project / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      generate_output_path: "sibling-output/"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(parent)  # PARENT of the governing project
+    paths = get_pdd_file_paths(
+        "widget", "python",
+        prompts_dir=str((project / "prompts").resolve()),
+        context_override="backend",
+    )
+    code = paths["code"].resolve(strict=False)
+    assert code.is_relative_to(project.resolve()), f"{code} escaped project {project}"
+    assert not (parent / "sibling-output").exists(), "created a sibling dir outside the project"
+
+
+def test_get_pdd_file_paths_nearer_pddrc_nonportable_output_fails_closed(tmp_path, monkeypatch):
+    """R16: a non-portable output (reserved device) from a NEARER descendant `.pddrc`
+    that the early raw gate did not see is still rejected at the resolved-path check."""
+    project = tmp_path
+    sub = project / "pkg"
+    (sub / "prompts").mkdir(parents=True)
+    (sub / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      generate_output_path: "src/"\n',
+        encoding="utf-8",
+    )
+    (sub / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      generate_output_path: "CON/"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(sub)
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+
+
+def test_get_pdd_file_paths_missing_prompt_escaping_output_not_swallowed(tmp_path, monkeypatch):
+    """A hard out-of-tree output error on the MISSING-prompt path must fail closed, not
+    be swallowed by the broad construct_paths fallback into an unvalidated target."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir(parents=True)  # prompt does NOT exist -> missing-prompt branch
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      generate_output_path: "../../escape_missing/"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("newmodule", "python", prompts_dir="prompts", context_override="backend")
+    assert not (tmp_path.parent.parent / "escape_missing").exists()
+
+
+# ---------------------------------------------------------------------------
+# Round-4 review hardening: explicit absolute .pddrc destinations that point
+# outside the project fail closed (not silently re-anchored into the project),
+# and control-bearing components are rejected on the resolved path too.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "defaults_yaml",
+    [
+        '      generate_output_path: "/work/foreign/"\n',
+        '      example_output_path: "/etc/pdd-out/"\n',
+        '      outputs:\n        test:\n          path: "/tmp/foreign/test_{name}.py"\n',
+    ],
+)
+def test_get_pdd_file_paths_rejects_absolute_escape_pddrc_output(tmp_path, monkeypatch, defaults_yaml):
+    """R16: an explicit absolute `.pddrc` output pointing OUTSIDE the project must fail
+    closed — it must NOT be silently re-anchored into a (wrong) in-project location."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(tmp_path, defaults_yaml, with_arch=True)
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+def test_get_pdd_file_paths_rejects_control_component_pddrc_output(tmp_path, monkeypatch):
+    """R16: a control-character component in a `.pddrc` output is rejected (raw gate and,
+    for values that reach a sink via a nearer config, the resolved-path component check)."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path, '      generate_output_path: "bad\\u000aname/"\n', with_arch=True
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+# ---------------------------------------------------------------------------
+# Round-5 review hardening: a present NON-STRING .pddrc output value is malformed
+# and must fail closed — it must not slip past string validation, raise inside
+# str-only path handling, and degrade to an uncontained parent-CWD fallback.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_value", ["123", "3.14", "[]", "{}", "true"])
+def test_get_pdd_file_paths_rejects_nonstring_pddrc_output(tmp_path, monkeypatch, bad_value):
+    """R16: a truthy non-string generate_output_path from a PARENT CWD must fail closed,
+    not fall through to an out-of-project convention path."""
+    parent = tmp_path
+    project = parent / "project"
+    (project / "prompts").mkdir(parents=True)
+    (project / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      generate_output_path: ' + bad_value + '\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(parent)  # parent CWD is where the unsafe fallback would land
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths(
+            "widget", "python",
+            prompts_dir=str((project / "prompts").resolve()),
+            context_override="backend",
+        )
+
+
+def test_get_pdd_file_paths_rejects_nonstring_outputs_template_path(tmp_path, monkeypatch):
+    """R16: a non-string outputs.<artifact>.path template value is malformed -> fail closed."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      outputs:\n        example:\n          path: 123\n',
+        with_arch=True,
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+# ---------------------------------------------------------------------------
+# Round-6 review hardening: discovered test_files are contained (an escaping
+# symlink is dropped, never handed to a runner); a nearer descendant .pddrc is
+# raw-validated (normalized-away `..`); a non-string configured prompts_dir
+# fails closed instead of degrading to a wrong convention path.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_drops_escaping_test_file_symlink(tmp_path, monkeypatch):
+    """R16: a discovered test_files entry that resolves outside the project (via symlink)
+    is dropped from the returned list so it is never executed by the test runner."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir(parents=True)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n'
+        '      generate_output_path: "src/"\n      test_output_path: "tests/"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "tests" / "test_widget.py").write_text("x = 1\n", encoding="utf-8")
+    foreign = tmp_path.parent / "sdo_foreign_test.py"
+    foreign.write_text("raise SystemExit\n", encoding="utf-8")
+    try:
+        (tmp_path / "tests" / "test_widget_extra.py").symlink_to(foreign)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    try:
+        paths = get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+        root = tmp_path.resolve()
+        for tf in paths.get("test_files", []):
+            assert Path(tf).resolve(strict=False).is_relative_to(root), (
+                f"escaping test file returned: {tf}"
+            )
+    finally:
+        foreign.unlink(missing_ok=True)
+
+
+def test_get_pdd_file_paths_rejects_nearer_pddrc_normalized_traversal(tmp_path, monkeypatch):
+    """R16: a nearer descendant `.pddrc` output with `safe/../src/` (which resolve()
+    would normalize back inside the project) still fails closed."""
+    project = tmp_path
+    sub = project / "pkg"
+    (sub / "prompts").mkdir(parents=True)
+    (sub / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      generate_output_path: "src/"\n',
+        encoding="utf-8",
+    )
+    (sub / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      generate_output_path: "safe/../src/"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(sub)
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+
+
+def test_get_pdd_file_paths_rejects_nonstring_prompts_dir_config(tmp_path, monkeypatch):
+    """A present non-string `.pddrc` prompts_dir is malformed and must fail closed, not
+    degrade to a wrong convention path."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir(parents=True)
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      prompts_dir: 123\n      generate_output_path: "src/"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises((UnsafeOutputPathError, UnsafePromptPathError)):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+# ---------------------------------------------------------------------------
+# Round-7 review hardening: absolute outputs templates (which template
+# normalization would mangle into a doubled path) and malformed `outputs`
+# shapes fail closed instead of silently degrading to a convention path.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("artifact", "template_suffix", "expected_suffix"),
+    [
+        ("code", "src/{name}.py", "src/widget.py"),
+        ("example", "examples/{name}_example.py", "examples/widget_example.py"),
+        ("test", "tests/test_{name}.py", "tests/test_widget.py"),
+    ],
+)
+def test_get_pdd_file_paths_accepts_absolute_outputs_template_inside_project(
+    tmp_path, monkeypatch, artifact, template_suffix, expected_suffix
+):
+    """R16: a portable absolute template keeps its identity inside the project."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        f'      outputs:\n        {artifact}:\n          path: "'
+        + str((tmp_path / template_suffix).resolve(strict=False))
+        + '"\n',
+        with_arch=False,
+    )
+    paths = get_pdd_file_paths(
+        "widget", "python", prompts_dir="prompts", context_override="backend"
+    )
+    assert paths[artifact] == tmp_path / expected_suffix
+
+
+@pytest.mark.parametrize("artifact", ["code", "example", "test"])
+def test_get_pdd_file_paths_rejects_absolute_outputs_template_outside_project(
+    tmp_path, monkeypatch, artifact
+):
+    """R16: absolute artifact templates outside the governing project fail closed."""
+    monkeypatch.chdir(tmp_path)
+    foreign = tmp_path.parent / f"foreign-{artifact}"
+    _write_escape_pddrc_project(
+        tmp_path,
+        f'      outputs:\n        {artifact}:\n          path: "'
+        + str(foreign / "{name}.py")
+        + '"\n',
+        with_arch=False,
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths(
+            "widget", "python", prompts_dir="prompts", context_override="backend"
+        )
+
+
+def test_get_pdd_file_paths_absolute_template_preserves_category_placeholder(
+    tmp_path, monkeypatch
+):
+    """R16: placeholders expand without losing an absolute template's leading root."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text(
+        "% widget\n", encoding="utf-8"
+    )
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      outputs:\n        code:\n          path: "'
+        + str(tmp_path / "src" / "{category}" / "{name}.py")
+        + '"\n',
+        encoding="utf-8",
+    )
+    paths = get_pdd_file_paths(
+        "nested/widget", "python", prompts_dir="prompts", context_override="backend"
+    )
+    assert paths["code"] == tmp_path / "src" / "nested" / "widget.py"
+
+
+@pytest.mark.parametrize(
+    "outputs_yaml",
+    [
+        '      outputs:\n        code: "src/{name}.py"\n',   # entry is a bare string, not {path:...}
+        '      outputs: "not-a-mapping"\n',                    # outputs is not a mapping
+        '      outputs:\n        code:\n          path: 123\n',  # path is non-string
+    ],
+)
+def test_get_pdd_file_paths_rejects_malformed_outputs_shape(tmp_path, monkeypatch, outputs_yaml):
+    """R16: a malformed `outputs` mapping is rejected rather than silently ignored and
+    degraded to a convention path."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(tmp_path, outputs_yaml, with_arch=True)
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+def test_reject_unsafe_pddrc_output_config_rejects_normalized_traversal(tmp_path):
+    """Isolates the nearer-.pddrc revalidation: `_reject_unsafe_pddrc_output_config`
+    (called on the resolved prompt's directory in the finalizer) rejects a raw `..`
+    even though it would normalize back inside the project."""
+    import sync_determine_operation as sync_determine_module
+
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      generate_output_path: "safe/../src/"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        sync_determine_module._reject_unsafe_pddrc_output_config(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Round-8 review hardening: a relative outputs.prompt.path is anchored at the
+# governing project root (not CWD); an outputs entry without a `path` fails
+# closed instead of silently suppressing the configured legacy fallback.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_outputs_prompt_path_anchored_from_parent_cwd(tmp_path, monkeypatch):
+    """R8/Issue #237: a relative `outputs.prompt.path` resolves under the governing
+    project even when sync is driven from a PARENT CWD (not beside it)."""
+    parent = tmp_path
+    project = parent / "project"
+    (project / "api").mkdir(parents=True)
+    (project / "custom" / "prompts").mkdir(parents=True)
+    (project / "custom" / "prompts" / "users_python.prompt").write_text("% users\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        'version: "1.0"\ncontexts:\n  api:\n    paths: ["api/**", "custom/prompts/**"]\n'
+        '    defaults:\n      default_language: "python"\n      outputs:\n'
+        '        prompt:\n          path: "custom/prompts/{name}_{language}.prompt"\n'
+        '        code:\n          path: "src/api/{name}.py"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(parent)  # PARENT of the governing project
+    paths = get_pdd_file_paths(
+        "users", "python",
+        prompts_dir=str((project / "custom" / "prompts").resolve()),
+        context_override="api",
+    )
+    prompt = paths["prompt"].resolve(strict=False)
+    assert prompt.is_relative_to(project.resolve()), f"{prompt} not under project {project}"
+    assert prompt == (project / "custom" / "prompts" / "users_python.prompt").resolve()
+
+
+def test_get_pdd_file_paths_rejects_pathless_outputs_entry(tmp_path, monkeypatch):
+    """R16: an `outputs` artifact entry with no (or empty) `path` is malformed — its
+    key presence would suppress the configured legacy fallback and silently degrade to
+    a convention path — so it fails closed."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "src/"\n      outputs:\n        code: {}\n',
+        with_arch=True,
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+def test_get_pdd_file_paths_large_prompt_tree_enumerates_once(tmp_path, monkeypatch):
+    """R18: architecture-hint and fallback discovery share one bounded tree scan."""
+    monkeypatch.chdir(tmp_path)
+    prompts = tmp_path / "prompts"
+    for index in range(400):
+        candidate = prompts / f"bucket-{index:03d}" / f"noise_{index}_python.prompt"
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text("% noise\n", encoding="utf-8")
+    target = prompts / "nested" / "widget_python.prompt"
+    target.parent.mkdir()
+    target.write_text("% widget\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    calls = 0
+    original_rglob = Path.rglob
+
+    def counted_rglob(path, pattern):
+        nonlocal calls
+        if path.resolve(strict=False) == prompts.resolve(strict=False) and pattern == "*.prompt":
+            calls += 1
+        return original_rglob(path, pattern)
+
+    monkeypatch.setattr(Path, "rglob", counted_rglob)
+    paths = get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+    assert paths["prompt"].resolve(strict=False) == target.resolve(strict=False)
+    assert calls == 1
+
+
+def test_get_pdd_file_paths_missing_prompt_enumerates_once(tmp_path, monkeypatch):
+    """R18: a recursive miss reuses its empty inventory for fallback construction."""
+    monkeypatch.chdir(tmp_path)
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n'
+        '      generate_output_path: "src/"\n',
+        encoding="utf-8",
+    )
+    calls = 0
+    original_rglob = Path.rglob
+
+    def counted_rglob(path, pattern):
+        nonlocal calls
+        if path.resolve(strict=False) == prompts.resolve(strict=False) and pattern == "*.prompt":
+            calls += 1
+        return original_rglob(path, pattern)
+
+    monkeypatch.setattr(Path, "rglob", counted_rglob)
+    paths = get_pdd_file_paths("missing", "python", prompts_dir="prompts")
+    assert paths["prompt"].resolve(strict=False) == (
+        prompts / "missing_python.prompt"
+    ).resolve(strict=False)
+    assert calls == 1
+
+
+def test_get_pdd_file_paths_inventory_order_and_context_are_deterministic(
+    tmp_path, monkeypatch
+):
+    """R18/R3: scan order cannot make a recursive match cross context territory."""
+    monkeypatch.chdir(tmp_path)
+    prompts = tmp_path / "prompts"
+    backend = prompts / "backend" / "Widget_Python.prompt"
+    frontend = prompts / "frontend" / "Widget_Python.prompt"
+    backend.parent.mkdir(parents=True)
+    frontend.parent.mkdir(parents=True)
+    backend.write_text("% backend\n", encoding="utf-8")
+    frontend.write_text("% frontend\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["backend/**"]\n    defaults:\n'
+        '      prompts_dir: "prompts/backend"\n      generate_output_path: "src/backend/"\n'
+        '  frontend:\n    paths: ["frontend/**"]\n    defaults:\n'
+        '      prompts_dir: "prompts/frontend"\n      generate_output_path: "src/frontend/"\n',
+        encoding="utf-8",
+    )
+    original_rglob = Path.rglob
+    reverse = False
+
+    def reordered_rglob(path, pattern):
+        nonlocal reverse
+        found = list(original_rglob(path, pattern))
+        reverse = not reverse
+        return iter(sorted(found, key=str, reverse=reverse))
+
+    monkeypatch.setattr(Path, "rglob", reordered_rglob)
+    first = get_pdd_file_paths(
+        "backend/widget", "python", prompts_dir="prompts", context_override="backend"
+    )
+    second = get_pdd_file_paths(
+        "backend/widget", "python", prompts_dir="prompts", context_override="backend"
+    )
+    assert first["prompt"] == backend
+    assert second["prompt"] == backend
+
+
+def test_get_pdd_file_paths_inventory_rechecks_retargeted_symlink(
+    tmp_path, monkeypatch
+):
+    """R18/R8: a candidate retargeted after enumeration cannot escape the project."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    prompts = tmp_path / "prompts"
+    canonical = prompts / "canonical_python.prompt"
+    alias = prompts / "nested" / "widget_python.prompt"
+    alias.parent.mkdir(parents=True)
+    canonical.write_text("% canonical\n", encoding="utf-8")
+    foreign = tmp_path.parent / "foreign_inventory_prompt.prompt"
+    foreign.write_text("% foreign\n", encoding="utf-8")
+    try:
+        alias.symlink_to(canonical)
+    except OSError:
+        foreign.unlink(missing_ok=True)
+        pytest.skip("symlinks unavailable")
+    original_inventory = sync_determine_module._enumerate_prompt_tree
+    calls = 0
+
+    def retarget_after_inventory(root):
+        nonlocal calls
+        calls += 1
+        snapshot = original_inventory(root)
+        alias.unlink()
+        alias.symlink_to(foreign)
+        return snapshot
+
+    monkeypatch.setattr(
+        sync_determine_module, "_enumerate_prompt_tree", retarget_after_inventory
+    )
+    try:
+        with pytest.raises(UnsafePromptPathError):
+            get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+        assert calls == 1
+    finally:
+        alias.unlink(missing_ok=True)
+        foreign.unlink(missing_ok=True)
+
+
 def test_v1_hash_matches_base_whitespace_cwd_and_invalid_utf8(tmp_path, monkeypatch):
     prompt_dir = tmp_path / "prompts"
     cwd = tmp_path / "cwd"
@@ -5676,6 +10009,76 @@ def test_v1_new_grammar_save_reload_rerun_does_not_self_drift(
     assert second == first
 
 
+# ---------------------------------------------------------------------------
+# Round-9 review hardening (post-#1985 merge): explicit null outputs entries
+# fail closed; test_files are rebuilt from the ANCHORED test dir (parent-CWD
+# safe); templates that expand to nothing / the project root / an unexpanded
+# placeholder fail closed instead of returning a directory or literal braces.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_rejects_null_outputs_entry(tmp_path, monkeypatch):
+    """R16: an explicit `outputs: {code: null}` is malformed (its key presence would
+    suppress the configured legacy fallback) and must fail closed."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "src/"\n      outputs:\n        code: null\n',
+        with_arch=True,
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+@pytest.mark.parametrize("code_template", ['"{category}"', '"src/{module}.py"'])
+def test_get_pdd_file_paths_rejects_empty_or_unresolved_template_expansion(tmp_path, monkeypatch, code_template):
+    """R16: a template that expands to nothing (flat-basename `{category}` -> project
+    root) or keeps an unexpanded/unsupported placeholder is not a real artifact file."""
+    monkeypatch.chdir(tmp_path)
+    # NO architecture.json -> the outputs.code template is actually applied.
+    (tmp_path / "prompts").mkdir(parents=True)
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      outputs:\n        code:\n          path: ' + code_template + '\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+def test_get_pdd_file_paths_test_files_rebuilt_from_anchored_dir_parent_cwd(tmp_path, monkeypatch):
+    """R16: test_files come from the ANCHORED (nested project) test directory, not the
+    parent CWD — a parent-CWD run must not hand the parent's sibling tests to the runner
+    nor return nonexistent nested paths."""
+    parent = tmp_path
+    project = parent / "project"
+    (project / "prompts").mkdir(parents=True)
+    (project / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (project / "tests").mkdir()
+    (project / "tests" / "test_widget.py").write_text("x = 1\n", encoding="utf-8")
+    (project / "tests" / "test_widget_extra.py").write_text("y = 2\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      generate_output_path: "src/"\n      test_output_path: "tests/"\n',
+        encoding="utf-8",
+    )
+    # A decoy sibling under the PARENT CWD that must NOT be picked up.
+    (parent / "tests").mkdir()
+    (parent / "tests" / "test_widget_parent.py").write_text("z = 3\n", encoding="utf-8")
+    monkeypatch.chdir(parent)
+    paths = get_pdd_file_paths(
+        "widget", "python",
+        prompts_dir=str((project / "prompts").resolve()),
+        context_override="backend",
+    )
+    root = project.resolve()
+    for tf in paths["test_files"]:
+        rp = Path(tf).resolve(strict=False)
+        assert rp.is_relative_to(root), f"test_file escaped project: {tf}"
+        assert rp.exists(), f"nonexistent test_file returned: {tf}"
+    names = {Path(tf).name for tf in paths["test_files"]}
+    assert "test_widget_parent.py" not in names
 @pytest.mark.parametrize("policy_mutation", [None, "delete", "rename"])
 def test_sync_classifier_preserves_nested_prompt_alias_identity(
     tmp_path, monkeypatch, policy_mutation
@@ -5766,3 +10169,1137 @@ def test_sync_classifier_preserves_nested_prompt_alias_identity(
     assert digest_before is not None
     assert digest_after is not None
     assert digest_after != digest_before
+
+
+# ---------------------------------------------------------------------------
+# Post-#1991-merge reconciliation + round-10 review hardening.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_nested_prompt_template_keeps_physical_category(tmp_path, monkeypatch):
+    """r10 P1: a nested physical prompt with an outputs `{category}` template maps under
+    the nested directory (src/nested/foo.py), not the bare leaf (src/foo.py)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "foo_python.prompt").write_text("% foo\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n'
+        '      outputs:\n        code:\n          path: "src/{category}/{name}.py"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+    paths = get_pdd_file_paths("foo", "python", "prompts")
+    assert paths["code"].resolve(strict=False) == (tmp_path / "src" / "nested" / "foo.py").resolve()
+
+
+def test_get_pdd_file_paths_nested_prompt_template_category_from_parent_cwd(tmp_path, monkeypatch):
+    """r10 P1 (CWD-independence): the nested physical category survives a parent-CWD run."""
+    project = tmp_path / "project"
+    (project / "prompts" / "nested").mkdir(parents=True)
+    (project / "prompts" / "nested" / "foo_python.prompt").write_text("% foo\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n'
+        '      outputs:\n        code:\n          path: "src/{category}/{name}.py"\n',
+        encoding="utf-8",
+    )
+    (project / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # PARENT
+    paths = get_pdd_file_paths("foo", "python", str((project / "prompts").resolve()))
+    assert paths["code"].resolve(strict=False) == (project / "src" / "nested" / "foo.py").resolve()
+
+
+@pytest.mark.parametrize("prompt_template", ['"custom/{module}.prompt"', '"{category}"'])
+def test_get_pdd_file_paths_rejects_unresolved_or_empty_prompt_template(tmp_path, monkeypatch, prompt_template):
+    """r10 P2: an outputs.prompt.path that keeps an unexpanded placeholder or expands to
+    the project root is not a real prompt file -> fail closed."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir(parents=True)
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      outputs:\n        prompt:\n          path: ' + prompt_template + '\n',
+        encoding="utf-8",
+    )
+    with pytest.raises((UnsafePromptPathError, UnsafeOutputPathError)):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+def test_get_pdd_file_paths_path_qualified_prefers_filename_path_match_over_bare_leaf(tmp_path, monkeypatch):
+    """#1991 reconciliation: a path-qualified `nested/widget` resolves to the row whose
+    FILENAME path-matches it (nested/widget_python.prompt -> src/nested/widget.py), and a
+    bare `widget_python.prompt` row (-> wrong/nested/widget.py) neither wins nor raises a
+    false AmbiguousModuleError."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "src" / "nested").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "widget_python.prompt", "filepath": "wrong/nested/widget.py"},
+            {"filename": "nested/widget_python.prompt", "filepath": "src/nested/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    paths = get_pdd_file_paths("nested/widget", "python", "prompts")
+    assert paths["code"].resolve(strict=False) == (tmp_path / "src" / "nested" / "widget.py").resolve()
+
+
+# ---------------------------------------------------------------------------
+# Round-11 review hardening: approved aliases must survive ALL discovery paths;
+# all-legacy suffix-aligned ambiguity must not be filtered away; the architecture
+# branch's example/test templates must keep the nested physical identity.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_approved_alias_via_indirect_discovery(tmp_path, monkeypatch):
+    """r11 F1: a BARE `widget` request whose architecture row names `nested/widget`
+    resolves the approved in-repo alias symlink through architecture-hint/recursive
+    discovery (not only the direct fast path) — no UnsafePromptPathError."""
+    import subprocess
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "prompts" / "nested").mkdir(parents=True)
+    (root / "canonical-prompts").mkdir()
+    (root / "src" / "nested").mkdir(parents=True)
+    (root / "canonical-prompts" / "widget_python.prompt").write_text("Build\n", encoding="utf-8")
+    try:
+        (root / "prompts" / "nested" / "widget_python.prompt").symlink_to(
+            "../../canonical-prompts/widget_python.prompt"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / "src" / "nested" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    (root / "architecture.json").write_text(
+        json.dumps([{"filename": "nested/widget_python.prompt", "filepath": "src/nested/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    paths = get_pdd_file_paths("widget", "python", "prompts")  # BARE request
+    assert paths["prompt"] == Path("prompts/nested/widget_python.prompt")
+    assert paths["code"].resolve(strict=False) == (root / "src" / "nested" / "widget.py").resolve()
+
+
+def test_get_pdd_file_paths_all_legacy_suffix_aligned_rows_still_ambiguous(tmp_path, monkeypatch):
+    """r11 F2: two BARE `widget_python.prompt` rows mapping a qualified `nested/widget`
+    to two distinct nested outputs is genuinely ambiguous — the filename-ownership
+    filter must NOT collapse the choices to an empty set that silently falls back."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "widget_python.prompt", "filepath": "src/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "other/nested/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    import sync_determine_operation as sync_determine_module
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("nested/widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_arch_branch_nested_category_example_test(tmp_path, monkeypatch):
+    """r11 F3: with a non-empty architecture row for a nested prompt, an example/test
+    `{category}` template keeps the nested prefix (examples/nested/..., tests/nested/...)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "foo_python.prompt").write_text("% foo\n", encoding="utf-8")
+    (tmp_path / "src" / "nested").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        example:\n          path: "examples/{category}/{name}_example.py"\n'
+        '        test:\n          path: "tests/{category}/test_{name}.py"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([{"filename": "nested/foo_python.prompt", "filepath": "src/nested/foo.py"}]),
+        encoding="utf-8",
+    )
+    paths = get_pdd_file_paths("foo", "python", "prompts")
+    assert paths["example"].resolve(strict=False) == (tmp_path / "examples" / "nested" / "foo_example.py").resolve()
+    assert paths["test"].resolve(strict=False) == (tmp_path / "tests" / "nested" / "test_foo.py").resolve()
+
+
+# ---------------------------------------------------------------------------
+# Round-12 review hardening: the approved-alias policy must hold through the
+# INTERNAL recursive architecture-hint search and nested-subproject
+# finalization; alias authority must come from a REAL git worktree (not a
+# planted `.git`); and an unsafe path-owning row must not suppress a genuine
+# ambiguity between two valid legacy rows.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_approved_alias_flat_filename_recursive_discovery(tmp_path, monkeypatch):
+    """r12 F1: a LEGACY FLAT architecture filename (`widget_python.prompt`) whose file
+    lives nested is found by the INTERNAL recursive rglob search. When that nested file
+    is an APPROVED in-repo alias (symlink escaping the prompts root but staying inside
+    the git repository), the recursive search must honour it — not raise
+    UnsafePromptPathError. This exercises the recursive path (line ~422), not the
+    qualified-filename direct path covered by the r11 test."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "prompts" / "nested").mkdir(parents=True)
+    (root / "canonical-prompts").mkdir()
+    (root / "src" / "nested").mkdir(parents=True)
+    (root / "canonical-prompts" / "widget_python.prompt").write_text("Build\n", encoding="utf-8")
+    try:
+        (root / "prompts" / "nested" / "widget_python.prompt").symlink_to(
+            "../../canonical-prompts/widget_python.prompt"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / "src" / "nested" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    # FLAT filename (not `nested/widget_python.prompt`): the direct join misses, so the
+    # bare request drops into the recursive rglob search.
+    (root / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "src/nested/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    paths = get_pdd_file_paths("widget", "python", "prompts")
+    assert paths["prompt"].resolve(strict=False) == (
+        root / "canonical-prompts" / "widget_python.prompt"
+    ).resolve()
+    assert paths["code"].resolve(strict=False) == (root / "src" / "nested" / "widget.py").resolve()
+
+
+def test_get_pdd_file_paths_nested_subproject_alias_survives_finalization(tmp_path, monkeypatch):
+    """r12 F1: a nested subproject's approved alias may target a canonical prompt
+    ELSEWHERE in the enclosing repository. It passes discovery, and finalization must
+    also accept it (the resolved target stays inside the validated enclosing repo) —
+    it must NOT be rejected just because it escapes the nested governing/prompts root."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    # Canonical prompt shared at the repo top, OUTSIDE the nested subproject.
+    (root / "shared-prompts").mkdir()
+    (root / "shared-prompts" / "widget_python.prompt").write_text("Build\n", encoding="utf-8")
+    sub = root / "sub"
+    (sub / "prompts").mkdir(parents=True)
+    (sub / "src").mkdir(parents=True)
+    (sub / "src" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    try:
+        (sub / "prompts" / "widget_python.prompt").symlink_to(
+            "../../shared-prompts/widget_python.prompt"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    # A nested .pddrc + architecture.json make `sub` its own governing root.
+    (sub / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n', encoding="utf-8"
+    )
+    (sub / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(sub)
+    paths = get_pdd_file_paths("widget", "python", "prompts")
+    assert paths["prompt"].resolve(strict=False) == (
+        root / "shared-prompts" / "widget_python.prompt"
+    ).resolve()
+    assert paths["code"].resolve(strict=False) == (sub / "src" / "widget.py").resolve()
+
+
+def test_enclosing_git_root_rejects_planted_git_marker(tmp_path):
+    """r12 F2: an empty/planted `.git` directory is NOT a real worktree, so
+    _enclosing_git_root must return None for it while returning the resolved root for a
+    genuine repository."""
+    import sync_determine_operation as sync_determine_module
+    fake = tmp_path / "fake"
+    (fake / ".git").mkdir(parents=True)
+    (fake / "prompts").mkdir()
+    assert sync_determine_module._enclosing_git_root(fake / "prompts") is None
+
+    real = tmp_path / "real"
+    real.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=real, check=True)
+    (real / "prompts").mkdir()
+    resolved = sync_determine_module._enclosing_git_root(real / "prompts")
+    assert resolved is not None
+    assert resolved.resolve() == real.resolve()
+
+
+def test_get_pdd_file_paths_fake_git_marker_rejects_escaping_alias(tmp_path, monkeypatch):
+    """r12 F2: a planted empty `.git` in a NON-repository tree must not grant alias
+    authority — an escaping prompt symlink is still rejected, so a later `update` cannot
+    overwrite the non-prompt file it points at."""
+    root = tmp_path / "proj"
+    (root / "prompts").mkdir(parents=True)
+    (root / ".git").mkdir()  # planted, empty — NOT a real repository
+    victim = root / "victim.py"
+    original = "SECRET = 1  # must remain unchanged\n"
+    victim.write_text(original, encoding="utf-8")
+    try:
+        (root / "prompts" / "credits_python.prompt").symlink_to("../victim.py")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    monkeypatch.chdir(root)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("credits", "python", prompts_dir="prompts")
+    assert victim.read_text(encoding="utf-8") == original
+
+
+def test_get_pdd_file_paths_unsafe_owner_row_does_not_suppress_ambiguity(tmp_path, monkeypatch):
+    """r12 F3: a row whose FILENAME path-owns the qualified basename but whose FILEPATH
+    escapes containment (`../../nested/widget.py`) must NOT set the owner flag — else it
+    is dropped by the safety pass while suppressing two valid legacy rows, collapsing a
+    genuine ambiguity to a silent first-match. The owner flag must be built from the
+    fully-eligible (contained + right-extension) row set."""
+    import sync_determine_operation as sync_determine_module
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            # Unsafe: filename path-owns `nested/widget`, but filepath escapes the root.
+            {"filename": "nested/widget_python.prompt", "filepath": "../../nested/widget.py"},
+            # Two valid legacy rows -> two distinct nested outputs = genuine ambiguity.
+            {"filename": "widget_python.prompt", "filepath": "src/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "other/nested/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("nested/widget", "python", "prompts")
+
+
+# ---------------------------------------------------------------------------
+# Round-13 review hardening: git worktree authority must not be redirected by
+# inherited GIT_* env or served stale from a process cache; architecture
+# SELECTION must apply the same language-extension eligibility as ambiguity
+# enumeration; and finalization must reject existing-directory destinations.
+# ---------------------------------------------------------------------------
+
+
+def test_enclosing_git_root_ignores_inherited_git_env_redirect(tmp_path, monkeypatch):
+    """r13 F1: a caller-inherited GIT_WORK_TREE=/ (or GIT_DIR to a foreign repo) must
+    NOT make _enclosing_git_root report an attacker-chosen worktree for a non-repository
+    directory — repo-selection env is stripped from the git subprocess."""
+    import sync_determine_operation as sync_determine_module
+    non_repo = tmp_path / "not_a_repo"
+    non_repo.mkdir()
+    # A real repo elsewhere, wired in via inherited env.
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=foreign, check=True)
+    monkeypatch.setenv("GIT_DIR", str(foreign / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", "/")
+    # Without the env scrub, git would report "/" as the worktree root.
+    assert sync_determine_module._enclosing_git_root(non_repo) is None
+
+
+def test_enclosing_git_root_not_stale_after_repo_removed(tmp_path):
+    """r13 F1: a positive result must not remain authoritative after the repository is
+    removed in the same process (no stale process-wide cache)."""
+    import shutil
+    import sync_determine_operation as sync_determine_module
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    first = sync_determine_module._enclosing_git_root(repo)
+    assert first is not None and first.resolve() == repo.resolve()
+    shutil.rmtree(repo / ".git")
+    assert sync_determine_module._enclosing_git_root(repo) is None
+
+
+def test_get_pdd_file_paths_git_env_redirect_still_rejects_escaping_alias(tmp_path, monkeypatch):
+    """r13 F1: end-to-end — with GIT_WORK_TREE=/ inherited, an escaping prompt symlink in
+    a NON-repository project is still rejected, so authority cannot be smuggled in via
+    env and a later update cannot overwrite the target."""
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=foreign, check=True)
+    root = tmp_path / "proj"
+    (root / "prompts").mkdir(parents=True)
+    victim = root / "victim.py"
+    original = "SECRET = 1\n"
+    victim.write_text(original, encoding="utf-8")
+    try:
+        (root / "prompts" / "credits_python.prompt").symlink_to("../victim.py")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    monkeypatch.setenv("GIT_DIR", str(foreign / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", "/")
+    monkeypatch.chdir(root)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("credits", "python", prompts_dir="prompts")
+    assert victim.read_text(encoding="utf-8") == original
+
+
+def test_get_pdd_file_paths_selection_respects_language_extension(tmp_path, monkeypatch):
+    """r13 F2: architecture SELECTION must apply the same language-extension gate as the
+    ambiguity enumeration. A Python request whose exact-filename row targets a `.ts` file
+    must not be chosen over the `.py` legacy row that the choices prefer."""
+    import sync_determine_operation as sync_determine_module
+    from pathlib import Path as _P
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "nested/widget_python.prompt", "filepath": "src/nested/widget.ts"},
+            {"filename": "widget_python.prompt", "filepath": "other/nested/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    choices = sync_determine_module._architecture_module_choices(
+        _P("architecture.json"), "nested/widget", "python"
+    )
+    assert choices == ["other/nested/widget.py"]
+    paths = get_pdd_file_paths("nested/widget", "python", "prompts")
+    # Selection must AGREE with the choice (the .py row), not return the wrong-language .ts.
+    assert paths["code"].resolve(strict=False) == (tmp_path / "other" / "nested" / "widget.py").resolve()
+
+
+def test_get_pdd_file_paths_rejects_existing_directory_code_destination(tmp_path, monkeypatch):
+    """r13 F3: an outputs.code.path pointing at an EXISTING directory is not a writable
+    artifact file — reject it instead of returning the directory (later IsADirectoryError)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        code:\n          path: "docs"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_rejects_existing_directory_prompt_destination(tmp_path, monkeypatch):
+    """r13 F3: an outputs.prompt.path pointing at an EXISTING directory must be rejected
+    rather than returned as the prompt file."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        prompt:\n          path: "docs"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+# ---------------------------------------------------------------------------
+# Round-14 review hardening: the approved-alias exception is DISCOVERY-ONLY and
+# must not follow a symlinked ANCESTOR into a foreign repository; a configured
+# outputs.prompt.path symlink obeys the normal configured-destination policy;
+# and a cyclic configured prompt symlink fails closed.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_configured_prompt_symlinked_ancestor_into_foreign_repo(tmp_path, monkeypatch):
+    """r14 F1: an outputs.prompt.path whose lexical path sits under the project but
+    traverses a DIRECTORY symlink into a FOREIGN git repository must be rejected — a
+    symlinked ancestor must not redirect `git -C` authority to that foreign repo."""
+    proj = tmp_path / "proj"
+    (proj / "prompts").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=proj, check=True)
+    (proj / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=foreign, check=True)
+    (foreign / "real_python.prompt").write_text("% evil\n", encoding="utf-8")
+    try:
+        # The LEAF is itself a symlink (so it enters the discovery-alias branch), reached
+        # through `link`, a DIRECTORY symlink into the foreign repository.
+        (foreign / "evil_python.prompt").symlink_to("real_python.prompt")
+        (proj / "link").symlink_to(foreign, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (proj / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        prompt:\n          path: "link/evil_python.prompt"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(proj)
+    with pytest.raises((UnsafePromptPathError, UnsafeOutputPathError)):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_configured_prompt_symlink_gets_no_discovery_alias_exception(tmp_path, monkeypatch):
+    """r14 F2: a CONFIGURED outputs.prompt.path that is an existing leaf symlink to a
+    canonical prompt elsewhere in the SAME repository must obey the normal
+    configured-destination policy (contained in prompts root / governing project) and
+    must NOT inherit the discovery-only approved-alias exception."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "shared").mkdir()
+    (root / "shared" / "canonical_python.prompt").write_text("% shared\n", encoding="utf-8")
+    sub = root / "sub"
+    (sub / "prompts").mkdir(parents=True)
+    (sub / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (sub / "custom").mkdir()
+    try:
+        (sub / "custom" / "widget_python.prompt").symlink_to(
+            root / "shared" / "canonical_python.prompt"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (sub / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        prompt:\n          path: "custom/widget_python.prompt"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(sub)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_cyclic_configured_prompt_symlink_fails_closed(tmp_path, monkeypatch):
+    """r14 F3: a configured outputs.prompt.path resolving through a symlink LOOP must fail
+    closed as UnsafePromptPathError — never leak a raw RuntimeError/OSError or silently
+    fall through to convention fallback."""
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    try:
+        (tmp_path / "a").symlink_to(tmp_path / "b")
+        (tmp_path / "b").symlink_to(tmp_path / "a")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        prompt:\n          path: "a"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_discovered_nested_alias_still_allowed_control(tmp_path, monkeypatch):
+    """r14 control: the legitimate neighbour — a DISCOVERED nested-subproject approved
+    alias targeting a canonical prompt elsewhere in the same repo — must STILL resolve
+    after the F1/F2 hardening (the discovery-only exception is preserved)."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "shared-prompts").mkdir()
+    (root / "shared-prompts" / "widget_python.prompt").write_text("Build\n", encoding="utf-8")
+    sub = root / "sub"
+    (sub / "prompts").mkdir(parents=True)
+    (sub / "src").mkdir(parents=True)
+    (sub / "src" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    try:
+        (sub / "prompts" / "widget_python.prompt").symlink_to(
+            "../../shared-prompts/widget_python.prompt"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (sub / ".pddrc").write_text('contexts:\n  default:\n    paths: ["**"]\n', encoding="utf-8")
+    (sub / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(sub)
+    paths = get_pdd_file_paths("widget", "python", "prompts")
+    assert paths["prompt"].resolve(strict=False) == (
+        root / "shared-prompts" / "widget_python.prompt"
+    ).resolve()
+
+
+# ---------------------------------------------------------------------------
+# Round-15 review hardening: approved aliases must stay in-repo at EVERY physical
+# symlink hop (no intermediate external hop / TOCTOU); discovery privilege comes
+# from explicit provenance, not final-path equality; and the R11 owner pre-pass
+# must apply context eligibility so a sibling-context owner cannot suppress
+# ambiguity between two valid legacy rows.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_rejects_alias_through_external_intermediate_symlink(tmp_path, monkeypatch):
+    """r15 F1: an in-repo prompt alias whose chain traverses an EXTERNAL intermediate
+    symlink (currently re-entering the repo) must be rejected — validating only the final
+    target would let a later retarget of the external node escape (TOCTOU)."""
+    root = tmp_path / "repo"
+    (root / "prompts").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "canonical").mkdir()
+    (root / "canonical" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (root / "canonical" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    ext = tmp_path / "external"  # OUTSIDE the repository
+    ext.mkdir()
+    try:
+        # external intermediate currently points BACK into the repo...
+        (ext / "intermediate").symlink_to(root / "canonical" / "widget_python.prompt")
+        # ...and the in-repo alias hops through that external node.
+        (root / "prompts" / "widget_python.prompt").symlink_to(ext / "intermediate")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "canonical/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_symlink_chain_within_root_rejects_external_intermediate(tmp_path):
+    """r15 F1 (unit): _symlink_chain_within_root walks every hop; an external intermediate
+    node is rejected even when it re-enters, while a fully in-repo chain is accepted."""
+    import sync_determine_operation as sync_determine_module
+    root = tmp_path / "repo"
+    (root / "a").mkdir(parents=True)
+    (root / "canon").mkdir()
+    (root / "canon" / "f").write_text("x\n", encoding="utf-8")
+    ext = tmp_path / "ext"
+    ext.mkdir()
+    try:
+        (ext / "mid").symlink_to(root / "canon" / "f")
+        (root / "a" / "via_ext").symlink_to(ext / "mid")           # hops out then back
+        (root / "a" / "in_repo").symlink_to(root / "canon" / "f")  # stays in repo
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    root_real = os.path.realpath(str(root))
+    assert sync_determine_module._symlink_chain_within_root(root / "a" / "via_ext", root_real) is False
+    assert sync_determine_module._symlink_chain_within_root(root / "a" / "in_repo", root_real) is True
+
+
+def test_get_pdd_file_paths_configured_prompt_equal_to_discovered_alias_no_exception(tmp_path, monkeypatch):
+    """r15 F2: a CONFIGURED outputs.prompt.path expanding to exactly the discovered alias
+    path must NOT inherit the discovery-only exception (provenance is explicit, not path
+    equality). The configured symlink to a shared prompt outside the subproject is rejected."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "shared").mkdir()
+    (root / "shared" / "canonical_python.prompt").write_text("% shared\n", encoding="utf-8")
+    sub = root / "sub"
+    (sub / "prompts").mkdir(parents=True)
+    try:
+        # discovered prompt AND configured outputs.prompt.path expand to the SAME path.
+        (sub / "prompts" / "widget_python.prompt").symlink_to(
+            root / "shared" / "canonical_python.prompt"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    # LITERAL configured destination that coincides exactly with the discovered alias
+    # path (no placeholders, so it is rejected only by provenance — not by an unresolved
+    # `{...}` — isolating the R15 F2 fix).
+    (sub / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        prompt:\n          path: "prompts/widget_python.prompt"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(sub)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_sibling_context_owner_does_not_suppress_ambiguity(tmp_path, monkeypatch):
+    """r15 F3: a path-owning row whose code target lives in a SIBLING context must not set
+    the owner flag (selection would reject it), so two valid legacy rows in the resolving
+    context stay ambiguous and raise AmbiguousModuleError instead of falling through."""
+    import sync_determine_operation as sync_determine_module
+    from pathlib import Path as _P
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  frontend:\n    paths: ["frontend/**"]\n'
+        '  backend:\n    paths: ["backend/**"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            # path-owning row, but its target is in the SIBLING (frontend) context
+            {"filename": "nested/widget_python.prompt", "filepath": "frontend/nested/widget.py"},
+            # two valid legacy rows in the resolving (backend) context, both suffix-aligning
+            # with `nested/widget` -> genuine ambiguity that the sibling owner must not hide
+            {"filename": "widget_python.prompt", "filepath": "backend/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "backend/src/nested/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    choices = sync_determine_module._architecture_module_choices(
+        _P("architecture.json"), "nested/widget", "python", context_name="backend"
+    )
+    # The sibling owner must NOT collapse the two backend legacy rows.
+    assert "backend/nested/widget.py" in choices
+    assert "backend/src/nested/widget.py" in choices
+    assert len(choices) >= 2
+
+
+def test_get_pdd_file_paths_current_context_owner_still_suppresses(tmp_path, monkeypatch):
+    """r15 F3 control: a path-owning row in the CURRENT context legitimately owns the
+    qualified basename and still uniquely resolves (the sibling-context guard must not
+    over-suppress a genuine same-context owner)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "backend" / "nested").mkdir(parents=True)
+    (tmp_path / "backend" / "nested" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["backend/**"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "nested/widget_python.prompt", "filepath": "backend/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "backend/legacy/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    paths = get_pdd_file_paths("nested/widget", "python", "prompts", context_override="backend")
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "nested" / "widget.py"
+    ).resolve()
+
+
+# ---------------------------------------------------------------------------
+# Round-16 review hardening: the owner pre-pass must apply the FULL selection
+# eligibility (current-context ownership OR exact module-naming), and every-hop
+# symlink validation must run on ALL paths including when the terminal target
+# re-enters the prompts root (leaf AND directory symlink chains).
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_heuristic_owner_out_of_context_does_not_suppress_ambiguity(tmp_path, monkeypatch):
+    """r16 F1: a MORE-qualified path-owning row (`src/nested/widget`) whose target is
+    unowned/out-of-current-context is only a heuristic borrow that selection would reject,
+    so it must NOT suppress two valid legacy rows in the resolving context. Reproduces the
+    choices=nonempty / selection=(None,None) divergence as a guarded ambiguity."""
+    import sync_determine_operation as sync_determine_module
+    from pathlib import Path as _P
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["backend/**"]\n', encoding="utf-8"
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            # heuristic owner: path-owns `nested/widget` by SUFFIX, but exact name is
+            # `src/nested/widget` and its target is unowned (outside backend) -> not selectable
+            {"filename": "src/nested/widget_python.prompt", "filepath": "shared/nested/widget.py"},
+            # two valid legacy rows in the resolving (backend) context -> genuine ambiguity
+            {"filename": "widget_python.prompt", "filepath": "backend/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "backend/src/nested/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    choices = sync_determine_module._architecture_module_choices(
+        _P("architecture.json"), "nested/widget", "python", context_name="backend"
+    )
+    assert "backend/nested/widget.py" in choices
+    assert "backend/src/nested/widget.py" in choices
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("nested/widget", "python", "prompts", context_override="backend")
+
+
+def test_get_pdd_file_paths_exact_name_owner_out_of_context_still_suppresses(tmp_path, monkeypatch):
+    """r16 F1 control: a row whose filename EXACTLY names the qualified module
+    (`nested/widget`) IS its own explicit mapping (selection's row_names_this_module), so it
+    still uniquely resolves even when its target sits outside the current context's globs."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "shared" / "nested").mkdir(parents=True)
+    (tmp_path / "shared" / "nested" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["backend/**"]\n', encoding="utf-8"
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "nested/widget_python.prompt", "filepath": "shared/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "backend/legacy/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    paths = get_pdd_file_paths("nested/widget", "python", "prompts", context_override="backend")
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "shared" / "nested" / "widget.py"
+    ).resolve()
+
+
+def test_get_pdd_file_paths_rejects_leaf_alias_reentering_prompts_root_via_external(tmp_path, monkeypatch):
+    """r16 F2: a LEAF alias hopping through an EXTERNAL intermediate symlink that re-enters
+    BENEATH the prompts root (terminal target inside prompts_root) must still be rejected —
+    the every-hop check runs even on the terminal-contained path."""
+    root = tmp_path / "repo"
+    (root / "prompts" / "canonical").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "prompts" / "canonical" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (root / "src").mkdir()
+    (root / "src" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    ext = tmp_path / "external"
+    ext.mkdir()
+    try:
+        (ext / "mid").symlink_to(root / "prompts" / "canonical" / "widget_python.prompt")
+        (root / "prompts" / "widget_python.prompt").symlink_to(ext / "mid")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_rejects_dir_symlink_reentering_prompts_root_via_external(tmp_path, monkeypatch):
+    """r16 F2: a DIRECTORY-symlink chain leaving the repo and re-entering beneath the prompts
+    root must be rejected too — realpath(parent) would collapse the external hop, so the
+    manual every-hop walk is required."""
+    root = tmp_path / "repo"
+    (root / "prompts" / "real").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "prompts" / "real" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (root / "src").mkdir()
+    (root / "src" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    ext = tmp_path / "external"
+    ext.mkdir()
+    try:
+        (ext / "dirlink").symlink_to(root / "prompts" / "real", target_is_directory=True)
+        (root / "prompts" / "link").symlink_to(ext / "dirlink", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / "architecture.json").write_text(
+        json.dumps([{"filename": "link/widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    import sync_determine_operation as sync_determine_module
+    monkeypatch.chdir(root)
+    with pytest.raises((UnsafePromptPathError, sync_determine_module.AmbiguousModuleError)):
+        get_pdd_file_paths("link/widget", "python", "prompts")
+
+
+def test_symlink_chain_within_root_component_walk(tmp_path):
+    """r16 F2 (unit): the every-hop walk rejects a chain leaving the repo and re-entering
+    (leaf and directory forms), while accepting a fully in-repo alias and the trusted
+    prompt-root directory-symlink topology (prompts -> pdd/prompts)."""
+    import sync_determine_operation as sync_determine_module
+    root = tmp_path / "repo"
+    (root / "prompts" / "canonical").mkdir(parents=True)
+    (root / "pdd" / "prompts").mkdir(parents=True)
+    (root / "pdd" / "prompts" / "f.prompt").write_text("x\n", encoding="utf-8")
+    (root / "prompts" / "canonical" / "f").write_text("y\n", encoding="utf-8")
+    ext = tmp_path / "ext"
+    ext.mkdir()
+    try:
+        (ext / "mid").symlink_to(root / "prompts" / "canonical" / "f")
+        (root / "prompts" / "via_ext").symlink_to(ext / "mid")             # leaves + re-enters
+        (root / "prompts" / "in_repo").symlink_to(root / "prompts" / "canonical" / "f")
+        (root / "top_prompts").symlink_to(root / "pdd" / "prompts", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    root_real = os.path.realpath(str(root))
+    assert sync_determine_module._symlink_chain_within_root(root / "prompts" / "via_ext", root_real) is False
+    assert sync_determine_module._symlink_chain_within_root(root / "prompts" / "in_repo", root_real) is True
+    # prompt-root directory symlink staying in-repo is accepted
+    assert sync_determine_module._symlink_chain_within_root(root / "top_prompts" / "f.prompt", root_real) is True
+
+
+def test_path_has_symlink_fast_gate_skips_full_walk_for_regular_path(tmp_path, monkeypatch):
+    """Regular paths use the bounded fast gate instead of the every-hop walker."""
+    import sync_determine_operation as sync_determine_module
+    prompt = tmp_path.resolve() / "prompts" / "widget_python.prompt"
+    prompt.parent.mkdir()
+    prompt.write_text("% widget\n", encoding="utf-8")
+    assert sync_determine_module._path_has_symlink(prompt) is False
+    monkeypatch.setattr(
+        sync_determine_module,
+        "_symlink_chain_within_root",
+        lambda *_args, **_kwargs: pytest.fail("regular path reached full symlink walk"),
+    )
+    found, contained = sync_determine_module._walk_prompt_relative_path(prompt.parent, (prompt.name,))
+    assert contained is True
+    assert found == prompt
+
+
+def test_get_pdd_file_paths_discovered_prompt_not_reanchored_from_parent_cwd(tmp_path, monkeypatch):
+    """CI regression: a DISCOVERED prompt is the real CWD-relative on-disk path and must
+    NOT be re-anchored against a nested subproject governing root — doing so DOUBLED the
+    subproject prefix (extensions/app/extensions/app/prompts/...) and broke
+    get_fingerprint_path's walk-up to the subproject .pdd/meta. Only a CONFIGURED
+    outputs.prompt.path (governing-root-relative, Issue #237) is re-anchored."""
+    sub = tmp_path / "extensions" / "github_pdd_app"
+    prompts_dir = sub / "prompts" / "src" / "routers"
+    prompts_dir.mkdir(parents=True)
+    (sub / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n'
+        '      default_language: "python"\n'
+        '      prompts_dir: "prompts/src/routers"\n'
+        '      generate_output_path: "src/routers/"\n',
+        encoding="utf-8",
+    )
+    (prompts_dir / "webhook_handlers_Python.prompt").write_text("p", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    result = get_pdd_file_paths(
+        "webhook_handlers", "python",
+        prompts_dir="extensions/github_pdd_app/prompts/src/routers",
+    )
+    resolved_prompt = Path(result["prompt"]).resolve()
+    # exactly ONE subproject prefix — not doubled
+    assert resolved_prompt == (prompts_dir / "webhook_handlers_Python.prompt").resolve()
+    assert str(resolved_prompt).count("github_pdd_app") == 1
+
+
+# ---------------------------------------------------------------------------
+# Round-17 review hardening: every-hop symlink validation must run in NON-Git
+# projects too; the R11 owner pre-pass must reject a symlinked owner by its
+# RESOLVED sibling-context identity (as selection does); and the manual walker
+# must preserve Windows drive-letter / UNC anchors.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_nongit_rejects_leaf_alias_reentering_via_external(tmp_path, monkeypatch):
+    """r17 F1: in a NON-Git project, a leaf alias hopping through an EXTERNAL intermediate
+    symlink that re-enters prompts_root must still be rejected (no enclosing repo)."""
+    root = tmp_path / "proj"  # NOT a git repo
+    (root / "prompts" / "canonical").mkdir(parents=True)
+    (root / "prompts" / "canonical" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (root / "src").mkdir()
+    (root / "src" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    ext = tmp_path / "external"
+    ext.mkdir()
+    try:
+        (ext / "mid").symlink_to(root / "prompts" / "canonical" / "widget_python.prompt")
+        (root / "prompts" / "widget_python.prompt").symlink_to(ext / "mid")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_nongit_rejects_dir_alias_reentering_via_external(tmp_path, monkeypatch):
+    """r17 F1: NON-Git directory-symlink chain leaving the project and re-entering
+    prompts_root is rejected too."""
+    root = tmp_path / "proj"
+    (root / "prompts" / "real").mkdir(parents=True)
+    (root / "prompts" / "real" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (root / "src").mkdir()
+    (root / "src" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    ext = tmp_path / "external"
+    ext.mkdir()
+    try:
+        (ext / "dirlink").symlink_to(root / "prompts" / "real", target_is_directory=True)
+        (root / "prompts" / "link").symlink_to(ext / "dirlink", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / "architecture.json").write_text(
+        json.dumps([{"filename": "link/widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    import sync_determine_operation as sync_determine_module
+    monkeypatch.chdir(root)
+    with pytest.raises((UnsafePromptPathError, sync_determine_module.AmbiguousModuleError)):
+        get_pdd_file_paths("link/widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_nongit_toplevel_prompts_symlink_control(tmp_path, monkeypatch):
+    """r17 F1 control: a trusted NON-Git top-level prompt-root symlink (prompts ->
+    pdd/prompts, both in-project) must STILL resolve after the non-git hop hardening."""
+    (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+    (tmp_path / "pdd" / "prompts" / "foo_python.prompt").write_text("% f\n", encoding="utf-8")
+    try:
+        (tmp_path / "prompts").symlink_to("pdd/prompts", target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks unavailable")
+    monkeypatch.chdir(tmp_path)
+    paths = get_pdd_file_paths("foo", "python", prompts_dir="prompts")
+    assert Path(paths["prompt"]).resolve() == (
+        tmp_path / "pdd" / "prompts" / "foo_python.prompt"
+    ).resolve()
+
+
+def test_get_pdd_file_paths_resolved_sibling_owner_does_not_suppress_ambiguity(tmp_path, monkeypatch):
+    """r17 F2: a path-owning row whose LEXICAL filepath is in the current context but which
+    RESOLVES (through an in-project symlink) into a SIBLING context must not set the owner
+    flag — selection would reject it — so two valid legacy rows stay ambiguous."""
+    import sync_determine_operation as sync_determine_module
+    from pathlib import Path as _P
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["backend/**"]\n  frontend:\n    paths: ["frontend/**"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "frontend" / "nested").mkdir(parents=True)
+    (tmp_path / "frontend" / "nested" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    (tmp_path / "backend" / "nested").mkdir(parents=True)
+    try:
+        # lexically backend, but a symlink resolving into the frontend (sibling) context
+        (tmp_path / "backend" / "nested" / "widget.py").symlink_to(
+            tmp_path / "frontend" / "nested" / "widget.py"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    for leg in ("legacy_a", "legacy_b"):
+        (tmp_path / "backend" / leg / "nested").mkdir(parents=True)
+        (tmp_path / "backend" / leg / "nested" / "widget.py").write_text("x\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "nested/widget_python.prompt", "filepath": "backend/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "backend/legacy_a/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "backend/legacy_b/nested/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    choices = sync_determine_module._architecture_module_choices(
+        _P("architecture.json"), "nested/widget", "python", context_name="backend"
+    )
+    assert "backend/legacy_a/nested/widget.py" in choices
+    assert "backend/legacy_b/nested/widget.py" in choices
+
+
+def test_split_path_anchor_preserves_windows_and_unc_anchors():
+    """r17 F3: the manual walker's anchor extraction must preserve a Windows drive letter
+    and a UNC share root rather than restarting traversal from a bare separator (which
+    would drop the drive and fail containment for valid Windows in-repo aliases)."""
+    import ntpath
+    import posixpath
+    import sync_determine_operation as sync_determine_module
+    drive_anchor, drive_parts = sync_determine_module._split_path_anchor(
+        r"C:\repo\prompts\alias", ntpath
+    )
+    assert drive_anchor == "C:\\"
+    assert drive_parts == ["repo", "prompts", "alias"]
+    unc_anchor, unc_parts = sync_determine_module._split_path_anchor(
+        r"\\server\share\repo\x", ntpath
+    )
+    assert unc_anchor == "\\\\server\\share\\"
+    assert unc_parts == ["repo", "x"]
+    posix_anchor, posix_parts = sync_determine_module._split_path_anchor(
+        "/repo/prompts/alias", posixpath
+    )
+    assert posix_anchor == "/"
+    assert posix_parts == ["repo", "prompts", "alias"]
+
+
+# ---------------------------------------------------------------------------
+# Round-18 review hardening: every-hop validation on code/example/test artifact
+# paths; R11 pre-pass + selection share physical prompt identity under prompt-root
+# prefix-overlap; and a convention-reconstructed dangling alias must fail closed.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_artifact_rejects_external_intermediate_symlink(tmp_path, monkeypatch):
+    """r18 F1: a configured artifact output (outputs.code.path) reached through an EXTERNAL
+    intermediate directory symlink that re-enters the repo must be rejected — the every-hop
+    walk applies to code/example/test, not only prompts (retarget-safe)."""
+    root = tmp_path / "repo"
+    (root / "prompts").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "prompts" / "foo_python.prompt").write_text("% f\n", encoding="utf-8")
+    (root / "realsrc").mkdir()
+    ext = tmp_path / "external"
+    ext.mkdir()
+    try:
+        (ext / "back").symlink_to(root / "realsrc", target_is_directory=True)
+        (root / "link").symlink_to(ext, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        code:\n          path: "link/back/foo.py"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    with pytest.raises((UnsafeOutputPathError, UnsafePromptPathError)):
+        get_pdd_file_paths("foo", "python", "prompts")
+
+
+def test_get_pdd_file_paths_prompt_root_overlap_is_ambiguous(tmp_path, monkeypatch):
+    """r18 F2: when the prompt root already represents the qualified dir (pdd/prompts), a
+    bare row and a `prompts/`-prefixed row both physically own the same prompt. Two distinct
+    outputs is a genuine ambiguity that must be BLOCKED (not silently resolved to one row)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+    (tmp_path / "pdd" / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "widget_python.prompt", "filepath": "legacy/prompts/widget.py"},
+            {"filename": "prompts/widget_python.prompt", "filepath": "src/prompts/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    import sync_determine_operation as sync_determine_module
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("prompts/widget", "python", prompts_dir="pdd/prompts")
+
+
+def test_architecture_module_choices_prompt_root_overlap_counts_both_rows(tmp_path):
+    """r18 F2 (helper): _architecture_module_choices canonicalises `prompts/widget` against
+    a `pdd/prompts` root (prefix-overlap stripping) so BOTH the bare and prefixed rows count
+    -> two distinct outputs -> ambiguity, matching what final selection would face."""
+    import sync_determine_operation as sync_determine_module
+    from pathlib import Path as _P
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "widget_python.prompt", "filepath": "legacy/prompts/widget.py"},
+            {"filename": "prompts/widget_python.prompt", "filepath": "src/prompts/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    choices = sync_determine_module._architecture_module_choices(
+        tmp_path / "architecture.json", "prompts/widget", "python",
+        prompts_root=_P("pdd/prompts"),
+    )
+    assert "legacy/prompts/widget.py" in choices
+    assert "src/prompts/widget.py" in choices
+
+
+def test_get_pdd_file_paths_dangling_convention_alias_fails_closed(tmp_path, monkeypatch):
+    """r18 F3: a nested `prompts/foo -> ../../shared/foo` whose in-repo target does NOT exist
+    is excluded by discovery (is_file False); the missing-prompt convention reconstruction
+    must NOT grant it the discovery-only approved-alias privilege — it fails closed."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "shared").mkdir()  # target dir exists, but the prompt file does NOT
+    sub = root / "sub"
+    (sub / "prompts").mkdir(parents=True)
+    try:
+        (sub / "prompts" / "foo_python.prompt").symlink_to("../../shared/foo_python.prompt")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (sub / ".pddrc").write_text('contexts:\n  default:\n    paths: ["**"]\n', encoding="utf-8")
+    monkeypatch.chdir(sub)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("foo", "python", "prompts")
+
+
+def test_get_pdd_file_paths_discovered_alias_control_still_resolves(tmp_path, monkeypatch):
+    """r18 F3 control: a genuinely DISCOVERED approved alias whose in-repo target EXISTS must
+    still resolve after the provenance tightening."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "shared-prompts").mkdir()
+    (root / "shared-prompts" / "widget_python.prompt").write_text("Build\n", encoding="utf-8")
+    sub = root / "sub"
+    (sub / "prompts").mkdir(parents=True)
+    (sub / "src").mkdir(parents=True)
+    (sub / "src" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    try:
+        (sub / "prompts" / "widget_python.prompt").symlink_to(
+            "../../shared-prompts/widget_python.prompt"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (sub / ".pddrc").write_text('contexts:\n  default:\n    paths: ["**"]\n', encoding="utf-8")
+    (sub / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(sub)
+    paths = get_pdd_file_paths("widget", "python", "prompts")
+    assert paths["prompt"].resolve(strict=False) == (
+        root / "shared-prompts" / "widget_python.prompt"
+    ).resolve()

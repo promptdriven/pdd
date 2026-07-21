@@ -1463,6 +1463,10 @@
     },
     {
       "language_id": "python",
+      "prompt_path": "pdd/prompts/mock_contract_validation_python.prompt"
+    },
+    {
+      "language_id": "python",
       "prompt_path": "pdd/prompts/model_tester_python.prompt"
     },
     {

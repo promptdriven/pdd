@@ -12,10 +12,15 @@ import ast
 import json
 import os
 import re
+import subprocess
 import textwrap
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Optional
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Any, Mapping, Optional
+
+from filelock import FileLock
 
 from ._selector_parse import parse_selectors_string
 from .api_contract_slicer import ApiContractSlicer, ContractSlicerError
@@ -26,6 +31,7 @@ from .compression_reporting import (
     record_compression_fallback,
 )
 from .pytest_slicer import PytestSlicer, SlicerError
+from .sync_core.path_policy import PathPolicy, PathPolicyError
 
 # Conditional YAML support
 try:
@@ -477,6 +483,1984 @@ def _sibling_test_paths(module_path: Path) -> list[Path]:
     if module_path.parent.name != "tests":
         candidates.append(module_path.parent.parent / "tests" / f"test_{stem}.py")
     return [path for path in candidates if path.is_file()]
+
+
+# JS/TS jest/vitest/Next.js co-located test conventions (issue #1903).
+_JS_TS_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+_JS_TS_TEST_SUFFIXES = (".test", ".spec")
+_JS_TS_TEST_SUBDIRS = ("__test__", "__tests__", "tests")
+# Python modules whose sibling tests `_sibling_test_paths` (always `.py`) can
+# legitimately match (issue #1903). Any other suffix is unsupported and yields no
+# candidates — a safe no-op — so e.g. `src/foo.go` never adopts a same-stem
+# `tests/test_foo.py` and retargets Go generation into a Python file.
+_PYTHON_EXTENSIONS = (".py", ".pyi")
+
+
+def _collocated_js_ts_candidates(module_path: Path) -> list[Path]:
+    """Candidate co-located test files for a JS/TS module (issue #1903).
+
+    Covers ``{stem}.test.<ext>`` / ``{stem}.spec.<ext>`` beside the module and
+    under ``__test__/``, ``__tests__/`` and ``tests/`` — the conventions jest,
+    vitest and Next.js collect. Existence is filtered by the caller.
+    """
+    stem = module_path.stem
+    parent = module_path.parent
+    candidates: list[Path] = []
+    for ext in _JS_TS_EXTENSIONS:
+        for suffix in _JS_TS_TEST_SUFFIXES:
+            filename = f"{stem}{suffix}{ext}"
+            candidates.append(parent / filename)
+            for subdir in _JS_TS_TEST_SUBDIRS:
+                candidates.append(parent / subdir / filename)
+    return candidates
+
+
+def _contained_in_root(candidate_resolved: Path, root_resolved: Path) -> bool:
+    """CWE-022 containment barrier: *candidate_resolved* is *root* or inside it.
+
+    Both arguments MUST already be ``.resolve()``d (symlinks and ``..``
+    normalized). Adoption candidates are derived from a caller-supplied
+    code-file path — issue-influenced in the hosted/agentic flow — and must
+    never escape the working tree: a traversal like ``../../victim`` would
+    otherwise become a generated-test WRITE target (py/path-injection,
+    PR #1914 CodeQL alerts #339-#342).
+    """
+    candidate_s, root_s = str(candidate_resolved), str(root_resolved)
+    return candidate_s == root_s or candidate_s.startswith(
+        root_s.rstrip(os.sep) + os.sep
+    )
+
+
+def _validated_project_path(
+    untrusted_path: str | Path,
+    *,
+    root: Path | None = None,
+) -> Optional[Path]:
+    """Return a canonical in-project path built from sanitized components.
+
+    ``code_file`` can originate in an issue-driven/cloud request, so it must
+    not flow directly into any filesystem operation. First reduce an absolute
+    path to a path relative to the trusted working-tree root (or reject it),
+    then sanitize every component with :func:`os.path.basename` before joining
+    it back to that root. Only after that lexical barrier do we resolve
+    symlinks and enforce canonical containment. This ordering is important:
+    checking containment *after* calling ``resolve`` on the raw caller value is
+    too late for CWE-022 and is reported by CodeQL's ``py/path-injection``
+    query.
+
+    The helper is total. Traversal, an outside absolute path, a symlink escape,
+    or any malformed value returns ``None``.
+    """
+    try:
+        # PathPolicy is the repository's canonical path authority: it anchors
+        # only allowlisted relative components beneath a real checkout root and
+        # rejects any unapproved symlink hop before returning a canonical path.
+        # Do not resolve the caller path directly before this boundary.
+        policy = PathPolicy(Path.cwd() if root is None else Path(root))
+        root_resolved = policy.checkout_root
+        raw = Path(untrusted_path)
+        if raw.is_absolute():
+            try:
+                relative = raw.relative_to(root_resolved)
+            except ValueError:
+                return None
+        else:
+            relative = raw
+
+        if not relative.parts:
+            return None
+
+        safe_parts: list[str] = []
+        for part in relative.parts:
+            # basename is the path-component sanitization barrier. Equality
+            # ensures separators/traversal were not silently stripped.
+            safe_part = os.path.basename(part)
+            if (
+                safe_part != part
+                or safe_part in {'', os.curdir, os.pardir}
+                or "\\" in safe_part
+                or PureWindowsPath(safe_part).drive
+            ):
+                return None
+            safe_parts.append(safe_part)
+
+        return policy.resolve(
+            PurePosixPath(*safe_parts), allow_missing=True
+        ).canonical_path
+    except (OSError, RuntimeError, TypeError, ValueError, PathPolicyError):
+        return None
+
+
+def find_collocated_test(code_file: str | Path) -> Optional[Path]:
+    """Return the single existing co-located test for *code_file*, else ``None``.
+
+    Pure runner-awareness detector (issue #1903). Covers Python sibling
+    conventions (reusing :func:`_sibling_test_paths`) and JS/TS jest/vitest/
+    Next.js conventions (``{stem}.test.<ext>`` / ``{stem}.spec.<ext>`` beside
+    the module and under ``__test__/``, ``__tests__/``, ``tests/``). Any other
+    language is unsupported and returns ``None`` (no candidates) so a non-Python,
+    non-JS/TS module is never retargeted onto a same-stem ``.py`` sibling.
+
+    Only EXISTING files are considered, the module itself is excluded, and
+    candidates are de-duped by resolved path. Candidates outside the current
+    working tree are rejected (containment, CWE-022): adoption only ever
+    targets tests inside the project the CLI is operating on, so a
+    traversal-shaped *code_file* degrades to no-adoption rather than escaping
+    the repo. The match is returned only when exactly one distinct test file
+    exists (0 matches OR >1 match -> ``None``) so an ambiguous project is
+    never silently retargeted. Never raises: any error yields ``None``.
+    """
+    matches = _collocated_test_matches(code_file)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _collocated_test_matches(code_file: str | Path) -> list[Path]:
+    """All distinct EXISTING co-located tests for *code_file* (validated, in-root).
+
+    The shared match set behind :func:`find_collocated_test`. Cardinality
+    matters to callers: ZERO matches is greenfield-eligible, but an AMBIGUOUS
+    (>1) project must NOT be treated as greenfield (that would fork a third
+    test) — see :func:`resolve_test_output_path`. Never raises: any error yields
+    ``[]``.
+    """
+    try:
+        root_resolved = Path.cwd().resolve()
+        module_path = _validated_project_path(code_file, root=root_resolved)
+        if module_path is None:
+            return []
+        suffix = module_path.suffix.lower()
+        if suffix in _JS_TS_EXTENSIONS:
+            raw_candidates = _collocated_js_ts_candidates(module_path)
+        elif suffix in _PYTHON_EXTENSIONS:
+            raw_candidates = _sibling_test_paths(module_path)
+        else:
+            return []
+
+        seen: set[Path] = set()
+        matches: list[Path] = []
+        for candidate in raw_candidates:
+            resolved = _validated_project_path(candidate, root=root_resolved)
+            if resolved is None or not resolved.is_file():
+                continue
+            if resolved == module_path or resolved in seen:
+                continue
+            seen.add(resolved)
+            matches.append(resolved)
+        return matches
+    except Exception:  # pylint: disable=broad-except
+        return []
+
+
+# JS/TS test-runner config markers for greenfield discovery (issue #1903 §A).
+# A project that configures jest/vitest collects tests co-located with the
+# module: jest's default ``testMatch`` matches any ``*.test.<ext>`` /
+# ``*.spec.<ext>`` regardless of directory, so an ``__test__/{stem}.test.tsx``
+# beside the module is collected. When PDD would otherwise write the FIRST test
+# for a brand-new module to a runner-blind ``tests/`` shadow, detect that the
+# project uses such a runner and write the first test where the runner will
+# actually collect it — never a root ``tests/`` orphan.
+_JS_TS_RUNNER_CONFIG_STEMS = ("jest.config", "vitest.config")
+_JS_TS_RUNNER_CONFIG_EXTS = ("", ".js", ".ts", ".mjs", ".cjs", ".mts", ".cts", ".json")
+
+
+def _package_json_declares_js_runner(package_json: Path) -> bool:
+    """Return True when *package_json* references jest/vitest.
+
+    Checks an inline ``"jest"``/``"vitest"`` config block, a declared
+    dependency on jest/vitest, or a ``test`` script that invokes one. Total —
+    any read/parse error yields ``False``.
+    """
+    try:
+        data = json.loads(package_json.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, Mapping):
+        return False
+    # Inline runner config block (``"jest": {...}`` / ``"vitest": {...}``).
+    for key in ("jest", "vitest"):
+        if data.get(key) is not None:
+            return True
+    # Declared dependency on a runner (incl. scoped ``@scope/jest`` wrappers).
+    for dep_key in (
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ):
+        deps = data.get(dep_key)
+        if isinstance(deps, Mapping):
+            for name in deps:
+                if isinstance(name, str) and (
+                    name in ("jest", "vitest")
+                    or name.endswith("/jest")
+                    or name.endswith("/vitest")
+                ):
+                    return True
+    # A ``test`` / ``test:*`` script that INVOKES a runner as a command token —
+    # only these script keys, and only a real ``jest``/``vitest`` command token
+    # (not any substring, so ``"build": "echo no-jest"`` does not false-positive;
+    # issue #1903 review round 5).
+    scripts = data.get("scripts")
+    if isinstance(scripts, Mapping):
+        for key, cmd in scripts.items():
+            if not (isinstance(key, str) and (key == "test" or key.startswith("test:"))):
+                continue
+            if not isinstance(cmd, str):
+                continue
+            if re.search(r"(?:^|[\s;&|/])(?:jest|vitest)(?:$|[\s;&|@'\"])", cmd):
+                return True
+    return False
+
+
+def _project_uses_js_test_runner(module_path: Path, root_resolved: Path) -> bool:
+    """True when a jest/vitest runner is configured at or above *module_path*.
+
+    Walks from the module's directory up to (and including) *root_resolved*,
+    looking for a jest/vitest config file or a ``package.json`` that declares
+    one. Never walks above the trusted root. Total — any error yields ``False``.
+    """
+    try:
+        current = module_path.parent.resolve()
+    except (OSError, RuntimeError):
+        return False
+    root_s = str(root_resolved)
+    while True:
+        for stem in _JS_TS_RUNNER_CONFIG_STEMS:
+            for ext in _JS_TS_RUNNER_CONFIG_EXTS:
+                if (current / f"{stem}{ext}").is_file():
+                    return True
+        pkg = current / "package.json"
+        if pkg.is_file() and _package_json_declares_js_runner(pkg):
+            return True
+        if str(current) == root_s or not _contained_in_root(current, root_resolved):
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return False
+
+
+def _as_str_list(value: Any) -> list[str]:
+    """Coerce a jest config value (str | list | None) to a list of strings."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [v for v in value if isinstance(v, str)]
+    return []
+
+
+def _jest_config_from_package_json(package_json: Path) -> Optional[Mapping[str, Any]]:
+    """Return the inline ``jest``/``vitest`` config block from a package.json."""
+    try:
+        data = json.loads(package_json.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, Mapping):
+        return None
+    for key in ("jest", "vitest"):
+        block = data.get(key)
+        if isinstance(block, Mapping):
+            return block
+    return None
+
+
+# Test-discovery keys whose presence in an unparseable JS/TS config means we
+# cannot assume default discovery (issue #1903 §A). Covers BOTH the jest dialect
+# (testMatch/testRegex/testPathIgnorePatterns/roots/rootDir) and the vitest
+# dialect (test.include/exclude, projects, workspace) — matched as whole words
+# so generic tokens (e.g. ``__dirname``, ``rootReducer``) do not false-trigger.
+_JS_RUNNER_DISCOVERY_KEYS = (
+    "testMatch",
+    "testRegex",
+    "testPathIgnorePatterns",
+    "roots",
+    "rootDir",
+    "root",
+    "dir",
+    "include",
+    "exclude",
+    "projects",
+    "workspace",
+)
+_JS_RUNNER_DISCOVERY_RE = re.compile(
+    r"\b(?:" + "|".join(_JS_RUNNER_DISCOVERY_KEYS) + r")\b"
+)
+# Composition/delegation a static text scan cannot resolve: a config that
+# imports/requires/spreads/extends a base, applies a preset, is a function, or
+# whose export is a CALL expression (``module.exports = buildConfig()``,
+# ``export default defineConfig(...)``, ``createJestConfig(...)``) could set
+# discovery elsewhere. Any of these makes the config unresolvable -> refuse
+# (issue #1903 review rounds 2-3, delegating/wrapper jest.config.js).
+_JS_RUNNER_UNRESOLVABLE_RE = re.compile(
+    r"\brequire\s*\(|\bimport\b|\bpreset\b|\bextends\b|\.\.\."
+    r"|=>|\bfunction\b"
+    r"|=\s*[A-Za-z_$][\w$.]*\s*\("          # export is a call: = buildConfig(
+    r"|\.\w+\s*\("                          # ANY method call: ['a','b'].join(
+    r"|\[[^\]\n]*\]\s*:"                    # computed property key: {[..]: ..}
+    r"|`"                                   # template literal (dynamic strings)
+    r"|module\.exports\s*=\s*[A-Za-z_$]"    # export is an identifier: = config
+    r"|export\s+default\s+[A-Za-z_$]"       # export default ident / defineConfig
+)
+_JS_RUNNER_CONFIG_FILE_STEMS = ("jest.config", "vitest.config", "vite.config")
+
+
+def _strip_js_comments_and_strings(text: str) -> str:
+    """Best-effort: blank out JS comments and string/template literals.
+
+    So a discovery keyword or extra ``;`` inside a comment or string cannot
+    change the structural (whitelist) analysis. Replaces the CONTENTS of each
+    ``//``, ``/* */``, ``'…'``, ``"…"``, `` `…` `` with spaces (preserving
+    length/newlines is unnecessary). A single pass; never raises.
+    """
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        two = text[i : i + 2]
+        if two == "//":
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if two == "/*":
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        if c in "'\"`":
+            quote = c
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    i += 2
+                    continue
+                if text[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            out.append('""')  # placeholder token for a string value
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _js_config_is_trivial_default_literal(text: str) -> bool:
+    """True ONLY when *text* is provably a SINGLE plain-object-literal export.
+
+    Whitelist (not blacklist): the config must be exactly ``module.exports = {…}``
+    or ``export default {…}`` — one statement, balanced braces, nothing else
+    before or after (only optional ``;``/whitespace) — and the object body must
+    reference no discovery key and no dynamic/composition construct. This refuses
+    evasions a blacklist misses, e.g. a second statement mutating the export
+    (``module.exports = {}; module.exports['test'+'Match'] = […]``). Total.
+    """
+    code = _strip_js_comments_and_strings(text).strip()
+    for prefix in ("module.exports", "export default"):
+        if not code.startswith(prefix):
+            continue
+        rest = code[len(prefix):].lstrip()
+        if prefix == "module.exports":
+            if not rest.startswith("="):
+                return False
+            rest = rest[1:].lstrip()
+        if not rest.startswith("{"):
+            return False
+        # Match the object literal via brace counting.
+        depth, end = 0, -1
+        for idx, ch in enumerate(rest):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = idx
+                    break
+        if end < 0:
+            return False  # unbalanced
+        body = rest[: end + 1]
+        trailing = rest[end + 1 :].strip().strip(";").strip()
+        if trailing:
+            return False  # extra statements/assignments after the literal
+        # The object body must be a plain literal with no discovery/dynamic bits.
+        if _JS_RUNNER_DISCOVERY_RE.search(body) or _JS_RUNNER_UNRESOLVABLE_RE.search(body):
+            return False
+        return True
+    return False
+
+
+def _js_config_text_has_custom_discovery(config_file: Path) -> bool:
+    """True when a JS/TS config CANNOT be proven a trivial default literal.
+
+    We cannot execute a ``jest.config.js`` / ``vitest.config.ts`` in Python, so
+    (issue #1903 review round 7) we use a POSITIVE whitelist: trust DEFAULT
+    discovery ONLY when the config text is a single plain-object-literal export
+    with no discovery keys and no dynamic/composition constructs
+    (:func:`_js_config_is_trivial_default_literal`). ANY other shape — extra
+    statements, dynamic key construction, imports/require/spread/preset/function,
+    or an unreadable file — returns True so the caller conservatively refuses to
+    claim a co-located path is collected rather than risk a false-green.
+    """
+    try:
+        text = config_file.read_text(encoding="utf-8", errors="ignore")
+    except (OSError, ValueError):
+        return True  # unreadable opaque config -> cannot prove default -> refuse
+    # Check discovery keys against the ORIGINAL text (round 8): string-stripping
+    # would erase a QUOTED property key like ``"testMatch"``, so a discovery key
+    # anywhere in the raw text — quoted or not — forces refusal (a discovery word
+    # inside a string VALUE only over-refuses, which is safe).
+    if _JS_RUNNER_DISCOVERY_RE.search(text):
+        return True
+    return not _js_config_is_trivial_default_literal(text)
+
+
+class _StaticJsLiteralParser:
+    """Parse only closed, side-effect-free JS literals used by runner configs."""
+
+    def __init__(self, text: str) -> None:
+        self.tokens = self._tokenize(text)
+        self.index = 0
+        self.bindings: dict[str, tuple[Any, set[str]]] = {}
+
+    @staticmethod
+    def _tokenize(text: str) -> list[tuple[str, str]]:
+        tokens: list[tuple[str, str]] = []
+        index = 0
+        while index < len(text):
+            char = text[index]
+            if char.isspace():
+                index += 1
+                continue
+            if text.startswith("//", index):
+                newline = text.find("\n", index + 2)
+                index = len(text) if newline < 0 else newline + 1
+                continue
+            if text.startswith("/*", index):
+                end = text.find("*/", index + 2)
+                if end < 0:
+                    raise ValueError("unterminated comment")
+                index = end + 2
+                continue
+            if char in "'\"":
+                start = index
+                quote = char
+                index += 1
+                escaped = False
+                while index < len(text):
+                    current = text[index]
+                    index += 1
+                    if escaped:
+                        escaped = False
+                    elif current == "\\":
+                        escaped = True
+                    elif current == quote:
+                        break
+                else:
+                    raise ValueError("unterminated string")
+                raw = text[start:index]
+                try:
+                    value = ast.literal_eval(raw)
+                except (SyntaxError, ValueError) as exc:
+                    raise ValueError("unsupported string") from exc
+                if not isinstance(value, str):
+                    raise ValueError("non-string literal")
+                tokens.append(("string", value))
+                continue
+            match = re.match(r"[A-Za-z_$][A-Za-z0-9_$]*", text[index:])
+            if match:
+                value = match.group(0)
+                tokens.append(("ident", value))
+                index += len(value)
+                continue
+            match = re.match(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", text[index:])
+            if match:
+                value = match.group(0)
+                tokens.append(("number", value))
+                index += len(value)
+                continue
+            if char not in "{}[]():,;.=+":
+                raise ValueError("dynamic token")
+            tokens.append((char, char))
+            index += 1
+        return tokens
+
+    def _peek(self, kind: str, value: Optional[str] = None) -> bool:
+        if self.index >= len(self.tokens):
+            return False
+        token_kind, token_value = self.tokens[self.index]
+        return token_kind == kind and (value is None or token_value == value)
+
+    def _take(self, kind: str, value: Optional[str] = None) -> str:
+        if not self._peek(kind, value):
+            raise ValueError("unexpected token")
+        token_value = self.tokens[self.index][1]
+        self.index += 1
+        return token_value
+
+    def _expression(self) -> tuple[Any, set[str]]:
+        value, references = self._primary()
+        while self._peek("+"):
+            self._take("+")
+            right, right_references = self._primary()
+            if not isinstance(value, str) or not isinstance(right, str):
+                raise ValueError("non-string concatenation")
+            value += right
+            references.update(right_references)
+        if self._peek("."):
+            self._take(".")
+            self._take("ident", "join")
+            self._take("(")
+            separator = self._take("string")
+            self._take(")")
+            if not isinstance(value, list) or not all(
+                isinstance(item, str) for item in value
+            ):
+                raise ValueError("non-literal join")
+            value = separator.join(value)
+        return value, references
+
+    def _primary(self) -> tuple[Any, set[str]]:
+        if self._peek("string"):
+            return self._take("string"), set()
+        if self._peek("number"):
+            return json.loads(self._take("number")), set()
+        if self._peek("ident"):
+            name = self._take("ident")
+            if name in {"true", "false", "null"}:
+                return {"true": True, "false": False, "null": None}[name], set()
+            if name not in self.bindings:
+                raise ValueError("unbound identifier")
+            return self.bindings[name][0], {name}
+        if self._peek("["):
+            return self._array()
+        if self._peek("{"):
+            return self._object()
+        raise ValueError("non-literal expression")
+
+    def _array(self) -> tuple[list[Any], set[str]]:
+        self._take("[")
+        values: list[Any] = []
+        references: set[str] = set()
+        while not self._peek("]"):
+            value, item_references = self._expression()
+            values.append(value)
+            references.update(item_references)
+            if not self._peek(","):
+                break
+            self._take(",")
+            if self._peek("]"):
+                break
+        self._take("]")
+        return values, references
+
+    def _object(self) -> tuple[dict[str, Any], set[str]]:
+        self._take("{")
+        values: dict[str, Any] = {}
+        references: set[str] = set()
+        while not self._peek("}"):
+            if self._peek("["):
+                self._take("[")
+                key, key_references = self._expression()
+                self._take("]")
+                if not isinstance(key, str):
+                    raise ValueError("non-string key")
+                references.update(key_references)
+            elif self._peek("string"):
+                key = self._take("string")
+            else:
+                key = self._take("ident")
+            self._take(":")
+            value, value_references = self._expression()
+            if key in values:
+                raise ValueError("duplicate key")
+            values[key] = value
+            references.update(value_references)
+            if not self._peek(","):
+                break
+            self._take(",")
+            if self._peek("}"):
+                break
+        self._take("}")
+        return values, references
+
+    def parse_export(self) -> dict[str, Any]:
+        """Return the sole exported object, rejecting unused/unrelated bindings."""
+        while self._peek("ident", "const"):
+            self._take("ident", "const")
+            name = self._take("ident")
+            self._take("=")
+            value, references = self._expression()
+            if name in self.bindings:
+                raise ValueError("duplicate binding")
+            self.bindings[name] = (value, references)
+            if self._peek(";"):
+                self._take(";")
+
+        if self._peek("ident", "module"):
+            self._take("ident", "module")
+            self._take(".")
+            self._take("ident", "exports")
+            self._take("=")
+        else:
+            self._take("ident", "export")
+            self._take("ident", "default")
+        exported, direct_references = self._expression()
+        if self._peek(";"):
+            self._take(";")
+        if self.index != len(self.tokens) or not isinstance(exported, dict):
+            raise ValueError("not one exported object")
+
+        used = set(direct_references)
+        pending = list(direct_references)
+        while pending:
+            name = pending.pop()
+            for dependency in self.bindings[name][1]:
+                if dependency not in used:
+                    used.add(dependency)
+                    pending.append(dependency)
+        if used != set(self.bindings):
+            raise ValueError("unrelated binding")
+        return exported
+
+
+def _parse_static_js_runner_config(config_file: Path) -> Optional[Mapping[str, Any]]:
+    """Parse only discovery fields in the actual exported static config object."""
+    try:
+        text = config_file.read_text(encoding="utf-8", errors="ignore")
+        exported = _StaticJsLiteralParser(text).parse_export()
+    except (OSError, ValueError):
+        return None
+
+    discovery_names = {
+        "testMatch",
+        "testRegex",
+        "roots",
+        "rootDir",
+        "testPathIgnorePatterns",
+        "include",
+        "exclude",
+    }
+
+    def has_nested_discovery(value: Any) -> bool:
+        if isinstance(value, Mapping):
+            return any(
+                key in discovery_names or has_nested_discovery(item)
+                for key, item in value.items()
+            )
+        if isinstance(value, list):
+            return any(has_nested_discovery(item) for item in value)
+        return False
+
+    parsed: dict[str, Any] = {}
+    for key in ("testMatch", "testRegex", "roots", "testPathIgnorePatterns"):
+        if key in exported:
+            value = exported[key]
+            if not isinstance(value, (str, list)) or (
+                isinstance(value, list)
+                and not all(isinstance(item, str) for item in value)
+            ):
+                return None
+            parsed[key] = value
+    if "rootDir" in exported:
+        if not isinstance(exported["rootDir"], str):
+            return None
+        parsed["rootDir"] = exported["rootDir"]
+
+    vitest = exported.get("test")
+    if vitest is not None:
+        if not isinstance(vitest, Mapping):
+            return None
+        if set(vitest) - {"include", "exclude"}:
+            return None
+        for source_key, target_key in (
+            ("include", "testMatch"),
+            ("exclude", "testPathIgnorePatterns"),
+        ):
+            if source_key not in vitest:
+                continue
+            value = vitest[source_key]
+            if not isinstance(value, (str, list)) or (
+                isinstance(value, list)
+                and not all(isinstance(item, str) for item in value)
+            ):
+                return None
+            parsed[target_key] = value
+
+    # Presets/projects and discovery keys hidden below an unrelated option can
+    # change collection without the top-level fields parsed above. Other
+    # side-effect-free scalar options (for example testEnvironment) are safe.
+    for key, value in exported.items():
+        if key == "test" or key in discovery_names:
+            continue
+        if key in {"preset", "projects", "workspace"} or has_nested_discovery(value):
+            return None
+    return parsed
+
+
+def _collect_js_runner_config(
+    module_path: Path, root_resolved: Path
+) -> tuple[Mapping[str, Any], Optional[Path], bool]:
+    """Return the nearest jest/vitest config, its directory, and an opaque flag.
+
+    Walks from the module's directory up to (and including) *root_resolved*,
+    reading ``jest.config.json`` / ``.jestrc`` / ``.jestrc.json`` and the
+    ``package.json`` ``"jest"``/``"vitest"`` block (nearest wins). A JS/TS config
+    file (``jest.config.js``/``.ts``, ``vitest.config.*``) is parsed only when it
+    is a complete side-effect-free literal program whose sole export can be
+    proven structurally. The third return value (``opaque_custom``) is ``True``
+    for every unsupported/dynamic shape, signalling the caller to refuse to
+    claim a path is collected. Returns ``({}, None, False)`` when no config is
+    found. Total.
+    """
+    try:
+        current = module_path.parent.resolve()
+    except (OSError, RuntimeError):
+        return {}, None, False
+    root_s = str(root_resolved)
+    while True:
+        # Gather EVERY runner-config source AT THIS LEVEL. When more than one
+        # exists (e.g. an inline package.json jest block AND a vitest.config.ts),
+        # the ACTIVE runner is ambiguous — a different source could set different
+        # discovery — so fail closed (opaque) rather than let one hide another
+        # (issue #1903 review round 7).
+        json_config: Optional[Mapping[str, Any]] = None
+        for fname in ("jest.config.json", ".jestrc", ".jestrc.json"):
+            candidate = current / fname
+            if candidate.is_file():
+                try:
+                    data = json.loads(
+                        candidate.read_text(encoding="utf-8", errors="ignore")
+                    )
+                    if isinstance(data, Mapping):
+                        json_config = data
+                        break
+                except (OSError, ValueError):
+                    pass
+        pkg = current / "package.json"
+        pkg_block = _jest_config_from_package_json(pkg) if pkg.is_file() else None
+        # Collect EVERY JS/TS config file at this level (round 8) — e.g. both a
+        # ``jest.config.js`` AND a ``vitest.config.ts`` — so two distinct runner
+        # config files count as two sources rather than the loop silently keeping
+        # only the first and missing the ambiguity.
+        js_config_files: list[Path] = []
+        for stem in _JS_RUNNER_CONFIG_FILE_STEMS:
+            for ext in (".js", ".ts", ".mjs", ".cjs", ".mts", ".cts"):
+                jsfile = current / f"{stem}{ext}"
+                if jsfile.is_file():
+                    js_config_files.append(jsfile)
+
+        source_count = (
+            (1 if json_config is not None else 0)
+            + (1 if pkg_block is not None else 0)
+            + len(js_config_files)
+        )
+        if source_count > 1:
+            return {}, current, True  # ambiguous active runner -> refuse
+        if json_config is not None:
+            return json_config, current, False
+        if pkg_block is not None:
+            return pkg_block, current, False
+        if js_config_files:
+            parsed = _parse_static_js_runner_config(js_config_files[0])
+            if parsed is not None:
+                return parsed, current, False
+            return {}, current, True
+
+        if str(current) == root_s or not _contained_in_root(current, root_resolved):
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return {}, None, False
+
+
+def _micromatch_to_regex(glob: str) -> Optional[str]:
+    """Translate a jest/micromatch ``testMatch`` glob to an anchored regex.
+
+    Single pass. Handles the constructs jest's default and typical custom
+    ``testMatch`` use: ``**``/``**/`` globstar, ``*``, ``?``, extglobs
+    ``?(...)`` ``*(...)`` ``+(...)`` ``@(...)`` (with their quantifiers applied
+    to the group), brace alternation ``{a,b}``, ``|`` alternation inside groups,
+    and character classes ``[...]``. Returns ``None`` for negation ``!(...)`` (we
+    refuse to guess). ``<rootDir>`` must already be substituted by the caller.
+    """
+    out = ["^"]
+    # Parallel stacks per open group: the trailing regex quantifier ("", "?",
+    # "*", "+") and the group KIND. Kind matters because alternation differs by
+    # construct: BRACES ``{a,b}`` alternate on COMMA (pipe is literal), while
+    # EXTGLOBS ``@(a|b)`` / plain parens alternate on PIPE (comma is literal) —
+    # issue #1903 review round 5.
+    group_quant: list[str] = []
+    group_kind: list[str] = []  # "brace" | "extglob" | "paren"
+    i, n = 0, len(glob)
+    while i < n:
+        c = glob[i]
+        if c == "!" and glob[i + 1 : i + 2] == "(":
+            return None  # negation — refuse to guess
+        if c in "?*+@" and glob[i + 1 : i + 2] == "(":
+            group_quant.append({"?": "?", "*": "*", "+": "+", "@": ""}[c])
+            group_kind.append("extglob")
+            out.append("(?:")
+            i += 2
+            continue
+        if c == "*":
+            # ``**`` is a GLOBSTAR (crosses ``/``) ONLY when it is a whole path
+            # segment — preceded by ``/`` or start AND followed by ``/`` or end
+            # (round 9). micromatch treats ``**`` embedded in a segment (``qa**/``,
+            # ``**bar``, ``foo**``) as a plain single-segment ``*``, so translating
+            # every ``**`` to ``.*`` over-matches paths jest rejects (an uncollected
+            # green). ``[^/]*`` keeps embedded stars segment-local.
+            is_double = glob[i : i + 2] == "**"
+            at_seg_start = i == 0 or glob[i - 1] == "/"
+            after_double = glob[i + 2 : i + 3]
+            if is_double and at_seg_start and after_double == "/":
+                out.append("(?:.*/)?")
+                i += 3
+            elif is_double and at_seg_start and after_double == "":
+                out.append(".*")  # trailing whole-segment ``**`` -> match subtree
+                i += 2
+            elif is_double:
+                out.append("[^/]*")  # embedded ``**`` == single-segment ``*``
+                i += 2
+            else:
+                out.append("[^/]*")
+                i += 1
+            continue
+        if c == "?":
+            out.append("[^/]")
+            i += 1
+            continue
+        if c == "(":
+            group_quant.append("")
+            group_kind.append("paren")
+            out.append("(?:")
+            i += 1
+            continue
+        if c == ")":
+            out.append(")")
+            out.append(group_quant.pop() if group_quant else "")
+            if group_kind:
+                group_kind.pop()
+            i += 1
+            continue
+        if c == "|":
+            # Alternation only inside an extglob/paren group; elsewhere literal.
+            inside = group_kind and group_kind[-1] in ("extglob", "paren")
+            out.append("|" if inside else r"\|")
+            i += 1
+            continue
+        if c == "{":
+            group_quant.append("")
+            group_kind.append("brace")
+            out.append("(?:")
+            i += 1
+            continue
+        if c == "}":
+            out.append(")")
+            out.append(group_quant.pop() if group_quant else "")
+            if group_kind:
+                group_kind.pop()
+            i += 1
+            continue
+        if c == ",":
+            # Alternation only inside a brace group; elsewhere literal.
+            inside_brace = group_kind and group_kind[-1] == "brace"
+            out.append("|" if inside_brace else ",")
+            i += 1
+            continue
+        if c == "[":
+            # micromatch/bash character class. A leading ``!`` (or ``^``) means
+            # NEGATION — translate to Python's ``[^...]`` (``[!_]`` = "not _", NOT
+            # "``!`` or ``_``"). ``]`` as the FIRST class member is a literal.
+            start = i + 1
+            neg = start < n and glob[start] in "!^"
+            scan = start + 1 if neg else start
+            if scan < n and glob[scan] == "]":  # literal ] as first member
+                scan += 1
+            j = glob.find("]", scan)
+            if j == -1:  # malformed / unterminated -> literal '['
+                out.append(r"\[")
+                i += 1
+                continue
+            inner = glob[(start + 1 if neg else start):j]
+            out.append("[^" + inner + "]" if neg else "[" + inner + "]")
+            i = j + 1
+            continue
+        out.append(re.escape(c))
+        i += 1
+    out.append("$")
+    return "".join(out)
+
+
+try:  # `regex` (already a pdd dependency) supports a per-match wall-clock timeout
+    import regex as _redos_regex  # type: ignore
+    _HAVE_REDOS_REGEX = True
+except ImportError:  # pragma: no cover - stdlib fallback (no timeout, caps only)
+    _redos_regex = re  # type: ignore
+    _HAVE_REDOS_REGEX = False
+
+# Repo-controlled ``testMatch``/``testRegex``/``testPathIgnorePatterns`` are
+# hosted/issue-influenced. Matching them with backtracking regex is a ReDoS
+# vector (issue #1903 review round 4), so every such match runs with a strict
+# wall-clock timeout and generous length caps, and FAILS CLOSED (``None``).
+_REGEX_MATCH_TIMEOUT_S = 0.05
+_REGEX_MAX_PATTERN_LEN = 4096
+_REGEX_MAX_TEXT_LEN = 2048
+# Aggregate-work caps for greenfield discovery (issue #1903 review rounds 5-6): a
+# hostile config with very many patterns/roots/candidates must not stall sync.
+# Bounded by BOTH element caps AND a single wall-clock budget for the whole
+# discovery call (worst case ~ caps * per-match timeout is further capped here).
+_MAX_RUNNER_PATTERNS = 32
+_MAX_GREENFIELD_CANDIDATES = 24
+_DISCOVERY_TOTAL_BUDGET_S = 1.0
+
+
+def _safe_regex_search(pattern: Optional[str], text: str) -> Optional[bool]:
+    """Timeout-bounded, fail-closed ``search`` for a repo-controlled pattern.
+
+    Returns ``True``/``False`` on a decisive match, or ``None`` (fail closed) on
+    a timeout (catastrophic backtracking), a compile error, or over-long input —
+    so a malicious/pathological runner pattern can never stall sync.
+    """
+    if pattern is None or text is None:
+        return None
+    if len(pattern) > _REGEX_MAX_PATTERN_LEN or len(text) > _REGEX_MAX_TEXT_LEN:
+        return None
+    if not _HAVE_REDOS_REGEX:
+        # No wall-clock-timeout engine available. A SHORT catastrophic pattern
+        # (e.g. ``(a+)+$``) well under the length caps can still backtrack
+        # exponentially in text length, so the caps alone do NOT bound stdlib
+        # ``re``. Repo-controlled patterns are hosted/issue-influenced, so fail
+        # closed rather than evaluate an untrusted regex without a timeout
+        # (ReDoS; Codex review, PR #1998). ``regex`` is declared directly in
+        # pyproject so this fallback is not reached in a normal install.
+        return None
+    try:
+        return _redos_regex.search(
+            pattern, text, timeout=_REGEX_MATCH_TIMEOUT_S
+        ) is not None
+    except (re.error, ValueError, RecursionError, TimeoutError):
+        return None
+    except Exception:  # pylint: disable=broad-except  (regex.TimeoutError etc.)
+        return None
+
+
+def _glob_matches(glob: str, posix_path: str) -> Optional[bool]:
+    """Best-effort: does *posix_path* match jest ``testMatch`` *glob*?
+
+    Returns ``True``/``False`` when the glob is translatable and matched within
+    the ReDoS timeout, or ``None`` when it is not (negation, compile failure, or
+    a timeout) so the caller stays conservative rather than guessing.
+    """
+    # Reject an oversized RAW glob BEFORE translation (round 8): a multi-megabyte
+    # repo-controlled pattern would otherwise be fully scanned/expanded by
+    # ``_micromatch_to_regex`` outside the regex timeout and aggregate deadline.
+    if glob is None or len(glob) > _REGEX_MAX_PATTERN_LEN:
+        return None
+    return _safe_regex_search(_micromatch_to_regex(glob), posix_path)
+
+
+def _sub_root_dir(value: str, root_dir: Path) -> str:
+    """Substitute jest's ``<rootDir>`` token with the effective root directory."""
+    return value.replace("<rootDir>", str(root_dir))
+
+
+def _resolve_config_roots(
+    config: Mapping[str, Any], config_dir: Path
+) -> tuple[list[Path], Path]:
+    """Resolve jest's effective ``rootDir`` and ``roots`` (absolute paths).
+
+    *config_dir* is the ``<rootDir>`` base. Returns ``(roots, root_dir)``;
+    ``roots`` defaults to ``[root_dir]`` when none are configured.
+    """
+    root_dir = config_dir
+    root_dir_value = config.get("rootDir")
+    if isinstance(root_dir_value, str) and root_dir_value:
+        try:
+            root_dir = (config_dir / root_dir_value).resolve()
+        except (OSError, RuntimeError, ValueError):
+            root_dir = config_dir
+    roots: list[Path] = []
+    for r in _as_str_list(config.get("roots")):
+        try:
+            # jest resolves a non-absolute ``roots`` entry against the EFFECTIVE
+            # rootDir (path.resolve(rootDir, entry)), NOT the config directory
+            # (issue #1903 review round 5). ``<rootDir>`` substitution yields an
+            # absolute path that is used as-is.
+            sub = _sub_root_dir(r, root_dir)
+            p = Path(sub)
+            roots.append((p if p.is_absolute() else (root_dir / sub)).resolve())
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return (roots or [root_dir]), root_dir
+
+
+_GLOB_WILDCARD_CHARS = frozenset("*?[]{}()+@!")
+
+
+def _testmatch_literal_dir(glob: str, root_dir: Path) -> Optional[Path]:
+    """Literal directory prefix of a ``testMatch`` glob before its first wildcard.
+
+    ``<rootDir>/test/**/*.test.ts`` -> ``<root>/test``. Returns ``None`` when the
+    pattern has no fixed directory anchor. Used to derive a collected write
+    location for a centralized (non-co-located) test layout (issue #1903 §A).
+    """
+    if glob is None or len(glob) > _REGEX_MAX_PATTERN_LEN:
+        return None  # round 8: bound preprocessing of an oversized raw pattern
+    sub = _sub_root_dir(glob, root_dir)
+    idx = next((i for i, c in enumerate(sub) if c in _GLOB_WILDCARD_CHARS), len(sub))
+    slash = sub.rfind("/", 0, idx)
+    if slash <= 0:
+        return None
+    dir_str = sub[:slash]
+    try:
+        directory = Path(dir_str)
+        if not directory.is_absolute():
+            directory = root_dir / dir_str
+        return directory.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _module_rel_dir(
+    module_path: Path, root_dir: Path, config_dir: Path
+) -> Optional[Path]:
+    """The module's directory relative to the effective rootDir (or config dir).
+
+    Preserved under a centralized test anchor so a same-stem module in a
+    different source directory does not collide onto one shared test path.
+    Returns ``None`` when the module sits directly at the base (no relative
+    component) or cannot be related to either base.
+    """
+    parent = module_path.parent
+    for base in (root_dir, config_dir):
+        try:
+            rel = parent.relative_to(base)
+        except (ValueError, TypeError):
+            continue
+        return None if str(rel) in ("", ".") else rel
+    return None
+
+
+def _greenfield_candidate_paths(
+    module_path: Path, config: Mapping[str, Any], config_dir: Optional[Path]
+) -> list[Path]:
+    """Ordered first-test candidates, biased by config conventions.
+
+    Co-located placements beside the module come first (the preferred layout).
+    When the config declares ``roots``/``rootDir`` or a ``testMatch`` with a
+    fixed directory prefix (a CENTRALIZED layout), also derive candidates UNDER
+    those collected directories so a project whose runner does not collect
+    co-located tests still gets a runner-collected path instead of a runner-blind
+    ``tests/`` shadow (issue #1903 §A). ``_candidate_is_collected`` decides which
+    survive; ordering only sets preference.
+    """
+    stem = module_path.stem
+    ext = module_path.suffix
+    # Bound the hint scan (round 8): only a fixed number of patterns, each a
+    # bounded prefix, so a hostile multi-megabyte ``testMatch`` cannot turn this
+    # substring probe into unbounded preprocessing work.
+    _hint_pats = (
+        _as_str_list(config.get("testMatch")) + _as_str_list(config.get("testRegex"))
+    )[:_MAX_RUNNER_PATTERNS]
+    hint = " ".join(p[:_REGEX_MAX_PATTERN_LEN] for p in _hint_pats).lower()
+
+    if "spec" in hint and "test" not in hint:
+        infixes = [".spec", ".test"]
+    else:
+        infixes = [".test", ".spec"]
+
+    if "__tests__" in hint and "__test__" not in hint:
+        subdirs = ["__tests__", "__test__", ""]
+    else:
+        subdirs = ["__test__", "__tests__", ""]
+
+    def _variants(base: Path) -> list[Path]:
+        out: list[Path] = []
+        for infix in infixes:
+            for sub in subdirs:
+                anchored = base / sub if sub else base
+                out.append(anchored / f"{stem}{infix}{ext}")
+        return out
+
+    candidates: list[Path] = list(_variants(module_path.parent))
+
+    if config_dir is not None:
+        roots, root_dir = _resolve_config_roots(config, config_dir)
+        # Mirror the module's directory (relative to the effective rootDir) under
+        # each centralized anchor so DISTINCT modules that share a stem
+        # (``src/a/util.ts`` vs ``src/b/util.ts``) map to DISTINCT collected test
+        # paths — never onto one shared file that a second sync would overwrite
+        # (issue #1903 "never fork, never overwrite").
+        rel_dir = _module_rel_dir(module_path, root_dir, config_dir)
+        anchor_dirs: list[Path] = []
+        for glob in _as_str_list(config.get("testMatch")):
+            literal = _testmatch_literal_dir(glob, root_dir)
+            if literal is not None:
+                anchor_dirs.append(literal)
+        if config.get("roots"):
+            anchor_dirs.extend(roots)
+        # An explicit rootDir centralizes collection under it — a module OUTSIDE
+        # rootDir has no collected co-located path, so derive one under rootDir.
+        if isinstance(config.get("rootDir"), str) and config.get("rootDir"):
+            anchor_dirs.append(root_dir)
+        seen = {str(c) for c in candidates}
+        for anchor in anchor_dirs:
+            base = anchor / rel_dir if rel_dir is not None else anchor
+            for cand in _variants(base):
+                key = str(cand)
+                if key not in seen:
+                    candidates.append(cand)
+                    seen.add(key)
+    return candidates
+
+
+def _candidate_is_collected(
+    candidate: Path,
+    config: Mapping[str, Any],
+    config_dir: Optional[Path],
+    deadline: Optional[float] = None,
+) -> Optional[bool]:
+    """Would the runner collect a test written at *candidate*?
+
+    Enforces the config knobs issue #1903 §A names — ``roots``/``rootDir``
+    (containment), ``testPathIgnorePatterns`` (exclusion), and
+    ``testMatch``/``testRegex`` (collection patterns). Returns ``True`` when
+    collected, ``False`` when provably NOT collected (so the caller falls back to
+    the derived path rather than emit an uncollected test), or ``None`` when the
+    config gives no verdict (no relevant keys, or unparseable patterns) so the
+    caller keeps the default-convention behavior. When *deadline* (a
+    ``time.monotonic`` value) is passed and already exceeded, fails CLOSED
+    (``False``) so aggregate regex work stays bounded (issue #1903 review r6).
+    """
+    if config_dir is None:
+        return None
+    if deadline is not None and time.monotonic() > deadline:
+        return False
+    posix = candidate.as_posix()
+    resolved_roots, root_dir = _resolve_config_roots(config, config_dir)
+
+    # roots / rootDir containment.
+    if config.get("roots") or (
+        isinstance(config.get("rootDir"), str) and config.get("rootDir")
+    ):
+        if not any(_contained_in_root(candidate, root) for root in resolved_roots):
+            return False
+
+    # testPathIgnorePatterns exclusion (repo-controlled regex over the path,
+    # ReDoS-bounded). A match excludes; an UNEVALUABLE ignore pattern could also
+    # exclude, so fail closed to "not collected" either way.
+    for pat in _as_str_list(config.get("testPathIgnorePatterns")):
+        if _safe_regex_search(_sub_root_dir(pat, root_dir), posix) is not False:
+            return False
+
+    # testMatch / testRegex collection patterns.
+    match_globs = _as_str_list(config.get("testMatch"))
+    test_regexes = _as_str_list(config.get("testRegex"))
+    has_explicit = (
+        config.get("testMatch") is not None or config.get("testRegex") is not None
+    )
+    if not has_explicit:
+        # DEFAULT discovery: no explicit collection constraint -> no verdict; the
+        # caller applies the dialect-aware default-extension gate and default
+        # convention.
+        return None
+    # jest rejects configuring BOTH testMatch and testRegex -> fail closed.
+    if match_globs and test_regexes:
+        return False
+    # An EXPLICIT but empty collection set (``testMatch: []`` / ``testRegex: []``)
+    # matches NOTHING in jest -> not collected here (issue #1903 review round 5).
+    if not match_globs and not test_regexes:
+        return False
+
+    # EXPLICIT patterns are present (default discovery already returned above).
+    # From here NEVER return ``None`` (which would mark the candidate a
+    # default-convention fallback): an explicit-rule miss or an unevaluable rule
+    # must FAIL CLOSED to ``False`` so the caller refuses rather than emit an
+    # uncollected path (issue #1903 review round 3).
+    #
+    # jest/micromatch apply ``testMatch`` SEQUENTIALLY: a positive glob includes,
+    # a leading-``!`` glob EXCLUDES, and a LATER match overrides an earlier one
+    # (negative-then-positive re-includes, positive-then-negative excludes).
+    included: Optional[bool] = None
+    for glob in match_globs:
+        if deadline is not None and time.monotonic() > deadline:
+            return False  # aggregate budget exhausted mid-candidate -> fail closed
+        g = _sub_root_dir(glob, root_dir)
+        negated = g.startswith("!")
+        matched = _glob_matches(g[1:] if negated else g, posix)
+        if matched is None:
+            return False  # cannot evaluate a rule whose position matters -> closed
+        if matched:
+            included = not negated
+    for rgx in test_regexes:
+        if deadline is not None and time.monotonic() > deadline:
+            return False
+        res = _safe_regex_search(_sub_root_dir(rgx, root_dir), posix)
+        if res is None:
+            return False  # unevaluable / timed-out regex -> fail closed
+        if res:
+            included = True
+    return bool(included)  # True = collected; explicit miss / excluded -> False
+
+
+def _project_uses_vitest(module_path: Path, root_resolved: Path) -> bool:
+    """True when the detected runner is vitest (vs jest).
+
+    Walks module dir -> root looking for a ``vitest.config.*``/``vite.config.*``
+    file or a ``package.json`` that declares a ``vitest`` dependency / inline
+    ``vitest`` config block. Used only to widen the DEFAULT-discovery extension
+    set (vitest's default ``include`` collects ``.mjs``/``.cjs``; jest's does
+    not). Total — any error yields ``False`` (treat as jest, the stricter set).
+    """
+    try:
+        current = module_path.parent.resolve()
+    except (OSError, RuntimeError):
+        return False
+    root_s = str(root_resolved)
+    while True:
+        for stem in ("vitest.config", "vite.config"):
+            for ext in (".js", ".ts", ".mjs", ".cjs", ".mts", ".cts"):
+                if (current / f"{stem}{ext}").is_file():
+                    return True
+        pkg = current / "package.json"
+        if pkg.is_file():
+            try:
+                data = json.loads(pkg.read_text(encoding="utf-8", errors="ignore"))
+            except (OSError, ValueError):
+                data = None
+            if isinstance(data, Mapping):
+                if isinstance(data.get("vitest"), Mapping):
+                    return True
+                for dep_key in ("dependencies", "devDependencies",
+                                "peerDependencies", "optionalDependencies"):
+                    deps = data.get(dep_key)
+                    if isinstance(deps, Mapping) and "vitest" in deps:
+                        return True
+        if str(current) == root_s or not _contained_in_root(current, root_resolved):
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return False
+
+
+def _semver_clause_min_major(clause: str) -> Optional[int]:
+    """The guaranteed-minimum major of ONE AND-clause (space-separated
+    comparators), or ``None`` when the clause has NO lower bound (only ``<``/
+    ``<=``/``*``). Round 10: conservative — an upper-bound-only or wildcard clause
+    admits arbitrarily low majors."""
+    tokens = clause.split()
+    if "-" in tokens:  # hyphen range "A - B": the lower bound is A
+        idx = tokens.index("-")
+        if idx > 0:
+            m = re.search(r"(\d+)", tokens[idx - 1])
+            return int(m.group(1)) if m else None
+        return None
+    lower: Optional[int] = None
+    for tok in tokens:
+        t = tok.strip()
+        if not t or t in ("*", "x", "X", "latest"):
+            continue
+        if t.startswith("<"):
+            continue  # upper bound, not a lower bound
+        mm = re.match(r"^(?:\^|~|>=|>|=|v)?\s*(\d+)", t)
+        if mm:
+            maj = int(mm.group(1))
+            lower = maj if lower is None else max(lower, maj)
+    return lower
+
+
+def _semver_range_min_major(range_str: str) -> int:
+    """The guaranteed-minimum MAJOR across a full npm range (``||`` union), i.e.
+    the lowest major any satisfying install could have (round 10). ``0`` when the
+    range cannot guarantee a floor (``"<30"``, ``"*"``, ``"latest"``, ``""``, or a
+    ``||`` alternative with no lower bound), so the caller enables version-gated
+    defaults ONLY when the WHOLE range is provably >= the required major."""
+    if not range_str or not range_str.strip():
+        return 0
+    mins: list[int] = []
+    for alt in range_str.split("||"):
+        cm = _semver_clause_min_major(alt)
+        if cm is None:
+            return 0  # an alternative admits arbitrarily low majors -> no floor
+        mins.append(cm)
+    return min(mins) if mins else 0
+
+
+def _detected_jest_major(module_path: Path, root_resolved: Path) -> Optional[int]:
+    """The GUARANTEED-MINIMUM declared jest major from the nearest package.json,
+    or ``None`` when no jest dependency is declared. Parses the full npm range
+    conservatively (round 10): ``"<30"`` -> 0, ``"^30 || ^29"`` -> 29, ``"^30"``
+    -> 30 — so a caller enabling jest-30-only discovery never certifies an
+    uncollected test on a range that could install jest <=29. Total."""
+    try:
+        current = module_path.parent.resolve()
+    except (OSError, RuntimeError):
+        return None
+    root_s = str(root_resolved)
+    while True:
+        pkg = current / "package.json"
+        if pkg.is_file():
+            try:
+                data = json.loads(pkg.read_text(encoding="utf-8", errors="ignore"))
+            except (OSError, ValueError):
+                data = None
+            if isinstance(data, Mapping):
+                for dep_key in ("dependencies", "devDependencies",
+                                "peerDependencies", "optionalDependencies"):
+                    deps = data.get(dep_key)
+                    if isinstance(deps, Mapping) and isinstance(deps.get("jest"), str):
+                        return _semver_range_min_major(deps["jest"])
+        if str(current) == root_s or not _contained_in_root(current, root_resolved):
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return None
+
+
+_DEFAULT_RUNNER_IGNORED_SEGMENTS = frozenset({"node_modules"})
+
+
+def _has_default_ignored_segment(candidate: Path, root_resolved: Path) -> bool:
+    """True when *candidate* lies under a directory BOTH jest and vitest exclude
+    from default discovery (``node_modules``) — round 10. Checked on the path
+    RELATIVE to the project root so a root that legitimately sits under such a
+    name does not force-refuse everything."""
+    try:
+        rel = candidate.resolve().relative_to(root_resolved)
+    except (ValueError, OSError, RuntimeError):
+        return False
+    return any(seg in _DEFAULT_RUNNER_IGNORED_SEGMENTS for seg in rel.parts)
+
+
+def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
+    """Greenfield runner-aware first-test path for a NEW JS/TS module (#1903 §A).
+
+    When no co-located test yet exists (:func:`find_collocated_test` returns
+    ``None``) but the project configures a jest/vitest runner, return the
+    co-located path the runner will actually collect so the FIRST generated test
+    lands where ``npm test`` looks instead of a runner-blind root ``tests/``
+    shadow (the primary false-green in issue #1903). The write location honors
+    JSON-readable config: ``testMatch``/``testRegex`` pick the ``.test``/``.spec``
+    + ``__test__``/``__tests__`` convention, and ``roots``/``rootDir``/
+    ``testPathIgnorePatterns`` are enforced so a custom layout never yields an
+    UNCOLLECTED test — if no candidate would be collected, return ``None`` (the
+    sink records needs-review and selects no test). For a CENTRALIZED layout (``roots``/``rootDir`` or
+    a ``testMatch`` with a fixed directory prefix) a collected path UNDER the
+    configured directory is derived instead of a co-located one, so the test
+    still lands where the runner looks. When the runner is configured only by a
+    JS file (``jest.config.js``, unparseable in Python): if that file's text
+    references NO discovery key the jest-default convention
+    ``__test__/{stem}.test.{ext}`` is used (jest's default ``testMatch`` collects
+    it); if it DOES customize discovery (``testMatch``/``roots``/... we cannot
+    parse) we conservatively return ``None`` rather than claim an unproven path is
+    collected. Python keeps its pytest-idiomatic ``tests/`` default (unchanged).
+    Any other language, or no detectable runner, yields ``None``.
+
+    The module path is caller/issue-influenced, so it flows through
+    :func:`_validated_project_path` (CWE-022) before any filesystem use and the
+    returned write-target is re-asserted in-root. Never raises: any error path
+    returns ``None`` (no greenfield write authority).
+    """
+    try:
+        root_resolved = Path.cwd().resolve()
+        module_path = _validated_project_path(code_file, root=root_resolved)
+        if module_path is None:
+            return None
+        if module_path.suffix.lower() not in _JS_TS_EXTENSIONS:
+            return None
+        if not _project_uses_js_test_runner(module_path, root_resolved):
+            return None
+
+        config, config_dir, opaque_custom = _collect_js_runner_config(
+            module_path, root_resolved
+        )
+        # An unparseable JS/TS config that customizes discovery: we cannot prove
+        # where tests are collected, so refuse to select a write target rather
+        # than guess the default.
+        if opaque_custom:
+            return None
+        # A parseable config that composes discovery in ways we do not resolve
+        # (jest ``projects`` multi-project, or a vitest ``test``/``include``/
+        # ``exclude`` block) — refuse rather than risk certifying an uncollected
+        # path.
+        if isinstance(config, Mapping) and any(
+            config.get(k) is not None
+            for k in ("projects", "workspace", "include", "exclude")
+        ):
+            return None
+        # Bound AGGREGATE discovery work (issue #1903 review round 5): candidates
+        # x repo-controlled patterns, each with a ReDoS timeout, is O(P^2); a
+        # hostile config with a huge pattern/root count could still stall an
+        # issue-driven sync for minutes. Refuse when the declared pattern/root
+        # count is implausibly large rather than spend the budget.
+        if isinstance(config, Mapping):
+            declared_patterns = sum(
+                len(_as_str_list(config.get(k)))
+                for k in ("testMatch", "testRegex", "testPathIgnorePatterns", "roots")
+            )
+            if declared_patterns > _MAX_RUNNER_PATTERNS:
+                return None
+        # DEFAULT-convention safety: when the config declares no explicit
+        # ``testMatch``/``testRegex`` (so placement relies on the runner's
+        # default discovery), only a module whose extension the DEFAULT collects
+        # is eligible. jest's default collects js/jsx/ts/tsx; vitest's default
+        # ``include`` ALSO collects mjs/cjs — so widen the set for a vitest
+        # project (issue #1903 review round 3).
+        has_explicit_match = isinstance(config, Mapping) and (
+            config.get("testMatch") is not None or config.get("testRegex") is not None
+        )
+        default_exts = (".js", ".jsx", ".ts", ".tsx")
+        # vitest's default ``include`` collects mjs/cjs; jest's default collects
+        # them only from v30+ (v30 added `[mc]` to the default testMatch). Widen
+        # the default set accordingly; an UNKNOWN jest version stays strict
+        # (refuse mjs/cjs) since jest <=29 would not collect them (#1903 review).
+        # Widen to mjs/cjs ONLY when the ACTIVE runner unambiguously collects
+        # them: jest>=30 (any project), OR vitest with NO jest present. A project
+        # with jest<=29 AND a vitest dependency is AMBIGUOUS (a jest run would not
+        # collect .mjs) -> fail closed, refuse (issue #1903 review round 6).
+        jest_major = _detected_jest_major(module_path, root_resolved)
+        allow_mc = (jest_major is not None and jest_major >= 30) or (
+            jest_major is None and _project_uses_vitest(module_path, root_resolved)
+        )
+        if allow_mc:
+            default_exts = default_exts + (".mjs", ".cjs")
+        if not has_explicit_match and module_path.suffix.lower() not in default_exts:
+            return None
+        candidates = _greenfield_candidate_paths(module_path, config, config_dir)[
+            :_MAX_GREENFIELD_CANDIDATES
+        ]
+
+        # Single wall-clock budget for the whole discovery call so an adversarial
+        # config of many near-timeout patterns cannot accumulate minutes of work
+        # (issue #1903 review round 6). On exhaustion, fail closed.
+        deadline = time.monotonic() + _DISCOVERY_TOTAL_BUDGET_S
+        fallback_default: Optional[Path] = None
+        for candidate in candidates:
+            resolved = _validated_project_path(candidate, root=root_resolved)
+            if resolved is None or not _contained_in_root(resolved, root_resolved):
+                continue
+            if resolved == module_path:
+                continue
+            # Default runner ignore (round 10): both jest (default
+            # ``testPathIgnorePatterns: ["/node_modules/"]``) and vitest (default
+            # ``exclude`` includes ``**/node_modules/**``) never collect a test
+            # under ``node_modules`` — so a co-located candidate there would be a
+            # false-green even when the filename convention matches.
+            if _has_default_ignored_segment(resolved, root_resolved):
+                continue
+            if time.monotonic() > deadline:
+                return fallback_default  # budget exhausted -> stop, best-so-far
+            verdict = _candidate_is_collected(resolved, config, config_dir, deadline)
+            if verdict is True:
+                return resolved
+            if verdict is False:
+                continue
+            # verdict is None (no config verdict): remember the first valid
+            # default-convention candidate but keep looking for a proven match.
+            if fallback_default is None:
+                fallback_default = resolved
+        return fallback_default
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
+def _existing_collocated_is_collected(
+    module_path: Path, sibling: Path, root_resolved: Path
+) -> Optional[bool]:
+    """Would the configured runner COLLECT an EXISTING co-located *sibling*?
+
+    Adoption (issue #1903 §B) must not blindly retarget onto a co-located file the
+    project's runner does not actually collect — e.g. a stale
+    ``src/__test__/page.test.ts`` under a Jest ``testMatch: ["qa/**/*.spec.ts"]``
+    — which would just preserve the false-green on an EXCLUDED file (review round
+    9). Returns ``True`` (collected), ``False`` (a configured runner PROVABLY
+    excludes it), or ``None`` (no evaluable JS/TS runner config — Python, no
+    runner, or an opaque/composed config we cannot resolve). A configured runner
+    plus ``None`` is not adoption authority; the caller suppresses test output
+    unless a bounded placement decision proves a collected path. Never raises.
+    """
+    try:
+        if module_path.suffix.lower() not in _JS_TS_EXTENSIONS:
+            return None
+        if not _project_uses_js_test_runner(module_path, root_resolved):
+            return None
+        config, config_dir, opaque_custom = _collect_js_runner_config(
+            module_path, root_resolved
+        )
+        if opaque_custom or not isinstance(config, Mapping):
+            return None  # cannot parse -> cannot prove exclusion -> adopt
+        if any(
+            config.get(k) is not None
+            for k in ("projects", "workspace", "include", "exclude")
+        ):
+            return None  # composed discovery we do not resolve -> adopt
+        deadline = time.monotonic() + _DISCOVERY_TOTAL_BUDGET_S
+        verdict = _candidate_is_collected(sibling, config, config_dir, deadline)
+        if verdict is not None:
+            return verdict
+
+        # With no explicit collection matcher, ``None`` means the ordinary
+        # runner defaults apply. Preserve an existing human-authored sibling
+        # whenever it is one of our bounded default-convention candidates.
+        # (Comparing only with ``find_runner_collected_test_path`` is too narrow:
+        # that helper returns the FIRST candidate, while a collected sibling may
+        # legitimately use another default layout such as ``page.test.tsx``.)
+        if config.get("testMatch") is not None or config.get("testRegex") is not None:
+            return None
+        default_exts = (".js", ".jsx", ".ts", ".tsx")
+        jest_major = _detected_jest_major(module_path, root_resolved)
+        if (jest_major is not None and jest_major >= 30) or (
+            jest_major is None and _project_uses_vitest(module_path, root_resolved)
+        ):
+            default_exts += (".mjs", ".cjs")
+        if module_path.suffix.lower() not in default_exts:
+            return False
+        if _has_default_ignored_segment(sibling, root_resolved):
+            return False
+        sibling_resolved = _validated_project_path(sibling, root=root_resolved)
+        if sibling_resolved is None:
+            return False
+        candidates = _greenfield_candidate_paths(module_path, config, config_dir)[
+            :_MAX_GREENFIELD_CANDIDATES
+        ]
+        return any(
+            _validated_project_path(candidate, root=root_resolved) == sibling_resolved
+            for candidate in candidates
+        )
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
+PDD_TEST_OUTPUT_NEEDS_REVIEW_MARKER = "PDD_TEST_OUTPUT_NEEDS_REVIEW"
+
+
+def _configured_js_runner_is_unresolved(code_file: str | Path) -> bool:
+    """True when a detected JS/TS runner has no provable collected test path."""
+    try:
+        root_resolved = Path.cwd().resolve()
+        module_path = _validated_project_path(code_file, root=root_resolved)
+        return bool(
+            module_path is not None
+            and module_path.suffix.lower() in _JS_TS_EXTENSIONS
+            and _project_uses_js_test_runner(module_path, root_resolved)
+            and find_runner_collected_test_path(module_path) is None
+        )
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+
+def unresolved_test_output_review_note(code_file: str | Path) -> str:
+    """Return the stable operator-facing note for a suppressed test output."""
+    return (
+        f"test generation needs review for `{Path(code_file).name}`: a configured "
+        "JavaScript/TypeScript runner was detected, but its effective collection "
+        "path could not be proven safely; no unverified test path was selected or "
+        "written"
+    )
+
+
+def resolve_test_output_path(
+    code_file: str | Path,
+    derived_test_path: str | Path,
+    *,
+    user_pinned: bool,
+) -> Optional[Path]:
+    """Adopt an existing co-located test as the canonical test path (issue #1903).
+
+    PDD derives its test-output path from ``.pddrc`` / defaults, blind to the
+    project's real test runner, so on a jest/Next.js project it maintains a
+    ``tests/`` shadow while the co-located test the runner collects goes stale
+    (a false-green). When a single unambiguous co-located test exists, return
+    it so generate/change/sync target the real file instead. When NO co-located
+    test exists yet but the project configures a jest/vitest runner (greenfield,
+    issue #1903 §A), return the co-located path the runner will collect
+    (``{module_dir}/__test__/{stem}.test.{ext}``) so the FIRST test lands where
+    the runner looks — never a root ``tests/`` orphan.
+
+    Args:
+        code_file: The module under test.
+        derived_test_path: The test path PDD derived from config/defaults.
+        user_pinned: ``True`` when the user explicitly pinned the path (CLI
+            ``--output`` or an explicit ``.pddrc test_output_path``); such
+            paths are returned unchanged.
+
+    Returns:
+        The adopted/proven runner-collected test, the explicit/ordinary derived
+        path, or ``None`` when a configured JS/TS runner is detected but no path
+        can be proven collected. ``None`` is a structured non-write decision:
+        callers continue while flagging the module for review. Never raises.
+    """
+    derived = Path(derived_test_path)
+    if user_pinned:
+        return derived
+    try:
+        matches = _collocated_test_matches(code_file)
+        if len(matches) != 1:
+            # ZERO existing co-located tests -> greenfield-eligible. AMBIGUOUS
+            # (>1) is NOT greenfield: writing a first test there would fork a
+            # THIRD file next to the existing ones. Only true greenfield (zero)
+            # consults runner discovery; an unresolved configured runner becomes
+            # a non-write decision (issue #1903 review round 3 — adoption never
+            # fires when >1 exists).
+            if matches:  # >1 existing co-located tests -> do not fork
+                return None if _configured_js_runner_is_unresolved(code_file) else derived
+            # Greenfield (issue #1903 §A): no existing co-located test. If the
+            # project configures a JS/TS runner, write the FIRST test where the
+            # runner actually collects it rather than the runner-blind derived
+            # ``tests/`` shadow. No runner detected (or Python) -> derived.
+            greenfield = find_runner_collected_test_path(code_file)
+            if greenfield is None:
+                return None if _configured_js_runner_is_unresolved(code_file) else derived
+            root_resolved = Path.cwd().resolve()
+            derived_resolved = _validated_project_path(derived, root=root_resolved)
+            if derived_resolved is not None and greenfield == derived_resolved:
+                return derived
+            return greenfield
+        # Exactly one existing co-located test -> adopt it.
+        sibling = matches[0]
+        root_resolved = Path.cwd().resolve()
+        sibling_resolved = _validated_project_path(sibling, root=root_resolved)
+        if sibling_resolved is None:
+            return derived
+        # Defense in depth (CWE-022): find_collocated_test already rejects
+        # candidates outside the working tree, but re-assert containment at
+        # the adoption sink — the returned path becomes a generated-test
+        # WRITE target downstream.
+        if not _contained_in_root(sibling_resolved, root_resolved):
+            return derived
+        derived_resolved = _validated_project_path(derived, root=root_resolved)
+        if derived_resolved is not None and sibling_resolved == derived_resolved:
+            return derived
+        # Round 9: only adopt a sibling the runner ACTUALLY collects. When a
+        # configured JS/TS runner PROVABLY excludes it (custom testMatch/roots the
+        # sibling does not match), adopting it would perpetuate the false-green on
+        # an excluded file. Redirect to the runner-collected location instead
+        # (greenfield discovery); if none can be proven, suppress test output
+        # rather than certify the excluded file or create a runner-blind shadow.
+        module_path = _validated_project_path(code_file, root=root_resolved)
+        collection_status = (
+            _existing_collocated_is_collected(
+                module_path, sibling_resolved, root_resolved
+            )
+            if module_path is not None
+            else None
+        )
+        if module_path is not None and _project_uses_js_test_runner(
+            module_path, root_resolved
+        ):
+            greenfield = find_runner_collected_test_path(code_file)
+            if collection_status is True or greenfield == sibling_resolved:
+                return sibling_resolved
+            if greenfield is not None and greenfield != sibling_resolved:
+                if derived_resolved is not None and greenfield == derived_resolved:
+                    return derived
+                return greenfield
+            return None
+        return sibling_resolved
+    except Exception:  # pylint: disable=broad-except
+        return None if _configured_js_runner_is_unresolved(code_file) else derived
+
+
+def was_test_adopted(
+    code_file: str | Path,
+    resolved_test_path: str | Path,
+    derived_test_path: str | Path,
+    *,
+    user_pinned: bool,
+) -> bool:
+    """True when *resolved_test_path* is an EXISTING co-located test PDD ADOPTED.
+
+    This is the structured provenance the issue #1903 §B.4 never-block requires:
+    it must fire ONLY for a co-located test PDD adopted from a HUMAN's existing
+    file — NOT a user-pinned path and NOT a greenfield test PDD is creating for
+    the first time. It is True only when ALL hold: the location was NOT
+    ``user_pinned``; a single existing co-located sibling was found at resolution
+    time (``find_collocated_test`` is not ``None`` — greenfield finds none yet);
+    and the resolved path actually differs from the derived default (adoption
+    genuinely happened, not a fall-through to the runner-blind shadow).
+
+    MUST be evaluated at PATH-RESOLUTION time (before generation overwrites the
+    file), because after generation the greenfield-created and human-adopted
+    cases both exist on disk and become indistinguishable by presence. Total —
+    any error yields ``False`` (conservative: no never-block).
+    """
+    try:
+        if user_pinned:
+            return False
+        sibling = find_collocated_test(code_file)
+        if sibling is None:
+            return False
+        if Path(resolved_test_path) == Path(derived_test_path):
+            return False
+        # Round 9: adoption means the resolved path IS that existing human
+        # sibling — NOT a greenfield/runner-collected redirect AWAY from a sibling
+        # the runner excludes (``resolve_test_output_path`` now redirects such
+        # excluded siblings). A redirect target is a fresh PDD-created file, not a
+        # human test, so it must never reach the never-block.
+        root_resolved = Path.cwd().resolve()
+        resolved_here = _validated_project_path(resolved_test_path, root=root_resolved)
+        sibling_here = _validated_project_path(sibling, root=root_resolved)
+        if (
+            resolved_here is None
+            or sibling_here is None
+            or resolved_here != sibling_here
+        ):
+            return False
+        # Ownership provenance (issue #1903 review round 7): a test PDD itself
+        # GREENFIELD-created on a prior run must NOT be reclassified as
+        # human-adopted just because it now exists as a single co-located sibling.
+        if is_pdd_created_test(resolved_test_path):
+            return False
+        return True
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+
+# Manifest of tests PDD GREENFIELD-created itself (issue #1903 review round 7),
+# so a later run never mistakes a PDD-owned co-located test for a human-adopted
+# one when deciding the churn never-block. Repo-relative POSIX paths. Lives under
+# ``.pdd/meta/`` — PDD's TRACKED sync-metadata directory (committed alongside the
+# per-module fingerprints) — NOT the top-level ``.pdd/`` which projects routinely
+# gitignore. This durability matters: a fresh checkout or the durable runner's
+# fresh module worktree must still see PDD's ownership, else a PDD-created test
+# is re-read as human-adopted and can improperly reach the never-block (round 8).
+_PDD_CREATED_TESTS_MANIFEST = Path(".pdd") / "meta" / "pdd_created_tests.json"
+# Legacy location (round 7) read as a fallback so ownership recorded before the
+# move is not lost on the first post-upgrade run.
+_PDD_CREATED_TESTS_MANIFEST_LEGACY = Path(".pdd") / "pdd_created_tests.json"
+
+
+@contextmanager
+def _interprocess_lock(lock_path: Path):
+    """Hold an EXCLUSIVE cross-platform lock over *lock_path*.
+
+    ``filelock`` is an existing project dependency and provides the native
+    POSIX/Windows implementation.  Unlike the old fcntl-only branch, Windows
+    writers now serialize the ownership-manifest read-modify-write operation.
+    The lock file intentionally remains on disk after release and is ignored by
+    Git; lock ownership itself is released by the context manager.
+    """
+    with FileLock(str(lock_path)):
+        yield
+
+
+def _pdd_created_tests_manifest_path() -> Path:
+    return Path.cwd() / _PDD_CREATED_TESTS_MANIFEST
+
+
+def _load_pdd_created_tests() -> Optional[set[str]]:
+    """Load monotonic ownership from protected base plus the worktree.
+
+    Invalid present evidence is fail-closed (``None``). A protected manifest
+    cannot be weakened by candidate deletion or truncation because its entries
+    are always unioned with the writable candidate copy.
+    """
+    result: set = set()
+    protected_ref = os.environ.get("PDD_PROTECTED_BASE_REF", "").strip()
+    if protected_ref:
+        for rel in (_PDD_CREATED_TESTS_MANIFEST, _PDD_CREATED_TESTS_MANIFEST_LEGACY):
+            try:
+                loaded = subprocess.run(
+                    ["git", "show", f"{protected_ref}:{rel.as_posix()}"],
+                    cwd=Path.cwd(),
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return None
+            if loaded.returncode != 0:
+                continue
+            try:
+                data = json.loads(loaded.stdout)
+            except ValueError:
+                return None
+            if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
+                return None
+            result.update(data)
+    for rel in (_PDD_CREATED_TESTS_MANIFEST, _PDD_CREATED_TESTS_MANIFEST_LEGACY):
+        path = Path.cwd() / rel
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
+            return None
+        result.update(data)
+    return result
+
+
+def _test_repo_relative(test_path: str | Path) -> Optional[str]:
+    """Repo-relative POSIX form of *test_path* (in-root), or ``None``."""
+    try:
+        root = Path.cwd().resolve()
+        p = Path(test_path)
+        resolved = (p if p.is_absolute() else (root / p)).resolve()
+        return resolved.relative_to(root).as_posix()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def record_pdd_created_test(test_path: str | Path) -> None:
+    """Record that PDD GREENFIELD-created the test at *test_path* (#1903 §A/§B.4).
+
+    Callers invoke this ONLY when PDD writes a brand-new greenfield test (no
+    pre-existing human file), so :func:`was_test_adopted` can later exclude it
+    from the human-adopted never-block.
+
+    Parallel agentic-sync CHILD PROCESSES can record concurrently, so the whole
+    read-modify-write runs under an interprocess EXCLUSIVE file lock and commits
+    via a temp file + atomic ``os.replace`` (round 9): an unlocked RMW would let
+    two children read the same set and clobber each other's additions, dropping an
+    ownership record so a later run misreads a PDD-owned test as human-adopted.
+    Evidence/path persistence failures raise so publication cannot continue
+    after silently losing ownership provenance.
+    """
+    rel = _test_repo_relative(test_path)
+    if rel is None:
+        raise RuntimeError("PDD test ownership path is outside the project")
+    manifest = _pdd_created_tests_manifest_path()
+    try:
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError("PDD test ownership directory is unavailable") from exc
+    lock_path = manifest.with_suffix(manifest.suffix + ".lock")
+    try:
+        with _interprocess_lock(lock_path):
+            existing = _load_pdd_created_tests()  # merges protected/legacy under lock
+            if existing is None:
+                raise RuntimeError("PDD test ownership evidence is unreadable")
+            if rel in existing:
+                return
+            existing.add(rel)
+            payload = json.dumps(sorted(existing), indent=2) + "\n"
+            tmp = manifest.with_suffix(manifest.suffix + f".tmp.{os.getpid()}")
+            try:
+                tmp.write_text(payload, encoding="utf-8")
+                os.replace(tmp, manifest)  # atomic within the same directory
+            finally:
+                try:
+                    if tmp.exists():
+                        tmp.unlink()
+                except OSError:
+                    pass
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("PDD test ownership could not be persisted") from exc
+
+
+def is_pdd_created_test(test_path: str | Path) -> bool:
+    """True when *test_path* is recorded as a PDD greenfield-created test. Total."""
+    rel = _test_repo_relative(test_path)
+    if rel is None:
+        return True
+    owned = _load_pdd_created_tests()
+    return owned is None or rel in owned
+
+
+def _pins_test_output_location(config: Mapping[str, Any]) -> bool:
+    """Return True when *config* explicitly pins the test-output location (#1903).
+
+    Recognizes both the flat ``test_output_path`` key and the Issue #237
+    template form ``outputs.test.path``. It MUST be fed a RAW ``.pddrc`` context
+    ``defaults`` block (where these keys appear only when explicitly configured),
+    NEVER the ``resolved_config`` that ``construct_paths`` returns: that config
+    has a generated-default ``test_output_path`` injected back into it, so it is
+    ALWAYS present and would read as pinned even for a default derivation. Use
+    :func:`configured_test_output_pinned` to obtain the right raw defaults for a
+    file. Never raises.
+    """
+    try:
+        # Presence (not truthiness): an explicitly configured `test_output_path: ""`
+        # (root-level test output) or `outputs.test.path: ""` is still an explicit
+        # user pin. Only a genuinely ABSENT key (or an explicit null) means
+        # "default derivation" and is eligible for co-located adoption (#1903).
+        if config.get("test_output_path") is not None:
+            return True
+        outputs = config.get("outputs")
+        if isinstance(outputs, Mapping):
+            test_cfg = outputs.get("test")
+            if isinstance(test_cfg, Mapping) and test_cfg.get("path") is not None:
+                return True
+        return False
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+
+def configured_test_output_pinned(
+    target_file: str | Path,
+    *,
+    context_override: Optional[str] = None,
+    search_from: Optional[str | Path] = None,
+) -> bool:
+    """True when the test-output location is user-pinned for *target_file* (#1903).
+
+    Reads the explicit-vs-default provenance from the SAME authoritative source
+    the path derivation is configured by — the RAW ``.pddrc`` context ``defaults``
+    (``test_output_path`` / ``outputs.test.path``) and the ``PDD_TEST_OUTPUT_PATH``
+    env var — and NEVER from ``construct_paths``' ``resolved_config`` (which injects
+    a generated-default ``test_output_path`` and so always reads as pinned).
+
+    The context is resolved the way ``construct_paths`` resolves it: an explicit
+    *context_override* wins; otherwise the context that owns *target_file* is
+    detected from its path (matching ``.pddrc`` ``prompts_dir`` / ``paths``), and
+    when nothing matches the ``default`` context's defaults apply. This keeps the
+    pin signal aligned with the derived path even when the owning context is
+    selected by a ``prompts_dir`` prefix rather than the bare basename/CWD.
+
+    Args:
+        target_file: The file whose owning context is inspected — the prompt file
+            for sync/change derivation, or the code file for ``pdd test``.
+        context_override: An explicit context name, when the caller already
+            resolved one (bypasses path-based detection).
+        search_from: Directory to locate the nearest ``.pddrc`` from (defaults to
+            *target_file*'s parent). Sync passes its ``prompts_root`` anchor so a
+            nested subproject finds its own ``.pddrc``.
+
+    Returns:
+        True when the location is explicitly pinned, else False. Never raises.
+    """
+    try:
+        # Presence (not truthiness): an explicitly exported `PDD_TEST_OUTPUT_PATH=`
+        # (even empty — a root-level pin) is an explicit user choice, consistent with
+        # the `.pddrc test_output_path: ""` handling in `_pins_test_output_location`.
+        # Only a genuinely UNSET env var (None) is default-eligible (#1903).
+        if os.environ.get("PDD_TEST_OUTPUT_PATH") is not None:
+            return True
+        # Lazy import: mirrors the repo's other construct_paths lookups from here
+        # and avoids any import cycle at module load.
+        from .construct_paths import (  # pylint: disable=import-outside-toplevel
+            _find_pddrc_file,
+            _load_pddrc_config,
+            detect_context_for_file,
+        )
+        start = Path(search_from) if search_from else Path(target_file).parent
+        pddrc_path = _find_pddrc_file(start)
+        if not pddrc_path:
+            return False
+        config = _load_pddrc_config(pddrc_path)
+        contexts = config.get("contexts", {})
+        context_name = context_override
+        if not context_name:
+            context_name, _ = detect_context_for_file(
+                str(target_file), repo_root=str(pddrc_path.parent)
+            )
+        # `.pddrc`'s `default` context is the fallback when no context matches
+        # (construct_paths applies it too), so a project that keeps all config in
+        # `default` is still recognized as pinned.
+        if not context_name and "default" in contexts:
+            context_name = "default"
+        defaults = contexts.get(context_name or "", {}).get("defaults", {})
+        return _pins_test_output_location(defaults)
+    except Exception:  # pylint: disable=broad-except
+        return False
 
 
 def discover_sibling_patch_targets(file_path: str | Path) -> set[str]:

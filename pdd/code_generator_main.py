@@ -49,6 +49,7 @@ from .interface_semantics import (
     annotations_compatible,
     build_module_default_symbols,
     compare_default_sources,
+    parse_callable_contract,
     signature_entries_compatible,
 )
 
@@ -176,6 +177,7 @@ class PublicSurfaceRegressionError(click.UsageError):
         total_cost: float = 0.0,
         model_name: str = "unknown",
         repair_directive: Optional[str] = None,
+        signature_details: Optional[List[Tuple[str, str, str, str]]] = None,
     ) -> None:
         self.prompt_name = prompt_name
         self.output_path = output_path or ""
@@ -185,16 +187,42 @@ class PublicSurfaceRegressionError(click.UsageError):
         self.post_surface_size = int(post_surface_size)
         self.total_cost = float(total_cost or 0.0)
         self.model_name = model_name or "unknown"
+        # Structured per-symbol detail for signature mismatches (issue #1900):
+        # ``(symbol, expected_entry, actual_entry, source)`` where ``source`` is
+        # ``"pdd-interface"`` when the expected signature came from the prompt's
+        # declaration. Purely additive — the ``removed:`` / ``signature_changed:``
+        # message lines below stay byte-for-byte identical (the cloud parser and
+        # ~50 tests key on them).
+        self.signature_details = list(signature_details or [])
         self._repair_directive_override = repair_directive
         output_display = self.output_path or "<unknown>"
-        super().__init__(
-            f"Public surface regression for {prompt_name}:\n"
-            f"removed: {', '.join(self.removed_symbols) if self.removed_symbols else '<none>'}\n"
-            f"signature_changed: {', '.join(self.changed_signatures) if self.changed_signatures else '<none>'}\n"
-            f"output: {output_display}\n"
-            f"pre_surface_size: {self.pre_surface_size}\n"
-            f"post_surface_size: {self.post_surface_size}"
-        )
+        message_lines = [
+            f"Public surface regression for {prompt_name}:",
+            f"removed: {', '.join(self.removed_symbols) if self.removed_symbols else '<none>'}",
+            f"signature_changed: {', '.join(self.changed_signatures) if self.changed_signatures else '<none>'}",
+            f"output: {output_display}",
+            f"pre_surface_size: {self.pre_surface_size}",
+            f"post_surface_size: {self.post_surface_size}",
+        ]
+        # Append (never alter the lines above) one structured detail line per
+        # signature mismatch so the full expected-vs-actual contract is carried
+        # in the message the local + cloud repair loops read. JSON-encoded so a
+        # signature/default containing the old ` | ` field delimiters can't corrupt
+        # parsing (codex round-8 finding 2); parsed by
+        # ``agentic_sync_runner._parse_signature_detail_lines``.
+        for symbol, expected_entry, actual_entry, source in self.signature_details:
+            message_lines.append(
+                "signature_detail: "
+                + json.dumps(
+                    {
+                        "symbol": symbol,
+                        "expected": expected_entry,
+                        "actual": actual_entry,
+                        "source": source,
+                    }
+                )
+            )
+        super().__init__("\n".join(message_lines))
 
     @property
     def repair_directive(self) -> str:
@@ -205,15 +233,103 @@ class PublicSurfaceRegressionError(click.UsageError):
             lines.append("Restore these public symbols from the existing module:")
             for sym in self.removed_symbols:
                 lines.append(f"- {sym}")
-        if self.changed_signatures:
+        # Prefer the DECLARED signature as the repair target when the prompt's
+        # <pdd-interface> is the source of truth: it is a stable target, unlike
+        # "restore compatible signatures" (compatible with the very code being
+        # regenerated) which dead-ended the change->sync loop (issue #1900).
+        declared_details = [
+            detail for detail in self.signature_details if detail[3] == "pdd-interface"
+        ]
+        if declared_details:
+            # Inject the DECLARED signature as a VERBATIM hard constraint, not
+            # just a description of the violation (issue #1968): an annotation-
+            # level drift (declared `object`, regenerated `Any`; or a broadened
+            # param union) converges only when the retry is told to reproduce the
+            # declared annotation text token-for-token instead of a semantically
+            # "equivalent" spelling it keeps re-emitting.
+            lines.append(
+                "Restore these public symbols to their declared "
+                "<pdd-interface> signatures — emit each declared signature "
+                "VERBATIM. Reproduce the declared annotation text token-for-"
+                "token; do not substitute an equivalent-but-differently-spelled "
+                "type (keep `object` as `object`; never emit `Any` where the "
+                "declaration says `object`) and do not broaden a declared "
+                "parameter's type with `|` union members the declaration omits:"
+            )
+            for symbol, expected_entry, actual_entry, _ in declared_details:
+                lines.append(
+                    f"- Restore `{symbol}` to its declared signature "
+                    f"`{expected_entry}` (found `{actual_entry}`). Emit exactly "
+                    f"`{expected_entry}` — the prior attempt emitted "
+                    f"`{actual_entry}`, which differs only in annotation "
+                    f"spelling and was rejected."
+                )
+            # Declaration-aware guidance (codex round-7 finding 3): a declared
+            # PARAM change is authorized by EDITING the declaration, not by a
+            # BREAKING-CHANGE marker (which only relaxes the un-declarable
+            # binding-kind/async for declared symbols) — advising the marker here
+            # would loop the user back into the dead-end #1900 removes.
+            lines.append(
+                "If a declared parameter change is intended, edit the prompt's "
+                "<pdd-interface> declaration to the intended signature (the "
+                "declaration is the contract for declared symbols)."
+            )
+        declared_changed = {detail[0] for detail in declared_details}
+        remaining_changed = [
+            sym for sym in self.changed_signatures if sym not in declared_changed
+        ]
+        if remaining_changed:
             lines.append("Restore compatible signatures for these public symbols:")
-            for sym in self.changed_signatures:
+            for sym in remaining_changed:
                 lines.append(f"- {sym}")
         lines.append(
             "Preserve backward-compatible public helpers unless the prompt lists "
             "the intended removals with BREAKING-CHANGE: remove <symbol>."
         )
         return "\n".join(lines)
+
+
+_CHURN_NONCE_ENV = "PDD_CHURN_NONCE_FD"
+_CHURN_NONCE_CACHE: Optional[str] = None
+_CHURN_NONCE_READ = False
+
+
+def _read_churn_nonce() -> str:
+    """Read the one-time provenance nonce the PARENT sync runner handed this child
+    over a NON-inherited pipe FD (issue #1903 §B.4 review round 8).
+
+    The parent passes the read-end FD number via ``PDD_CHURN_NONCE_FD`` and keeps
+    the FD out of any grandchild test subprocess (``close_fds`` default), so only
+    THIS trusted child process can read the nonce. Stamping it into the churn
+    block lets the parent distinguish a genuine PDD-emitted block from one a
+    hostile project test merely printed to stdout (which cannot know the nonce).
+    Read once (the pipe yields EOF afterwards) and cached. Returns ``""`` when no
+    channel is present (standalone ``pdd test``/``sync`` — which never
+    never-blocks — or an older parent). Total: any error yields ``""``.
+    """
+    global _CHURN_NONCE_CACHE, _CHURN_NONCE_READ  # pylint: disable=global-statement
+    if _CHURN_NONCE_READ:
+        return _CHURN_NONCE_CACHE or ""
+    _CHURN_NONCE_READ = True
+    fd_s = os.environ.get(_CHURN_NONCE_ENV)
+    if not fd_s:
+        _CHURN_NONCE_CACHE = ""
+        return ""
+    try:
+        fd = int(fd_s)
+        chunks = []
+        while len(b"".join(chunks)) < 256:
+            data = os.read(fd, 256)
+            if not data:
+                break
+            chunks.append(data)
+        token = b"".join(chunks).decode("ascii", "ignore").strip()
+        # Accept only a plausible hex nonce so a coincidental FD-number collision
+        # in some process cannot inject arbitrary bytes as a "valid" nonce.
+        _CHURN_NONCE_CACHE = token if re.fullmatch(r"[0-9a-f]{8,128}", token) else ""
+    except (OSError, ValueError):
+        _CHURN_NONCE_CACHE = ""
+    return _CHURN_NONCE_CACHE or ""
 
 
 class TestChurnError(click.UsageError):
@@ -230,6 +346,7 @@ class TestChurnError(click.UsageError):
         total_cost: float = 0.0,
         model_name: str = "unknown",
         repair_directive: Optional[str] = None,
+        adopted_human: bool = False,
     ) -> None:
         self.prompt_name = prompt_name
         self.output_path = output_path or ""
@@ -239,15 +356,28 @@ class TestChurnError(click.UsageError):
         self.post_line_count = int(post_line_count)
         self.total_cost = float(total_cost or 0.0)
         self.model_name = model_name or "unknown"
+        # Issue #1903 §B.4 provenance: True only when this test was ADOPTED from
+        # an existing HUMAN co-located test (unpinned), determined at path
+        # resolution BEFORE generation. The issue-driven never-block requires it;
+        # a False value keeps the strict hard-fail. Serialized into the block so
+        # the (subprocess-boundary) parent runner can read it.
+        self.adopted_human = bool(adopted_human)
         self._repair_directive_override = repair_directive
         output_display = self.output_path or "<unknown>"
+        # Stamp the parent-issued nonce (round 8) so the parent can authenticate
+        # THIS block as genuinely PDD-emitted; a forged block printed by a hostile
+        # project test cannot carry the correct (secret) nonce and is refused.
+        nonce = _read_churn_nonce()
+        nonce_line = f"\nnonce: {nonce}" if nonce else ""
         super().__init__(
             f"Test churn threshold exceeded for {prompt_name}:\n"
             f"ratio: {self.churn_ratio:.2f}\n"
             f"threshold: {self.threshold:.2f}\n"
             f"output: {output_display}\n"
             f"pre_line_count: {self.pre_line_count}\n"
-            f"post_line_count: {self.post_line_count}"
+            f"post_line_count: {self.post_line_count}\n"
+            f"adopted: {str(self.adopted_human).lower()}"
+            f"{nonce_line}"
         )
 
     @property
@@ -580,10 +710,14 @@ def _is_test_output_path(output_path: Optional[str]) -> bool:
         ".test.tsx",
         ".test.js",
         ".test.jsx",
+        ".test.mjs",
+        ".test.cjs",
         ".spec.ts",
         ".spec.tsx",
         ".spec.js",
         ".spec.jsx",
+        ".spec.mjs",
+        ".spec.cjs",
     )
     # `<name>_test.<ext>` / `<name>_spec.<ext>` patterns for files that
     # live next to production code rather than under `tests/`. Go's
@@ -631,7 +765,7 @@ def _is_test_output_path(output_path: Optional[str]) -> bool:
         name.startswith("test_")
         or lower_name.endswith(js_like_test_suffixes)
         or name.endswith(pascal_test_suffixes)
-        or any(part in {"tests", "__tests__"} for part in path.parts)
+        or any(part in {"tests", "__tests__", "__test__"} for part in path.parts)
     )
 
 
@@ -916,27 +1050,30 @@ def _symbol_exists_in_module(tree: ast.Module, symbol: str) -> bool:
                 if node.value is not None and _assign_target_matches(node.target, symbol):
                     return True
         return False
-    cls_name, remainder = symbol.split(".", 1)
-    cls_node = next(
-        (node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == cls_name),
-        None,
-    )
-    if cls_node is None:
-        return False
-    if "." not in remainder:
-        return any(
-            isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == remainder
-            for child in cls_node.body
+    # Dotted: walk the leading segments as nested ``ClassDef`` containers, then
+    # match the final segment as a method OR a (nested) class. Resolving the final
+    # segment as a class too — not method-only — means a declared NESTED class
+    # constructor whose path includes an underscore (``_Outer.Inner`` /
+    # ``Outer._Inner``) is recognized as defined and captured via the patch-target
+    # path, mirroring how the public recursion already keys nested classes as
+    # ``Outer.Inner`` (codex round-9). This only ever recognizes MORE names as
+    # defined, so no previously-matched name stops matching.
+    parts = symbol.split(".")
+    body: List[ast.stmt] = list(tree.body)
+    for part in parts[:-1]:
+        cls_node = next(
+            (node for node in body if isinstance(node, ast.ClassDef) and node.name == part),
+            None,
         )
-    inner_cls, method_name = remainder.split(".", 1)
-    for child in cls_node.body:
-        if isinstance(child, ast.ClassDef) and child.name == inner_cls:
-            return any(
-                isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and method.name == method_name
-                for method in child.body
-            )
-    return False
+        if cls_node is None:
+            return False
+        body = list(cls_node.body)
+    last = parts[-1]
+    return any(
+        isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and child.name == last
+        for child in body
+    )
 
 
 def _effective_patch_targets(
@@ -1793,6 +1930,67 @@ def _synthesize_dataclass_init_signature(
     return f"({', '.join(parts)})"
 
 
+def _resolve_class_node(
+    tree: ast.Module, symbol: str
+) -> Optional[ast.ClassDef]:
+    """Resolve a (possibly dotted / nested) class path to its ``ClassDef`` node.
+
+    Walks each dotted segment through nested class bodies (``Outer.Inner`` ->
+    the ``Inner`` node inside ``Outer``). Returns ``None`` when any segment is not
+    a class — so a dotted method path (``Outer.method``) resolves to ``None`` and
+    the caller falls back to method-signature capture. Used to give a patch-target
+    nested class its ``[class]`` constructor-ABI entry (codex round-9).
+    """
+    body: List[ast.stmt] = list(tree.body)
+    node: Optional[ast.ClassDef] = None
+    for part in symbol.split("."):
+        node = next(
+            (child for child in body if isinstance(child, ast.ClassDef) and child.name == part),
+            None,
+        )
+        if node is None:
+            return None
+        body = list(node.body)
+    return node
+
+
+def _class_constructor_signature(
+    class_node: ast.ClassDef,
+    class_defs: Dict[str, ast.ClassDef],
+    imported_names: Set[str],
+) -> str:
+    """Return a class's constructor-ABI signature string (no ``[class]`` prefix).
+
+    Mirrors an explicit receiver-stripped ``__init__``, a synthesised stdlib
+    ``@dataclass`` init, or the bare ``()`` fallback — the exact logic
+    :func:`_snapshot_public_signatures` uses for the ``[class]`` entry, extracted
+    so a patch-target class (e.g. a declared underscore class whose constructor is
+    the contract) can reuse it (codex round-8 finding 3).
+    """
+    explicit_init: Optional[ast.AST] = None
+    for child in class_node.body:
+        if (
+            isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and child.name == "__init__"
+        ):
+            explicit_init = child
+            break
+    if explicit_init is not None:
+        return _format_python_signature(explicit_init, skip_first=True)
+    dataclass_decorators = [
+        dec for dec in class_node.decorator_list if _is_dataclass_decorator(dec)
+    ]
+    is_dataclass = bool(dataclass_decorators)
+    init_synthesized = all(
+        _dataclass_decorator_synthesizes_init(dec) for dec in dataclass_decorators
+    )
+    if is_dataclass and init_synthesized:
+        return _synthesize_dataclass_init_signature(
+            class_node, class_defs=class_defs, imported_names=imported_names
+        )
+    return "()"
+
+
 def _patch_target_signature_entry(
     tree: ast.Module,
     symbol: str,
@@ -1932,54 +2130,13 @@ def _snapshot_public_signatures(
         # function/async-function/class kind tagging so a replacement
         # that swaps the class for a function with a matching constructor
         # signature is still flagged.
-        explicit_init: Optional[ast.AST] = None
-        for child in class_node.body:
-            if (
-                isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and child.name == "__init__"
-            ):
-                explicit_init = child
-                break
-        if explicit_init is not None:
-            class_signature = _format_python_signature(
-                explicit_init, skip_first=True
-            )
-        else:
-            # No explicit ``__init__`` — but if the class is a stdlib
-            # ``@dataclass``, the synthesised init mirrors the field
-            # annotations. Build it from the ``AnnAssign`` field list so
-            # that adding/removing/reordering required fields shows up as
-            # a snapshot diff (reviewer reproducer for PR #1015). Falls
-            # back to the previous bare ``()`` for non-dataclass classes
-            # and for unsupported decorator forms (``@attr.s``,
-            # ``@pydantic.dataclasses.dataclass``, etc).
-            dataclass_decorators = [
-                dec
-                for dec in class_node.decorator_list
-                if _is_dataclass_decorator(dec)
-            ]
-            is_dataclass = bool(dataclass_decorators)
-            # ``@dataclass(init=False)`` keeps the class's natural
-            # ``__init__`` (typically ``object.__init__`` — no fields
-            # injected). When ANY dataclass decorator opts out, do NOT
-            # synthesise from the class body: adding fields under
-            # ``init=False`` does not change the runtime constructor and
-            # must not falsely trip the gate; flipping ``init=False`` →
-            # default DOES change the constructor and SHOULD trip it
-            # (the ``()`` snapshot here vs the synth signature on the
-            # default branch).
-            init_synthesized = all(
-                _dataclass_decorator_synthesizes_init(dec)
-                for dec in dataclass_decorators
-            )
-            if is_dataclass and init_synthesized:
-                class_signature = _synthesize_dataclass_init_signature(
-                    class_node,
-                    class_defs=class_defs,
-                    imported_names=imported_names,
-                )
-            else:
-                class_signature = "()"
+        # Record the class with its constructor-ABI signature (explicit
+        # receiver-stripped ``__init__`` / synthesised stdlib ``@dataclass`` init /
+        # bare ``()``). Shared with the patch-target class path via
+        # :func:`_class_constructor_signature`.
+        class_signature = _class_constructor_signature(
+            class_node, class_defs, imported_names
+        )
         signatures[qualname] = f"[class] {class_signature}"
 
         # First pass: accumulate property accessor roles per name so a
@@ -2218,6 +2375,20 @@ def _snapshot_public_signatures(
         for symbol in sorted(patch_targets):
             if symbol in signatures:
                 continue
+            # A patch-target that is a CLASS — top-level OR a nested
+            # ``Outer.Inner`` (incl. underscore paths) — gets its ``[class]``
+            # constructor-ABI entry, so a declared (possibly underscore) class or
+            # ``Class.__init__`` / ``Outer.Inner.__init__`` is validated like a
+            # public class rather than skipped for lack of a signature entry (codex
+            # round-8 finding 3 + round-9). ``_patch_target_signature_entry`` only
+            # builds function/method entries.
+            class_node = _resolve_class_node(tree, symbol)
+            if class_node is not None:
+                class_signature = _class_constructor_signature(
+                    class_node, class_defs, imported_names
+                )
+                signatures[symbol] = f"[class] {class_signature}"
+                continue
             entry = _patch_target_signature_entry(tree, symbol, class_defs)
             if entry is not None:
                 signatures[symbol] = entry
@@ -2232,6 +2403,182 @@ def _collect_python_public_surface(source: str) -> List[str]:
 def _prompt_allows_breaking_change(prompt_content: Optional[str]) -> bool:
     """Backward-compatible wrapper for the public marker helper."""
     return _prompt_has_breaking_change_marker(prompt_content)
+
+
+def _collect_declared_surface(
+    prompt_content: Optional[str],
+    prompt_name: str,
+) -> Dict[str, Optional[str]]:
+    """Collect declared public symbols and raw signatures from ``<pdd-interface>``.
+
+    Returns ``{name -> raw_signature_or_None}`` for every function the prompt's
+    ``type: "module"`` ``<pdd-interface>`` declares (``module.functions``).
+    Unlike :func:`_extract_pdd_interface_signatures`, a missing or non-paren
+    signature is KEPT (mapped to ``None``) so the surface gate can enforce
+    presence-only for description-only declarations (issue #1900).
+
+    Scoped to ``type: "module"`` ONLY. ``type: "cli"`` / ``type: "command"``
+    interfaces declare COMMAND strings (e.g. ``"sync-architecture"``,
+    ``"pdd extracts prune"`` — hyphens/spaces, not valid Python identifiers), not
+    module symbols; feeding those to the surface gate produced phantom
+    ``removed:`` diffs on valid generated code (codex review finding 1). CLI/
+    command signature conformance stays owned by the conformance gate
+    (:func:`_extract_pdd_interface_signatures` still covers them).
+
+    Returns ``{}`` when there is no prompt, no ``type: "module"``
+    ``<pdd-interface>`` block, or the JSON is malformed. The conformance gate owns
+    the parse-error warning, so this stays silent to avoid a duplicate warning.
+    """
+    declared: Dict[str, Optional[str]] = {}
+    if not prompt_content:
+        return declared
+    tags = parse_prompt_tags(prompt_content)
+    if tags.get("interface_parse_error"):
+        return declared
+    interface = tags.get("interface")
+    if not isinstance(interface, dict) or interface.get("type") != "module":
+        return declared
+
+    module_spec = interface.get("module") or {}
+    for item in module_spec.get("functions") or []:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not name or not isinstance(name, str):
+            continue
+        sig = item.get("signature")
+        declared[name] = sig if isinstance(sig, str) else None
+    return declared
+
+
+def _declared_signature_to_entry(
+    raw_signature: Optional[str],
+    binding_kind: str,
+    *,
+    is_async: bool = False,
+    strip_receiver: bool = False,
+) -> Optional[str]:
+    """Normalize a declared ``<pdd-interface>`` signature into a snapshot entry.
+
+    Produces an entry shaped like :func:`_snapshot_public_signatures` values
+    (``[<kind>] (params) -> ret``) so :func:`signature_entries_compatible` can
+    compare the DECLARED contract against the generated one. The binding kind and
+    async marker are copied from the GENERATED symbol (``binding_kind`` /
+    ``is_async``) because a ``<pdd-interface>`` signature cannot express
+    ``self`` / property / ``async``; matching them by construction means only the
+    parameter list and return annotation are actually compared, and no
+    binding-kind drift is ever invented from the declaration.
+
+    ``strip_receiver=True`` (used for receiver-bound methods and constructors:
+    ``instance`` / ``classmethod`` / ``class`` kinds) drops a leading ``self`` /
+    ``cls`` positional so the declared ``(self, x)`` matches the snapshot's
+    receiver-stripped ``(x)``. An already-stripped ``(x)`` is left unchanged.
+
+    Returns ``None`` (presence-only: the symbol must exist but its signature is
+    not checked) when the declared signature is not a parseable paren-list — a
+    missing signature, ``None``, a class header (``class Foo(Base)``),
+    ``dataclass ...``, ``...`` — or when the composed entry does not parse as a
+    callable contract.
+    """
+    if not raw_signature or not isinstance(raw_signature, str):
+        return None
+    sig = raw_signature.strip()
+    # Strip a leading ``async`` and/or ``def <name>`` prefix so a declaration
+    # written as ``async def foo(x)`` or ``def foo(x)`` reduces to the bare
+    # parameter list. The entry's async-ness is taken from the generated symbol,
+    # not the declaration, so any declared ``async`` is dropped here.
+    if sig.startswith("async "):
+        sig = sig[len("async "):].strip()
+    def_match = re.match(r"^def\s+[A-Za-z_]\w*\s*(.*)$", sig, re.DOTALL)
+    if def_match:
+        sig = def_match.group(1).strip()
+        if sig.startswith("async "):
+            sig = sig[len("async "):].strip()
+    if not sig.startswith("("):
+        return None
+    if strip_receiver:
+        # Mirror the snapshot's receiver stripping: parse the declared paren
+        # signature and drop a leading ``self``/``cls`` positional so a declared
+        # ``(self, x)`` compares against the snapshot's ``(x)``. A signature that
+        # does not parse or whose first positional is not a receiver is left
+        # unchanged (an already receiver-free ``(x)`` stays ``(x)``).
+        try:
+            parsed = ast.parse(f"def _pdd{sig}: pass").body[0]
+        except SyntaxError:
+            return None
+        if isinstance(parsed, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            positional = list(parsed.args.posonlyargs) + list(parsed.args.args)
+            if positional and positional[0].arg in {"self", "cls"}:
+                sig = _format_python_signature(parsed, skip_first=True)
+    async_prefix = "async " if is_async else ""
+    entry = f"[{binding_kind}] {async_prefix}{sig}"
+    if parse_callable_contract(entry) is None:
+        return None
+    return entry
+
+
+def _entry_binding_context(entry: Optional[str]) -> Optional[Tuple[str, bool]]:
+    """Return ``(binding_kind, is_async)`` parsed off a snapshot entry.
+
+    Reads the ``[<kind>]`` prefix and a leading ``async `` from a
+    :func:`_snapshot_public_signatures` value (e.g. ``[async_function] async
+    (x)`` -> ``("async_function", True)``). Returns ``None`` when the entry has
+    no binding-kind prefix.
+    """
+    if not entry:
+        return None
+    match = re.match(r"^\[([^\]]+)\]\s*(.*)$", entry.strip())
+    if match is None:
+        return None
+    return match.group(1), match.group(2).lstrip().startswith("async ")
+
+
+def _declared_presence_name(name: str) -> str:
+    """Map a declared symbol to the surface name whose presence satisfies it.
+
+    A constructor's ABI is keyed on the CLASS symbol (``Foo``), never
+    ``Foo.__init__`` (see :func:`_snapshot_public_surface`), so a prompt that
+    declares ``Foo.__init__`` is present as long as ``Foo`` is — flagging it as
+    a removed symbol on valid code was a false positive (codex review finding 2).
+    Every other declared name maps to itself.
+    """
+    if name.endswith(".__init__"):
+        return name[: -len(".__init__")]
+    return name
+
+
+def _declared_patch_targets(
+    code: Optional[str],
+    declared_names: Set[str],
+    language: Optional[str],
+) -> Set[str]:
+    """Return the declared symbols DEFINED in *code*, as snapshot surface keys.
+
+    The prompt's ``<pdd-interface>`` declaration is authoritative (like ``__all__``),
+    so a declared ``_``-prefixed helper (real: ``_extract_step_report``) must be
+    captured in the public-surface / signature snapshots even though the default
+    heuristic filters underscore names out (codex round-7 finding 1). These are
+    fed as ``patch_targets`` (which force a defined name into the snapshot), so only
+    names actually DEFINED in *code* are returned — a genuinely removed declared
+    symbol stays out of the ``after`` snapshot and is still reported as removed.
+
+    Each declared name is mapped through :func:`_declared_presence_name` (so a
+    declared ``Class.__init__`` contributes the CLASS key, matching where the
+    snapshot puts the constructor ABI, and never injects a phantom ``Class.__init__``
+    signature entry that would bypass the declared-vs-old-code routing).
+    """
+    if not declared_names or (language or "").lower() not in {"python", "py"}:
+        return set()
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return set()
+    targets: Set[str] = set()
+    for name in declared_names:
+        presence = _declared_presence_name(name)
+        if _symbol_exists_in_module(tree, presence):
+            targets.add(presence)
+    return targets
 
 
 def _verify_public_surface_regression(
@@ -2253,7 +2600,21 @@ def _verify_public_surface_regression(
     ):
         return
 
-    patch_targets = _effective_patch_targets(existing_code, language or "python", output_path)
+    # The prompt's ``<pdd-interface>`` declaration is the stable surface contract
+    # (issue #1900), and it is authoritative like ``__all__``. Collect it BEFORE
+    # the snapshots so declared symbols — including ``_``-prefixed helpers the
+    # default heuristic would filter out (codex round-7 finding 1) — are forced
+    # into the surface/signature snapshots via ``patch_targets`` (only when
+    # actually DEFINED in the respective code, so a genuinely removed declared
+    # symbol still diffs as removed). Empty when there is no parseable
+    # ``<pdd-interface>`` (also on a JSON parse error — the conformance gate owns
+    # that warning), so undeclared modules behave exactly as before.
+    declared = _collect_declared_surface(prompt_content, prompt_name)
+    declared_names = set(declared)
+
+    patch_targets = _effective_patch_targets(
+        existing_code, language or "python", output_path
+    ) | _declared_patch_targets(existing_code, declared_names, language or "python")
     before = _snapshot_public_surface(
         existing_code,
         language or "python",
@@ -2291,7 +2652,7 @@ def _verify_public_surface_regression(
             ) from syntax_err
     after_patch_targets = _effective_patch_targets(
         generated_code, language or "python", output_path
-    )
+    ) | _declared_patch_targets(generated_code, declared_names, language or "python")
     after = _snapshot_public_surface(
         generated_code,
         language or "python",
@@ -2312,11 +2673,35 @@ def _verify_public_surface_regression(
         for sym in before:
             if sym.startswith(prefix):
                 expanded_allowed.add(sym)
-    removed = [
+    # Per-symbol hybrid (issue #1900): DECLARED symbols are validated against the
+    # declaration (a stable target) so a legit ``pdd change`` that also drifts an
+    # unrelated declared signature no longer dead-ends the change->sync loop;
+    # UNDECLARED symbols keep the old-code baseline. ``declared`` was collected
+    # above (it also seeds ``patch_targets``).
+
+    # Removal, per-symbol. UNDECLARED: a public name dropped between before and
+    # after regresses unless BREAKING-CHANGE opts it out (today's behavior).
+    # DECLARED: a still-declared symbol absent from the generated surface
+    # regresses regardless — the declaration is authoritative, so a
+    # BREAKING-CHANGE: remove does NOT excuse it, and its absence counts even if
+    # it was never in ``before``.
+    undeclared_removed = [
         symbol
         for symbol in _diff_public_surface(before, after)
-        if symbol not in expanded_allowed
+        if symbol not in declared_names and symbol not in expanded_allowed
     ]
+    # ``Foo.__init__`` is present when the ``Foo`` class symbol is (the
+    # constructor ABI is keyed on the class, not ``Class.__init__``), so map each
+    # declared name through its presence-name before the surface membership test
+    # (codex review finding 2). The presence-name is also what gets reported when
+    # a declared symbol is genuinely missing.
+    declared_missing = [
+        presence
+        for symbol in declared_names
+        for presence in (_declared_presence_name(symbol),)
+        if presence not in after
+    ]
+    removed = sorted(set(undeclared_removed) | set(declared_missing))
     before_signatures = _snapshot_public_signatures(
         existing_code,
         language or "python",
@@ -2329,17 +2714,162 @@ def _verify_public_surface_regression(
     )
     # Per-side module default-symbol tables (issue #1558): a parameter default
     # written as a same-module constant (``max_chars=_LIMIT`` where
-    # ``_LIMIT = 25000``) resolves to the literal it stands for. Each side is
-    # resolved against its OWN module — the existing code for the ``before``
-    # signature and the generated code for the ``after`` — so a literal <->
-    # same-module-constant refactor of a default is not flagged as a regression,
-    # while the same constant name resolving to a different value across the two
-    # versions still is.
+    # ``_LIMIT = 25000``) resolves to the literal it stands for. For the
+    # UNDECLARED old-vs-new comparison each side is resolved against its OWN
+    # module — the existing code for the ``before`` signature and the generated
+    # code for the ``after`` — so a literal <-> same-module-constant refactor of a
+    # default is not flagged as a regression, while the same constant name
+    # resolving to a different value across the two versions still is.
     before_default_symbols = build_module_default_symbols(existing_code)
     after_default_symbols = build_module_default_symbols(generated_code)
     allowed_signature_changes = _prompt_breaking_change_signature_symbols(prompt_content)
     changed_set: Set[str] = set()
+    signature_details: List[Tuple[str, str, str, str]] = []
+    # Declared symbols that were ACTUALLY validated against the declaration below
+    # (top-level functions with a parseable declared signature). Only these are
+    # excluded from the undeclared old-code loops, so the declaration can
+    # authorize a change old code would flag (the #2971 case). A declared symbol
+    # that is PRESENCE-ONLY here — a dotted method, or a non-paren declared
+    # signature where ``_declared_signature_to_entry`` returns None — is NOT
+    # added, so it falls back to the exact old-code baseline (added-required-param
+    # / binding-kind flip / ctor ABI drift stay caught; codex over-skip fix).
+    declared_validated: Set[str] = set()
+
+    # DECLARED symbols: validate the generated signature against the DECLARED
+    # PARAM/return contract (a stable target), NEVER re-comparing params against
+    # the old code. Top-level functions AND dotted methods/constructors are all
+    # first-class declared-contract citizens here — the declaration is the permit
+    # for their params/return, while the un-declarable binding-kind/async are
+    # anchored to old code (below). Defaults on BOTH sides resolve in the
+    # GENERATED module namespace — the prompt describes the generated module
+    # (issue #1558's declared-vs-generated resolution).
+    for symbol in sorted(declared_names):
+        # A constructor's ABI is keyed on the CLASS symbol as a ``[class]`` entry,
+        # so a declared ``Class.__init__`` validates against the class entry;
+        # every other declared name (top-level function or ``Class.method``) keys
+        # on itself.
+        if symbol.endswith(".__init__"):
+            snapshot_key = symbol[: -len(".__init__")]
+        else:
+            snapshot_key = symbol
+        actual_entry = after_signatures.get(snapshot_key)
+        if actual_entry is None:
+            # Absent from the generated signature table (missing symbol or a
+            # non-callable form). Presence is enforced by the removal check
+            # above; not validated -> left out of ``declared_validated`` so it
+            # falls back to the old-code baseline.
+            continue
+        actual_ctx = _entry_binding_context(actual_entry)
+        if actual_ctx is None:
+            continue
+        # Binding kind + async are un-declarable (``<pdd-interface>`` cannot
+        # express ``self`` / property / ``async`` / function-vs-class), so their
+        # baseline is the PRIOR generation: an async->sync or function->class drift
+        # on a declared symbol is a real regression (codex round-2 finding 1a),
+        # anchored to the OLD entry when the symbol already existed and was
+        # callable there. A ``BREAKING-CHANGE: change signature <sym>`` opt-out
+        # relaxes ONLY these un-declarable facets — it uses the GENERATED kind/
+        # async — but the declared PARAM/return contract is STILL enforced below,
+        # so prose cannot wave through an added-required-param that violates the
+        # declaration (codex FM2). A newly-added declared symbol (or one whose
+        # prior form was a non-callable assignment/import) has no prior callable
+        # contract, so it also falls back to the generated kind/async.
+        if symbol in allowed_signature_changes:
+            expected_kind, expected_async = actual_ctx
+        else:
+            before_entry = before_signatures.get(snapshot_key)
+            before_ctx = (
+                _entry_binding_context(before_entry)
+                if before_entry is not None
+                and parse_callable_contract(before_entry) is not None
+                else None
+            )
+            expected_kind, expected_async = (
+                before_ctx if before_ctx is not None else actual_ctx
+            )
+        # The snapshot receiver-strips ``self``/``cls`` for receiver-bound methods
+        # and constructors, so strip a leading receiver from the declared signature
+        # for those kinds before comparing (a declared ``(self, x)`` must match the
+        # snapshot's ``(x)``; a plain function/staticmethod is left as declared).
+        strip_receiver = expected_kind in {"instance", "classmethod", "class"}
+        expected_entry = _declared_signature_to_entry(
+            declared[symbol],
+            expected_kind,
+            is_async=expected_async,
+            strip_receiver=strip_receiver,
+        )
+        if expected_entry is None:
+            # Declared signature is not a parseable paren-list -> presence-only:
+            # the symbol must exist (enforced above) but its signature is NOT
+            # validated against the declaration here. It is intentionally left out
+            # of ``declared_validated`` so the undeclared old-code loops below
+            # still protect its signature (codex over-skip fix, e.g. a declared
+            # class with a non-paren ``"class Service"`` signature).
+            continue
+        compatible = signature_entries_compatible(
+            expected_entry,
+            actual_entry,
+            old_symbols=after_default_symbols,
+            new_symbols=after_default_symbols,
+        )
+        if compatible is None:
+            # The GENERATED symbol is not a callable contract — a declared
+            # callable regenerated as a non-callable (``def f`` -> ``f = 1`` /
+            # ``from pkg import f as f``). If the OLD form WAS a callable, the
+            # declared callable became non-callable: flag it DIRECTLY here — that
+            # break is not authorized by ``BREAKING-CHANGE: change signature``
+            # (which relaxes params, not de-callable-ing; de-callable-ing is a
+            # ``BREAKING-CHANGE: remove``), and the old-code loop would otherwise
+            # skip the symbol under such an opt-out (codex round-8 finding 1).
+            before_entry = before_signatures.get(snapshot_key)
+            before_ctx = (
+                _entry_binding_context(before_entry)
+                if before_entry is not None
+                and parse_callable_contract(before_entry) is not None
+                else None
+            )
+            if before_ctx is not None:
+                strip = before_ctx[0] in {"instance", "classmethod", "class"}
+                callable_expected = (
+                    _declared_signature_to_entry(
+                        declared[symbol],
+                        before_ctx[0],
+                        is_async=before_ctx[1],
+                        strip_receiver=strip,
+                    )
+                    or before_entry
+                )
+                changed_set.add(symbol)
+                signature_details.append(
+                    (symbol, callable_expected, actual_entry, "pdd-interface")
+                )
+            # else: the OLD form was ALSO non-callable (e.g. ``f = lambda: x`` that
+            # stayed an ``[assignment]``). Not validated -> falls through to the
+            # OLD-CODE baseline, which compares equal old-vs-new -> no false
+            # positive. Not added to ``declared_validated`` either way.
+            continue
+        # A real callable-vs-callable decision was made, so the declaration owns
+        # this symbol: exclude its SNAPSHOT KEY from the old-code loops below (the
+        # class entry for a validated ``__init__``, the ``X.method`` entry for a
+        # validated method).
+        declared_validated.add(snapshot_key)
+        if compatible is False:
+            # Report the ORIGINAL declared name (``Foo.method`` /
+            # ``Service.__init__``), not the snapshot key.
+            changed_set.add(symbol)
+            signature_details.append(
+                (symbol, expected_entry, actual_entry, "pdd-interface")
+            )
+        # ``compatible is True`` -> compatible (nothing to flag).
+
+    # UNDECLARED (and presence-only DECLARED) symbols: keep the historical
+    # old-vs-new comparison EXACTLY. Only symbols VALIDATED against the
+    # declaration above are skipped here — a presence-only declared symbol (dotted
+    # method / non-paren class) falls through to this old-code baseline so its
+    # signature drift is still caught (codex over-skip fix).
     for symbol, signature in before_signatures.items():
+        if symbol in declared_validated:
+            continue
         if symbol not in after_signatures or symbol in allowed_signature_changes:
             continue
         after_signature = after_signatures[symbol]
@@ -2364,6 +2894,8 @@ def _verify_public_surface_regression(
             continue
         changed_set.add(symbol)
     for symbol in before_signatures:
+        if symbol in declared_validated:
+            continue
         if symbol in after_signatures or symbol in changed_set:
             continue
         if "." in symbol:
@@ -2379,7 +2911,274 @@ def _verify_public_surface_regression(
             changed_signatures=changed_signatures,
             pre_surface_size=len(before),
             post_surface_size=len(after),
+            signature_details=signature_details,
         )
+
+
+def _index_function_defs(tree: ast.Module) -> Dict[str, ast.AST]:
+    """Map dotted qualnames (``foo``, ``Class.method``) to their AST nodes.
+
+    Classes contribute both their own key (so a declared class is locatable) and
+    the recursively-qualified keys of their nested functions/classes, matching the
+    dotted symbol names :func:`_snapshot_public_signatures` produces. First
+    definition wins on a name clash.
+    """
+    index: Dict[str, ast.AST] = {}
+
+    def _walk(prefix: str, body: List[ast.stmt]) -> None:
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                index.setdefault(f"{prefix}{node.name}", node)
+            elif isinstance(node, ast.ClassDef):
+                qual = f"{prefix}{node.name}"
+                index.setdefault(qual, node)
+                _walk(f"{qual}.", node.body)
+
+    _walk("", tree.body)
+    return index
+
+
+def _parse_declared_def(raw_signature: Optional[str]) -> Optional[ast.FunctionDef]:
+    """Parse a declared ``<pdd-interface>`` signature into a ``FunctionDef`` node.
+
+    Mirrors :func:`_declared_signature_to_entry`'s normalization: strip a leading
+    ``async`` / ``def <name>`` prefix down to the bare parameter list, then parse
+    ``def _pdd<sig>: pass``. Returns ``None`` when the declaration is not a
+    parseable paren-list (a presence-only declaration is never reconciled).
+    """
+    if not raw_signature or not isinstance(raw_signature, str):
+        return None
+    sig = raw_signature.strip()
+    if sig.startswith("async "):
+        sig = sig[len("async "):].strip()
+    def_match = re.match(r"^def\s+[A-Za-z_]\w*\s*(.*)$", sig, re.DOTALL)
+    if def_match:
+        sig = def_match.group(1).strip()
+        if sig.startswith("async "):
+            sig = sig[len("async "):].strip()
+    if not sig.startswith("("):
+        return None
+    try:
+        parsed = ast.parse(f"def _pdd{sig}: pass").body[0]
+    except SyntaxError:
+        return None
+    if not isinstance(parsed, ast.FunctionDef):
+        return None
+    return parsed
+
+
+def _signature_slots(
+    func: ast.AST,
+) -> List[Tuple[str, str, bool, Optional[str], Optional[ast.AST]]]:
+    """Ordered ``(name, kind, has_default, default_text, annotation_node)`` slots.
+
+    Mirrors :func:`pdd.interface_semantics._params_from_arguments` so the
+    structural comparison in :func:`_annotation_only_edits` matches exactly what
+    the public-surface gate compares (posonly / positional / vararg /
+    keyword_only / kwarg, defaults normalized by :func:`ast.unparse`).
+    """
+    args = func.args
+    slots: List[Tuple[str, str, bool, Optional[str], Optional[ast.AST]]] = []
+
+    def _add(arg: ast.arg, kind: str, default: Optional[ast.AST]) -> None:
+        has_default = default is not None
+        default_text = ast.unparse(default).strip() if default is not None else None
+        slots.append((arg.arg, kind, has_default, default_text, arg.annotation))
+
+    positional = list(args.posonlyargs) + list(args.args)
+    defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
+    for arg, default in zip(args.posonlyargs, defaults[: len(args.posonlyargs)]):
+        _add(arg, "posonly", default)
+    for arg, default in zip(args.args, defaults[len(args.posonlyargs):]):
+        _add(arg, "positional", default)
+    if args.vararg is not None:
+        _add(args.vararg, "vararg", None)
+    for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+        _add(arg, "keyword_only", default)
+    if args.kwarg is not None:
+        _add(args.kwarg, "kwarg", None)
+    return slots
+
+
+def _line_start_byte_offsets(source: str) -> List[int]:
+    """UTF-8 byte offset at which each 1-indexed source line begins."""
+    data = source.encode("utf-8")
+    offsets = [0]
+    for index, byte in enumerate(data):
+        if byte == 0x0A:  # newline
+            offsets.append(index + 1)
+    return offsets
+
+
+def _node_byte_span(
+    node: ast.AST, line_offsets: List[int]
+) -> Optional[Tuple[int, int]]:
+    """Absolute UTF-8 byte ``(start, end)`` of a node, or ``None`` if unlocatable.
+
+    ``ast`` column offsets are UTF-8 byte offsets into their line, so the caller
+    splices the encoded bytes (see :func:`_apply_byte_edits`).
+    """
+    lineno = getattr(node, "lineno", None)
+    end_lineno = getattr(node, "end_lineno", None)
+    col = getattr(node, "col_offset", None)
+    end_col = getattr(node, "end_col_offset", None)
+    if lineno is None or end_lineno is None or col is None or end_col is None:
+        return None
+    if lineno > len(line_offsets) or end_lineno > len(line_offsets):
+        return None
+    return line_offsets[lineno - 1] + col, line_offsets[end_lineno - 1] + end_col
+
+
+def _apply_byte_edits(source: str, edits: List[Tuple[int, int, str]]) -> str:
+    """Apply non-overlapping ``(start, end, replacement)`` byte edits to *source*."""
+    data = bytearray(source.encode("utf-8"))
+    # Apply right-to-left so earlier offsets stay valid; skip any overlap defensively.
+    ordered = sorted(edits, key=lambda edit: edit[0], reverse=True)
+    last_start: Optional[int] = None
+    for start, end, replacement in ordered:
+        if start < 0 or end > len(data) or start > end:
+            continue
+        if last_start is not None and end > last_start:
+            continue
+        data[start:end] = replacement.encode("utf-8")
+        last_start = start
+    return data.decode("utf-8")
+
+
+def _annotation_only_edits(
+    declared_def: ast.FunctionDef,
+    gen_node: ast.AST,
+    line_offsets: List[int],
+) -> List[Tuple[int, int, str]]:
+    """Byte edits rewriting ``gen_node``'s annotations to the declared text.
+
+    Returns an empty list unless the ONLY drift between the declaration and the
+    generated signature is annotation spelling on one or more parameters or the
+    return type (identical names, order, kinds and defaults). Only annotations the
+    public-surface gate considers INCOMPATIBLE are rewritten, so a compatible
+    alias (``Dict`` vs ``dict``) is never churned. Any structural difference
+    disqualifies the whole symbol (real drift the gate must still fire on).
+    """
+    declared_slots = _signature_slots(declared_def)
+    gen_slots = _signature_slots(gen_node)
+    # A ``<pdd-interface>`` signature cannot express ``self`` / ``cls``; the gate
+    # strips a leading receiver from the generated method before comparing, so
+    # drop it here too when the declaration does not carry one.
+    if (
+        gen_slots
+        and gen_slots[0][0] in {"self", "cls"}
+        and (not declared_slots or declared_slots[0][0] not in {"self", "cls"})
+    ):
+        gen_slots = gen_slots[1:]
+    if len(declared_slots) != len(gen_slots):
+        return []
+    edits: List[Tuple[int, int, str]] = []
+    for declared_slot, gen_slot in zip(declared_slots, gen_slots):
+        d_name, d_kind, d_has_def, d_def, d_ann = declared_slot
+        g_name, g_kind, g_has_def, g_def, g_ann = gen_slot
+        if (
+            d_name != g_name
+            or d_kind != g_kind
+            or d_has_def != g_has_def
+            or d_def != g_def
+        ):
+            return []
+        if d_ann is None or g_ann is None:
+            continue
+        d_text = ast.unparse(d_ann).strip()
+        g_text = ast.unparse(g_ann).strip()
+        if d_text == g_text or annotations_compatible(d_text, g_text):
+            continue
+        span = _node_byte_span(g_ann, line_offsets)
+        if span is None:
+            return []
+        edits.append((span[0], span[1], d_text))
+    d_ret = declared_def.returns
+    g_ret = getattr(gen_node, "returns", None)
+    if d_ret is not None and g_ret is not None:
+        d_ret_text = ast.unparse(d_ret).strip()
+        g_ret_text = ast.unparse(g_ret).strip()
+        if d_ret_text != g_ret_text and not annotations_compatible(
+            d_ret_text, g_ret_text
+        ):
+            span = _node_byte_span(g_ret, line_offsets)
+            if span is None:
+                return []
+            edits.append((span[0], span[1], d_ret_text))
+    return edits
+
+
+def _reconcile_declared_annotation_drift(
+    existing_code: Optional[str],
+    generated_code: str,
+    prompt_name: str,
+    output_path: Optional[str],
+    language: Optional[str],
+    prompt_content: Optional[str],
+) -> Optional[str]:
+    """Rewrite annotation-only drift on a declared symbol back to the declared text.
+
+    Issue #1968: when a regeneration drifts a declared ``<pdd-interface>``
+    signature ONLY in annotation spelling — the declaration says ``object`` but
+    the model emitted ``Any``, or it broadened a parameter's declared type with
+    extra ``|`` union members — the public-surface gate correctly rejects it, but
+    the LLM repair retry keeps re-emitting the same "equivalent" spelling and
+    never converges. This deterministic pass runs BEFORE the gate: for every
+    declared symbol whose generated signature differs from the declaration ONLY
+    in annotation text (identical parameter names, order, kinds and defaults), it
+    rewrites the offending annotation(s) in the generated SOURCE to the declared
+    spelling, so the gate passes on the reconciled code with no further
+    generation attempt.
+
+    Returns the rewritten ``generated_code`` when at least one annotation was
+    reconciled, or ``None`` when nothing safe to rewrite was found. It is
+    fail-safe: only annotations the gate considers INCOMPATIBLE are rewritten,
+    structural drift is left untouched, and the whole rewrite is discarded if the
+    result no longer parses. Bypass with ``PDD_SKIP_ANNOTATION_RECONCILE=1``.
+    """
+    if (
+        not existing_code
+        or not existing_code.strip()
+        or _env_flag_enabled("PDD_SKIP_ANNOTATION_RECONCILE")
+        or _env_flag_enabled("PDD_SKIP_PUBLIC_SURFACE_GATE")
+        or _env_flag_enabled("PDD_SKIP_CONFORMANCE")
+        or _is_test_output_path(output_path)
+        or not _is_python_generation(language, output_path)
+    ):
+        return None
+    declared = _collect_declared_surface(prompt_content, prompt_name)
+    if not declared:
+        return None
+    try:
+        tree = ast.parse(generated_code)
+    except SyntaxError:
+        return None
+    func_index = _index_function_defs(tree)
+    line_offsets = _line_start_byte_offsets(generated_code)
+    edits: List[Tuple[int, int, str]] = []
+    try:
+        for name, raw_sig in declared.items():
+            if not raw_sig:
+                continue
+            node = func_index.get(name)
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            declared_def = _parse_declared_def(raw_sig)
+            if declared_def is None:
+                continue
+            edits.extend(_annotation_only_edits(declared_def, node, line_offsets))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if not edits:
+        return None
+    reconciled = _apply_byte_edits(generated_code, edits)
+    if reconciled == generated_code:
+        return None
+    try:
+        ast.parse(reconciled)
+    except SyntaxError:
+        return None
+    return reconciled
 
 
 def _get_test_churn_threshold() -> float:
@@ -2445,8 +3244,15 @@ def _verify_test_churn(
     prompt_name: str,
     output_path: Optional[str],
     prompt_content: Optional[str],
+    adopted_human: bool = False,
 ) -> None:
-    """Fail when rewriting an existing test file exceeds the churn threshold."""
+    """Fail when rewriting an existing test file exceeds the churn threshold.
+
+    *adopted_human* records whether this test was adopted from an existing HUMAN
+    co-located test (unpinned) — provenance the issue #1903 §B.4 never-block
+    requires, computed by the caller at path-resolution time. It only annotates
+    the raised error; the gate decision here is unchanged.
+    """
     if (
         not existing_code
         or not existing_code.strip()
@@ -2467,6 +3273,7 @@ def _verify_test_churn(
             threshold=threshold,
             pre_line_count=len(existing_code.splitlines()),
             post_line_count=len(generated_code.splitlines()),
+            adopted_human=adopted_human,
         )
 
 def _should_wire_generated_exports(output_path: str) -> bool:
@@ -4044,14 +4851,30 @@ def code_generator_main(
                             elif verbose:
                                 console.print(f"[yellow]Git (log) failed for {prompt_file_rel_to_root_str} or no history found: {log_stderr}[/yellow]")
                         
+                        # Last resort: resolve the "original" prompt from the base branch.
+                        # In the cloud sync-after-change flow the prompt edit is already
+                        # committed on this branch (on-disk == HEAD) and no distinct prior
+                        # version is found in local history, so without this we silently
+                        # fall back to full regeneration and re-drop declared symbols
+                        # (#1938/#1940, test_repo#4232). Configurable via PDD_SYNC_BASE_REF
+                        # (defaults to origin/main). Only used when it differs from the
+                        # current prompt; otherwise leave can_attempt_incremental False so an
+                        # honest full regeneration runs (surfaced loudly below).
                         if not found_different_prior:
-                            original_prompt_content_for_incremental = new_prompt_candidate 
-                            can_attempt_incremental = True 
-                            if verbose:
+                            base_ref = os.environ.get("PDD_SYNC_BASE_REF", "origin/main")
+                            base_content = get_git_content_at_ref(prompt_file, git_ref=base_ref)
+                            if base_content is not None and base_content.strip() != prompt_content.strip():
+                                original_prompt_content_for_incremental = base_content
+                                can_attempt_incremental = True
+                                found_different_prior = True
+                                if verbose:
+                                    console.print(f"[cyan]Using base-branch ({base_ref}) prompt as incremental original.[/cyan]")
+                            elif verbose:
                                 console.print(
                                     f"[yellow]Warning: Could not find a prior *different* version of {prompt_file} "
-                                    f"within the last {MAX_COMMITS_TO_SEARCH if git_root_path_obj else 'N/A'} relevant commits. "
-                                    f"Using current HEAD version as original (prompts will be identical).[/yellow]"
+                                    f"within the last {MAX_COMMITS_TO_SEARCH if git_root_path_obj else 'N/A'} relevant commits, "
+                                    f"and base-branch ({base_ref}) did not provide a distinct original. "
+                                    f"Performing full regeneration.[/yellow]"
                                 )
                 else:
                     # File not in HEAD, cannot determine git-based original prompt.
@@ -4092,6 +4915,22 @@ def code_generator_main(
                 "and performing full generation with the repair directive.[/blue]"
             )
         can_attempt_incremental = False
+
+    # Loud (non-verbose) degradation notice: a mature module (existing non-empty
+    # code on disk) is about to be fully regenerated because no "original" prompt
+    # could be resolved for surgical/incremental generation. This is the silent
+    # failure mode that re-drops declared symbols on sync (#1938/#1940,
+    # test_repo#4232) — surface it once so operators aren't blind. New/empty
+    # modules doing a legitimate first generation and repair-directive full
+    # regenerations are intentionally excluded.
+    if (llm_enabled
+            and existing_code_content is not None
+            and not can_attempt_incremental
+            and not repair_directive_active):
+        console.print(
+            "[yellow]Surgical/incremental generation unavailable (no original prompt "
+            "resolved) — performing full regeneration.[/yellow]"
+        )
 
     try:
         # Resolve post-process script from env/CLI override, then front matter, then sensible default per template
@@ -4789,6 +5628,24 @@ def code_generator_main(
                 # existing file to 0 bytes — silent erasure of mature
                 # public APIs and test coverage (external review iter-13
                 # follow-up; reproduced with mocked local generation).
+                #
+                # Deterministic annotation reconciliation (issue #1968): when a
+                # regeneration drifts a declared signature ONLY in annotation
+                # spelling (declared `object` vs emitted `Any`, or a broadened
+                # union), rewrite the emitted annotation back to the declared text
+                # BEFORE the gate re-checks so the sync converges without another
+                # generation attempt. The pass is a no-op unless it finds such
+                # drift, so it never alters an otherwise-passing generation.
+                reconciled_code = _reconcile_declared_annotation_drift(
+                    existing_code=existing_code_content,
+                    generated_code=generated_code_content,
+                    prompt_name=prompt_name,
+                    output_path=output_path,
+                    language=language,
+                    prompt_content=prompt_content,
+                )
+                if reconciled_code is not None:
+                    generated_code_content = reconciled_code
                 try:
                     _verify_public_surface_regression(
                         existing_code=existing_code_content,

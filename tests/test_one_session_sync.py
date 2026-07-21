@@ -494,6 +494,55 @@ class TestRunOneSessionSync:
 
     @patch("pdd.one_session_sync.run_agentic_task")
     @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_direct_workflow_shares_provider_failures_across_repair_attempts(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        from pdd.agentic_common import (
+            get_disabled_providers,
+            mark_provider_permanently_failed,
+        )
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        pdd_files = _make_pdd_files(tmp_path)
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        rewritten_tests = (
+            "def test_new_a(): pass\n"
+            "def test_new_b(): pass\n"
+            "def test_new_c(): pass\n"
+        )
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+        observed = []
+
+        def fake_task(*args, **kwargs):
+            observed.append(get_disabled_providers())
+            if mock_task.call_count == 1:
+                mark_provider_permanently_failed("openai", "auth")
+                pdd_files["test"].write_text(rewritten_tests, encoding="utf-8")
+            else:
+                pdd_files["test"].write_text(
+                    original_tests + "def test_d(): pass\n", encoding="utf-8"
+                )
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        result = run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        assert result["success"] is True
+        assert observed == [{}, {"openai": "auth"}]
+        assert get_disabled_providers() == {}
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
     def test_failure_returns_errors(self, mock_build, mock_task, tmp_path):
         mock_task.return_value = (False, "Something went wrong", 0.5, "claude-code")
         pdd_files = _make_pdd_files(tmp_path)

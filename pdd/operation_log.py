@@ -587,7 +587,12 @@ def save_fingerprint(
     """
     from dataclasses import asdict
     from datetime import timezone
-    from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
+    from .sync_determine_operation import (
+        Fingerprint,
+        calculate_current_hashes,
+        read_fingerprint,
+        trusted_hash_root_for_paths,
+    )
     from . import __version__
 
     # Issue #983: when the caller provides `paths`, use them directly — do
@@ -612,7 +617,15 @@ def save_fingerprint(
     # Issue #522: Pass stored include deps for prompt hash calculation
     prev_fp = read_fingerprint(basename, language, paths=paths)
     stored_deps = prev_fp.include_deps if prev_fp else None
-    current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps) if paths else {}
+    current_hashes = (
+        calculate_current_hashes(
+            paths,
+            stored_include_deps=stored_deps,
+            dependency_root=trusted_hash_root_for_paths(paths),
+        )
+        if paths
+        else {}
+    )
 
     # Create Fingerprint with same format as _save_fingerprint_atomic
     fingerprint = Fingerprint(
