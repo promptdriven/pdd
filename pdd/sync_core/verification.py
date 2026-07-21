@@ -620,42 +620,48 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS
 # evidence.  They deliberately are not appended to replay bootstrap authority.
 _PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
-        "pdd/prompts/operation_log_python.prompt", "python",
+        "pdd/prompts/operation_log_python.prompt",
+        "python",
         "e9314dff3064004dafe75821e7aec984cbbec76e4745f6c49e73c50105ecb9c8",
         "370d4f511f320b3db71cb74bb17532a6293d1c48def1a0faebfa8fbb7f00eb12",
         "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
         "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
     ),
     _exact_bootstrap_requirement_transition(
-        "pdd/prompts/pin_example_hack_python.prompt", "python",
+        "pdd/prompts/pin_example_hack_python.prompt",
+        "python",
         "7efec65cda40e8357cd08c974abc4b1aebb450d2fe75401e5cc5629e0696feb9",
         "4b45b2744bb856ba48681d3038ba41512353df5e0ed77c3d698928ca89c6cabb",
         "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
         "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
     ),
     _exact_bootstrap_requirement_transition(
-        "pdd/prompts/server/routes/prompts_python.prompt", "python",
+        "pdd/prompts/server/routes/prompts_python.prompt",
+        "python",
         "8a88807f83d1d4bd5cfa9ccbd465a619a2d00fef9f81c53b84047470c8399293",
         "0cef545efaa9eef5007d338656c0e40e70db314ddbd0e7a00b64f300dba7f342",
         "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
         "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
     ),
     _exact_bootstrap_requirement_transition(
-        "pdd/prompts/sync_determine_operation_python.prompt", "python",
+        "pdd/prompts/sync_determine_operation_python.prompt",
+        "python",
         "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
         "fd24cdd0df308353e33bfe6d7e004cd3064303c3d1eef536b1adbfc3a67bd1d8",
         "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
         "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
     ),
     _exact_bootstrap_requirement_transition(
-        "pdd/prompts/sync_orchestration_python.prompt", "python",
+        "pdd/prompts/sync_orchestration_python.prompt",
+        "python",
         "ca4ad5eff6774715d7a65c73e17a12f79da66cb409c69fe90bf41ae097181266",
         "5420f3f617586ceb3149a9efb557968b25115855ae65275be2d11d55c91f227e",
         "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
         "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
     ),
     _exact_bootstrap_requirement_transition(
-        "pdd/prompts/update_main_python.prompt", "python",
+        "pdd/prompts/update_main_python.prompt",
+        "python",
         "b1042be0dd594c9bbb197a4afe7e5c5a12aaad1574feadf7cb5b26f9bf85bccd",
         "17fc1c03860bca7d7889ac388e4de26c19b73edb7ead9bea20f6be1016995bb5",
         "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
@@ -664,34 +670,56 @@ _PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
 )
 
 _PR1971_COMBINED_PYTEST_OBLIGATIONS = {
-    (PurePosixPath("pdd/prompts/operation_log_python.prompt"), "python"):
-        VerificationObligation(
-            "pytest-operation-log", "test", "pytest",
-            "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
-            ("CONTRACT-SHA256:370d4f511f320b3db71cb74bb17532a6293d1c48def1a0faebfa8fbb7f00eb12",),
-            (PurePosixPath("tests/test_operation_log.py"),), True,
-            (PurePosixPath("pdd/operation_log.py"),),
+    (
+        PurePosixPath("pdd/prompts/operation_log_python.prompt"),
+        "python",
+    ): VerificationObligation(
+        "pytest-operation-log",
+        "test",
+        "pytest",
+        "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+        (
+            "CONTRACT-SHA256:370d4f511f320b3db71cb74bb17532a6293d1c48def1a0faebfa8fbb7f00eb12",
         ),
-    (PurePosixPath("pdd/prompts/server/routes/prompts_python.prompt"), "python"):
-        VerificationObligation(
-            "pytest-server-routes-prompts", "test", "pytest",
-            "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
-            ("CONTRACT-SHA256:0cef545efaa9eef5007d338656c0e40e70db314ddbd0e7a00b64f300dba7f342",),
-            (PurePosixPath("tests/server/routes/test_prompts.py"),), True,
-            (PurePosixPath("pdd/server/routes/prompts.py"),),
+        (PurePosixPath("tests/test_operation_log.py"),),
+        True,
+        (PurePosixPath("pdd/operation_log.py"),),
+    ),
+    (
+        PurePosixPath("pdd/prompts/server/routes/prompts_python.prompt"),
+        "python",
+    ): VerificationObligation(
+        "pytest-server-routes-prompts",
+        "test",
+        "pytest",
+        "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+        (
+            "CONTRACT-SHA256:0cef545efaa9eef5007d338656c0e40e70db314ddbd0e7a00b64f300dba7f342",
         ),
-    (PurePosixPath("pdd/prompts/update_main_python.prompt"), "python"):
-        VerificationObligation(
-            "pytest-update-main", "test", "pytest",
-            "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
-            ("CONTRACT-SHA256:17fc1c03860bca7d7889ac388e4de26c19b73edb7ead9bea20f6be1016995bb5",),
-            (PurePosixPath("tests/test_update_main.py"),), True,
-            (PurePosixPath("pdd/update_main.py"),),
+        (PurePosixPath("tests/server/routes/test_prompts.py"),),
+        True,
+        (PurePosixPath("pdd/server/routes/prompts.py"),),
+    ),
+    (
+        PurePosixPath("pdd/prompts/update_main_python.prompt"),
+        "python",
+    ): VerificationObligation(
+        "pytest-update-main",
+        "test",
+        "pytest",
+        "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+        (
+            "CONTRACT-SHA256:17fc1c03860bca7d7889ac388e4de26c19b73edb7ead9bea20f6be1016995bb5",
         ),
+        (PurePosixPath("tests/test_update_main.py"),),
+        True,
+        (PurePosixPath("pdd/update_main.py"),),
+    ),
 }
 
-# Six replay-modified prompts already had historical bootstrap rows. Their
-# reviewed replacements, together with the 25 new replay rows above, are the
+# Eight replay-modified prompts already have protected transition rows: six
+# historical bootstrap rows and two rows merged by #1971. Their reviewed
+# replacements, together with the 23 otherwise-new replay rows above, are the
 # only bootstrap authority allowed to carry a changed profile policy.
 _REPLAY_REPLACED_PROMPT_PATHS = frozenset(
     {
@@ -1595,7 +1623,10 @@ def _is_exact_combined_requirement_reconciliation(
 ) -> bool:
     """Recognize only the reviewed same-candidate policy/profile byte pairs."""
     if None in (
-        protected_policy, candidate_policy, protected_profile, candidate_profile
+        protected_policy,
+        candidate_policy,
+        protected_profile,
+        candidate_profile,
     ):
         return False
     assert protected_policy is not None and candidate_policy is not None
@@ -1622,14 +1653,17 @@ def _is_exact_pr1971_pytest_reconciliation(
 ) -> bool:
     """Recognize only #1971's complete reviewed profile-obligation addition."""
     pr1971_rows = tuple(
-        item for item in authorizations
+        item
+        for item in authorizations
         if item.bindings.head_policy_sha256 == _PR1971_COMBINED_PROFILE_BYTES[1]
     )
     return (
         manifest.repository_id == _PDD_REPOSITORY_ID
         and _is_exact_combined_requirement_reconciliation(
-            rotation_policies[0], rotation_policies[1],
-            profile_policies[0], profile_policies[1],
+            rotation_policies[0],
+            rotation_policies[1],
+            profile_policies[0],
+            profile_policies[1],
         )
         and pr1971_rows == _PR1971_COMBINED_REQUIREMENT_TRANSITIONS
     )
@@ -2152,10 +2186,7 @@ def _load_requirement_transition_authorizations(
         item
         for item in candidate
         if item not in protected
-        and not (
-            is_pdd_repository
-            and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
-        )
+        and not (is_pdd_repository and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS)
     )
     if legacy_pdd1989_reconciliation or pr1971_reconciliation:
         # The exact historical pair both installed and consumed its authority

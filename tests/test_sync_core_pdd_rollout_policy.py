@@ -507,7 +507,10 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
     assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
     # The row remains the exact historical transition, while the replay base
     # is now current main and therefore has its subsequently composed profile.
-    assert profile_digest == "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
+    assert (
+        profile_digest
+        == "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
+    )
 
     protected_policy = json.loads(
         subprocess.check_output(
@@ -536,9 +539,9 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
         "pdd/prompts/routing_policy_python.prompt",
         "pdd/prompts/setup_tool_python.prompt",
     }
-    assert {
-        row["base_policy_sha256"] for row in pdd1989_rows
-    } == {"f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"}
+    assert {row["base_policy_sha256"] for row in pdd1989_rows} == {
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b"
+    }
 
 
 def _requirement_authorization_row(authorization) -> dict[str, str]:
@@ -590,7 +593,8 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
     }
     surviving_rows = [
-        row for row in protected_rows
+        row
+        for row in protected_rows
         if json.dumps(row, sort_keys=True) not in replaced_protected_rows
     ]
     candidate_rows = [
@@ -608,7 +612,10 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     assert rows == surviving_rows + candidate_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3"
+    assert (
+        profile_digest
+        == "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3"
+    )
     pr2017_phase_a_rows = [
         row
         for row in rows
@@ -630,9 +637,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         for row in pr2017_phase_a_rows
     )
     current_rows = [
-        row
-        for row in candidate_rows
-        if row["head_policy_sha256"] == profile_digest
+        row for row in candidate_rows if row["head_policy_sha256"] == profile_digest
     ]
     replay_prompt_changes = set(
         subprocess.check_output(
@@ -658,8 +663,9 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     assert {row["prompt_path"] for row in current_rows} == replay_prompt_changes
     for row in current_rows:
         prompt = ROOT / row["prompt_path"]
-        assert hashlib.sha256(prompt.read_bytes()).hexdigest() == (
-            row["head_prompt_sha256"]
+        assert (
+            hashlib.sha256(prompt.read_bytes()).hexdigest()
+            == (row["head_prompt_sha256"])
         )
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
 
@@ -695,11 +701,11 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         assert row["head_policy_sha256"] == head_policy_digest
         prompt = ROOT / row["prompt_path"]
         assert (
-            hashlib.sha256(prompt.read_bytes()).hexdigest()
-            == row["head_prompt_sha256"]
+            hashlib.sha256(prompt.read_bytes()).hexdigest() == row["head_prompt_sha256"]
         )
         assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
         assert row["base_policy_sha256"] != row["head_policy_sha256"]
+
 
 def _git_blob(ref: str, path: Path) -> bytes:
     """Read one historical policy byte sequence without rewriting it."""
@@ -743,11 +749,39 @@ def test_pr1971_combined_profile_reconciliation_is_consumed() -> None:
     assert profiles.coverage == 1.0
     for prompt_path, expected in PR_1971_PYTEST_OBLIGATIONS.items():
         profile = next(
-            item for item in profiles.profiles
+            item
+            for item in profiles.profiles
             if item.unit_id.prompt_relpath.as_posix() == prompt_path
         )
-        assert any(item.obligation_id == expected["obligation_id"]
-                   for item in profile.obligations)
+        assert any(
+            item.obligation_id == expected["obligation_id"]
+            for item in profile.obligations
+        )
+
+
+def test_pr1971_combined_history_rejects_foreign_repository() -> None:
+    """Exact #1971 bytes never grant authority outside the PDD repository."""
+    manifest = build_unit_manifest(
+        ROOT, base_ref=PR_1971_COMBINED_BASE, head_ref=PR_1971_COMBINED_HEAD
+    )
+    base_policy = _git_blob(PR_1971_COMBINED_BASE, ROTATION_FILE)
+    head_policy = _git_blob(PR_1971_COMBINED_HEAD, ROTATION_FILE)
+    profiles = (
+        _git_blob(PR_1971_COMBINED_BASE, PROFILE_FILE),
+        _git_blob(PR_1971_COMBINED_HEAD, PROFILE_FILE),
+    )
+    authorizations = verification._parse_requirement_transition_authorizations(  # pylint: disable=protected-access
+        head_policy, "candidate"
+    )
+    assert verification._is_exact_pr1971_pytest_reconciliation(  # pylint: disable=protected-access
+        manifest, (base_policy, head_policy), profiles, authorizations
+    )
+    assert not verification._is_exact_pr1971_pytest_reconciliation(  # pylint: disable=protected-access
+        replace(manifest, repository_id="foreign-repository"),
+        (base_policy, head_policy),
+        profiles,
+        authorizations,
+    )
 
 
 def test_pr1971_reordered_obligation_bytes_are_rejected() -> None:
@@ -755,16 +789,23 @@ def test_pr1971_reordered_obligation_bytes_are_rejected() -> None:
     base_policy = _git_blob(PR_1971_COMBINED_BASE, ROTATION_FILE)
     base_profile = _git_blob(PR_1971_COMBINED_BASE, PROFILE_FILE)
     payload = json.loads(_git_blob(PR_1971_COMBINED_HEAD, PROFILE_FILE))
-    next(row for row in payload["profiles"] if row["prompt_path"] ==
-         "pdd/prompts/operation_log_python.prompt")["obligations"].reverse()
+    next(
+        row
+        for row in payload["profiles"]
+        if row["prompt_path"] == "pdd/prompts/operation_log_python.prompt"
+    )["obligations"].reverse()
     assert not verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
-        base_policy, _git_blob(PR_1971_COMBINED_HEAD, ROTATION_FILE), base_profile,
+        base_policy,
+        _git_blob(PR_1971_COMBINED_HEAD, ROTATION_FILE),
+        base_profile,
         json.dumps(payload, indent=2).encode() + b"\n",
     )
 
 
 @pytest.mark.parametrize("mutation", ("altered", "extra", "partial", "unrelated"))
-def test_pr1971_pytest_obligation_semantic_mutations_are_rejected(mutation: str) -> None:
+def test_pr1971_pytest_obligation_semantic_mutations_are_rejected(
+    mutation: str,
+) -> None:
     """#1971's pytest addition accepts only its exact protected fields."""
     base, base_invalid = verification._load_inputs(  # pylint: disable=protected-access
         ROOT, PR_1971_COMBINED_BASE, REPOSITORY_ID, {}
@@ -776,51 +817,78 @@ def test_pr1971_pytest_obligation_semantic_mutations_are_rejected(mutation: str)
     target_path = PurePosixPath("pdd/prompts/operation_log_python.prompt")
     authorization_path = (
         PurePosixPath("pdd/prompts/pin_example_hack_python.prompt")
-        if mutation == "unrelated" else target_path
+        if mutation == "unrelated"
+        else target_path
     )
     authorization = next(
-        item for item in verification._PR1971_COMBINED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+        item
+        for item in verification._PR1971_COMBINED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
         if item.prompt_path == authorization_path
     )
     unit_id = UnitId(REPOSITORY_ID, authorization_path, "python")
-    obligation = verification._PR1971_COMBINED_PYTEST_OBLIGATIONS[(  # pylint: disable=protected-access
-        target_path, "python"
-    )]
+    obligation = verification._PR1971_COMBINED_PYTEST_OBLIGATIONS[
+        (  # pylint: disable=protected-access
+            target_path,
+            "python",
+        )
+    ]
     if mutation == "altered":
-        obligations = tuple(sorted(
-            replace(item, validator_config_digest="pytest-v2")
-            if item.obligation_id == obligation.obligation_id else item
-            for item in head[unit_id].obligations
-        ))
+        obligations = tuple(
+            sorted(
+                replace(item, validator_config_digest="pytest-v2")
+                if item.obligation_id == obligation.obligation_id
+                else item
+                for item in head[unit_id].obligations
+            )
+        )
     elif mutation == "extra":
-        obligations = tuple(sorted((*head[unit_id].obligations,
-            replace(obligation, obligation_id="pytest-operation-log-extra"))))
+        obligations = tuple(
+            sorted(
+                (
+                    *head[unit_id].obligations,
+                    replace(obligation, obligation_id="pytest-operation-log-extra"),
+                )
+            )
+        )
     elif mutation == "partial":
-        obligations = tuple(sorted(
-            replace(item, code_under_test_paths=())
-            if item.obligation_id == obligation.obligation_id else item
-            for item in head[unit_id].obligations
-        ))
+        obligations = tuple(
+            sorted(
+                replace(item, code_under_test_paths=())
+                if item.obligation_id == obligation.obligation_id
+                else item
+                for item in head[unit_id].obligations
+            )
+        )
     else:
         obligations = tuple(sorted((*head[unit_id].obligations, obligation)))
     candidate = replace(head[unit_id], obligations=obligations)
     assert verification._expected_requirement_update(  # pylint: disable=protected-access
-        authorization, base[unit_id], candidate,
+        authorization,
+        base[unit_id],
+        candidate,
         None if mutation == "unrelated" else obligation,
     ) == (None, "requirement transition changes protected fields")
 
 
 def test_pr1971_profile_pytest_obligations_are_exact() -> None:
     """Keep the three protected test-to-code bindings in current profiles."""
-    profiles = {row["prompt_path"]: row for row in json.loads(
-        PROFILE_FILE.read_text(encoding="utf-8"))["profiles"]}
+    profiles = {
+        row["prompt_path"]: row
+        for row in json.loads(PROFILE_FILE.read_text(encoding="utf-8"))["profiles"]
+    }
     for prompt_path, expected in PR_1971_PYTEST_OBLIGATIONS.items():
-        obligation = next(item for item in profiles[prompt_path]["obligations"]
-                          if item["obligation_id"] == expected["obligation_id"])
+        obligation = next(
+            item
+            for item in profiles[prompt_path]["obligations"]
+            if item["obligation_id"] == expected["obligation_id"]
+        )
         assert obligation["validator_id"] == "pytest"
         assert obligation["validator_config_digest"] == PYTEST_VALIDATOR_CONFIG_DIGEST
         assert obligation["required"] is True
-        assert obligation["requirement_ids"] == profiles[prompt_path]["required_requirement_ids"]
+        assert (
+            obligation["requirement_ids"]
+            == profiles[prompt_path]["required_requirement_ids"]
+        )
         assert tuple(obligation["artifact_paths"]) == expected["tests"]
         assert tuple(obligation["code_under_test_paths"]) == expected["code"]
 
