@@ -20,6 +20,7 @@
       {"name": "run_checkup_review_loop", "signature": "(*, context: ReviewLoopContext, config: ReviewLoopConfig, cwd: Path, verbose: bool, quiet: bool, use_github_state: bool) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"},
       {"name": "parse_reviewers", "signature": "(value: str | Sequence[str] | None) -> Tuple[str, ...]", "returns": "Tuple[str, ...]"},
       {"name": "parse_reviewer_commands", "signature": "(value: str | Sequence[str] | None) -> Dict[str, str]", "returns": "Dict[str, str]"},
+      {"name": "write_terra_sol_progress", "signature": "(*, artifacts_dir: Path, max_rounds: int, round_number: int, phase: str, terminal_reason: str = \"\", max_rounds_reached: bool = False) -> None", "returns": "None"},
       {"name": "write_final_gate_fallback_artifact", "signature": "(*, artifact_path: Optional[str], pr_owner: str = \"\", pr_repo: str = \"\", pr_number: int = 0, head_sha: str = \"\", canonical_status: str = \"fail\", blockers: Optional[Sequence[str]] = None, no_fix: bool = False) -> Optional[str]", "returns": "Optional[str]"}
     ]
   }
@@ -29,6 +30,7 @@
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>architecture_registry_python.prompt</pdd-dependency>
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
+<pdd-dependency>routing_policy_python.prompt</pdd-dependency>
 
 % Goal
 Add a PR-mode independent-reviewer/separate-fixer review loop for `pdd checkup`.

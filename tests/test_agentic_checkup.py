@@ -944,6 +944,72 @@ class TestRunAgenticCheckup:
         assert model == ""
         assert os.environ[mod._HOSTED_RECEIPT_KEY_ENV] == "still-private"
 
+    def test_terra_sol_conflict_invalidates_stale_hosted_pass(
+        self, monkeypatch, tmp_path
+    ):
+        """Validation failure is current and blocking at the hosted boundary."""
+        import pdd.agentic_checkup as mod
+
+        public = tmp_path / "agentic.json"
+        public.write_text(
+            json.dumps({"status": "passed", "verdict": {"decision": "pass"}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(public))
+
+        success, message, _cost, _model = mod.run_agentic_checkup(
+            None,
+            pr_url="https://github.com/owner/repo/pull/2",
+            terra_sol=True,
+            final_gate=True,
+            cwd=tmp_path,
+        )
+
+        assert success is False
+        assert "--final-gate" in message
+        payload = json.loads(public.read_text(encoding="utf-8"))
+        assert payload["status"] != "passed"
+        assert payload["verdict"]["decision"] == "block"
+
+    @pytest.mark.parametrize(
+        ("pr_url", "issue_url", "expected_message"),
+        [
+            ("not-a-pr", None, "Invalid GitHub PR URL"),
+            (
+                "https://github.com/owner/repo/pull/2",
+                "not-an-issue",
+                "Invalid GitHub issue URL",
+            ),
+        ],
+    )
+    def test_terra_sol_invalid_identity_invalidates_stale_hosted_pass(
+        self, monkeypatch, tmp_path, pr_url, issue_url, expected_message
+    ):
+        """Malformed PR/issue identities cannot preserve an earlier PASS."""
+        import pdd.agentic_checkup as mod
+
+        public = tmp_path / "agentic.json"
+        public.write_text(
+            json.dumps({"status": "passed", "verdict": {"decision": "pass"}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(public))
+
+        success, message, _cost, _model = mod.run_agentic_checkup(
+            issue_url,
+            pr_url=pr_url,
+            terra_sol=True,
+            cwd=tmp_path,
+        )
+
+        assert success is False
+        assert expected_message in message
+        payload = json.loads(public.read_text(encoding="utf-8"))
+        assert payload["status"] != "passed"
+        assert payload["verdict"]["decision"] == "block"
+
     @pytest.mark.parametrize("invalid_rounds", [0, -1, True, 1.5])
     def test_terra_sol_library_boundary_rejects_invalid_round_budget_before_io(
         self, monkeypatch, invalid_rounds
@@ -1010,6 +1076,17 @@ class TestRunAgenticCheckup:
         )
         stale_path.parent.mkdir(parents=True)
         stale_path.write_text('{"fresh_final_status":"clean"}', encoding="utf-8")
+        progress_path = stale_path.with_name("terra-sol-progress.json")
+        progress_path.write_text(
+            json.dumps(
+                {
+                    "phase": "terminal",
+                    "terminal": True,
+                    "terminal_reason": "old run passed",
+                }
+            ),
+            encoding="utf-8",
+        )
         monkeypatch.setattr(mod, "_find_project_root", lambda _cwd: tmp_path)
         monkeypatch.setattr(mod, "_check_gh_cli", lambda: False)
 
@@ -1023,6 +1100,11 @@ class TestRunAgenticCheckup:
         assert success is False
         assert "GitHub CLI" in message
         assert not stale_path.exists()
+        progress = json.loads(progress_path.read_text(encoding="utf-8"))
+        assert progress["phase"] == "terminal"
+        assert progress["terminal"] is True
+        assert "GitHub CLI" in progress["terminal_reason"]
+        assert progress["terminal_reason"] != "old run passed"
 
     def test_terra_sol_clears_stale_state_before_hosted_reservation_failure(
         self, monkeypatch, tmp_path
@@ -1039,6 +1121,17 @@ class TestRunAgenticCheckup:
         )
         stale_path.parent.mkdir(parents=True)
         stale_path.write_text('{"fresh_final_status":"clean"}', encoding="utf-8")
+        progress_path = stale_path.with_name("terra-sol-progress.json")
+        progress_path.write_text(
+            json.dumps(
+                {
+                    "phase": "terminal",
+                    "terminal": True,
+                    "terminal_reason": "old run passed",
+                }
+            ),
+            encoding="utf-8",
+        )
         monkeypatch.setattr(mod, "_find_project_root", lambda _cwd: tmp_path)
         monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
         monkeypatch.setenv(
@@ -1047,6 +1140,10 @@ class TestRunAgenticCheckup:
 
         def fail_reservation(*_args, **_kwargs):
             assert not stale_path.exists()
+            progress = json.loads(progress_path.read_text(encoding="utf-8"))
+            assert progress["phase"] == "initializing"
+            assert progress["terminal"] is False
+            assert progress["terminal_reason"] is None
             return None
 
         monkeypatch.setattr(mod, "_prepare_hosted_agentic_artifact", fail_reservation)
@@ -1065,6 +1162,11 @@ class TestRunAgenticCheckup:
         assert cost == 0.0
         assert model == ""
         assert not stale_path.exists()
+        progress = json.loads(progress_path.read_text(encoding="utf-8"))
+        assert progress["phase"] == "terminal"
+        assert progress["terminal"] is True
+        assert "provenance" in progress["terminal_reason"]
+        assert progress["terminal_reason"] != "old run passed"
         check_gh.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -1093,6 +1195,26 @@ class TestRunAgenticCheckup:
             "findings": [],
             "terra_sol_mode": True,
             "sol_model": model,
+        }
+
+        assert not mod._review_loop_ship_verdict(
+            state,
+            has_issue=False,
+            require_terra_sol_model=True,
+        )
+
+    def test_terra_sol_ship_verdict_rejects_contradictory_round_cap(self):
+        """A clean/model-valid persisted state cannot override exhaustion."""
+        import pdd.agentic_checkup as mod
+
+        state = {
+            "reviewer_status": {"codex": "clean"},
+            "active_reviewer": "codex",
+            "fresh_final_status": "clean",
+            "findings": [],
+            "terra_sol_mode": True,
+            "sol_model": "gpt-5.6-sol",
+            "max_rounds_reached": True,
         }
 
         assert not mod._review_loop_ship_verdict(

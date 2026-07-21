@@ -976,15 +976,35 @@ def _publish_terra_sol_progress(
     """Publish bounded Terra/Sol watchdog state at every phase transition."""
     if not config.terra_sol:
         return
-    safe_reason = _scrub_secrets(terminal_reason)
+    write_terra_sol_progress(
+        artifacts_dir=artifacts_dir,
+        max_rounds=config.max_rounds,
+        round_number=round_number,
+        phase=phase,
+        terminal_reason=terminal_reason,
+        max_rounds_reached=state.max_rounds_reached,
+    )
+
+
+def write_terra_sol_progress(
+    *,
+    artifacts_dir: Path,
+    max_rounds: int,
+    round_number: int,
+    phase: str,
+    terminal_reason: str = "",
+    max_rounds_reached: bool = False,
+) -> None:
+    """Publish watchdog state when the outer dispatcher has no loop state yet."""
+    safe_reason = _scrub_secrets(terminal_reason)[:2000]
     payload = {
         "schema": "pdd.checkup.terra_sol_progress.v1",
         "current_round": round_number,
-        "max_rounds": config.max_rounds,
+        "max_rounds": max_rounds,
         "phase": phase,
         "terminal": bool(safe_reason),
         "terminal_reason": safe_reason or None,
-        "max_rounds_reached": state.max_rounds_reached,
+        "max_rounds_reached": max_rounds_reached,
     }
     _write_artifact(
         artifacts_dir / "terra-sol-progress.json",
@@ -993,7 +1013,7 @@ def _publish_terra_sol_progress(
     set_agentic_progress(
         workflow="terra-sol-checkup",
         current_step=max(0, round_number),
-        total_steps=config.max_rounds,
+        total_steps=max_rounds,
         step_name=(f"{phase}: {safe_reason}" if safe_reason else phase),
         completed_steps=list(range(1, max(0, round_number))),
     )

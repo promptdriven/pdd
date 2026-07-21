@@ -8236,6 +8236,11 @@
             "returns": "Tuple[bool, str, float, str]"
           },
           {
+            "name": "_invalidate_hosted_agentic_artifact",
+            "signature": "(artifact_path: Optional[str]) -> bool",
+            "returns": "True only after a public blocking placeholder replaces any prior hosted verdict"
+          },
+          {
             "name": "_prepare_hosted_agentic_artifact",
             "signature": "(artifact_path: Optional[str], *, pr_owner: str = '', pr_repo: str = '', pr_number: int = 0, receipt_key_hex: Optional[str] = None, receipt_run_id: str = '', receipt_expected_head_sha: str = '') -> Optional[_HostedAgenticArtifactReservation]",
             "returns": "Invocation-private reservation after a verified public blocking placeholder is published, otherwise None"
@@ -8264,7 +8269,8 @@
     "dependencies": [
       "agentic_common_python.prompt",
       "architecture_registry_python.prompt",
-      "git_porcelain_python.prompt"
+      "git_porcelain_python.prompt",
+      "routing_policy_python.prompt"
     ],
     "priority": 217.5,
     "filename": "checkup_review_loop_python.prompt",
@@ -8319,6 +8325,11 @@
             "name": "parse_reviewer_commands",
             "signature": "(value: str | Sequence[str] | None) -> Dict[str, str]",
             "returns": "Dict[str, str]"
+          },
+          {
+            "name": "write_terra_sol_progress",
+            "signature": "(*, artifacts_dir: Path, max_rounds: int, round_number: int, phase: str, terminal_reason: str = \"\", max_rounds_reached: bool = False) -> None",
+            "returns": "None"
           },
           {
             "name": "write_final_gate_fallback_artifact",

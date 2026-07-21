@@ -226,6 +226,16 @@ class TestShipVerdictPredicate:
         state["findings"] = [{"status": "fixed"}]
         assert _review_loop_ship_verdict(state, has_issue=True) is True
 
+    def test_explicit_budget_cap_hit_never_ships(self) -> None:
+        for cap_flag in (
+            "max_rounds_reached",
+            "max_cost_reached",
+            "max_duration_reached",
+        ):
+            state = _clean_final_state()
+            state[cap_flag] = True
+            assert _review_loop_ship_verdict(state, has_issue=True) is False
+
 
 # ---------------------------------------------------------------------------
 # Library: two-layer dispatch, ordering, propagation, verdict
