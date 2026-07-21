@@ -45,6 +45,33 @@ CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
 PR_2017_PHASE_A_BASE = "c887daba0d171585658f8205e79316e5f36f82c6"
 PR_2017_PHASE_A_HEAD = "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
 REPLAY_PROTECTED_BASE = "e10bd9b3d0d5ac94d1a56af88f5abf07cf8af775"
+TERRA_SOL_PHASE_A_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
+REPLAY_REVIEWED_HEAD = TERRA_SOL_PHASE_A_BASE
+TERRA_SOL_PHASE_A_TARGET_PROFILE = (
+    "42f8590423230d275e403907d20dd18f2b2b4c3d016c52a421bd3da3e318d89b"
+)
+TERRA_SOL_PHASE_A_REPLACEMENTS = (
+    (
+        "pdd/prompts/agentic_checkup_python.prompt",
+        "1812c6d204e346d0745403c908a47e5d4d42b53612efd61efbe40af04ba4b868",
+        "32a25b0db4cef735d3c5850ee38a99860d6d7ea93e5aaf01c3fa2f811cf799f5",
+    ),
+    (
+        "pdd/prompts/checkup_review_loop_python.prompt",
+        "c5ec02fb049e1359da107067d65e725b3ad0a8cca4da6fd31328821f6b6d1c73",
+        "4774486ebfaf5cdb749849e052a4856c27b7f2c12452d4f19b2fe5678fa1a05e",
+    ),
+    (
+        "pdd/prompts/commands/checkup_python.prompt",
+        "b453bb71475123c5545a37dd23bbff9f057d960b775c0e977151ee98a9b976e0",
+        "cb45de93de961e2a35fb716ce78788fd2b5ad56091ce356bac8f8b9775b0814e",
+    ),
+    (
+        "pdd/prompts/checkup_agentic_artifact_python.prompt",
+        "dc4db042ae408dcd90c0dcfe4fb9607421e331f024f56de8e22ca1272d0df1f7",
+        "460c5c8f6ec93da5aa0d3ee30d41d5dfbda05e4631c79354c1a16e6818b45a16",
+    ),
+)
 PR_1971_COMBINED_BASE = "ee9fcff457b23fb7123bb7e15666c9287409ad0f"
 PR_1971_COMBINED_HEAD = REPLAY_PROTECTED_BASE
 PR_1971_COMBINED_PROFILE_DIGEST = (
@@ -488,7 +515,7 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
         [
             "git",
             "show",
-            f"{REPLAY_PROTECTED_BASE}:{STORY_REGRESSION_DORMANT_ROTATION['prompt_path']}",
+            f"{REPLAY_REVIEWED_HEAD}:{STORY_REGRESSION_DORMANT_ROTATION['prompt_path']}",
         ],
         cwd=ROOT,
     )
@@ -496,7 +523,7 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
         [
             "git",
             "show",
-            f"{REPLAY_PROTECTED_BASE}:{PROFILE_REL_PATH.as_posix()}",
+            f"{REPLAY_REVIEWED_HEAD}:{PROFILE_REL_PATH.as_posix()}",
         ],
         cwd=ROOT,
     )
@@ -509,7 +536,7 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
     # is now current main and therefore has its subsequently composed profile.
     assert (
         profile_digest
-        == "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
+        == "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3"
     )
 
     protected_policy = json.loads(
@@ -517,7 +544,7 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
             [
                 "git",
                 "show",
-                f"{REPLAY_PROTECTED_BASE}:.pdd/verification-profile-rotations.json",
+                f"{REPLAY_REVIEWED_HEAD}:.pdd/verification-profile-rotations.json",
             ],
             cwd=ROOT,
             text=True,
@@ -529,9 +556,8 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
         if row["head_policy_sha256"]
         == STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
     ]
-    assert len(pdd1989_rows) == 7
+    assert len(pdd1989_rows) == 6
     assert {row["prompt_path"] for row in pdd1989_rows} == {
-        "pdd/prompts/agentic_common_python.prompt",
         "pdd/prompts/commands/checkup_python.prompt",
         "pdd/prompts/generate_model_catalog_python.prompt",
         "pdd/prompts/llm_invoke_python.prompt",
@@ -560,151 +586,54 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
 
 
 def test_committed_rotations_equal_exact_protected_authority() -> None:
-    """Keep protected history before exact replay and dormant bindings."""
+    """Terra/Sol Phase A replaces only consumed rows with exact successors."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = policy["requirement_rotations"]
-    protected_policy = json.loads(
-        subprocess.check_output(
-            [
-                "git",
-                "show",
-                f"{REPLAY_PROTECTED_BASE}:.pdd/verification-profile-rotations.json",
-            ],
-            cwd=ROOT,
-            text=True,
-        )
-    )
+    protected_raw = _git_blob(TERRA_SOL_PHASE_A_BASE, ROTATION_FILE)
+    protected_policy = json.loads(protected_raw)
     protected_rows = protected_policy["requirement_rotations"]
-    bootstrap_rows = list(
-        map(
-            _requirement_authorization_row,
-            verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS,  # pylint: disable=protected-access
-        )
-    )
-    story_identity = (STORY_REGRESSION_DORMANT_ROTATION["prompt_path"], "python")
-    bootstrap_rows = [
-        STORY_REGRESSION_DORMANT_ROTATION
-        if (row["prompt_path"], row["language_id"]) == story_identity
-        else row
-        for row in bootstrap_rows
-    ]
-    replaced_protected_rows = {
-        json.dumps(_requirement_authorization_row(item), sort_keys=True)
-        for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
-    }
+    replacement_paths = {item[0] for item in TERRA_SOL_PHASE_A_REPLACEMENTS}
     surviving_rows = [
-        row
-        for row in protected_rows
-        if json.dumps(row, sort_keys=True) not in replaced_protected_rows
+        row for row in protected_rows if row["prompt_path"] not in replacement_paths
     ]
-    candidate_rows = [
-        row for row in bootstrap_rows if row in rows and row not in protected_rows
-    ]
-    assert len(protected_rows) == 31
-    assert len(bootstrap_rows) == 58
-    assert len(surviving_rows) == 23
-    assert len(candidate_rows) == 31
-    assert len(rows) == 54
-    assert all(
-        _requirement_authorization_row(item) not in rows
-        for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
+    protected_tokens, _ = verification._raw_requirement_transition_history(  # pylint: disable=protected-access
+        protected_raw, "protected"
     )
-    assert rows == surviving_rows + candidate_rows
+    candidate_tokens, _ = verification._raw_requirement_transition_history(  # pylint: disable=protected-access
+        ROTATION_FILE.read_bytes(), "candidate"
+    )
+    surviving_tokens = tuple(
+        token
+        for row, token in zip(protected_rows, protected_tokens, strict=True)
+        if row["prompt_path"] not in replacement_paths
+    )
+
+    assert len(protected_rows) == 54
+    assert len(surviving_rows) == 51
+    assert len(rows) == 55
+    assert rows[: len(surviving_rows)] == surviving_rows
+    assert candidate_tokens[: len(surviving_tokens)] == surviving_tokens
+    assert len(candidate_tokens) == 55
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
     assert (
         profile_digest
         == "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3"
     )
-    pr2017_phase_a_rows = [
-        row
-        for row in rows
-        if row["head_policy_sha256"]
-        == "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3"
+    replacements = rows[len(surviving_rows) :]
+    assert [row["prompt_path"] for row in replacements] == [
+        item[0] for item in TERRA_SOL_PHASE_A_REPLACEMENTS
     ]
-    assert {row["prompt_path"] for row in pr2017_phase_a_rows} == {
-        "pdd/prompts/fix_error_loop_python.prompt",
-        "pdd/prompts/get_test_command_python.prompt",
-    }
-    assert all(
-        row["base_policy_sha256"]
-        == "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
-        for row in pr2017_phase_a_rows
-    )
-    assert all(
-        hashlib.sha256((ROOT / row["prompt_path"]).read_bytes()).hexdigest()
-        == row["head_prompt_sha256"]
-        for row in pr2017_phase_a_rows
-    )
-    current_rows = [
-        row for row in candidate_rows if row["head_policy_sha256"] == profile_digest
-    ]
-    replay_prompt_changes = set(
-        subprocess.check_output(
-            [
-                "git",
-                "diff",
-                "--name-only",
-                f"{REPLAY_PROTECTED_BASE}...HEAD",
-                "--",
-                "pdd/prompts",
-            ],
-            cwd=ROOT,
-            text=True,
-        ).splitlines()
-    )
-    # The mock-contract prompt is a new unit, authorized by the separate exact
-    # profile-addition tuple. Every modified protected prompt needs a transition.
-    replay_prompt_changes.remove("pdd/prompts/mock_contract_validation_python.prompt")
-    assert {
-        item.prompt_path.as_posix()
-        for item in verification._REPLAY_PROFILE_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
-    } == replay_prompt_changes
-    assert {row["prompt_path"] for row in current_rows} == replay_prompt_changes
-    for row in current_rows:
-        prompt = ROOT / row["prompt_path"]
-        assert (
-            hashlib.sha256(prompt.read_bytes()).hexdigest()
-            == (row["head_prompt_sha256"])
-        )
-        assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
-
-    pr1790_rows = [
-        row
-        for row in rows
-        if row["head_policy_sha256"]
-        == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
-    ]
-    replaced_rows = {
-        json.dumps(_requirement_authorization_row(item), sort_keys=True)
-        for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
-    }
-    expected_pr1790_rows = [
-        row
-        for row in protected_rows
-        if row["head_policy_sha256"]
-        == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
-        and json.dumps(row, sort_keys=True) not in replaced_rows
-    ]
-    assert len(pr1790_rows) == 4
-    assert pr1790_rows == expected_pr1790_rows
-    base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
-    head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
-    assert base_policy_digest == (
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
-    )
-    assert head_policy_digest == (
-        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
-    )
-    for row in pr1790_rows:
-        assert row["base_policy_sha256"] == base_policy_digest
-        assert row["head_policy_sha256"] == head_policy_digest
-        prompt = ROOT / row["prompt_path"]
-        assert (
-            hashlib.sha256(prompt.read_bytes()).hexdigest() == row["head_prompt_sha256"]
-        )
-        assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
-        assert row["base_policy_sha256"] != row["head_policy_sha256"]
+    for row, (prompt_path, source_digest, target_digest) in zip(
+        replacements, TERRA_SOL_PHASE_A_REPLACEMENTS, strict=True
+    ):
+        assert hashlib.sha256((ROOT / prompt_path).read_bytes()).hexdigest() == source_digest
+        assert row["from_requirement_id"] == f"CONTRACT-SHA256:{source_digest}"
+        assert row["base_prompt_sha256"] == source_digest
+        assert row["to_requirement_id"] == f"CONTRACT-SHA256:{target_digest}"
+        assert row["head_prompt_sha256"] == target_digest
+        assert row["base_policy_sha256"] == profile_digest
+        assert row["head_policy_sha256"] == TERRA_SOL_PHASE_A_TARGET_PROFILE
 
 
 def _git_blob(ref: str, path: Path) -> bytes:
@@ -1346,8 +1275,10 @@ def test_pr2017_phase_a_is_dormant_on_current_protected_base() -> None:
 
 
 def test_replay_transitions_cover_the_actual_protected_base() -> None:
-    """The replay transitions must load a complete exact-base profile set."""
-    manifest = build_unit_manifest(ROOT, base_ref=REPLAY_PROTECTED_BASE, head_ref="HEAD")
+    """Replay remains bound to its reviewed historical head, not future authority."""
+    manifest = build_unit_manifest(
+        ROOT, base_ref=REPLAY_REVIEWED_HEAD, head_ref=REPLAY_REVIEWED_HEAD
+    )
     profiles = load_verification_profiles(ROOT, manifest)
 
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
