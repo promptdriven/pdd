@@ -1,21 +1,21 @@
 {
-  "pdd_version": "0.0.285.dev18",
-  "timestamp": "2026-07-10T18:00:01.932912+00:00",
-  "command": "fix",
+  "pdd_version": "0.0.307.dev0",
+  "timestamp": "2026-07-21T19:20:25.481211+00:00",
+  "command": "test",
   "prompt_hash": "cf3f1dcaa149c8baf90a579b87d2b301af3206b4cb408bd29d1af2236a5fbe3c",
-  "code_hash": "5861739f97572d4dbe41bcf1b007d29bd0750e87bd40a904977a7724adce9073",
+  "code_hash": "4a2101f6356d1908e1a10b5dcba8218499deb6fa3e9a7c803b735fc74fcee68e",
   "example_hash": "fcb36209abb5ab882ad551754fb574d62509c968f8c564e18163be7f2b7ef35a",
-  "test_hash": "e3020657766f31c647849877831f38298d1006f63f72fd13043bdec747c1b0c7",
+  "test_hash": "166d6ab51c645ac025f853b9f0083053cbfbf9a71d2dc92914d36aa9d90229b6",
   "test_files": {
-    "test_agentic_sync_runner.py": "e3020657766f31c647849877831f38298d1006f63f72fd13043bdec747c1b0c7"
+    "test_agentic_sync_runner.py": "166d6ab51c645ac025f853b9f0083053cbfbf9a71d2dc92914d36aa9d90229b6"
   },
   "include_deps": {
-    "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",
-    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
-    "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
-    "context/agentic_test_orchestrator_example.py": "473901f6f62844c81a047fa69387c4116d91a522c62d5c6ad30188e2e99dfaa5",
-    "context/architecture_sync_example.py": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
-    "context/sync_order_example.py": "b4eb1e167e7604c7dbac703bdcba7287188fa9d2d5ef6d490216d003cdc542fa"
+    "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",
+    "context/sync_order_example.py": "b4eb1e167e7604c7dbac703bdcba7287188fa9d2d5ef6d490216d003cdc542fa",
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
+    "context/architecture_sync_example.py": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
+    "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
+    "context/agentic_test_orchestrator_example.py": "473901f6f62844c81a047fa69387c4116d91a522c62d5c6ad30188e2e99dfaa5"
   }
 }
