@@ -173,15 +173,8 @@ def test_preflight_fails_closed_on_path_escaping_worktree(
     run.assert_not_called()
 
 
-def test_preflight_passes_canonical_paths_not_symlink_spelling(tmp_path: Path) -> None:
-    """The heal subprocess must receive the resolved target, not a symlink spelling.
-
-    Codex review (PR #1998): passing the original spelling leaves a check/use gap
-    where a symlink component could be re-pointed out of the worktree between
-    validation and the child opening it. Passing the canonicalized path (symlink
-    collapsed) closes that gap; for an in-worktree symlink the child gets the real
-    target's path.
-    """
+def test_preflight_fails_closed_for_unapproved_in_tree_symlink(tmp_path: Path) -> None:
+    """PathPolicy rejects unapproved links even when their target is in-tree."""
     real_prompt = tmp_path / "prompts" / "real_TypeScript.prompt"
     real_code = tmp_path / "src" / "unique.ts"
     for p in (real_prompt, real_code):
@@ -196,13 +189,37 @@ def test_preflight_passes_canonical_paths_not_symlink_spelling(tmp_path: Path) -
     )
 
     with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), patch(
-        "pdd.agentic_change_orchestrator.subprocess.run",
-        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+        "pdd.agentic_change_orchestrator.subprocess.run"
     ) as run:
-        healed, failed, _ = _preflight_drift_heal(tmp_path, quiet=True)
+        healed, failed, healed_prompts = _preflight_drift_heal(tmp_path, quiet=True)
 
-    assert healed == ["hackathon_event_detail_page"]
-    assert failed == []
-    argv = run.call_args.args[0]
-    assert argv[-2] == "prompts/real_TypeScript.prompt"
-    assert argv[-1] == "src/unique.ts"
+    assert healed == []
+    assert failed == ["hackathon_event_detail_page"]
+    assert healed_prompts == []
+    run.assert_not_called()
+
+
+def test_preflight_fails_closed_for_symlink_target_outside_worktree(tmp_path: Path) -> None:
+    """A contained spelling must not permit a symlink escape to the host."""
+    real_code = tmp_path / "src" / "unique.ts"
+    real_code.parent.mkdir(parents=True)
+    real_code.write_text("x\n", encoding="utf-8")
+    outside = tmp_path.parent / "outside_TypeScript.prompt"
+    outside.write_text("x\n", encoding="utf-8")
+    link_prompt = tmp_path / "prompts" / "link_TypeScript.prompt"
+    link_prompt.parent.mkdir(parents=True)
+    link_prompt.symlink_to(outside)
+    drift = _drift(
+        prompt_path="prompts/link_TypeScript.prompt",
+        code_path="src/unique.ts",
+    )
+
+    with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), patch(
+        "pdd.agentic_change_orchestrator.subprocess.run"
+    ) as run:
+        healed, failed, healed_prompts = _preflight_drift_heal(tmp_path, quiet=True)
+
+    assert healed == []
+    assert failed == ["hackathon_event_detail_page"]
+    assert healed_prompts == []
+    run.assert_not_called()

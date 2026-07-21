@@ -1737,28 +1737,6 @@ _PREFLIGHT_CHDIR_LOCK = threading.Lock()
 _PREFLIGHT_MAX_HEAL_MODULES = 10
 
 
-def _canonical_preflight_path(raw_path: str | Path, worktree_path: Path) -> Path | None:
-    """Resolve a drift path within the trusted worktree boundary."""
-    try:
-        from pdd.sync_core.path_policy import PathPolicy, PathPolicyError
-
-        root = PathPolicy(worktree_path).checkout_root
-        candidate = Path(raw_path)
-        relative = (
-            candidate.relative_to(root) if candidate.is_absolute() else candidate
-        )
-        if not relative.parts or any(
-            part in {"", ".", ".."} or "\\" in part or Path(part).name != part
-            for part in relative.parts
-        ):
-            return None
-        resolved = root.joinpath(*relative.parts).resolve(strict=False)
-        resolved.relative_to(root)
-        return resolved
-    except (OSError, RuntimeError, TypeError, ValueError, PathPolicyError):
-        return None
-
-
 def _preflight_drift_heal(
     worktree_path: Path,
     quiet: bool = False,
@@ -1928,24 +1906,17 @@ def _preflight_drift_heal(
         # write beyond it. The paths originate from repo-controlled config that
         # is issue-influenced in the agentic flow, so this is a trust boundary
         # (CWE-022; Codex review, PR #1998).
+        from pdd.content_selector import _validated_project_path
         from pdd.sync_core.path_policy import PathPolicy
 
-        safe_prompt_path = _canonical_preflight_path(prompt_path, worktree_path)
-        safe_code_path = _canonical_preflight_path(code_path, worktree_path)
+        safe_prompt_path = _validated_project_path(prompt_path, root=worktree_path)
+        safe_code_path = _validated_project_path(code_path, root=worktree_path)
         if safe_prompt_path is None or safe_code_path is None:
             failed.append(drift.basename)
             continue
-        # Pass the CANONICAL paths (symlinks already collapsed by
-        # _validated_project_path) to the subprocess, NOT the original spellings,
-        # so the child opens the resolved target directly and a symlink component
-        # cannot be re-pointed out of the worktree between validation and use
-        # (CWE-022 / CWE-367 check/use gap; Codex review, PR #1998). Expressed
-        # relative to the worktree root the child runs in, which equals the
-        # original spelling for ordinary (non-symlinked) paths.
-        # Use the same canonical checkout root as the path policy.  A caller
-        # may pass a symlink spelling for the worktree itself, so independently
-        # resolving it here can disagree with the validated path's root and
-        # turn a valid in-tree pair into a failed heal.
+        # `_validated_project_path` rejects every unapproved symlink hop through
+        # PathPolicy, then returns a canonical path.  Passing that canonical
+        # target rather than the original spelling closes the check/use gap.
         worktree_root_resolved = PathPolicy(worktree_path).checkout_root
         heal_prompt_arg = str(safe_prompt_path.relative_to(worktree_root_resolved))
         heal_code_arg = str(safe_code_path.relative_to(worktree_root_resolved))
