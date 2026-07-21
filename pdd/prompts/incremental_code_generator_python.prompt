@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "incremental_code_generator", "signature": "(original_prompt: str, new_prompt: str, existing_code: str, language: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = 0.25, force_incremental: bool = False, verbose: bool = False, preprocess_prompt: bool = True) -> Tuple[Optional[str], bool, float, str]", "returns": "Tuple[Optional[str], bool, float, str]"}
+      {"name": "incremental_code_generator", "signature": "(original_prompt: str, new_prompt: str, existing_code: str, language: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = 0.25, force_incremental: bool = False, verbose: bool = False, preprocess_prompt: bool = True, compatibility_surface: Optional[str] = None) -> Tuple[Optional[str], bool, float, str]", "returns": "Tuple[Optional[str], bool, float, str]"}
     ]
   }
 }
@@ -31,6 +31,7 @@
         'force_incremental' - A boolean that forces the use of incremental patching even if the diff analyzer suggests full regeneration. Default is False.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
         'preprocess_prompt' - A boolean that indicates whether to preprocess the prompt. Default is True.
+        'compatibility_surface' - An optional string containing a pre-serialized `% Compatibility Surface` block (from `CompatibilityContract.to_prompt_section()`). When `None` (the default), the function attempts `os.environ.get('PDD_COMPATIBILITY_SURFACE', '')` as a fallback. If the resolved value is non-empty, it is prepended symmetrically to both `original_prompt` and `new_prompt` before any LLM call. When empty or not provided, no modification is made.
     Outputs:
         'updated_code' - A string that is the updated runnable code or None if a full regeneration is needed
         'is_incremental' - A boolean indicating whether the update was incremental (True) or if full regeneration is needed (False)
@@ -57,6 +58,8 @@
     </internal_modules>
 
 % This program will use Langchain to do the following:
+    Step 0 (Compatibility Surface Injection): Resolve the compatibility surface: `_compat_surface = (compatibility_surface or os.environ.get('PDD_COMPATIBILITY_SURFACE', '')).strip()`. If `_compat_surface` is non-empty, prepend it (plus a single blank line) to BOTH `original_prompt` and `new_prompt` using the **same** resolved variable — i.e., `original_prompt = _compat_surface + "\n\n" + original_prompt` and `new_prompt = _compat_surface + "\n\n" + new_prompt`. Using the same variable for both sides guarantees that the diff analyzer sees a neutral delta (identical prefix on each side) and only computes the real spec difference, preventing a spurious `is_big_change=True` signal. The prefixed `new_prompt` is also used as `CHANGE_DESCRIPTION` in Step 4b so all three template slots (`ORIGINAL_PROMPT`, `NEW_PROMPT`, `CHANGE_DESCRIPTION`) are consistent. Do NOT re-read the env var a second time between the two assignments. This step runs before preprocessing so the compatibility block is included in the prompt as presented to the diff analyzer.
+
     Step 1. Load the 'diff_analyzer_LLM' prompt template using load_prompt_template with preprocess double_curly_brackets=True but be sure to exclude the input parameters from getting double curly brackets.
     
     Step 2. Run the diff_analyzer_LLM prompt through llm_invoke:
