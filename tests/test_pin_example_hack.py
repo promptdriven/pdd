@@ -46,9 +46,15 @@ class TestIssue1080MonorepoCwd:
             result.stderr = ""
             return result
 
-        with patch('pdd.pin_example_hack.subprocess.run', side_effect=capture_run), \
-             patch('pdd.pin_example_hack.calculate_sha256', return_value="abc123"), \
-             patch('pdd.pin_example_hack.save_run_report'):
+        with (
+            patch('pdd.pin_example_hack.subprocess.run', side_effect=capture_run),
+            patch(
+                'pdd.pin_example_hack.trusted_hash_root_for_paths',
+                return_value=tmp_path,
+            ) as hash_root,
+            patch('pdd.pin_example_hack.calculate_sha256', return_value="abc123") as hash_file,
+            patch('pdd.pin_example_hack.save_run_report'),
+        ):
             try:
                 _execute_tests_and_create_run_report(
                     test_file=test_file,
@@ -72,6 +78,11 @@ class TestIssue1080MonorepoCwd:
             f"got cwd={actual_cwd}. pin_example_hack uses test_file.parent "
             f"instead of TestCommand.cwd from get_test_command_for_file()."
         )
+        assert hash_root.call_count == 2
+        assert [hash_call.args[1] for hash_call in hash_file.call_args_list] == [
+            tmp_path,
+            tmp_path,
+        ]
 
     def test_execute_tests_extracts_command_string_from_testcommand(self, tmp_path, monkeypatch):
         """Verify subprocess.run receives a command string, not a TestCommand object.

@@ -39,7 +39,7 @@
 
   4. `GET /sync-status`:
      - Query params: `basename`, `language`; requires validator dependency.
-     - Use `read_fingerprint`, `get_pdd_file_paths`, `calculate_sha256` from `pdd.sync_determine_operation`.
+     - Use `read_fingerprint`, `get_pdd_file_paths`, `calculate_sha256` from `pdd.sync_determine_operation`. Derive `hash_root = Path(validator.project_root)` and hash both prompt and code with `calculate_sha256(path, hash_root)`; never use a one-argument or CWD-relative hash. `test_sync_status_in_sync` must verify both trusted-root calls.
      - Return `never_synced`, `in_sync`, `prompt_changed`, `code_changed`, or `conflict` based on current hashes vs fingerprint hashes.
      - Include fingerprint timestamp/command and prompt/code existence booleans.
 
