@@ -4897,18 +4897,28 @@ def _adopt_collocated_test(result: Dict[str, Any], *, user_pinned: bool) -> Dict
                 code_path
             )
             return result
-        root_resolved = trusted_hash_root_for_paths(result).resolve(strict=False)
-        adopted_resolved = _validated_project_path(adopted, root=root_resolved)
+        # The prompt path selects the governing nested/custom .pddrc root.
+        # Never hand the whole mutable result map to root discovery: adopted
+        # output candidates are issue-influenced and are valid only after the
+        # PathPolicy boundary in _validated_project_path.
+        prompt_path = result.get('prompt')
+        authority_paths = (
+            {"prompt": prompt_path} if isinstance(prompt_path, Path) else {}
+        )
+        trusted_root = (
+            trusted_hash_root_for_paths(authority_paths)
+            if authority_paths
+            else Path.cwd()
+        )
+        adopted_resolved = _validated_project_path(adopted, root=trusted_root)
         if adopted_resolved is None:
             return result
         # Defense in depth (CWE-022, PR #1914 CodeQL): the adopted path becomes
-        # the generated-test WRITE target (result['test']/['test_files']); only
-        # accept it when it stays inside the working tree.
-        if not _contained_in_root(adopted_resolved, root_resolved):
-            return result
+        # the generated-test WRITE target (result['test']/['test_files']).
+        # _validated_project_path admits only the PathPolicy-contained target.
         derived_resolved = _validated_project_path(
             derived_test,
-            root=root_resolved,
+            root=trusted_root,
         )
         if derived_resolved is not None and adopted_resolved == derived_resolved:
             return result

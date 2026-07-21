@@ -1902,6 +1902,23 @@ def test_validated_project_path_sanitizes_before_filesystem_use(tmp_path, monkey
     assert _validated_project_path(outside) is None
 
 
+def test_validated_project_path_allows_only_policy_contained_components(tmp_path, monkeypatch):
+    """The shared resolver accepts valid paths but rejects traversal, outside
+    absolutes, and an in-tree symlink that targets outside the trusted root."""
+    repo = tmp_path / "repo"
+    module = _write(repo / "src" / "widget.ts", "export const x = 1;\n")
+    outside = _write(tmp_path / "outside.ts", "export const y = 2;\n")
+    escaped_link = repo / "src" / "escaped.ts"
+    escaped_link.symlink_to(outside)
+    monkeypatch.chdir(repo)
+
+    assert _validated_project_path("src/widget.ts") == module.resolve()
+    assert _validated_project_path(module) == module.resolve()
+    assert _validated_project_path("../outside.ts") is None
+    assert _validated_project_path(outside) is None
+    assert _validated_project_path(escaped_link) is None
+
+
 def test_find_collocated_test_rejects_symlink_escape(tmp_path, monkeypatch):
     """A lexical in-repo candidate whose symlink target escapes is rejected."""
     repo = tmp_path / "repo"
