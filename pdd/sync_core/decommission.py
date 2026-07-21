@@ -116,6 +116,7 @@ def control_transition_invalid(
     head_ref: str,
     base_ownership: tuple[OwnershipRule, ...],
     head_ownership: tuple[OwnershipRule, ...],
+    allowed_ownership_weakenings: tuple[tuple[OwnershipRule, OwnershipRule], ...] = (),
 ) -> list[str]:
     """Reject removal or weakening of protected denominator controls."""
     invalid: list[str] = []
@@ -124,8 +125,12 @@ def control_transition_invalid(
     if base_ownership_blob is not None and head_ownership_blob is None:
         invalid.append(f"{head_ref}: protected sync ownership policy is missing")
     elif base_ownership_blob is not None:
+        head_by_pattern = {rule.pattern: rule for rule in head_ownership}
+        allowed_weakenings = set(allowed_ownership_weakenings)
         removed = set(base_ownership) - set(head_ownership)
         for rule in sorted(removed, key=lambda item: item.pattern):
+            if (rule, head_by_pattern.get(rule.pattern)) in allowed_weakenings:
+                continue
             promoted = replace(rule, preauthorize_absent=True)
             path = PurePosixPath(rule.pattern)
             if (

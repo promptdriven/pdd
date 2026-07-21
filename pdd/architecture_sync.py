@@ -665,6 +665,35 @@ def _architecture_prompt_filenames(architecture_path: Path) -> set[str]:
     }
 
 
+_EXTERNAL_CONTEXT_TEMPLATE: Dict[str, Any] = {
+    "reason": "Provides shared Python generation conventions for prompt templates.",
+    "description": (
+        "Human-maintained context template included by Python prompt modules to "
+        "define package, typing, import, error-handling, and preservation conventions."
+    ),
+    "dependencies": [],
+    "priority": 98,
+    "filename": "context/python_preamble.prompt",
+    "filepath": "context/python_preamble.prompt",
+    "tags": ["config", "context", "python", "template"],
+    "interface": {"type": "config", "config": {"keys": []}},
+}
+
+
+def _is_external_context_template(module: Dict[str, Any]) -> bool:
+    """Return whether an entry is the one registered non-generated context file."""
+    return module == _EXTERNAL_CONTEXT_TEMPLATE
+
+
+def _is_context_template_candidate(module: Dict[str, Any]) -> bool:
+    """Return whether an entry attempts to use the reserved root context namespace."""
+    return any(
+        isinstance(value, str)
+        and value.startswith("context/")
+        for value in (module.get("filename"), module.get("filepath"))
+    )
+
+
 # --- Architecture Update ---
 
 def _format_signature_param(
@@ -1503,6 +1532,14 @@ def sync_all_prompts_to_architecture(
             skipped_count += 1
             continue
 
+        # Shared context templates are human-maintained files outside the
+        # generated prompts root. They remain architecture dependencies so
+        # validation can resolve include edges, but prompt-to-architecture sync
+        # must not search for a synthetic prompts/context copy.
+        if _is_external_context_template(module):
+            skipped_count += 1
+            continue
+
         # Scope gate: when only_files is provided, restrict the update pass to
         # those prompts too (not just the registration pre-pass above). Without
         # this, in-workflow callers that pass a narrow scope (e.g. the pre-checkup
@@ -1619,6 +1656,22 @@ def validate_architecture_modules(modules: List[Dict[str, Any]]) -> Dict[str, An
         dependencies = module.get("dependencies", [])
         if not isinstance(dependencies, list):
             dependencies = []
+
+        if (
+            isinstance(module, dict)
+            and _is_context_template_candidate(module)
+            and not _is_external_context_template(module)
+        ):
+            errors.append(
+                {
+                    "type": "invalid_external_context_template",
+                    "message": (
+                        "Only the exact registered context/python_preamble.prompt "
+                        "context template may be external to prompts/"
+                    ),
+                    "modules": [filename or "(unnamed)"],
+                }
+            )
 
         for dependency in dependencies:
             if dependency not in all_filenames:

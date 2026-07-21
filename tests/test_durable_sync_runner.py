@@ -69,6 +69,18 @@ class PushFailingMetadataRunner(MetadataDurableRunner):
         return False, "simulated push outage"
 
 
+_NEEDS_REVIEW_NOTE = "`foo`: adopted test kept unchanged — flagged for review (#1903)."
+
+
+class NeedsReviewDurableRunner(DurableSyncRunner):
+    """Stubs the child sync as a success that flags the module needs-review —
+    mirrors the issue #1903 §B.4 never-block outcome (round 8)."""
+
+    def _run_child_sync(self, basename: str):
+        self.module_states[basename].needs_review = _NEEDS_REVIEW_NOTE
+        return True, 0.0, ""
+
+
 class MultiModuleDurableRunner(DurableSyncRunner):
     def _run_child_sync(self, basename: str):
         cwd = self.module_cwds[basename]
@@ -107,11 +119,27 @@ def _runner(repo: Path, runner_cls=EmptyDurableRunner, **kwargs) -> DurableSyncR
 def test_parse_checkpoint_trailer_requires_supported_version_and_fields():
     assert _parse_checkpoint_trailer(
         "PDD-Sync-Checkpoint-V1: issue=1328 module=src/foo"
-    ) == (1328, "src/foo")
+    ) == (1328, "src/foo", None)
     assert _parse_checkpoint_trailer(
         "PDD-Sync-Checkpoint-V2: issue=1328 module=src/foo"
     ) is None
     assert _parse_checkpoint_trailer("PDD-Sync-Checkpoint-V1: module=src/foo") is None
+
+
+def test_checkpoint_trailer_round_trips_needs_review_note(tmp_path: Path):
+    """Issue #1903 §B.4 (round 8): a durable checkpoint must carry the adopted-test
+    ``needs_review`` note so a resumed run does not silently drop it."""
+    import base64
+    from pdd.durable_sync_runner import CHECKPOINT_TRAILER
+
+    note = "`foo`: test churn kept the existing test (`src/foo.test.tsx`) — review."
+    enc = base64.urlsafe_b64encode(note.encode("utf-8")).decode("ascii").rstrip("=")
+    line = f"{CHECKPOINT_TRAILER}: issue=1328 module=src/foo review={enc}"
+    assert _parse_checkpoint_trailer(line) == (1328, "src/foo", note)
+    # A whitespace-free garbage review token degrades to None, never raises.
+    bad = f"{CHECKPOINT_TRAILER}: issue=1328 module=src/foo review=!!!notb64!!!"
+    parsed = _parse_checkpoint_trailer(bad)
+    assert parsed is not None and parsed[0] == 1328 and parsed[1] == "src/foo"
 
 
 def test_slugify_basename_adds_digest_to_avoid_worktree_name_collisions():
@@ -201,6 +229,25 @@ def test_resume_skips_modules_with_matching_issue_trailer(tmp_path: Path):
     assert after == before
 
 
+def test_durable_resume_restores_needs_review_flag(tmp_path: Path):
+    """Issue #1903 §B.4 (round 8): a durable resume rebuilds state from checkpoint
+    trailers only; the adopted-test needs-review note must survive that round-trip
+    rather than reappearing as a clean success."""
+    repo = _init_repo_with_remote(tmp_path)
+    first = _runner(repo, runner_cls=NeedsReviewDurableRunner)
+    success, message, _ = first.run()
+    assert success is True, message
+    assert first.module_states["foo"].needs_review == _NEEDS_REVIEW_NOTE
+
+    # Resume in a fresh runner: no local JSON state — only the git trailer.
+    second = _runner(repo, runner_cls=NeedsReviewDurableRunner)
+    # Restore happens in _prepare_durable_branch before any child sync re-runs.
+    ok, msg = second._prepare_durable_branch()
+    assert ok, msg
+    assert second._resumed_modules == ["foo"]
+    assert second.module_states["foo"].needs_review == _NEEDS_REVIEW_NOTE
+
+
 def test_no_resume_ignores_existing_trailer_and_appends_checkpoint(tmp_path: Path):
     repo = _init_repo_with_remote(tmp_path)
     first = _runner(repo)
@@ -244,6 +291,36 @@ def test_module_metadata_is_force_added_even_when_pdd_dir_is_ignored(tmp_path: P
     assert json.loads(metadata) == {"module": "foo"}
     readme = _git(repo, "show", "sync/issue-1328:README.md").stdout
     assert readme == "updated\n"
+
+
+class OwnershipManifestRunner(DurableSyncRunner):
+    """Writes module metadata AND the shared greenfield-ownership manifest,
+    mirroring a child that greenfield-creates a co-located test (round 10)."""
+
+    def _run_child_sync(self, basename: str):
+        cwd = self.module_cwds[basename]
+        (cwd / "README.md").write_text("updated\n", encoding="utf-8")
+        meta_dir = cwd / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        (meta_dir / "foo_python.json").write_text(
+            json.dumps({"module": basename}), encoding="utf-8")
+        (meta_dir / "pdd_created_tests.json").write_text(
+            json.dumps(["src/__test__/foo.test.tsx"]), encoding="utf-8")
+        return True, 0.0, ""
+
+
+def test_ownership_manifest_is_checkpointed_even_when_pdd_dir_is_ignored(tmp_path: Path):
+    # Round 10: the shared, non-module-prefixed ownership manifest must be
+    # force-added to the checkpoint (not rejected as unsafe), so a fresh-worktree
+    # resume keeps PDD's greenfield ownership provenance.
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(repo, runner_cls=OwnershipManifestRunner)
+    success, message, _ = runner.run()
+    assert success is True, message
+    manifest = _git(
+        repo, "show", "sync/issue-1328:.pdd/meta/pdd_created_tests.json"
+    ).stdout
+    assert json.loads(manifest) == ["src/__test__/foo.test.tsx"]
 
 
 def test_nested_module_metadata_is_force_added_for_module_cwd(tmp_path: Path):

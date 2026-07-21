@@ -342,6 +342,7 @@ class TestPreflightDriftHeal:
     def test_single_drift_healed_successfully(self, worktree: Path) -> None:
         drift = MagicMock()
         drift.basename = "mod_a"
+        drift.prompt_path = "prompts/mod_a_Python.prompt"
         drift.code_path = "pdd/mod_a.py"
         with patch(
             "pdd.ci_drift_heal.detect_drift",
@@ -363,7 +364,14 @@ class TestPreflightDriftHeal:
         import sys
         call = m_run.call_args_list[0]
         assert call.args[0] == [
-            sys.executable, "-m", "pdd", "update", "--sync-metadata", "pdd/mod_a.py",
+            sys.executable,
+            "-m",
+            "pdd",
+            "update",
+            "--sync-metadata",
+            "--git",
+            "prompts/mod_a_Python.prompt",
+            "pdd/mod_a.py",
         ]
         assert str(call.kwargs.get("cwd", "")) == str(worktree)
 
