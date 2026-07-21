@@ -1383,6 +1383,12 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "model": "claude-fable-5",
         "input": 10.0,
         "output": 50.0,
+        # Fable has no reviewed Arena/DeepSWE score yet. It is the explicit
+        # pdd-opus target, so preserve this unscored provider-default row
+        # through regeneration without fabricating benchmark evidence.
+        "coding_arena_elo": 0,
+        "model_rank_score": 0,
+        "model_rank_source": "platform-default",
         "base_url": "",
         "api_key": "ANTHROPIC_API_KEY",
         "max_reasoning_tokens": 128000,
