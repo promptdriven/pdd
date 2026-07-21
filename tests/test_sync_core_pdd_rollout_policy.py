@@ -46,7 +46,7 @@ PR_2017_PHASE_A_BASE = "c887daba0d171585658f8205e79316e5f36f82c6"
 PR_2017_PHASE_A_HEAD = "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
 REPLAY_PROTECTED_BASE = "e10bd9b3d0d5ac94d1a56af88f5abf07cf8af775"
 TERRA_SOL_PHASE_A_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
-REPLAY_REVIEWED_HEAD = TERRA_SOL_PHASE_A_BASE
+REPLAY_REVIEWED_HEAD = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
 TERRA_SOL_PHASE_A_TARGET_PROFILE = (
     "7bab95b144218327e3dee6a834819a2e3e61419d41df612094bb40aed9578bb0"
 )
@@ -515,7 +515,7 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
         [
             "git",
             "show",
-            f"{REPLAY_REVIEWED_HEAD}:{STORY_REGRESSION_DORMANT_ROTATION['prompt_path']}",
+            f"{REPLAY_PROTECTED_BASE}:{STORY_REGRESSION_DORMANT_ROTATION['prompt_path']}",
         ],
         cwd=ROOT,
     )
@@ -523,7 +523,7 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
         [
             "git",
             "show",
-            f"{REPLAY_REVIEWED_HEAD}:{PROFILE_REL_PATH.as_posix()}",
+            f"{REPLAY_PROTECTED_BASE}:{PROFILE_REL_PATH.as_posix()}",
         ],
         cwd=ROOT,
     )
@@ -536,7 +536,7 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
     # is now current main and therefore has its subsequently composed profile.
     assert (
         profile_digest
-        == "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3"
+        == "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
     )
 
     protected_policy = json.loads(
@@ -544,7 +544,7 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
             [
                 "git",
                 "show",
-                f"{REPLAY_REVIEWED_HEAD}:.pdd/verification-profile-rotations.json",
+                f"{REPLAY_PROTECTED_BASE}:.pdd/verification-profile-rotations.json",
             ],
             cwd=ROOT,
             text=True,
@@ -556,8 +556,9 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
         if row["head_policy_sha256"]
         == STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
     ]
-    assert len(pdd1989_rows) == 6
+    assert len(pdd1989_rows) == 7
     assert {row["prompt_path"] for row in pdd1989_rows} == {
+        "pdd/prompts/agentic_common_python.prompt",
         "pdd/prompts/commands/checkup_python.prompt",
         "pdd/prompts/generate_model_catalog_python.prompt",
         "pdd/prompts/llm_invoke_python.prompt",
@@ -1277,7 +1278,7 @@ def test_pr2017_phase_a_is_dormant_on_current_protected_base() -> None:
 def test_replay_transitions_cover_the_actual_protected_base() -> None:
     """Replay remains bound to its reviewed historical head, not future authority."""
     manifest = build_unit_manifest(
-        ROOT, base_ref=REPLAY_REVIEWED_HEAD, head_ref=REPLAY_REVIEWED_HEAD
+        ROOT, base_ref=REPLAY_PROTECTED_BASE, head_ref=REPLAY_REVIEWED_HEAD
     )
     profiles = load_verification_profiles(ROOT, manifest)
 
