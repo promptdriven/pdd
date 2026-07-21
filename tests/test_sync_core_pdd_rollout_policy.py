@@ -532,8 +532,8 @@ def test_story_regression_transition_is_exact_and_consumed() -> None:
     assert prompt_digest != STORY_REGRESSION_DORMANT_ROTATION["base_prompt_sha256"]
     assert prompt_digest == STORY_REGRESSION_DORMANT_ROTATION["head_prompt_sha256"]
     assert profile_digest != STORY_REGRESSION_DORMANT_ROTATION["base_policy_sha256"]
-    # The row remains the exact historical transition, while the replay base
-    # is now current main and therefore has its subsequently composed profile.
+    # The immutable e10 replay base records this subsequently composed c566
+    # profile for the exact historical transition.
     assert (
         profile_digest
         == "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
