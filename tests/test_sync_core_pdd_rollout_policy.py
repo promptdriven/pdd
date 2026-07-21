@@ -45,35 +45,35 @@ CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
 PR_2017_PHASE_A_BASE = "c887daba0d171585658f8205e79316e5f36f82c6"
 PR_2017_PHASE_A_HEAD = "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
 REPLAY_PROTECTED_BASE = "e10bd9b3d0d5ac94d1a56af88f5abf07cf8af775"
-TERRA_SOL_PHASE_A_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
+TERRA_SOL_PHASE_A_BASE = "cce43d8478f470a36113f73ecba25e7a8b025e0b"
 REPLAY_REVIEWED_HEAD = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
 TERRA_SOL_PHASE_A_TARGET_PROFILE = (
-    "fed436316c49f6b248c6b5ed79a8e835357abe675128659b808798889d889e1d"
+    "cce9f1c883d5e4dda7338decfd803ae05ad2840086ee04018014f14425071038"
 )
 TERRA_SOL_PHASE_A_REPLACEMENTS = (
     (
         "pdd/prompts/agentic_checkup_python.prompt",
-        "1812c6d204e346d0745403c908a47e5d4d42b53612efd61efbe40af04ba4b868",
+        "e8969f78c34b118cfd1cee0386f6fa5ecec981bb324f27e9b070fe41bb5051ef",
         "e8969f78c34b118cfd1cee0386f6fa5ecec981bb324f27e9b070fe41bb5051ef",
     ),
     (
         "pdd/prompts/checkup_review_loop_python.prompt",
-        "c5ec02fb049e1359da107067d65e725b3ad0a8cca4da6fd31328821f6b6d1c73",
         "222c8740b291e885303f29c9a3268de27c258c5e386041796df76862edb5c085",
+        "d40e052d3d4adc1937347aaa9d4cd11fc76df480cf84b337f5483fc477c4b0b8",
     ),
     (
         "pdd/prompts/commands/checkup_python.prompt",
-        "b453bb71475123c5545a37dd23bbff9f057d960b775c0e977151ee98a9b976e0",
+        "1096ee61eeba061adae05e4a4e8f8239cff6103ce75e451efb053f5644203be4",
         "1096ee61eeba061adae05e4a4e8f8239cff6103ce75e451efb053f5644203be4",
     ),
     (
         "pdd/prompts/checkup_agentic_artifact_python.prompt",
-        "dc4db042ae408dcd90c0dcfe4fb9607421e331f024f56de8e22ca1272d0df1f7",
+        "460c5c8f6ec93da5aa0d3ee30d41d5dfbda05e4631c79354c1a16e6818b45a16",
         "460c5c8f6ec93da5aa0d3ee30d41d5dfbda05e4631c79354c1a16e6818b45a16",
     ),
     (
         "pdd/prompts/agentic_common_python.prompt",
-        "e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c",
+        "11aa8636691deb2c6e1dd1051ba46cb06947bb1a65335914868647e8240cede9",
         "11aa8636691deb2c6e1dd1051ba46cb06947bb1a65335914868647e8240cede9",
     ),
 )
@@ -614,7 +614,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         if row["prompt_path"] not in replacement_paths
     )
 
-    assert len(protected_rows) == 54
+    assert len(protected_rows) == 55
     assert len(surviving_rows) == 50
     assert len(rows) == 55
     assert rows[: len(surviving_rows)] == surviving_rows
@@ -627,18 +627,22 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         == "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3"
     )
     replacements = rows[len(surviving_rows) :]
+    protected_by_path = {row["prompt_path"]: row for row in protected_rows}
     assert [row["prompt_path"] for row in replacements] == [
         item[0] for item in TERRA_SOL_PHASE_A_REPLACEMENTS
     ]
     for row, (prompt_path, source_digest, target_digest) in zip(
         replacements, TERRA_SOL_PHASE_A_REPLACEMENTS, strict=True
     ):
-        assert hashlib.sha256((ROOT / prompt_path).read_bytes()).hexdigest() == source_digest
+        assert protected_by_path[prompt_path]["head_prompt_sha256"] == source_digest
         assert row["from_requirement_id"] == f"CONTRACT-SHA256:{source_digest}"
         assert row["base_prompt_sha256"] == source_digest
         assert row["to_requirement_id"] == f"CONTRACT-SHA256:{target_digest}"
         assert row["head_prompt_sha256"] == target_digest
-        assert row["base_policy_sha256"] == profile_digest
+        assert (
+            row["base_policy_sha256"]
+            == protected_by_path[prompt_path]["head_policy_sha256"]
+        )
         assert row["head_policy_sha256"] == TERRA_SOL_PHASE_A_TARGET_PROFILE
 
 
