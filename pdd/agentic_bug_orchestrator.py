@@ -1992,8 +1992,12 @@ def run_agentic_bug_orchestrator(
                 )
                 state["issue_updated_at"] = issue_updated_at
 
-    # Initialize variables from state or defaults
-    if state is not None and not effective_clean_restart:
+    # Initialize variables from state or defaults.  The raw CLI flag is the
+    # one-shot instruction to discard cached steps.  A persisted
+    # ``clean_restart`` flag only records lineage so resumed worktree/PR
+    # operations retain their clean-branch and force-with-lease semantics; it
+    # must not make every later invocation restart the workflow from Step 1.
+    if state is not None and not clean_restart:
         last_completed_step = state.get("last_completed_step", 0)
         step_outputs = state.get("step_outputs", {})
         total_cost = state.get("total_cost", 0.0)
