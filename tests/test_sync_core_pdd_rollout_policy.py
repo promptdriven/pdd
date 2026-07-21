@@ -949,10 +949,10 @@ def test_pr1971_combined_profile_reconciliation_is_exact_and_consumed() -> None:
     "mutation",
     ("altered", "extra", "partial", "unrelated"),
 )
-def test_pr1971_pytest_obligation_semantic_mutations_are_rejected(
+def test_pr1971_to_pr1873_composed_semantic_mutations_are_rejected(
     mutation: str,
 ) -> None:
-    """Exact #1971 inputs reject protected-field obligation mutations."""
+    """The exact composed inputs reject altered, extra, partial, or unrelated data."""
     base, base_invalid = verification._load_inputs(  # pylint: disable=protected-access
         ROOT, PR_1971_COMBINED_BASE, REPOSITORY_ID, {}
     )
@@ -1105,6 +1105,91 @@ def test_pr1971_combined_profile_reconciliation_rejects_byte_mutation() -> None:
     )
     assert not verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
         base_policy, candidate_policy, base_profile, candidate_profile + b" "
+    )
+
+
+@pytest.mark.parametrize(
+    "mutated_input",
+    ("base_policy", "candidate_policy", "base_profile", "candidate_profile"),
+)
+def test_pr1971_to_pr1873_composed_reconciliation_is_exact(
+    mutated_input: str,
+) -> None:
+    """The one composed historical path rejects a mutation on every boundary."""
+    inputs = {
+        "base_policy": subprocess.check_output(
+            [
+                "git",
+                "show",
+                f"{PR_1971_COMBINED_BASE}:{ROTATION_FILE.relative_to(ROOT)}",
+            ]
+        ),
+        "candidate_policy": ROTATION_FILE.read_bytes(),
+        "base_profile": subprocess.check_output(
+            [
+                "git",
+                "show",
+                f"{PR_1971_COMBINED_BASE}:{PROFILE_FILE.relative_to(ROOT)}",
+            ]
+        ),
+        "candidate_profile": PROFILE_FILE.read_bytes(),
+    }
+
+    assert verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
+        inputs["base_policy"],
+        inputs["candidate_policy"],
+        inputs["base_profile"],
+        inputs["candidate_profile"],
+    )
+    inputs[mutated_input] += b" "
+    assert not verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
+        inputs["base_policy"],
+        inputs["candidate_policy"],
+        inputs["base_profile"],
+        inputs["candidate_profile"],
+    )
+
+
+def test_pr1971_to_pr1873_composed_reconciliation_still_binds_prompt_bytes() -> None:
+    """The composed policy exception cannot authorize a changed prompt byte."""
+    authorization = next(
+        item
+        for item in verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+        if item.prompt_path == PurePosixPath("pdd/prompts/operation_log_python.prompt")
+        and item.language_id == "python"
+    )
+    base_profile = subprocess.check_output(
+        [
+            "git",
+            "show",
+            f"{PR_1971_COMBINED_BASE}:{PROFILE_FILE.relative_to(ROOT)}",
+        ]
+    )
+    candidate_profile = PROFILE_FILE.read_bytes()
+    base_prompt = subprocess.check_output(
+        ["git", "show", f"{PR_1971_COMBINED_BASE}:{authorization.prompt_path}"]
+    )
+    candidate_prompt = (ROOT / authorization.prompt_path).read_bytes()
+    accepted_pairs = (
+        verification._PR1971_COMBINED_PROFILE_BYTES,  # pylint: disable=protected-access
+        verification._LEGACY_PDD_1873_PROFILE_BYTES,  # pylint: disable=protected-access
+    )
+
+    assert verification._transition_bytes_match(  # pylint: disable=protected-access
+        authorization,
+        base_profile,
+        candidate_profile,
+        base_prompt,
+        candidate_prompt,
+        accepted_pairs,
+    )
+    assert not verification._transition_bytes_match(  # pylint: disable=protected-access
+        authorization,
+        base_profile,
+        candidate_profile,
+        base_prompt,
+        candidate_prompt + b" ",
+        accepted_pairs,
     )
 
 

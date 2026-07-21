@@ -64,6 +64,19 @@ _LEGACY_PDD_1873_PROFILE_BYTES = (
     "80aac1bc026f92408cc7de3f37d85ad223cc2e053319b070bea2231b379309a0",
 )
 
+# PR #1875 contains both reviewed historical steps above. CI therefore compares
+# the protected state before #1971 directly with the merged state after #1873.
+# Bind that composed reconciliation to its exact four byte identities; this is
+# not generic permission to skip either intermediate policy/profile check.
+_PR1971_TO_PDD1873_COMPOSED_SCHEMA_2_HISTORY = (
+    _PR1971_COMBINED_SCHEMA_2_HISTORY[0],
+    _LEGACY_PDD_1873_SCHEMA_2_HISTORY[1],
+)
+_PR1971_TO_PDD1873_COMPOSED_PROFILE_BYTES = (
+    _PR1971_COMBINED_PROFILE_BYTES[0],
+    _LEGACY_PDD_1873_PROFILE_BYTES[1],
+)
+
 
 class VerificationProfileError(ValueError):
     """Raised when protected verification-profile data cannot be parsed."""
@@ -158,6 +171,7 @@ class _RequirementTransitionContext:
         PurePosixPath,
         tuple[bytes | None, bytes | None],
     ]
+    accepted_composed_policy_pairs: tuple[tuple[str, str], ...] = ()
 
 
 def _exact_bootstrap_requirement_transition(
@@ -1320,6 +1334,36 @@ def _validate_dormant_policy_installation(
         )
 
 
+def _is_exact_pr1971_to_pdd1873_composed_reconciliation(
+    protected_policy: bytes | None,
+    candidate_policy: bytes | None,
+    protected_profile: bytes | None,
+    candidate_profile: bytes | None,
+) -> bool:
+    """Recognize only the reviewed #1971-base to merged-#1873-head bytes."""
+    if None in (
+        protected_policy,
+        candidate_policy,
+        protected_profile,
+        candidate_profile,
+    ):
+        return False
+    assert protected_policy is not None and candidate_policy is not None
+    assert protected_profile is not None and candidate_profile is not None
+    policy_pair = (
+        hashlib.sha256(protected_policy).hexdigest(),
+        hashlib.sha256(candidate_policy).hexdigest(),
+    )
+    profile_pair = (
+        hashlib.sha256(protected_profile).hexdigest(),
+        hashlib.sha256(candidate_profile).hexdigest(),
+    )
+    return (
+        policy_pair == _PR1971_TO_PDD1873_COMPOSED_SCHEMA_2_HISTORY
+        and profile_pair == _PR1971_TO_PDD1873_COMPOSED_PROFILE_BYTES
+    )
+
+
 def _is_exact_combined_requirement_reconciliation(
     protected_policy: bytes | None,
     candidate_policy: bytes | None,
@@ -1348,7 +1392,12 @@ def _is_exact_combined_requirement_reconciliation(
         (_LEGACY_PDD_1989_SCHEMA_2_HISTORY, _LEGACY_PDD_1989_PROFILE_BYTES),
         (_LEGACY_PDD_1873_SCHEMA_2_HISTORY, _LEGACY_PDD_1873_PROFILE_BYTES),
         (_PR1971_COMBINED_SCHEMA_2_HISTORY, _PR1971_COMBINED_PROFILE_BYTES),
-    }
+    } or _is_exact_pr1971_to_pdd1873_composed_reconciliation(
+        protected_policy,
+        candidate_policy,
+        protected_profile,
+        candidate_profile,
+    )
 
 
 def _is_exact_pr1971_pytest_reconciliation(
@@ -1883,6 +1932,12 @@ def _load_requirement_transition_authorizations(
         policies[0],
         policies[1],
     )
+    pr1971_to_pdd1873_composed = _is_exact_pr1971_to_pdd1873_composed_reconciliation(
+        protected_policy,
+        candidate_policy,
+        policies[0],
+        policies[1],
+    )
     policy_digest_pair = (
         (
             hashlib.sha256(protected_policy).hexdigest(),
@@ -1957,14 +2012,18 @@ def _load_requirement_transition_authorizations(
             )
     if candidate_policy != protected_policy:
         _validate_dormant_policy_installation(protected_policy, candidate_policy)
-    if legacy_pdd1873_reconciliation or legacy_pdd1873_current_state:
+    if (
+        legacy_pdd1873_reconciliation
+        or legacy_pdd1873_current_state
+        or pr1971_to_pdd1873_composed
+    ):
         cli_identity = (PurePosixPath("pdd/prompts/core/cli_python.prompt"), "python")
         candidate = tuple(
             item
             for item in candidate
             if (item.prompt_path, item.language_id) != cli_identity
         )
-        if legacy_pdd1873_reconciliation:
+        if legacy_pdd1873_reconciliation or pr1971_to_pdd1873_composed:
             cli_transition = next(
                 item
                 for item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
@@ -1984,6 +2043,7 @@ def _transition_bytes_match(
     head_policy: bytes | None,
     base_prompt: bytes | None,
     head_prompt: bytes | None,
+    accepted_composed_policy_pairs: tuple[tuple[str, str], ...] = (),
 ) -> bool:
     """Check all four byte identities and both derived requirement identities."""
     if None in (base_policy, head_policy, base_prompt, head_prompt):
@@ -1991,9 +2051,16 @@ def _transition_bytes_match(
     assert base_policy is not None and head_policy is not None
     assert base_prompt is not None and head_prompt is not None
     bindings = authorization.bindings
+    actual_policy_pair = (_sha256(base_policy), _sha256(head_policy))
+    bound_policy_pair = (
+        bindings.base_policy_sha256,
+        bindings.head_policy_sha256,
+    )
+    policy_bytes_match = actual_policy_pair == bound_policy_pair or (
+        bound_policy_pair in accepted_composed_policy_pairs
+    )
     return (
-        _sha256(base_policy) == bindings.base_policy_sha256
-        and _sha256(head_policy) == bindings.head_policy_sha256
+        policy_bytes_match
         and _sha256(base_prompt) == bindings.base_prompt_sha256
         and _sha256(head_prompt) == bindings.head_prompt_sha256
         and _prompt_requirements(base_prompt) == (authorization.from_requirement_id,)
@@ -2145,6 +2212,7 @@ def _evaluate_requirement_authorization(
         context.policies[1],
         prompts[0],
         prompts[1],
+        context.accepted_composed_policy_pairs,
     ):
         return unit_id, None, "requirement transition bindings mismatch"
     result, reason = _expected_requirement_update(
@@ -2175,8 +2243,28 @@ def _authorized_requirement_updates(
     pr1971_pytest_reconciliation = _is_exact_pr1971_pytest_reconciliation(
         manifest, rotation_policies, policies, authorizations
     )
+    accepted_composed_policy_pairs: tuple[tuple[str, str], ...] = ()
+    if _is_exact_pr1971_to_pdd1873_composed_reconciliation(
+        rotation_policies[0],
+        rotation_policies[1],
+        policies[0],
+        policies[1],
+    ):
+        # The outer four-byte gate proves this exact two-step history. Each row
+        # must still match one reviewed intermediate profile pair and both
+        # endpoint prompt bytes before it can update a protected profile.
+        accepted_composed_policy_pairs = (
+            _PR1971_COMBINED_PROFILE_BYTES,
+            _LEGACY_PDD_1873_PROFILE_BYTES,
+        )
     context = _RequirementTransitionContext(
-        root, manifest, base, head, policies, prompts
+        root,
+        manifest,
+        base,
+        head,
+        policies,
+        prompts,
+        accepted_composed_policy_pairs,
     )
     for authorization in authorizations:
         pytest_obligation = None
