@@ -48,23 +48,23 @@ REPLAY_PROTECTED_BASE = "e10bd9b3d0d5ac94d1a56af88f5abf07cf8af775"
 TERRA_SOL_PHASE_A_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
 REPLAY_REVIEWED_HEAD = TERRA_SOL_PHASE_A_BASE
 TERRA_SOL_PHASE_A_TARGET_PROFILE = (
-    "42f8590423230d275e403907d20dd18f2b2b4c3d016c52a421bd3da3e318d89b"
+    "7bab95b144218327e3dee6a834819a2e3e61419d41df612094bb40aed9578bb0"
 )
 TERRA_SOL_PHASE_A_REPLACEMENTS = (
     (
         "pdd/prompts/agentic_checkup_python.prompt",
         "1812c6d204e346d0745403c908a47e5d4d42b53612efd61efbe40af04ba4b868",
-        "32a25b0db4cef735d3c5850ee38a99860d6d7ea93e5aaf01c3fa2f811cf799f5",
+        "e8969f78c34b118cfd1cee0386f6fa5ecec981bb324f27e9b070fe41bb5051ef",
     ),
     (
         "pdd/prompts/checkup_review_loop_python.prompt",
         "c5ec02fb049e1359da107067d65e725b3ad0a8cca4da6fd31328821f6b6d1c73",
-        "4774486ebfaf5cdb749849e052a4856c27b7f2c12452d4f19b2fe5678fa1a05e",
+        "eedea3f07e724cff1092b314e3611f738e758637d0bab853e99ea53dcbd4e48f",
     ),
     (
         "pdd/prompts/commands/checkup_python.prompt",
         "b453bb71475123c5545a37dd23bbff9f057d960b775c0e977151ee98a9b976e0",
-        "cb45de93de961e2a35fb716ce78788fd2b5ad56091ce356bac8f8b9775b0814e",
+        "1096ee61eeba061adae05e4a4e8f8239cff6103ce75e451efb053f5644203be4",
     ),
     (
         "pdd/prompts/checkup_agentic_artifact_python.prompt",
