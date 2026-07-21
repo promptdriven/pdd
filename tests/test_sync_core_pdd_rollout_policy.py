@@ -958,7 +958,7 @@ def test_pr2017_transition_has_complete_profiles_on_protected_base() -> None:
 def test_pr1971_combined_profile_reconciliation_is_exact_and_consumed() -> None:
     """PR #1971 can consume only its exact six prompt/profile transitions."""
     manifest = build_unit_manifest(
-        ROOT, base_ref=PR_1971_COMBINED_BASE, head_ref="HEAD"
+        ROOT, base_ref=PR_1971_COMBINED_BASE, head_ref=PR_1971_COMBINED_HEAD
     )
     profiles = load_verification_profiles(ROOT, manifest)
 
