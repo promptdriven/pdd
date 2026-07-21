@@ -447,9 +447,10 @@ def _emit_agentic_review_loop_json(
     is_flag=True,
     default=False,
     help=(
-        "Terra/Sol unbounded convergence mode (issue #2170). Both Terra "
-        "(fixer) and Sol (reviewer) run on GPT-5.6. The loop runs until Sol "
-        "reports no findings — there is no round, time, or cost limit. "
+        "Terra/Sol Codex convergence mode (issue #2170). Both Terra (fixer) "
+        "and Sol (reviewer) run on GPT-5.6. Sol may finish early when clean; "
+        "otherwise --max-review-rounds (default 5) is the hard round cap. "
+        "Time and cost do not cap this mode. "
         "Requires --pr. Cannot be combined with --final-gate, --review-loop, "
         "--no-fix, --review-only, or --agentic-review-loop."
     ),
@@ -1385,8 +1386,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         )
     # Validate Terra/Sol before another mode rewrites local flags (notably,
     # ``--agentic-review-loop`` implies ``review_loop=True``).  This preserves
-    # the actual conflicting option in the diagnostic and keeps the unbounded
-    # mode out of bounded-mode budget validation.
+    # the actual conflicting option in the diagnostic. Terra/Sol has a bounded
+    # round cap but intentionally no cost/duration budget.
     if terra_sol:
         if not pr_mode:
             raise click.BadParameter(
@@ -1518,7 +1519,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     # The final gate runs the review loop as Layer 2, so its budget knobs must
     # be valid there too — otherwise the canonical gate could terminate via a
     # runtime cap path (e.g. "Max review rounds reached: 0").
-    if (review_loop or final_gate) and max_review_rounds < 1:
+    if (review_loop or final_gate or terra_sol) and max_review_rounds < 1:
         raise click.BadParameter(
             "--max-review-rounds must be >= 1.",
             param_hint="'--max-review-rounds'",

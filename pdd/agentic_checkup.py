@@ -1488,9 +1488,11 @@ def run_agentic_checkup(
             cached state already contains earlier step outputs.
         agentic_artifact_path: Invocation-private artifact destination for an
             explicit standalone agentic review loop. Ignored in other modes.
-        terra_sol: Run the unbounded Codex-only Terra/Sol convergence loop.
-            Conflicting review/final-gate/report-only modes are rejected before
-            any environment mutation or external I/O.
+        terra_sol: Run the bounded Codex-only Terra/Sol convergence loop.
+            It uses ``max_review_rounds`` (default 5) as its authoritative
+            round cap while retaining no cost/duration cap. Conflicting
+            review/final-gate/report-only modes are rejected before any
+            environment mutation or external I/O.
 
     Returns:
         Tuple of (success, message, total_cost, model_used).
@@ -1521,6 +1523,17 @@ def run_agentic_checkup(
             )
         if not str(pr_url or "").strip():
             return False, "--terra-sol requires --pr.", 0.0, ""
+        if (
+            isinstance(max_review_rounds, bool)
+            or not isinstance(max_review_rounds, int)
+            or max_review_rounds < 1
+        ):
+            return (
+                False,
+                "--terra-sol max_review_rounds must be a positive integer.",
+                0.0,
+                "",
+            )
 
     # Capture the receipt secret at the function boundary, before any target
     # repository hook, provider, test, or subprocess can inherit it. The key is
@@ -1860,7 +1873,7 @@ def run_agentic_checkup(
                 if hosted_artifact_reservation is not None
                 else None
             ),
-            unbounded_terra_sol=terra_sol,
+            terra_sol=terra_sol,
         )
         # Reviewers/fixers may run repository tests too. Keep the outer stable
         # transport slot out of every provider/test child while the private
@@ -1973,9 +1986,10 @@ def run_agentic_checkup(
             result, hosted_artifact_reservation, canonical_passed=None
         )
 
-    # Terra/Sol unbounded convergence mode: the loop runs until Sol (reviewer)
-    # reports no findings. No round, cost, or time limit applies; budget
-    # checks are intentionally inert so transient failures remain observable.
+    # Terra/Sol bounded convergence mode: Sol can finish early when clean, but
+    # a non-clean run stops at the caller-selected round cap (default five).
+    # Cost and duration remain intentionally uncapped so each allowed round can
+    # get a decisive Sol result.
     if terra_sol:
         if not pr_context_ready:
             return False, "--terra-sol requires --pr.", 0.0, ""

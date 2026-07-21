@@ -8622,7 +8622,7 @@ class TestAttemptSourceOfTruthRepair2047:
 
         details = _attempt_source_of_truth_repair(
             context=ctx,
-            config=Config(unbounded_terra_sol=True),
+            config=Config(terra_sol=True),
             state=state,
             worktree=tmp_path,
             changed_files=["pdd/agentic_update.py"],
@@ -8681,7 +8681,7 @@ class TestAttemptSourceOfTruthRepair2047:
 
         details = _attempt_source_of_truth_repair(
             context=ctx,
-            config=Config(unbounded_terra_sol=True),
+            config=Config(terra_sol=True),
             state=state,
             worktree=tmp_path,
             changed_files=["pdd/agentic_update.py"],
@@ -9093,7 +9093,7 @@ class TestSourceOfTruthRepairLoop2047:
         success, report, cost, model = run_checkup_review_loop(
             context=_ctx(tmp_path),
             config=_config(
-                unbounded_terra_sol=True,
+                terra_sol=True,
                 require_final_fresh_review=False,
                 enable_source_of_truth_repair=True,
             ),
@@ -15736,12 +15736,12 @@ def test_write_final_gate_fallback_artifact_canonical_fail(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Terra/Sol unbounded convergence loop (issue #2170)
+# Terra/Sol bounded convergence loop (issue #2170)
 # ---------------------------------------------------------------------------
 
 
-class TestTerraSolUnboundedLoop:
-    """Tests for the Terra/Sol unbounded Sol-convergence mode."""
+class TestTerraSolBoundedLoop:
+    """Tests for the bounded Terra/Sol Sol-convergence mode."""
 
     def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
         import pdd.checkup_review_loop as mod
@@ -15773,7 +15773,7 @@ class TestTerraSolUnboundedLoop:
             "reviewer": "codex",
             "fixer": "codex",
             "allow_same_reviewer_fixer": True,
-            "unbounded_terra_sol": True,
+            "terra_sol": True,
             "enable_source_of_truth_repair": False,
         }
         data.update(overrides)
@@ -15819,10 +15819,10 @@ class TestTerraSolUnboundedLoop:
         assert '"sol_model": "gpt-5.6-sol"' in report
         assert '"sol_review_status": "clean"' in report
 
-    def test_terra_sol_runs_more_than_five_iterations(
+    def test_terra_sol_default_five_rounds_exhaust_non_clean(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
-        """Sol verifier returns findings 6 times; loop must exceed default max_rounds=5 rounds."""
+        """A non-clean Sol result in all five default rounds fails at the cap."""
         from pdd.checkup_review_loop import run_checkup_review_loop
         import pdd.checkup_review_loop as mod
 
@@ -15843,11 +15843,9 @@ class TestTerraSolUnboundedLoop:
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             label = kwargs.get("label", "")
             if "verify" in label:
-                # Sol verifier: return findings for first 6 calls, then clean
+                # Sol verifier stays non-clean past the default round cap.
                 sol_verify_count[0] += 1
-                if sol_verify_count[0] <= 6:
-                    return True, _json("findings", FINDING), 0.01, "gpt-5.6-sol"
-                return True, _json("clean"), 0.01, "gpt-5.6-sol"
+                return True, _json("findings", FINDING), 0.01, "gpt-5.6-sol"
             if "review" in label:
                 # Sol round-start review: always return findings to enter fix cycle
                 return True, _json("findings", FINDING), 0.01, "gpt-5.6-sol"
@@ -15865,12 +15863,65 @@ class TestTerraSolUnboundedLoop:
         )
 
         assert success is True
-        # Sol verified more times than the default max_rounds (5)
-        assert sol_verify_count[0] > 5
-        # Must NOT report max_rounds_reached
-        assert '"max_rounds_reached": false' in report
+        assert sol_verify_count[0] == 5
+        assert '"max_rounds_reached": true' in report
+        assert "Max review rounds reached: 5." in report
         assert '"max_cost_reached": false' in report
         assert '"max_duration_reached": false' in report
+
+    @pytest.mark.parametrize(
+        ("max_rounds", "clean_on_verify", "expect_exhausted"),
+        [(1, 2, True), (3, 3, False), (7, 7, False)],
+    )
+    def test_terra_sol_honors_smaller_and_larger_round_overrides(
+        self,
+        monkeypatch: Any,
+        tmp_path: Path,
+        max_rounds: int,
+        clean_on_verify: int,
+        expect_exhausted: bool,
+    ) -> None:
+        """The caller-selected cap is exact; a clean final allowed round ships."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        verifies = [0]
+        finding = [
+            {
+                "severity": "critical",
+                "finding": "issue",
+                "required_fix": "fix it",
+                "area": "code",
+            }
+        ]
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs.get("label", "")
+            if "verify" in label:
+                verifies[0] += 1
+                if verifies[0] >= clean_on_verify:
+                    return True, _json("clean"), 0.01, "gpt-5.6-sol"
+                return True, _json("findings", finding), 0.01, "gpt-5.6-sol"
+            if "review" in label:
+                return True, _json("findings", finding), 0.01, "gpt-5.6-sol"
+            return True, _json("clean"), 0.01, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        _success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(max_rounds=max_rounds),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert verifies[0] == max_rounds
+        assert ('"max_rounds_reached": true' in report) is expect_exhausted
+        if expect_exhausted:
+            assert f"Max review rounds reached: {max_rounds}." in report
+        else:
+            assert "codex=clean" in report
 
     def test_terra_sol_terminates_only_on_clean_sol_review(
         self, monkeypatch: Any, tmp_path: Path
@@ -15948,7 +15999,7 @@ class TestTerraSolUnboundedLoop:
         # Loop must return (True, report) but report must NOT show clean Sol
         assert success is True
         assert "codex=clean" not in report or "fresh-final=clean" not in report
-        # Must not claim max-* reached
+        # A failed first Sol call is hard-not-clean, not a false clean.
         assert '"max_rounds_reached": false' in report
 
     def test_terra_sol_budget_exhausted_never_fires(
@@ -15964,7 +16015,7 @@ class TestTerraSolUnboundedLoop:
 
         config = ReviewLoopConfig(
             reviewers=("codex",),
-            unbounded_terra_sol=True,
+            terra_sol=True,
             max_cost=0.0001,  # tiny limit
             max_minutes=0.0001,  # tiny limit
         )
@@ -15974,10 +16025,10 @@ class TestTerraSolUnboundedLoop:
         # Must return False in terra_sol mode
         assert _budget_exhausted(config, state, past_deadline) is False
 
-    def test_terra_sol_agentic_artifact_has_no_budget_caps(
+    def test_terra_sol_agentic_artifact_preserves_round_cap_only(
         self, tmp_path: Path
     ) -> None:
-        """Hosted artifact recomputation must preserve the unbounded contract."""
+        """Hosted artifact preserves the round cap but suppresses cost/time caps."""
         from pdd.checkup_review_loop import (
             ReviewLoopState,
             _maybe_write_agentic_artifact,
@@ -16008,11 +16059,11 @@ class TestTerraSolUnboundedLoop:
         assert written == str(artifact_path)
         payload = json.loads(artifact_path.read_text(encoding="utf-8"))
         assert payload["budget"] == {
-            "max_rounds_reached": False,
+            "max_rounds_reached": True,
             "max_minutes_reached": False,
             "max_cost_reached": False,
         }
-        assert payload["status"] != "budget_exhausted"
+        assert payload["status"] == "budget_exhausted"
 
     def test_hosted_fresh_sol_findings_return_to_terra_until_clean(
         self, monkeypatch: Any, tmp_path: Path
@@ -16231,10 +16282,10 @@ class TestTerraSolUnboundedLoop:
         assert payload["sol_model"] == "gpt-5.6-sol"
         assert payload["terra_fixer"] == "codex"
 
-    def test_terra_sol_resumed_session_keeps_unbounded_mode(
+    def test_terra_sol_restarted_invocation_uses_fresh_configured_round_budget(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
-        """A restarted checkpoint rechecks remote HEAD and stays unbounded."""
+        """A rerun starts fresh from remote HEAD with its supplied round cap."""
         from pdd.checkup_review_loop import (
             ReviewLoopConfig,
             ReviewLoopState,
@@ -16247,8 +16298,9 @@ class TestTerraSolUnboundedLoop:
 
         # Persist a real prior-run checkpoint showing that Sol still had
         # findings. Restart safety deliberately rebuilds from authoritative
-        # remote PR HEAD instead of trusting an old mutable worktree, while the
-        # caller's Terra/Sol configuration keeps the new run unbounded.
+        # remote PR HEAD instead of trusting an old mutable worktree. The prior
+        # values remain audit evidence only; this new invocation receives its
+        # own explicit round budget.
         artifacts_dir = tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         _write_final_state(
@@ -16260,6 +16312,8 @@ class TestTerraSolUnboundedLoop:
                 stop_reason="Restart after retryable provider failure.",
                 last_model="gpt-5.6-sol",
                 terra_sol_mode=True,
+                rounds_completed=1,
+                max_rounds=1,
             ),
             "true",
         )
@@ -16278,7 +16332,7 @@ class TestTerraSolUnboundedLoop:
 
         monkeypatch.setattr(mod, "_setup_pr_worktree", setup_from_remote)
 
-        rounds_entered: List[int] = [0]
+        verify_calls: List[int] = [0]
 
         FINDING = [
             {
@@ -16291,23 +16345,26 @@ class TestTerraSolUnboundedLoop:
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             label = kwargs.get("label", "")
-            if "review" in label and "verify" not in label:
-                rounds_entered[0] += 1
-                if rounds_entered[0] < 2:
+            if "verify" in label:
+                verify_calls[0] += 1
+                if verify_calls[0] == 1:
                     return True, _json("findings", FINDING), 0.01, "gpt-5.6-sol"
                 return True, _json("clean"), 0.01, "gpt-5.6-sol"
+            if "review" in label and "verify" not in label:
+                return True, _json("findings", FINDING), 0.01, "gpt-5.6-sol"
             return True, _json("clean"), 0.01, "gpt-5.6-sol"
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
 
-        # Run with unbounded_terra_sol=True; even if max_rounds=1 this must not terminate
+        # A restarted invocation must honor the newly supplied max_rounds rather
+        # than consuming a stale cross-invocation checkpoint.
         config = ReviewLoopConfig(
             reviewers=("codex",),
             reviewer="codex",
             fixer="codex",
             allow_same_reviewer_fixer=True,
-            unbounded_terra_sol=True,
-            max_rounds=1,  # would terminate early in bounded mode
+            terra_sol=True,
+            max_rounds=2,
             enable_source_of_truth_repair=False,
         )
 
@@ -16321,14 +16378,15 @@ class TestTerraSolUnboundedLoop:
 
         assert success is True
         assert "codex=clean" in report
-        # More than max_rounds (1) rounds were needed
-        assert rounds_entered[0] >= 2
+        assert verify_calls[0] == 2
         assert '"max_rounds_reached": false' in report
         assert setup_resume_values == [False]
         resumed = json.loads((artifacts_dir / "final-state.json").read_text())
         assert resumed["terra_sol_mode"] is True
         assert resumed["sol_review_status"] == "clean"
         assert resumed["sol_model"] == "gpt-5.6-sol"
+        assert resumed["rounds_completed"] == 2
+        assert resumed["max_rounds"] == 2
 
     def test_terra_sol_cli_flag_validation(self) -> None:
         """--terra-sol requires --pr and rejects incompatible flags."""
@@ -16371,6 +16429,19 @@ class TestTerraSolUnboundedLoop:
             assert result.exit_code != 0
             assert conflicting_flag in result.output
 
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr",
+                "https://github.com/o/r/pull/1",
+                "--terra-sol",
+                "--max-review-rounds",
+                "0",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "--max-review-rounds must be >= 1" in result.output
+
     def test_terra_sol_cli_success_emits_cloud_facing_report(
         self, monkeypatch: Any
     ) -> None:
@@ -16398,12 +16469,15 @@ class TestTerraSolUnboundedLoop:
                 "--pr",
                 "https://github.com/o/r/pull/1",
                 "--terra-sol",
+                "--max-review-rounds",
+                "7",
                 "--no-github-state",
             ],
         )
 
         assert result.exit_code == 0, result.output
         assert observed["terra_sol"] is True
+        assert observed["max_review_rounds"] == 7
         assert observed["use_github_state"] is False
         assert "sol-review-status: clean" in result.output
         assert '"terra_sol_mode": true' in result.output
@@ -16421,11 +16495,11 @@ class TestTerraSolUnboundedLoop:
             assert expected in (root / relative_path).read_text(encoding="utf-8")
 
     def test_terra_sol_config_fields_exist(self) -> None:
-        """ReviewLoopConfig.unbounded_terra_sol and ReviewLoopState.terra_sol_mode must exist."""
+        """ReviewLoopConfig.terra_sol and ReviewLoopState.terra_sol_mode must exist."""
         from pdd.checkup_review_loop import ReviewLoopConfig, ReviewLoopState
 
         cfg = ReviewLoopConfig(
-            unbounded_terra_sol=True,
+            terra_sol=True,
             reviewers=("claude", "gemini"),
             reviewer="claude",
             fixer="gemini",
@@ -16433,7 +16507,7 @@ class TestTerraSolUnboundedLoop:
             fixer_fallback="claude",
             fallback_reviewer_on_failure=True,
         )
-        assert cfg.unbounded_terra_sol is True
+        assert cfg.terra_sol is True
         assert cfg.reviewers == ("codex",)
         assert cfg.reviewer == "codex"
         assert cfg.fixer == "codex"
@@ -16444,7 +16518,7 @@ class TestTerraSolUnboundedLoop:
         assert cfg.fresh_final_review_role == "codex"
 
         cfg_default = ReviewLoopConfig()
-        assert cfg_default.unbounded_terra_sol is False
+        assert cfg_default.terra_sol is False
 
         state = ReviewLoopState(terra_sol_mode=True)
         assert state.terra_sol_mode is True
@@ -16452,12 +16526,22 @@ class TestTerraSolUnboundedLoop:
         state_default = ReviewLoopState()
         assert state_default.terra_sol_mode is False
 
+    @pytest.mark.parametrize("invalid", [0, -1, True, 1.5])
+    def test_terra_sol_direct_config_rejects_invalid_round_budget(
+        self, invalid: Any
+    ) -> None:
+        """Direct callers cannot bypass the positive integer round budget."""
+        from pdd.checkup_review_loop import ReviewLoopConfig
+
+        with pytest.raises(ValueError, match="max_rounds must be a positive integer"):
+            ReviewLoopConfig(terra_sol=True, max_rounds=invalid)
+
     @pytest.mark.parametrize("report_only", ["no_fix", "review_only"])
     def test_terra_sol_config_rejects_report_only_modes(self, report_only: str) -> None:
         from pdd.checkup_review_loop import ReviewLoopConfig
 
         with pytest.raises(ValueError, match="requires Terra fixes"):
-            ReviewLoopConfig(unbounded_terra_sol=True, **{report_only: True})
+            ReviewLoopConfig(terra_sol=True, **{report_only: True})
 
     def test_terra_sol_task_pins_codex_model_and_restores_environment(
         self, monkeypatch: Any, tmp_path: Path
@@ -16500,7 +16584,7 @@ class TestTerraSolUnboundedLoop:
         )
 
         result = _enforce_terra_sol_task_model(
-            ReviewLoopConfig(unbounded_terra_sol=True),
+            ReviewLoopConfig(terra_sol=True),
             (True, _json("clean"), 0.01, observed_model),
         )
 

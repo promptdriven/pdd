@@ -906,7 +906,7 @@ class TestRunAgenticCheckup:
         assert config.fixer == "codex"
         assert config.reviewer_fallback is None
         assert config.fixer_fallback is None
-        assert config.unbounded_terra_sol is True
+        assert config.terra_sol is True
 
     @pytest.mark.parametrize(
         ("mode_kwargs", "conflicting_flag"),
@@ -943,6 +943,31 @@ class TestRunAgenticCheckup:
         assert cost == 0.0
         assert model == ""
         assert os.environ[mod._HOSTED_RECEIPT_KEY_ENV] == "still-private"
+
+    @pytest.mark.parametrize("invalid_rounds", [0, -1, True, 1.5])
+    def test_terra_sol_library_boundary_rejects_invalid_round_budget_before_io(
+        self, monkeypatch, invalid_rounds
+    ):
+        """Hosted/direct callers cannot bypass the positive round-cap contract."""
+        import pdd.agentic_checkup as mod
+
+        monkeypatch.setattr(
+            mod,
+            "_check_gh_cli",
+            lambda: pytest.fail("round validation must run before GitHub I/O"),
+        )
+
+        success, message, cost, model = mod.run_agentic_checkup(
+            None,
+            pr_url="https://github.com/owner/repo/pull/2",
+            terra_sol=True,
+            max_review_rounds=invalid_rounds,
+        )
+
+        assert success is False
+        assert "max_review_rounds must be a positive integer" in message
+        assert cost == 0.0
+        assert model == ""
 
     @pytest.mark.parametrize("model", ["", "codex", "gpt-5.5", "gpt-5.4"])
     def test_terra_sol_ship_verdict_requires_observed_gpt_5_6(self, model):

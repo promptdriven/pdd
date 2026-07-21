@@ -860,17 +860,21 @@ class ReviewLoopConfig:
     agentic_artifact_sink: Optional[Callable[[bytes], None]] = field(
         default=None, repr=False
     )
-    # APPENDED — Terra/Sol unbounded convergence mode (issue #2170). When True,
-    # all round, cost, and time limits are disabled and the loop runs until Sol
-    # (the reviewer) reports no findings. Terra (the fixer) addresses each Sol
-    # finding; Sol re-reviews the updated PR head after every Terra fix. Both
-    # roles must use the GPT-5.6 model family. ``_budget_exhausted`` returns
-    # False unconditionally in this mode so provider/transient failures remain
-    # observable and retriable without masking as a clean Sol result.
-    unbounded_terra_sol: bool = False
+    # APPENDED — bounded Terra/Sol convergence mode (issue #2170). When True,
+    # Sol and Terra are Codex/GPT-5.6 only. ``max_rounds`` remains authoritative
+    # (default five, caller-configurable); cost and duration are intentionally
+    # not caps for this mode. A non-clean result at the round boundary is a
+    # failed, ``max_rounds_reached`` verdict rather than a false clean result.
+    terra_sol: bool = False
 
     def __post_init__(self) -> None:
-        if self.unbounded_terra_sol:
+        if self.terra_sol:
+            if (
+                isinstance(self.max_rounds, bool)
+                or not isinstance(self.max_rounds, int)
+                or self.max_rounds < 1
+            ):
+                raise ValueError("Terra/Sol max_rounds must be a positive integer.")
             if self.no_fix or self.review_only:
                 raise ValueError(
                     "Terra/Sol mode requires Terra fixes; no_fix and review_only "
@@ -902,7 +906,7 @@ def _enforce_terra_sol_task_model(
 ) -> Tuple[bool, str, float, str]:
     """Fail a successful Terra/Sol task closed when model evidence is absent/wrong."""
     success, output, cost, model = result
-    if not config.unbounded_terra_sol or not success:
+    if not config.terra_sol or not success:
         return result
     if _is_terra_sol_model(model):
         return result
@@ -1171,9 +1175,14 @@ class ReviewLoopState:
     # different blocking-severity policy.
     _finding_accounting_reviewer_by_key: Dict[str, str] = field(default_factory=dict)
     _finding_blocking_by_key: Dict[str, bool] = field(default_factory=dict)
-    # Set at loop entry when ``config.unbounded_terra_sol`` is True so the final
+    # Set at loop entry when ``config.terra_sol`` is True so the final
     # report and ``final-state.json`` carry an explicit Terra/Sol audit marker.
     terra_sol_mode: bool = False
+    # Persist the configured round cap alongside observed consumption. This is
+    # deliberately appended after every existing state field so positional
+    # construction remains stable. A later invocation is a fresh authoritative
+    # run; these values are audit evidence, not a cross-invocation checkpoint.
+    max_rounds: Optional[int] = None
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -1226,17 +1235,16 @@ def run_checkup_review_loop(
         active_reviewer=reviewer,
         original_reviewer=reviewer,
         same_role_review_fix=same_role_review_fix,
-        terra_sol_mode=config.unbounded_terra_sol,
+        terra_sol_mode=config.terra_sol,
+        max_rounds=config.max_rounds,
     )
     loop_start_monotonic = time.monotonic()
     state.started_monotonic = loop_start_monotonic
-    # Terra/Sol convergence is genuinely unbounded: pass ``None`` through every
-    # provider dispatch so _run_role_task does not retain the ordinary
-    # max-minutes deadline after the loop-level budget checks are disabled.
+    # Terra/Sol has a bounded round count but deliberately no provider duration
+    # cap: pass ``None`` so each of the configured rounds can obtain a decisive
+    # Sol result rather than being cut off by the ordinary max-minutes deadline.
     deadline: Optional[float] = (
-        None
-        if config.unbounded_terra_sol
-        else loop_start_monotonic + (config.max_minutes * 60.0)
+        None if config.terra_sol else loop_start_monotonic + (config.max_minutes * 60.0)
     )
     worktree, setup_error = _setup_pr_worktree(
         cwd,
@@ -1473,7 +1481,7 @@ def run_checkup_review_loop(
     round_number = 0
     while True:
         round_number += 1
-        if not config.unbounded_terra_sol and round_number > config.max_rounds:
+        if round_number > config.max_rounds:
             break
         if _budget_exhausted(config, state, deadline):
             _mark_budget_exhausted(config, state, deadline)
@@ -1483,7 +1491,7 @@ def run_checkup_review_loop(
         state.rounds_completed = round_number
 
         if not quiet:
-            max_display = "∞" if config.unbounded_terra_sol else str(config.max_rounds)
+            max_display = str(config.max_rounds)
             console.print(
                 f"[bold cyan]--- Review Loop Round {round_number}/{max_display} ---"
                 "[/bold cyan]"
@@ -1752,7 +1760,7 @@ def run_checkup_review_loop(
                 else:
                     _mark_reviewer_findings_fixed(state, reviewer)
                     state.reviewer_status[reviewer] = "clean"
-                    if config.unbounded_terra_sol:
+                    if config.terra_sol:
                         state.fresh_final_status = "clean"
                         fresh_findings = _terra_sol_fresh_final_findings(
                             context=context,
@@ -1796,7 +1804,7 @@ def run_checkup_review_loop(
                     fix_findings = list(gate_findings)
                 else:
                     state.reviewer_status[reviewer] = "clean"
-                    if config.unbounded_terra_sol:
+                    if config.terra_sol:
                         state.fresh_final_status = "clean"
                         fresh_findings = _terra_sol_fresh_final_findings(
                             context=context,
@@ -2361,23 +2369,16 @@ def run_checkup_review_loop(
         _mark_budget_exhausted(config, state, deadline)
 
     if not state.stop_reason:
-        if config.unbounded_terra_sol:
-            # Unexpected exit without a decisive Sol verdict; fail closed.
-            state.stop_reason = (
-                "Terra/Sol unbounded loop exited without a decisive Sol verdict."
-            )
-        else:
-            if pending_findings:
-                for finding in pending_findings:
-                    stored = state.findings_by_key.get(finding.key)
-                    if stored is not None and stored.status == "fixed":
-                        stored.status = "open"
-            state.max_rounds_reached = True
-            state.stop_reason = f"Max review rounds reached: {config.max_rounds}."
+        if pending_findings:
+            for finding in pending_findings:
+                stored = state.findings_by_key.get(finding.key)
+                if stored is not None and stored.status == "fixed":
+                    stored.status = "open"
+        state.max_rounds_reached = True
+        state.stop_reason = f"Max review rounds reached: {config.max_rounds}."
 
     # Clamp: the while-True guard fires at max_rounds+1; match for-loop semantics.
-    if not config.unbounded_terra_sol:
-        round_number = min(round_number, config.max_rounds)
+    round_number = min(round_number, config.max_rounds)
 
     if (
         state.fresh_final_status == "missing"
@@ -2385,7 +2386,7 @@ def run_checkup_review_loop(
     ):
         state.fresh_final_status = "clean"
 
-    if not config.unbounded_terra_sol:
+    if not config.terra_sol:
         _maybe_run_fresh_final_review_override(
             context=context,
             config=config,
@@ -2427,7 +2428,7 @@ def _terra_sol_fresh_final_findings(
     Sol state, and return actionable findings to the normal fixer/verifier
     cycle. A failed/degraded/missing fresh Sol pass stays hard-not-clean.
     """
-    if not config.unbounded_terra_sol or not config.agentic_mode:
+    if not config.terra_sol or not config.agentic_mode:
         return []
     _maybe_run_fresh_final_review_override(
         context=context,
@@ -2729,12 +2730,12 @@ def _maybe_write_agentic_artifact(
             }
 
         # The hosted artifact builder normally recomputes budget exhaustion
-        # from actual use versus the configured caps. Terra/Sol has no caps, so
-        # give the builder an explicit no-cap snapshot instead of allowing the
-        # legacy 5-round / 90-minute / $50 defaults to leak into Cloud state.
+        # from actual use versus configured caps. Terra/Sol keeps its configured
+        # round cap authoritative, but intentionally has no duration or cost
+        # cap; zero only those two fields in the non-mutating snapshot.
         artifact_config = (
-            replace(config, max_rounds=0, max_minutes=0.0, max_cost=0.0)
-            if config.unbounded_terra_sol
+            replace(config, max_minutes=0.0, max_cost=0.0)
+            if config.terra_sol
             else config
         )
         artifact = build_agentic_v1_artifact(
@@ -4022,7 +4023,7 @@ def _run_review(
             reasoning_time=config.reasoning_time,
             deadline=deadline,
             read_only=True,
-            model_override=(TERRA_SOL_MODEL if config.unbounded_terra_sol else None),
+            model_override=(TERRA_SOL_MODEL if config.terra_sol else None),
         ),
     )
     state.total_cost += cost
@@ -4177,7 +4178,7 @@ def _run_review_parse_repair(
             reasoning_time=config.reasoning_time,
             deadline=deadline,
             read_only=True,
-            model_override=(TERRA_SOL_MODEL if config.unbounded_terra_sol else None),
+            model_override=(TERRA_SOL_MODEL if config.terra_sol else None),
         ),
     )
     state.total_cost += cost
@@ -4251,7 +4252,7 @@ def _run_fix(
             max_retries=DEFAULT_MAX_RETRIES,
             reasoning_time=config.reasoning_time,
             deadline=deadline,
-            model_override=(TERRA_SOL_MODEL if config.unbounded_terra_sol else None),
+            model_override=(TERRA_SOL_MODEL if config.terra_sol else None),
         ),
     )
     state.total_cost += cost
@@ -6612,10 +6613,10 @@ def _budget_exhausted(
     state: ReviewLoopState,
     deadline: Optional[float],
 ) -> bool:
-    # Terra/Sol unbounded mode has no cost or time budget; all budget checks
-    # must be inert so provider/transient failures are never mistaken for a
-    # clean Sol result and remain observable and retriable.
-    if config.unbounded_terra_sol:
+    # Terra/Sol has no cost or time cap. Its round guard remains authoritative
+    # in ``run_checkup_review_loop`` so transient failures cannot be mistaken
+    # for a clean Sol result or spin indefinitely.
+    if config.terra_sol:
         return False
     if deadline is None:
         # Bounded callers must always establish a deadline. Fail closed if a
@@ -6629,7 +6630,7 @@ def _mark_budget_exhausted(
     state: ReviewLoopState,
     deadline: Optional[float],
 ) -> None:
-    if config.unbounded_terra_sol:
+    if config.terra_sol:
         return
     if deadline is None:
         state.max_duration_reached = True
@@ -8179,14 +8180,14 @@ def _attempt_source_of_truth_repair(
             max_retries=DEFAULT_MAX_RETRIES,
             reasoning_time=config.reasoning_time,
             deadline=deadline,
-            model_override=(TERRA_SOL_MODEL if config.unbounded_terra_sol else None),
+            model_override=(TERRA_SOL_MODEL if config.terra_sol else None),
         ),
     )
     state.total_cost += cost
     observed_model = str(model or "").strip()
     details["fixer_model"] = observed_model
     details["fixer_cost"] = float(cost or 0.0)
-    if config.unbounded_terra_sol:
+    if config.terra_sol:
         # Store the observation even when it is missing. Retaining an earlier
         # Sol model here would make a failed source-of-truth repair look as if
         # its last provider dispatch had satisfied the GPT-5.6 contract.
@@ -8216,7 +8217,7 @@ def _attempt_source_of_truth_repair(
         details["blocked"] = True
         return details
     regen_results = []
-    if config.unbounded_terra_sol:
+    if config.terra_sol:
         # ``code_generator_main`` is a generic generation boundary. It does
         # not accept the Codex role/model override used by ``_run_role_task``
         # and may route through a third provider. Running it here could replace
@@ -9006,6 +9007,8 @@ def _write_final_state(
         "total_cost": state.total_cost,
         "last_model": state.last_model,
         "max_rounds_reached": state.max_rounds_reached,
+        "rounds_completed": state.rounds_completed,
+        "max_rounds": state.max_rounds,
         "max_cost_reached": state.max_cost_reached,
         "max_duration_reached": state.max_duration_reached,
         "terra_sol_mode": state.terra_sol_mode,
@@ -9490,6 +9493,8 @@ def _render_machine_verdict_block(
         "verified_head_sha": verified_sha_line,
         "remote_pr_head_sha": remote_sha_line,
         "max_rounds_reached": state.max_rounds_reached,
+        "rounds_completed": state.rounds_completed,
+        "max_rounds": state.max_rounds,
         "max_cost_reached": state.max_cost_reached,
         "max_duration_reached": state.max_duration_reached,
         "terra_sol_mode": state.terra_sol_mode,
