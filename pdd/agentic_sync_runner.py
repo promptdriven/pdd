@@ -373,6 +373,10 @@ def _extract_test_output_needs_review(stdout: str) -> Optional[str]:
 # Env var naming the pipe FD the child reads the churn-provenance nonce from
 # (issue #1903 §B.4 review round 8). MUST match code_generator_main._CHURN_NONCE_ENV.
 _CHURN_NONCE_ENV = "PDD_CHURN_NONCE_FD"
+# ``subprocess.Popen(pass_fds=...)`` is POSIX-only.  On platforms without it,
+# omit the nonce channel and fail closed: churn blocks cannot authenticate, so
+# the issue-driven never-block exception remains disabled while sync still runs.
+_CHURN_NONCE_PASS_FDS_SUPPORTED = os.name == "posix"
 
 
 _TEST_CHURN_HEADERS = (
@@ -3511,18 +3515,26 @@ class AsyncSyncRunner:
 
         cwd_str = str(self._module_cwd_path(basename))
 
-        # Trusted churn-provenance channel (issue #1903 §B.4 review round 8): write
-        # the secret nonce into a pipe and hand the child ONLY the read end via
-        # ``pass_fds``. The child inherits this FD; the grandchild test processes it
-        # later spawns do NOT (subprocess ``close_fds`` default), so a hostile
-        # project test can read the ``PDD_CHURN_NONCE_FD`` env var but not the FD it
-        # names — it cannot learn the nonce and thus cannot forge a trusted block.
-        nonce_read_fd, nonce_write_fd = os.pipe()
-        try:
-            os.write(nonce_write_fd, self._churn_nonce.encode("ascii"))
-        finally:
-            os.close(nonce_write_fd)
-        env[_CHURN_NONCE_ENV] = str(nonce_read_fd)
+        # Trusted churn-provenance channel (issue #1903 §B.4 review round 8).
+        # POSIX hands the child ONLY the pipe's read end via ``pass_fds``. The
+        # child inherits this FD; grandchild test processes do not, so a hostile
+        # project test cannot learn the nonce and forge a trusted block.
+        #
+        # Windows does not support ``pass_fds``.  Do not substitute an env value
+        # or temp file: either would disclose the secret to hostile project tests.
+        # Instead omit the channel and fail closed.  The child can still run, but
+        # no churn block can authenticate and the never-block exception stays off.
+        nonce_read_fd: Optional[int] = None
+        popen_nonce_kwargs: Dict[str, Any] = {}
+        env.pop(_CHURN_NONCE_ENV, None)
+        if _CHURN_NONCE_PASS_FDS_SUPPORTED:
+            nonce_read_fd, nonce_write_fd = os.pipe()
+            try:
+                os.write(nonce_write_fd, self._churn_nonce.encode("ascii"))
+            finally:
+                os.close(nonce_write_fd)
+            env[_CHURN_NONCE_ENV] = str(nonce_read_fd)
+            popen_nonce_kwargs["pass_fds"] = (nonce_read_fd,)
 
         try:
             process = subprocess.Popen(
@@ -3535,7 +3547,7 @@ class AsyncSyncRunner:
                 text=False,
                 bufsize=0,
                 start_new_session=True,
-                pass_fds=(nonce_read_fd,),
+                **popen_nonce_kwargs,
             )
             try:
                 self._child_pgids.add(process.pid)
@@ -3554,10 +3566,11 @@ class AsyncSyncRunner:
         finally:
             # The child holds its own inherited copy; drop the parent's so the
             # write side's EOF reaches the child and no FD leaks per attempt.
-            try:
-                os.close(nonce_read_fd)
-            except OSError:
-                pass
+            if nonce_read_fd is not None:
+                try:
+                    os.close(nonce_read_fd)
+                except OSError:
+                    pass
 
         t_out = threading.Thread(
             target=_read_stream,
