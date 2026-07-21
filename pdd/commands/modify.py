@@ -625,6 +625,18 @@ def update(
         )
 
         if ret is None:
+            # In single-file mode `update_main` returns None ONLY on failure
+            # (input error, git-history/provider failure, invalid output). A bare
+            # `return None` here makes Click exit 0, so a subprocess caller that
+            # only sees the exit code — e.g. the change orchestrator's Step 8.5
+            # preflight drift-heal running `pdd update --sync-metadata --git ...`
+            # — would record an unchanged, still-stale prompt as "healed" and
+            # reason Step 9 from stale intent. Surface a non-zero exit so that
+            # boundary fails closed. Repo-wide mode keeps returning None (exit 0)
+            # because there None is also the legitimate "everything in sync"
+            # no-op, not a failure (Codex review, PR #1998).
+            if not is_repo_mode:
+                raise click.exceptions.Exit(1)
             return None
         return ret
 
