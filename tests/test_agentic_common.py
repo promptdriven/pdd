@@ -17,6 +17,7 @@ pytestmark = pytest.mark.timeout(600)
 
 from pdd.agentic_common import (
     AgenticTaskResult,
+    _ProviderRunResult,
     get_available_agents,
     get_agent_provider_preference,
     run_agentic_task,
@@ -2350,6 +2351,142 @@ def test_run_with_provider_background_safe_bypasses_interactive_mcp(
     assert success and output == "background reply"
     bridge.assert_not_called()
     assert "-p" in mock_subprocess.call_args.args[0]
+
+
+def test_later_ordinary_provider_failure_clears_typed_environment_failure(
+    tmp_path,
+):
+    """A stale Anthropic UI classification must not describe OpenAI's failure."""
+    provider_results = [
+        _ProviderRunResult(
+            False,
+            "Provider runtime requires interactive configuration.",
+            0.0,
+            None,
+            provider_environment_reason="interactive_ui",
+        ),
+        _ProviderRunResult(
+            False,
+            "OpenAI request failed without a provider-environment classification.",
+            0.0,
+            None,
+        ),
+    ]
+
+    with (
+        patch(
+            "pdd.agentic_common.get_agent_provider_preference",
+            return_value=["anthropic", "openai"],
+        ),
+        patch(
+            "pdd.agentic_common.get_available_agents",
+            return_value=["anthropic", "openai"],
+        ),
+        patch("pdd.agentic_common._run_with_provider", side_effect=provider_results),
+        patch("pdd.agentic_common._log_agentic_interaction"),
+        patch("pdd.agentic_common._get_provider_cli_version", return_value="test"),
+    ):
+        result = run_agentic_task(
+            "exercise provider fallback",
+            tmp_path,
+            max_retries=1,
+            quiet=True,
+            background_safe=True,
+        )
+
+    assert not result.success
+    assert result.provider_environment_failure is None
+    assert result.output_text.startswith("All agent providers failed:")
+    assert "openai:" in result.output_text
+
+
+def test_terminal_typed_failure_is_preserved_after_ordinary_provider_failure(
+    tmp_path,
+):
+    """The final attempted provider's trusted classification remains actionable."""
+    provider_results = [
+        _ProviderRunResult(False, "ordinary Anthropic failure", 0.0, None),
+        _ProviderRunResult(
+            False,
+            "Provider runtime requires interactive configuration.",
+            0.0,
+            None,
+            provider_environment_reason="interactive_ui",
+        ),
+    ]
+
+    with (
+        patch(
+            "pdd.agentic_common.get_agent_provider_preference",
+            return_value=["anthropic", "openai"],
+        ),
+        patch(
+            "pdd.agentic_common.get_available_agents",
+            return_value=["anthropic", "openai"],
+        ),
+        patch("pdd.agentic_common._run_with_provider", side_effect=provider_results),
+        patch("pdd.agentic_common._log_agentic_interaction"),
+        patch("pdd.agentic_common._get_provider_cli_version", return_value="test"),
+    ):
+        result = run_agentic_task(
+            "exercise provider fallback",
+            tmp_path,
+            max_retries=1,
+            quiet=True,
+            background_safe=True,
+        )
+
+    assert not result.success
+    assert result.provider_environment_failure == ("openai", "interactive_ui")
+    assert result.output_text == (
+        'PDD_PROVIDER_ENVIRONMENT_FAILURE_V1:'
+        '{"provider":"openai","reason":"interactive_ui"}'
+    )
+
+
+def test_later_provider_success_does_not_publish_prior_typed_failure(tmp_path):
+    """A successful fallback must not retain an earlier provider's failure."""
+    provider_results = [
+        _ProviderRunResult(
+            False,
+            "Provider runtime requires interactive configuration.",
+            0.0,
+            None,
+            provider_environment_reason="interactive_ui",
+        ),
+        _ProviderRunResult(
+            True,
+            "OpenAI completed the requested task successfully.",
+            0.1,
+            "gpt-test",
+        ),
+    ]
+
+    with (
+        patch(
+            "pdd.agentic_common.get_agent_provider_preference",
+            return_value=["anthropic", "openai"],
+        ),
+        patch(
+            "pdd.agentic_common.get_available_agents",
+            return_value=["anthropic", "openai"],
+        ),
+        patch("pdd.agentic_common._run_with_provider", side_effect=provider_results),
+        patch("pdd.agentic_common._log_agentic_interaction"),
+        patch("pdd.agentic_common._get_provider_cli_version", return_value="test"),
+    ):
+        result = run_agentic_task(
+            "exercise successful provider fallback",
+            tmp_path,
+            max_retries=1,
+            quiet=True,
+            background_safe=True,
+        )
+
+    assert result.success
+    assert result.provider == "openai"
+    assert result.provider_environment_failure is None
+    assert result.output_text == "OpenAI completed the requested task successfully."
 
 
 def test_run_agentic_task_accepts_short_zero_cost_interactive_reply(

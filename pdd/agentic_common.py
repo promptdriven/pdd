@@ -5420,6 +5420,10 @@ def run_agentic_task(
                     and environment_reason in _PROVIDER_ENVIRONMENT_REASONS
                 ):
                     provider_environment_failure = (provider, environment_reason)
+                else:
+                    # Provider-environment failure is terminal-attempt state,
+                    # not a sticky observation from an earlier fallback.
+                    provider_environment_failure = None
                 success = bool(provider_result[0])
                 output = str(provider_result[1])
                 cost = float(provider_result[2])
