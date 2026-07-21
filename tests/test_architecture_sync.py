@@ -4600,3 +4600,546 @@ def test_sync_prompts_to_architecture_named_files_propagates_warnings(
     row = result["results"][0]
     assert row["warnings"] == ["contract_summary: evidence manifest unreadable: bad json"]
     assert row["contract_summary"]["rules"] == ["R1"]
+
+
+# ============================================================================
+# Issue #2081: Bug 2 — Dry-run validates pre-sync registry, not proposed state
+#
+# When dry_run=True, register_untracked_prompts builds a proposed arch_data list
+# in memory but writes nothing.  sync_all_prompts_to_architecture then re-reads
+# architecture.json from disk (line 1487), losing the proposed registrations.
+# sync_prompts_to_architecture reads the disk file a third time for validation
+# (line 1769-1771) — still without the proposed modules — so it falsely reports
+# "Module B depends on non-existent module C" even though module C is in the plan.
+#
+# Three fix components (2a/2b/2c) working together:
+#  2a. register_untracked_prompts must return arch_data in its result dict
+#  2b. sync_all_prompts_to_architecture must expose proposed_modules in its result
+#  2c. sync_prompts_to_architecture must validate against proposed_modules, not disk
+#
+# Tests 6–11 assert the EXPECTED (fixed) behavior.  They FAIL on current code.
+# Step 5 reproduction class at the end preserves additional behavioral assertions.
+# ============================================================================
+
+
+def _make_scenario_2081(tmp_path: Path) -> tuple:
+    """
+    Build the standard Bug 2 scenario:
+      arch.json:  module_a (dep: module_b), module_b (dep: module_c)
+      prompts/:   module_a.prompt (no PDD tags), module_b.prompt (no PDD tags),
+                  module_c.prompt (<pdd-reason> — eligible for auto-register)
+
+    module_c is NOT in architecture.json.
+    module_b already depends on module_c (pre-existing arch entry).
+    A valid dry-run plan would register module_c, satisfying module_b's dep.
+
+    Returns (prompts_dir, arch_path).
+    """
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    arch_path = tmp_path / "architecture.json"
+
+    (prompts_dir / "module_a_python.prompt").write_text(
+        "% module A — no PDD tags\n", encoding="utf-8"
+    )
+    (prompts_dir / "module_b_python.prompt").write_text(
+        "% module B — no PDD tags\n", encoding="utf-8"
+    )
+    (prompts_dir / "module_c_python.prompt").write_text(
+        "<pdd-reason>Module C</pdd-reason>\n% body\n", encoding="utf-8"
+    )
+
+    arch_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "module_a_python.prompt",
+                    "filepath": "pdd/module_a.py",
+                    "reason": "Module A",
+                    "description": "Module A",
+                    "dependencies": ["module_b_python.prompt"],
+                    "priority": 1,
+                    "tags": ["module"],
+                    "interface": {"type": "module", "module": {"functions": []}},
+                },
+                {
+                    "filename": "module_b_python.prompt",
+                    "filepath": "pdd/module_b.py",
+                    "reason": "Module B",
+                    "description": "Module B",
+                    "dependencies": ["module_c_python.prompt"],  # C not registered yet!
+                    "priority": 2,
+                    "tags": ["module"],
+                    "interface": {"type": "module", "module": {"functions": []}},
+                },
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return prompts_dir, arch_path
+
+
+# ---------------------------------------------------------------------------
+# Step 8 Test 6 — register_untracked_prompts returns arch_data on dry-run
+# ---------------------------------------------------------------------------
+
+
+def test_register_untracked_prompts_dry_run_returns_arch_data_with_proposed_entry(
+    tmp_path: Path,
+) -> None:
+    """
+    Bug 2a fix: register_untracked_prompts(dry_run=True) must return 'arch_data'
+    in its result dict containing the full proposed in-memory module list
+    (existing modules + newly auto-registered entries), even when no disk write
+    occurs.
+
+    FAILS on current code because register_untracked_prompts only returns
+    {registered, skipped, errors} — the proposed state is inaccessible to callers
+    without re-reading architecture.json, which misses new entries when dry_run=True.
+    """
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    arch_path = tmp_path / "architecture.json"
+
+    arch_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "module_a_python.prompt",
+                    "filepath": "pdd/module_a.py",
+                    "reason": "Module A",
+                    "description": "Module A",
+                    "dependencies": [],
+                    "priority": 1,
+                    "tags": ["module"],
+                    "interface": {"type": "module", "module": {"functions": []}},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    (prompts_dir / "module_c_python.prompt").write_text(
+        "<pdd-reason>Module C</pdd-reason>\n% body\n", encoding="utf-8"
+    )
+
+    original_disk_content = arch_path.read_text(encoding="utf-8")
+
+    result = register_untracked_prompts(
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+        dry_run=True,
+    )
+
+    # Pre-condition: module_c must appear in the plan
+    assert "module_c_python.prompt" in result["registered"], (
+        f"Pre-condition: module_c should be in the registered plan. "
+        f"Got: {result['registered']}"
+    )
+
+    # After fix: arch_data key must exist and contain the proposed state
+    assert "arch_data" in result, (
+        "Bug 2a: register_untracked_prompts returned no 'arch_data' key. "
+        "Callers (sync_all_prompts_to_architecture) cannot propagate the "
+        "proposed state without re-reading disk, which misses newly registered "
+        "modules when dry_run=True."
+    )
+
+    proposed_filenames = [m["filename"] for m in result["arch_data"]]
+    assert "module_c_python.prompt" in proposed_filenames, (
+        f"Bug 2a: arch_data must include the newly registered module_c. "
+        f"Got filenames: {proposed_filenames}"
+    )
+    assert "module_a_python.prompt" in proposed_filenames, (
+        "arch_data must also include the original module_a (pre-existing entry)"
+    )
+
+    # Dry-run must NOT write to disk
+    assert arch_path.read_text(encoding="utf-8") == original_disk_content, (
+        "dry_run=True must not write to architecture.json"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 8 Test 7 — sync_all exposes proposed_modules in its return value
+# ---------------------------------------------------------------------------
+
+
+def test_sync_all_dry_run_exposes_proposed_modules_in_return_value(
+    tmp_path: Path,
+) -> None:
+    """
+    Bug 2b fix: sync_all_prompts_to_architecture(dry_run=True) must expose the
+    proposed module list (including auto-registered modules) in its return value
+    under a 'proposed_modules' key, so that sync_prompts_to_architecture can
+    validate the proposed state rather than the pre-sync disk snapshot.
+
+    FAILS on current code because sync_all re-reads architecture.json from disk
+    after register_untracked_prompts returns, discarding the proposed in-memory
+    registrations, and never exposes them to the caller.
+    """
+    prompts_dir, arch_path = _make_scenario_2081(tmp_path)
+
+    result = sync_all_prompts_to_architecture(
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+        dry_run=True,
+    )
+
+    # Pre-condition: module_c must appear in the registration plan
+    assert "module_c_python.prompt" in result.get("registered", []), (
+        f"Pre-condition: module_c should be in the registered plan. "
+        f"Got: {result.get('registered')}"
+    )
+
+    # After fix: proposed_modules must be returned so sync_prompts can validate it
+    assert "proposed_modules" in result, (
+        "Bug 2b: sync_all_prompts_to_architecture returned no 'proposed_modules' "
+        "key.  sync_prompts_to_architecture cannot validate the proposed "
+        "(post-registration) state without this — it falls back to re-reading "
+        "disk, which misses newly registered modules when dry_run=True, producing "
+        "false missing_dependency errors."
+    )
+
+    proposed_filenames = {m["filename"] for m in result["proposed_modules"]}
+    assert "module_c_python.prompt" in proposed_filenames, (
+        f"Bug 2b: proposed_modules does not include the newly registered "
+        f"module_c_python.prompt.  Got: {proposed_filenames}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 8 Test 8 — sync_prompts dry-run validates proposed state
+# ---------------------------------------------------------------------------
+
+
+def test_sync_prompts_dry_run_validates_proposed_state_not_pre_sync_disk(
+    tmp_path: Path,
+) -> None:
+    """
+    Bug 2c fix: sync_prompts_to_architecture(dry_run=True) must validate the
+    PROPOSED architecture (including newly auto-registered modules) rather than
+    the pre-sync on-disk state.
+
+    module_b already depends on module_c.  The dry-run plan registers module_c.
+    After the fix, validation runs on the merged proposed state → module_c is
+    present → validation passes.
+
+    FAILS on current code because sync_prompts re-reads architecture.json from
+    disk (line 1769-1771), which does not include module_c (registered only
+    in-memory), causing a false missing_dependency error for module_b.
+    """
+    prompts_dir, arch_path = _make_scenario_2081(tmp_path)
+    original_disk_content = arch_path.read_text(encoding="utf-8")
+
+    result = sync_prompts_to_architecture(
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+        dry_run=True,
+    )
+
+    # Pre-condition: plan must include module_c
+    assert "module_c_python.prompt" in result.get("registered", []), (
+        f"Pre-condition: module_c should be in the registered plan. "
+        f"Got: {result.get('registered')}"
+    )
+
+    # After fix: no false missing_dep error for module_c
+    validation = result.get("validation", {})
+    missing_dep_errors = [
+        e
+        for e in validation.get("errors", [])
+        if e.get("type") == "missing_dependency"
+        and "module_c_python.prompt" in str(e.get("modules", []))
+    ]
+    assert not missing_dep_errors, (
+        "Bug 2c: dry-run validation falsely reported 'module_c_python.prompt' "
+        "as a missing dependency for module_b, even though module_c IS in the "
+        "plan.  Validation must run against the proposed merged state, not the "
+        f"pre-sync disk snapshot.  Missing-dep errors: {missing_dep_errors}"
+    )
+
+    # Disk must not be modified
+    assert arch_path.read_text(encoding="utf-8") == original_disk_content, (
+        "dry_run=True must not write to architecture.json"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 8 Test 9 — dry-run and applied-run agree on validation verdict
+# ---------------------------------------------------------------------------
+
+
+def test_sync_prompts_dry_run_and_applied_run_agree_on_validity(
+    tmp_path: Path,
+) -> None:
+    """
+    Bug 2 fix — consistency: dry-run and applied-run must agree on
+    validation.valid for the same input graph.
+
+    FAILS on current code: dry-run yields validation.valid=False (false positive
+    from pre-sync state), while applied run correctly yields validation.valid=True.
+    """
+    prompts_dir, arch_path = _make_scenario_2081(tmp_path)
+
+    dry_result = sync_prompts_to_architecture(
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+        dry_run=True,
+    )
+
+    applied_result = sync_prompts_to_architecture(
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+        dry_run=False,
+    )
+
+    applied_valid = applied_result.get("validation", {}).get("valid", False)
+    dry_valid = dry_result.get("validation", {}).get("valid", False)
+
+    # Applied run must succeed (module_c is now registered)
+    assert applied_valid, (
+        f"Applied-run must be valid after registering module_c. "
+        f"Errors: {applied_result.get('validation', {}).get('errors', [])}"
+    )
+
+    # After fix: dry-run and applied-run must agree
+    assert dry_valid == applied_valid, (
+        f"Bug 2: dry-run validation.valid={dry_valid!r} disagrees with "
+        f"applied-run validation.valid={applied_valid!r}. "
+        "Both must report the same validity verdict for the same graph. "
+        "The dry-run falsely fails because it validates the pre-sync disk "
+        "state instead of the proposed merged state."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 8 Test 10 — Applied run registers module and validates clean
+# ---------------------------------------------------------------------------
+
+
+def test_sync_prompts_applied_run_registers_module_and_validates_clean(
+    tmp_path: Path,
+) -> None:
+    """
+    Regression: after the Bug 2 fix, the applied-run path (dry_run=False) must
+    continue to register module_c, write it to disk, and produce a clean
+    validation result.
+    """
+    prompts_dir, arch_path = _make_scenario_2081(tmp_path)
+
+    result = sync_prompts_to_architecture(
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+        dry_run=False,
+    )
+
+    assert "module_c_python.prompt" in result.get("registered", []), (
+        f"Applied run must register module_c. Got: {result.get('registered')}"
+    )
+
+    disk_arch = json.loads(arch_path.read_text(encoding="utf-8"))
+    disk_filenames = {
+        m["filename"]
+        for m in (disk_arch if isinstance(disk_arch, list) else disk_arch.get("modules", []))
+    }
+    assert "module_c_python.prompt" in disk_filenames, (
+        "Applied run must write module_c_python.prompt entry to architecture.json"
+    )
+
+    assert result.get("validation", {}).get("valid", False), (
+        "Applied run validation must pass after registering module_c. "
+        f"Errors: {result.get('validation', {}).get('errors', [])}"
+    )
+    missing_dep_errors = [
+        e
+        for e in result.get("validation", {}).get("errors", [])
+        if e.get("type") == "missing_dependency"
+    ]
+    assert not missing_dep_errors, (
+        f"Applied run must have no missing_dependency errors. "
+        f"Got: {missing_dep_errors}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 8 Test 11 — Second dry-run after valid apply is a no-op
+# ---------------------------------------------------------------------------
+
+
+def test_second_dry_run_after_valid_apply_is_noop(tmp_path: Path) -> None:
+    """
+    Acceptance criterion: after applying a valid plan (registering module_c),
+    a second dry-run must find nothing to register and must validate as clean.
+
+    Directly verifies the issue's acceptance criterion:
+    "Second dry-run after an applied valid plan is a no-op."
+    """
+    prompts_dir, arch_path = _make_scenario_2081(tmp_path)
+
+    # Apply (register module_c, write to disk)
+    sync_prompts_to_architecture(
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+        dry_run=False,
+    )
+
+    # Second dry-run: module_c is now registered → no missing_dep → clean
+    second_dry = sync_prompts_to_architecture(
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+        dry_run=True,
+    )
+
+    assert second_dry.get("registered", []) == [], (
+        "Second dry-run after a valid apply must have an empty registered list. "
+        f"Got: {second_dry.get('registered')}"
+    )
+    assert second_dry.get("validation", {}).get("valid", False), (
+        "Second dry-run after a valid apply must validate as clean. "
+        f"Validation errors: {second_dry.get('validation', {}).get('errors', [])}"
+    )
+
+
+# ============================================================================
+# Step 5 reproduction tests for Bug 2 (TestDryRunValidatesProposedRegistry)
+# Preserved from Step 5 investigation; demonstrate the dry-run / applied-run
+# inconsistency on the current buggy code.
+# ============================================================================
+
+
+class TestDryRunValidatesProposedRegistry2081:
+    """
+    # Step 5 reproduction
+    sync_prompts_to_architecture(dry_run=True) should validate the PROPOSED
+    architecture (what would be written), not the current on-disk state.
+    """
+
+    def _build_scenario(self, tmp_path: Path) -> tuple:
+        return _make_scenario_2081(tmp_path)
+
+    def test_dry_run_does_not_write_architecture(self, tmp_path: Path) -> None:
+        """Sanity: dry_run=True must not modify architecture.json."""
+        prompts_dir, arch_path = self._build_scenario(tmp_path)
+        original = arch_path.read_text(encoding="utf-8")
+
+        sync_prompts_to_architecture(
+            prompts_dir=prompts_dir,
+            architecture_path=arch_path,
+            dry_run=True,
+        )
+
+        assert arch_path.read_text(encoding="utf-8") == original, (
+            "dry_run=True must not write to architecture.json"
+        )
+
+    def test_dry_run_registers_new_module_in_plan(self, tmp_path: Path) -> None:
+        """The dry-run result must include module_c in the 'registered' list."""
+        prompts_dir, arch_path = self._build_scenario(tmp_path)
+
+        result = sync_prompts_to_architecture(
+            prompts_dir=prompts_dir,
+            architecture_path=arch_path,
+            dry_run=True,
+        )
+
+        registered = result.get("registered", [])
+        assert "module_c_python.prompt" in registered, (
+            f"Dry-run should include 'module_c_python.prompt' in the registered "
+            f"list (plan). Got: {registered}"
+        )
+
+    def test_dry_run_does_not_report_false_missing_dependency(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        # Step 5 reproduction — Bug 2
+        EXPECTED (fixed): the dry-run validation must run against the proposed
+        (merged) state, so it must NOT report 'module_b depends on non-existent
+        module_c' when module_c IS in the same plan.
+        """
+        prompts_dir, arch_path = self._build_scenario(tmp_path)
+
+        result = sync_prompts_to_architecture(
+            prompts_dir=prompts_dir,
+            architecture_path=arch_path,
+            dry_run=True,
+        )
+
+        # Pre-condition
+        assert "module_c_python.prompt" in result.get("registered", []), (
+            "Pre-condition: module_c should be registered by the plan"
+        )
+
+        validation = result.get("validation", {})
+        missing_dep_errors = [
+            e
+            for e in validation.get("errors", [])
+            if e.get("type") == "missing_dependency"
+            and "module_c_python.prompt" in str(e.get("modules", []))
+        ]
+        assert not missing_dep_errors, (
+            "Bug 2: dry-run validation falsely reported 'module_c_python.prompt' "
+            "as a missing dependency for module_b, even though module_c IS "
+            "registered in the same plan. Validation must run against the "
+            f"proposed (merged) state. Missing-dep errors: {missing_dep_errors}"
+        )
+
+    def test_dry_run_and_applied_run_agree_on_validity(self, tmp_path: Path) -> None:
+        """
+        # Step 5 reproduction — Bug 2 consistency
+        EXPECTED (fixed): dry-run and applied-run must agree on validation.valid.
+        """
+        prompts_dir, arch_path = self._build_scenario(tmp_path)
+
+        dry_result = sync_prompts_to_architecture(
+            prompts_dir=prompts_dir,
+            architecture_path=arch_path,
+            dry_run=True,
+        )
+        applied_result = sync_prompts_to_architecture(
+            prompts_dir=prompts_dir,
+            architecture_path=arch_path,
+            dry_run=False,
+        )
+
+        dry_valid = dry_result.get("validation", {}).get("valid", False)
+        applied_valid = applied_result.get("validation", {}).get("valid", False)
+
+        assert applied_valid, (
+            f"Applied-run must be valid after registering module_c. "
+            f"Errors: {applied_result.get('validation', {}).get('errors', [])}"
+        )
+        assert dry_valid == applied_valid, (
+            f"Bug 2: dry-run validation.valid={dry_valid!r} disagrees with "
+            f"applied-run validation.valid={applied_valid!r}. "
+            "Both must report the same validity verdict for the same graph. "
+            "The dry-run falsely fails because it validates the pre-sync "
+            "on-disk state instead of the proposed merged state."
+        )
+
+    def test_second_dry_run_after_valid_apply_is_noop(self, tmp_path: Path) -> None:
+        """After applying a valid plan, a second dry-run must be a no-op."""
+        prompts_dir, arch_path = self._build_scenario(tmp_path)
+
+        sync_prompts_to_architecture(
+            prompts_dir=prompts_dir,
+            architecture_path=arch_path,
+            dry_run=False,
+        )
+
+        second_dry = sync_prompts_to_architecture(
+            prompts_dir=prompts_dir,
+            architecture_path=arch_path,
+            dry_run=True,
+        )
+
+        assert second_dry.get("updated_count", -1) == 0, (
+            "Second dry-run after a valid apply should find nothing to update. "
+            f"Got updated_count={second_dry.get('updated_count')}"
+        )
+        assert second_dry.get("validation", {}).get("valid", False), (
+            "Second dry-run after a valid apply must validate as clean. "
+            f"Validation errors: {second_dry.get('validation', {}).get('errors', [])}"
+        )
