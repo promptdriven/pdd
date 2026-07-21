@@ -16442,7 +16442,7 @@ class TestTerraSolBoundedLoop:
 
         success, report, _cost, _model = run_checkup_review_loop(
             context=_ctx(tmp_path),
-            config=self._terra_sol_config(),
+            config=self._terra_sol_config(max_rounds=1),
             cwd=tmp_path,
             quiet=True,
             use_github_state=False,
@@ -16451,8 +16451,11 @@ class TestTerraSolBoundedLoop:
         # Loop must return (True, report) but report must NOT show clean Sol
         assert success is True
         assert "codex=clean" not in report or "fresh-final=clean" not in report
-        # A failed first Sol call is hard-not-clean, not a false clean.
-        assert '"max_rounds_reached": false' in report
+        # A provider failure on the final allowed round keeps its concrete
+        # failure reason but must also expose the exhausted-round verdict to
+        # the final state, machine verdict, and hosted mirror.
+        assert '"max_rounds_reached": true' in report
+        assert '"status": "failed"' in report
 
     def test_terra_sol_budget_exhausted_never_fires(
         self, monkeypatch: Any, tmp_path: Path

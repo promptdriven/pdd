@@ -2510,6 +2510,18 @@ def run_checkup_review_loop(
     if not state.stop_reason and _budget_exhausted(config, state, deadline):
         _mark_budget_exhausted(config, state, deadline)
 
+    # A terminal error on the final allowed round is still a cap hit.  Keep the
+    # concrete provider/push/guard reason for operators, but make the round-cap
+    # verdict agree with the persisted state and hosted artifact whenever no
+    # authoritative clean verdict was established.
+    authoritative_clean = (
+        state.reviewer_status.get(reviewer) == "clean"
+        and state.fresh_final_status == "clean"
+        and not pending_findings
+    )
+    if state.rounds_completed >= config.max_rounds and not authoritative_clean:
+        state.max_rounds_reached = True
+
     if not state.stop_reason:
         if pending_findings:
             for finding in pending_findings:
