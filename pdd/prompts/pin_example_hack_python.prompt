@@ -66,7 +66,7 @@ At function start, coerce `None` for `target_coverage`, `budget`, `max_attempts`
 Implement:
 - `load_sync_log`, `create_sync_log_entry`, `update_sync_log_entry`, `append_sync_log`, `log_sync_event`
 - `save_run_report(report, basename, language, atomic_state=None)` writing `META_DIR / "{safe_basename}_{language.lower()}_run.json"`
-- `_save_operation_fingerprint(..., atomic_state=None)` using `calculate_current_hashes` + `Fingerprint`, writing `META_DIR / "{safe_basename}_{language.lower()}.json"`
+- `_save_operation_fingerprint(..., atomic_state=None)` using `calculate_current_hashes(paths, dependency_root=trusted_hash_root_for_paths(paths))` + `Fingerprint`, writing `META_DIR / "{safe_basename}_{language.lower()}.json"`. Import `trusted_hash_root_for_paths` from `sync_determine_operation`; fingerprint hashing must be rooted in the resolved PDD project, never the process CWD.
 - `_python_cov_target_for_code_file`, `_python_cov_target_for_test_and_code`
 - `_parse_test_output` for Python, JS/TS, Go, Rust, plus fallback
 - `_detect_example_errors` (traceback + ERROR-log patterns only)
@@ -77,7 +77,7 @@ Implement:
 - `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None, atomic_state=None, test_files=None)`:
   - Python: run pytest + coverage, project-root detection via `_find_project_root`, support multiple test files
   - Non-Python: use `get_test_command_for_file`
-  - Always persist `RunReport` (including `test_files` hash map)
+  - Always persist `RunReport` (including `test_files` hash map). Hash the primary and each test file with `calculate_sha256(test_path, trusted_hash_root_for_paths({"test": test_path}))`, never a one-argument/CWD-relative call. `test_execute_tests_uses_config_dir_not_test_file_parent` must also guard those trusted-root hash calls.
 - `_create_mock_context`
 - `_display_sync_log` in verbose and concise modes
 

@@ -39,6 +39,17 @@ _LEGACY_PDD_1989_PROFILE_BYTES = (
     "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
     "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
 )
+# PR #1971 must consume six prompt/profile transitions in the same reviewed
+# candidate.  Phase-A-only bootstrap rules would reject that safe, exact
+# historical composition, so bind both rotation-policy and profile bytes here.
+_PR1971_COMBINED_SCHEMA_2_HISTORY = (
+    "8f423a11f5c25c3042073e733085ad08c5d03a999087cf04d2f6bc7f24fb0d72",
+    "2b96e538280ebb79db86d0dece4791d80f46dadcc93ba6ab4ad81182b9491d5f",
+)
+_PR1971_COMBINED_PROFILE_BYTES = (
+    "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+    "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+)
 
 
 class VerificationProfileError(ValueError):
@@ -397,6 +408,113 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += (
     _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS
 )
+
+
+# PR #1971 consumes six exact prompt/profile transitions in its reviewed
+# candidate tree.  `_PR1971_COMBINED_*` above binds the complete policy pair;
+# these rows bind each participating prompt and its human requirement.
+_PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/operation_log_python.prompt",
+        "python",
+        "e9314dff3064004dafe75821e7aec984cbbec76e4745f6c49e73c50105ecb9c8",
+        "370d4f511f320b3db71cb74bb17532a6293d1c48def1a0faebfa8fbb7f00eb12",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/pin_example_hack_python.prompt",
+        "python",
+        "7efec65cda40e8357cd08c974abc4b1aebb450d2fe75401e5cc5629e0696feb9",
+        "4b45b2744bb856ba48681d3038ba41512353df5e0ed77c3d698928ca89c6cabb",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/server/routes/prompts_python.prompt",
+        "python",
+        "8a88807f83d1d4bd5cfa9ccbd465a619a2d00fef9f81c53b84047470c8399293",
+        "0cef545efaa9eef5007d338656c0e40e70db314ddbd0e7a00b64f300dba7f342",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_determine_operation_python.prompt",
+        "python",
+        "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
+        "fd24cdd0df308353e33bfe6d7e004cd3064303c3d1eef536b1adbfc3a67bd1d8",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_orchestration_python.prompt",
+        "python",
+        "ca4ad5eff6774715d7a65c73e17a12f79da66cb409c69fe90bf41ae097181266",
+        "5420f3f617586ceb3149a9efb557968b25115855ae65275be2d11d55c91f227e",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/update_main_python.prompt",
+        "python",
+        "b1042be0dd594c9bbb197a4afe7e5c5a12aaad1574feadf7cb5b26f9bf85bccd",
+        "17fc1c03860bca7d7889ac388e4de26c19b73edb7ead9bea20f6be1016995bb5",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+)
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PR1971_COMBINED_REQUIREMENT_TRANSITIONS
+
+# The exact #1971 candidate also adds these three complete pytest obligations.
+# They are not a general profile-field rotation: each addition is accepted only
+# while the reviewed four-byte reconciliation and all six transition rows match.
+_PR1971_COMBINED_PYTEST_OBLIGATIONS = {
+    (
+        PurePosixPath("pdd/prompts/operation_log_python.prompt"),
+        "python",
+    ): VerificationObligation(
+        "pytest-operation-log",
+        "test",
+        "pytest",
+        "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+        (
+            "CONTRACT-SHA256:370d4f511f320b3db71cb74bb17532a6293d1c48def1a0faebfa8fbb7f00eb12",
+        ),
+        (PurePosixPath("tests/test_operation_log.py"),),
+        True,
+        (PurePosixPath("pdd/operation_log.py"),),
+    ),
+    (
+        PurePosixPath("pdd/prompts/server/routes/prompts_python.prompt"),
+        "python",
+    ): VerificationObligation(
+        "pytest-server-routes-prompts",
+        "test",
+        "pytest",
+        "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+        (
+            "CONTRACT-SHA256:0cef545efaa9eef5007d338656c0e40e70db314ddbd0e7a00b64f300dba7f342",
+        ),
+        (PurePosixPath("tests/server/routes/test_prompts.py"),),
+        True,
+        (PurePosixPath("pdd/server/routes/prompts.py"),),
+    ),
+    (
+        PurePosixPath("pdd/prompts/update_main_python.prompt"),
+        "python",
+    ): VerificationObligation(
+        "pytest-update-main",
+        "test",
+        "pytest",
+        "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+        (
+            "CONTRACT-SHA256:17fc1c03860bca7d7889ac388e4de26c19b73edb7ead9bea20f6be1016995bb5",
+        ),
+        (PurePosixPath("tests/test_update_main.py"),),
+        True,
+        (PurePosixPath("pdd/update_main.py"),),
+    ),
+}
 
 
 # One long-lived pre-schema-2 unit first becomes managed in pdd#1790. Bind its
@@ -1157,6 +1275,60 @@ def _validate_dormant_policy_installation(
         )
 
 
+def _is_exact_combined_requirement_reconciliation(
+    protected_policy: bytes | None,
+    candidate_policy: bytes | None,
+    protected_profile: bytes | None,
+    candidate_profile: bytes | None,
+) -> bool:
+    """Recognize only reviewed same-candidate policy/profile transitions."""
+    if None in (
+        protected_policy,
+        candidate_policy,
+        protected_profile,
+        candidate_profile,
+    ):
+        return False
+    assert protected_policy is not None and candidate_policy is not None
+    assert protected_profile is not None and candidate_profile is not None
+    policy_pair = (
+        hashlib.sha256(protected_policy).hexdigest(),
+        hashlib.sha256(candidate_policy).hexdigest(),
+    )
+    profile_pair = (
+        hashlib.sha256(protected_profile).hexdigest(),
+        hashlib.sha256(candidate_profile).hexdigest(),
+    )
+    return (policy_pair, profile_pair) in {
+        (_LEGACY_PDD_1989_SCHEMA_2_HISTORY, _LEGACY_PDD_1989_PROFILE_BYTES),
+        (_PR1971_COMBINED_SCHEMA_2_HISTORY, _PR1971_COMBINED_PROFILE_BYTES),
+    }
+
+
+def _is_exact_pr1971_pytest_reconciliation(
+    manifest: UnitManifest,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+    authorizations: tuple[_RequirementTransitionAuthorization, ...],
+) -> bool:
+    """Recognize only #1971's complete reviewed profile-obligation addition."""
+    pr1971_rows = tuple(
+        item
+        for item in authorizations
+        if item.bindings.head_policy_sha256 == _PR1971_COMBINED_PROFILE_BYTES[1]
+    )
+    return (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and _is_exact_combined_requirement_reconciliation(
+            rotation_policies[0],
+            rotation_policies[1],
+            profile_policies[0],
+            profile_policies[1],
+        )
+        and pr1971_rows == _PR1971_COMBINED_REQUIREMENT_TRANSITIONS
+    )
+
+
 def _candidate_authorization_is_strictly_dormant(
     manifest: UnitManifest,
     base: Mapping[UnitId, _ProfileInput],
@@ -1638,27 +1810,17 @@ def _load_requirement_transition_authorizations(
         protected_policy,
         candidate_policy,
     )
-    legacy_pdd1989_reconciliation = (
-        protected_policy is not None
-        and candidate_policy is not None
-        and policies[0] is not None
-        and policies[1] is not None
-        and (
-            hashlib.sha256(protected_policy).hexdigest(),
-            hashlib.sha256(candidate_policy).hexdigest(),
-        )
-        == _LEGACY_PDD_1989_SCHEMA_2_HISTORY
-        and (
-            hashlib.sha256(policies[0]).hexdigest(),
-            hashlib.sha256(policies[1]).hexdigest(),
-        )
-        == _LEGACY_PDD_1989_PROFILE_BYTES
+    exact_combined_reconciliation = _is_exact_combined_requirement_reconciliation(
+        protected_policy,
+        candidate_policy,
+        policies[0],
+        policies[1],
     )
     retired_by_candidate = {item.obsolete for item in candidate_retirements}
     new_authorizations = tuple(item for item in candidate if item not in protected)
-    if legacy_pdd1989_reconciliation:
-        # The exact historical pair both installed and consumed its authority
-        # before Phase-A isolation existed; validate it as consumption below.
+    if exact_combined_reconciliation:
+        # These exact historical pairs both installed and consumed their
+        # authority before Phase-A isolation existed; validate consumption below.
         new_authorizations = ()
     for item in candidate:
         if item in authority:
@@ -1666,7 +1828,7 @@ def _load_requirement_transition_authorizations(
                 item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
                 and item not in protected
                 and policies[0] != policies[1]
-                and not legacy_pdd1989_reconciliation
+                and not exact_combined_reconciliation
             ):
                 raise VerificationProfileError(
                     "candidate legacy bootstrap requirement transition changes "
@@ -1693,7 +1855,7 @@ def _load_requirement_transition_authorizations(
             )
     candidate_authority = set(candidate_rows)
     for item in protected:
-        if item in candidate_authority or legacy_pdd1989_reconciliation:
+        if item in candidate_authority or exact_combined_reconciliation:
             continue
         if not _authorization_is_consumed_at_current_state(
             manifest, base, head, prompts[item.prompt_path], item
@@ -1733,6 +1895,7 @@ def _expected_requirement_update(
     authorization: _RequirementTransitionAuthorization,
     protected: _ProfileInput,
     candidate: _ProfileInput,
+    pytest_obligation: VerificationObligation | None = None,
 ) -> tuple[_ProfileInput | None, str | None]:
     """Return the sole permitted profile delta for one exact prompt transition."""
     obligations = {item.obligation_id: item for item in protected.obligations}
@@ -1765,6 +1928,8 @@ def _expected_requirement_update(
         )
         for obligation_id, obligation in obligations.items()
     }
+    if pytest_obligation is not None:
+        obligations[pytest_obligation.obligation_id] = pytest_obligation
     expected = _ProfileInput(
         (authorization.to_requirement_id,), tuple(sorted(obligations.values()))
     )
@@ -1824,6 +1989,7 @@ def _matches_unchanged_requirement_state(
 def _evaluate_requirement_authorization(
     context: _RequirementTransitionContext,
     authorization: _RequirementTransitionAuthorization,
+    pytest_obligation: VerificationObligation | None = None,
 ) -> tuple[UnitId, _ProfileInput | None, str | None]:
     """Evaluate one rule as dormant, consumed, exact, or invalid."""
     unit_id = UnitId(
@@ -1871,7 +2037,9 @@ def _evaluate_requirement_authorization(
         prompts[1],
     ):
         return unit_id, None, "requirement transition bindings mismatch"
-    result, reason = _expected_requirement_update(authorization, protected, candidate)
+    result, reason = _expected_requirement_update(
+        authorization, protected, candidate, pytest_obligation
+    )
     return unit_id, result, reason
 
 
@@ -1890,12 +2058,24 @@ def _authorized_requirement_updates(
         read_git_blob(root, manifest.base_ref, PROFILE_PATH),
         read_git_blob(root, manifest.head_ref, PROFILE_PATH),
     )
+    rotation_policies = (
+        read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH),
+        read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH),
+    )
+    pr1971_pytest_reconciliation = _is_exact_pr1971_pytest_reconciliation(
+        manifest, rotation_policies, policies, authorizations
+    )
     context = _RequirementTransitionContext(
         root, manifest, base, head, policies, prompts
     )
     for authorization in authorizations:
+        pytest_obligation = None
+        if pr1971_pytest_reconciliation:
+            pytest_obligation = _PR1971_COMBINED_PYTEST_OBLIGATIONS.get(
+                (authorization.prompt_path, authorization.language_id)
+            )
         unit_id, result, reason = _evaluate_requirement_authorization(
-            context, authorization
+            context, authorization, pytest_obligation
         )
         if reason is not None:
             invalid.append(f"{authorization.prompt_path}: {reason}")

@@ -2581,7 +2581,7 @@
   },
   {
     "reason": "CLI wrapper for updating prompts from modified code with repo-wide scan, agentic routing, optional metadata sync, and fingerprint finalization.",
-    "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, and formats output.",
+    "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, formats output, and checks fingerprint include dependencies from the owning project root so parent or sibling working directories do not create false deletion drift.",
     "dependencies": [
       "auto_include_python.prompt",
       "metadata_sync_python.prompt",
@@ -2999,7 +2999,7 @@
   },
   {
     "reason": "Determines the next sync operation, including isolated replay/repair decisions.",
-    "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed.",
+    "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed. Fingerprint include resolution is root-anchored and safely supports committed prompt aliases without allowing uncontained reads.",
     "dependencies": [
       "agentic_langtest_python.prompt"
     ],
@@ -3123,8 +3123,8 @@
     }
   },
   {
-    "reason": "Coordinates sync workflow steps and state management. Manages workflow state, determines next steps, tracks progress, and handles step dependencies.",
-    "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies. For generate operations, catches ArchitectureConformanceError, PublicSurfaceRegressionError, and TestChurnError (issue #1012), accumulates failed-attempt total_cost/model_name, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits on repeated failure signatures (missing-symbol set / removed-symbol set / (rounded churn ratio, pre_line_count)) and additionally caps TestChurnError retries at one attempt, reuses the already-resolved .pddrc context_override/strength/temperature/context_config across retries (no mid-loop .pddrc re-resolution), relies on code_generator_main reading the pre-generation code file from disk for the public-surface snapshot, restores the prior environment value, includes failed-attempt cost in success and exception logs, and emits the appropriate build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error diagnostic block before re-raising the final failure.",
+    "reason": "Coordinates sync workflow steps and state management. Manages workflow state, determines next steps, tracks progress, and handles step dependencies. Persists fingerprints and run-report test hashes under the resolved PDD trusted root rather than process CWD.",
+    "description": "Manages workflow state, determines next steps, tracks progress, handles step dependencies, and persists fingerprints and run-report test hashes under the resolved PDD trusted root rather than process CWD. For generate operations, catches ArchitectureConformanceError, PublicSurfaceRegressionError, and TestChurnError (issue #1012), accumulates failed-attempt total_cost/model_name, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits on repeated failure signatures (missing-symbol set / removed-symbol set / (rounded churn ratio, pre_line_count)) and additionally caps TestChurnError retries at one attempt, reuses the already-resolved .pddrc context_override/strength/temperature/context_config across retries (no mid-loop .pddrc re-resolution), relies on code_generator_main reading the pre-generation code file from disk for the public-surface snapshot, restores the prior environment value, includes failed-attempt cost in success and exception logs, and emits the appropriate build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error diagnostic block before re-raising the final failure.",
     "dependencies": [
       "code_generator_main_python.prompt",
       "agentic_sync_runner_python.prompt",
@@ -3144,7 +3144,7 @@
         "functions": [
           {
             "name": "sync_orchestration",
-            "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", examples_dir: str = \"examples\", tests_dir: str = \"tests\", max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, snapshot_context: bool = False, compressed_context: bool = False) -> Dict[str, Any]",
+            "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", examples_dir: str = \"examples\", tests_dir: str = \"tests\", max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, compress: bool = False, evidence: bool = False, snapshot_context: bool = False, compressed_context: bool = False) -> Dict[str, Any]",
             "returns": "Dict[str, Any]"
           }
         ]
@@ -5648,6 +5648,40 @@
     }
   },
   {
+    "reason": "Fixes validation errors from a single failed validation step (completeness, sync, or dependencies).",
+    "description": "Step 13 of the agentic architecture workflow. Repairs validation failures by reconciling architecture.json, generated prompt filenames, and path-mirroring rules without flattening path-aware prompt layouts.",
+    "dependencies": [
+      "agentic_arch_step12_deps_LLM.prompt"
+    ],
+    "priority": 153,
+    "filename": "agentic_arch_step13_fix_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_arch_step13_fix_LLM.prompt",
+    "tags": [
+      "agentic",
+      "architecture",
+      "config",
+      "fix",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "fix_validation",
+            "signature": "(failed_step: str, failed_output: str)",
+            "returns": "str (list of fixes applied)"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 21280,
+      "y": 220
+    }
+  },
+  {
     "reason": "Architecture registry: tracks per-issue generation provenance, merges entries, and resolves project root via tiered marker precedence.",
     "description": "Maintains .pdd/architecture_registry.json (provenance of which modules came from which GitHub issue), provides architecture-merging and topological priority renumbering, discovers nested architecture.json files, and resolves the project root: PDD markers (.pddrc/.pdd/ Tier A or sources/ + PRD/spec markdown Tier B) and .git (Tier C) are project boundaries, and the nearest boundary found while walking upward wins. It skips Path.home() and system temp roots (/tmp, TMPDIR, tempfile.gettempdir()) for PDD-marker checks so user-global or CI cache markers do not anchor unrelated projects. A self-contained pdd project nested inside an unrelated outer git repo is correctly identified as its own project root, while an outer PDD marker cannot override a nearer inner git repository.",
     "dependencies": [],
@@ -7453,7 +7487,7 @@
           },
           {
             "name": "log_event",
-            "signature": "(basename: str, language: str, event: str, details: Mapping[str, Any] | None = None, project_root=None, paths=None) -> None",
+            "signature": "(basename: str, language: str, event_type: str, details: Any, invocation_mode: str = \"manual\", paths: Optional[Dict[str, Any]] = None, compression: Any = None, agentic_fallback: Any = None) -> None",
             "returns": "None"
           }
         ]
