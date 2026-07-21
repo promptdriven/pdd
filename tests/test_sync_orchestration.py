@@ -1,12 +1,15 @@
 # tests/test_sync_orchestration.py
 
 import pytest
+import inspect
 import json
 import sys
 import threading
 from pathlib import Path
 from unittest.mock import patch, MagicMock, Mock, call, ANY
 import os
+import signal
+import subprocess
 import click
 
 # Cap per-test runtime for this real-LLM heavy module. Individual hot tests
@@ -2094,15 +2097,17 @@ def test_sync_orchestration_public_interface_matches_prompt_and_architecture():
     runtime_signature = inspect.signature(sync_orchestration)
     runtime_names = list(runtime_signature.parameters)
     assert "one_session" not in runtime_names
-    assert runtime_names[-5:] == [
+    assert runtime_names[-6:] == [
         "agentic_mode",
         "compress",
         "evidence",
         "snapshot_context",
         "compressed_context",
+        "fresh",
     ]
     assert runtime_signature.parameters["compress"].default is False
     assert runtime_signature.parameters["evidence"].default is False
+    assert runtime_signature.parameters["fresh"].default is False
 
     repo_root = Path(__file__).resolve().parents[1]
     prompt_text = (repo_root / "pdd/prompts/sync_orchestration_python.prompt").read_text()
@@ -4717,6 +4722,54 @@ class TestStateUpdateAtomicity:
             "run_report was written despite exception - rollback failed!"
         assert not fingerprint_path.exists(), \
             "fingerprint was written despite exception - rollback failed!"
+
+    def test_sigkill_after_first_rename_recovers_complete_pair(self, tmp_path):
+        """A real child death cannot make a half-pair look committed on restart."""
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        (tmp_path / ".pddrc").write_text("", encoding="utf-8")
+        prompt_path = tmp_path / "prompts" / "test_python.prompt"
+        prompt_path.parent.mkdir()
+        prompt_path.write_text("test", encoding="utf-8")
+        run_report_path = meta_dir / "test_python_run.json"
+        fingerprint_path = meta_dir / "test_python.json"
+        run_report_path.write_text('{"state": "old"}\n', encoding="utf-8")
+        fingerprint_path.write_text('{"state": "old"}\n', encoding="utf-8")
+        child = """
+import os, signal, sys
+from pathlib import Path
+from pdd.sync_orchestration import AtomicStateUpdate
+meta = Path(sys.argv[1])
+state = AtomicStateUpdate('test', 'python')
+state._crash_hook = lambda event: os.kill(os.getpid(), signal.SIGKILL) if event == 'after_install:0' else None
+with state:
+    state.set_run_report({'state': 'new'}, meta / 'test_python_run.json')
+    state.set_fingerprint({'state': 'new'}, meta / 'test_python.json')
+"""
+        environment = dict(os.environ)
+        environment["PYTHONPATH"] = str(Path(__file__).parents[1])
+        completed = subprocess.run(
+            [sys.executable, "-c", child, str(meta_dir)],
+            env=environment,
+            check=False,
+        )
+        assert completed.returncode == -signal.SIGKILL
+        assert json.loads(run_report_path.read_text())["state"] == "new"
+        assert json.loads(fingerprint_path.read_text())["state"] == "old"
+
+        from pdd.sync_orchestration import recover_incomplete_metadata_transactions
+
+        recovered = recover_incomplete_metadata_transactions(
+            "test",
+            "python",
+            paths={
+                "prompt": prompt_path,
+                "code": tmp_path / "pdd" / "test.py",
+            },
+        )
+        assert len(recovered) == 1
+        assert json.loads(run_report_path.read_text()) == {"state": "new"}
+        assert json.loads(fingerprint_path.read_text()) == {"state": "new"}
 
     def test_run_report_and_fingerprint_are_written_atomically(self, orchestration_fixture):
         """
@@ -9603,3 +9656,18 @@ def test_sync_orchestration_skip_handler_for_fix(orchestration_fixture):
     orchestration_fixture['_save_fingerprint_atomic'].assert_any_call(
         "calculator", "python", "skip:fix", ANY, 0.0, "skipped"
     )
+
+
+def test_sync_orchestration_appends_fresh_after_legacy_positional_tail():
+    """Legacy positional evidence must not bind the later ``fresh`` option."""
+    legacy_evidence = object()
+    bound = inspect.signature(sync_orchestration).bind(
+        "calculator", 90.0, "python", "prompts", "src", "context", "tests",
+        3, 10.0, False, False, False, False, 1.0, 0.0, 0.25, False,
+        False, None, False, False, None, None, None, False, 5.0, False,
+        True, legacy_evidence, True, True,
+    )
+    bound.apply_defaults()
+
+    assert bound.arguments["evidence"] is legacy_evidence
+    assert bound.arguments["fresh"] is False
