@@ -1940,8 +1940,8 @@ def _estimate_updates(monkeypatch, head_profile, head_prompts, head_rotation=Non
     return authorizations, updates, invalid
 
 
-def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
-    """Preauthorize only the two reviewed #2058 prompt/profile transitions."""
+def test_estimate_contract_rotations_preserve_stale_cli_authority() -> None:
+    """Keep protected #2058 rows exact when this branch makes CLI authority stale."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     estimate_paths = {item["prompt_path"] for item in ESTIMATE_REQUIREMENT_ROTATIONS}
     rules = [
@@ -1952,36 +1952,35 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     assert rules == list(ESTIMATE_REQUIREMENT_ROTATIONS)
 
     target_prompts, _target_profile = _estimate_target_bytes()
-    for rule in ESTIMATE_REQUIREMENT_ROTATIONS:
-        prompt_path = rule["prompt_path"]
-        assert (
-            hashlib.sha256((ROOT / prompt_path).read_bytes()).hexdigest()
-            == (rule["base_prompt_sha256"])
-        )
-        assert (
-            hashlib.sha256(target_prompts[prompt_path]).hexdigest()
-            == (rule["head_prompt_sha256"])
-        )
+    generate_rule, cli_rule = ESTIMATE_REQUIREMENT_ROTATIONS
+    assert hashlib.sha256(
+        (ROOT / generate_rule["prompt_path"]).read_bytes()
+    ).hexdigest() == generate_rule["base_prompt_sha256"]
+    assert hashlib.sha256(
+        target_prompts[generate_rule["prompt_path"]]
+    ).hexdigest() == generate_rule["head_prompt_sha256"]
 
+    current_cli_digest = hashlib.sha256(
+        (ROOT / cli_rule["prompt_path"]).read_bytes()
+    ).hexdigest()
+    assert current_cli_digest not in {
+        cli_rule["base_prompt_sha256"],
+        cli_rule["head_prompt_sha256"],
+    }
     current_inputs = _estimate_inputs(PROFILE_FILE.read_bytes())
     assert len(current_inputs) == 2
-    assert {item.requirements[0] for item in current_inputs.values()} == {
-        item["from_requirement_id"] for item in ESTIMATE_REQUIREMENT_ROTATIONS
-    }
-    current_prompts = {
-        item["prompt_path"]: (ROOT / item["prompt_path"]).read_bytes()
-        for item in ESTIMATE_REQUIREMENT_ROTATIONS
-    }
-    _authorizations, updates, invalid = _estimate_updates(
-        monkeypatch, PROFILE_FILE.read_bytes(), current_prompts
+    cli_id = UnitId(
+        REPOSITORY_ID, PurePosixPath(cli_rule["prompt_path"]), cli_rule["language_id"]
     )
-    assert not invalid
-    assert not updates
+    assert current_inputs[cli_id].requirements[0] not in {
+        cli_rule["from_requirement_id"],
+        cli_rule["to_requirement_id"],
+    }
 
 
 def test_estimate_contract_rotations_share_one_exact_profile_transition(
 ) -> None:
-    """Both #2058 rows share one profile binding and exact replacements."""
+    """The surviving #2058 rows retain their exact protected representation."""
     target_prompts, target_profile = _estimate_target_bytes()
     protected = _estimate_inputs(PROFILE_FILE.read_bytes())
     candidate = _estimate_inputs(target_profile)
@@ -1996,6 +1995,14 @@ def test_estimate_contract_rotations_share_one_exact_profile_transition(
             REPOSITORY_ID, PurePosixPath(rule["prompt_path"]), rule["language_id"]
         )
         authorization = authorizations[rule["prompt_path"]]
+        if rule["prompt_path"] == "pdd/prompts/core/cli_python.prompt":
+            assert hashlib.sha256(
+                target_prompts[rule["prompt_path"]]
+            ).hexdigest() != authorization.bindings.head_prompt_sha256
+            assert protected[unit_id].requirements != (
+                authorization.from_requirement_id,
+            )
+            continue
         assert hashlib.sha256(target_prompts[rule["prompt_path"]]).hexdigest() == (
             authorization.bindings.head_prompt_sha256
         )

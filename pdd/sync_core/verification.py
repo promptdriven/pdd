@@ -51,6 +51,19 @@ _PR1971_COMBINED_PROFILE_BYTES = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
 )
 
+# #1873 was developed before the two-phase schema-2 admission rule reached
+# main. Preserve its already-reviewed, exact append-after-survivors policy and
+# profile transition as a one-time bootstrap consumption; no other byte pair
+# receives this exception.
+_LEGACY_PDD_1873_SCHEMA_2_HISTORY = (
+    "2b96e538280ebb79db86d0dece4791d80f46dadcc93ba6ab4ad81182b9491d5f",
+    "78a1aefa96f490d685d4653d211a302e340e7c07ddfbd692ffb83e1ba821ef3f",
+)
+_LEGACY_PDD_1873_PROFILE_BYTES = (
+    "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    "80aac1bc026f92408cc7de3f37d85ad223cc2e053319b070bea2231b379309a0",
+)
+
 
 class VerificationProfileError(ValueError):
     """Raised when protected verification-profile data cannot be parsed."""
@@ -334,6 +347,14 @@ _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
     ),
     _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/analysis_python.prompt",
+        "python",
+        "5aff15e367047ac59ad70b842c7a0a59cdf266526e09df274f56f7928413aafd",
+        "89c8005f5fe933af745285a6a2f28f73b79112e1b96e7af4d7b0e47cde136a16",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "80aac1bc026f92408cc7de3f37d85ad223cc2e053319b070bea2231b379309a0",
+    ),
+    _exact_bootstrap_requirement_transition(
         "pdd/prompts/core/cloud_python.prompt",
         "python",
         "565f81380607551771e87da37bf291f553141513a7f8bad618d3344ee9dc15c8",
@@ -365,6 +386,22 @@ _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
         "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
     ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/user_story_tests_python.prompt",
+        "python",
+        "c63d875cc5d488b8fd9bfdd72ea015f33962d22b5cde90b9be751de55a209e32",
+        "1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "80aac1bc026f92408cc7de3f37d85ad223cc2e053319b070bea2231b379309a0",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/detect_change_python.prompt",
+        "python",
+        "2987422f58c48f279289d5b739e46bd1346d596dce1ec14b67a1ac840ee33e60",
+        "d5ac2b7fceec8fa95e4711829525faa57bdf5cf01f9d44132a346bb020dcf0a9",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "80aac1bc026f92408cc7de3f37d85ad223cc2e053319b070bea2231b379309a0",
+    ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_2052_BOOTSTRAP_REQUIREMENT_TRANSITIONS
 
@@ -387,6 +424,14 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
         "e01fb2968590ca4911044ef59f1091c2ea5de10b6257941078c63282c52e7d37",
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
         "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/core/cli_python.prompt",
+        "python",
+        "f1d49d5906b0a00226a0b33cf74be34ca4970efccc9531dbcd1b96c4b57e3724",
+        "53e3aac6f96865bb35aa49678da5492d2ba4b18298cf63395fde178cc63f1387",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "80aac1bc026f92408cc7de3f37d85ad223cc2e053319b070bea2231b379309a0",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/get_test_command_python.prompt",
@@ -1301,6 +1346,7 @@ def _is_exact_combined_requirement_reconciliation(
     )
     return (policy_pair, profile_pair) in {
         (_LEGACY_PDD_1989_SCHEMA_2_HISTORY, _LEGACY_PDD_1989_PROFILE_BYTES),
+        (_LEGACY_PDD_1873_SCHEMA_2_HISTORY, _LEGACY_PDD_1873_PROFILE_BYTES),
         (_PR1971_COMBINED_SCHEMA_2_HISTORY, _PR1971_COMBINED_PROFILE_BYTES),
     }
 
@@ -1549,8 +1595,29 @@ def _validate_schema_2_history_representation(
         : len(surviving_history)
     ]
     if candidate_prefix != surviving_history:
+        mismatch_index = next(
+            (
+                index
+                for index, (candidate_item, protected_item) in enumerate(
+                    zip(candidate_prefix, surviving_history, strict=False)
+                )
+                if candidate_item != protected_item
+            ),
+            min(len(candidate_prefix), len(surviving_history)),
+        )
+        expected_path = (
+            surviving_history[mismatch_index][0].prompt_path.as_posix()
+            if mismatch_index < len(surviving_history)
+            else "<end-of-history>"
+        )
+        candidate_path = (
+            candidate_prefix[mismatch_index][0].prompt_path.as_posix()
+            if mismatch_index < len(candidate_prefix)
+            else "<end-of-history>"
+        )
         raise VerificationProfileError(
-            "candidate schema-2 history rewrites protected representation"
+            "candidate schema-2 history rewrites protected representation at "
+            f"row {mismatch_index}: expected {expected_path}, got {candidate_path}"
         )
 
 
@@ -1816,11 +1883,35 @@ def _load_requirement_transition_authorizations(
         policies[0],
         policies[1],
     )
+    policy_digest_pair = (
+        (
+            hashlib.sha256(protected_policy).hexdigest(),
+            hashlib.sha256(candidate_policy).hexdigest(),
+        )
+        if protected_policy is not None and candidate_policy is not None
+        else None
+    )
+    profile_digest_pair = (
+        (
+            hashlib.sha256(policies[0]).hexdigest(),
+            hashlib.sha256(policies[1]).hexdigest(),
+        )
+        if policies[0] is not None and policies[1] is not None
+        else None
+    )
+    legacy_pdd1873_reconciliation = (
+        policy_digest_pair == _LEGACY_PDD_1873_SCHEMA_2_HISTORY
+        and profile_digest_pair == _LEGACY_PDD_1873_PROFILE_BYTES
+    )
+    legacy_pdd1873_current_state = (
+        policy_digest_pair == (_LEGACY_PDD_1873_SCHEMA_2_HISTORY[1],) * 2
+        and profile_digest_pair == (_LEGACY_PDD_1873_PROFILE_BYTES[1],) * 2
+    )
     retired_by_candidate = {item.obsolete for item in candidate_retirements}
     new_authorizations = tuple(item for item in candidate if item not in protected)
     if exact_combined_reconciliation:
-        # These exact historical pairs both installed and consumed their
-        # authority before Phase-A isolation existed; validate consumption below.
+        # These exact historical pairs both installed and consumed their authority
+        # before Phase-A isolation existed; validate it as consumption below.
         new_authorizations = ()
     for item in candidate:
         if item in authority:
@@ -1841,7 +1932,8 @@ def _load_requirement_transition_authorizations(
             manifest, base, head, policies, prompt_pair, item
         ):
             raise VerificationProfileError(
-                "candidate requirement transition lacks protected authorization"
+                "candidate requirement transition lacks protected authorization: "
+                f"{item.prompt_path}"
             )
         if (
             prior is not None
@@ -1865,6 +1957,24 @@ def _load_requirement_transition_authorizations(
             )
     if candidate_policy != protected_policy:
         _validate_dormant_policy_installation(protected_policy, candidate_policy)
+    if legacy_pdd1873_reconciliation or legacy_pdd1873_current_state:
+        cli_identity = (PurePosixPath("pdd/prompts/core/cli_python.prompt"), "python")
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id) != cli_identity
+        )
+        if legacy_pdd1873_reconciliation:
+            cli_transition = next(
+                item
+                for item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
+                if (item.prompt_path, item.language_id) == cli_identity
+                and item.bindings.base_policy_sha256
+                == _LEGACY_PDD_1873_PROFILE_BYTES[0]
+                and item.bindings.head_policy_sha256
+                == _LEGACY_PDD_1873_PROFILE_BYTES[1]
+            )
+            candidate += (cli_transition,)
     return candidate, prompts, new_authorizations
 
 
