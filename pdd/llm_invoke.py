@@ -102,13 +102,12 @@ except Exception:
     # Be conservative: default to True even if env parsing fails
     litellm.drop_params = True
 
-# Anthropic enforced the adaptive thinking API for Claude Opus 4.7 on
-# 2026-05-23: the legacy `thinking={"type":"enabled","budget_tokens":N}`
-# shape now returns 400 "is not supported for this model" on Anthropic-
-# family providers that perform strict validation (Vertex AI confirmed;
-# Bedrock has the same inheritance path). The direct-Anthropic endpoint
-# happens to tolerate both shapes together, which is why PR #1156 (CSV
-# flip to `adaptive`) appeared sufficient — it isn't, on Vertex.
+# Anthropic's adaptive-thinking Claude models (Opus 4.7+ and Fable 5) reject
+# the legacy `thinking={"type":"enabled","budget_tokens":N}` shape on
+# Anthropic-family providers that perform strict validation (Vertex AI
+# confirmed; Bedrock has the same inheritance path). The direct-Anthropic
+# endpoint happens to tolerate both shapes together, which is why a CSV-only
+# flip to `adaptive` is insufficient on relays.
 #
 # LiteLLM's gating helper for "model uses adaptive thinking" has been
 # renamed between releases:
@@ -150,7 +149,8 @@ if _AnthropicConfigOpus47 is not None:
     # callers (LiteLLM 1.82.6 dropped 4.5 from `_is_claude_4_6_model`,
     # which it now controls). Dot-aliases mirror LiteLLM's own naming
     # support so we don't miss `claude-opus-4.7` style identifiers.
-    _OPUS_ADDITIONAL_ALIASES = (
+    _ADAPTIVE_CLAUDE_ADDITIONAL_ALIASES = (
+        "fable-5", "fable_5",
         "opus-4-8", "opus_4_8", "opus-4.8", "opus_4.8",
         "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7",
         "opus-4-5", "opus_4_5", "opus-4.5", "opus_4.5",
@@ -165,7 +165,7 @@ if _AnthropicConfigOpus47 is not None:
             _orig_is_opus_4_5 = _existing_is_opus_4_5
             def _patched_is_opus_4_5(self, model):  # pylint: disable=function-redefined
                 m = model.lower() if isinstance(model, str) else ""
-                return _orig_is_opus_4_5(self, model) or any(a in m for a in _OPUS_ADDITIONAL_ALIASES)
+                return _orig_is_opus_4_5(self, model) or any(a in m for a in _ADAPTIVE_CLAUDE_ADDITIONAL_ALIASES)
             _patched_is_opus_4_5._pdd_opus_4_7_patched = True
             _AnthropicConfigOpus47._is_claude_opus_4_5 = _patched_is_opus_4_5
     except Exception as _err:  # pylint: disable=broad-except
@@ -192,7 +192,7 @@ if _AnthropicConfigOpus47 is not None:
                     return orig(model) or any(a in m for a in aliases)
                 _patched._pdd_opus_4_7_helper_patched = True
                 return _patched
-            _new_static = staticmethod(_make_patched(_underlying, _OPUS_ADDITIONAL_ALIASES))
+            _new_static = staticmethod(_make_patched(_underlying, _ADAPTIVE_CLAUDE_ADDITIONAL_ALIASES))
             setattr(_AnthropicConfigOpus47, _helper_name, _new_static)
         except Exception as _err:  # pylint: disable=broad-except
             logger.error("[opus_4_7_patch] %s patch failed: %s", _helper_name, _err)
@@ -2652,6 +2652,8 @@ def _model_disallows_temperature(model_name: Any) -> bool:
     """Return True for models whose provider rejects the temperature parameter."""
     model_lower = str(model_name or "").lower()
     return (
+        "claude-fable-5" in model_lower
+        or
         "claude-opus-4-7" in model_lower
         or "claude-opus-4.7" in model_lower
         or "claude-opus-4-8" in model_lower

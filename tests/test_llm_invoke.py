@@ -8768,6 +8768,7 @@ def test_map_openai_params_direct_opus_48_emits_adaptive_shape():
     Bedrock Converse and Vertex relay transform classes are covered by the
     dedicated 4.8 relay tests below."""
     for model in (
+        "claude-fable-5",
         "claude-opus-4-8",
         "claude-opus-4.8",
         "vertex_ai/claude-opus-4-8",

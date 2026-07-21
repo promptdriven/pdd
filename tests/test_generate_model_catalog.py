@@ -109,6 +109,22 @@ def test_manifest_file_is_checked_in_and_loadable():
     assert index["gpt-5-5-high"]["elo"] == 1500.0
 
 
+def test_fable_catalog_seed_preserves_anthropic_adaptive_contract():
+    rows = _read_catalog_rows()
+    row = next(
+        candidate
+        for candidate in rows
+        if candidate["provider"] == "Anthropic"
+        and candidate["model"] == "claude-fable-5"
+    )
+
+    assert row["api_key"] == "ANTHROPIC_API_KEY"
+    assert row["input"] == "10.0"
+    assert row["output"] == "50.0"
+    assert row["reasoning_type"] == "adaptive"
+    assert row["context_limit"] == "1000000"
+
+
 def test_parse_agentic_manifest_indexes_reviewed_aliases():
     payload = _manifest([
         {

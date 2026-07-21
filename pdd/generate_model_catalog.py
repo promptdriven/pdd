@@ -94,6 +94,10 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     # -----------------------------------------------------------------------
     # Anthropic Claude
     # -----------------------------------------------------------------------
+    # Fable 5 has no reviewed Code Arena result yet. Keep its catalog score at
+    # zero rather than inventing benchmark evidence; pdd-opus selects it
+    # explicitly in the GitHub App rather than via rank-based routing.
+    "claude-fable-5": 0,
     "claude-opus-4-8": 1575,            # [EST] provisional, until live arena lists it
     "claude-opus-4-7": 1565,            # [CODE] reviewed WebDev manifest row
     "claude-opus-4-6": 1561,            # [CODE] #1
@@ -626,7 +630,11 @@ def _has_region(model_id: str) -> bool:
 # legacy budget shape. Direct Anthropic and Azure AI Foundry routes enforce
 # this; Bedrock / Vertex relays stay on effort because their adaptive
 # conversion is handled by LiteLLM relay patches in llm_invoke.py.
-_ADAPTIVE_CLAUDE_MODELS = {"claude-opus-4-7", "claude-opus-4-8"}
+_ADAPTIVE_CLAUDE_MODELS = {
+    "claude-fable-5",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+}
 _ADAPTIVE_CLAUDE_PROVIDERS = {"anthropic", "azure_ai"}
 
 
@@ -1364,6 +1372,24 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "structured_output": True,
         "reasoning_type": "effort",
         "location": "",
+    },
+    {
+        # Claude Fable 5 is Anthropic's generally available flagship model.
+        # It uses adaptive thinking exclusively, has a 1M-token context
+        # window, and is priced at $10 / $50 per million input/output tokens.
+        # Seed the direct row until the installed LiteLLM catalog carries the
+        # model so explicit ANTHROPIC_API_KEY selection remains stable.
+        "provider": "Anthropic",
+        "model": "claude-fable-5",
+        "input": 10.0,
+        "output": 50.0,
+        "base_url": "",
+        "api_key": "ANTHROPIC_API_KEY",
+        "max_reasoning_tokens": 128000,
+        "structured_output": True,
+        "reasoning_type": "adaptive",
+        "location": "",
+        "context_limit": 1_000_000,
     },
     {
         # Claude Opus 4.8 (released 2026-05-28) is PDD's default Opus

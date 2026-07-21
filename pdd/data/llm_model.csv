@@ -15,6 +15,7 @@ AWS Bedrock,bedrock/us-east-1/moonshotai.kimi-k2-thinking,0.6,2.5,1333,1333,stat
 AWS Bedrock,anthropic.claude-haiku-4-5@20251001,1.0,5.0,1316,1316,arena-elo-fallback,,AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,0,True,effort,,False,
 AWS Bedrock,minimax.minimax-m2,0.3,1.2,1313,1313,static-prefix,,AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,0,False,none,,False,
 Anthropic,claude-opus-4-7,5.0,25.0,1565,15400,deepswe-solve-rate,,ANTHROPIC_API_KEY,16000,True,adaptive,,False,
+Anthropic,claude-fable-5,10.0,50.0,0,0,static-prefix,,ANTHROPIC_API_KEY,128000,True,adaptive,,False,1000000
 Anthropic,claude-sonnet-4-6,3.0,15.0,1525,13200,deepswe-solve-rate,,ANTHROPIC_API_KEY,128000,True,budget,,False,
 Anthropic,claude-opus-4-8,5.0,25.0,1575,1575,static,,ANTHROPIC_API_KEY,16000,True,adaptive,,False,
 Anthropic,claude-opus-4-6,5.0,25.0,1548,1548,arena-elo-fallback,,ANTHROPIC_API_KEY,128000,True,budget,,False,
