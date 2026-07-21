@@ -221,7 +221,7 @@ def test_e2e_story_failure_diagnostics_with_real_llm(
 
     assert "FAIL" in output
     assert "story__refund_receipts.md" in output
-    assert "Linked prompts:" in output
+    assert "Evaluated prompts:" in output
     assert "refund_python.prompt" in output
     assert "Missing or stale behavior:" in output
     assert "Next step:" in output

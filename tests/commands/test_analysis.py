@@ -365,7 +365,7 @@ def test_detect_stories_quiet_failure_suppresses_diagnostic_and_onboarding():
     assert result.exit_code == 1
     assert mock_detect.call_count == 1
     assert "Complete onboarding with `pdd setup`" not in result.output
-    assert "Linked prompts:" not in result.output
+    assert "Evaluated prompts:" not in result.output
     assert "Missing or stale behavior:" not in result.output
     assert "Next step:" not in result.output
 

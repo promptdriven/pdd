@@ -2009,7 +2009,7 @@ def test_failure_diagnostic_output_quiet_true(tmp_path, capsys, monkeypatch):
     assert passed is False
     captured = capsys.readouterr()
     out = captured.out
-    assert "Linked prompts:" not in out
+    assert "Evaluated prompts:" not in out
     assert "Missing or stale behavior:" not in out
     assert "Next step:" not in out
 
@@ -2139,6 +2139,133 @@ def test_failure_diagnostic_output_preserves_rich_markup_characters(
     assert "prompts/frontend/app/[tenant]/queues/page_TypeScriptReact.prompt" in out
     assert "app/[tenant]/queues shows slot state" in out
     assert "pdd fix user_stories/story__tenant_queue.md" in out
+
+
+def _write_two_failing_stories(tmp_path):
+    """Create two explicitly linked stories for deterministic diagnostic tests."""
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    for slug in ("alpha", "beta"):
+        (prompts_dir / f"{slug}.prompt").write_text(
+            f"Current {slug} behavior.", encoding="utf-8"
+        )
+        (stories_dir / f"story__{slug}.md").write_text(
+            f"As a user, I need new {slug} behavior.\n"
+            f"<!-- pdd-story-prompts: prompts/{slug}.prompt -->\n",
+            encoding="utf-8",
+        )
+
+
+def test_failure_diagnostic_fail_fast_prints_complete_first_block_only(
+    tmp_path, capsys, monkeypatch
+):
+    """Fail-fast completes the first diagnostic before suppressing later stories."""
+    monkeypatch.chdir(tmp_path)
+    _write_two_failing_stories(tmp_path)
+    first_changes = [
+        {
+            "prompt_name": "alpha.prompt",
+            "change_instructions": "Add alpha retry behavior.",
+        }
+    ]
+
+    with patch(
+        "pdd.user_story_tests.detect_change",
+        return_value=(first_changes, 0.1, "gpt-test"),
+    ) as detector:
+        passed, results, _cost, _model = run_user_story_tests(
+            prompts_dir="prompts",
+            stories_dir="user_stories",
+            quiet=False,
+            fail_fast=True,
+        )
+
+    assert passed is False
+    assert detector.call_count == 1
+    assert [result["story"] for result in results] == [
+        "user_stories/story__alpha.md"
+    ]
+    output = capsys.readouterr().out
+    expected_first_block = (
+        "FAIL user_stories/story__alpha.md\n"
+        "\n"
+        "  Evaluated prompts:\n"
+        "  - prompts/alpha.prompt\n"
+        "  Missing or stale behavior:\n"
+        "  - prompts/alpha.prompt: Add alpha retry behavior.\n"
+        "  Next step:  pdd fix user_stories/story__alpha.md\n"
+    )
+    assert expected_first_block in output
+    assert "story__beta.md" not in output
+    assert "prompts/beta.prompt" not in output
+
+
+def test_failure_diagnostic_no_fail_fast_prints_complete_block_for_every_failure(
+    tmp_path, capsys, monkeypatch
+):
+    """No-fail-fast reports a complete actionable diagnostic for each failure."""
+    monkeypatch.chdir(tmp_path)
+    _write_two_failing_stories(tmp_path)
+    changes_by_story = [
+        (
+            [
+                {
+                    "prompt_name": "alpha.prompt",
+                    "change_instructions": "Add alpha retry behavior.",
+                }
+            ],
+            0.1,
+            "gpt-test",
+        ),
+        (
+            [
+                {
+                    "prompt_name": "beta.prompt",
+                    "change_instructions": "Add beta audit behavior.",
+                }
+            ],
+            0.2,
+            "gpt-test",
+        ),
+    ]
+
+    with patch(
+        "pdd.user_story_tests.detect_change", side_effect=changes_by_story
+    ) as detector:
+        passed, results, _cost, _model = run_user_story_tests(
+            prompts_dir="prompts",
+            stories_dir="user_stories",
+            quiet=False,
+            fail_fast=False,
+        )
+
+    assert passed is False
+    assert detector.call_count == 2
+    assert [result["story"] for result in results] == [
+        "user_stories/story__alpha.md",
+        "user_stories/story__beta.md",
+    ]
+    output = capsys.readouterr().out
+    expected_blocks = (
+        "FAIL user_stories/story__alpha.md\n"
+        "\n"
+        "  Evaluated prompts:\n"
+        "  - prompts/alpha.prompt\n"
+        "  Missing or stale behavior:\n"
+        "  - prompts/alpha.prompt: Add alpha retry behavior.\n"
+        "  Next step:  pdd fix user_stories/story__alpha.md\n"
+        "FAIL user_stories/story__beta.md\n"
+        "\n"
+        "  Evaluated prompts:\n"
+        "  - prompts/beta.prompt\n"
+        "  Missing or stale behavior:\n"
+        "  - prompts/beta.prompt: Add beta audit behavior.\n"
+        "  Next step:  pdd fix user_stories/story__beta.md\n"
+    )
+    assert expected_blocks in output
 
 
 def test_cache_story_prompt_links_honors_explicit_prompts(tmp_path, monkeypatch):
