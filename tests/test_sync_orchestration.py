@@ -2097,15 +2097,17 @@ def test_sync_orchestration_public_interface_matches_prompt_and_architecture():
     runtime_signature = inspect.signature(sync_orchestration)
     runtime_names = list(runtime_signature.parameters)
     assert "one_session" not in runtime_names
-    assert runtime_names[-5:] == [
+    assert runtime_names[-6:] == [
         "agentic_mode",
         "compress",
         "evidence",
         "snapshot_context",
         "compressed_context",
+        "fresh",
     ]
     assert runtime_signature.parameters["compress"].default is False
     assert runtime_signature.parameters["evidence"].default is False
+    assert runtime_signature.parameters["fresh"].default is False
 
     repo_root = Path(__file__).resolve().parents[1]
     prompt_text = (repo_root / "pdd/prompts/sync_orchestration_python.prompt").read_text()
