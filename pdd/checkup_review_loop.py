@@ -8026,8 +8026,9 @@ Required actions:
    `<pdd-dependency>` tags) to match the code change exactly.
 2. Do NOT delete the prompt. Do NOT edit unrelated prompts or code.
 3. Keep the generated code consistent with the repaired prompt (the loop will
-   regenerate it; leave your code edit in place so it is not lost if
-   regeneration is skipped).
+   regenerate it only through an auditable provider/model boundary; leave your
+   code edit in place because Terra/Sol mode deliberately retains the verified
+   GPT-5.6 edit instead of invoking the generic generator).
 
 Report the prompt files you edited. Do not open a PR or run git push."""
 
@@ -8084,6 +8085,12 @@ def _regenerate_module_from_prompt(
             pass
 
 
+_TERRA_SOL_REGENERATION_SKIP_REASON = (
+    "generic code generation skipped in Terra/Sol mode because "
+    "code_generator_main cannot prove a Codex GPT-5.6 provider/model boundary"
+)
+
+
 def _attempt_source_of_truth_repair(
     *,
     context: ReviewLoopContext,
@@ -8104,8 +8111,10 @@ def _attempt_source_of_truth_repair(
     Issue #2047. Splits offenders by kind:
 
       * ``drift`` (registered code changed, owning prompt present but unedited)
-        is REPAIRABLE: one fixer turn edits the owning prompt(s), then a
-        best-effort one-shot regeneration makes the code match.
+        is REPAIRABLE: one fixer turn edits the owning prompt(s). Ordinary mode
+        then attempts best-effort generic regeneration; Terra/Sol mode retains
+        Terra's observed-GPT-5.6 code edit because the generic generator cannot
+        prove the required Codex model boundary.
       * ``missing_prompt`` / ``rename_drift`` are NOT auto-repaired — safely
         re-authoring a destroyed/relocated source of truth (or a brand-new
         prompt contract) is the mis-specification risk the guard exists to
@@ -8174,7 +8183,15 @@ def _attempt_source_of_truth_repair(
         ),
     )
     state.total_cost += cost
-    if model:
+    observed_model = str(model or "").strip()
+    details["fixer_model"] = observed_model
+    details["fixer_cost"] = float(cost or 0.0)
+    if config.unbounded_terra_sol:
+        # Store the observation even when it is missing. Retaining an earlier
+        # Sol model here would make a failed source-of-truth repair look as if
+        # its last provider dispatch had satisfied the GPT-5.6 contract.
+        state.last_model = observed_model
+    elif model:
         state.last_model = model
     if not config.agentic_mode:
         state.raw_outputs.append(
@@ -8198,20 +8215,39 @@ def _attempt_source_of_truth_repair(
         )
         details["blocked"] = True
         return details
-    # Best-effort regeneration so the code provably matches the repaired prompt.
     regen_results = []
-    for offender in repairable:
-        regen = _regenerate_module_from_prompt(
-            worktree, offender["code_path"], offender["prompt_path"]
-        )
-        state.total_cost += float(regen.get("cost") or 0.0)
-        regen_results.append(
+    if config.unbounded_terra_sol:
+        # ``code_generator_main`` is a generic generation boundary. It does
+        # not accept the Codex role/model override used by ``_run_role_task``
+        # and may route through a third provider. Running it here could replace
+        # Terra's GPT-5.6 edit immediately before push while ``last_model``
+        # still names the repair task. The repaired prompt co-edit satisfies
+        # the deterministic source guard, so retain Terra's code and record the
+        # deliberate skip instead of making an unauditable provider call.
+        regen_results.extend(
             {
                 **offender,
-                "regenerated": regen.get("ok"),
-                "regen_error": regen.get("error"),
+                "regenerated": False,
+                "regen_error": "",
+                "regeneration_skipped_reason": _TERRA_SOL_REGENERATION_SKIP_REASON,
             }
+            for offender in repairable
         )
+    else:
+        # Ordinary review-loop mode keeps the existing best-effort generic
+        # regeneration behavior.
+        for offender in repairable:
+            regen = _regenerate_module_from_prompt(
+                worktree, offender["code_path"], offender["prompt_path"]
+            )
+            state.total_cost += float(regen.get("cost") or 0.0)
+            regen_results.append(
+                {
+                    **offender,
+                    "regenerated": regen.get("ok"),
+                    "regen_error": regen.get("error"),
+                }
+            )
     details["repaired"] = regen_results
     # ``blocked`` is provisional here; the caller re-runs the guards and
     # overwrites it with the authoritative residual result.

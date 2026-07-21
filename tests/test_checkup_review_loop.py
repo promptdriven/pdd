@@ -8594,6 +8594,116 @@ class TestAttemptSourceOfTruthRepair2047:
         assert details["unrepairable"] == []
         assert state.total_cost == pytest.approx(0.5)
 
+    def test_terra_sol_repair_skips_unpinned_generic_regeneration(
+        self, tmp_path, monkeypatch
+    ):
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import _attempt_source_of_truth_repair
+
+        ctx, Config, State = self._make(tmp_path)
+        state = State()
+
+        def fake_task(role, instruction, cwd, **kwargs):
+            assert role == "codex"
+            assert kwargs["model_override"] == mod.TERRA_SOL_MODEL
+            (tmp_path / "pdd/prompts/agentic_update_python.prompt").write_text(
+                "prompt body\nrepaired\n", encoding="utf-8"
+            )
+            return True, "edited prompt", 0.3, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        monkeypatch.setattr(
+            mod,
+            "_regenerate_module_from_prompt",
+            lambda *a, **k: pytest.fail(
+                "Terra/Sol must not invoke the unpinned generic generator"
+            ),
+        )
+
+        details = _attempt_source_of_truth_repair(
+            context=ctx,
+            config=Config(unbounded_terra_sol=True),
+            state=state,
+            worktree=tmp_path,
+            changed_files=["pdd/agentic_update.py"],
+            head_ref="HEAD",
+            round_number=1,
+            artifacts_dir=tmp_path / ".pdd" / "art",
+            deadline=None,
+            active_fixer="codex",
+            verbose=False,
+            quiet=True,
+        )
+
+        assert details["fixer_reported_success"] is True
+        assert details["fixer_model"] == "gpt-5.6-sol"
+        assert details["fixer_cost"] == pytest.approx(0.3)
+        assert details["repaired"] == [
+            {
+                "code_path": "pdd/agentic_update.py",
+                "prompt_path": "pdd/prompts/agentic_update_python.prompt",
+                "kind": "drift",
+                "regenerated": False,
+                "regen_error": "",
+                "regeneration_skipped_reason": mod._TERRA_SOL_REGENERATION_SKIP_REASON,
+            }
+        ]
+        assert state.total_cost == pytest.approx(0.3)
+        assert state.last_model == "gpt-5.6-sol"
+
+    @pytest.mark.parametrize(
+        ("reported_model", "observed_model"),
+        [("", ""), ("  ", ""), ("gpt-5.4", "gpt-5.4")],
+    )
+    def test_terra_sol_repair_rejects_missing_or_wrong_observed_model(
+        self, tmp_path, monkeypatch, reported_model, observed_model
+    ):
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import _attempt_source_of_truth_repair
+
+        ctx, Config, State = self._make(tmp_path)
+        state = State(last_model="gpt-5.6-sol")
+
+        def fake_task(*args, **kwargs):
+            # Even a provider that edits enough prompt bytes for the guard to
+            # pass cannot authorize a push without observed GPT-5.6 evidence.
+            (tmp_path / "pdd/prompts/agentic_update_python.prompt").write_text(
+                "prompt body\npartial repair\n", encoding="utf-8"
+            )
+            return True, "claimed success", 0.3, reported_model
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        monkeypatch.setattr(
+            mod,
+            "_regenerate_module_from_prompt",
+            lambda *a, **k: pytest.fail("failed repair must not regenerate"),
+        )
+
+        details = _attempt_source_of_truth_repair(
+            context=ctx,
+            config=Config(unbounded_terra_sol=True),
+            state=state,
+            worktree=tmp_path,
+            changed_files=["pdd/agentic_update.py"],
+            head_ref="HEAD",
+            round_number=1,
+            artifacts_dir=tmp_path / ".pdd" / "art",
+            deadline=None,
+            active_fixer="codex",
+            verbose=False,
+            quiet=True,
+        )
+
+        assert details["fixer_reported_success"] is False
+        assert details["blocked"] is True
+        assert details["repair_skipped_reason"] == (
+            "source-of-truth repair fixer reported failure"
+        )
+        assert details["fixer_model"] == observed_model
+        assert details["fixer_cost"] == pytest.approx(0.3)
+        assert state.total_cost == pytest.approx(0.3)
+        assert state.last_model == observed_model
+
     def test_missing_prompt_is_blocker_without_llm(self, tmp_path, monkeypatch):
         import pdd.checkup_review_loop as mod
         from pdd.checkup_review_loop import _attempt_source_of_truth_repair
@@ -8919,6 +9029,89 @@ class TestSourceOfTruthRepairLoop2047:
         verdict = _machine_verdict_from_report(report)
         # The repair recorded its result and the guard no longer blocks.
         assert verdict["source_of_truth"]["blocked"] is False
+
+    @pytest.mark.parametrize("observed_model", ["", "gpt-5.4"])
+    def test_terra_sol_sot_model_failure_blocks_before_push(
+        self, monkeypatch: Any, tmp_path: Path, observed_model: str
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+        (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd/agentic_update.py").write_text("# gen\n", encoding="utf-8")
+        prompt_rel = "pdd/prompts/agentic_update_python.prompt"
+        (tmp_path / prompt_rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / prompt_rel).write_text("prompt body\n", encoding="utf-8")
+
+        changed = ["pdd/agentic_update.py"]
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _wt: list(changed))
+        monkeypatch.setattr(
+            mod,
+            "_regenerate_module_from_prompt",
+            lambda *a, **k: pytest.fail(
+                "Terra/Sol must not invoke generic regeneration"
+            ),
+        )
+        push_calls: List[str] = []
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: push_calls.append("called") or (True, "pushed"),
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            assert role == "codex"
+            assert kwargs["model_override"] == mod.TERRA_SOL_MODEL
+            if "sot-repair" in label:
+                (tmp_path / prompt_rel).write_text(
+                    "prompt body\npartial repair\n", encoding="utf-8"
+                )
+                changed.append(prompt_rel)
+                return True, "claimed repair", 0.3, observed_model
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":["pdd/agentic_update.py"]}',
+                    0.1,
+                    "gpt-5.6-sol",
+                )
+            return (
+                True,
+                _json("findings", [self._finding()]),
+                0.1,
+                "gpt-5.6-sol",
+            )
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                unbounded_terra_sol=True,
+                require_final_fresh_review=False,
+                enable_source_of_truth_repair=True,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert push_calls == []
+        assert cost == pytest.approx(0.5)
+        assert model == observed_model
+        verdict = _machine_verdict_from_report(report)
+        assert verdict["status"] == "failed"
+        assert verdict["failure_category"] == "source_of_truth_repair_needed"
+        assert verdict["source_of_truth"]["blocked"] is True
+        assert verdict["source_of_truth"]["fixer_model"] == observed_model
+        assert verdict["source_of_truth"]["fixer_cost"] == pytest.approx(0.3)
 
     def test_repair_disabled_preserves_legacy_block(
         self, monkeypatch: Any, tmp_path: Path
