@@ -16192,6 +16192,46 @@ def test_write_final_gate_fallback_artifact_canonical_fail(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("model_id", "expected_model"),
+    [("gpt-5.6-sol", "gpt-5.6-sol"), (None, "")],
+)
+def test_role_task_uses_structured_model_not_legacy_provider(
+    monkeypatch: Any,
+    tmp_path: Path,
+    model_id: Optional[str],
+    expected_model: str,
+) -> None:
+    """Terra/Sol provenance must not read AgenticTaskResult.provider."""
+    import pdd.checkup_review_loop as mod
+    from pdd.agentic_common import AgenticTaskResult
+
+    def fake_task(**kwargs: Any):
+        return AgenticTaskResult(
+            True,
+            "ok",
+            0.01,
+            "openai",
+            None,
+            model_id=model_id,
+        )
+
+    monkeypatch.setattr(mod, "run_agentic_task", fake_task)
+    result = mod._run_role_task(
+        "codex",
+        "review",
+        tmp_path,
+        verbose=False,
+        quiet=True,
+        label="structured-model-bridge",
+        timeout=30.0,
+        max_retries=0,
+        reasoning_time=None,
+    )
+
+    assert result == (True, "ok", 0.01, expected_model)
+
+
 class TestTerraSolBoundedLoop:
     """Tests for the bounded Terra/Sol Sol-convergence mode."""
 

@@ -4692,7 +4692,7 @@ def _run_role_task(
             else None
         )
         with _forced_provider(provider):
-            return run_agentic_task(
+            result = run_agentic_task(
                 instruction=instruction,
                 cwd=cwd,
                 verbose=verbose,
@@ -4705,6 +4705,17 @@ def _run_role_task(
                 claude_policy=claude_policy,
                 include_log_bodies=False,
             )
+            # AgenticTaskResult retains ``provider`` as its legacy fourth
+            # iterable item. The review loop's fourth item is instead the
+            # provider-observed model used for Terra/Sol provenance, so bridge
+            # its structured field explicitly. Missing evidence stays empty:
+            # a provider label such as ``openai`` must never look like a model.
+            if hasattr(result, "model_id"):
+                success, output, cost, _provider = result
+                return success, output, cost, str(result.model_id or "")
+            # Compatibility for direct legacy tuple/mocked callers, whose
+            # fourth item has always been this helper's model value.
+            return result
     finally:
         if original_codex_sandbox is None:
             os.environ.pop("CODEX_SANDBOX_MODE", None)
