@@ -435,7 +435,7 @@ certificate_program:
     pdd_cloud_vendored_sync_semantics: null
     real_pdd_cloud_canary: pending
 live_rebaseline:
-  captured_at: "2026-07-19"
+  captured_at: "2026-07-20"
   gates_passed: 0
   gates_required: 10
   qualifying_nights: 0
