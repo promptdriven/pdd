@@ -17,7 +17,7 @@ import textwrap
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Mapping, Optional
 
 from filelock import FileLock
@@ -31,6 +31,7 @@ from .compression_reporting import (
     record_compression_fallback,
 )
 from .pytest_slicer import PytestSlicer, SlicerError
+from .sync_core.path_policy import PathPolicy, PathPolicyError
 
 # Conditional YAML support
 try:
@@ -551,7 +552,12 @@ def _validated_project_path(
     or any malformed value returns ``None``.
     """
     try:
-        root_resolved = (root or Path.cwd()).resolve()
+        # PathPolicy is the repository's canonical path authority: it anchors
+        # only allowlisted relative components beneath a real checkout root and
+        # rejects any unapproved symlink hop before returning a canonical path.
+        # Do not resolve the caller path directly before this boundary.
+        policy = PathPolicy(Path.cwd() if root is None else Path(root))
+        root_resolved = policy.checkout_root
         raw = Path(untrusted_path)
         if raw.is_absolute():
             try:
@@ -569,16 +575,19 @@ def _validated_project_path(
             # basename is the path-component sanitization barrier. Equality
             # ensures separators/traversal were not silently stripped.
             safe_part = os.path.basename(part)
-            if safe_part != part or safe_part in {'', os.curdir, os.pardir}:
+            if (
+                safe_part != part
+                or safe_part in {'', os.curdir, os.pardir}
+                or "\\" in safe_part
+                or PureWindowsPath(safe_part).drive
+            ):
                 return None
             safe_parts.append(safe_part)
 
-        candidate = root_resolved.joinpath(*safe_parts)
-        resolved = candidate.resolve()
-        if not _contained_in_root(resolved, root_resolved):
-            return None
-        return resolved
-    except (OSError, RuntimeError, TypeError, ValueError):
+        return policy.resolve(
+            PurePosixPath(*safe_parts), allow_missing=True
+        ).canonical_path
+    except (OSError, RuntimeError, TypeError, ValueError, PathPolicyError):
         return None
 
 
