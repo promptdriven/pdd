@@ -580,7 +580,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     assert rows[len(surviving_rows) :] == candidate_rows
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert profile_digest == "0ca806d390d34a07a59451ef11f4fa1b04a6a0a66bfbb12308315aa4fbf38c91"
+    assert profile_digest == "9caf55f5a1366c9e439b5ac4394f8192b3131102be4c648ab4bc3e89c42c5550"
     pr2017_phase_a_rows = [
         row
         for row in rows

@@ -566,10 +566,10 @@ _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/sync_determine_operation_python.prompt",
         "python",
-        "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
-        "29779356fc293e48045a18ce068610df5869c26c9ff99b514b21f6a36c381a04",
-        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
-        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+        "fd24cdd0df308353e33bfe6d7e004cd3064303c3d1eef536b1adbfc3a67bd1d8",
+        "c84ef0e33d0759ffcf6920e5cd14951045b43d2e6d4d93e8b5b9fb31f8215ed7",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "9caf55f5a1366c9e439b5ac4394f8192b3131102be4c648ab4bc3e89c42c5550",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/sync_main_python.prompt",
@@ -626,7 +626,7 @@ _REPLAY_BASE_PROFILE_SHA256 = (
     "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
 )
 _REPLAY_HEAD_PROFILE_SHA256 = (
-    "0ca806d390d34a07a59451ef11f4fa1b04a6a0a66bfbb12308315aa4fbf38c91"
+    "9caf55f5a1366c9e439b5ac4394f8192b3131102be4c648ab4bc3e89c42c5550"
 )
 _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS = tuple(
     replace(
@@ -655,6 +655,14 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = tuple(
     for item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
 )
 _REPLAY_REPLACED_PROTECTED_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_determine_operation_python.prompt",
+        "python",
+        "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
+        "fd24cdd0df308353e33bfe6d7e004cd3064303c3d1eef536b1adbfc3a67bd1d8",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
         "python",
@@ -745,7 +753,7 @@ _BOOTSTRAP_PROFILE_ADDITIONS = (
         PurePosixPath("pdd/prompts/mock_contract_validation_python.prompt"),
         "python",
         "CONTRACT-SHA256:34624bde64048913f0c05a3ce2d7faab89997cf46c97f81e4ae27a603e5ed506",
-        "0ca806d390d34a07a59451ef11f4fa1b04a6a0a66bfbb12308315aa4fbf38c91",
+        "9caf55f5a1366c9e439b5ac4394f8192b3131102be4c648ab4bc3e89c42c5550",
         "34624bde64048913f0c05a3ce2d7faab89997cf46c97f81e4ae27a603e5ed506",
     ),
 )

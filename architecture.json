@@ -7765,7 +7765,7 @@
           },
           {
             "name": "log_event",
-            "signature": "(basename: str, language: str, event: str, details: Mapping[str, Any] | None = None, project_root=None, paths=None, compression=None, agentic_fallback=None) -> None",
+            "signature": "(basename: str, language: str, event_type: str, details: Any, invocation_mode: str = \"manual\", paths: Optional[Dict[str, Any]] = None, compression: Any = None, agentic_fallback: Any = None) -> None",
             "returns": "None"
           },
           {
