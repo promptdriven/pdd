@@ -39,6 +39,16 @@ _LEGACY_PDD_1989_PROFILE_BYTES = (
     "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
     "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
 )
+# PR #1971 consumed six prompt/profile transitions in one reviewed candidate.
+# Retain its exact historical byte binding; it is not replay authority.
+_PR1971_COMBINED_SCHEMA_2_HISTORY = (
+    "8f423a11f5c25c3042073e733085ad08c5d03a999087cf04d2f6bc7f24fb0d72",
+    "2b96e538280ebb79db86d0dece4791d80f46dadcc93ba6ab4ad81182b9491d5f",
+)
+_PR1971_COMBINED_PROFILE_BYTES = (
+    "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+    "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+)
 
 
 class VerificationProfileError(ValueError):
@@ -582,10 +592,10 @@ _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/sync_orchestration_python.prompt",
         "python",
-        "ca4ad5eff6774715d7a65c73e17a12f79da66cb409c69fe90bf41ae097181266",
+        "5420f3f617586ceb3149a9efb557968b25115855ae65275be2d11d55c91f227e",
         "7cfd6ea5b6a182e1de3ac97ac8554ade69c7c486a2127faafec644438762b78a",
-        "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
-        "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/sync_tui_python.prompt",
@@ -606,6 +616,80 @@ _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS = (
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS
 
+# PR #1971's six historical prompt/profile transitions remain exact protected
+# evidence.  They deliberately are not appended to replay bootstrap authority.
+_PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/operation_log_python.prompt", "python",
+        "e9314dff3064004dafe75821e7aec984cbbec76e4745f6c49e73c50105ecb9c8",
+        "370d4f511f320b3db71cb74bb17532a6293d1c48def1a0faebfa8fbb7f00eb12",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/pin_example_hack_python.prompt", "python",
+        "7efec65cda40e8357cd08c974abc4b1aebb450d2fe75401e5cc5629e0696feb9",
+        "4b45b2744bb856ba48681d3038ba41512353df5e0ed77c3d698928ca89c6cabb",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/server/routes/prompts_python.prompt", "python",
+        "8a88807f83d1d4bd5cfa9ccbd465a619a2d00fef9f81c53b84047470c8399293",
+        "0cef545efaa9eef5007d338656c0e40e70db314ddbd0e7a00b64f300dba7f342",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_determine_operation_python.prompt", "python",
+        "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
+        "fd24cdd0df308353e33bfe6d7e004cd3064303c3d1eef536b1adbfc3a67bd1d8",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_orchestration_python.prompt", "python",
+        "ca4ad5eff6774715d7a65c73e17a12f79da66cb409c69fe90bf41ae097181266",
+        "5420f3f617586ceb3149a9efb557968b25115855ae65275be2d11d55c91f227e",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/update_main_python.prompt", "python",
+        "b1042be0dd594c9bbb197a4afe7e5c5a12aaad1574feadf7cb5b26f9bf85bccd",
+        "17fc1c03860bca7d7889ac388e4de26c19b73edb7ead9bea20f6be1016995bb5",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
+)
+
+_PR1971_COMBINED_PYTEST_OBLIGATIONS = {
+    (PurePosixPath("pdd/prompts/operation_log_python.prompt"), "python"):
+        VerificationObligation(
+            "pytest-operation-log", "test", "pytest",
+            "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+            ("CONTRACT-SHA256:370d4f511f320b3db71cb74bb17532a6293d1c48def1a0faebfa8fbb7f00eb12",),
+            (PurePosixPath("tests/test_operation_log.py"),), True,
+            (PurePosixPath("pdd/operation_log.py"),),
+        ),
+    (PurePosixPath("pdd/prompts/server/routes/prompts_python.prompt"), "python"):
+        VerificationObligation(
+            "pytest-server-routes-prompts", "test", "pytest",
+            "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+            ("CONTRACT-SHA256:0cef545efaa9eef5007d338656c0e40e70db314ddbd0e7a00b64f300dba7f342",),
+            (PurePosixPath("tests/server/routes/test_prompts.py"),), True,
+            (PurePosixPath("pdd/server/routes/prompts.py"),),
+        ),
+    (PurePosixPath("pdd/prompts/update_main_python.prompt"), "python"):
+        VerificationObligation(
+            "pytest-update-main", "test", "pytest",
+            "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+            ("CONTRACT-SHA256:17fc1c03860bca7d7889ac388e4de26c19b73edb7ead9bea20f6be1016995bb5",),
+            (PurePosixPath("tests/test_update_main.py"),), True,
+            (PurePosixPath("pdd/update_main.py"),),
+        ),
+}
+
 # Six replay-modified prompts already had historical bootstrap rows. Their
 # reviewed replacements, together with the 25 new replay rows above, are the
 # only bootstrap authority allowed to carry a changed profile policy.
@@ -623,10 +707,10 @@ _REPLAY_REPLACED_PROMPT_PATHS = frozenset(
 # reviewed candidate transitions to that immutable base; older bootstrap rows
 # retain their historical policy pairs and cannot authorize a new candidate.
 _REPLAY_BASE_PROFILE_SHA256 = (
-    "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
+    "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
 )
 _REPLAY_HEAD_PROFILE_SHA256 = (
-    "9caf55f5a1366c9e439b5ac4394f8192b3131102be4c648ab4bc3e89c42c5550"
+    "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3"
 )
 _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS = tuple(
     replace(
@@ -655,6 +739,14 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = tuple(
     for item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
 )
 _REPLAY_REPLACED_PROTECTED_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_orchestration_python.prompt",
+        "python",
+        "ca4ad5eff6774715d7a65c73e17a12f79da66cb409c69fe90bf41ae097181266",
+        "5420f3f617586ceb3149a9efb557968b25115855ae65275be2d11d55c91f227e",
+        "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/sync_determine_operation_python.prompt",
         "python",
@@ -753,7 +845,7 @@ _BOOTSTRAP_PROFILE_ADDITIONS = (
         PurePosixPath("pdd/prompts/mock_contract_validation_python.prompt"),
         "python",
         "CONTRACT-SHA256:34624bde64048913f0c05a3ce2d7faab89997cf46c97f81e4ae27a603e5ed506",
-        "9caf55f5a1366c9e439b5ac4394f8192b3131102be4c648ab4bc3e89c42c5550",
+        "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
         "34624bde64048913f0c05a3ce2d7faab89997cf46c97f81e4ae27a603e5ed506",
     ),
 )
@@ -1495,6 +1587,54 @@ def _validate_dormant_policy_installation(
         )
 
 
+def _is_exact_combined_requirement_reconciliation(
+    protected_policy: bytes | None,
+    candidate_policy: bytes | None,
+    protected_profile: bytes | None,
+    candidate_profile: bytes | None,
+) -> bool:
+    """Recognize only the reviewed same-candidate policy/profile byte pairs."""
+    if None in (
+        protected_policy, candidate_policy, protected_profile, candidate_profile
+    ):
+        return False
+    assert protected_policy is not None and candidate_policy is not None
+    assert protected_profile is not None and candidate_profile is not None
+    policy_pair = (
+        hashlib.sha256(protected_policy).hexdigest(),
+        hashlib.sha256(candidate_policy).hexdigest(),
+    )
+    profile_pair = (
+        hashlib.sha256(protected_profile).hexdigest(),
+        hashlib.sha256(candidate_profile).hexdigest(),
+    )
+    return (policy_pair, profile_pair) in {
+        (_LEGACY_PDD_1989_SCHEMA_2_HISTORY, _LEGACY_PDD_1989_PROFILE_BYTES),
+        (_PR1971_COMBINED_SCHEMA_2_HISTORY, _PR1971_COMBINED_PROFILE_BYTES),
+    }
+
+
+def _is_exact_pr1971_pytest_reconciliation(
+    manifest: UnitManifest,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+    authorizations: tuple[_RequirementTransitionAuthorization, ...],
+) -> bool:
+    """Recognize only #1971's complete reviewed profile-obligation addition."""
+    pr1971_rows = tuple(
+        item for item in authorizations
+        if item.bindings.head_policy_sha256 == _PR1971_COMBINED_PROFILE_BYTES[1]
+    )
+    return (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and _is_exact_combined_requirement_reconciliation(
+            rotation_policies[0], rotation_policies[1],
+            profile_policies[0], profile_policies[1],
+        )
+        and pr1971_rows == _PR1971_COMBINED_REQUIREMENT_TRANSITIONS
+    )
+
+
 def _candidate_authorization_is_strictly_dormant(
     manifest: UnitManifest,
     base: Mapping[UnitId, _ProfileInput],
@@ -1948,6 +2088,13 @@ def _load_requirement_transition_authorizations(
         read_git_blob(root, manifest.base_ref, PROFILE_PATH),
         read_git_blob(root, manifest.head_ref, PROFILE_PATH),
     )
+    pr1971_reconciliation = _is_exact_pr1971_pytest_reconciliation(
+        manifest, (protected_policy, candidate_policy), policies, candidate
+    )
+    if pr1971_reconciliation:
+        # Historical #1971 is accepted only as its complete, byte-bound
+        # reconciliation; it is never installed as general replay authority.
+        authority.update(_PR1971_COMBINED_REQUIREMENT_TRANSITIONS)
     prompt_paths = {item.prompt_path for item in (*protected_rows, *candidate_rows)}
     prompts = {
         prompt_path: (
@@ -2010,7 +2157,7 @@ def _load_requirement_transition_authorizations(
             and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
         )
     )
-    if legacy_pdd1989_reconciliation:
+    if legacy_pdd1989_reconciliation or pr1971_reconciliation:
         # The exact historical pair both installed and consumed its authority
         # before Phase-A isolation existed; validate it as consumption below.
         new_authorizations = ()
@@ -2025,6 +2172,7 @@ def _load_requirement_transition_authorizations(
                 )
                 and policies[0] != policies[1]
                 and not legacy_pdd1989_reconciliation
+                and not pr1971_reconciliation
             ):
                 raise VerificationProfileError(
                     "candidate legacy bootstrap requirement transition changes "
@@ -2096,6 +2244,7 @@ def _expected_requirement_update(
     authorization: _RequirementTransitionAuthorization,
     protected: _ProfileInput,
     candidate: _ProfileInput,
+    pytest_obligation: VerificationObligation | None = None,
 ) -> tuple[_ProfileInput | None, str | None]:
     """Return the sole permitted profile delta for one exact prompt transition."""
     obligations = {item.obligation_id: item for item in protected.obligations}
@@ -2128,6 +2277,8 @@ def _expected_requirement_update(
         )
         for obligation_id, obligation in obligations.items()
     }
+    if pytest_obligation is not None:
+        obligations[pytest_obligation.obligation_id] = pytest_obligation
     expected = _ProfileInput(
         (authorization.to_requirement_id,), tuple(sorted(obligations.values()))
     )
@@ -2187,6 +2338,7 @@ def _matches_unchanged_requirement_state(
 def _evaluate_requirement_authorization(
     context: _RequirementTransitionContext,
     authorization: _RequirementTransitionAuthorization,
+    pytest_obligation: VerificationObligation | None = None,
 ) -> tuple[UnitId, _ProfileInput | None, str | None]:
     """Evaluate one rule as dormant, consumed, exact, or invalid."""
     unit_id = UnitId(
@@ -2234,7 +2386,9 @@ def _evaluate_requirement_authorization(
         prompts[1],
     ):
         return unit_id, None, "requirement transition bindings mismatch"
-    result, reason = _expected_requirement_update(authorization, protected, candidate)
+    result, reason = _expected_requirement_update(
+        authorization, protected, candidate, pytest_obligation
+    )
     return unit_id, result, reason
 
 
@@ -2253,12 +2407,24 @@ def _authorized_requirement_updates(
         read_git_blob(root, manifest.base_ref, PROFILE_PATH),
         read_git_blob(root, manifest.head_ref, PROFILE_PATH),
     )
+    rotation_policies = (
+        read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH),
+        read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH),
+    )
+    pr1971_pytest_reconciliation = _is_exact_pr1971_pytest_reconciliation(
+        manifest, rotation_policies, policies, authorizations
+    )
     context = _RequirementTransitionContext(
         root, manifest, base, head, policies, prompts
     )
     for authorization in authorizations:
+        pytest_obligation = None
+        if pr1971_pytest_reconciliation:
+            pytest_obligation = _PR1971_COMBINED_PYTEST_OBLIGATIONS.get(
+                (authorization.prompt_path, authorization.language_id)
+            )
         unit_id, result, reason = _evaluate_requirement_authorization(
-            context, authorization
+            context, authorization, pytest_obligation
         )
         if reason is not None:
             invalid.append(f"{authorization.prompt_path}: {reason}")
