@@ -38,6 +38,7 @@ from .sync_determine_operation import (
     read_run_report,
     calculate_sha256,
     calculate_current_hashes,
+    trusted_hash_root_for_paths,
     _safe_basename,
 )
 from .auto_deps_main import auto_deps_main
@@ -258,7 +259,9 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
     from .sync_determine_operation import calculate_current_hashes, Fingerprint
     from . import __version__
 
-    current_hashes = calculate_current_hashes(paths)
+    current_hashes = calculate_current_hashes(
+        paths, dependency_root=trusted_hash_root_for_paths(paths)
+    )
     fingerprint = Fingerprint(
         pdd_version=__version__,
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -694,11 +697,15 @@ def _execute_tests_and_create_run_report(
     all_test_files = test_files if test_files else [test_file]
 
     # Calculate test file hash for staleness detection (primary file for backward compat)
-    test_hash = calculate_sha256(test_file) if test_file.exists() else None
+    test_hash = (
+        calculate_sha256(test_file, trusted_hash_root_for_paths({"test": test_file}))
+        if test_file.exists()
+        else None
+    )
 
     # Bug #156: Calculate hashes for ALL test files
     test_file_hashes = {
-        f.name: calculate_sha256(f)
+        f.name: calculate_sha256(f, trusted_hash_root_for_paths({"test": f}))
         for f in all_test_files
         if f.exists()
     } if all_test_files else None
@@ -1238,7 +1245,10 @@ def sync_orchestration(
                         _save_operation_fingerprint(basename, language, 'skip:crash', pdd_files, 0.0, 'skipped')
                         # FIX: Create a synthetic run_report to prevent infinite loop when crash is skipped
                         # Without this, sync_determine_operation keeps returning 'crash' because no run_report exists
-                        current_hashes = calculate_current_hashes(pdd_files)
+                        current_hashes = calculate_current_hashes(
+                            pdd_files,
+                            dependency_root=trusted_hash_root_for_paths(pdd_files),
+                        )
                         synthetic_report = RunReport(
                             timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                             exit_code=0,  # Assume success since we're skipping validation
@@ -1354,7 +1364,14 @@ def sync_orchestration(
                                         # No crash - save run report with exit_code=0 so sync_determine_operation
                                         # knows the example was tested and passed (prevents infinite loop)
                                         # Include test_hash for staleness detection
-                                        test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                        test_hash = (
+                                            calculate_sha256(
+                                                pdd_files['test'],
+                                                trusted_hash_root_for_paths(pdd_files),
+                                            )
+                                            if pdd_files['test'].exists()
+                                            else None
+                                        )
                                         report = RunReport(
                                             datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                             exit_code=0,
@@ -1385,7 +1402,14 @@ def sync_orchestration(
                                         if retry_returncode == 0:
                                             # Auto-fix worked! Save run report and continue
                                             log_sync_event(basename, language, "auto_fix_success", {"message": auto_fix_msg})
-                                            test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                            test_hash = (
+                                                calculate_sha256(
+                                                    pdd_files['test'],
+                                                    trusted_hash_root_for_paths(pdd_files),
+                                                )
+                                                if pdd_files['test'].exists()
+                                                else None
+                                            )
                                             report = RunReport(
                                                 datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                                 exit_code=0,
@@ -1640,7 +1664,14 @@ def sync_orchestration(
                                      timeout=60
                                  )
                                  # Include test_hash for staleness detection
-                                 test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                 test_hash = (
+                                     calculate_sha256(
+                                         pdd_files['test'],
+                                         trusted_hash_root_for_paths(pdd_files),
+                                     )
+                                     if pdd_files['test'].exists()
+                                     else None
+                                 )
                                  report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0, test_hash=test_hash)
                                  save_run_report(asdict(report), basename, language)
                             except Exception as e:

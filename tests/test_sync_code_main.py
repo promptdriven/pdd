@@ -324,6 +324,29 @@ class TestCheckIncludeDepsChangedDirect:
         assert changed is False
         assert "include deps unchanged" in reason
 
+    def test_relative_dep_is_anchored_to_trusted_root_from_sibling_cwd(
+        self, tmp_path, monkeypatch
+    ):
+        """Relative fingerprint keys remain valid outside the project CWD."""
+        from pdd.sync_determine_operation import calculate_sha256
+
+        project = tmp_path / "project"
+        sibling = tmp_path / "sibling"
+        dependency = project / "prompts" / "shared.py"
+        dependency.parent.mkdir(parents=True)
+        sibling.mkdir()
+        dependency.write_text("VALUE = 1\n", encoding="utf-8")
+        fp = MagicMock()
+        fp.include_deps = {
+            "prompts/shared.py": calculate_sha256(dependency, project)
+        }
+
+        monkeypatch.chdir(sibling)
+        assert _check_include_deps_changed(fp, project) == (
+            False,
+            "include deps unchanged",
+        )
+
 
 # ---------------------------------------------------------------------------
 # get_git_changed_files
