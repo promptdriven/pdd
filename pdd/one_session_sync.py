@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from rich.console import Console
 from rich import print as rprint
 
-from .agentic_common import run_agentic_task
+from .agentic_common import provider_failure_workflow, run_agentic_task
 from .agentic_test_generate import (
     _get_file_mtimes,
     _snapshot_pre_test_contents,
@@ -543,6 +543,7 @@ def build_one_session_prompt(
     return prompt
 
 
+@provider_failure_workflow
 def run_one_session_sync(
     basename: str,
     language: str,
@@ -588,6 +589,57 @@ def run_one_session_sync(
             existing_test_content = test_path.read_text(encoding="utf-8")
         except OSError:
             existing_test_content = None
+
+    # Issue #1903 §B.4 provenance: is the canonical test an ADOPTED human
+    # co-located test (unpinned)? Computed NOW — before the agentic session
+    # overwrites it — because after generation a greenfield-created and a
+    # human-adopted test are indistinguishable by presence. Threaded into the
+    # churn gate so the issue-driven never-block only relieves a genuine
+    # adopted-human test. Total; any error -> False (keep the strict gate).
+    test_was_adopted_human = False
+    try:
+        if test_path is not None:
+            from .content_selector import (
+                configured_test_output_pinned,
+                find_collocated_test,
+                is_pdd_created_test,
+                record_pdd_created_test,
+            )
+            _pin_target = str(prompt_path or code_path)
+            _pinned = (
+                os.environ.get("PDD_TEST_OUTPUT_PATH") is not None
+                or configured_test_output_pinned(_pin_target)
+            )
+            _sibling = find_collocated_test(code_path)
+            test_was_adopted_human = bool(
+                not _pinned
+                and _sibling is not None
+                and Path(test_path).resolve() == Path(_sibling).resolve()
+                and not is_pdd_created_test(test_path)  # PDD-owned greenfield != adopted
+            )
+            # Ownership provenance (issue #1903 §B.4 round 7): if PDD is
+            # GREENFIELD-creating this co-located test (no pre-existing file /
+            # sibling, unpinned, a co-located shape), record PDD ownership so a
+            # later run never treats it as human-adopted.
+            _pp = Path(test_path)
+            _segs = [s for s in _pp.as_posix().split("/") if s]
+            _collocated_shape = (
+                "__test__" in _segs
+                or "__tests__" in _segs
+                or ".test." in _pp.name.lower()
+                or ".spec." in _pp.name.lower()
+            )
+            if (
+                not _pinned
+                and _sibling is None
+                and not _pp.exists()
+                and _segs
+                and _segs[0] != "tests"
+                and _collocated_shape
+            ):
+                record_pdd_created_test(test_path)
+    except Exception:  # pylint: disable=broad-except
+        test_was_adopted_human = False
 
     # Snapshot the pre-session code content (#1012, P1.A) so the
     # public-surface regression gate can run after the agentic session
@@ -1106,6 +1158,7 @@ def run_one_session_sync(
                                 "- Add new tests for the prompt change without removing "
                                 "the pre-existing ones."
                             ),
+                            adopted_human=test_was_adopted_human,
                         )
                     generated_test_content = test_path.read_text(encoding="utf-8")
                     _verify_test_churn(
@@ -1114,6 +1167,7 @@ def run_one_session_sync(
                         prompt_name=f"{basename}_test_{language}.prompt",
                         output_path=str(test_path),
                         prompt_content=prompt_content,
+                        adopted_human=test_was_adopted_human,
                     )
                 # Gate passed — accept this attempt.
                 churn_gate_passed = True

@@ -466,7 +466,27 @@ def resolve_test_output_paths(  # pylint: disable=too-many-arguments
         context_override=context_override,
     )
     resolved = output_file_paths.get("output")
-    return [str(resolved)] if resolved else []
+    if not resolved:
+        return []
+    # Issue #1903: mirror cmd_test_main's co-located-test adoption so the evidence
+    # manifest records the path PDD actually writes/runs (the adopted co-located
+    # test), not the runner-blind derived shadow. Pin detection matches
+    # cmd_test_main: explicit `output`, or a raw-`.pddrc`/env pin for the module's
+    # context (prompt-side, honoring `context_override`). Lazy import avoids a cycle.
+    from .content_selector import (  # pylint: disable=import-outside-toplevel
+        configured_test_output_pinned,
+        resolve_test_output_path,
+    )
+    pin_target = str(prompt_file) if prompt_file else str(code_file)
+    user_pinned = output is not None or configured_test_output_pinned(
+        pin_target,
+        context_override=context_override,
+        search_from=Path(pin_target).parent if pin_target else None,
+    )
+    resolved_path = resolve_test_output_path(
+        code_file, resolved, user_pinned=user_pinned
+    )
+    return [str(resolved_path)] if resolved_path is not None else []
 
 
 def _safe_slug(value: str) -> str:

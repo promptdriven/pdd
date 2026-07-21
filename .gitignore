@@ -249,6 +249,19 @@ yarn.lock
 !.pdd/repository-id
 !.pdd/meta/
 .pdd/meta/*.json
+# Transient interprocess lock files (e.g. pdd_created_tests.json.lock, issue
+# #1903 round 9). `os.open(O_CREAT)` leaves them behind and they are NOT
+# unlinked on release (advisory flock is tied to the fd, so unlinking would
+# break mutual exclusion). They must never be staged: `git add -A` would stage
+# a `.lock` that the durable-sync allowlist then rejects (not the ownership
+# manifest, not a module-prefixed `.json`), failing an otherwise-successful
+# greenfield module (Codex review, PR #1998).
+.pdd/meta/*.lock
+# PDD greenfield-ownership manifest (issue #1903 §B.4): TRACKED so a fresh
+# checkout / durable worktree keeps ownership provenance for co-located tests
+# PDD created, else they are misread as human-adopted and can reach the churn
+# never-block. Not a fingerprint, but shares the tracked .pdd/meta home.
+!.pdd/meta/pdd_created_tests.json
 !.pdd/meta/agentic_bug_orchestrator_python.json
 !.pdd/meta/agentic_bug_python.json
 !.pdd/meta/agentic_checkup_python.json

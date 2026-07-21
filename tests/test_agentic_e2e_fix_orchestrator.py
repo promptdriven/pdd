@@ -168,6 +168,8 @@ class TestPromptFormatting:
         for i in range(1, 9):
             base_context[f"step{i}_output"] = f"Step {i} output"
         base_context["next_cycle"] = 2  # Required for "more cycles needed" section
+        base_context["mock_contract_audit_required"] = "true"
+        base_context["mock_contract_test_files"] = "- `tests/test_example.py`"
 
         template = load_prompt_template("agentic_e2e_fix_step9_verify_all_LLM")
         assert template is not None, "Template should load"
@@ -180,6 +182,8 @@ class TestPromptFormatting:
         assert "{N}" in formatted, "Escaped {{N}} should become {N} literal in output"
         assert "{M}" in formatted, "Escaped {{M}} should become {M} literal in output"
         assert "{K}" in formatted, "Escaped {{K}} should become {K} literal in output"
+        assert "tests/test_example.py" in formatted
+        assert "MOCK_CONTRACTS_VERIFIED" in formatted
 
 
 def test_run_agentic_e2e_fix_orchestrator_has_protect_tests_parameter():
@@ -1228,6 +1232,62 @@ class TestIssue545CommitAndPushWithTaintedHashes:
                        cwd=worktree, check=True, capture_output=True)
 
         return worktree, module
+
+    def test_commit_and_push_preserves_unrelated_prestaged_entries(self, tmp_path):
+        """The workflow commit is restricted to its computed file allowlist."""
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push, _get_file_hashes
+        import subprocess
+
+        worktree, module = self._init_git_repo_with_remote(tmp_path)
+        unrelated = worktree / "unrelated.txt"
+        unrelated.write_text("baseline\n", encoding="utf-8")
+        subprocess.run(["git", "add", "unrelated.txt"], cwd=worktree, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "add unrelated baseline"],
+            cwd=worktree,
+            check=True,
+        )
+        subprocess.run(["git", "push"], cwd=worktree, check=True)
+
+        # This staged edit predates the workflow snapshot and therefore must
+        # remain in the caller's index rather than entering the fix commit.
+        unrelated.write_text("caller staged edit\n", encoding="utf-8")
+        subprocess.run(["git", "add", "unrelated.txt"], cwd=worktree, check=True)
+        initial_hashes = _get_file_hashes(worktree)
+        module.write_text("x = 2  # workflow edit\n", encoding="utf-8")
+
+        success, message = _commit_and_push(
+            cwd=worktree,
+            issue_number=545,
+            issue_title="Scope workflow commit",
+            repo_owner="owner",
+            repo_name="repo",
+            initial_file_hashes=initial_hashes,
+            quiet=True,
+        )
+
+        assert success is True, message
+        assert subprocess.run(
+            ["git", "show", "HEAD:module.py"],
+            cwd=worktree,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout == "x = 2  # workflow edit\n"
+        assert subprocess.run(
+            ["git", "show", "HEAD:unrelated.txt"],
+            cwd=worktree,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout == "baseline\n"
+        assert subprocess.run(
+            ["git", "diff", "--cached", "--name-only"],
+            cwd=worktree,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines() == ["unrelated.txt"]
 
     def test_commit_and_push_falls_back_to_git_diff_when_hashes_match(self, tmp_path):
         """Primary bug test: fails on buggy code because hash delta is zero
@@ -10711,6 +10771,65 @@ class TestPreCheckupGateRemediation:
         assert cost == 0.0
         assert changed_files == ["app/foo.py"]
         assert agent_calls == []
+
+    def test_local_gate_remediation_revalidates_mock_contract_before_commit(
+        self, tmp_path, monkeypatch
+    ):
+        """A remediation edit that diverges from repository contracts is not pushed."""
+        from pdd import agentic_e2e_fix_orchestrator as orch
+
+        monkeypatch.setattr(
+            orch,
+            "run_pre_checkup_gate",
+            lambda **_kwargs: (False, "pre_checkup_gate blocked", 0.0),
+        )
+        monkeypatch.setattr(
+            orch,
+            "_detect_changed_files",
+            lambda _cwd, _hashes: ["app/foo.py", "tests/test_foo.py"],
+        )
+        divergent = MagicMock(diverged=True)
+        monkeypatch.setattr(
+            orch,
+            "_validate_changed_mock_contracts",
+            lambda **_kwargs: divergent,
+        )
+        monkeypatch.setattr(
+            orch,
+            "format_mock_contract_report",
+            lambda _report: "fabricated field foo",
+        )
+        commit_fix = MagicMock(return_value=(True, "committed"))
+        monkeypatch.setattr(orch, "_commit_ci_fix", commit_fix)
+
+        success, message, cost, changed_files = (
+            orch._run_pre_checkup_gate_with_remediation(
+                cwd=tmp_path,
+                changed_files=["app/foo.py"],
+                repo_owner="owner",
+                repo_name="repo",
+                issue_url="https://github.com/owner/repo/issues/42",
+                issue_number=42,
+                step10_template="{ci_check_results}",
+                run_agentic_task_fn=lambda **_kwargs: (
+                    True,
+                    "CI_FIX_APPLIED",
+                    0.25,
+                    "model",
+                ),
+                ci_retries=1,
+                timeout=60.0,
+                initial_file_hashes={},
+                quiet=True,
+                initial_sha="base-sha",
+            )
+        )
+
+        assert success is False
+        assert cost == 0.25
+        assert "fabricated field foo" in message
+        assert changed_files == ["app/foo.py", "tests/test_foo.py"]
+        commit_fix.assert_not_called()
 
 
 class TestVerifierOutputDetail:

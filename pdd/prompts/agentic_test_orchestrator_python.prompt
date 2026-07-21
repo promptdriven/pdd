@@ -7,6 +7,8 @@
 The module is an **Agentic Test Orchestrator** for an 18-step automated test generation workflow. Its responsibility is to manage the lifecycle of an "issue-to-test" conversion process by executing sequential and conditional agentic tasks. It maintains state, handles workspace isolation via git worktrees, manages complex context passing between steps (including special handling for web/Playwright tests), and supports resume-from-failure functionality using both local and remote (GitHub) state persistence.
 
 # Requirements
+
+Decorate `run_agentic_test_orchestrator` with `provider_failure_workflow` so direct library calls own one provider-health epoch across all steps.
 1. **Workflow Execution**: Implement a linear sequence of 18 steps (including fractional steps like 5.5) defined by specific prompt templates.
 2. **State Management**: 
     - Support persistence and resumption using `load_workflow_state` and `save_workflow_state`.

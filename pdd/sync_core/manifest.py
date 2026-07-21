@@ -90,10 +90,10 @@ class OwnershipRule:
 
 # A candidate cannot normally introduce its own human-ownership rule: the
 # protected base must establish an exact dormant rule first. These exact files
-# are one-time story-detection and story-diagnostics rollout boundaries bound
-# to this repository identity and exact paths. Keeping the tuple in code makes the
-# bootstrap auditable and prevents a candidate from broadening it with a
-# wildcard, parent directory, or altered owner/inventory fields.
+# are reviewed one-time rollout boundaries bound to this repository identity
+# and exact paths. Keeping the tuple in code makes the bootstrap auditable and
+# prevents a candidate from broadening it with a wildcard, parent directory,
+# or altered owner/inventory fields.
 _PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 _BOOTSTRAP_HUMAN_OWNERSHIP = (
     OwnershipRule(
@@ -132,6 +132,20 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
         True,
     ),
     OwnershipRule(
+        "docs/global_sync_extraction_manifest.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "docs/global_sync_pdd_adapter_demand.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
         "pdd/schemas/story_detection_result.schema.json",
         InventoryStatus.HUMAN_OWNED,
         "human-maintained",
@@ -140,6 +154,20 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
     ),
     OwnershipRule(
         "pdd/schemas/story_detection_scope.schema.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "pdd/sync_core/adapter_demand_verifier.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "scripts/manual_validate_pr_1875.py",
         InventoryStatus.HUMAN_OWNED,
         "human-maintained",
         "pdd-maintainers",
@@ -159,6 +187,64 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
         "pdd-maintainers",
         True,
     ),
+    OwnershipRule(
+        "tests/test_sync_core_adapter_demand_verifier.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+)
+
+# The #1998 replay was reviewed against a protected tree which already
+# contained these ordinary human-ownership rows.  Rebasing it onto the newer
+# protected tree makes the same rows candidate-only.  They deliberately stay
+# ordinary (``preauthorize_absent=False``) in the candidate policy: changing
+# that file must not grant a reusable absent-path authority.  The only bridge
+# is this repository-bound, exact-path bootstrap, which turns each matching
+# reviewed row into an effective one-shot absent-path rule while the replay is
+# evaluated.  Do not add patterns, directories, or globs here.
+_REPLAY_HUMAN_OWNERSHIP = tuple(
+    OwnershipRule(
+        pattern,
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+    )
+    for pattern in (
+        ".pdd/meta/agentic_test_orchestrator_python.json",
+        ".pdd/meta/auto_deps_main_python.json",
+        ".pdd/meta/auto_deps_main_python_run.json",
+        ".pdd/meta/ci_validation_python.json",
+        ".pdd/meta/cmd_test_main_python.json",
+        ".pdd/meta/cmd_test_main_python_run.json",
+        ".pdd/meta/code_generator_main_python_run.json",
+        ".pdd/meta/content_selector_python.json",
+        ".pdd/meta/content_selector_python_run.json",
+        ".pdd/meta/core_cli_python.json",
+        ".pdd/meta/evidence_manifest_python_run.json",
+        ".pdd/meta/fix_main_python.json",
+        ".pdd/meta/fix_main_python_run.json",
+        ".pdd/meta/mock_contract_validation_python.json",
+        ".pdd/meta/mock_contract_validation_python_run.json",
+        ".pdd/meta/one_session_sync_python.json",
+        ".pdd/meta/operation_log_python.json",
+        ".pdd/meta/operation_log_python_run.json",
+        ".pdd/meta/preprocess_python_run.json",
+        ".pdd/meta/sync_main_python.json",
+        ".pdd/meta/sync_main_python_run.json",
+        ".pdd/meta/update_main_python.json",
+        ".pdd/meta/update_main_python_run.json",
+        "context/evidence_manifest_example.py",
+        "context/mock_contract_validation_example.py",
+        "tests/test_issue_1900_surface_contract.py",
+        "tests/test_issue_1903_adopt_collocated_test.py",
+        "tests/test_issue_1939_mock_contract_validation.py",
+        "tests/test_issue_1968_annotation_convergence.py",
+        "tests/test_issue_2004_authoritative_drift_pair.py",
+        "tests/test_mock_contract_fix_wiring.py",
+        "tests/test_mock_contract_validation.py",
+    )
 )
 
 
@@ -469,7 +555,9 @@ def _config_context(
     matches: list[tuple[int, int, dict[str, object], PurePosixPath]] = []
     for index, (_name, context) in enumerate(contexts.items()):
         defaults = context.get("defaults") if isinstance(context, dict) else None
-        prompts_dir = defaults.get("prompts_dir") if isinstance(defaults, dict) else None
+        prompts_dir = (
+            defaults.get("prompts_dir") if isinstance(defaults, dict) else None
+        )
         if not isinstance(prompts_dir, str) or not prompts_dir.strip():
             continue
         root = config_path.parent / PurePosixPath(prompts_dir)
@@ -496,7 +584,9 @@ def _configured_output(
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     relative = prompt_path.relative_to(prompts_root)
     name = relative.stem.rsplit("_", 1)[0]
-    category = "" if relative.parent == PurePosixPath(".") else relative.parent.as_posix()
+    category = (
+        "" if relative.parent == PurePosixPath(".") else relative.parent.as_posix()
+    )
     values = {
         "name": name,
         "language": unit_id.language_id,
@@ -608,6 +698,26 @@ def _architecture_modules(
     return modules, None
 
 
+_EXTERNAL_CONTEXT_TEMPLATE: dict[object, object] = {
+    "reason": "Provides shared Python generation conventions for prompt templates.",
+    "description": (
+        "Human-maintained context template included by Python prompt modules to "
+        "define package, typing, import, error-handling, and preservation conventions."
+    ),
+    "dependencies": [],
+    "priority": 98,
+    "filename": "context/python_preamble.prompt",
+    "filepath": "context/python_preamble.prompt",
+    "tags": ["config", "context", "python", "template"],
+    "interface": {"type": "config", "config": {"keys": []}},
+}
+
+
+def _is_external_context_template(item: dict[object, object]) -> bool:
+    """Return whether an entry is the one non-managed context artifact."""
+    return item == _EXTERNAL_CONTEXT_TEMPLATE
+
+
 def _map_architecture_modules(
     ref: str,
     architecture_path: PurePosixPath,
@@ -621,11 +731,15 @@ def _map_architecture_modules(
     invalid: list[str] = []
     for item in modules:
         if not isinstance(item, dict):
-            invalid.append(f"{ref}:{architecture_path.as_posix()}: invalid module entry")
+            invalid.append(
+                f"{ref}:{architecture_path.as_posix()}: invalid module entry"
+            )
             continue
         filename = item.get("filename")
         filepath = item.get("filepath")
         if not isinstance(filename, str) or not isinstance(filepath, str):
+            continue
+        if _is_external_context_template(item):
             continue
         if PurePosixPath(filename).suffix != ".prompt":
             continue
@@ -640,8 +754,8 @@ def _map_architecture_modules(
         exact_match = next(
             (path for path in exact_candidates if path in prompt_units), None
         )
-        matches = [exact_match] if exact_match is not None else by_name.get(
-            declared.name, []
+        matches = (
+            [exact_match] if exact_match is not None else by_name.get(declared.name, [])
         )
         if len(matches) != 1:
             invalid.append(
@@ -652,7 +766,9 @@ def _map_architecture_modules(
         declared_output = PurePosixPath(filepath)
         output = parent / declared_output
         if declared_output.is_absolute() or ".." in declared_output.parts:
-            invalid.append(f"{ref}:{architecture_path.as_posix()}: invalid output {filepath}")
+            invalid.append(
+                f"{ref}:{architecture_path.as_posix()}: invalid output {filepath}"
+            )
             continue
         if output in outputs:
             invalid.append(
@@ -677,7 +793,9 @@ def _manifest_unit(
     head_artifacts = {
         path for path, owner in sources.head_outputs.items() if owner == unit_id
     }
-    removed = prompt_path in sources.base_units and prompt_path not in sources.head_units
+    removed = (
+        prompt_path in sources.base_units and prompt_path not in sources.head_units
+    )
     tombstoned = bool(
         removed
         and tombstone
@@ -771,7 +889,11 @@ def _candidate_records(
             inventory = InventoryStatus.MANAGED
             provenance = "prompt-backed"
         elif path in sources.output_owner:
-            role, inventory, provenance = "code", InventoryStatus.MANAGED, "architecture"
+            role, inventory, provenance = (
+                "code",
+                InventoryStatus.MANAGED,
+                "architecture",
+            )
         elif rule is not None and rule.role == "excluded-project":
             role = rule.role
             inventory = rule.inventory
@@ -794,7 +916,8 @@ def _candidate_records(
                 inventory = InventoryStatus.INVALID
                 provenance = "none"
                 invalid.append(
-                    rule_error or f"{path.as_posix()}: tracked path has no ownership rule"
+                    rule_error
+                    or f"{path.as_posix()}: tracked path has no ownership rule"
                 )
             else:
                 role = rule.role
@@ -807,18 +930,26 @@ def _candidate_records(
                 path in sources.base_entries,
                 path in sources.head_entries,
                 provenance,
-                sources.base_entries.get(path).object_id
-                if path in sources.base_entries
-                else None,
-                sources.base_entries.get(path).git_mode
-                if path in sources.base_entries
-                else None,
-                sources.head_entries.get(path).object_id
-                if path in sources.head_entries
-                else None,
-                sources.head_entries.get(path).git_mode
-                if path in sources.head_entries
-                else None,
+                (
+                    sources.base_entries.get(path).object_id
+                    if path in sources.base_entries
+                    else None
+                ),
+                (
+                    sources.base_entries.get(path).git_mode
+                    if path in sources.base_entries
+                    else None
+                ),
+                (
+                    sources.head_entries.get(path).object_id
+                    if path in sources.head_entries
+                    else None
+                ),
+                (
+                    sources.head_entries.get(path).git_mode
+                    if path in sources.head_entries
+                    else None
+                ),
                 unit_id,
             )
         )
@@ -919,7 +1050,9 @@ def _ownership_for(
     path: PurePosixPath,
     rules: tuple[OwnershipRule, ...],
 ) -> tuple[OwnershipRule | None, str | None]:
-    matches = [rule for rule in rules if fnmatch.fnmatchcase(path.as_posix(), rule.pattern)]
+    matches = [
+        rule for rule in rules if fnmatch.fnmatchcase(path.as_posix(), rule.pattern)
+    ]
     if not matches:
         return None, None
     outcomes = {(item.inventory, item.role, item.owner) for item in matches}
@@ -953,12 +1086,15 @@ def _ownership_rules(root: Path, protected_base_ref: str) -> tuple[OwnershipRule
             owner = str(item["owner"])
         except (KeyError, ValueError) as exc:
             raise ManifestError("protected ownership rule is malformed") from exc
-        rule = OwnershipRule(pattern, inventory, role, owner,
-                             item.get("preauthorize_absent", False))
+        rule = OwnershipRule(
+            pattern, inventory, role, owner, item.get("preauthorize_absent", False)
+        )
         if not _valid_ownership_rule(rule):
             raise ManifestError("protected ownership rule is overly broad or invalid")
         if pattern in patterns:
-            raise ManifestError(f"protected ownership rule has duplicate pattern: {pattern}")
+            raise ManifestError(
+                f"protected ownership rule has duplicate pattern: {pattern}"
+            )
         patterns.add(pattern)
         rules.append(rule)
     return tuple(sorted(rules))
@@ -978,15 +1114,17 @@ def _bootstrap_ownership_rules(
     candidates.  A first protected installation has no base row to consume,
     so this narrow repository-bound tuple is the equivalent of a one-time
     prerequisite.  Every path must be absent in the base, present in the
-    candidate, and represented by the exact protected row in the candidate
-    policy.  Any mutation or additional path remains unaccounted.
+    candidate, and represented by the exact reviewed row in the candidate
+    policy.  The replay rows are deliberately ordinary policy rows; only this
+    repository-bound bootstrap makes them effective absent-path rules.  Any
+    mutation or additional path remains unaccounted.
     """
     if repository_id != _PDD_REPOSITORY_ID:
         return base_rules
     base_by_pattern = {rule.pattern: rule for rule in base_rules}
     head_by_pattern = {rule.pattern: rule for rule in head_rules}
     additions: list[OwnershipRule] = []
-    for expected in _BOOTSTRAP_HUMAN_OWNERSHIP:
+    for expected in (*_BOOTSTRAP_HUMAN_OWNERSHIP, *_REPLAY_HUMAN_OWNERSHIP):
         if expected.pattern in base_by_pattern:
             continue
         if head_by_pattern.get(expected.pattern) != expected:
@@ -996,8 +1134,61 @@ def _bootstrap_ownership_rules(
             read_git_tree_entry(root, base_ref, path) is None
             and read_git_tree_entry(root, head_ref, path) is not None
         ):
-            additions.append(expected)
+            additions.append(
+                OwnershipRule(
+                    expected.pattern,
+                    expected.inventory,
+                    expected.role,
+                    expected.owner,
+                    True,
+                )
+            )
     return tuple(sorted((*base_rules, *additions)))
+
+
+def _replay_bootstrap_weakenings(
+    root: Path,
+    repository_id: str,
+    base_ref: str,
+    head_ref: str,
+    base_rules: tuple[OwnershipRule, ...],
+    head_rules: tuple[OwnershipRule, ...],
+) -> tuple[tuple[OwnershipRule, OwnershipRule], ...]:
+    """Return only replay bootstrap effective-to-candidate ownership pairs.
+
+    The transition classifier sees the effective rule with absent-path
+    authority, while the candidate intentionally retains its reviewed ordinary
+    row.  Control validation may accept that one narrow apparent weakening only
+    after every bootstrap predicate has already been proven again here.
+    """
+    if repository_id != _PDD_REPOSITORY_ID:
+        return ()
+    base_by_pattern = {rule.pattern: rule for rule in base_rules}
+    head_by_pattern = {rule.pattern: rule for rule in head_rules}
+    pairs: list[tuple[OwnershipRule, OwnershipRule]] = []
+    for expected in _REPLAY_HUMAN_OWNERSHIP:
+        if expected.pattern in base_by_pattern:
+            continue
+        if head_by_pattern.get(expected.pattern) != expected:
+            continue
+        path = PurePosixPath(expected.pattern)
+        if (
+            read_git_tree_entry(root, base_ref, path) is None
+            and read_git_tree_entry(root, head_ref, path) is not None
+        ):
+            pairs.append(
+                (
+                    OwnershipRule(
+                        expected.pattern,
+                        expected.inventory,
+                        expected.role,
+                        expected.owner,
+                        True,
+                    ),
+                    expected,
+                )
+            )
+    return tuple(sorted(pairs))
 
 
 def _approved_aliases(
@@ -1061,16 +1252,27 @@ def _approved_aliases(
 
 def _valid_ownership_rule(rule: OwnershipRule) -> bool:
     """Reject catch-all or escaping rules that could hide future managed debt."""
-    pattern_valid = rule.pattern not in {"*", "**", "**/*"} and not rule.pattern.startswith("/")
+    pattern_valid = rule.pattern not in {
+        "*",
+        "**",
+        "**/*",
+    } and not rule.pattern.startswith("/")
     pattern_valid = pattern_valid and ".." not in PurePosixPath(rule.pattern).parts
     identity_valid = bool(rule.role and rule.owner)
-    inventory_valid = rule.inventory in {InventoryStatus.MANAGED, InventoryStatus.HUMAN_OWNED}
+    inventory_valid = rule.inventory in {
+        InventoryStatus.MANAGED,
+        InventoryStatus.HUMAN_OWNED,
+    }
     return (
-        pattern_valid and identity_valid and inventory_valid
+        pattern_valid
+        and identity_valid
+        and inventory_valid
         and isinstance(rule.preauthorize_absent, bool)
-        and (not rule.preauthorize_absent or not any(
-            token in rule.pattern for token in ("*", "?", "[")
-        )))
+        and (
+            not rule.preauthorize_absent
+            or not any(token in rule.pattern for token in ("*", "?", "["))
+        )
+    )
 
 
 def _tree_manifest(
@@ -1239,12 +1441,22 @@ def build_unit_manifest(
     except (UnicodeDecodeError, ValueError) as exc:
         raise ManifestError("protected repository identity is malformed") from exc
     if base_repository_id != head_repository_id:
-        raise ManifestError("repository identity changed between protected base and head")
+        raise ManifestError(
+            "repository identity changed between protected base and head"
+        )
     repository_id = base_repository_id
     language_registry = registry or LanguageRegistry.bundled()
     ownership = _ownership_rules(repository_root, base_ref)
     head_ownership = _ownership_rules(repository_root, head_ref)
     transition_ownership = _bootstrap_ownership_rules(
+        repository_root,
+        repository_id,
+        base_ref,
+        head_ref,
+        ownership,
+        head_ownership,
+    )
+    replay_bootstrap_weakenings = _replay_bootstrap_weakenings(
         repository_root,
         repository_id,
         base_ref,
@@ -1285,10 +1497,7 @@ def build_unit_manifest(
             repository_root, head_ref, repository_id
         )
         managed_paths = (
-            set(base.units)
-            | set(head.units)
-            | set(base.outputs)
-            | set(head.outputs)
+            set(base.units) | set(head.units) | set(base.outputs) | set(head.outputs)
         )
         alias_invalid.extend(
             _validate_managed_alias_counterparts(
@@ -1309,18 +1518,30 @@ def build_unit_manifest(
             base.outputs,
             tuple(base.invalid_reasons + tuple(alias_invalid)),
         )
-    transition = _assemble_manifest(repository_id, language_registry.digest(),
-                                    base, head, tombstones, expected_registry,
-                                    transition_ownership, approved_aliases)
+    transition = _assemble_manifest(
+        repository_id,
+        language_registry.digest(),
+        base,
+        head,
+        tombstones,
+        expected_registry,
+        transition_ownership,
+        approved_aliases,
+    )
     if base_ref == head_ref:
         return transition
 
     head_aliases, stable_alias_invalid = _approved_aliases(
         repository_root, head_ref, head_ref
     )
-    stable_base = _tree_manifest(repository_root, head_ref, repository_id,
-                                 language_registry, head_ownership,
-                                 approved_aliases=head_aliases)
+    stable_base = _tree_manifest(
+        repository_root,
+        head_ref,
+        repository_id,
+        language_registry,
+        head_ownership,
+        approved_aliases=head_aliases,
+    )
     stable_alias_invalid.extend(
         _validate_managed_alias_counterparts(
             repository_root,
@@ -1338,11 +1559,22 @@ def build_unit_manifest(
             stable_base.outputs,
             tuple(stable_base.invalid_reasons + tuple(stable_alias_invalid)),
         )
-    stable = _assemble_manifest(repository_id, language_registry.digest(),
-                                stable_base, stable_base, head_tombstones,
-                                head_expected_registry, head_ownership,
-                                head_aliases)
+    stable = _assemble_manifest(
+        repository_id,
+        language_registry.digest(),
+        stable_base,
+        stable_base,
+        head_tombstones,
+        head_expected_registry,
+        head_ownership,
+        head_aliases,
+    )
     control_invalid = control_transition_invalid(
-        repository_root, base_ref, head_ref, transition_ownership, head_ownership
+        repository_root,
+        base_ref,
+        head_ref,
+        transition_ownership,
+        head_ownership,
+        replay_bootstrap_weakenings,
     )
     return enforce_head_fixed_point(transition, stable, control_invalid)

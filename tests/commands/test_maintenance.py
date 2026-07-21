@@ -61,6 +61,51 @@ def _make_cli(command, ctx_obj):
 
 class TestSyncCommand:
 
+    def test_sync_fresh_flag_forwarded(self, runner, base_ctx_obj):
+        """`pdd sync --fresh` forwards fresh=True to sync_main; default is
+        fresh=False so mature modules regenerate surgically (#1938 Pillar A)."""
+        mock_result = ({"success": True}, 0.0, "none")
+        cli = _make_cli(sync, base_ctx_obj)
+
+        with patch("pdd.commands.maintenance.sync_main", return_value=mock_result) as mock_sm:
+            result = runner.invoke(cli, ["sync", "calc", "--fresh"], catch_exceptions=False)
+            assert result.exit_code == 0
+            assert mock_sm.call_args.kwargs["fresh"] is True
+
+        with patch("pdd.commands.maintenance.sync_main", return_value=mock_result) as mock_sm:
+            result = runner.invoke(cli, ["sync", "calc"], catch_exceptions=False)
+            assert result.exit_code == 0
+            assert mock_sm.call_args.kwargs["fresh"] is False
+
+    def test_sync_fresh_rejected_on_global_sync(self, runner, base_ctx_obj):
+        """--fresh is single-module only: reject on no-argument global sync
+        instead of silently dropping it (#1938)."""
+        cli = _make_cli(sync, base_ctx_obj)
+
+        with patch("pdd.commands.maintenance._run_global_sync_dispatch") as mock_global, \
+             patch("pdd.commands.maintenance.run_agentic_sync") as mock_agentic:
+            result = runner.invoke(cli, ["sync", "--fresh"])
+
+        assert result.exit_code != 0
+        assert "single-module sync" in result.output
+        mock_global.assert_not_called()
+        mock_agentic.assert_not_called()
+
+    def test_sync_fresh_rejected_on_agentic_url_sync(self, runner, base_ctx_obj):
+        """--fresh is single-module only: reject on GitHub-issue agentic sync
+        instead of silently dropping it (#1938)."""
+        cli = _make_cli(sync, base_ctx_obj)
+
+        with patch("pdd.commands.maintenance._is_github_issue_url", return_value=True), \
+             patch("pdd.commands.maintenance.run_agentic_sync") as mock_agentic:
+            result = runner.invoke(cli, [
+                "sync", "https://github.com/org/repo/issues/7", "--fresh",
+            ])
+
+        assert result.exit_code != 0
+        assert "single-module sync" in result.output
+        mock_agentic.assert_not_called()
+
     def test_sync_basic(self, runner, base_ctx_obj):
         """sync dispatches to sync_main with correct arguments."""
         mock_result = ({"success": True}, 0.05, "gpt-4")
