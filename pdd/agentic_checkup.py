@@ -1245,7 +1245,10 @@ def _post_final_gate_report(
 
 
 def _review_loop_ship_verdict(
-    final_state: Optional[Dict[str, Any]], *, has_issue: bool
+    final_state: Optional[Dict[str, Any]],
+    *,
+    has_issue: bool,
+    require_terra_sol_model: bool = False,
 ) -> bool:
     """Derive a real ship/no-ship verdict from a review-loop ``final-state.json``.
 
@@ -1285,6 +1288,12 @@ def _review_loop_ship_verdict(
         return False
     if reviewer_status.get(active) not in _SHIP_REVIEWER_STATES:
         return False
+    if require_terra_sol_model:
+        if final_state.get("terra_sol_mode") is not True or active != "codex":
+            return False
+        observed_model = str(final_state.get("last_model") or "").strip().lower()
+        if not observed_model.startswith("gpt-5.6"):
+            return False
     # The canonical ``_write_final_state`` ALWAYS serializes ``findings`` as a
     # list of dicts (``ReviewFinding.to_dict()``) whose ``status`` is a non-empty
     # string ("open" while unresolved, "fixed" once resolved). The canonical
@@ -1429,6 +1438,7 @@ def run_agentic_checkup(
     agentic_review_loop: bool = False,
     fresh_final_review_role: Optional[str] = None,
     agentic_artifact_path: Optional[str] = None,
+    terra_sol: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -1478,10 +1488,40 @@ def run_agentic_checkup(
             cached state already contains earlier step outputs.
         agentic_artifact_path: Invocation-private artifact destination for an
             explicit standalone agentic review loop. Ignored in other modes.
+        terra_sol: Run the unbounded Codex-only Terra/Sol convergence loop.
+            Conflicting review/final-gate/report-only modes are rejected before
+            any environment mutation or external I/O.
 
     Returns:
         Tuple of (success, message, total_cost, model_used).
     """
+    # ``run_agentic_checkup`` is the library boundary used by pdd_cloud and
+    # e2e callers, so enforce the same mutually-exclusive mode contract as the
+    # Click command before mutating the hosted environment, reserving artifacts,
+    # fetching GitHub state, or running any provider. Terra/Sol owns its
+    # fix/review loop end to end.
+    if terra_sol:
+        incompatible = [
+            name
+            for enabled, name in (
+                (final_gate, "--final-gate"),
+                (review_loop, "--review-loop"),
+                (no_fix, "--no-fix"),
+                (review_only, "--review-only"),
+                (agentic_review_loop, "--agentic-review-loop"),
+            )
+            if enabled
+        ]
+        if incompatible:
+            return (
+                False,
+                "--terra-sol cannot be combined with " + ", ".join(incompatible) + ".",
+                0.0,
+                "",
+            )
+        if not str(pr_url or "").strip():
+            return False, "--terra-sol requires --pr.", 0.0, ""
+
     # Capture the receipt secret at the function boundary, before any target
     # repository hook, provider, test, or subprocess can inherit it. The key is
     # never restored to ``os.environ`` and is retained only in this process.
@@ -1758,16 +1798,28 @@ def run_agentic_checkup(
             final_gate_canonical_status=final_gate_canonical_status,
         )
         hosted_agentic_mode = hosted_artifact_reservation is not None
+        # In terra_sol mode both roles run on the GPT-5.6 Codex provider so
+        # that fixer (Terra) and reviewer (Sol) share the same model family
+        # while keeping their execution contexts and audit evidence distinct.
+        effective_reviewers = "codex" if terra_sol else reviewers
+        effective_reviewer = "codex" if terra_sol else reviewer
+        effective_fixer = "codex" if terra_sol else fixer
+        # There is no distinct GPT-5.6 Codex fallback role. Ignore caller
+        # fallbacks in Terra/Sol mode so Claude/Gemini can never take over
+        # either authoritative role after a Codex failure.
+        effective_reviewer_fallback = None if terra_sol else reviewer_fallback
+        effective_fixer_fallback = None if terra_sol else fixer_fallback
+        effective_allow_same = allow_same_reviewer_fixer or terra_sol
         loop_config = ReviewLoopConfig(
             # Hosted fallback/mirror settings are additive evidence only: they
             # must not change the canonical review-loop provider set or prompt.
             # Per-role hosted commands are still serialized below for the
             # artifact, but canonical execution uses the caller's reviewers.
-            reviewers=parse_reviewers(reviewers),
-            reviewer=reviewer,
-            fixer=fixer,
-            reviewer_fallback=reviewer_fallback,
-            fixer_fallback=fixer_fallback,
+            reviewers=parse_reviewers(effective_reviewers),
+            reviewer=effective_reviewer,
+            fixer=effective_fixer,
+            reviewer_fallback=effective_reviewer_fallback,
+            fixer_fallback=effective_fixer_fallback,
             review_only=review_only or no_fix,
             no_fix=no_fix,
             max_rounds=max_review_rounds,
@@ -1781,7 +1833,7 @@ def run_agentic_checkup(
             blocking_severities=parse_severity_list(blocking_severities),
             clean_reviewer_states=parse_state_list(clean_reviewer_states),
             fallback_reviewer_on_failure=fallback_reviewer_on_failure,
-            allow_same_reviewer_fixer=allow_same_reviewer_fixer,
+            allow_same_reviewer_fixer=effective_allow_same,
             enable_gates=enable_gates,
             gate_timeout=gate_timeout,
             gate_allow=tuple(gate_allow),
@@ -1801,13 +1853,14 @@ def run_agentic_checkup(
             # caller. Hosted fallback/mirror commands are artifact metadata;
             # keeping them in a separate field prevents the non-authoritative
             # env contract from steering ``_reviewer_command_block``.
-            reviewer_commands=parse_reviewer_commands(reviewers),
+            reviewer_commands=parse_reviewer_commands(effective_reviewers),
             artifact_reviewer_commands=parse_reviewer_commands(hosted_reviewers),
             agentic_artifact_sink=(
                 hosted_artifact_reservation.write_private_bytes
                 if hosted_artifact_reservation is not None
                 else None
             ),
+            unbounded_terra_sol=terra_sol,
         )
         # Reviewers/fixers may run repository tests too. Keep the outer stable
         # transport slot out of every provider/test child while the private
@@ -1918,6 +1971,39 @@ def run_agentic_checkup(
         result = _run_review_loop_layer()
         return _require_hosted_publication(
             result, hosted_artifact_reservation, canonical_passed=None
+        )
+
+    # Terra/Sol unbounded convergence mode: the loop runs until Sol (reviewer)
+    # reports no findings. No round, cost, or time limit applies; budget
+    # checks are intentionally inert so transient failures remain observable.
+    if terra_sol:
+        if not pr_context_ready:
+            return False, "--terra-sol requires --pr.", 0.0, ""
+        assert pr_number is not None
+        # The returned loop boolean means "trustworthy report produced", not
+        # "Sol is clean". Remove any prior verdict before this run and derive
+        # the CLI result only from the current final-state.json.
+        clear_final_state(project_root, issue_number, pr_number)
+        if load_final_state(project_root, issue_number, pr_number) is not None:
+            return (
+                False,
+                (
+                    "Terra/Sol could not clear the stale review-loop verdict at "
+                    ".pdd/checkup-review-loop/; refusing to trust a prior run."
+                ),
+                0.0,
+                "",
+            )
+        _loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer()
+        ship = _review_loop_ship_verdict(
+            load_final_state(project_root, issue_number, pr_number),
+            has_issue=has_issue,
+            require_terra_sol_model=True,
+        )
+        return _require_hosted_publication(
+            (ship, loop_message, loop_cost, loop_model),
+            hosted_artifact_reservation,
+            canonical_passed=ship,
         )
 
     # For the final gate, snapshot PR context BEFORE Layer 1 so Layer 2 reviews

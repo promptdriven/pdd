@@ -7,7 +7,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -144,9 +144,7 @@ def test_provider_structured_fields_are_scrubbed_bounded_across_artifacts(
             ],
         }
     )
-    summary, dispositions, rationales = mod._parse_fix_output(
-        fixer_payload, findings
-    )
+    summary, dispositions, rationales = mod._parse_fix_output(fixer_payload, findings)
     assert credential_marker not in summary
     assert len(summary) <= mod.PROVIDER_STRUCTURED_TEXT_MAX_CHARS
     assert credential_marker not in rationales[finding.key]
@@ -211,14 +209,18 @@ def test_provider_collection_cardinality_and_paths_are_bounded(tmp_path: Path) -
     assert state.findings_omitted_count == len(overflow)
 
     marker = "gh" + "p_" + ("Q" * 40)
-    paths = [f"Authorization Bearer {marker}-file-{index}-" + ("x" * 2000)
-             for index in range(5000)]
+    paths = [
+        f"Authorization Bearer {marker}-file-{index}-" + ("x" * 2000)
+        for index in range(5000)
+    ]
     mapping = {f"key-{index}": "reason" for index in range(5000)}
     fix = mod.FixResult(
         "claude", True, "done", paths, dispositions=mapping, rationales=mapping
     )
     assert len(fix.changed_files) == mod.PROVIDER_CHANGED_FILES_MAX_ITEMS
-    assert all(len(path) <= mod.PROVIDER_CHANGED_FILE_MAX_CHARS for path in fix.changed_files)
+    assert all(
+        len(path) <= mod.PROVIDER_CHANGED_FILE_MAX_CHARS for path in fix.changed_files
+    )
     assert all(marker not in path for path in fix.changed_files)
     assert len(fix.dispositions) == mod.PROVIDER_FIX_ITEMS_MAX_ITEMS
     assert len(fix.rationales) == mod.PROVIDER_FIX_ITEMS_MAX_ITEMS
@@ -290,7 +292,9 @@ def test_finding_cap_fails_closed_when_only_omitted_row_is_blocking() -> None:
         {"severity": "low", "finding": f"row-{index}", "required_fix": "fix"}
         for index in range(mod.PROVIDER_FINDINGS_MAX_ITEMS)
     ]
-    rows.append({"severity": "critical", "finding": "late blocker", "required_fix": "must fix"})
+    rows.append(
+        {"severity": "critical", "finding": "late blocker", "required_fix": "must fix"}
+    )
     findings = mod._normalize_findings(rows, "codex", 1)
     assert len(findings) == mod.PROVIDER_FINDINGS_MAX_ITEMS
     assert any(
@@ -9035,6 +9039,116 @@ class TestAttemptSourceOfTruthRepair2047:
         assert details["unrepairable"] == []
         assert state.total_cost == pytest.approx(0.5)
 
+    def test_terra_sol_repair_skips_unpinned_generic_regeneration(
+        self, tmp_path, monkeypatch
+    ):
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import _attempt_source_of_truth_repair
+
+        ctx, Config, State = self._make(tmp_path)
+        state = State()
+
+        def fake_task(role, instruction, cwd, **kwargs):
+            assert role == "codex"
+            assert kwargs["model_override"] == mod.TERRA_SOL_MODEL
+            (tmp_path / "pdd/prompts/agentic_update_python.prompt").write_text(
+                "prompt body\nrepaired\n", encoding="utf-8"
+            )
+            return True, "edited prompt", 0.3, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        monkeypatch.setattr(
+            mod,
+            "_regenerate_module_from_prompt",
+            lambda *a, **k: pytest.fail(
+                "Terra/Sol must not invoke the unpinned generic generator"
+            ),
+        )
+
+        details = _attempt_source_of_truth_repair(
+            context=ctx,
+            config=Config(unbounded_terra_sol=True),
+            state=state,
+            worktree=tmp_path,
+            changed_files=["pdd/agentic_update.py"],
+            head_ref="HEAD",
+            round_number=1,
+            artifacts_dir=tmp_path / ".pdd" / "art",
+            deadline=None,
+            active_fixer="codex",
+            verbose=False,
+            quiet=True,
+        )
+
+        assert details["fixer_reported_success"] is True
+        assert details["fixer_model"] == "gpt-5.6-sol"
+        assert details["fixer_cost"] == pytest.approx(0.3)
+        assert details["repaired"] == [
+            {
+                "code_path": "pdd/agentic_update.py",
+                "prompt_path": "pdd/prompts/agentic_update_python.prompt",
+                "kind": "drift",
+                "regenerated": False,
+                "regen_error": "",
+                "regeneration_skipped_reason": mod._TERRA_SOL_REGENERATION_SKIP_REASON,
+            }
+        ]
+        assert state.total_cost == pytest.approx(0.3)
+        assert state.last_model == "gpt-5.6-sol"
+
+    @pytest.mark.parametrize(
+        ("reported_model", "observed_model"),
+        [("", ""), ("  ", ""), ("gpt-5.4", "gpt-5.4")],
+    )
+    def test_terra_sol_repair_rejects_missing_or_wrong_observed_model(
+        self, tmp_path, monkeypatch, reported_model, observed_model
+    ):
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import _attempt_source_of_truth_repair
+
+        ctx, Config, State = self._make(tmp_path)
+        state = State(last_model="gpt-5.6-sol")
+
+        def fake_task(*args, **kwargs):
+            # Even a provider that edits enough prompt bytes for the guard to
+            # pass cannot authorize a push without observed GPT-5.6 evidence.
+            (tmp_path / "pdd/prompts/agentic_update_python.prompt").write_text(
+                "prompt body\npartial repair\n", encoding="utf-8"
+            )
+            return True, "claimed success", 0.3, reported_model
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        monkeypatch.setattr(
+            mod,
+            "_regenerate_module_from_prompt",
+            lambda *a, **k: pytest.fail("failed repair must not regenerate"),
+        )
+
+        details = _attempt_source_of_truth_repair(
+            context=ctx,
+            config=Config(unbounded_terra_sol=True),
+            state=state,
+            worktree=tmp_path,
+            changed_files=["pdd/agentic_update.py"],
+            head_ref="HEAD",
+            round_number=1,
+            artifacts_dir=tmp_path / ".pdd" / "art",
+            deadline=None,
+            active_fixer="codex",
+            verbose=False,
+            quiet=True,
+        )
+
+        assert details["fixer_reported_success"] is False
+        assert details["blocked"] is True
+        assert details["repair_skipped_reason"] == (
+            "source-of-truth repair fixer reported failure"
+        )
+        assert details["fixer_model"] == observed_model
+        assert details["fixer_cost"] == pytest.approx(0.3)
+        assert state.total_cost == pytest.approx(0.3)
+        assert state.last_model == observed_model
+
     def test_missing_prompt_is_blocker_without_llm(self, tmp_path, monkeypatch):
         import pdd.checkup_review_loop as mod
         from pdd.checkup_review_loop import _attempt_source_of_truth_repair
@@ -9360,6 +9474,89 @@ class TestSourceOfTruthRepairLoop2047:
         verdict = _machine_verdict_from_report(report)
         # The repair recorded its result and the guard no longer blocks.
         assert verdict["source_of_truth"]["blocked"] is False
+
+    @pytest.mark.parametrize("observed_model", ["", "gpt-5.4"])
+    def test_terra_sol_sot_model_failure_blocks_before_push(
+        self, monkeypatch: Any, tmp_path: Path, observed_model: str
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+        (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd/agentic_update.py").write_text("# gen\n", encoding="utf-8")
+        prompt_rel = "pdd/prompts/agentic_update_python.prompt"
+        (tmp_path / prompt_rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / prompt_rel).write_text("prompt body\n", encoding="utf-8")
+
+        changed = ["pdd/agentic_update.py"]
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _wt: list(changed))
+        monkeypatch.setattr(
+            mod,
+            "_regenerate_module_from_prompt",
+            lambda *a, **k: pytest.fail(
+                "Terra/Sol must not invoke generic regeneration"
+            ),
+        )
+        push_calls: List[str] = []
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: push_calls.append("called") or (True, "pushed"),
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            assert role == "codex"
+            assert kwargs["model_override"] == mod.TERRA_SOL_MODEL
+            if "sot-repair" in label:
+                (tmp_path / prompt_rel).write_text(
+                    "prompt body\npartial repair\n", encoding="utf-8"
+                )
+                changed.append(prompt_rel)
+                return True, "claimed repair", 0.3, observed_model
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":["pdd/agentic_update.py"]}',
+                    0.1,
+                    "gpt-5.6-sol",
+                )
+            return (
+                True,
+                _json("findings", [self._finding()]),
+                0.1,
+                "gpt-5.6-sol",
+            )
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                unbounded_terra_sol=True,
+                require_final_fresh_review=False,
+                enable_source_of_truth_repair=True,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert push_calls == []
+        assert cost == pytest.approx(0.5)
+        assert model == observed_model
+        verdict = _machine_verdict_from_report(report)
+        assert verdict["status"] == "failed"
+        assert verdict["failure_category"] == "source_of_truth_repair_needed"
+        assert verdict["source_of_truth"]["blocked"] is True
+        assert verdict["source_of_truth"]["fixer_model"] == observed_model
+        assert verdict["source_of_truth"]["fixer_cost"] == pytest.approx(0.3)
 
     def test_repair_disabled_preserves_legacy_block(
         self, monkeypatch: Any, tmp_path: Path
@@ -15072,6 +15269,16 @@ def test_fresh_final_review_override_runs_override_role(tmp_path):
         reviewer_status={"codex": "clean"},
         active_reviewer="codex",
         fresh_final_status="clean",
+        fresh_final_findings=[
+            crl.ReviewFinding(
+                severity="critical",
+                reviewer="fresh-final",
+                area="code",
+                evidence="prior session",
+                finding="stale prior veto",
+                required_fix="already handled",
+            )
+        ],
     )
     ctx = crl.ReviewLoopContext(
         issue_url="",
@@ -15292,6 +15499,7 @@ def test_fresh_final_review_override_fails_closed_on_exception(tmp_path, capsys)
     assert state.fresh_final_review_invocations == 1
     assert state.fresh_final_status == "failed"
     assert state.fresh_final_status in crl.HARD_NOT_CLEAN_STATES
+    assert state.fresh_final_findings == []
     assert "gemini" not in state.reviewer_status
 
     # The emitted artifact must block (non-zero CLI exit), not pass.
@@ -16157,3 +16365,776 @@ class TestTargetPromptsRootResolution1957:
             _check_architecture_registry_edit_guard(tmp_path, ["src/foo.py"])
             is None
         )
+
+
+# ---------------------------------------------------------------------------
+# Terra/Sol unbounded convergence loop (issue #2170)
+# ---------------------------------------------------------------------------
+
+
+class TestTerraSolUnboundedLoop:
+    """Tests for the Terra/Sol unbounded Sol-convergence mode."""
+
+    def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "base_ref": "main",
+                "head_sha": "a" * 40,
+            },
+        )
+        monkeypatch.setattr(
+            mod, "_commit_and_push_if_changed", lambda *a, **k: (True, "pushed")
+        )
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: "a" * 40)
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
+
+    def _terra_sol_config(self, **overrides: Any):
+        from pdd.checkup_review_loop import ReviewLoopConfig
+
+        data: Dict[str, Any] = {
+            "reviewers": ("codex",),
+            "reviewer": "codex",
+            "fixer": "codex",
+            "allow_same_reviewer_fixer": True,
+            "unbounded_terra_sol": True,
+            "enable_source_of_truth_repair": False,
+        }
+        data.update(overrides)
+        return ReviewLoopConfig(**data)
+
+    def test_terra_sol_clean_on_first_review_terminates(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Sol reports clean immediately → loop exits after one review."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        deadlines: List[Optional[float]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            deadlines.append(kwargs.get("deadline"))
+            return True, _json("clean"), 0.05, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "codex=clean" in report
+        review_labels = [lbl for _, lbl in calls]
+        assert any("review" in lbl for lbl in review_labels)
+        assert deadlines
+        assert all(deadline is None for deadline in deadlines)
+        assert '"terra_sol_mode": true' in report
+        assert "sol-reviewer: codex" in report
+        assert "sol-review-status: clean" in report
+        assert "terra-fixer: codex" in report
+        assert "terra-sol-model: gpt-5.6-sol" in report
+        assert '"sol_model": "gpt-5.6-sol"' in report
+        assert '"sol_review_status": "clean"' in report
+
+    def test_terra_sol_runs_more_than_five_iterations(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Sol verifier returns findings 6 times; loop must exceed default max_rounds=5 rounds."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # Track rounds entered by the loop itself via rounds_completed
+        # and count Sol verify calls to confirm > 5 iterations happen.
+        sol_verify_count: List[int] = [0]
+
+        FINDING = [
+            {
+                "severity": "critical",
+                "finding": "issue",
+                "required_fix": "fix it",
+                "area": "code",
+            }
+        ]
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs.get("label", "")
+            if "verify" in label:
+                # Sol verifier: return findings for first 6 calls, then clean
+                sol_verify_count[0] += 1
+                if sol_verify_count[0] <= 6:
+                    return True, _json("findings", FINDING), 0.01, "gpt-5.6-sol"
+                return True, _json("clean"), 0.01, "gpt-5.6-sol"
+            if "review" in label:
+                # Sol round-start review: always return findings to enter fix cycle
+                return True, _json("findings", FINDING), 0.01, "gpt-5.6-sol"
+            # Terra fix
+            return True, _json("clean"), 0.01, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Sol verified more times than the default max_rounds (5)
+        assert sol_verify_count[0] > 5
+        # Must NOT report max_rounds_reached
+        assert '"max_rounds_reached": false' in report
+        assert '"max_cost_reached": false' in report
+        assert '"max_duration_reached": false' in report
+
+    def test_terra_sol_terminates_only_on_clean_sol_review(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Loop must NOT terminate after Terra fix; only Sol's clean verify ends it."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        verify_count: List[int] = [0]
+
+        FINDING = [
+            {
+                "severity": "critical",
+                "finding": "issue",
+                "required_fix": "fix it",
+                "area": "code",
+            }
+        ]
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs.get("label", "")
+            if "verify" in label:
+                verify_count[0] += 1
+                # Return findings for first 2 verify calls, then clean
+                if verify_count[0] < 3:
+                    return True, _json("findings", FINDING), 0.01, "gpt-5.6-sol"
+                return True, _json("clean"), 0.01, "gpt-5.6-sol"
+            if "review" in label:
+                return True, _json("findings", FINDING), 0.01, "gpt-5.6-sol"
+            # Terra fix
+            return True, _json("clean"), 0.01, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "codex=clean" in report
+        # Sol verified at least 3 times (2 findings + 1 clean)
+        assert verify_count[0] >= 3
+
+    def test_terra_sol_provider_error_never_produces_clean(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Provider/transient failure must not produce a false clean result."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs.get("label", "")
+            if "review" in label:
+                # Simulate provider failure (non-zero exit, no structured output)
+                return False, "rate limit exceeded: provider unavailable", 0.01, role
+            return True, _json("clean"), 0.01, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # Loop must return (True, report) but report must NOT show clean Sol
+        assert success is True
+        assert "codex=clean" not in report or "fresh-final=clean" not in report
+        # Must not claim max-* reached
+        assert '"max_rounds_reached": false' in report
+
+    def test_terra_sol_budget_exhausted_never_fires(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """_budget_exhausted must return False in terra_sol mode regardless of cost/time."""
+        import time
+        from pdd.checkup_review_loop import (
+            ReviewLoopConfig,
+            ReviewLoopState,
+            _budget_exhausted,
+        )
+
+        config = ReviewLoopConfig(
+            reviewers=("codex",),
+            unbounded_terra_sol=True,
+            max_cost=0.0001,  # tiny limit
+            max_minutes=0.0001,  # tiny limit
+        )
+        state = ReviewLoopState(total_cost=1_000_000.0)  # way over budget
+        # deadline in the past
+        past_deadline = time.monotonic() - 9999
+        # Must return False in terra_sol mode
+        assert _budget_exhausted(config, state, past_deadline) is False
+
+    def test_terra_sol_agentic_artifact_has_no_budget_caps(
+        self, tmp_path: Path
+    ) -> None:
+        """Hosted artifact recomputation must preserve the unbounded contract."""
+        from pdd.checkup_review_loop import (
+            ReviewLoopState,
+            _maybe_write_agentic_artifact,
+        )
+
+        artifact_path = tmp_path / "terra-sol-agentic.json"
+        state = ReviewLoopState(
+            reviewer_status={"codex": "findings"},
+            active_reviewer="codex",
+            original_reviewer="codex",
+            fresh_final_status="findings",
+            rounds_completed=6,
+            elapsed_minutes=91.0,
+            total_cost=51.0,
+            terra_sol_mode=True,
+            issue_aligned=True,
+        )
+        config = self._terra_sol_config(
+            agentic_mode=True,
+            agentic_artifact_path=str(artifact_path),
+            max_rounds=5,
+            max_minutes=90.0,
+            max_cost=50.0,
+        )
+
+        written = _maybe_write_agentic_artifact(_ctx(tmp_path), config, state)
+
+        assert written == str(artifact_path)
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        assert payload["budget"] == {
+            "max_rounds_reached": False,
+            "max_minutes_reached": False,
+            "max_cost_reached": False,
+        }
+        assert payload["status"] != "budget_exhausted"
+
+    def test_hosted_fresh_sol_findings_return_to_terra_until_clean(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """A hosted fresh-Sol veto must re-enter Terra/Sol convergence."""
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        labels: List[str] = []
+        fresh_final_calls = 0
+        late_finding = [
+            {
+                "severity": "critical",
+                "finding": "late hosted issue",
+                "required_fix": "repair the late issue",
+                "area": "code",
+            }
+        ]
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            nonlocal fresh_final_calls
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if "fresh-final" in label:
+                fresh_final_calls += 1
+                if fresh_final_calls == 1:
+                    return (
+                        True,
+                        _json("findings", late_finding),
+                        0.01,
+                        "gpt-5.6-sol",
+                    )
+                return True, _json("clean"), 0.01, "gpt-5.6-sol"
+            if "verify" in label:
+                return True, _json("clean"), 0.01, "gpt-5.6-sol"
+            if "fix" in label:
+                return True, _json("clean"), 0.01, "gpt-5.6-sol"
+            return True, _json("clean"), 0.01, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        artifact_path = tmp_path / "hosted-terra-sol.json"
+
+        success, report, _cost, _model = mod.run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(
+                agentic_mode=True,
+                agentic_artifact_path=str(artifact_path),
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert fresh_final_calls == 2
+        assert len([label for label in labels if "fix" in label]) == 1
+        assert len([label for label in labels if "verify" in label]) == 1
+        fresh_labels = [label for label in labels if "fresh-final" in label]
+        assert fresh_labels == [
+            "checkup-review-loop-fresh-final-invocation-1-codex-round1",
+            "checkup-review-loop-fresh-final-invocation-2-codex-round1",
+        ]
+        assert "sol-review-status: clean" in report
+        assert "terra-sol-model: gpt-5.6-sol" in report
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert final_state["sol_review_status"] == "clean"
+        assert final_state["fresh_final_status"] == "clean"
+        assert all(row["status"] != "open" for row in final_state["findings"])
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        assert artifact["status"] == "passed"
+        assert artifact["fresh_final_review"]["finding_count"] == 0
+        artifacts_dir = tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
+        first_base = "round-1-fresh-final-invocation-1-codex"
+        second_base = "round-1-fresh-final-invocation-2-codex"
+        for base in (first_base, second_base):
+            assert (artifacts_dir / f"{base}.prompt.evidence.json").exists()
+            assert (artifacts_dir / f"{base}.output.evidence.json").exists()
+            assert (artifacts_dir / f"{base}.findings.json").exists()
+        assert (
+            len(
+                json.loads(
+                    (artifacts_dir / f"{first_base}.findings.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+            )
+            == 1
+        )
+        assert (
+            json.loads(
+                (artifacts_dir / f"{second_base}.findings.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            == []
+        )
+
+    def test_failed_fresh_sol_findings_never_reach_terra(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Partial findings from a failed fresh Sol pass are diagnostic only."""
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        labels: List[str] = []
+        partial_finding = [
+            {
+                "severity": "critical",
+                "finding": "partial untrusted issue",
+                "required_fix": "must not reach Terra",
+                "area": "code",
+            }
+        ]
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if "fresh-final" in label:
+                return (
+                    True,
+                    _json("failed", partial_finding),
+                    0.01,
+                    "gpt-5.6-sol",
+                )
+            return True, _json("clean"), 0.01, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        artifact_path = tmp_path / "failed-fresh-sol.json"
+
+        success, report, _cost, _model = mod.run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(
+                agentic_mode=True,
+                agentic_artifact_path=str(artifact_path),
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert not any("fix" in label for label in labels)
+        assert not any("verify" in label for label in labels)
+        assert "sol-review-status: failed" in report
+        assert "fresh-final-review: failed" in report
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        assert artifact["status"] != "passed"
+        assert artifact["fresh_final_review"] == {
+            "provider": "codex",
+            "status": "failed",
+            "finding_count": 1,
+        }
+
+    def test_terra_sol_state_reflects_mode(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """ReviewLoopState.terra_sol_mode must be True when config enables it."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        captured_state: List[Any] = []
+
+        original_finalize = mod._finalize
+
+        def patched_finalize(context, state, roles, artifacts_dir):
+            captured_state.append(state)
+            return original_finalize(context, state, roles, artifacts_dir)
+
+        monkeypatch.setattr(mod, "_finalize", patched_finalize)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            return True, _json("clean"), 0.01, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert captured_state, "finalize was not called"
+        assert captured_state[0].terra_sol_mode is True
+
+    def test_terra_sol_final_state_json_has_terra_sol_mode(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """terra_sol_mode must appear in final-state.json."""
+        from pdd.checkup_review_loop import ReviewLoopState, _write_final_state
+
+        state = ReviewLoopState(
+            reviewer_status={"codex": "clean"},
+            active_reviewer="codex",
+            fresh_final_status="clean",
+            stop_reason="Sol reports no findings.",
+            last_model="gpt-5.6-sol",
+            terra_sol_mode=True,
+        )
+        artifacts_dir = tmp_path
+        _write_final_state(artifacts_dir, state, "true")
+
+        payload = json.loads((tmp_path / "final-state.json").read_text())
+        assert payload["terra_sol_mode"] is True
+        assert payload["sol_review_status"] == "clean"
+        assert payload["sol_model"] == "gpt-5.6-sol"
+        assert payload["terra_fixer"] == "codex"
+
+    def test_terra_sol_resumed_session_keeps_unbounded_mode(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """A restarted checkpoint rechecks remote HEAD and stays unbounded."""
+        from pdd.checkup_review_loop import (
+            ReviewLoopConfig,
+            ReviewLoopState,
+            _write_final_state,
+            run_checkup_review_loop,
+        )
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        # Persist a real prior-run checkpoint showing that Sol still had
+        # findings. Restart safety deliberately rebuilds from authoritative
+        # remote PR HEAD instead of trusting an old mutable worktree, while the
+        # caller's Terra/Sol configuration keeps the new run unbounded.
+        artifacts_dir = tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        _write_final_state(
+            artifacts_dir,
+            ReviewLoopState(
+                reviewer_status={"codex": "findings"},
+                active_reviewer="codex",
+                fresh_final_status="findings",
+                stop_reason="Restart after retryable provider failure.",
+                last_model="gpt-5.6-sol",
+                terra_sol_mode=True,
+            ),
+            "true",
+        )
+        assert (
+            json.loads((artifacts_dir / "final-state.json").read_text())[
+                "terra_sol_mode"
+            ]
+            is True
+        )
+
+        setup_resume_values: List[bool] = []
+
+        def setup_from_remote(*args: Any, **kwargs: Any):
+            setup_resume_values.append(bool(kwargs.get("resume_existing")))
+            return tmp_path, None
+
+        monkeypatch.setattr(mod, "_setup_pr_worktree", setup_from_remote)
+
+        rounds_entered: List[int] = [0]
+
+        FINDING = [
+            {
+                "severity": "critical",
+                "finding": "issue",
+                "required_fix": "fix it",
+                "area": "code",
+            }
+        ]
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs.get("label", "")
+            if "review" in label and "verify" not in label:
+                rounds_entered[0] += 1
+                if rounds_entered[0] < 2:
+                    return True, _json("findings", FINDING), 0.01, "gpt-5.6-sol"
+                return True, _json("clean"), 0.01, "gpt-5.6-sol"
+            return True, _json("clean"), 0.01, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        # Run with unbounded_terra_sol=True; even if max_rounds=1 this must not terminate
+        config = ReviewLoopConfig(
+            reviewers=("codex",),
+            reviewer="codex",
+            fixer="codex",
+            allow_same_reviewer_fixer=True,
+            unbounded_terra_sol=True,
+            max_rounds=1,  # would terminate early in bounded mode
+            enable_source_of_truth_repair=False,
+        )
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=config,
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "codex=clean" in report
+        # More than max_rounds (1) rounds were needed
+        assert rounds_entered[0] >= 2
+        assert '"max_rounds_reached": false' in report
+        assert setup_resume_values == [False]
+        resumed = json.loads((artifacts_dir / "final-state.json").read_text())
+        assert resumed["terra_sol_mode"] is True
+        assert resumed["sol_review_status"] == "clean"
+        assert resumed["sol_model"] == "gpt-5.6-sol"
+
+    def test_terra_sol_cli_flag_validation(self) -> None:
+        """--terra-sol requires --pr and rejects incompatible flags."""
+        runner = CliRunner()
+
+        # --terra-sol combined with --final-gate should fail
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr",
+                "https://github.com/o/r/pull/1",
+                "--final-gate",
+                "--terra-sol",
+            ],
+        )
+        assert result.exit_code != 0
+
+        # --terra-sol combined with --review-loop should fail
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr",
+                "https://github.com/o/r/pull/1",
+                "--review-loop",
+                "--terra-sol",
+            ],
+        )
+        assert result.exit_code != 0
+
+        for conflicting_flag in ("--no-fix", "--review-only", "--agentic-review-loop"):
+            result = runner.invoke(
+                checkup,
+                [
+                    "--pr",
+                    "https://github.com/o/r/pull/1",
+                    conflicting_flag,
+                    "--terra-sol",
+                ],
+            )
+            assert result.exit_code != 0
+            assert conflicting_flag in result.output
+
+    def test_terra_sol_cli_success_emits_cloud_facing_report(
+        self, monkeypatch: Any
+    ) -> None:
+        """The public CLI forwards the mode and emits its structured report."""
+        import importlib
+
+        command_module = importlib.import_module("pdd.commands.checkup")
+        observed: Dict[str, Any] = {}
+        report = (
+            "sol-review-status: clean\n"
+            "terra-sol-model: gpt-5.6-sol\n"
+            '```json\n{"terra_sol_mode": true, "sol_review_status": "clean", '
+            '"sol_model": "gpt-5.6-sol"}\n```'
+        )
+
+        def fake_agentic_checkup(*args: Any, **kwargs: Any):
+            observed.update(kwargs)
+            return True, report, 0.5, "gpt-5.6-sol"
+
+        monkeypatch.setattr(command_module, "run_agentic_checkup", fake_agentic_checkup)
+
+        result = CliRunner().invoke(
+            checkup,
+            [
+                "--pr",
+                "https://github.com/o/r/pull/1",
+                "--terra-sol",
+                "--no-github-state",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert observed["terra_sol"] is True
+        assert observed["use_github_state"] is False
+        assert "sol-review-status: clean" in result.output
+        assert '"terra_sol_mode": true' in result.output
+        assert "Model: gpt-5.6-sol" in result.output
+
+    def test_terra_sol_flag_is_shipped_in_all_shell_completions(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+
+        expected_by_path = {
+            "pdd/pdd_completion.sh": "--terra-sol",
+            "pdd/pdd_completion.zsh": "--terra-sol",
+            "pdd/pdd_completion.fish": "-l terra-sol",
+        }
+        for relative_path, expected in expected_by_path.items():
+            assert expected in (root / relative_path).read_text(encoding="utf-8")
+
+    def test_terra_sol_config_fields_exist(self) -> None:
+        """ReviewLoopConfig.unbounded_terra_sol and ReviewLoopState.terra_sol_mode must exist."""
+        from pdd.checkup_review_loop import ReviewLoopConfig, ReviewLoopState
+
+        cfg = ReviewLoopConfig(
+            unbounded_terra_sol=True,
+            reviewers=("claude", "gemini"),
+            reviewer="claude",
+            fixer="gemini",
+            reviewer_fallback="gemini",
+            fixer_fallback="claude",
+            fallback_reviewer_on_failure=True,
+        )
+        assert cfg.unbounded_terra_sol is True
+        assert cfg.reviewers == ("codex",)
+        assert cfg.reviewer == "codex"
+        assert cfg.fixer == "codex"
+        assert cfg.reviewer_fallback is None
+        assert cfg.fixer_fallback is None
+        assert cfg.fallback_reviewer_on_failure is False
+        assert cfg.allow_same_reviewer_fixer is True
+        assert cfg.fresh_final_review_role == "codex"
+
+        cfg_default = ReviewLoopConfig()
+        assert cfg_default.unbounded_terra_sol is False
+
+        state = ReviewLoopState(terra_sol_mode=True)
+        assert state.terra_sol_mode is True
+
+        state_default = ReviewLoopState()
+        assert state_default.terra_sol_mode is False
+
+    @pytest.mark.parametrize("report_only", ["no_fix", "review_only"])
+    def test_terra_sol_config_rejects_report_only_modes(self, report_only: str) -> None:
+        from pdd.checkup_review_loop import ReviewLoopConfig
+
+        with pytest.raises(ValueError, match="requires Terra fixes"):
+            ReviewLoopConfig(unbounded_terra_sol=True, **{report_only: True})
+
+    def test_terra_sol_task_pins_codex_model_and_restores_environment(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        observed: List[str] = []
+
+        def fake_agentic_task(**kwargs: Any):
+            observed.append(os.environ.get("CODEX_MODEL", ""))
+            return True, _json("clean"), 0.01, "gpt-5.6-sol"
+
+        monkeypatch.setenv("CODEX_MODEL", "gpt-5.4")
+        monkeypatch.setattr(mod, "run_agentic_task", fake_agentic_task)
+
+        result = mod._run_role_task(
+            "codex",
+            "review",
+            tmp_path,
+            verbose=False,
+            quiet=True,
+            label="terra-sol-model-pin",
+            timeout=30.0,
+            max_retries=0,
+            reasoning_time=None,
+            model_override=mod.TERRA_SOL_MODEL,
+        )
+
+        assert result[0] is True
+        assert observed == ["gpt-5.6-sol"]
+        assert os.environ["CODEX_MODEL"] == "gpt-5.4"
+
+    @pytest.mark.parametrize("observed_model", ["", "codex", "gpt-5.4"])
+    def test_terra_sol_task_rejects_wrong_observed_model(
+        self, observed_model: str
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            ReviewLoopConfig,
+            _enforce_terra_sol_task_model,
+        )
+
+        result = _enforce_terra_sol_task_model(
+            ReviewLoopConfig(unbounded_terra_sol=True),
+            (True, _json("clean"), 0.01, observed_model),
+        )
+
+        assert result[0] is False
+        assert "requires an observed GPT-5.6" in result[1]

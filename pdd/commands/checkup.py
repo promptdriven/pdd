@@ -442,6 +442,19 @@ def _emit_agentic_review_loop_json(
     ),
 )
 @click.option(
+    "--terra-sol",
+    "terra_sol",
+    is_flag=True,
+    default=False,
+    help=(
+        "Terra/Sol unbounded convergence mode (issue #2170). Both Terra "
+        "(fixer) and Sol (reviewer) run on GPT-5.6. The loop runs until Sol "
+        "reports no findings — there is no round, time, or cost limit. "
+        "Requires --pr. Cannot be combined with --final-gate, --review-loop, "
+        "--no-fix, --review-only, or --agentic-review-loop."
+    ),
+)
+@click.option(
     "--review-only",
     is_flag=True,
     default=False,
@@ -794,6 +807,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     adversarial_prompt: str,
     fresh_final_review: Optional[str],
     final_gate: bool,
+    terra_sol: bool,
     review_only: bool,
     reviewers: str,
     reviewer: Optional[str],
@@ -1107,9 +1121,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "local prompt-target checkup."
         )
     if prompt_repair_effort and not prompt_repair_model:
-        raise click.UsageError(
-            "--prompt-repair-effort requires --prompt-repair-model."
-        )
+        raise click.UsageError("--prompt-repair-effort requires --prompt-repair-model.")
 
     if (
         interactive
@@ -1371,6 +1383,29 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "TARGET (e.g., `pdd checkup <issue-url>`).",
             param_hint="'--issue'",
         )
+    # Validate Terra/Sol before another mode rewrites local flags (notably,
+    # ``--agentic-review-loop`` implies ``review_loop=True``).  This preserves
+    # the actual conflicting option in the diagnostic and keeps the unbounded
+    # mode out of bounded-mode budget validation.
+    if terra_sol:
+        if not pr_mode:
+            raise click.BadParameter(
+                "--terra-sol requires --pr.",
+                param_hint="'--terra-sol'",
+            )
+        terra_sol_conflicts = (
+            (final_gate, "--final-gate"),
+            (review_loop, "--review-loop"),
+            (agentic_review_loop, "--agentic-review-loop"),
+            (no_fix, "--no-fix"),
+            (review_only, "--review-only"),
+        )
+        for enabled, flag in terra_sol_conflicts:
+            if enabled:
+                raise click.BadParameter(
+                    f"--terra-sol cannot be combined with {flag}.",
+                    param_hint="'--terra-sol'",
+                )
     # ``--agentic-review-loop`` (issue #1788) is a standalone adversarial PR
     # checkup. It implies ``--review-loop`` and ``--json``, requires ``--pr``
     # (``--issue`` optional — own-merits review), and permits ``--no-fix`` for
@@ -1642,6 +1677,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             max_prompt_repair_rounds=effective_max_repair_rounds,
             max_prompt_token_growth=effective_max_token_growth,
             max_prompt_repair_seconds=effective_max_repair_seconds,
+            terra_sol=terra_sol,
         )
 
         if agentic_review_loop:
