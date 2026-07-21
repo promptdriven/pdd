@@ -45,11 +45,13 @@ CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
 PR_2017_PHASE_A_BASE = "c887daba0d171585658f8205e79316e5f36f82c6"
 PR_2017_PHASE_A_HEAD = "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
 REPLAY_PROTECTED_BASE = "e10bd9b3d0d5ac94d1a56af88f5abf07cf8af775"
+REPLAY_PROTECTED_HEAD = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
 PR_1971_COMBINED_BASE = "ee9fcff457b23fb7123bb7e15666c9287409ad0f"
 PR_1971_COMBINED_HEAD = REPLAY_PROTECTED_BASE
 PR_1971_COMBINED_PROFILE_DIGEST = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
 )
+PROVIDER_ENVIRONMENT_AUTHORITY_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
 PR_1971_PYTEST_OBLIGATIONS = {
     "pdd/prompts/operation_log_python.prompt": {
         "obligation_id": "pytest-operation-log",
@@ -269,6 +271,52 @@ STORY_REGRESSION_DORMANT_ROTATION = {
     ),
     "head_prompt_sha256": (
         "fbd4c2c6592bcb6950868a6b57691a66c2c3cd16d0ffd4a39abf3081ba613931"
+    ),
+}
+PROVIDER_ENVIRONMENT_CONSUMED_ROTATION = {
+    "prompt_path": "pdd/prompts/agentic_common_python.prompt",
+    "language_id": "python",
+    "from_requirement_id": (
+        "CONTRACT-SHA256:c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900"
+    ),
+    "to_requirement_id": (
+        "CONTRACT-SHA256:e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c"
+    ),
+    "policy_path": ".pdd/verification-profiles.json",
+    "base_policy_sha256": (
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
+    ),
+    "head_policy_sha256": (
+        "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3"
+    ),
+    "base_prompt_sha256": (
+        "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900"
+    ),
+    "head_prompt_sha256": (
+        "e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c"
+    ),
+}
+PROVIDER_ENVIRONMENT_FALLBACK_DORMANT_ROTATION = {
+    "prompt_path": "pdd/prompts/agentic_common_python.prompt",
+    "language_id": "python",
+    "from_requirement_id": (
+        "CONTRACT-SHA256:e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c"
+    ),
+    "to_requirement_id": (
+        "CONTRACT-SHA256:d797c30e06bd5d72b8cb836ffd878b91ad05789a4d7796ee8157ddf8122a6e0e"
+    ),
+    "policy_path": ".pdd/verification-profiles.json",
+    "base_policy_sha256": (
+        "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3"
+    ),
+    "head_policy_sha256": (
+        "26b5f2dcb4e4e4f0556cc2b9a65fa39fac7c35a68df0ecd617b9c401c76f33f3"
+    ),
+    "base_prompt_sha256": (
+        "e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c"
+    ),
+    "head_prompt_sha256": (
+        "d797c30e06bd5d72b8cb836ffd878b91ad05789a4d7796ee8157ddf8122a6e0e"
     ),
 }
 LEGACY_SCHEMA_1_REQUIREMENT_ROTATION = {
@@ -559,10 +607,85 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
     }
 
 
+def test_provider_environment_fallback_authority_is_exact_and_dormant() -> None:
+    """Bind Phase B bytes without changing the protected prompt or profile."""
+    prompt_path = Path(PROVIDER_ENVIRONMENT_FALLBACK_DORMANT_ROTATION["prompt_path"])
+    base_prompt = _git_blob(PROVIDER_ENVIRONMENT_AUTHORITY_BASE, ROOT / prompt_path)
+    base_profile = _git_blob(PROVIDER_ENVIRONMENT_AUTHORITY_BASE, PROFILE_FILE)
+    assert (ROOT / prompt_path).read_bytes() == base_prompt
+    assert PROFILE_FILE.read_bytes() == base_profile
+
+    old_terminal_contract = (
+        b"If the provider waterfall ultimately fails because of trusted state,"
+    )
+    per_attempt_contract = (
+        b"Provider-environment state is per attempt, not a sticky historical "
+        b"observation: after every completed provider attempt, replace the aggregate "
+        b"state with that attempt's validated `(provider, reason)` pair or clear it "
+        b"when the attempt has no trusted classification. Thus a typed Anthropic "
+        b"failure followed by an ordinary OpenAI failure ends as an ordinary waterfall "
+        b"failure, while the inverse order retains OpenAI's terminal typed failure; a "
+        b"later success still returns immediately without publishing any prior failure. "
+        b"If the provider waterfall ultimately fails because its terminal completed "
+        b"attempt carries trusted state,"
+    )
+    assert base_prompt.count(old_terminal_contract) == 1
+    target_prompt = base_prompt.replace(old_terminal_contract, per_attempt_contract)
+    assert hashlib.sha256(base_prompt).hexdigest() == (
+        PROVIDER_ENVIRONMENT_FALLBACK_DORMANT_ROTATION["base_prompt_sha256"]
+    )
+    assert hashlib.sha256(target_prompt).hexdigest() == (
+        PROVIDER_ENVIRONMENT_FALLBACK_DORMANT_ROTATION["head_prompt_sha256"]
+    )
+
+    base_requirement = PROVIDER_ENVIRONMENT_FALLBACK_DORMANT_ROTATION[
+        "from_requirement_id"
+    ].encode()
+    target_requirement = PROVIDER_ENVIRONMENT_FALLBACK_DORMANT_ROTATION[
+        "to_requirement_id"
+    ].encode()
+    assert base_profile.count(base_requirement) == 2
+    target_profile = base_profile.replace(base_requirement, target_requirement)
+    assert hashlib.sha256(base_profile).hexdigest() == (
+        PROVIDER_ENVIRONMENT_FALLBACK_DORMANT_ROTATION["base_policy_sha256"]
+    )
+    assert hashlib.sha256(target_profile).hexdigest() == (
+        PROVIDER_ENVIRONMENT_FALLBACK_DORMANT_ROTATION["head_policy_sha256"]
+    )
+
+    manifest = build_unit_manifest(
+        ROOT, base_ref=PROVIDER_ENVIRONMENT_AUTHORITY_BASE, head_ref="HEAD"
+    )
+    profiles = load_verification_profiles(ROOT, manifest)
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
 def test_committed_rotations_equal_exact_protected_authority() -> None:
     """Keep protected history before exact replay and dormant bindings."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = policy["requirement_rotations"]
+    authority_base_policy = json.loads(
+        subprocess.check_output(
+            [
+                "git",
+                "show",
+                f"{PROVIDER_ENVIRONMENT_AUTHORITY_BASE}:"
+                ".pdd/verification-profile-rotations.json",
+            ],
+            cwd=ROOT,
+            text=True,
+        )
+    )
+    authority_base_rows = authority_base_policy["requirement_rotations"]
+    assert PROVIDER_ENVIRONMENT_CONSUMED_ROTATION in authority_base_rows
+    assert policy["schema_version"] == authority_base_policy["schema_version"] == 2
+    assert policy["rotations"] == authority_base_policy["rotations"]
+    assert rows == [
+        row
+        for row in authority_base_rows
+        if row != PROVIDER_ENVIRONMENT_CONSUMED_ROTATION
+    ] + [PROVIDER_ENVIRONMENT_FALLBACK_DORMANT_ROTATION]
     protected_policy = json.loads(
         subprocess.check_output(
             [
@@ -603,13 +726,17 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     assert len(protected_rows) == 31
     assert len(bootstrap_rows) == 58
     assert len(surviving_rows) == 23
-    assert len(candidate_rows) == 31
+    assert len(candidate_rows) == 30
     assert len(rows) == 54
     assert all(
         _requirement_authorization_row(item) not in rows
         for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
     )
-    assert rows == surviving_rows + candidate_rows
+    assert rows == (
+        surviving_rows
+        + candidate_rows
+        + [PROVIDER_ENVIRONMENT_FALLBACK_DORMANT_ROTATION]
+    )
 
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
     assert (
@@ -660,7 +787,11 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         item.prompt_path.as_posix()
         for item in verification._REPLAY_PROFILE_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
     } == replay_prompt_changes
-    assert {row["prompt_path"] for row in current_rows} == replay_prompt_changes
+    assert {
+        row["prompt_path"] for row in current_rows
+    } | {PROVIDER_ENVIRONMENT_FALLBACK_DORMANT_ROTATION["prompt_path"]} == (
+        replay_prompt_changes
+    )
     for row in current_rows:
         prompt = ROOT / row["prompt_path"]
         assert (
@@ -1346,8 +1477,10 @@ def test_pr2017_phase_a_is_dormant_on_current_protected_base() -> None:
 
 
 def test_replay_transitions_cover_the_actual_protected_base() -> None:
-    """The replay transitions must load a complete exact-base profile set."""
-    manifest = build_unit_manifest(ROOT, base_ref=REPLAY_PROTECTED_BASE, head_ref="HEAD")
+    """The historical replay must load its exact protected profile set."""
+    manifest = build_unit_manifest(
+        ROOT, base_ref=REPLAY_PROTECTED_BASE, head_ref=REPLAY_PROTECTED_HEAD
+    )
     profiles = load_verification_profiles(ROOT, manifest)
 
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS

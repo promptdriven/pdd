@@ -296,17 +296,6 @@
       "head_prompt_sha256": "54f1c25a8cdbf5d1a724981f6fe9f9b6fbe5b20988f30fd2183c24b60d932d88"
     },
     {
-      "prompt_path": "pdd/prompts/agentic_common_python.prompt",
-      "language_id": "python",
-      "from_requirement_id": "CONTRACT-SHA256:c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
-      "to_requirement_id": "CONTRACT-SHA256:e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c",
-      "policy_path": ".pdd/verification-profiles.json",
-      "base_policy_sha256": "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
-      "head_policy_sha256": "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
-      "base_prompt_sha256": "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
-      "head_prompt_sha256": "e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c"
-    },
-    {
       "prompt_path": "pdd/prompts/evidence_manifest_python.prompt",
       "language_id": "python",
       "from_requirement_id": "CONTRACT-SHA256:55f2de2533a461b1d26f4c7641edd6c2c7c05858dc98102ed6f9df04d552e24d",
@@ -602,6 +591,17 @@
       "head_policy_sha256": "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
       "base_prompt_sha256": "754f44ef1cab69a0a1fc70b321333ec68476e2b5432e5b5e6be3a3e382c32e29",
       "head_prompt_sha256": "a5fd7095f26859503d4f2a2c30b49b1a0fe834b78d55536f69eae26006fb9fb7"
+    },
+    {
+      "prompt_path": "pdd/prompts/agentic_common_python.prompt",
+      "language_id": "python",
+      "from_requirement_id": "CONTRACT-SHA256:e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c",
+      "to_requirement_id": "CONTRACT-SHA256:d797c30e06bd5d72b8cb836ffd878b91ad05789a4d7796ee8157ddf8122a6e0e",
+      "policy_path": ".pdd/verification-profiles.json",
+      "base_policy_sha256": "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
+      "head_policy_sha256": "26b5f2dcb4e4e4f0556cc2b9a65fa39fac7c35a68df0ecd617b9c401c76f33f3",
+      "base_prompt_sha256": "e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c",
+      "head_prompt_sha256": "d797c30e06bd5d72b8cb836ffd878b91ad05789a4d7796ee8157ddf8122a6e0e"
     }
   ]
 }
