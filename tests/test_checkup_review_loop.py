@@ -16361,6 +16361,115 @@ class TestTerraSolBoundedLoop:
         assert '"max_cost_reached": false' in report
         assert '"max_duration_reached": false' in report
 
+    def test_terra_sol_publishes_each_phase_and_terminal_round_cap(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Watchdogs can observe bounded movement and the terminal cap reason."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        observed: List[Dict[str, Any]] = []
+        finding = [
+            {
+                "severity": "critical",
+                "finding": "still broken",
+                "required_fix": "fix it",
+                "area": "code",
+            }
+        ]
+        progress_path = (
+            tmp_path
+            / ".pdd"
+            / "checkup-review-loop"
+            / "issue-2-pr-1"
+            / "terra-sol-progress.json"
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            observed.append(json.loads(progress_path.read_text(encoding="utf-8")))
+            if "fix" in kwargs.get("label", ""):
+                return True, _json("clean"), 0.01, "gpt-5.6-sol"
+            return True, _json("findings", finding), 0.01, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(max_rounds=2),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert [row["phase"] for row in observed] == [
+            "review",
+            "fix",
+            "verify",
+            "fix",
+            "verify",
+        ]
+        assert {row["current_round"] for row in observed} == {1, 2}
+        assert all(row["max_rounds"] == 2 for row in observed)
+        terminal = json.loads(progress_path.read_text(encoding="utf-8"))
+        assert terminal == {
+            "current_round": 2,
+            "max_rounds": 2,
+            "max_rounds_reached": True,
+            "phase": "terminal",
+            "schema": "pdd.checkup.terra_sol_progress.v1",
+            "terminal": True,
+            "terminal_reason": "max_rounds_reached",
+        }
+
+    def test_missing_sol_model_never_inherits_valid_terra_model(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Failure artifacts attribute model evidence to the invoking role."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        finding = [
+            {
+                "severity": "critical",
+                "finding": "issue",
+                "required_fix": "fix it",
+                "area": "code",
+            }
+        ]
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs.get("label", "")
+            if "verify" in label:
+                return True, _json("clean"), 0.01, ""
+            if "fix" in label:
+                return True, _json("clean"), 0.01, "gpt-5.6-sol"
+            return True, _json("findings", finding), 0.01, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        _success, report, _cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert model == ""
+        assert final_state["last_model"] == ""
+        assert final_state["sol_model"] == ""
+        assert final_state["terra_model"] == "gpt-5.6-sol"
+        assert "terra-sol-model: none" in report
+
     @pytest.mark.parametrize(
         ("max_rounds", "clean_on_verify", "expect_exhausted"),
         [(1, 2, True), (3, 3, False), (7, 7, False)],
@@ -16763,6 +16872,7 @@ class TestTerraSolBoundedLoop:
             fresh_final_status="clean",
             stop_reason="Sol reports no findings.",
             last_model="gpt-5.6-sol",
+            sol_model="gpt-5.6-sol",
             terra_sol_mode=True,
         )
         artifacts_dir = tmp_path
@@ -16803,6 +16913,7 @@ class TestTerraSolBoundedLoop:
                 fresh_final_status="findings",
                 stop_reason="Restart after retryable provider failure.",
                 last_model="gpt-5.6-sol",
+                sol_model="gpt-5.6-sol",
                 terra_sol_mode=True,
                 rounds_completed=1,
                 max_rounds=1,
@@ -17066,7 +17177,20 @@ class TestTerraSolBoundedLoop:
         assert observed == ["gpt-5.6-sol"]
         assert os.environ["CODEX_MODEL"] == "gpt-5.4"
 
-    @pytest.mark.parametrize("observed_model", ["", "codex", "gpt-5.4"])
+    @pytest.mark.parametrize(
+        "observed_model",
+        [
+            "",
+            "codex",
+            "gpt-5.4",
+            "gpt-5.60",
+            "gpt-5.60-legacy",
+            "gpt-5.6evil",
+            " gpt-5.6-sol",
+            "gpt-5.6-sol ",
+            "GPT-5.6-sol",
+        ],
+    )
     def test_terra_sol_task_rejects_wrong_observed_model(
         self, observed_model: str
     ) -> None:
@@ -17082,6 +17206,24 @@ class TestTerraSolBoundedLoop:
 
         assert result[0] is False
         assert "requires an observed GPT-5.6" in result[1]
+
+    @pytest.mark.parametrize(
+        "observed_model", ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6/sol"]
+    )
+    def test_terra_sol_task_accepts_delimiter_bounded_model(
+        self, observed_model: str
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            ReviewLoopConfig,
+            _enforce_terra_sol_task_model,
+        )
+
+        result = _enforce_terra_sol_task_model(
+            ReviewLoopConfig(terra_sol=True),
+            (True, _json("clean"), 0.01, observed_model),
+        )
+
+        assert result[0] is True
 
 
 class TestTargetPromptsRootResolution1957:

@@ -151,7 +151,7 @@ complete -c pdd -n "__fish_seen_subcommand_from checkup" -l pr -x -d "Target PR 
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l issue -x -d "Target issue number or URL"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l review-loop -d "Enable PR review loop"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l final-gate -d "Canonical final PR gate: PR checkup then review-loop (needs --pr and --issue)"
-complete -c pdd -n "__fish_seen_subcommand_from checkup" -l terra-sol -d "Run Terra fixes and Sol reviews on GPT-5.6 until Sol has no findings"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l terra-sol -d "Bounded GPT-5.6 Terra/Sol loop (5 rounds by default; succeeds only when clean)"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l test-scope -x -a "full targeted" -d "PR-mode test scope (full or targeted)"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l no-gates -d "Disable deterministic local gates (issue #1092)"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l gate-timeout -x -d "Per-gate wall-clock timeout in seconds (default 60)"

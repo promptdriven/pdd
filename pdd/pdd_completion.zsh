@@ -500,7 +500,7 @@ _pdd_checkup() {
     '--issue[Target issue number or URL]:issue:' \
     '--review-loop[Enable PR review loop]' \
     '--final-gate[Canonical final PR gate: PR checkup then review-loop (needs --pr and --issue)]' \
-    '--terra-sol[Run Terra fixes and Sol reviews on GPT-5.6 until Sol has no findings]' \
+    '--terra-sol[Bounded GPT-5.6 Terra/Sol loop (5 rounds by default; succeeds only when clean)]' \
     '--test-scope[PR-mode test scope]:scope:(full targeted)' \
     '--no-gates[Disable deterministic local gates (issue #1092)]' \
     '--gate-timeout[Per-gate wall-clock timeout in seconds (default 60)]:seconds:' \

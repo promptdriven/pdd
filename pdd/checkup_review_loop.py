@@ -63,8 +63,10 @@ from .agentic_checkup_orchestrator import (
 )
 from .agentic_common import (
     DEFAULT_MAX_RETRIES,
+    clear_agentic_progress,
     provider_failure_workflow,
     run_agentic_task,
+    set_agentic_progress,
 )
 from .agentic_e2e_fix_orchestrator import push_with_retry
 from .architecture_registry import extract_modules
@@ -138,6 +140,9 @@ TERRA_SOL_REVIEWER = "codex"
 TERRA_SOL_FIXER = "codex"
 TERRA_SOL_MODEL_PREFIX = "gpt-5.6"
 TERRA_SOL_MODEL = CODEX_MODEL_DEFAULT
+_TERRA_SOL_MODEL_RE = re.compile(
+    rf"{re.escape(TERRA_SOL_MODEL_PREFIX)}(?:$|[-._/][a-z0-9][a-z0-9._/-]*)\Z"
+)
 EXTERNAL_STATUS_FINDING_MARKERS: Tuple[str, ...] = (
     "action required",
     "action_required",
@@ -929,8 +934,69 @@ class ReviewLoopConfig:
 
 
 def _is_terra_sol_model(model: object) -> bool:
-    """Return whether provider evidence identifies the required GPT-5.6 family."""
-    return str(model or "").strip().lower().startswith(TERRA_SOL_MODEL_PREFIX)
+    """Return whether exact provider evidence identifies the GPT-5.6 family.
+
+    Model identifiers are case-sensitive and may not contain surrounding
+    whitespace. Variants must be delimiter-bounded so sibling names such as
+    ``gpt-5.60`` and ``gpt-5.6evil`` cannot cross the trust boundary.
+    """
+    return _TERRA_SOL_MODEL_RE.fullmatch(str(model or "")) is not None
+
+
+def _record_terra_sol_model_observation(
+    state: "ReviewLoopState",
+    config: ReviewLoopConfig,
+    *,
+    role: str,
+    model: object,
+) -> None:
+    """Record one provider observation without borrowing another role's model."""
+    observed = str(model or "")
+    if config.terra_sol:
+        # Missing/wrong evidence is itself authoritative evidence for this
+        # invocation. Never retain a prior role's successful model in its place.
+        state.last_model = observed
+        if role == "sol":
+            state.sol_model = observed
+        elif role == "terra":
+            state.terra_model = observed
+    elif observed:
+        state.last_model = observed
+
+
+def _publish_terra_sol_progress(
+    artifacts_dir: Path,
+    config: ReviewLoopConfig,
+    state: "ReviewLoopState",
+    *,
+    round_number: int,
+    phase: str,
+    terminal_reason: str = "",
+) -> None:
+    """Publish bounded Terra/Sol watchdog state at every phase transition."""
+    if not config.terra_sol:
+        return
+    safe_reason = _scrub_secrets(terminal_reason)
+    payload = {
+        "schema": "pdd.checkup.terra_sol_progress.v1",
+        "current_round": round_number,
+        "max_rounds": config.max_rounds,
+        "phase": phase,
+        "terminal": bool(safe_reason),
+        "terminal_reason": safe_reason or None,
+        "max_rounds_reached": state.max_rounds_reached,
+    }
+    _write_artifact(
+        artifacts_dir / "terra-sol-progress.json",
+        json.dumps(payload, indent=2, sort_keys=True),
+    )
+    set_agentic_progress(
+        workflow="terra-sol-checkup",
+        current_step=max(0, round_number),
+        total_steps=config.max_rounds,
+        step_name=(f"{phase}: {safe_reason}" if safe_reason else phase),
+        completed_steps=list(range(1, max(0, round_number))),
+    )
 
 
 def _enforce_terra_sol_task_model(
@@ -1230,6 +1296,11 @@ class ReviewLoopState:
     # construction remains stable. A later invocation is a fresh authoritative
     # run; these values are audit evidence, not a cross-invocation checkpoint.
     max_rounds: Optional[int] = None
+    # Terra/Sol provider observations are role-scoped. ``last_model`` remains
+    # the backwards-compatible last-dispatch field, while these fields prevent
+    # a valid Terra observation from being serialized as missing Sol evidence.
+    sol_model: str = ""
+    terra_model: str = ""
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -1550,6 +1621,13 @@ def run_checkup_review_loop(
         # Record the round we are actually entering so the agentic artifact can
         # recompute ``max_rounds_reached`` from real consumption (R5).
         state.rounds_completed = round_number
+        _publish_terra_sol_progress(
+            artifacts_dir,
+            config,
+            state,
+            round_number=round_number,
+            phase="review",
+        )
 
         if not quiet:
             max_display = str(config.max_rounds)
@@ -1974,6 +2052,13 @@ def run_checkup_review_loop(
         # it just to consume another fallback invocation defeats the
         # one-shot fallback contract.
         active_fixer = state.active_fixer or fixer
+        _publish_terra_sol_progress(
+            artifacts_dir,
+            config,
+            state,
+            round_number=round_number,
+            phase="fix",
+        )
         fix = _run_fix(
             fixer=active_fixer,
             reviewer=reviewer,
@@ -2375,6 +2460,13 @@ def run_checkup_review_loop(
             _mark_budget_exhausted(config, state, deadline)
             break
 
+        _publish_terra_sol_progress(
+            artifacts_dir,
+            config,
+            state,
+            round_number=round_number,
+            phase="verify",
+        )
         verify = _run_review(
             reviewer=reviewer,
             context=context,
@@ -2543,8 +2635,22 @@ def run_checkup_review_loop(
         )
 
     report = _finalize(context, state, roles, artifacts_dir)
+    _publish_terra_sol_progress(
+        artifacts_dir,
+        config,
+        state,
+        round_number=min(round_number, config.max_rounds),
+        phase="terminal",
+        terminal_reason=(
+            "max_rounds_reached"
+            if state.max_rounds_reached
+            else state.stop_reason or "completed"
+        ),
+    )
     _maybe_write_agentic_artifact(context, config, state)
     _post_review_loop_report(context, report, use_github_state)
+    if config.terra_sol:
+        clear_agentic_progress()
     return True, report, state.total_cost, state.last_model
 
 
@@ -4169,7 +4275,7 @@ def _run_review(
         ),
     )
     state.total_cost += cost
-    state.last_model = model or state.last_model
+    _record_terra_sol_model_observation(state, config, role="sol", model=model)
     if not config.agentic_mode:
         state.raw_outputs.append(
             (f"{artifact_mode}:{reviewer}:round{round_number}", output)
@@ -4324,7 +4430,7 @@ def _run_review_parse_repair(
         ),
     )
     state.total_cost += cost
-    state.last_model = model or state.last_model
+    _record_terra_sol_model_observation(state, config, role="sol", model=model)
     if not config.agentic_mode:
         state.raw_outputs.append(
             (f"{mode}:{reviewer}:round{round_number}:parse-repair", output)
@@ -4398,7 +4504,7 @@ def _run_fix(
         ),
     )
     state.total_cost += cost
-    state.last_model = model or state.last_model
+    _record_terra_sol_model_observation(state, config, role="terra", model=model)
     if not config.agentic_mode:
         state.raw_outputs.append(
             (f"fix:{fixer}:for:{reviewer}:round{round_number}", output)
@@ -8361,16 +8467,12 @@ def _attempt_source_of_truth_repair(
         ),
     )
     state.total_cost += cost
-    observed_model = str(model or "").strip()
+    observed_model = str(model or "")
     details["fixer_model"] = observed_model
     details["fixer_cost"] = float(cost or 0.0)
-    if config.terra_sol:
-        # Store the observation even when it is missing. Retaining an earlier
-        # Sol model here would make a failed source-of-truth repair look as if
-        # its last provider dispatch had satisfied the GPT-5.6 contract.
-        state.last_model = observed_model
-    elif model:
-        state.last_model = model
+    _record_terra_sol_model_observation(
+        state, config, role="terra", model=observed_model
+    )
     if not config.agentic_mode:
         state.raw_outputs.append(
             (f"sot-repair:{active_fixer}:round{round_number}", output)
@@ -9199,7 +9301,8 @@ def _write_final_state(
             if state.terra_sol_mode
             else None
         ),
-        "sol_model": state.last_model if state.terra_sol_mode else None,
+        "sol_model": state.sol_model if state.terra_sol_mode else None,
+        "terra_model": state.terra_model if state.terra_sol_mode else None,
         "terra_fixer": TERRA_SOL_FIXER if state.terra_sol_mode else None,
         "fix_attempts_by_key": dict(state.fix_attempts_by_key),
         "dispute_notes_by_key": dict(state.dispute_notes_by_key),
@@ -9656,7 +9759,7 @@ def _render_machine_verdict_block(
         and not state.max_rounds_reached
         and not state.max_cost_reached
         and not state.max_duration_reached
-        and (not state.terra_sol_mode or _is_terra_sol_model(state.last_model))
+        and (not state.terra_sol_mode or _is_terra_sol_model(state.sol_model))
     )
     payload = {
         "schema": FINAL_GATE_REPORT_SCHEMA,
@@ -9689,7 +9792,8 @@ def _render_machine_verdict_block(
             if state.terra_sol_mode
             else None
         ),
-        "sol_model": state.last_model if state.terra_sol_mode else None,
+        "sol_model": state.sol_model if state.terra_sol_mode else None,
+        "terra_model": state.terra_model if state.terra_sol_mode else None,
         "terra_fixer": TERRA_SOL_FIXER if state.terra_sol_mode else None,
         "findings": [finding.to_dict() for finding in remaining_findings],
     }
@@ -9756,7 +9860,8 @@ def _render_final_report(
                 state.active_reviewer or TERRA_SOL_REVIEWER, "missing"
             ),
             f"terra-fixer: {TERRA_SOL_FIXER}",
-            f"terra-sol-model: {state.last_model or 'none'}",
+            f"terra-sol-model: {state.sol_model or 'none'}",
+            f"terra-model: {state.terra_model or 'none'}",
         ]
         if state.terra_sol_mode
         else []

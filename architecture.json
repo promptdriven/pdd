@@ -8806,7 +8806,7 @@
         "commands": [
           {
             "name": "checkup",
-            "description": "Run agentic health checkup, PR review loop, or local diagnostics including lint; supports --agentic-review-loop for standalone adversarial PR review"
+            "description": "Run agentic health checkup, PR review loop, Terra/Sol convergence, or local diagnostics including lint; supports --agentic-review-loop for standalone adversarial PR review"
           }
         ]
       }

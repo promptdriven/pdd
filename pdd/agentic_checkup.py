@@ -54,6 +54,7 @@ from .checkup_review_loop import (
     SOURCE_OF_TRUTH_GUARD_REFUSAL_MARKERS,
     ReviewLoopConfig,
     ReviewLoopContext,
+    _is_terra_sol_model,
     _scrub_secrets,
     clear_final_state,
     load_final_state,
@@ -1291,8 +1292,7 @@ def _review_loop_ship_verdict(
     if require_terra_sol_model:
         if final_state.get("terra_sol_mode") is not True or active != "codex":
             return False
-        observed_model = str(final_state.get("last_model") or "").strip().lower()
-        if not observed_model.startswith("gpt-5.6"):
+        if not _is_terra_sol_model(final_state.get("sol_model")):
             return False
     # The canonical ``_write_final_state`` ALWAYS serializes ``findings`` as a
     # list of dicts (``ReviewFinding.to_dict()``) whose ``status`` is a non-empty
@@ -1523,6 +1523,15 @@ def run_agentic_checkup(
             )
         if not str(pr_url or "").strip():
             return False, "--terra-sol requires --pr.", 0.0, ""
+        if str(prompt_repair or "off").strip().lower() != "off":
+            return (
+                False,
+                "--terra-sol requires prompt repair to be off; an explicit "
+                "--prompt-repair value or project .pddrc default cannot cross "
+                "the Codex-only worktree boundary.",
+                0.0,
+                "",
+            )
         if (
             isinstance(max_review_rounds, bool)
             or not isinstance(max_review_rounds, int)
@@ -1584,16 +1593,7 @@ def run_agentic_checkup(
         else None
     )
 
-    # 1. Check gh CLI
-    if not _check_gh_cli():
-        return (
-            False,
-            "GitHub CLI (gh) not found. Install from https://cli.github.com/",
-            0.0,
-            "",
-        )
-
-    # 2. Parse PR URL up-front (when in PR mode) so an invalid PR fails before
+    # 1. Parse PR URL up-front (when in PR mode) so an invalid PR fails before
     #    any issue work, and so a no-issue run can alias its comment/state
     #    thread to the PR (GitHub treats PRs as issues for the comments API).
     pr_owner: Optional[str] = None
@@ -1605,7 +1605,8 @@ def run_agentic_checkup(
             return False, f"Invalid GitHub PR URL: {pr_url}", 0.0, ""
         pr_owner, pr_repo, pr_number = pr_parsed
 
-    # 3. Resolve the source issue. The issue is OPTIONAL in PR mode (#1292):
+    # 2. Resolve the source issue identifier. The issue is OPTIONAL in PR mode
+    #    (#1292):
     #    with no issue the PR is reviewed on its own merits, the issue fetch
     #    is skipped, and the issue context stays empty (never the literal
     #    "None") so the step prompts do merit review.
@@ -1616,8 +1617,47 @@ def run_agentic_checkup(
         parsed = _parse_issue_url(issue_url)
         if not parsed:
             return False, f"Invalid GitHub issue URL: {issue_url}", 0.0, ""
-
         owner, repo, issue_number = parsed
+    else:
+        # No issue: the comment/state thread is the PR itself.
+        if pr_url is None or pr_owner is None or pr_repo is None or pr_number is None:
+            return (
+                False,
+                "No issue URL and no PR URL provided; nothing to check.",
+                0.0,
+                "",
+            )
+        owner, repo, issue_number = pr_owner, pr_repo, pr_number
+
+    # An explicit Terra/Sol invocation owns the verdict slot as soon as its PR
+    # and optional issue identities are known. Invalidate a prior clean verdict
+    # before gh validation, network fetches, project loading, or any repair path
+    # can fail so a retry can never leave stale clean state authoritative.
+    if terra_sol:
+        assert pr_number is not None
+        clear_final_state(project_root, issue_number, pr_number)
+        if load_final_state(project_root, issue_number, pr_number) is not None:
+            return (
+                False,
+                (
+                    "Terra/Sol could not clear the stale review-loop verdict at "
+                    ".pdd/checkup-review-loop/; refusing to trust a prior run."
+                ),
+                0.0,
+                "",
+            )
+
+    # 3. Check gh only after stale Terra/Sol state has been invalidated.
+    if not _check_gh_cli():
+        return (
+            False,
+            "GitHub CLI (gh) not found. Install from https://cli.github.com/",
+            0.0,
+            "",
+        )
+
+    # 4. Fetch the already-validated optional issue.
+    if has_issue:
 
         if not quiet:
             console.print(
@@ -1647,15 +1687,6 @@ def run_agentic_checkup(
         )
         effective_issue_url = issue_url
     else:
-        # No issue: the comment/state thread is the PR itself.
-        if pr_url is None or pr_owner is None or pr_repo is None or pr_number is None:
-            return (
-                False,
-                "No issue URL and no PR URL provided; nothing to check.",
-                0.0,
-                "",
-            )
-        owner, repo, issue_number = pr_owner, pr_repo, pr_number
         raw_title = ""
         raw_full_content = ""
         effective_issue_url = ""
@@ -1664,7 +1695,7 @@ def run_agentic_checkup(
     title = _escape_format_braces(raw_title)
     full_content = _escape_format_braces(raw_full_content)
 
-    # 4. Load project context
+    # 5. Load project context
     architecture, _ = _load_architecture_json(project_root)
     raw_arch_json_str = (
         json.dumps(architecture, indent=2)
@@ -1995,19 +2026,8 @@ def run_agentic_checkup(
             return False, "--terra-sol requires --pr.", 0.0, ""
         assert pr_number is not None
         # The returned loop boolean means "trustworthy report produced", not
-        # "Sol is clean". Remove any prior verdict before this run and derive
-        # the CLI result only from the current final-state.json.
-        clear_final_state(project_root, issue_number, pr_number)
-        if load_final_state(project_root, issue_number, pr_number) is not None:
-            return (
-                False,
-                (
-                    "Terra/Sol could not clear the stale review-loop verdict at "
-                    ".pdd/checkup-review-loop/; refusing to trust a prior run."
-                ),
-                0.0,
-                "",
-            )
+        # "Sol is clean". The prior verdict was cleared immediately after URL
+        # parsing above; derive the CLI result only from this run's state.
         _loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer()
         ship = _review_loop_ship_verdict(
             load_final_state(project_root, issue_number, pr_number),

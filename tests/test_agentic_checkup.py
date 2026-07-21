@@ -840,7 +840,7 @@ class TestRunAgenticCheckup:
                     "fresh_final_status": "missing",
                     "findings": [],
                     "terra_sol_mode": True,
-                    "last_model": "gpt-5.6-sol",
+                    "sol_model": "gpt-5.6-sol",
                 },
                 False,
             ),
@@ -851,7 +851,7 @@ class TestRunAgenticCheckup:
                     "fresh_final_status": "clean",
                     "findings": [],
                     "terra_sol_mode": True,
-                    "last_model": "gpt-5.6-sol",
+                    "sol_model": "gpt-5.6-sol",
                 },
                 True,
             ),
@@ -969,7 +969,76 @@ class TestRunAgenticCheckup:
         assert cost == 0.0
         assert model == ""
 
-    @pytest.mark.parametrize("model", ["", "codex", "gpt-5.5", "gpt-5.4"])
+    @pytest.mark.parametrize("configured_mode", ["best-effort", "strict"])
+    def test_terra_sol_rejects_explicit_or_project_default_prompt_repair_before_io(
+        self, monkeypatch, configured_mode
+    ):
+        """A CLI value or .pddrc-derived value cannot cross the model boundary."""
+        import pdd.agentic_checkup as mod
+
+        monkeypatch.setattr(
+            mod,
+            "_check_gh_cli",
+            lambda: pytest.fail("prompt-repair validation must precede GitHub I/O"),
+        )
+
+        success, message, cost, model = mod.run_agentic_checkup(
+            None,
+            pr_url="https://github.com/owner/repo/pull/2",
+            terra_sol=True,
+            prompt_repair=configured_mode,
+        )
+
+        assert success is False
+        assert "prompt repair to be off" in message
+        assert ".pddrc" in message
+        assert cost == 0.0
+        assert model == ""
+
+    def test_terra_sol_clears_stale_state_before_early_gh_failure(
+        self, monkeypatch, tmp_path
+    ):
+        """An explicit retry invalidates its old clean verdict before gh checks."""
+        import pdd.agentic_checkup as mod
+
+        stale_path = (
+            tmp_path
+            / ".pdd"
+            / "checkup-review-loop"
+            / "issue-2-pr-2"
+            / "final-state.json"
+        )
+        stale_path.parent.mkdir(parents=True)
+        stale_path.write_text('{"fresh_final_status":"clean"}', encoding="utf-8")
+        monkeypatch.setattr(mod, "_find_project_root", lambda _cwd: tmp_path)
+        monkeypatch.setattr(mod, "_check_gh_cli", lambda: False)
+
+        success, message, _cost, _model = mod.run_agentic_checkup(
+            "https://github.com/owner/repo/issues/2",
+            pr_url="https://github.com/owner/repo/pull/2",
+            terra_sol=True,
+            cwd=tmp_path,
+        )
+
+        assert success is False
+        assert "GitHub CLI" in message
+        assert not stale_path.exists()
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "",
+            "codex",
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.60",
+            "gpt-5.60-legacy",
+            "gpt-5.6evil",
+            " gpt-5.6-sol",
+            "gpt-5.6-sol ",
+            "GPT-5.6-sol",
+        ],
+    )
     def test_terra_sol_ship_verdict_requires_observed_gpt_5_6(self, model):
         """A clean Sol status from an absent or wrong model cannot ship."""
         import pdd.agentic_checkup as mod
@@ -980,7 +1049,7 @@ class TestRunAgenticCheckup:
             "fresh_final_status": "clean",
             "findings": [],
             "terra_sol_mode": True,
-            "last_model": model,
+            "sol_model": model,
         }
 
         assert not mod._review_loop_ship_verdict(
