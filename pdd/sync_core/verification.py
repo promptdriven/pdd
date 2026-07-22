@@ -656,6 +656,41 @@ _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS = (
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS
 
+_PDD_1875_COMPOSED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/analysis_python.prompt",
+        "python",
+        "5aff15e367047ac59ad70b842c7a0a59cdf266526e09df274f56f7928413aafd",
+        "89c8005f5fe933af745285a6a2f28f73b79112e1b96e7af4d7b0e47cde136a16",
+        _PDD_1875_COMPOSED_PROFILE_BYTES[0],
+        _PDD_1875_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/user_story_tests_python.prompt",
+        "python",
+        "c63d875cc5d488b8fd9bfdd72ea015f33962d22b5cde90b9be751de55a209e32",
+        "1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7",
+        _PDD_1875_COMPOSED_PROFILE_BYTES[0],
+        _PDD_1875_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/detect_change_python.prompt",
+        "python",
+        "2987422f58c48f279289d5b739e46bd1346d596dce1ec14b67a1ac840ee33e60",
+        "d5ac2b7fceec8fa95e4711829525faa57bdf5cf01f9d44132a346bb020dcf0a9",
+        _PDD_1875_COMPOSED_PROFILE_BYTES[0],
+        _PDD_1875_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/core/cli_python.prompt",
+        "python",
+        "779a19a53bdbb3c7ad5dbf4afb9fb29cf3f04b56e9bfc488552ed0eff823f46e",
+        "e0f5f0173e29379d84dd34934b3221b5ae0f5c9c7b745ea35cb73699cb6162b1",
+        _PDD_1875_COMPOSED_PROFILE_BYTES[0],
+        _PDD_1875_COMPOSED_PROFILE_BYTES[1],
+    ),
+)
+
 # PR #1971's six historical prompt/profile transitions remain exact protected
 # evidence.  They deliberately are not appended to replay bootstrap authority.
 _PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
@@ -806,6 +841,7 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = tuple(
     _REPLAY_TRANSITION_BY_IDENTITY.get((item.prompt_path, item.language_id), item)
     for item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
 )
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_1875_COMPOSED_REQUIREMENT_TRANSITIONS
 _REPLAY_REPLACED_PROTECTED_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/sync_orchestration_python.prompt",

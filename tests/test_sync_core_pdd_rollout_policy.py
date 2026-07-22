@@ -27,6 +27,7 @@ from pdd.sync_core.manifest import (
 )
 from pdd.sync_core.types import InventoryStatus, UnitId
 from pdd.sync_core.verification import PROFILE_PATH as PROFILE_REL_PATH
+from tests.conftest import skip_if_authenticated_candidate_lacks_refs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +48,8 @@ PR_2017_PHASE_A_HEAD = "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
 REPLAY_PROTECTED_BASE = "e10bd9b3d0d5ac94d1a56af88f5abf07cf8af775"
 PR_1971_COMBINED_BASE = "ee9fcff457b23fb7123bb7e15666c9287409ad0f"
 PR_1971_COMBINED_HEAD = REPLAY_PROTECTED_BASE
+PDD_1875_PROTECTED_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
+PDD_1875_PROTECTED_HEAD = "4597a4d1a1ace37dcf4aa4129cb193f9e2268524"
 PR_1971_COMBINED_PROFILE_DIGEST = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
 )
@@ -559,160 +562,77 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
     }
 
 
-def test_committed_rotations_equal_exact_protected_authority() -> None:
-    """Keep protected history before exact replay and dormant bindings."""
-    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
-    rows = policy["requirement_rotations"]
-    protected_policy = json.loads(
-        subprocess.check_output(
-            [
-                "git",
-                "show",
-                f"{REPLAY_PROTECTED_BASE}:.pdd/verification-profile-rotations.json",
-            ],
-            cwd=ROOT,
-            text=True,
-        )
+@pytest.mark.parametrize(
+    "mutated_input",
+    ("base_policy", "candidate_policy", "base_profile", "candidate_profile"),
+)
+def test_pdd1875_composed_reconciliation_is_exact(mutated_input: str) -> None:
+    """The #2260 gate rejects a byte mutation on every reviewed boundary."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact #1875 protected history",
+        PDD_1875_PROTECTED_BASE,
+        PDD_1875_PROTECTED_HEAD,
     )
-    protected_rows = protected_policy["requirement_rotations"]
-    bootstrap_rows = list(
-        map(
-            _requirement_authorization_row,
-            verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS,  # pylint: disable=protected-access
-        )
-    )
-    story_identity = (STORY_REGRESSION_DORMANT_ROTATION["prompt_path"], "python")
-    bootstrap_rows = [
-        STORY_REGRESSION_DORMANT_ROTATION
-        if (row["prompt_path"], row["language_id"]) == story_identity
-        else row
-        for row in bootstrap_rows
-    ]
-    replaced_protected_rows = {
-        json.dumps(_requirement_authorization_row(item), sort_keys=True)
-        for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
+    inputs = {
+        "base_policy": _git_blob(
+            PDD_1875_PROTECTED_BASE,
+            ROOT / ".pdd/verification-profile-rotations.json",
+        ),
+        "candidate_policy": _git_blob(PDD_1875_PROTECTED_HEAD, ROTATION_FILE),
+        "base_profile": _git_blob(PDD_1875_PROTECTED_BASE, PROFILE_FILE),
+        "candidate_profile": _git_blob(PDD_1875_PROTECTED_HEAD, PROFILE_FILE),
     }
-    surviving_rows = [
-        row
-        for row in protected_rows
-        if json.dumps(row, sort_keys=True) not in replaced_protected_rows
-        and row in rows
-    ]
-    candidate_rows = [
-        row for row in rows if row not in protected_rows
-    ]
-    assert len(protected_rows) == 31
-    assert len(bootstrap_rows) == 60
-    assert len(surviving_rows) == 21
-    assert len(candidate_rows) == 34
-    assert len(rows) == 55
-    assert all(
-        _requirement_authorization_row(item) not in rows
-        for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
-    )
-    assert rows == surviving_rows + candidate_rows
 
-    profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
-    assert (
-        profile_digest
-        == "b4832ab48a0d0cf4570dc2de40ae3fe93dc406c03b3fd7807523f95cb8c62a7f"
+    assert verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
+        inputs["base_policy"],
+        inputs["candidate_policy"],
+        inputs["base_profile"],
+        inputs["candidate_profile"],
     )
-    pr2017_phase_a_rows = [
-        row
-        for row in rows
-        if row["head_policy_sha256"]
-        == "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3"
-    ]
-    assert {row["prompt_path"] for row in pr2017_phase_a_rows} == {
-        "pdd/prompts/fix_error_loop_python.prompt",
-        "pdd/prompts/get_test_command_python.prompt",
-    }
-    assert all(
-        row["base_policy_sha256"]
-        == "56ea5d189034c9d85e91c86348689eb18c4c34fa67406258f78f0ae3330eaeb6"
-        for row in pr2017_phase_a_rows
+    inputs[mutated_input] += b" "
+    assert not verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
+        inputs["base_policy"],
+        inputs["candidate_policy"],
+        inputs["base_profile"],
+        inputs["candidate_profile"],
     )
-    assert all(
-        hashlib.sha256((ROOT / row["prompt_path"]).read_bytes()).hexdigest()
-        == row["head_prompt_sha256"]
-        for row in pr2017_phase_a_rows
-    )
-    current_rows = [
-        row
-        for row in candidate_rows
-        if row["head_policy_sha256"]
-        == verification._LEGACY_PDD_2168_PROFILE_BYTES[1]  # pylint: disable=protected-access
-    ]
-    replay_prompt_changes = set(
-        subprocess.check_output(
-            [
-                "git",
-                "diff",
-                "--name-only",
-                f"{REPLAY_PROTECTED_BASE}...HEAD",
-                "--",
-                "pdd/prompts",
-            ],
-            cwd=ROOT,
-            text=True,
-        ).splitlines()
-    )
-    # The mock-contract prompt is a new unit, while #2168 advances the two
-    # final-gate prompts after the #1998 replay profile has already landed.
-    replay_prompt_changes.remove("pdd/prompts/mock_contract_validation_python.prompt")
-    final_gate_prompt_changes = {
-        "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
-        "pdd/prompts/agentic_common_python.prompt",
-    }
-    assert {
-        item.prompt_path.as_posix()
-        for item in verification._REPLAY_PROFILE_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
-    } == replay_prompt_changes
-    assert {row["prompt_path"] for row in current_rows} == final_gate_prompt_changes
-    for row in current_rows:
-        prompt = ROOT / row["prompt_path"]
-        assert (
-            hashlib.sha256(prompt.read_bytes()).hexdigest()
-            == (row["head_prompt_sha256"])
-        )
-        assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
 
-    pr1790_rows = [
-        row
-        for row in rows
-        if row["head_policy_sha256"]
-        == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
-    ]
-    replaced_rows = {
-        json.dumps(_requirement_authorization_row(item), sort_keys=True)
-        for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
-    }
-    expected_pr1790_rows = [
-        row
-        for row in protected_rows
-        if row["head_policy_sha256"]
-        == "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
-        and json.dumps(row, sort_keys=True) not in replaced_rows
-    ]
-    assert len(pr1790_rows) == 4
-    assert pr1790_rows == expected_pr1790_rows
-    base_policy_digest = pr1790_rows[0]["base_policy_sha256"]
-    head_policy_digest = pr1790_rows[0]["head_policy_sha256"]
-    assert base_policy_digest == (
-        "7df63fe892ac14382f226ea97dbd2ac186a8cb48213faec958ad32c51d51aeb5"
+
+@pytest.mark.parametrize(
+    "authorization",
+    verification._PDD_1875_COMPOSED_REQUIREMENT_TRANSITIONS,  # pylint: disable=protected-access
+    ids=lambda item: item.prompt_path.name,
+)
+def test_pdd1875_composed_reconciliation_binds_prompt_bytes(authorization) -> None:
+    """Each reviewed profile transition remains bound to its exact prompt pair."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact #1875 protected history",
+        PDD_1875_PROTECTED_BASE,
+        PDD_1875_PROTECTED_HEAD,
     )
-    assert head_policy_digest == (
-        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc"
+    base_profile = _git_blob(PDD_1875_PROTECTED_BASE, PROFILE_FILE)
+    candidate_profile = _git_blob(PDD_1875_PROTECTED_HEAD, PROFILE_FILE)
+    base_prompt = _git_blob(PDD_1875_PROTECTED_BASE, ROOT / authorization.prompt_path)
+    candidate_prompt = _git_blob(
+        PDD_1875_PROTECTED_HEAD, ROOT / authorization.prompt_path
     )
-    for row in pr1790_rows:
-        assert row["base_policy_sha256"] == base_policy_digest
-        assert row["head_policy_sha256"] == head_policy_digest
-        prompt = ROOT / row["prompt_path"]
-        assert (
-            hashlib.sha256(prompt.read_bytes()).hexdigest() == row["head_prompt_sha256"]
-        )
-        assert row["base_prompt_sha256"] != row["head_prompt_sha256"]
-        assert row["base_policy_sha256"] != row["head_policy_sha256"]
+
+    assert verification._transition_bytes_match(  # pylint: disable=protected-access
+        authorization,
+        base_profile,
+        candidate_profile,
+        base_prompt,
+        candidate_prompt,
+    )
+    assert not verification._transition_bytes_match(  # pylint: disable=protected-access
+        authorization,
+        base_profile,
+        candidate_profile,
+        base_prompt,
+        candidate_prompt + b" ",
+    )
 
 
 def _git_blob(ref: str, path: Path) -> bytes:
