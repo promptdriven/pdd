@@ -1642,9 +1642,9 @@
       },
       "github": {
         "label": "pdd-baseten",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "Baseten"
@@ -1675,7 +1675,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 49,
@@ -1702,7 +1702,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 50,
@@ -1729,7 +1729,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 51,
@@ -1756,7 +1756,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 52,
@@ -1783,7 +1783,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 53,
@@ -1810,7 +1810,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 54,
@@ -1837,7 +1837,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -1897,9 +1897,9 @@
       },
       "github": {
         "label": "pdd-dashscope",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "Dashscope"
@@ -1930,7 +1930,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -1990,9 +1990,9 @@
       },
       "github": {
         "label": "pdd-deepinfra",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "DeepInfra"
@@ -2023,7 +2023,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 57,
@@ -2050,7 +2050,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 58,
@@ -2077,7 +2077,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -2593,9 +2593,9 @@
       },
       "github": {
         "label": "pdd-gmi",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "GMI Cloud"
@@ -2626,7 +2626,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 72,
@@ -2653,7 +2653,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 73,
@@ -2680,7 +2680,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 74,
@@ -2707,7 +2707,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 75,
@@ -2734,7 +2734,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 76,
@@ -2761,7 +2761,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 77,
@@ -2788,7 +2788,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 78,
@@ -2815,7 +2815,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 79,
@@ -2842,7 +2842,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 80,
@@ -2869,7 +2869,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 81,
@@ -2896,7 +2896,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 82,
@@ -2923,7 +2923,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 83,
@@ -2950,7 +2950,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -4257,9 +4257,9 @@
       },
       "github": {
         "label": "pdd-heroku",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "Heroku"
@@ -4290,7 +4290,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -4350,9 +4350,9 @@
       },
       "github": {
         "label": "pdd-hyperbolic",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "Hyperbolic"
@@ -4383,7 +4383,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 125,
@@ -4410,7 +4410,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 126,
@@ -4437,7 +4437,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -4497,9 +4497,9 @@
       },
       "github": {
         "label": "pdd-lambda",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "Lambda AI"
@@ -4530,7 +4530,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -4590,9 +4590,9 @@
       },
       "github": {
         "label": "pdd-minimax",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "MiniMax"
@@ -4623,7 +4623,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 129,
@@ -4650,7 +4650,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 130,
@@ -4677,7 +4677,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -4737,9 +4737,9 @@
       },
       "github": {
         "label": "pdd-moonshot",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "Moonshot AI"
@@ -4770,7 +4770,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 132,
@@ -4797,7 +4797,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 133,
@@ -4824,7 +4824,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -4884,9 +4884,9 @@
       },
       "github": {
         "label": "pdd-nebius",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "Nebius"
@@ -4917,7 +4917,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 135,
@@ -4944,7 +4944,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 136,
@@ -4971,7 +4971,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -5031,9 +5031,9 @@
       },
       "github": {
         "label": "pdd-novita",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "Novita AI"
@@ -5064,7 +5064,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 138,
@@ -5091,7 +5091,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 139,
@@ -5118,7 +5118,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 140,
@@ -5145,7 +5145,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 141,
@@ -5172,7 +5172,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 142,
@@ -5199,7 +5199,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 143,
@@ -5226,7 +5226,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 144,
@@ -5253,7 +5253,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -6863,9 +6863,9 @@
       },
       "github": {
         "label": "pdd-perplexity",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "Perplexity"
@@ -6896,7 +6896,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 194,
@@ -6923,7 +6923,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 195,
@@ -6950,7 +6950,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 196,
@@ -6977,7 +6977,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 197,
@@ -7004,7 +7004,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 198,
@@ -7031,7 +7031,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 199,
@@ -7058,7 +7058,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 200,
@@ -7085,7 +7085,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 201,
@@ -7112,7 +7112,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 202,
@@ -7139,7 +7139,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 203,
@@ -7166,7 +7166,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 204,
@@ -7193,7 +7193,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -7473,9 +7473,9 @@
       },
       "github": {
         "label": "pdd-sambanova",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "SambaNova"
@@ -7506,7 +7506,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 212,
@@ -7533,7 +7533,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 213,
@@ -7560,7 +7560,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -7965,9 +7965,9 @@
       },
       "github": {
         "label": "pdd-vercel",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "Vercel AI Gateway"
@@ -7998,7 +7998,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 223,
@@ -8025,7 +8025,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 224,
@@ -8052,7 +8052,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 225,
@@ -8079,7 +8079,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 226,
@@ -8106,7 +8106,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 227,
@@ -8133,7 +8133,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 228,
@@ -8160,7 +8160,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 229,
@@ -8187,7 +8187,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 230,
@@ -8214,7 +8214,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 231,
@@ -8241,7 +8241,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -8301,9 +8301,9 @@
       },
       "github": {
         "label": "pdd-wandb",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "W&B Inference"
@@ -8334,7 +8334,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 233,
@@ -8361,7 +8361,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 234,
@@ -8388,7 +8388,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 235,
@@ -8415,7 +8415,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 236,
@@ -8442,7 +8442,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
@@ -8502,9 +8502,9 @@
       },
       "github": {
         "label": "pdd-zai",
-        "execution_profile": "manual_review",
-        "eligible": false,
-        "reason": "Execution profile has not passed GitHub App conformance tests."
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
       },
       "csv_providers": [
         "Z.AI",
@@ -8536,7 +8536,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 238,
@@ -8563,7 +8563,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 239,
@@ -8590,7 +8590,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 240,
@@ -8617,7 +8617,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 241,
@@ -8644,7 +8644,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 245,
@@ -8671,7 +8671,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 246,
@@ -8698,7 +8698,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         },
         {
           "order": 247,
@@ -8725,7 +8725,7 @@
             "streaming",
             "tools"
           ],
-          "byok_eligible": false
+          "byok_eligible": true
         }
       ]
     },
