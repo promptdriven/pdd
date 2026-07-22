@@ -879,8 +879,8 @@ def cli(
         except Exception:
             pass
 
-    # Warn users who have not completed interactive setup unless they are running it now
-    if not estimate_mode and not json_mode and _should_show_onboarding_reminder(ctx):
+    # Warn users who have not completed interactive setup unless they are running it now.
+    if not quiet and not estimate_mode and not json_mode and _should_show_onboarding_reminder(ctx):
         console.print(
             "[warning]Complete onboarding with `pdd setup` to install tab completion and configure API keys.[/warning]"
         )
@@ -946,18 +946,32 @@ def cli(
             raise
 
 
+def _result_tuple_reports_failure(result: Any) -> bool:
+    """Return True for ``(data, cost, model)`` results with failed payload data."""
+    if not (isinstance(result, tuple) and len(result) == 3):
+        return False
+    result_data = result[0]
+    return isinstance(result_data, dict) and result_data.get("passed") is False
+
+
 def _derive_success_from_normalized_results(normalized_results: List[Any]) -> bool:
     """Return True iff every guarded subcommand reported success.
 
     Convention (documented at ``cli.py`` result-callback summary loop): guarded
     subcommands return a 3-tuple ``(result, cost, model_name)`` on success and
-    ``None`` on failure. An empty list is treated as non-success so that an
-    empty dispatch does not poison the dedup store. Used by the ``process_commands``
-    result callback to decide whether to persist a record for fix #1275.
+    ``None`` on failure. Some validation gates, including ``pdd detect --stories``,
+    return a 3-tuple so cost/model can still be summarized while the payload dict
+    reports ``{"passed": False}``; those are failures too. An empty list is treated
+    as non-success so that an empty dispatch does not poison the dedup store.
+    Used by the ``process_commands`` result callback to decide whether to persist
+    a record for fix #1275.
     """
     if not normalized_results:
         return False
-    return not any(r is None for r in normalized_results)
+    return not any(
+        r is None or _result_tuple_reports_failure(r)
+        for r in normalized_results
+    )
 
 
 def _normalized_results_should_exit_nonzero(
@@ -972,10 +986,8 @@ def _normalized_results_should_exit_nonzero(
         )
         if result is None and command_name != "install_completion":
             return True
-        if isinstance(result, tuple) and len(result) == 3:
-            result_data = result[0]
-            if isinstance(result_data, dict) and result_data.get("passed") is False:
-                return True
+        if _result_tuple_reports_failure(result):
+            return True
     return False
 
 
@@ -1026,7 +1038,14 @@ def process_commands(
     if estimate_mode or estimate_records:
         if estimate_records:
             _render_estimate_output(ctx, estimate_records)
-        elif not (isinstance(ctx.obj, dict) and ctx.obj.get("estimate_json")):
+        elif isinstance(ctx.obj, dict) and ctx.obj.get("estimate_json"):
+            _restore_captured_streams(ctx)
+            click.echo(
+                "Error: Estimate JSON was requested, but no estimate record was produced.",
+                err=True,
+            )
+            ctx.exit(1)
+        else:
             click.echo("No estimate was produced for this command.")
         _write_result_core_dump(ctx, normalized_results, invoked_subcommands, 0.0)
         return
@@ -1073,10 +1092,32 @@ def process_commands(
                     # "unknown"/"none"/"N/A") so the UI doesn't render a trailing
                     # blank "Model: " label (#1103).
                     model_repr = (model_name or "").strip()
-                    if model_repr and model_repr.lower() not in {"unknown", "n/a", "none", "skipped"}:
-                        console.print(f"  [success]{_OK_GLYPH}[/success] [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}, Model: {model_repr}")
+                    show_model = (
+                        model_repr
+                        and model_repr.lower()
+                        not in {"unknown", "n/a", "none", "skipped"}
+                    )
+                    if _result_tuple_reports_failure(result_tuple):
+                        step = f"Step {i+1} ({command_name}):"
+                        base = f"  [error]{_FAIL_GLYPH}[/error] [error]{step}[/error]"
+                        if show_model:
+                            console.print(
+                                f"{base} Failed. Cost: ${cost:.6f}, Model: {model_repr}"
+                            )
+                        else:
+                            console.print(f"{base} Failed. Cost: ${cost:.6f}")
+                    elif show_model:
+                        console.print(
+                            f"  [success]{_OK_GLYPH}[/success] "
+                            f"[info]Step {i+1} ({command_name}):[/info] "
+                            f"Cost: ${cost:.6f}, Model: {model_repr}"
+                        )
                     else:
-                        console.print(f"  [success]{_OK_GLYPH}[/success] [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}")
+                        console.print(
+                            f"  [success]{_OK_GLYPH}[/success] "
+                            f"[info]Step {i+1} ({command_name}):[/info] "
+                            f"Cost: ${cost:.6f}"
+                        )
                 
                 # Display examples used for grounding
                 if isinstance(result_data, dict) and result_data.get("examplesUsed"):

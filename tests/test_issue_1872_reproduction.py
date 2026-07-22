@@ -102,7 +102,9 @@ def test_issue_1872_reproduction_fatal_story_exception_exits_nonzero():
         result = runner.invoke(pdd_cli, ["--no-core-dump", "detect", "--stories"])
 
     assert result.exit_code != 0
-    assert "provider auth failed" in result.output
+    assert "Non-interactive credentials are missing or invalid." in result.output
+    assert "authenticate with a supported provider" in result.output
+    assert "provider auth failed" not in result.output
 
 
 def test_issue_1872_reproduction_passing_stories_exit_zero():

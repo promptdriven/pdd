@@ -91,7 +91,7 @@ class OwnershipRule:
 # A candidate cannot normally introduce its own human-ownership rule: the
 # protected base must establish an exact dormant rule first. These exact files
 # are reviewed one-time rollout boundaries bound to this repository identity
-# and path. Keeping the tuple in code makes the bootstrap auditable and
+# and exact paths. Keeping the tuple in code makes the bootstrap auditable and
 # prevents a candidate from broadening it with a wildcard, parent directory,
 # or altered owner/inventory fields.
 _PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
@@ -112,6 +112,20 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
     ),
     OwnershipRule(
         ".pdd/meta/story_detection_result_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        ".pdd/meta/user_story_tests_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        ".pdd/meta/user_story_tests_python_run.json",
         InventoryStatus.HUMAN_OWNED,
         "human-maintained",
         "pdd-maintainers",
@@ -147,6 +161,20 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
     ),
     OwnershipRule(
         "pdd/sync_core/adapter_demand_verifier.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "scripts/manual_validate_pr_1875.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "tests/test_e2e_story_failure_diagnostics.py",
         InventoryStatus.HUMAN_OWNED,
         "human-maintained",
         "pdd-maintainers",
@@ -527,7 +555,9 @@ def _config_context(
     matches: list[tuple[int, int, dict[str, object], PurePosixPath]] = []
     for index, (_name, context) in enumerate(contexts.items()):
         defaults = context.get("defaults") if isinstance(context, dict) else None
-        prompts_dir = defaults.get("prompts_dir") if isinstance(defaults, dict) else None
+        prompts_dir = (
+            defaults.get("prompts_dir") if isinstance(defaults, dict) else None
+        )
         if not isinstance(prompts_dir, str) or not prompts_dir.strip():
             continue
         root = config_path.parent / PurePosixPath(prompts_dir)
@@ -554,7 +584,9 @@ def _configured_output(
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     relative = prompt_path.relative_to(prompts_root)
     name = relative.stem.rsplit("_", 1)[0]
-    category = "" if relative.parent == PurePosixPath(".") else relative.parent.as_posix()
+    category = (
+        "" if relative.parent == PurePosixPath(".") else relative.parent.as_posix()
+    )
     values = {
         "name": name,
         "language": unit_id.language_id,
@@ -699,7 +731,9 @@ def _map_architecture_modules(
     invalid: list[str] = []
     for item in modules:
         if not isinstance(item, dict):
-            invalid.append(f"{ref}:{architecture_path.as_posix()}: invalid module entry")
+            invalid.append(
+                f"{ref}:{architecture_path.as_posix()}: invalid module entry"
+            )
             continue
         filename = item.get("filename")
         filepath = item.get("filepath")
@@ -720,8 +754,8 @@ def _map_architecture_modules(
         exact_match = next(
             (path for path in exact_candidates if path in prompt_units), None
         )
-        matches = [exact_match] if exact_match is not None else by_name.get(
-            declared.name, []
+        matches = (
+            [exact_match] if exact_match is not None else by_name.get(declared.name, [])
         )
         if len(matches) != 1:
             invalid.append(
@@ -732,7 +766,9 @@ def _map_architecture_modules(
         declared_output = PurePosixPath(filepath)
         output = parent / declared_output
         if declared_output.is_absolute() or ".." in declared_output.parts:
-            invalid.append(f"{ref}:{architecture_path.as_posix()}: invalid output {filepath}")
+            invalid.append(
+                f"{ref}:{architecture_path.as_posix()}: invalid output {filepath}"
+            )
             continue
         if output in outputs:
             invalid.append(
@@ -757,7 +793,9 @@ def _manifest_unit(
     head_artifacts = {
         path for path, owner in sources.head_outputs.items() if owner == unit_id
     }
-    removed = prompt_path in sources.base_units and prompt_path not in sources.head_units
+    removed = (
+        prompt_path in sources.base_units and prompt_path not in sources.head_units
+    )
     tombstoned = bool(
         removed
         and tombstone
@@ -851,7 +889,11 @@ def _candidate_records(
             inventory = InventoryStatus.MANAGED
             provenance = "prompt-backed"
         elif path in sources.output_owner:
-            role, inventory, provenance = "code", InventoryStatus.MANAGED, "architecture"
+            role, inventory, provenance = (
+                "code",
+                InventoryStatus.MANAGED,
+                "architecture",
+            )
         elif rule is not None and rule.role == "excluded-project":
             role = rule.role
             inventory = rule.inventory
@@ -874,7 +916,8 @@ def _candidate_records(
                 inventory = InventoryStatus.INVALID
                 provenance = "none"
                 invalid.append(
-                    rule_error or f"{path.as_posix()}: tracked path has no ownership rule"
+                    rule_error
+                    or f"{path.as_posix()}: tracked path has no ownership rule"
                 )
             else:
                 role = rule.role
@@ -887,18 +930,26 @@ def _candidate_records(
                 path in sources.base_entries,
                 path in sources.head_entries,
                 provenance,
-                sources.base_entries.get(path).object_id
-                if path in sources.base_entries
-                else None,
-                sources.base_entries.get(path).git_mode
-                if path in sources.base_entries
-                else None,
-                sources.head_entries.get(path).object_id
-                if path in sources.head_entries
-                else None,
-                sources.head_entries.get(path).git_mode
-                if path in sources.head_entries
-                else None,
+                (
+                    sources.base_entries.get(path).object_id
+                    if path in sources.base_entries
+                    else None
+                ),
+                (
+                    sources.base_entries.get(path).git_mode
+                    if path in sources.base_entries
+                    else None
+                ),
+                (
+                    sources.head_entries.get(path).object_id
+                    if path in sources.head_entries
+                    else None
+                ),
+                (
+                    sources.head_entries.get(path).git_mode
+                    if path in sources.head_entries
+                    else None
+                ),
                 unit_id,
             )
         )
@@ -999,7 +1050,9 @@ def _ownership_for(
     path: PurePosixPath,
     rules: tuple[OwnershipRule, ...],
 ) -> tuple[OwnershipRule | None, str | None]:
-    matches = [rule for rule in rules if fnmatch.fnmatchcase(path.as_posix(), rule.pattern)]
+    matches = [
+        rule for rule in rules if fnmatch.fnmatchcase(path.as_posix(), rule.pattern)
+    ]
     if not matches:
         return None, None
     outcomes = {(item.inventory, item.role, item.owner) for item in matches}
@@ -1033,12 +1086,15 @@ def _ownership_rules(root: Path, protected_base_ref: str) -> tuple[OwnershipRule
             owner = str(item["owner"])
         except (KeyError, ValueError) as exc:
             raise ManifestError("protected ownership rule is malformed") from exc
-        rule = OwnershipRule(pattern, inventory, role, owner,
-                             item.get("preauthorize_absent", False))
+        rule = OwnershipRule(
+            pattern, inventory, role, owner, item.get("preauthorize_absent", False)
+        )
         if not _valid_ownership_rule(rule):
             raise ManifestError("protected ownership rule is overly broad or invalid")
         if pattern in patterns:
-            raise ManifestError(f"protected ownership rule has duplicate pattern: {pattern}")
+            raise ManifestError(
+                f"protected ownership rule has duplicate pattern: {pattern}"
+            )
         patterns.add(pattern)
         rules.append(rule)
     return tuple(sorted(rules))
@@ -1196,16 +1252,27 @@ def _approved_aliases(
 
 def _valid_ownership_rule(rule: OwnershipRule) -> bool:
     """Reject catch-all or escaping rules that could hide future managed debt."""
-    pattern_valid = rule.pattern not in {"*", "**", "**/*"} and not rule.pattern.startswith("/")
+    pattern_valid = rule.pattern not in {
+        "*",
+        "**",
+        "**/*",
+    } and not rule.pattern.startswith("/")
     pattern_valid = pattern_valid and ".." not in PurePosixPath(rule.pattern).parts
     identity_valid = bool(rule.role and rule.owner)
-    inventory_valid = rule.inventory in {InventoryStatus.MANAGED, InventoryStatus.HUMAN_OWNED}
+    inventory_valid = rule.inventory in {
+        InventoryStatus.MANAGED,
+        InventoryStatus.HUMAN_OWNED,
+    }
     return (
-        pattern_valid and identity_valid and inventory_valid
+        pattern_valid
+        and identity_valid
+        and inventory_valid
         and isinstance(rule.preauthorize_absent, bool)
-        and (not rule.preauthorize_absent or not any(
-            token in rule.pattern for token in ("*", "?", "[")
-        )))
+        and (
+            not rule.preauthorize_absent
+            or not any(token in rule.pattern for token in ("*", "?", "["))
+        )
+    )
 
 
 def _tree_manifest(
@@ -1374,7 +1441,9 @@ def build_unit_manifest(
     except (UnicodeDecodeError, ValueError) as exc:
         raise ManifestError("protected repository identity is malformed") from exc
     if base_repository_id != head_repository_id:
-        raise ManifestError("repository identity changed between protected base and head")
+        raise ManifestError(
+            "repository identity changed between protected base and head"
+        )
     repository_id = base_repository_id
     language_registry = registry or LanguageRegistry.bundled()
     ownership = _ownership_rules(repository_root, base_ref)
@@ -1428,10 +1497,7 @@ def build_unit_manifest(
             repository_root, head_ref, repository_id
         )
         managed_paths = (
-            set(base.units)
-            | set(head.units)
-            | set(base.outputs)
-            | set(head.outputs)
+            set(base.units) | set(head.units) | set(base.outputs) | set(head.outputs)
         )
         alias_invalid.extend(
             _validate_managed_alias_counterparts(
@@ -1452,18 +1518,30 @@ def build_unit_manifest(
             base.outputs,
             tuple(base.invalid_reasons + tuple(alias_invalid)),
         )
-    transition = _assemble_manifest(repository_id, language_registry.digest(),
-                                    base, head, tombstones, expected_registry,
-                                    transition_ownership, approved_aliases)
+    transition = _assemble_manifest(
+        repository_id,
+        language_registry.digest(),
+        base,
+        head,
+        tombstones,
+        expected_registry,
+        transition_ownership,
+        approved_aliases,
+    )
     if base_ref == head_ref:
         return transition
 
     head_aliases, stable_alias_invalid = _approved_aliases(
         repository_root, head_ref, head_ref
     )
-    stable_base = _tree_manifest(repository_root, head_ref, repository_id,
-                                 language_registry, head_ownership,
-                                 approved_aliases=head_aliases)
+    stable_base = _tree_manifest(
+        repository_root,
+        head_ref,
+        repository_id,
+        language_registry,
+        head_ownership,
+        approved_aliases=head_aliases,
+    )
     stable_alias_invalid.extend(
         _validate_managed_alias_counterparts(
             repository_root,
@@ -1481,10 +1559,16 @@ def build_unit_manifest(
             stable_base.outputs,
             tuple(stable_base.invalid_reasons + tuple(stable_alias_invalid)),
         )
-    stable = _assemble_manifest(repository_id, language_registry.digest(),
-                                stable_base, stable_base, head_tombstones,
-                                head_expected_registry, head_ownership,
-                                head_aliases)
+    stable = _assemble_manifest(
+        repository_id,
+        language_registry.digest(),
+        stable_base,
+        stable_base,
+        head_tombstones,
+        head_expected_registry,
+        head_ownership,
+        head_aliases,
+    )
     control_invalid = control_transition_invalid(
         repository_root,
         base_ref,

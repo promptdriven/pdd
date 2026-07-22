@@ -324,6 +324,28 @@ def test_cli_estimate_json_generate_outputs_machine_payload(tmp_path):
     assert not (tmp_path / ".pdd" / "meta").exists()
 
 
+def test_cli_estimate_json_missing_record_exits_nonzero(tmp_path):
+    """Machine mode must never report success with an empty stdout payload."""
+    import pdd.cli  # noqa: F401 - registers commands on the core CLI
+    from pdd.core.cli import cli as real_cli
+
+    prompt = tmp_path / "demo_python.prompt"
+    prompt.write_text("% Generate demo code\n", encoding="utf-8")
+
+    with patch(
+        "pdd.commands.generate.code_generator_main",
+        return_value=(None, False, 0.0, "estimate"),
+    ):
+        result = CliRunner().invoke(
+            real_cli,
+            ["--estimate-json", "--no-core-dump", "generate", str(prompt)],
+        )
+
+    assert result.exit_code != 0
+    assert "no estimate record was produced" in result.output
+    assert result.exception is not None
+
+
 def test_cli_estimate_mode_does_not_leak_into_next_invocation(tmp_path, monkeypatch):
     """Regression: an --estimate run must not make later in-process runs sticky.
 
