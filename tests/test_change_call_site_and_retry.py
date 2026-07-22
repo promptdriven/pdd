@@ -663,6 +663,40 @@ class TestDeterministicChangeJudges:
         assert not missing.passed
         assert "exhaust" in missing.reasoning
 
+    def test_retry_fallback_judge_accepts_all_attempts_failure_cause_tail(
+        self,
+    ) -> None:
+        """A bounded failure cause may precede the explicit fallback action."""
+        judgment = _judge_retry_fallback(
+            "If all 3 attempts fail due to connection errors, run_pipeline "
+            "must propagate the final connection error to the caller."
+        )
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            "If all 3 attempts fail due to connection errors, keep retrying.",
+            (
+                "If all 3 attempts fail due to connection errors, the final "
+                "connection error remains available for inspection."
+            ),
+            "If all 3 attempts fail due to connection errors, return success.",
+            (
+                "If all 3 attempts fail due to connection errors, run_pipeline "
+                "must not propagate the final connection error."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_cause_tail_without_fallback(
+        self, guidance: str
+    ) -> None:
+        """A failure cause does not weaken fallback-action requirements."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed
+
     @pytest.mark.parametrize(
         "guidance",
         (
