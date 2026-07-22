@@ -832,6 +832,62 @@ class TestDeterministicChangeJudges:
         "guidance",
         (
             (
+                "Raise the final error once the third attempt fails due to a "
+                "transient connection error. Use 3 attempts."
+            ),
+            (
+                "Raise the final error after the 3rd attempt fails with a deeply "
+                "nested transient connection failure. Use 3 attempts."
+            ),
+            "Re-raise the exception once the third attempt fails. Use 3 attempts.",
+            "Surface the final error after the 3rd attempt fails. Use 3 attempts.",
+        ),
+    )
+    def test_retry_fallback_judge_accepts_inverse_ordinal_connectors(
+        self, guidance: str
+    ) -> None:
+        """Bound ordinal inverse forms support once and after connectors."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use 3 attempts. Raise the final error once the second attempt "
+                "fails due to a connection error."
+            ),
+            (
+                "Use 3 attempts. Do not propagate the final error once the third "
+                "attempt fails due to a connection error."
+            ),
+            (
+                "Use 3 attempts. Propagate the final error after the third attempt "
+                "fails due to a connection error. Keep retrying."
+            ),
+            (
+                "Use 3 attempts. Propagate the telemetry error once telemetry "
+                "fails on the third attempt."
+            ),
+            (
+                "Use 3 attempts. Propagate the final error after not the third "
+                "attempt fails."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_invalid_inverse_ordinal_connectors(
+        self, guidance: str
+    ) -> None:
+        """Inverse connectors retain bound, action, branch, and polarity checks."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
                 "Use a maximum of 1 attempt. If the first attempt also fails, "
                 "raise the final error."
             ),
