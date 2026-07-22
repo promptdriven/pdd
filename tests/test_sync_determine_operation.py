@@ -611,10 +611,17 @@ def test_decision_nothing_for_new_unit_no_prompt(mock_construct, pdd_test_enviro
 @patch('sync_determine_operation.construct_paths')
 def test_decision_nothing_when_synced(mock_construct, pdd_test_environment):
     prompts_dir = pdd_test_environment / "prompts"
-    p_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt")
-    c_hash = create_file(pdd_test_environment / f"{BASENAME}.py")
-    e_hash = create_file(pdd_test_environment / f"{BASENAME}_example.py")
-    t_hash = create_file(pdd_test_environment / f"test_{BASENAME}.py")
+    prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+    code_path = pdd_test_environment / f"{BASENAME}.py"
+    example_path = pdd_test_environment / f"{BASENAME}_example.py"
+    test_path = pdd_test_environment / f"test_{BASENAME}.py"
+    for path in (prompt_path, code_path, example_path, test_path):
+        path.write_text("", encoding="utf-8")
+
+    p_hash = calculate_sha256(prompt_path, prompts_dir)
+    c_hash = calculate_sha256(code_path, pdd_test_environment)
+    e_hash = calculate_sha256(example_path, pdd_test_environment)
+    t_hash = calculate_sha256(test_path, pdd_test_environment)
 
     mock_construct.return_value = (
         {}, {},
@@ -1436,14 +1443,26 @@ class TestIntegrationScenarios:
         example_content = "print(add(1,1))"
         test_content = "assert add(2, 2) == 4"
         
-        prompt_hash = create_file(prompts_dir / f"{basename}_{language}.prompt", prompt_content)
-        code_hash = create_file(Path(f"{basename}.py"), code_content)
+        prompt_path = prompts_dir / f"{basename}_{language}.prompt"
+        code_path = Path(f"{basename}.py")
+        example_path = Path(f"{basename}_example.py")
+        test_path = Path(f"test_{basename}.py")
+        prompt_path.write_text(prompt_content, encoding="utf-8")
+        code_path.write_text(code_content, encoding="utf-8")
         # Create example in both default current dir and new examples/ dir default
-        example_hash = create_file(Path(f"{basename}_example.py"), example_content)
+        example_path.write_text(example_content, encoding="utf-8")
         examples_dir = Path("examples")
         examples_dir.mkdir(exist_ok=True)
-        create_file(examples_dir / f"{basename}_example.py", example_content)
-        test_hash = create_file(Path(f"test_{basename}.py"), test_content)
+        (examples_dir / f"{basename}_example.py").write_text(
+            example_content,
+            encoding="utf-8",
+        )
+        test_path.write_text(test_content, encoding="utf-8")
+
+        prompt_hash = calculate_sha256(prompt_path, prompts_dir)
+        code_hash = calculate_sha256(code_path, Path.cwd())
+        example_hash = calculate_sha256(example_path, Path.cwd())
+        test_hash = calculate_sha256(test_path, Path.cwd())
         
         # Create matching fingerprint
         fingerprint = {
