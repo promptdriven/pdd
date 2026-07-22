@@ -763,6 +763,21 @@ def test_fable_mandatory_row_survives_as_unscored_platform_default():
     )
 
 
+def test_committed_csv_places_unranked_fable_at_end_of_anthropic_block():
+    """The committed catalog must retain the generator's rank-descending order."""
+    lines = (_ROOT / "pdd" / "data" / "llm_model.csv").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    fable_row = (
+        "Anthropic,claude-fable-5,10.0,50.0,0,0,platform-default,"
+        ",ANTHROPIC_API_KEY,128000,True,adaptive,,False,1000000"
+    )
+    idx = lines.index(fable_row)
+
+    assert lines[idx - 1].startswith("Anthropic,claude-haiku-4-5,")
+    assert lines[idx + 1].startswith("Azure AI,")
+
+
 def test_build_rows_retains_fable_unscored_platform_default():
     """The full generator retains Fable, not merely the committed CSV seed."""
     rows = gmc.build_rows()
