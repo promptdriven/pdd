@@ -9457,22 +9457,35 @@ def load_final_state(
     return data if isinstance(data, dict) else None
 
 
-def clear_final_state(cwd: Path, issue_number: int, pr_number: int) -> None:
-    """Delete any stale ``final-state.json`` before a fresh review-loop run.
+def clear_final_state(cwd: Path, issue_number: int, pr_number: int) -> bool:
+    """Delete and verify absence of stale ``final-state.json``.
 
     The final-gate (issue #1406) clears the prior verdict so a later
     ``load_final_state`` read cannot mistake a previous run's clean verdict for
     the current one. A role-error or setup-error path that returns before
     ``_finalize`` writes no new file, so the absence is correctly read as
-    fail-closed.
+    fail-closed. Return ``False`` when deletion or the independent absence
+    check fails; callers must stop rather than infer deletion from a parse
+    failure.
     """
     path = _artifacts_dir(cwd, issue_number, pr_number) / "final-state.json"
     try:
         path.unlink()
     except FileNotFoundError:
-        pass
+        return True
     except OSError:
-        pass
+        return False
+
+    # Verify the filesystem slot itself, independently of JSON parsing.  This
+    # catches unusual unlink implementations and avoids conflating malformed or
+    # unreadable content with successful removal.
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def _scrubbed_gate_run(run: Dict[str, Any]) -> Dict[str, Any]:

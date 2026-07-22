@@ -1059,8 +1059,9 @@ class TestFinalGateLibrary:
             "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
             return_value=(True, "checkup ok", 1.0, "model"),
         ), patch(
-            # Simulate a clear that fails to remove the stale artifact.
+            # Simulate a clear that cannot remove or verify the stale artifact.
             "pdd.agentic_checkup.clear_final_state",
+            return_value=False,
         ), patch(
             "pdd.agentic_checkup.run_checkup_review_loop"
         ) as loop_mock:

@@ -1556,6 +1556,12 @@ def run_agentic_checkup(
     Returns:
         Tuple of (success, message, total_cost, model_used).
     """
+    # Capture the receipt secret as the first operation at this library
+    # boundary, before project discovery, hosted invalidation, validation, or
+    # any target-repository hook can expose it to a subprocess. The key is
+    # never restored to ``os.environ`` and is retained only in this process.
+    hosted_receipt_key_hex = os.environ.pop(_HOSTED_RECEIPT_KEY_ENV, None)
+
     # Hosted consumers read one stable public verdict path. Invalidate it
     # before *any* validation return, without reserving private storage or
     # binding identities that have not yet parsed.
@@ -1615,11 +1621,6 @@ def run_agentic_checkup(
                 0.0,
                 "",
             )
-
-    # Capture the receipt secret at the function boundary, before any target
-    # repository hook, provider, test, or subprocess can inherit it. The key is
-    # never restored to ``os.environ`` and is retained only in this process.
-    hosted_receipt_key_hex = os.environ.pop(_HOSTED_RECEIPT_KEY_ENV, None)
 
     # Report-only modes are a hard write boundary.  Apply it before prompt
     # discovery/check/repair so an explicit CLI value or project default can
@@ -1687,17 +1688,30 @@ def run_agentic_checkup(
         def _terra_sol_early_failure(
             message: str,
         ) -> Tuple[bool, str, float, str]:
-            write_terra_sol_progress(
-                artifacts_dir=terra_sol_artifacts_dir,
-                max_rounds=max_review_rounds,
-                round_number=0,
-                phase="terminal",
-                terminal_reason=message,
-            )
+            try:
+                write_terra_sol_progress(
+                    artifacts_dir=terra_sol_artifacts_dir,
+                    max_rounds=max_review_rounds,
+                    round_number=0,
+                    phase="terminal",
+                    terminal_reason=message,
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                # Terminal publication is diagnostic and must never replace
+                # the authoritative workflow failure or break this function's
+                # documented tuple-return contract. Avoid echoing exception
+                # text because persistence failures can contain sensitive
+                # paths or environment-derived details.
+                message += (
+                    " Additionally, terminal Terra/Sol watchdog progress could "
+                    f"not be persisted ({type(exc).__name__})."
+                )
             return False, message, 0.0, ""
 
-        clear_final_state(project_root, issue_number, pr_number)
-        if load_final_state(project_root, issue_number, pr_number) is not None:
+        if (
+            not clear_final_state(project_root, issue_number, pr_number)
+            or load_final_state(project_root, issue_number, pr_number) is not None
+        ):
             return _terra_sol_early_failure(
                 (
                     "Terra/Sol could not clear the stale review-loop verdict at "
@@ -2290,8 +2304,11 @@ def run_agentic_checkup(
                 pr_owner is not None and pr_repo is not None and pr_number is not None
             )
             if layer1_step5_evidence_for_review:
-                clear_final_state(project_root, issue_number, pr_number)
-                if load_final_state(project_root, issue_number, pr_number) is not None:
+                if (
+                    not clear_final_state(project_root, issue_number, pr_number)
+                    or load_final_state(project_root, issue_number, pr_number)
+                    is not None
+                ):
                     return (
                         False,
                         (
@@ -2492,12 +2509,14 @@ def run_agentic_checkup(
             if not quiet:
                 console.print(f"[green]{github_checks_message}[/green]")
 
-        clear_final_state(project_root, issue_number, pr_number)
-        if load_final_state(project_root, issue_number, pr_number) is not None:
-            # ``clear_final_state`` swallows a non-fatal unlink error; if a stale
-            # verdict still survives, a Layer 2 that exits before finalizing
-            # (e.g. a role error) would let us read the PRIOR run's clean verdict
-            # as this run's. Fail closed rather than risk a false ship.
+        if (
+            not clear_final_state(project_root, issue_number, pr_number)
+            or load_final_state(project_root, issue_number, pr_number) is not None
+        ):
+            # A Layer 2 that exits before finalizing (e.g. a role error) must
+            # never let us read the PRIOR run's clean verdict as this run's.
+            # The clear helper verifies physical absence independently of
+            # parsing, so unreadable or malformed state cannot look deleted.
             return (
                 False,
                 (

@@ -874,7 +874,7 @@ class TestRunAgenticCheckup:
         monkeypatch.setattr(mod, "_load_architecture_json", lambda _root: ([], None))
         monkeypatch.setattr(mod, "_load_pddrc_content", lambda _root: "")
         monkeypatch.setattr(mod, "_fetch_pr_context", lambda *_args: "PR context")
-        monkeypatch.setattr(mod, "clear_final_state", lambda *_args: None)
+        monkeypatch.setattr(mod, "clear_final_state", lambda *_args: True)
         states = iter((None, final_state))
         monkeypatch.setattr(mod, "load_final_state", lambda *_args: next(states))
         observed = {}
@@ -942,7 +942,36 @@ class TestRunAgenticCheckup:
         assert conflicting_flag in message
         assert cost == 0.0
         assert model == ""
-        assert os.environ[mod._HOSTED_RECEIPT_KEY_ENV] == "still-private"
+        assert mod._HOSTED_RECEIPT_KEY_ENV not in os.environ
+
+    def test_receipt_key_removed_before_project_discovery_and_invalidation_failure(
+        self, monkeypatch, tmp_path
+    ):
+        """Even the earliest hosted failure consumes the one-shot secret."""
+        import pdd.agentic_checkup as mod
+
+        monkeypatch.setenv(mod._HOSTED_RECEIPT_KEY_ENV, "one-shot-secret")
+
+        def find_root(_cwd):
+            assert mod._HOSTED_RECEIPT_KEY_ENV not in os.environ
+            return tmp_path
+
+        def fail_invalidation(_path):
+            assert mod._HOSTED_RECEIPT_KEY_ENV not in os.environ
+            return False
+
+        monkeypatch.setattr(mod, "_find_project_root", find_root)
+        monkeypatch.setattr(
+            mod, "_invalidate_hosted_agentic_artifact", fail_invalidation
+        )
+
+        success, message, cost, model = mod.run_agentic_checkup(cwd=tmp_path)
+
+        assert success is False
+        assert "Failed to invalidate" in message
+        assert cost == 0.0
+        assert model == ""
+        assert mod._HOSTED_RECEIPT_KEY_ENV not in os.environ
 
     def test_terra_sol_conflict_invalidates_stale_hosted_pass(
         self, monkeypatch, tmp_path
@@ -957,6 +986,7 @@ class TestRunAgenticCheckup:
         )
         monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
         monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(public))
+        monkeypatch.setenv(mod._HOSTED_RECEIPT_KEY_ENV, "one-shot-secret")
 
         success, message, _cost, _model = mod.run_agentic_checkup(
             None,
@@ -971,6 +1001,7 @@ class TestRunAgenticCheckup:
         payload = json.loads(public.read_text(encoding="utf-8"))
         assert payload["status"] != "passed"
         assert payload["verdict"]["decision"] == "block"
+        assert mod._HOSTED_RECEIPT_KEY_ENV not in os.environ
 
     @pytest.mark.parametrize(
         ("pr_url", "issue_url", "expected_message"),
@@ -996,6 +1027,7 @@ class TestRunAgenticCheckup:
         )
         monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
         monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(public))
+        monkeypatch.setenv(mod._HOSTED_RECEIPT_KEY_ENV, "one-shot-secret")
 
         success, message, _cost, _model = mod.run_agentic_checkup(
             issue_url,
@@ -1009,6 +1041,7 @@ class TestRunAgenticCheckup:
         payload = json.loads(public.read_text(encoding="utf-8"))
         assert payload["status"] != "passed"
         assert payload["verdict"]["decision"] == "block"
+        assert mod._HOSTED_RECEIPT_KEY_ENV not in os.environ
 
     @pytest.mark.parametrize("invalid_rounds", [0, -1, True, 1.5])
     def test_terra_sol_library_boundary_rejects_invalid_round_budget_before_io(
@@ -1147,6 +1180,167 @@ class TestRunAgenticCheckup:
         assert not stale_path.exists()
         check_gh.assert_not_called()
         review_loop.assert_not_called()
+
+    def test_terra_sol_directory_in_final_state_slot_fails_closed(
+        self, monkeypatch, tmp_path
+    ):
+        """A directory cannot masquerade as an absent stale verdict."""
+        import pdd.agentic_checkup as mod
+
+        stale_path = (
+            tmp_path
+            / ".pdd"
+            / "checkup-review-loop"
+            / "issue-2-pr-2"
+            / "final-state.json"
+        )
+        stale_path.mkdir(parents=True)
+        monkeypatch.setattr(mod, "_find_project_root", lambda _cwd: tmp_path)
+        check_gh = MagicMock(side_effect=AssertionError("must stop before gh I/O"))
+        monkeypatch.setattr(mod, "_check_gh_cli", check_gh)
+
+        success, message, cost, model = mod.run_agentic_checkup(
+            "https://github.com/owner/repo/issues/2",
+            pr_url="https://github.com/owner/repo/pull/2",
+            terra_sol=True,
+            cwd=tmp_path,
+        )
+
+        assert success is False
+        assert "could not clear the stale review-loop verdict" in message
+        assert cost == 0.0
+        assert model == ""
+        assert stale_path.is_dir()
+        check_gh.assert_not_called()
+
+    def test_terra_sol_unlink_and_read_permission_errors_fail_closed(
+        self, monkeypatch, tmp_path
+    ):
+        """Unreadability is not evidence that physical deletion succeeded."""
+        import pdd.agentic_checkup as mod
+
+        stale_path = (
+            tmp_path
+            / ".pdd"
+            / "checkup-review-loop"
+            / "issue-2-pr-2"
+            / "final-state.json"
+        )
+        stale_path.parent.mkdir(parents=True)
+        stale_path.write_text('{"fresh_final_status":"clean"}', encoding="utf-8")
+        monkeypatch.setattr(mod, "_find_project_root", lambda _cwd: tmp_path)
+        original_unlink = Path.unlink
+        original_read_text = Path.read_text
+
+        def denied_unlink(path, *args, **kwargs):
+            if path == stale_path:
+                raise PermissionError("simulated unlink denial")
+            return original_unlink(path, *args, **kwargs)
+
+        def denied_read(path, *args, **kwargs):
+            if path == stale_path:
+                raise PermissionError("simulated read denial")
+            return original_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", denied_unlink)
+        monkeypatch.setattr(Path, "read_text", denied_read)
+        check_gh = MagicMock(side_effect=AssertionError("must stop before gh I/O"))
+        monkeypatch.setattr(mod, "_check_gh_cli", check_gh)
+
+        success, message, cost, model = mod.run_agentic_checkup(
+            "https://github.com/owner/repo/issues/2",
+            pr_url="https://github.com/owner/repo/pull/2",
+            terra_sol=True,
+            cwd=tmp_path,
+        )
+
+        assert success is False
+        assert "could not clear the stale review-loop verdict" in message
+        assert cost == 0.0
+        assert model == ""
+        assert stale_path.exists()
+        check_gh.assert_not_called()
+
+    def test_terra_sol_noop_unlink_with_unreadable_state_fails_closed(
+        self, monkeypatch, tmp_path
+    ):
+        """A swallowed/no-op unlink cannot use an unreadable parse as absence."""
+        import pdd.agentic_checkup as mod
+
+        stale_path = (
+            tmp_path
+            / ".pdd"
+            / "checkup-review-loop"
+            / "issue-2-pr-2"
+            / "final-state.json"
+        )
+        stale_path.parent.mkdir(parents=True)
+        stale_path.write_text('{"fresh_final_status":"clean"}', encoding="utf-8")
+        monkeypatch.setattr(mod, "_find_project_root", lambda _cwd: tmp_path)
+        original_unlink = Path.unlink
+        original_read_text = Path.read_text
+
+        def noop_unlink(path, *args, **kwargs):
+            if path == stale_path:
+                return None
+            return original_unlink(path, *args, **kwargs)
+
+        def denied_read(path, *args, **kwargs):
+            if path == stale_path:
+                raise PermissionError("simulated read denial")
+            return original_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", noop_unlink)
+        monkeypatch.setattr(Path, "read_text", denied_read)
+        check_gh = MagicMock(side_effect=AssertionError("must stop before gh I/O"))
+        monkeypatch.setattr(mod, "_check_gh_cli", check_gh)
+
+        success, message, cost, model = mod.run_agentic_checkup(
+            "https://github.com/owner/repo/issues/2",
+            pr_url="https://github.com/owner/repo/pull/2",
+            terra_sol=True,
+            cwd=tmp_path,
+        )
+
+        assert success is False
+        assert "could not clear the stale review-loop verdict" in message
+        assert cost == 0.0
+        assert model == ""
+        assert stale_path.exists()
+        check_gh.assert_not_called()
+
+    def test_terra_sol_terminal_progress_failure_preserves_workflow_failure(
+        self, monkeypatch, tmp_path
+    ):
+        """The second watchdog write cannot replace the authoritative error."""
+        import pdd.agentic_checkup as mod
+
+        monkeypatch.setattr(mod, "_find_project_root", lambda _cwd: tmp_path)
+        phases = []
+
+        def fail_terminal_progress(**kwargs):
+            phases.append(kwargs["phase"])
+            if kwargs["phase"] == "terminal":
+                raise OSError("simulated terminal persistence failure")
+
+        monkeypatch.setattr(mod, "write_terra_sol_progress", fail_terminal_progress)
+        monkeypatch.setattr(mod, "_check_gh_cli", lambda: False)
+
+        result = mod.run_agentic_checkup(
+            "https://github.com/owner/repo/issues/2",
+            pr_url="https://github.com/owner/repo/pull/2",
+            terra_sol=True,
+            cwd=tmp_path,
+        )
+
+        assert result[0] is False
+        assert "GitHub CLI" in result[1]
+        assert (
+            "terminal Terra/Sol watchdog progress could not be persisted" in result[1]
+        )
+        assert "OSError" in result[1]
+        assert result[2:] == (0.0, "")
+        assert phases == ["initializing", "terminal"]
 
     def test_terra_sol_clears_stale_state_before_hosted_reservation_failure(
         self, monkeypatch, tmp_path
@@ -1504,6 +1698,7 @@ class TestRunAgenticCheckup:
 
         mock_orchestrator.side_effect = layer1_without_outer_transport
         mock_review_loop.side_effect = layer2_without_outer_transport
+        mock_clear_final_state.return_value = True
         mock_load_final_state.side_effect = [
             None,
             {

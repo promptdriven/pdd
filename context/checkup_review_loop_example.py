@@ -358,15 +358,16 @@ def load_final_state(
     }
 
 
-def clear_final_state(cwd: Path, issue_number: int, pr_number: int) -> None:
-    """Delete any stale ``final-state.json`` before a fresh review-loop run.
+def clear_final_state(cwd: Path, issue_number: int, pr_number: int) -> bool:
+    """Delete and verify absence of stale ``final-state.json``.
 
     Ensures a later ``load_final_state`` cannot mistake a prior run's verdict for
     the current one. A run that returns before ``_finalize`` writes no new file,
-    so the post-clear absence reads as fail-closed. ``FileNotFoundError`` and
-    other ``OSError``s are swallowed.
+    so the post-clear absence reads as fail-closed. Returns ``True`` only when
+    the filesystem slot is physically absent; deletion and verification errors
+    return ``False`` and callers stop without consulting JSON parsing.
     """
-    return None
+    return True
 
 
 def write_terra_sol_progress(
