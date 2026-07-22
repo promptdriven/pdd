@@ -101,6 +101,10 @@ _WORD_ATTEMPT_ORDINAL_VALUES = {
     word: value
     for value, word in enumerate(_WORD_ATTEMPT_ORDINALS, start=1)
 }
+_ORDINAL_FAILURE_CAUSE_TAIL_PATTERN = (
+    r"(?:\s+(?:with|due\s+to)\s+(?:(?:an?|the)\s+)?"
+    r"(?:[\w-]+\s+){0,4}?(?:errors?|exceptions?|failures?))?"
+)
 
 _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"\b(?:"
@@ -127,8 +131,7 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     rf"(?:if|when)\s+(?:the\s+)?{_ATTEMPT_ORDINAL_PATTERN}\s+"
     r"(?:retry\s+)?attempt\s+"
     r"(?:(?:also|still)\s+)?fail(?:s|ed)?"
-    r"(?:\s+with\s+(?:(?:a|an|the)\s+)?(?:connection\s+)?"
-    r"(?:error|exception|failure))?|"
+    rf"{_ORDINAL_FAILURE_CAUSE_TAIL_PATTERN}|"
     r"(?:if|when)\s+(?:the\s+)?(?:connection\s+)?"
     r"(?:error|exception|failure)\s+(?:still\s+)?"
     r"(?:persist(?:s|ed)?|remain(?:s|ed)?)\s+after\s+(?:the\s+)?"
@@ -214,6 +217,12 @@ _SUCCESS_RETURN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_UNSUPPORTED_INVERSE_ORDINAL_PATTERN = re.compile(
+    rf"\b(?:once|after)\s+(?:the\s+)?{_ATTEMPT_ORDINAL_PATTERN}\s+"
+    r"(?:retry\s+)?attempt\s+(?:(?:also|still)\s+)?fails?\b",
+    re.IGNORECASE,
+)
+
 _CONNECTIVE_ONLY_PATTERN = re.compile(
     r"^\s*(?:then|(?:and|but)\s+then|otherwise|however|but|nevertheless|"
     r"as\s+(?:a|the)\s+fallback)?\s*$",
@@ -253,7 +262,8 @@ _MODAL_PREFIX_PATTERN = re.compile(
 )
 
 _INVERSE_EXHAUSTION_PATTERN = re.compile(
-    r"^\s*(?:when|once|after)\s+(?:"
+    rf"^\s*(?:(?:once|after)\s+(?!(?:the\s+)?{_ATTEMPT_ORDINAL_PATTERN}\s+"
+    r"(?:retry\s+)?attempt\b)|when\s+)(?:"
     r"(?:the\s+)?(?:max(?:imum)?\s+)?(?:retry\s+)?(?:attempts?|retries)\s+"
     r"(?:(?:is|are|have\s+been|has\s+been)\s+)?(?:exhausted|fail(?:s|ed)?)|"
     r"all\s+(?:retry\s+)?(?:attempts?|retries)\s+"
@@ -356,6 +366,8 @@ def _retry_units(prompt_output: str) -> tuple[str, ...]:
 def _fallback_action_state(text: str) -> tuple[bool, bool]:
     """Classify one self-contained action unit as affirmative or rejected."""
     text = text.strip(" ,;:.!?\t\r\n")
+    if _UNSUPPORTED_INVERSE_ORDINAL_PATTERN.search(text):
+        return False, False
     if _RETRY_CONTINUATION_PATTERN.search(text):
         return False, True
     if _SUCCESS_RETURN_PATTERN.search(text):
@@ -761,6 +773,85 @@ class TestDeterministicChangeJudges:
         )
 
         assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "If `fetch_data` raises a connection error during execution, "
+                "`run_pipeline(url, db)` must catch this error and retry the "
+                "entire pipeline from the beginning (starting with `fetch_data`). "
+                "The pipeline runner should allow a maximum of 3 attempts. If "
+                "the 3rd attempt also fails due to a connection error, "
+                "`run_pipeline` must propagate the final exception to the caller."
+            ),
+            (
+                "Use at most 3 attempts. If the third attempt still fails due "
+                "to a connection exception, re-raise the final exception."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_accepts_ordinal_due_to_explicit_action(
+        self, guidance: str
+    ) -> None:
+        """A bound ordinal cause may precede explicit propagation or re-raise."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use at most 3 attempts. If the third attempt fails due to a "
+                "connection error."
+            ),
+            (
+                "Use at most 3 attempts. If the third attempt fails due to a "
+                "connection error, handle it."
+            ),
+            (
+                "Use at most 3 attempts. If the third attempt fails due to a "
+                "connection error, the exception remains available."
+            ),
+            (
+                "Use at most 3 attempts. If the third attempt fails due to a "
+                "connection error, do not propagate the exception."
+            ),
+            (
+                "Use at most 3 attempts. Propagate the final exception when "
+                "the third attempt fails due to a connection error. Keep retrying."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_ordinal_due_to_without_fallback(
+        self, guidance: str
+    ) -> None:
+        """A bound ordinal cause alone is not an explicit fallback action."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use 3 attempts. If validation fails, log it, propagate the final "
+                "error once the third attempt fails."
+            ),
+            (
+                "Use 3 attempts. If validation fails and retries are exhausted, "
+                "propagate the final error after the third attempt fails."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_unsupported_inverse_branch_forms(
+        self, guidance: str
+    ) -> None:
+        """Unsupported inverse connectors cannot bypass conditional isolation."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
 
     @pytest.mark.parametrize(
         "guidance",
