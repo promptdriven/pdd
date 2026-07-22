@@ -444,16 +444,23 @@ def _previous_meaningful_unit(units: tuple[str, ...], index: int) -> str | None:
     return units[previous] if previous >= 0 else None
 
 
+def _previous_conditional_has_retry_context(
+    units: tuple[str, ...], index: int
+) -> bool:
+    """Reject fallback units inherited from an unrelated conditional branch."""
+    previous = _previous_meaningful_unit(units, index)
+    if previous is None or not _CONDITIONAL_UNIT_PATTERN.match(previous):
+        return True
+    return _has_affirmative_exhaustion(previous)
+
+
 def _stop_exhaustion_has_retry_context(
     units: tuple[str, ...], index: int, unit_prefix: str
 ) -> bool:
     """Reject stop-only guidance inherited from an unrelated conditional branch."""
     if unit_prefix.strip() and not _has_affirmative_exhaustion(unit_prefix):
         return False
-    previous = _previous_meaningful_unit(units, index)
-    if previous is None or not _CONDITIONAL_UNIT_PATTERN.match(previous):
-        return True
-    return _has_affirmative_exhaustion(previous)
+    return _previous_conditional_has_retry_context(units, index)
 
 
 def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
@@ -465,11 +472,15 @@ def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
         inverse_exhaustion, inverse_action, inverse_rejected = _inverse_action_state(
             prompt_output, unit
         )
-        if inverse_exhaustion:
+        inverse_has_retry_context = _previous_conditional_has_retry_context(
+            units, index
+        )
+        if inverse_exhaustion and inverse_has_retry_context:
             has_exhaustion = True
         if (
             inverse_action
             and not inverse_rejected
+            and inverse_has_retry_context
             and not _is_immediate_contradiction(units, index)
         ):
             has_action = True
