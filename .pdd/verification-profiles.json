@@ -1193,7 +1193,7 @@
       "prompt_path": "pdd/prompts/agentic_checkup_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:e8969f78c34b118cfd1cee0386f6fa5ecec981bb324f27e9b070fe41bb5051ef"
+        "CONTRACT-SHA256:6ffbc126545fc817d69c784521b32ca947fd6b120b891ab8f8a8f3f7ee4885bb"
       ],
       "obligations": [
         {
@@ -1202,7 +1202,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:e8969f78c34b118cfd1cee0386f6fa5ecec981bb324f27e9b070fe41bb5051ef"
+            "CONTRACT-SHA256:6ffbc126545fc817d69c784521b32ca947fd6b120b891ab8f8a8f3f7ee4885bb"
           ],
           "artifact_paths": [
             "pdd/prompts/agentic_checkup_python.prompt"
@@ -3503,7 +3503,7 @@
       "prompt_path": "pdd/prompts/checkup_review_loop_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:222c8740b291e885303f29c9a3268de27c258c5e386041796df76862edb5c085"
+        "CONTRACT-SHA256:ee5a910b670cba4ad6a7f32617288783cf0fee8e843bc012e70e17a29e2a937b"
       ],
       "obligations": [
         {
@@ -3512,7 +3512,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:222c8740b291e885303f29c9a3268de27c258c5e386041796df76862edb5c085"
+            "CONTRACT-SHA256:ee5a910b670cba4ad6a7f32617288783cf0fee8e843bc012e70e17a29e2a937b"
           ],
           "artifact_paths": [
             "pdd/prompts/checkup_review_loop_python.prompt"
@@ -4075,7 +4075,7 @@
       "prompt_path": "pdd/prompts/commands/checkup_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:1096ee61eeba061adae05e4a4e8f8239cff6103ce75e451efb053f5644203be4"
+        "CONTRACT-SHA256:c91feaa808d1c69a971626bbaedd813ecddae6d39d70711fc4c23a809c88a91a"
       ],
       "obligations": [
         {
@@ -4084,7 +4084,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:1096ee61eeba061adae05e4a4e8f8239cff6103ce75e451efb053f5644203be4"
+            "CONTRACT-SHA256:c91feaa808d1c69a971626bbaedd813ecddae6d39d70711fc4c23a809c88a91a"
           ],
           "artifact_paths": [
             "pdd/prompts/commands/checkup_python.prompt"
@@ -8235,7 +8235,7 @@
       "prompt_path": "pdd/prompts/pdd_completion_bash.prompt",
       "language_id": "bash",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:8ff68a8b73b323eaa876e51d15411c649ab4bd7aa1d90e23adcdbf4a08b5aa45"
+        "CONTRACT-SHA256:e4c8b74fe2b4781e63d8c7d3a4b5f685b14895d68fdf3622f692a2c494bf115f"
       ],
       "obligations": [
         {
@@ -8244,7 +8244,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:8ff68a8b73b323eaa876e51d15411c649ab4bd7aa1d90e23adcdbf4a08b5aa45"
+            "CONTRACT-SHA256:e4c8b74fe2b4781e63d8c7d3a4b5f685b14895d68fdf3622f692a2c494bf115f"
           ],
           "artifact_paths": [
             "pdd/prompts/pdd_completion_bash.prompt"
@@ -8257,7 +8257,7 @@
       "prompt_path": "pdd/prompts/pdd_completion_fish.prompt",
       "language_id": "fish",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:ff9102336506e75466d9dc36af6a3afc93b0d07161df4ae76d7aa21267517675"
+        "CONTRACT-SHA256:372e2e41f95d2d71e42dbf9a722cd8cf296e69c36c091f8461443b40b66a9504"
       ],
       "obligations": [
         {
@@ -8266,7 +8266,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:ff9102336506e75466d9dc36af6a3afc93b0d07161df4ae76d7aa21267517675"
+            "CONTRACT-SHA256:372e2e41f95d2d71e42dbf9a722cd8cf296e69c36c091f8461443b40b66a9504"
           ],
           "artifact_paths": [
             "pdd/prompts/pdd_completion_fish.prompt"
@@ -8279,7 +8279,7 @@
       "prompt_path": "pdd/prompts/pdd_completion_zsh.prompt",
       "language_id": "zsh",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:8a808a26292b9d46d515e8e12de6a8877fb5fdae8e4365c7285067fa216466cf"
+        "CONTRACT-SHA256:5d05ee3fcc959bfba1312b3d2ded6c2329ef1f6df0f532e855ac5a345ec6a107"
       ],
       "obligations": [
         {
@@ -8288,7 +8288,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:8a808a26292b9d46d515e8e12de6a8877fb5fdae8e4365c7285067fa216466cf"
+            "CONTRACT-SHA256:5d05ee3fcc959bfba1312b3d2ded6c2329ef1f6df0f532e855ac5a345ec6a107"
           ],
           "artifact_paths": [
             "pdd/prompts/pdd_completion_zsh.prompt"

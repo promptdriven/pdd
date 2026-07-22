@@ -52,6 +52,10 @@ REPLAY_PROTECTED_BASE = "e10bd9b3d0d5ac94d1a56af88f5abf07cf8af775"
 PR_1971_COMBINED_BASE = "ee9fcff457b23fb7123bb7e15666c9287409ad0f"
 PR_1971_COMBINED_HEAD = REPLAY_PROTECTED_BASE
 PDD_1875_PROTECTED_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
+# The historical #1875 profile candidate, retained independently from later
+# prompt/profile reconciliations on the active branch.
+PDD_1875_COMPOSED_HEAD = "b27837fd7fbf681bdec2b7eb311348b642b27979"
+TERRA_SOL_PROTECTED_BASE = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 PR_1971_COMBINED_PROFILE_DIGEST = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
 )
@@ -566,9 +570,9 @@ def test_pdd1875_composed_reconciliation_is_exact(mutated_input: str) -> None:
             PDD_1875_PROTECTED_BASE,
             ROOT / ".pdd/verification-profile-rotations.json",
         ),
-        "candidate_policy": ROTATION_FILE.read_bytes(),
+        "candidate_policy": _git_blob(PDD_1875_COMPOSED_HEAD, ROTATION_FILE),
         "base_profile": _git_blob(PDD_1875_PROTECTED_BASE, PROFILE_FILE),
-        "candidate_profile": PROFILE_FILE.read_bytes(),
+        "candidate_profile": _git_blob(PDD_1875_COMPOSED_HEAD, PROFILE_FILE),
     }
 
     assert verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
@@ -597,8 +601,70 @@ def test_pdd1875_composed_reconciliation_binds_prompt_bytes(authorization) -> No
         ROOT, "exact #1875 protected history", PDD_1875_PROTECTED_BASE
     )
     base_profile = _git_blob(PDD_1875_PROTECTED_BASE, PROFILE_FILE)
-    candidate_profile = PROFILE_FILE.read_bytes()
+    candidate_profile = _git_blob(PDD_1875_COMPOSED_HEAD, PROFILE_FILE)
     base_prompt = _git_blob(PDD_1875_PROTECTED_BASE, ROOT / authorization.prompt_path)
+    candidate_prompt = _git_blob(PDD_1875_COMPOSED_HEAD, ROOT / authorization.prompt_path)
+
+    assert verification._transition_bytes_match(  # pylint: disable=protected-access
+        authorization,
+        base_profile,
+        candidate_profile,
+        base_prompt,
+        candidate_prompt,
+    )
+    assert not verification._transition_bytes_match(  # pylint: disable=protected-access
+        authorization,
+        base_profile,
+        candidate_profile,
+        base_prompt,
+        candidate_prompt + b" ",
+    )
+
+
+@pytest.mark.parametrize(
+    "mutated_input",
+    ("base_policy", "candidate_policy", "base_profile", "candidate_profile"),
+)
+def test_terra_sol_composed_reconciliation_is_exact(mutated_input: str) -> None:
+    """PR #2171 accepts no prompt/profile byte substitution."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT, "exact Terra/Sol protected history", TERRA_SOL_PROTECTED_BASE
+    )
+    inputs = {
+        "base_policy": _git_blob(TERRA_SOL_PROTECTED_BASE, ROTATION_FILE),
+        "candidate_policy": ROTATION_FILE.read_bytes(),
+        "base_profile": _git_blob(TERRA_SOL_PROTECTED_BASE, PROFILE_FILE),
+        "candidate_profile": PROFILE_FILE.read_bytes(),
+    }
+
+    assert verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
+        inputs["base_policy"],
+        inputs["candidate_policy"],
+        inputs["base_profile"],
+        inputs["candidate_profile"],
+    )
+    inputs[mutated_input] += b" "
+    assert not verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
+        inputs["base_policy"],
+        inputs["candidate_policy"],
+        inputs["base_profile"],
+        inputs["candidate_profile"],
+    )
+
+
+@pytest.mark.parametrize(
+    "authorization",
+    verification._TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS,  # pylint: disable=protected-access
+    ids=lambda item: item.prompt_path.name,
+)
+def test_terra_sol_composed_reconciliation_binds_prompt_bytes(authorization) -> None:
+    """Every PR #2171 profile update is bound to its exact prompt pair."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT, "exact Terra/Sol protected history", TERRA_SOL_PROTECTED_BASE
+    )
+    base_profile = _git_blob(TERRA_SOL_PROTECTED_BASE, PROFILE_FILE)
+    candidate_profile = PROFILE_FILE.read_bytes()
+    base_prompt = _git_blob(TERRA_SOL_PROTECTED_BASE, ROOT / authorization.prompt_path)
     candidate_prompt = (ROOT / authorization.prompt_path).read_bytes()
 
     assert verification._transition_bytes_match(  # pylint: disable=protected-access
@@ -615,6 +681,22 @@ def test_pdd1875_composed_reconciliation_binds_prompt_bytes(authorization) -> No
         base_prompt,
         candidate_prompt + b" ",
     )
+
+
+def test_terra_sol_composed_reconciliation_consumes_only_reviewed_scope() -> None:
+    """The protected base reaches a complete profile set only via the exact pair."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT, "exact Terra/Sol protected history", TERRA_SOL_PROTECTED_BASE
+    )
+    manifest = build_unit_manifest(
+        ROOT, base_ref=TERRA_SOL_PROTECTED_BASE, head_ref="HEAD"
+    )
+
+    profiles = load_verification_profiles(ROOT, manifest)
+
+    assert not manifest.invalid_reasons
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
 
 
 def _git_blob(ref: str, path: Path) -> bytes:
