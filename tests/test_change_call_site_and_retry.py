@@ -679,6 +679,27 @@ class TestDeterministicChangeJudges:
     @pytest.mark.parametrize(
         "guidance",
         (
+            (
+                "Propagate the final connection error when all 3 attempts "
+                "fail due to connection errors."
+            ),
+            (
+                "Raise the final error after all 3 attempts fail due to a "
+                "transient connection error."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_accepts_inverse_failure_cause_tail(
+        self, guidance: str
+    ) -> None:
+        """A bounded failure cause also supports action-first word order."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
             "If all 3 attempts fail due to connection errors, keep retrying.",
             (
                 "If all 3 attempts fail due to connection errors, the final "
@@ -688,6 +709,26 @@ class TestDeterministicChangeJudges:
             (
                 "If all 3 attempts fail due to connection errors, run_pipeline "
                 "must not propagate the final connection error."
+            ),
+            (
+                "Do not propagate the final connection error when all 3 attempts "
+                "fail due to connection errors."
+            ),
+            (
+                "Keep retrying when all 3 attempts fail due to connection errors."
+            ),
+            (
+                "The final connection error remains available for inspection when "
+                "all 3 attempts fail due to connection errors."
+            ),
+            "Return success after all 3 attempts fail due to connection errors.",
+            (
+                "Propagate the final connection error when all 3 attempts fail due "
+                "to connection errors. Keep retrying."
+            ),
+            (
+                "Propagate the final connection error when not all 3 attempts fail "
+                "due to connection errors."
             ),
         ),
     )
