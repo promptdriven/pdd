@@ -2661,20 +2661,7 @@ def run_checkup_review_loop(
         state.max_rounds_reached = True
         state.stop_reason = f"Max review rounds reached: {config.max_rounds}."
 
-    # A terminal failure can occur *during* the final permitted Terra/Sol
-    # round (for example, an unavailable Sol verifier after Terra pushed).
-    # Keep that more specific ``stop_reason`` for diagnosis, while recording
-    # that the configured round budget was consumed. Otherwise the watchdog
-    # and final-state artifact disagree about the same terminal boundary.
-    if (
-        config.terra_sol
-        and state.rounds_completed >= config.max_rounds
-        and not (
-            state.reviewer_status.get(reviewer) == "clean"
-            and state.fresh_final_status == "clean"
-        )
-    ):
-        state.max_rounds_reached = True
+    _mark_terra_sol_final_round_exhausted(state)
 
     # Clamp: the while-True guard fires at max_rounds+1; match for-loop semantics.
     round_number = min(round_number, config.max_rounds)
@@ -9727,11 +9714,38 @@ def _finalize(
             # builder does not report it as ``verified`` against the now-stale
             # SHA.
             state.validation_stale = True
+    # Finalization can downgrade a seemingly clean final round when the
+    # remote PR head changed or cannot be confirmed. Re-evaluate after that
+    # downgrade, before rendering every final artifact, so a final-round
+    # Terra/Sol run has one consistent cap signal everywhere.
+    _mark_terra_sol_final_round_exhausted(state)
     report = _render_final_report(context, state, reviewers)
     issue_aligned = _resolve_issue_aligned(state)
     _write_artifact(artifacts_dir / "final-report.md", report)
     _write_final_state(artifacts_dir, state, issue_aligned)
     return report
+
+
+def _mark_terra_sol_final_round_exhausted(state: ReviewLoopState) -> None:
+    """Record a non-clean Terra/Sol result that consumed its final round.
+
+    Keep a specific provider, verifier, or stale-head ``stop_reason`` intact;
+    ``max_rounds_reached`` is complementary audit evidence, not a replacement
+    terminal diagnosis.
+    """
+    max_rounds = state.max_rounds
+    reviewer = state.active_reviewer or TERRA_SOL_REVIEWER
+    if (
+        state.terra_sol_mode
+        and isinstance(max_rounds, int)
+        and max_rounds > 0
+        and state.rounds_completed >= max_rounds
+        and not (
+            state.reviewer_status.get(reviewer) == "clean"
+            and state.fresh_final_status == "clean"
+        )
+    ):
+        state.max_rounds_reached = True
 
 
 def _resolve_issue_aligned(state: ReviewLoopState) -> str:

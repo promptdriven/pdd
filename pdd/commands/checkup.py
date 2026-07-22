@@ -452,7 +452,8 @@ def _emit_agentic_review_loop_json(
         "otherwise --max-review-rounds (default 5) is the hard round cap. "
         "Time and cost do not cap this mode. "
         "Requires --pr. Cannot be combined with --final-gate, --review-loop, "
-        "--no-fix, --review-only, or --agentic-review-loop."
+        "--no-fix, --review-only, --agentic-review-loop, or prompt-repair "
+        "modes (use --prompt-repair off)."
     ),
 )
 @click.option(

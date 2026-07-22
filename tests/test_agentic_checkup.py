@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import hashlib
 import hmac
@@ -1136,8 +1137,10 @@ class TestRunAgenticCheckup:
         progress = json.loads(progress_path.read_text(encoding="utf-8"))
         assert progress["phase"] == "terminal"
         assert progress["terminal"] is True
-        assert "GitHub CLI" in progress["terminal_reason"]
-        assert progress["terminal_reason"] != "old run passed"
+        assert progress["terminal_reason_present"] is True
+        assert progress["terminal_reason_sha256"] == hashlib.sha256(
+            message.encode("utf-8")
+        ).hexdigest()
 
     def test_terra_sol_progress_failure_clears_stale_state_and_stops(
         self, monkeypatch, tmp_path
@@ -1379,7 +1382,8 @@ class TestRunAgenticCheckup:
             progress = json.loads(progress_path.read_text(encoding="utf-8"))
             assert progress["phase"] == "initializing"
             assert progress["terminal"] is False
-            assert progress["terminal_reason"] is None
+            assert progress["terminal_reason_present"] is False
+            assert progress["terminal_reason_sha256"] is None
             return None
 
         monkeypatch.setattr(mod, "_prepare_hosted_agentic_artifact", fail_reservation)
@@ -1401,8 +1405,10 @@ class TestRunAgenticCheckup:
         progress = json.loads(progress_path.read_text(encoding="utf-8"))
         assert progress["phase"] == "terminal"
         assert progress["terminal"] is True
-        assert "provenance" in progress["terminal_reason"]
-        assert progress["terminal_reason"] != "old run passed"
+        assert progress["terminal_reason_present"] is True
+        assert progress["terminal_reason_sha256"] == hashlib.sha256(
+            message.encode("utf-8")
+        ).hexdigest()
         check_gh.assert_not_called()
 
     @pytest.mark.parametrize(

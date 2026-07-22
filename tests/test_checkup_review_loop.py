@@ -16771,6 +16771,60 @@ class TestTerraSolBoundedLoop:
         assert progress["max_rounds_reached"] is True
         assert '"max_rounds_reached": true' in report
 
+    def test_terra_sol_final_round_stale_head_marks_cap_reached(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """A finalization-time stale-head downgrade consumes the final round."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        sha_a = "a" * 40
+        sha_b = "b" * 40
+        self._patch_io(monkeypatch, tmp_path)
+        metadata_calls: List[int] = []
+
+        def fake_metadata(*_args: Any, **_kwargs: Any) -> Dict[str, str]:
+            metadata_calls.append(1)
+            return {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "base_ref": "main",
+                "head_sha": sha_a if len(metadata_calls) == 1 else sha_b,
+            }
+
+        monkeypatch.setattr(mod, "_fetch_pr_metadata", fake_metadata)
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *_args: sha_a)
+        monkeypatch.setattr(
+            mod,
+            "_run_role_task",
+            lambda *_args, **_kwargs: (
+                True,
+                _json("clean"),
+                0.01,
+                "gpt-5.6-sol",
+            ),
+        )
+
+        _success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        artifacts_dir = (
+            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
+        )
+        final_state = json.loads((artifacts_dir / "final-state.json").read_text())
+        progress = json.loads((artifacts_dir / "terra-sol-progress.json").read_text())
+        assert len(metadata_calls) == 2
+        assert final_state["fresh_final_status"] == "missing"
+        assert final_state["max_rounds_reached"] is True
+        assert "PR head advanced after review" in final_state["stop_reason"]
+        assert progress["max_rounds_reached"] is True
+        assert '"max_rounds_reached": true' in report
+
     def test_terra_sol_budget_exhausted_never_fires(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
@@ -17174,6 +17228,11 @@ class TestTerraSolBoundedLoop:
     def test_terra_sol_cli_flag_validation(self) -> None:
         """--terra-sol requires --pr and rejects incompatible flags."""
         runner = CliRunner()
+
+        help_result = runner.invoke(checkup, ["--help"])
+        assert help_result.exit_code == 0, help_result.output
+        assert "prompt-repair modes" in help_result.output
+        assert "repair off)" in help_result.output
 
         # --terra-sol combined with --final-gate should fail
         result = runner.invoke(
