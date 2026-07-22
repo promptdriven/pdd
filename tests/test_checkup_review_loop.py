@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -16418,7 +16419,10 @@ class TestTerraSolBoundedLoop:
             "phase": "terminal",
             "schema": "pdd.checkup.terra_sol_progress.v1",
             "terminal": True,
-            "terminal_reason": "max_rounds_reached",
+            "terminal_reason_present": True,
+            "terminal_reason_sha256": hashlib.sha256(
+                b"max_rounds_reached"
+            ).hexdigest(),
         }
 
     def test_terra_sol_publishes_terminal_progress_on_worktree_setup_failure(
@@ -16452,7 +16456,44 @@ class TestTerraSolBoundedLoop:
         assert progress["phase"] == "terminal"
         assert progress["current_round"] == 0
         assert progress["terminal"] is True
-        assert "Failed to set up PR worktree" in progress["terminal_reason"]
+        assert progress["terminal_reason_present"] is True
+        assert progress["terminal_reason_sha256"] == hashlib.sha256(
+            b"Failed to set up PR worktree: clone failed"
+        ).hexdigest()
+
+    def test_terra_sol_progress_never_persists_terminal_reason(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Watchdog artifacts and interrupt context omit secret-bearing reasons."""
+        import pdd.checkup_review_loop as mod
+
+        captured_progress: Dict[str, Any] = {}
+        monkeypatch.setattr(
+            mod,
+            "set_agentic_progress",
+            lambda **kwargs: captured_progress.update(kwargs),
+        )
+        secret_reason = "provider failed: sk-test-should-never-be-persisted"
+
+        mod.write_terra_sol_progress(
+            artifacts_dir=tmp_path,
+            max_rounds=2,
+            round_number=1,
+            phase="terminal",
+            terminal_reason=secret_reason,
+        )
+
+        raw_artifact = (tmp_path / "terra-sol-progress.json").read_text(
+            encoding="utf-8"
+        )
+        progress = json.loads(raw_artifact)
+        assert secret_reason not in raw_artifact
+        assert progress["terminal_reason_present"] is True
+        assert progress["terminal_reason_sha256"] == hashlib.sha256(
+            secret_reason.encode("utf-8")
+        ).hexdigest()
+        assert secret_reason not in captured_progress["step_name"]
+        assert captured_progress["step_name"] == "terminal: terminal reason redacted"
 
     def test_terra_sol_publishes_terminal_progress_on_preflight_conflict(
         self, monkeypatch: Any, tmp_path: Path
@@ -16495,7 +16536,12 @@ class TestTerraSolBoundedLoop:
         assert progress["phase"] == "terminal"
         assert progress["current_round"] == 0
         assert progress["terminal"] is True
-        assert "Pre-flight base-merge conflict" in progress["terminal_reason"]
+        assert progress["terminal_reason_present"] is True
+        assert progress["terminal_reason_sha256"] == hashlib.sha256(
+            b"Pre-flight base-merge conflict detected; refusing to start "
+            b"the review loop. See the synthetic blocker finding for "
+            b"remediation."
+        ).hexdigest()
 
     def test_missing_sol_model_never_inherits_valid_terra_model(
         self, monkeypatch: Any, tmp_path: Path

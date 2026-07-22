@@ -996,14 +996,24 @@ def write_terra_sol_progress(
     max_rounds_reached: bool = False,
 ) -> None:
     """Publish watchdog state when the outer dispatcher has no loop state yet."""
-    safe_reason = _scrub_secrets(terminal_reason)[:2000]
+    # ``terminal_reason`` can contain a provider or subprocess failure string.
+    # Treat it as secret-bearing: persist only a digest so watchdog consumers
+    # can correlate terminal states without retaining credentials in an
+    # on-disk artifact (or in the interrupt/core-dump progress context).
+    reason_present = bool(terminal_reason)
+    reason_sha256 = (
+        hashlib.sha256(terminal_reason.encode("utf-8", errors="replace")).hexdigest()
+        if reason_present
+        else None
+    )
     payload = {
         "schema": "pdd.checkup.terra_sol_progress.v1",
         "current_round": round_number,
         "max_rounds": max_rounds,
         "phase": phase,
-        "terminal": bool(safe_reason),
-        "terminal_reason": safe_reason or None,
+        "terminal": reason_present,
+        "terminal_reason_present": reason_present,
+        "terminal_reason_sha256": reason_sha256,
         "max_rounds_reached": max_rounds_reached,
     }
     _write_artifact(
@@ -1014,7 +1024,7 @@ def write_terra_sol_progress(
         workflow="terra-sol-checkup",
         current_step=max(0, round_number),
         total_steps=max_rounds,
-        step_name=(f"{phase}: {safe_reason}" if safe_reason else phase),
+        step_name=(f"{phase}: terminal reason redacted" if reason_present else phase),
         completed_steps=list(range(1, max(0, round_number))),
     )
 
