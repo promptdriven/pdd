@@ -766,6 +766,65 @@ class TestDeterministicChangeJudges:
         "guidance",
         (
             (
+                "The runner should allow a maximum of 3 attempts. If the 3rd "
+                "attempt also fails due to a connection error, `run_pipeline` "
+                "must propagate the final exception to the caller."
+            ),
+            (
+                "Use at most 3 attempts. If the third attempt still fails due "
+                "to a connection exception, re-raise the final exception."
+            ),
+            (
+                "Propagate the final exception when the third attempt fails "
+                "due to a transient connection error. Retry up to 3 times."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_accepts_ordinal_due_to_explicit_action(
+        self, guidance: str
+    ) -> None:
+        """A bound ordinal cause may precede explicit propagation or re-raise."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use at most 3 attempts. If the third attempt fails due to a "
+                "connection error."
+            ),
+            (
+                "Use at most 3 attempts. If the third attempt fails due to a "
+                "connection error, handle it."
+            ),
+            (
+                "Use at most 3 attempts. If the third attempt fails due to a "
+                "connection error, the exception remains available."
+            ),
+            (
+                "Use at most 3 attempts. If the third attempt fails due to a "
+                "connection error, do not propagate the exception."
+            ),
+            (
+                "Use at most 3 attempts. Propagate the final exception when "
+                "the third attempt fails due to a connection error. Keep retrying."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_ordinal_due_to_without_fallback(
+        self, guidance: str
+    ) -> None:
+        """A bound ordinal cause alone is not an explicit fallback action."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
                 "Use a maximum of 1 attempt. If the first attempt also fails, "
                 "raise the final error."
             ),
