@@ -779,6 +779,34 @@ def test_build_rows_retains_fable_unscored_platform_default():
     assert fable_rows[0]["model_rank_source"] == "platform-default"
 
 
+def test_build_rows_preserves_fable_contract_when_litellm_knows_it(monkeypatch):
+    """A reviewed LiteLLM row must not weaken Fable's mandatory capability contract."""
+    fake_litellm = type("L", (), {"model_cost": {
+        "claude-fable-5": {
+            "mode": "chat",
+            "input_cost_per_token": 10e-6,
+            "output_cost_per_token": 50e-6,
+            "litellm_provider": "anthropic",
+            "supports_reasoning": True,
+            "supports_function_calling": True,
+        },
+    }})
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    monkeypatch.setattr(gmc, "_fetch_arena_elo", lambda **_kw: {
+        "claude-fable-5": {"elo": 1600.0, "votes": 1, "raw_name": "claude-fable-5"},
+    })
+    monkeypatch.setattr(gmc, "_fetch_deepswe_elo", lambda **_kw: {})
+
+    fable_rows = [
+        row for row in gmc.build_rows()
+        if row.get("provider") == "Anthropic" and row.get("model") == "claude-fable-5"
+    ]
+
+    assert len(fable_rows) == 1
+    assert fable_rows[0]["max_reasoning_tokens"] == 128000
+    assert fable_rows[0]["context_limit"] == 1_000_000
+
+
 def test_gpt_5_6_openai_api_row_deduped_once_litellm_knows_it():
     """When the catalog already contains an OpenAI gpt-5.6 row, the mandatory
     seed must not duplicate it (matches the opus-4-8 dedup contract)."""

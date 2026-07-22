@@ -639,7 +639,7 @@ _ADAPTIVE_CLAUDE_PROVIDERS = {"anthropic", "azure_ai"}
 
 
 def _is_adaptive_claude_model(model_id: str, litellm_provider: str) -> bool:
-    """Return True for direct Anthropic/Azure AI Opus 4.7+ rows."""
+    """Return True for direct Anthropic/Azure AI adaptive-thinking rows."""
     root = _get_provider_root(litellm_provider)
     if root not in _ADAPTIVE_CLAUDE_PROVIDERS:
         return False
@@ -669,7 +669,10 @@ def _infer_max_reasoning_tokens(model_id: str, litellm_provider: str, entry: dic
     if root in _ANTHROPIC_PROVIDERS:
         if _is_adaptive_claude_model(model_id, litellm_provider):
             # adaptive serialization doesn't read this value, but match the
-            # validated pdd_cloud backend CSV (backend/functions/.pdd/llm_model.csv)
+            # reviewed direct-provider contract. Fable retains its full 128k
+            # reasoning allowance; the Opus adaptive rows retain their 16k cap.
+            if _normalize_model_name(model_id) == "claude-fable-5":
+                return 128000
             return 16000
         return 128000
     return 0
@@ -1739,6 +1742,26 @@ def _mandatory_rows_missing_from(
     return missing
 
 
+def _overlay_mandatory_contract_fields(row: dict) -> dict:
+    """Preserve mandatory capability contracts on LiteLLM-derived rows.
+
+    A reviewed score lets a LiteLLM row survive the catalog cutoff, so the
+    duplicate-prevention logic intentionally does not append its mandatory
+    fallback.  Keep capability fields from that fallback on the surviving row
+    rather than allowing a catalog refresh to weaken a reviewed PDD contract.
+    """
+    row_id = (row.get("provider", ""), row.get("model", ""))
+    for default_row in _MANDATORY_MODEL_ROWS:
+        default_id = (default_row.get("provider", ""), default_row.get("model", ""))
+        if row_id != default_id:
+            continue
+        for field in ("max_reasoning_tokens", "context_limit"):
+            if field in default_row:
+                row[field] = default_row[field]
+        break
+    return row
+
+
 # Issue #1269: the ChatGPT/Codex SUBSCRIPTION family is hand-managed. It is
 # billed by a flat-rate ChatGPT plan (not per-token API keys) and is not present
 # in ``litellm.model_cost`` in a curatable form, so it is intentionally skipped
@@ -1919,7 +1942,7 @@ def build_rows(
         # Location (Vertex AI models default to global)
         location = "global" if litellm_provider.startswith("vertex_ai") else ""
 
-        rows.append({
+        generated_row = {
             "provider": display_name,
             "model": model_id,
             "input": input_cost,
@@ -1933,7 +1956,8 @@ def build_rows(
             "structured_output": structured,
             "reasoning_type": reasoning_type,
             "location": location,
-        })
+        }
+        rows.append(_overlay_mandatory_contract_fields(generated_row))
 
     if skipped_previews:
         print(

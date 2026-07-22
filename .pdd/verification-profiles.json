@@ -7316,9 +7316,9 @@
     {
       "prompt_path": "pdd/prompts/generate_model_catalog_python.prompt",
       "language_id": "python",
-      "required_requirement_ids": [
-        "CONTRACT-SHA256:a086fdc50c2cb54bcd0543e467106dbc2fb87c3b2f196bfcc0f51b7ecf3bed97"
-      ],
+    "required_requirement_ids": [
+      "CONTRACT-SHA256:3cd5832b8a4c4f168111eeda8388087e0fcf9067b2e1c52856fb0a1bc1573b60"
+    ],
       "obligations": [
         {
           "obligation_id": "threshold-human-attestation",
@@ -7326,7 +7326,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:a086fdc50c2cb54bcd0543e467106dbc2fb87c3b2f196bfcc0f51b7ecf3bed97"
+        "CONTRACT-SHA256:3cd5832b8a4c4f168111eeda8388087e0fcf9067b2e1c52856fb0a1bc1573b60"
           ],
           "artifact_paths": [
             "pdd/prompts/generate_model_catalog_python.prompt"
@@ -7954,9 +7954,9 @@
     {
       "prompt_path": "pdd/prompts/llm_invoke_python.prompt",
       "language_id": "python",
-      "required_requirement_ids": [
-        "CONTRACT-SHA256:15c51e9dbc3bb536ab6d6dfa1a7927a30f33b1423398e326e5a06f9524896735"
-      ],
+    "required_requirement_ids": [
+      "CONTRACT-SHA256:387ffe499946a84b47210b784a4298664e56a2846cd351884d66fbe6696ef3fa"
+    ],
       "obligations": [
         {
           "obligation_id": "threshold-human-attestation",
@@ -7964,7 +7964,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:15c51e9dbc3bb536ab6d6dfa1a7927a30f33b1423398e326e5a06f9524896735"
+        "CONTRACT-SHA256:387ffe499946a84b47210b784a4298664e56a2846cd351884d66fbe6696ef3fa"
           ],
           "artifact_paths": [
             "pdd/prompts/llm_invoke_python.prompt"
