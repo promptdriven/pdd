@@ -74,6 +74,32 @@ def test_cli_generate_incremental_flag_passthrough(mock_main, mock_auto_update, 
     # CLI uses --incremental but main receives force_incremental_flag
     assert call_kwargs["force_incremental_flag"] is True
 
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_global_model_flag_sets_fable_for_generate_run(
+    mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch
+):
+    """The public CLI can explicitly select Fable without leaking process env."""
+    files = create_dummy_files("fable.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'claude-fable-5')
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    seen = {}
+
+    def capture_model(**kwargs):
+        seen["model"] = os.environ.get("PDD_MODEL_DEFAULT")
+        return ('code', False, 0.0, 'claude-fable-5')
+
+    mock_main.side_effect = capture_model
+    result = runner.invoke(
+        cli.cli,
+        ["--model", "claude-fable-5", "generate", str(files["fable.prompt"])],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen["model"] == "claude-fable-5"
+    assert os.environ.get("PDD_MODEL_DEFAULT") is None
+
 # --- Template Functionality Tests ---
 
 @patch('pdd.core.cli.auto_update')

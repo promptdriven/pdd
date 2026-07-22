@@ -3233,6 +3233,47 @@ def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     return alternatives
 
 
+def _is_explicit_claude_fable_selection(model_name: Optional[str]) -> bool:
+    """Return whether a configured model name explicitly requests Fable 5.
+
+    ``PDD_MODEL_DEFAULT`` normally supplies the base point for the strength
+    interpolation.  Claude Fable 5 is intentionally unranked, however, so a
+    high-strength interpolation would otherwise replace an explicit Fable
+    choice with a higher-ranked model before Fable is ever attempted.  Accept
+    both the catalog's bare name and the provider-qualified CLI form.
+    """
+    normalized = str(model_name or "").strip().lower()
+    return normalized in {"claude-fable-5", "anthropic/claude-fable-5"}
+
+
+def _prioritize_explicit_fable_candidate(
+    candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Return Fable first, preserving the original order as fallback.
+
+    The remaining candidates are deliberately retained: an explicit model
+    selection means "try Fable first", not "disable all recovery".  This
+    allows authentication, refusal, and provider failures to continue through
+    the existing candidate fallback loop after a real Fable attempt.
+    """
+    fable_candidates = [
+        candidate
+        for candidate in candidates
+        if str(candidate.get("model", "")).strip().lower() == "claude-fable-5"
+    ]
+    if not fable_candidates:
+        raise ValueError(
+            "Claude Fable 5 was explicitly selected, but the active model "
+            "catalog has no 'claude-fable-5' row. Add that row or use the "
+            "packaged catalog; refusing to silently select another model."
+        )
+    return fable_candidates + [
+        candidate
+        for candidate in candidates
+        if str(candidate.get("model", "")).strip().lower() != "claude-fable-5"
+    ]
+
+
 def _clean_optional_scalar(value: Any) -> Optional[str]:
     """Return a stripped string for a scalar value, treating blank/NaN as missing."""
     try:
@@ -4971,13 +5012,22 @@ def llm_invoke(
         # cascade and select the routed model directly when it exists.
         if model_override:
             _effective_default_model = model_override
+        explicit_fable_selection = _is_explicit_claude_fable_selection(
+            _effective_default_model
+        )
         candidate_models = _select_model_candidates(
             strength,
             _effective_default_model,
             model_df,
             manifest_by_model=manifest_by_model,
         )
-        if model_override:
+        if explicit_fable_selection:
+            # An explicit Fable selection is not merely a strength-routing base
+            # point. Fable is unranked, so strength=1.0 otherwise selects a
+            # different high-ranked model first. Keep the normal candidates
+            # after Fable so fallback begins only after Fable was attempted.
+            candidate_models = _prioritize_explicit_fable_candidate(candidate_models)
+        elif model_override:
             _exact = [
                 c for c in candidate_models
                 if str(c.get("model")) == str(model_override)

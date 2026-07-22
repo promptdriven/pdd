@@ -6248,6 +6248,82 @@ class TestLlmInvokeWithMockedLLM:
         assert result["model_name"] == "model-b"
         assert result["attempted_models"] == ["claude-fable-5", "model-b"]
 
+    def test_explicit_fable_env_is_attempted_first_at_default_strength(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """An explicit Fable selection beats high-strength rank ordering.
+
+        Fable has no benchmark rank, so the ordinary 1.0 selector would put
+        ``model-b`` first. Its failure here proves that the fallback is reached
+        only after an actual Fable request was attempted.
+        """
+        csv_path = tmp_path / "models.csv"
+        csv_path.write_text(
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_reasoning_tokens\n"
+            "Anthropic,claude-fable-5,1,2,0,KEY_A,True,adaptive,0\n"
+            "OpenAI,model-b,1,2,1500,KEY_B,True,none,0\n"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("PDD_MODEL_DEFAULT", "claude-fable-5")
+        monkeypatch.setenv("KEY_A", "sk-aaaa1234567890123456")
+        monkeypatch.setenv("KEY_B", "sk-bbbb1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+
+        success_message = MagicMock()
+        success_message.content = "fallback success"
+        success_choice = MagicMock()
+        success_choice.message = success_message
+        success_choice.finish_reason = "stop"
+        success_response = MagicMock()
+        success_response.choices = [success_choice]
+        success_response._hidden_params = {}
+
+        with patch.object(
+            llm_mod.litellm,
+            "completion",
+            side_effect=[Exception("Fable provider failure"), success_response],
+        ) as completion:
+            result = llm_mod.llm_invoke(
+                prompt="Say {greeting}",
+                input_json={"greeting": "hello"},
+                strength=1.0,
+                use_cloud=False,
+            )
+
+        assert [call.kwargs["model"] for call in completion.call_args_list] == [
+            "claude-fable-5",
+            "model-b",
+        ]
+        assert result["attempted_models"] == ["claude-fable-5", "model-b"]
+        assert result["model_name"] == "model-b"
+
+    def test_explicit_fable_env_refuses_catalog_surrogate(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """A stale catalog cannot turn an explicit Fable request into Opus."""
+        csv_path = tmp_path / "models.csv"
+        csv_path.write_text(
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_reasoning_tokens\n"
+            "Anthropic,claude-opus-4-7,1,2,1500,KEY_A,True,adaptive,0\n"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("PDD_MODEL_DEFAULT", "claude-fable-5")
+        monkeypatch.setenv("KEY_A", "sk-aaaa1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+
+        with patch.object(llm_mod.litellm, "completion") as completion:
+            with pytest.raises(ValueError, match="Claude Fable 5 was explicitly selected"):
+                llm_mod.llm_invoke(
+                    prompt="Say {greeting}",
+                    input_json={"greeting": "hello"},
+                    strength=1.0,
+                    use_cloud=False,
+                )
+
+        completion.assert_not_called()
+
     def test_all_models_fail_raises_runtime_error(self, llm_mod, tmp_path, monkeypatch):
         csv_path = self._make_csv_file(tmp_path)
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")

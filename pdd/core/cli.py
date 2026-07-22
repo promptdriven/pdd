@@ -528,6 +528,14 @@ class PDDCLI(click.Group):
     help=f"Set the strength of the AI model (0.0 to 1.0). Default: {DEFAULT_STRENGTH} or .pddrc value.",
 )
 @click.option(
+    "--model",
+    default=None,
+    help=(
+        "Override the model for this invocation (for example, "
+        "--model claude-fable-5). Takes precedence over PDD_MODEL_DEFAULT."
+    ),
+)
+@click.option(
     "--temperature",
     type=click.FloatRange(0.0, 2.0), # Allow higher temperatures if needed
     default=None,
@@ -650,6 +658,7 @@ def cli(
     ctx: Optional[click.Context] = None,
     force: bool = False,
     strength: Optional[float] = None,
+    model: Optional[str] = None,
     temperature: Optional[float] = None,
     verbose: bool = False,
     quiet: bool = False,
@@ -710,6 +719,21 @@ def cli(
 
     ctx.ensure_object(dict)
     ctx.obj["force"] = force
+    if model:
+        # Keep the global CLI form invocation-scoped, matching `sync --model`.
+        # The environment is the established handoff for library and spawned
+        # command paths, while llm_invoke resolves it at call time.
+        previous_model_default = os.environ.get("PDD_MODEL_DEFAULT")
+        os.environ["PDD_MODEL_DEFAULT"] = model
+
+        def _restore_model_default(_previous=previous_model_default):
+            if _previous is None:
+                os.environ.pop("PDD_MODEL_DEFAULT", None)
+            else:
+                os.environ["PDD_MODEL_DEFAULT"] = _previous
+
+        ctx.call_on_close(_restore_model_default)
+        ctx.obj["model"] = model
     if force:
         os.environ['PDD_FORCE'] = '1'
     # Only set strength/temperature if explicitly provided (not None)
