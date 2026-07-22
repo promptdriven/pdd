@@ -37,6 +37,8 @@ os.environ["HOME"] = _PYTEST_FAKE_HOME
 os.environ["CODEX_HOME"] = os.path.join(_PYTEST_FAKE_HOME, ".codex")
 
 import pytest
+from dotenv import load_dotenv
+from pdd.llm_invoke import InsufficientCreditsError
 
 
 CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
@@ -80,8 +82,6 @@ def skip_if_authenticated_candidate_lacks_refs(
         return
     if actual_identity.stdout.splitlines() == [candidate_sha, candidate_tree]:
         pytest.skip(f"requires {purpose}: " + ", ".join(missing_refs))
-from dotenv import load_dotenv
-from pdd.llm_invoke import InsufficientCreditsError
 
 
 class _MiniMocker:

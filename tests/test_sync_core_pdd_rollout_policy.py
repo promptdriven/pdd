@@ -2232,7 +2232,7 @@ def test_gate1_paths_compose_with_protected_preauthorization(
 ) -> None:
     """A branch-only checkout composes Gate 1 paths from protected preauth."""
     root = tmp_path / "gate1-preauth-composition"
-    protected_base = _synthetic_current_tree_repo(root)
+    _synthetic_current_tree_repo(root)
     assert not any(
         "global-sync-gate1" in ref
         for ref in subprocess.check_output(
@@ -2442,7 +2442,7 @@ def test_standalone_checker_package_boundary_composes_offline_and_fails_closed(
 ) -> None:
     """A branch-only checkout admits only the exact standalone boundary."""
     root = tmp_path / "standalone-checker-preauth-composition"
-    protected_base = _synthetic_current_tree_repo(root)
+    _synthetic_current_tree_repo(root)
     assert not any(
         "standalone-checker" in ref
         for ref in subprocess.check_output(
@@ -2532,7 +2532,7 @@ def test_global_sync_ledger_paths_compose_with_protected_preauthorization(
 ) -> None:
     """A branch-only checkout composes ledger paths from protected preauth."""
     root = tmp_path / "global-sync-ledger-preauth-composition"
-    protected_base = _synthetic_current_tree_repo(root)
+    _synthetic_current_tree_repo(root)
     assert not any(
         "global-sync-ledger" in ref
         for ref in subprocess.check_output(
