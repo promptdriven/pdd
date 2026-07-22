@@ -9519,6 +9519,11 @@
             "returns": "None"
           },
           {
+            "name": "_result_tuple_reports_failure",
+            "signature": "(result: Any)",
+            "returns": "bool"
+          },
+          {
             "name": "_derive_success_from_normalized_results",
             "signature": "(normalized_results: List[Any])",
             "returns": "bool"
@@ -10057,7 +10062,7 @@
   },
   {
     "reason": "LLM oracle for user story validation, generation, and story-driven prompt fixing; owns the story_id filename-slug identity convention and cross-unit story metadata helpers.",
-    "description": "Discovers story files, validates them against prompts via detect_change, generates LLM-authored story markdown from GitHub issues, and applies prompt fixes. Validation accepts an optional exact story-to-contract mapping so scoped callers use the authorized contract rather than discovering a conventional sibling. Provides cross-unit story traceability via parse_story_dev_unit_metadata, story_is_cross_unit, get_cross_unit_stories_for_prompt, and get_all_dev_units_for_story.",
+    "description": "Discovers story files, validates them against prompts via detect_change, generates LLM-authored story markdown from GitHub issues, and applies prompt fixes. Validation accepts an optional exact story-to-contract mapping so scoped callers use the authorized contract rather than discovering a conventional sibling. Provides the public story_id helper plus cross-unit story traceability via parse_story_dev_unit_metadata, story_is_cross_unit, get_cross_unit_stories_for_prompt, and get_all_dev_units_for_story.",
     "dependencies": [
       "contract_ir_python.prompt",
       "detect_change_python.prompt",
@@ -10144,6 +10149,49 @@
     "position": {
       "x": 0,
       "y": 0
+    },
+    "contract_summary": {
+      "rules": [
+        "R1",
+        "R2"
+      ],
+      "critical": [],
+      "stories": [],
+      "capabilities": [],
+      "coverage_status": "partial",
+      "evidence_status": "missing",
+      "waived": [],
+      "unchecked": [],
+      "rules_detail": {
+        "R1": {
+          "rule_id": "R1",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_failure_diagnostic_output_quiet_false",
+            "test_failure_diagnostic_metadata_resolution_failure",
+            "test_partial_unresolved_metadata_is_incomplete_after_evaluating_resolved_prompt",
+            "test_detect_stories_cli_failure_output_e2e_with_mocked_llm",
+            "test_failure_diagnostic_output_preserves_rich_markup_characters"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R2": {
+          "rule_id": "R2",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_failure_diagnostic_output_quiet_true"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        }
+      }
     }
   },
   {

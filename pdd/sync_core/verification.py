@@ -50,6 +50,19 @@ _PR1971_COMBINED_PROFILE_BYTES = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
 )
 
+# PR #1875 was reviewed before the #1998 campaign reached ``main``.  This
+# exact pair represents the campaign profile followed by the story-diagnostics
+# transitions and the composed CLI prompt. It is a one-time reconciliation,
+# not reusable authority for any other policy, profile, or prompt bytes.
+_PDD_1875_COMPOSED_SCHEMA_2_HISTORY = (
+    "85fd63ba8a0b8e5e4d514d4bd96c5f7ac423c8fea3c413a074ef7bdf3acec880",
+    "0b00131438c93244513b77346ae2649d1073414621f30f536e2f6ae55ee7d9ee",
+)
+_PDD_1875_COMPOSED_PROFILE_BYTES = (
+    "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
+    "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
+)
+
 
 class VerificationProfileError(ValueError):
     """Raised when protected verification-profile data cannot be parsed."""
@@ -616,6 +629,41 @@ _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS = (
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _REPLAY_PROMPT_REQUIREMENT_TRANSITIONS
 
+_PDD_1875_COMPOSED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/analysis_python.prompt",
+        "python",
+        "5aff15e367047ac59ad70b842c7a0a59cdf266526e09df274f56f7928413aafd",
+        "89c8005f5fe933af745285a6a2f28f73b79112e1b96e7af4d7b0e47cde136a16",
+        _PDD_1875_COMPOSED_PROFILE_BYTES[0],
+        _PDD_1875_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/user_story_tests_python.prompt",
+        "python",
+        "c63d875cc5d488b8fd9bfdd72ea015f33962d22b5cde90b9be751de55a209e32",
+        "1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7",
+        _PDD_1875_COMPOSED_PROFILE_BYTES[0],
+        _PDD_1875_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/detect_change_python.prompt",
+        "python",
+        "2987422f58c48f279289d5b739e46bd1346d596dce1ec14b67a1ac840ee33e60",
+        "d5ac2b7fceec8fa95e4711829525faa57bdf5cf01f9d44132a346bb020dcf0a9",
+        _PDD_1875_COMPOSED_PROFILE_BYTES[0],
+        _PDD_1875_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/core/cli_python.prompt",
+        "python",
+        "779a19a53bdbb3c7ad5dbf4afb9fb29cf3f04b56e9bfc488552ed0eff823f46e",
+        "e0f5f0173e29379d84dd34934b3221b5ae0f5c9c7b745ea35cb73699cb6162b1",
+        _PDD_1875_COMPOSED_PROFILE_BYTES[0],
+        _PDD_1875_COMPOSED_PROFILE_BYTES[1],
+    ),
+)
+
 # PR #1971's six historical prompt/profile transitions remain exact protected
 # evidence.  They deliberately are not appended to replay bootstrap authority.
 _PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
@@ -766,6 +814,7 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = tuple(
     _REPLAY_TRANSITION_BY_IDENTITY.get((item.prompt_path, item.language_id), item)
     for item in _BOOTSTRAP_REQUIREMENT_TRANSITIONS
 )
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_1875_COMPOSED_REQUIREMENT_TRANSITIONS
 _REPLAY_REPLACED_PROTECTED_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/sync_orchestration_python.prompt",
@@ -1642,6 +1691,7 @@ def _is_exact_combined_requirement_reconciliation(
     return (policy_pair, profile_pair) in {
         (_LEGACY_PDD_1989_SCHEMA_2_HISTORY, _LEGACY_PDD_1989_PROFILE_BYTES),
         (_PR1971_COMBINED_SCHEMA_2_HISTORY, _PR1971_COMBINED_PROFILE_BYTES),
+        (_PDD_1875_COMPOSED_SCHEMA_2_HISTORY, _PDD_1875_COMPOSED_PROFILE_BYTES),
     }
 
 
@@ -1864,17 +1914,20 @@ def _validate_schema_2_history_representation(
     candidate_rows: tuple[_RequirementTransitionAuthorization, ...],
 ) -> None:
     """Keep surviving schema-2 row tokens exact and ahead of new rows."""
-    if (
-        manifest.repository_id == _PDD_REPOSITORY_ID
-        and protected_raw is not None
-        and candidate_raw is not None
-        and (
-            hashlib.sha256(protected_raw).hexdigest(),
-            hashlib.sha256(candidate_raw).hexdigest(),
+    if manifest.repository_id == _PDD_REPOSITORY_ID:
+        policy_pair = (
+            (
+                hashlib.sha256(protected_raw).hexdigest(),
+                hashlib.sha256(candidate_raw).hexdigest(),
+            )
+            if protected_raw is not None and candidate_raw is not None
+            else None
         )
-        == _LEGACY_PDD_1989_SCHEMA_2_HISTORY
-    ):
-        return
+        if policy_pair in {
+            _LEGACY_PDD_1989_SCHEMA_2_HISTORY,
+            _PDD_1875_COMPOSED_SCHEMA_2_HISTORY,
+        }:
+            return
     protected_tokens, _ = _raw_requirement_transition_history(
         protected_raw, "protected"
     )
@@ -2181,6 +2234,23 @@ def _load_requirement_transition_authorizations(
         )
         == _LEGACY_PDD_1989_PROFILE_BYTES
     )
+    pdd1875_reconciliation = (
+        is_pdd_repository
+        and protected_policy is not None
+        and candidate_policy is not None
+        and policies[0] is not None
+        and policies[1] is not None
+        and (
+            hashlib.sha256(protected_policy).hexdigest(),
+            hashlib.sha256(candidate_policy).hexdigest(),
+        )
+        == _PDD_1875_COMPOSED_SCHEMA_2_HISTORY
+        and (
+            hashlib.sha256(policies[0]).hexdigest(),
+            hashlib.sha256(policies[1]).hexdigest(),
+        )
+        == _PDD_1875_COMPOSED_PROFILE_BYTES
+    )
     retired_by_candidate = {item.obsolete for item in candidate_retirements}
     new_authorizations = tuple(
         item
@@ -2188,7 +2258,7 @@ def _load_requirement_transition_authorizations(
         if item not in protected
         and not (is_pdd_repository and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS)
     )
-    if legacy_pdd1989_reconciliation or pr1971_reconciliation:
+    if legacy_pdd1989_reconciliation or pr1971_reconciliation or pdd1875_reconciliation:
         # The exact historical pair both installed and consumed its authority
         # before Phase-A isolation existed; validate it as consumption below.
         new_authorizations = ()
@@ -2204,6 +2274,7 @@ def _load_requirement_transition_authorizations(
                 and policies[0] != policies[1]
                 and not legacy_pdd1989_reconciliation
                 and not pr1971_reconciliation
+                and not pdd1875_reconciliation
             ):
                 raise VerificationProfileError(
                     "candidate legacy bootstrap requirement transition changes "
@@ -2230,7 +2301,11 @@ def _load_requirement_transition_authorizations(
             )
     candidate_authority = set(candidate_rows)
     for item in protected:
-        if item in candidate_authority or legacy_pdd1989_reconciliation:
+        if (
+            item in candidate_authority
+            or legacy_pdd1989_reconciliation
+            or pdd1875_reconciliation
+        ):
             continue
         if is_pdd_repository and any(
             protected == item and replacement in candidate_authority
