@@ -16725,6 +16725,52 @@ class TestTerraSolBoundedLoop:
         # A failed first Sol call is hard-not-clean, not a false clean.
         assert '"max_rounds_reached": false' in report
 
+    def test_terra_sol_final_round_verify_failure_marks_cap_reached(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """A non-clean terminal final round retains its reason and cap evidence."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        finding = [
+            {
+                "severity": "critical",
+                "finding": "issue",
+                "required_fix": "fix it",
+                "area": "code",
+            }
+        ]
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs.get("label", "")
+            if "verify" in label:
+                return False, "provider unavailable", 0.01, "gpt-5.6-sol"
+            if "review" in label:
+                return True, _json("findings", finding), 0.01, "gpt-5.6-sol"
+            return True, _json("clean"), 0.01, "gpt-5.6-sol"
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        _success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=self._terra_sol_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        artifacts_dir = (
+            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
+        )
+        final_state = json.loads((artifacts_dir / "final-state.json").read_text())
+        progress = json.loads((artifacts_dir / "terra-sol-progress.json").read_text())
+        assert final_state["rounds_completed"] == 1
+        assert final_state["max_rounds_reached"] is True
+        assert final_state["verification_status_by_round"]["1"] == "unverified"
+        assert "could not verify fixes: failed" in final_state["stop_reason"]
+        assert progress["max_rounds_reached"] is True
+        assert '"max_rounds_reached": true' in report
+
     def test_terra_sol_budget_exhausted_never_fires(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:

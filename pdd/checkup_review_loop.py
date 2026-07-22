@@ -2661,6 +2661,21 @@ def run_checkup_review_loop(
         state.max_rounds_reached = True
         state.stop_reason = f"Max review rounds reached: {config.max_rounds}."
 
+    # A terminal failure can occur *during* the final permitted Terra/Sol
+    # round (for example, an unavailable Sol verifier after Terra pushed).
+    # Keep that more specific ``stop_reason`` for diagnosis, while recording
+    # that the configured round budget was consumed. Otherwise the watchdog
+    # and final-state artifact disagree about the same terminal boundary.
+    if (
+        config.terra_sol
+        and state.rounds_completed >= config.max_rounds
+        and not (
+            state.reviewer_status.get(reviewer) == "clean"
+            and state.fresh_final_status == "clean"
+        )
+    ):
+        state.max_rounds_reached = True
+
     # Clamp: the while-True guard fires at max_rounds+1; match for-loop semantics.
     round_number = min(round_number, config.max_rounds)
 
