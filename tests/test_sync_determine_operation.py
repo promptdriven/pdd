@@ -7145,11 +7145,17 @@ class TestFingerprintIncludeDependencies:
         prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
         first = pdd_test_environment / "a.py"
         second = pdd_test_environment / "b.py"
-        create_file(prompt, "No includes.\n")
-        create_file(first, "A = 1\n")
-        create_file(second, "B = 1\n")
-        stored = {str(second): "old", str(pdd_test_environment / "missing.py"): "old", str(first): "old"}
-        expected = hashlib.sha256(prompt.read_bytes() + first.read_bytes() + second.read_bytes()).hexdigest()
+        prompt.write_text("No includes.\n", encoding="utf-8")
+        first.write_text("A = 1\n", encoding="utf-8")
+        second.write_text("B = 1\n", encoding="utf-8")
+        stored = {
+            str(second): "old",
+            str(pdd_test_environment / "missing.py"): "old",
+            str(first): "old",
+        }
+        expected = hashlib.sha256(
+            prompt.read_bytes() + first.read_bytes() + second.read_bytes()
+        ).hexdigest()
         assert calculate_prompt_hash(prompt, stored_deps=stored, hash_version=1) == expected
 
     def test_calculate_prompt_hash_detects_dep_change_via_stored_deps(self, pdd_test_environment):
