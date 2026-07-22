@@ -50,19 +50,57 @@ _CALL_SITE_TUPLE_HANDLING_PATTERN = re.compile(
 _RETRY_BOUND_PATTERNS = [
     re.compile(
         r"\b(?:retry|retries|attempt|attempts)\s+"
-        r"(?:up\s+to\s+|at\s+most\s+|no\s+more\s+than\s+)?\d+\b",
+        r"(?:up\s+to\s+|at\s+most\s+|no\s+more\s+than\s+)?"
+        r"(?P<count>\d+)\b",
         re.IGNORECASE,
     ),
     re.compile(
         r"\b(?:up\s+to|at\s+most|no\s+more\s+than|max(?:imum)?(?:\s+of)?)\s+"
-        r"\d+\s+(?:retry|retries|attempt|attempts|time|times)\b",
+        r"(?P<count>\d+)\s+(?:retry|retries|attempt|attempts|time|times)\b",
         re.IGNORECASE,
     ),
     re.compile(
-        r"\b\d+\s+(?:retry|retries|attempt|attempts|tries|time|times)\b",
+        r"\b(?P<count>\d+)\s+"
+        r"(?:retry|retries|attempt|attempts|tries|time|times)\b",
         re.IGNORECASE,
     ),
 ]
+
+_WORD_ATTEMPT_ORDINALS = (
+    "first",
+    "second",
+    "third",
+    "fourth",
+    "fifth",
+    "sixth",
+    "seventh",
+    "eighth",
+    "ninth",
+    "tenth",
+    "eleventh",
+    "twelfth",
+    "thirteenth",
+    "fourteenth",
+    "fifteenth",
+    "sixteenth",
+    "seventeenth",
+    "eighteenth",
+    "nineteenth",
+    "twentieth",
+)
+_WORD_ATTEMPT_ORDINAL_PATTERN = r"(?:" + "|".join(_WORD_ATTEMPT_ORDINALS) + r")"
+_ATTEMPT_ORDINAL_PATTERN = (
+    rf"(?:\d+(?:st|nd|rd|th)|{_WORD_ATTEMPT_ORDINAL_PATTERN})"
+)
+_ATTEMPT_ORDINAL_VALUE_PATTERN = re.compile(
+    rf"\b(?:(?P<numeric>\d+)(?:st|nd|rd|th)|"
+    rf"(?P<word>{_WORD_ATTEMPT_ORDINAL_PATTERN}))\b",
+    re.IGNORECASE,
+)
+_WORD_ATTEMPT_ORDINAL_VALUES = {
+    word: value
+    for value, word in enumerate(_WORD_ATTEMPT_ORDINALS, start=1)
+}
 
 _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"\b(?:"
@@ -82,16 +120,19 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"(?:(?:have|has|are|were)\s+)?fail(?:s|ed)?"
     r"(?:\s+due\s+to\s+(?:(?:an?|the)\s+)?"
     r"(?:[\w-]+\s+){0,4}?(?:errors?|exceptions?|failures?))?|"
-    r"(?:if|when)\s+[\w\s]+fail(?:s|ed)?\s+on\s+(?:the\s+)?"
-    r"\d+(?:st|nd|rd|th)\s+attempt|"
-    r"(?:if|when)\s+(?:the\s+)?\d+(?:st|nd|rd|th)\s+attempt\s+"
+    r"(?:if|when)\s+(?:the\s+)?"
+    r"(?:pipeline|operation|request|call|task|job|runner|it)\s+"
+    r"fail(?:s|ed)?\s+on\s+(?:the\s+)?"
+    rf"{_ATTEMPT_ORDINAL_PATTERN}\s+(?:retry\s+)?attempt|"
+    rf"(?:if|when)\s+(?:the\s+)?{_ATTEMPT_ORDINAL_PATTERN}\s+"
+    r"(?:retry\s+)?attempt\s+"
     r"(?:(?:also|still)\s+)?fail(?:s|ed)?"
     r"(?:\s+with\s+(?:(?:a|an|the)\s+)?(?:connection\s+)?"
     r"(?:error|exception|failure))?|"
     r"(?:if|when)\s+(?:the\s+)?(?:connection\s+)?"
     r"(?:error|exception|failure)\s+(?:still\s+)?"
     r"(?:persist(?:s|ed)?|remain(?:s|ed)?)\s+after\s+(?:the\s+)?"
-    r"\d+(?:st|nd|rd|th)\s+(?:retry\s+)?attempt|"
+    rf"{_ATTEMPT_ORDINAL_PATTERN}\s+(?:retry\s+)?attempt|"
     r"once\s+(?:the\s+)?(?:max(?:imum)?\s+)?(?:retry\s+)?attempts?\s+"
     r"(?:is\s+|are\s+)?(?:reached|exhausted)|"
     r"(?:once|when|if)\s+(?:the\s+)?max(?:imum)?\s+number\s+of\s+attempts?\s+"
@@ -228,8 +269,8 @@ _INVERSE_EXHAUSTION_PATTERN = re.compile(
     r"(?:(?:is|has\s+been)\s+)?(?:reached|exceeded|exhausted)|"
     r"(?:the\s+)?(?:connection\s+)?(?:error|exception|failure)\s+"
     r"(?:still\s+)?(?:persists?|remains?)\s+after\s+(?:the\s+)?"
-    r"\d+(?:st|nd|rd|th)\s+(?:retry\s+)?attempt|"
-    r"(?:the\s+)?\d+(?:st|nd|rd|th)\s+(?:retry\s+)?attempt\s+"
+    rf"{_ATTEMPT_ORDINAL_PATTERN}\s+(?:retry\s+)?attempt|"
+    rf"(?:the\s+)?{_ATTEMPT_ORDINAL_PATTERN}\s+(?:retry\s+)?attempt\s+"
     r"(?:(?:also|still)\s+)?fails?"
     r")\s*$",
     re.IGNORECASE,
@@ -273,6 +314,34 @@ def _judge_retry_bound(prompt_output: str) -> JudgmentResult:
         passed=False,
         reasoning="No explicit numeric retry limit found.",
     )
+
+
+def _retry_bound_values(prompt_output: str) -> frozenset[int]:
+    """Return all explicit numeric retry or attempt bounds in *prompt_output*."""
+    return frozenset(
+        int(match.group("count"))
+        for pattern in _RETRY_BOUND_PATTERNS
+        for match in pattern.finditer(prompt_output)
+    )
+
+
+def _exhaustion_ordinal_matches_bound(
+    prompt_output: str, exhaustion: re.Match[str]
+) -> bool:
+    """Bind ordinal exhaustion to the prompt's single explicit retry bound."""
+    ordinal = _ATTEMPT_ORDINAL_VALUE_PATTERN.search(exhaustion.group())
+    if ordinal is None:
+        return True
+    numeric = ordinal.group("numeric")
+    value = (
+        int(numeric)
+        if numeric is not None
+        else _WORD_ATTEMPT_ORDINAL_VALUES[ordinal.group("word").lower()]
+    )
+    bounds = _retry_bound_values(prompt_output)
+    if not bounds:
+        return numeric is not None
+    return len(bounds) == 1 and value in bounds
 
 
 def _retry_units(prompt_output: str) -> tuple[str, ...]:
@@ -386,6 +455,8 @@ def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
     for index, unit in enumerate(units):
         for exhaustion in _RETRY_EXHAUSTION_PATTERN.finditer(unit):
             prefix = unit[: exhaustion.start()]
+            if not _exhaustion_ordinal_matches_bound(prompt_output, exhaustion):
+                continue
             if not _is_affirmative_exhaustion_match(unit, exhaustion):
                 continue
             if _STOP_RETRYING_EXHAUSTION_PATTERN.fullmatch(exhaustion.group()) and not (
@@ -680,6 +751,121 @@ class TestDeterministicChangeJudges:
         )
 
         assert judgment.passed, judgment.reasoning
+
+    def test_retry_fallback_judge_accepts_word_ordinal_final_attempt(self) -> None:
+        """A spelled final-attempt ordinal binds the fallback action."""
+        judgment = _judge_retry_fallback(
+            "The runner should attempt the pipeline a maximum of 3 times. "
+            "If the third attempt also fails with a connection error, the "
+            "runner must propagate the connection error to the caller."
+        )
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use a maximum of 1 attempt. If the first attempt also fails, "
+                "raise the final error."
+            ),
+            (
+                "Retry up to 2 times. If the second attempt still fails, "
+                "return an error result."
+            ),
+            (
+                "When the fourth retry attempt also fails, abort the operation. "
+                "Retry up to 4 times."
+            ),
+            (
+                "Use at most 20 attempts. If the failure persists after the "
+                "twentieth attempt, "
+                "propagate the exception."
+            ),
+            (
+                "Use 12 attempts. Surface the error when the twelfth attempt "
+                "also fails."
+            ),
+            (
+                "Use a maximum of 3 attempts. If the 3rd attempt fails, "
+                "raise the error."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_accepts_common_word_ordinals(
+        self, guidance: str
+    ) -> None:
+        """Common spelled ordinals work in condition-first and inverse forms."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            "If the third attempt does not fail, return success.",
+            "If the third attempt fails, do not propagate the error.",
+            "If the third attempt fails, propagate the error. Keep retrying.",
+            (
+                "If the third attempt fails, the final error remains available "
+                "for inspection."
+            ),
+            (
+                "If the third attempt fails. If validation fails, propagate "
+                "the validation error."
+            ),
+            (
+                "Retry up to 3 times. If authentication fails, contact the "
+                "third-party provider; propagate an authentication error."
+            ),
+            (
+                "Use a maximum of 3 attempts. If the first attempt fails, "
+                "raise the error."
+            ),
+            (
+                "Use a maximum of 3 attempts. If the twentieth attempt fails, "
+                "raise the error."
+            ),
+            "Raise the error when the first attempt fails. Retry up to 3 times.",
+            (
+                "Retry up to 3 times. Raise the error when the twentieth "
+                "attempt fails."
+            ),
+            "If the third attempt fails, raise the error.",
+            "Raise the error when the third attempt fails.",
+            (
+                "Use a maximum of 3 attempts. If the 2nd attempt fails, "
+                "raise the error."
+            ),
+            (
+                "Use a maximum of 2 attempts. If telemetry fails on the second "
+                "attempt, raise the telemetry error."
+            ),
+            (
+                "Raise the telemetry error when telemetry fails on the second "
+                "attempt. Use at most 2 attempts."
+            ),
+            (
+                "Use a maximum of 2 attempts. If telemetry fails on the 2nd "
+                "attempt, raise the telemetry error."
+            ),
+            (
+                "Raise the telemetry error when telemetry fails on the 2nd "
+                "attempt. Use at most 2 attempts."
+            ),
+            (
+                "Use a maximum of 3 attempts and at most 4 retries. If the "
+                "third attempt fails, raise the error."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_word_ordinal_false_positives(
+        self, guidance: str
+    ) -> None:
+        """Spelled ordinals do not weaken rejection and clause binding."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
 
     @pytest.mark.parametrize(
         "guidance",
