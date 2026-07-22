@@ -54,6 +54,7 @@ from .checkup_review_loop import (
     SOURCE_OF_TRUTH_GUARD_REFUSAL_MARKERS,
     ReviewLoopConfig,
     ReviewLoopContext,
+    _is_terra_sol_model,
     _scrub_secrets,
     clear_final_state,
     load_final_state,
@@ -62,6 +63,7 @@ from .checkup_review_loop import (
     parse_severity_list,
     parse_state_list,
     run_checkup_review_loop,
+    write_terra_sol_progress,
     write_final_gate_fallback_artifact,
 )
 from .ci_validation import run_github_checks_gate
@@ -276,6 +278,73 @@ def _atomic_publish_hosted_bytes(path: Path, payload: bytes) -> None:
         raise
 
 
+def _hosted_blocking_payload(
+    invocation_id: str,
+    *,
+    pr_number: int = 0,
+    head_sha: str = "",
+    reason: str = "Current hosted checkup invocation has not produced a verdict.",
+) -> Dict[str, Any]:
+    """Return the fail-closed public record shared by invalidation/reservation."""
+    return {
+        "schema_version": "pdd.checkup.agentic.v1",
+        "invocation_id": invocation_id,
+        "owner": "",
+        "repo": "",
+        "pr_number": pr_number,
+        "head_sha": head_sha,
+        "status": "error",
+        "authority": "canonical_unknown_agentic_fallback_blocking",
+        "layer1": {"status": "unknown", "blockers": [reason]},
+        "verdict": {"decision": "block", "reason": reason},
+    }
+
+
+def _invalidate_hosted_agentic_artifact(artifact_path: Optional[str]) -> bool:
+    """Replace a prior public verdict before validation can return early.
+
+    This deliberately does not reserve private storage or bind PR/issue
+    identity. Identity-bound reservation remains later, after Terra/Sol has
+    cleared its local final state. If an atomic blocker cannot be installed,
+    remove a stale public record so an earlier PASS is never current.
+    """
+    if not artifact_path:
+        return True
+    path = Path(artifact_path)
+    lock_path = path.with_name(f".{path.name}.lock")
+    invocation_id = secrets.token_hex(16)
+    payload = _hosted_blocking_payload(invocation_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _hosted_artifact_lock(lock_path):
+            _atomic_publish_hosted_payload(path, payload)
+        persisted = json.loads(path.read_text(encoding="utf-8"))
+        return bool(
+            isinstance(persisted, dict)
+            and persisted.get("invocation_id") == invocation_id
+            and persisted.get("status") != "passed"
+            and isinstance(persisted.get("verdict"), dict)
+            and persisted["verdict"].get("decision") == "block"
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        try:
+            with _hosted_artifact_lock(lock_path):
+                try:
+                    current = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    current = None
+                current_id = (
+                    current.get("invocation_id")
+                    if isinstance(current, dict)
+                    else None
+                )
+                if current_id in (None, invocation_id):
+                    path.unlink(missing_ok=True)
+        except (OSError, TypeError, json.JSONDecodeError):
+            pass
+        return False
+
+
 def _prepare_hosted_agentic_artifact(
     artifact_path: Optional[str],
     *,
@@ -286,14 +355,11 @@ def _prepare_hosted_agentic_artifact(
     receipt_run_id: str = "",
     receipt_expected_head_sha: str = "",
 ) -> Optional[_HostedAgenticArtifactReservation]:
-    """Reserve a private path and publish a current blocking placeholder.
+    """Reserve a private path and claim the public slot for parsed identities.
 
-    This runs before validation/network early returns. A retry can therefore
-    never expose a passing artifact from an earlier invocation as the current
-    result when the new invocation fails before the review loop starts. The
-    placeholder itself carries the nonce used for locked compare-and-swap
-    publication. Ownership and invalidation are therefore one atomic record:
-    a crash cannot publish a new owner while leaving an earlier PASS visible.
+    Anonymous public invalidation runs separately before validation. This
+    identity-bound reservation runs only after Terra/Sol clears local state;
+    its nonce then provides locked compare-and-swap publication ownership.
     """
     if not artifact_path:
         return None
@@ -317,26 +383,11 @@ def _prepare_hosted_agentic_artifact(
     invocation_id = secrets.token_hex(16)
     lock_path = path.with_name(f".{path.name}.lock")
     claimed_public_slot = False
-    blocking_payload = {
-        "schema_version": "pdd.checkup.agentic.v1",
-        "invocation_id": invocation_id,
-        "owner": "",
-        "repo": "",
-        "pr_number": pr_number,
-        "head_sha": receipt_expected_head_sha,
-        "status": "error",
-        "authority": "canonical_unknown_agentic_fallback_blocking",
-        "layer1": {
-            "status": "unknown",
-            "blockers": [
-                "Current hosted checkup invocation has not produced a verdict."
-            ],
-        },
-        "verdict": {
-            "decision": "block",
-            "reason": "Current hosted checkup invocation has not produced a verdict.",
-        },
-    }
+    blocking_payload = _hosted_blocking_payload(
+        invocation_id,
+        pr_number=pr_number,
+        head_sha=receipt_expected_head_sha,
+    )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         # Claim and invalidate the public slot before reserving private storage.
@@ -1245,7 +1296,10 @@ def _post_final_gate_report(
 
 
 def _review_loop_ship_verdict(
-    final_state: Optional[Dict[str, Any]], *, has_issue: bool
+    final_state: Optional[Dict[str, Any]],
+    *,
+    has_issue: bool,
+    require_terra_sol_model: bool = False,
 ) -> bool:
     """Derive a real ship/no-ship verdict from a review-loop ``final-state.json``.
 
@@ -1285,6 +1339,20 @@ def _review_loop_ship_verdict(
         return False
     if reviewer_status.get(active) not in _SHIP_REVIEWER_STATES:
         return False
+    if require_terra_sol_model:
+        if final_state.get("terra_sol_mode") is not True or active != "codex":
+            return False
+        if not _is_terra_sol_model(final_state.get("sol_model")):
+            return False
+    # Canonical persisted state uses booleans for all cap flags. An explicit
+    # cap hit can never ship, and a present malformed value fails closed.
+    for cap_flag in (
+        "max_rounds_reached",
+        "max_cost_reached",
+        "max_duration_reached",
+    ):
+        if cap_flag in final_state and final_state.get(cap_flag) is not False:
+            return False
     # The canonical ``_write_final_state`` ALWAYS serializes ``findings`` as a
     # list of dicts (``ReviewFinding.to_dict()``) whose ``status`` is a non-empty
     # string ("open" while unresolved, "fixed" once resolved). The canonical
@@ -1429,6 +1497,7 @@ def run_agentic_checkup(
     agentic_review_loop: bool = False,
     fresh_final_review_role: Optional[str] = None,
     agentic_artifact_path: Optional[str] = None,
+    terra_sol: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -1478,37 +1547,206 @@ def run_agentic_checkup(
             cached state already contains earlier step outputs.
         agentic_artifact_path: Invocation-private artifact destination for an
             explicit standalone agentic review loop. Ignored in other modes.
+        terra_sol: Run the bounded Codex-only Terra/Sol convergence loop.
+            It uses ``max_review_rounds`` (default 5) as its authoritative
+            round cap while retaining no cost/duration cap. Conflicting
+            review/final-gate/report-only modes are rejected before any
+            environment mutation or external I/O.
 
     Returns:
         Tuple of (success, message, total_cost, model_used).
     """
-    # Capture the receipt secret at the function boundary, before any target
-    # repository hook, provider, test, or subprocess can inherit it. The key is
+    # Capture the receipt secret as the first operation at this library
+    # boundary, before project discovery, hosted invalidation, validation, or
+    # any target-repository hook can expose it to a subprocess. The key is
     # never restored to ``os.environ`` and is retained only in this process.
     hosted_receipt_key_hex = os.environ.pop(_HOSTED_RECEIPT_KEY_ENV, None)
+
+    # Hosted consumers read one stable public verdict path. Invalidate it
+    # before *any* validation return, without reserving private storage or
+    # binding identities that have not yet parsed.
+    project_root = _find_project_root(cwd if cwd is not None else Path.cwd())
+    hosted_agentic_artifact_path = _hosted_agentic_artifact_path(project_root)
+    if not _invalidate_hosted_agentic_artifact(hosted_agentic_artifact_path):
+        return (
+            False,
+            "Failed to invalidate the prior hosted agentic artifact.",
+            0.0,
+            "",
+        )
+
+    # ``run_agentic_checkup`` is the library boundary used by pdd_cloud and
+    # e2e callers, so enforce the same mutually-exclusive mode contract as the
+    # Click command before mutating the hosted environment, reserving artifacts,
+    # fetching GitHub state, or running any provider. Terra/Sol owns its
+    # fix/review loop end to end.
+    if terra_sol:
+        incompatible = [
+            name
+            for enabled, name in (
+                (final_gate, "--final-gate"),
+                (review_loop, "--review-loop"),
+                (no_fix, "--no-fix"),
+                (review_only, "--review-only"),
+                (agentic_review_loop, "--agentic-review-loop"),
+            )
+            if enabled
+        ]
+        if incompatible:
+            return (
+                False,
+                "--terra-sol cannot be combined with " + ", ".join(incompatible) + ".",
+                0.0,
+                "",
+            )
+        if not str(pr_url or "").strip():
+            return False, "--terra-sol requires --pr.", 0.0, ""
+        if str(prompt_repair or "off").strip().lower() != "off":
+            return (
+                False,
+                "--terra-sol requires prompt repair to be off; an explicit "
+                "--prompt-repair value or project .pddrc default cannot cross "
+                "the Codex-only worktree boundary.",
+                0.0,
+                "",
+            )
+        if (
+            isinstance(max_review_rounds, bool)
+            or not isinstance(max_review_rounds, int)
+            or max_review_rounds < 1
+        ):
+            return (
+                False,
+                "--terra-sol max_review_rounds must be a positive integer.",
+                0.0,
+                "",
+            )
 
     # Report-only modes are a hard write boundary.  Apply it before prompt
     # discovery/check/repair so an explicit CLI value or project default can
     # never trigger prompt edits or prompt-repair audit artifacts.
     effective_prompt_repair = "off" if (no_fix or review_only) else prompt_repair
 
-    # Establish hosted artifact provenance before any validation/network early
-    # return. This guarantees a retry cannot leave a prior passing artifact at
-    # the caller-controlled path when the current invocation fails early.
-    project_root = _find_project_root(cwd if cwd is not None else Path.cwd())
-    hosted_agentic_artifact_path = _hosted_agentic_artifact_path(project_root)
+    # Resolve artifact paths without reserving hosted provenance yet. Terra/Sol
+    # owns its local verdict slot as soon as the request identities are valid,
+    # so stale local state must be invalidated before this fallible reservation.
     standalone_agentic_artifact_path = (
         str(agentic_artifact_path or "").strip() or None
         if agentic_review_loop
         else None
     )
-    preview_pr = _parse_pr_url(pr_url) if pr_url else None
+
+    # 1. Parse PR URL up-front (when in PR mode) so an invalid PR fails before
+    #    any issue work, and so a no-issue run can alias its comment/state
+    #    thread to the PR (GitHub treats PRs as issues for the comments API).
+    pr_owner: Optional[str] = None
+    pr_repo: Optional[str] = None
+    pr_number: Optional[int] = None
+    if pr_url is not None:
+        pr_parsed = _parse_pr_url(pr_url)
+        if not pr_parsed:
+            return False, f"Invalid GitHub PR URL: {pr_url}", 0.0, ""
+        pr_owner, pr_repo, pr_number = pr_parsed
+
+    # 2. Resolve the source issue identifier. The issue is OPTIONAL in PR mode
+    #    (#1292):
+    #    with no issue the PR is reviewed on its own merits, the issue fetch
+    #    is skipped, and the issue context stays empty (never the literal
+    #    "None") so the step prompts do merit review.
+    # None, "", whitespace, or null-like strings all mean merit-review mode,
+    # matching the orchestrator's own has_issue derivation at line 1846.
+    has_issue = bool((issue_url or "").strip()) and issue_url not in ("null", "None")
+    if has_issue:
+        parsed = _parse_issue_url(issue_url)
+        if not parsed:
+            return False, f"Invalid GitHub issue URL: {issue_url}", 0.0, ""
+        owner, repo, issue_number = parsed
+    else:
+        # No issue: the comment/state thread is the PR itself.
+        if pr_url is None or pr_owner is None or pr_repo is None or pr_number is None:
+            return (
+                False,
+                "No issue URL and no PR URL provided; nothing to check.",
+                0.0,
+                "",
+            )
+        owner, repo, issue_number = pr_owner, pr_repo, pr_number
+
+    # An explicit Terra/Sol invocation owns the verdict slot as soon as its PR
+    # and optional issue identities are known. Invalidate a prior clean verdict
+    # before gh validation, network fetches, project loading, or any repair path
+    # can fail so a retry can never leave stale clean state authoritative.
+    if terra_sol:
+        assert pr_number is not None
+        terra_sol_artifacts_dir = (
+            project_root
+            / ".pdd"
+            / "checkup-review-loop"
+            / f"issue-{issue_number}-pr-{pr_number}"
+        )
+
+        def _terra_sol_early_failure(
+            message: str,
+        ) -> Tuple[bool, str, float, str]:
+            try:
+                write_terra_sol_progress(
+                    artifacts_dir=terra_sol_artifacts_dir,
+                    max_rounds=max_review_rounds,
+                    round_number=0,
+                    phase="terminal",
+                    terminal_reason=message,
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                # Terminal publication is diagnostic and must never replace
+                # the authoritative workflow failure or break this function's
+                # documented tuple-return contract. Avoid echoing exception
+                # text because persistence failures can contain sensitive
+                # paths or environment-derived details.
+                message += (
+                    " Additionally, terminal Terra/Sol watchdog progress could "
+                    f"not be persisted ({type(exc).__name__})."
+                )
+            return False, message, 0.0, ""
+
+        if (
+            not clear_final_state(project_root, issue_number, pr_number)
+            or load_final_state(project_root, issue_number, pr_number) is not None
+        ):
+            return _terra_sol_early_failure(
+                (
+                    "Terra/Sol could not clear the stale review-loop verdict at "
+                    ".pdd/checkup-review-loop/; refusing to trust a prior run."
+                )
+            )
+        try:
+            write_terra_sol_progress(
+                artifacts_dir=terra_sol_artifacts_dir,
+                max_rounds=max_review_rounds,
+                round_number=0,
+                phase="initializing",
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            # The stale verdict is already gone. Do not continue into hosted,
+            # GitHub, project, or provider work without a current watchdog
+            # record, and do not retry through the same failing writer.
+            return (
+                False,
+                "Failed to publish initial Terra/Sol watchdog progress; "
+                "the stale verdict was cleared and the review did not start.",
+                0.0,
+                "",
+            )
+
+    # Establish hosted public-placeholder provenance after Terra/Sol has
+    # invalidated its prior local verdict, but before any network/project I/O.
+    # A reservation failure therefore blocks the run without leaving either a
+    # stale local clean verdict or a stale public PASS authoritative.
     hosted_artifact_reservation = (
         _prepare_hosted_agentic_artifact(
             hosted_agentic_artifact_path,
-            pr_owner=preview_pr[0] if preview_pr else "",
-            pr_repo=preview_pr[1] if preview_pr else "",
-            pr_number=preview_pr[2] if preview_pr else 0,
+            pr_owner=pr_owner or "",
+            pr_repo=pr_repo or "",
+            pr_number=pr_number or 0,
             receipt_key_hex=hosted_receipt_key_hex,
             receipt_run_id=str(os.environ.get(_HOSTED_RECEIPT_RUN_ID_ENV, "")),
             receipt_expected_head_sha=str(os.environ.get(_HOSTED_EXPECTED_HEAD_ENV, ""))
@@ -1519,6 +1757,10 @@ def run_agentic_checkup(
         else None
     )
     if hosted_agentic_artifact_path is not None and hosted_artifact_reservation is None:
+        if terra_sol:
+            return _terra_sol_early_failure(
+                "Failed to establish current hosted agentic artifact provenance."
+            )
         return (
             False,
             "Failed to establish current hosted agentic artifact provenance.",
@@ -1531,8 +1773,12 @@ def run_agentic_checkup(
         else None
     )
 
-    # 1. Check gh CLI
+    # 3. Check gh only after stale Terra/Sol state has been invalidated.
     if not _check_gh_cli():
+        if terra_sol:
+            return _terra_sol_early_failure(
+                "GitHub CLI (gh) not found. Install from https://cli.github.com/"
+            )
         return (
             False,
             "GitHub CLI (gh) not found. Install from https://cli.github.com/",
@@ -1540,31 +1786,8 @@ def run_agentic_checkup(
             "",
         )
 
-    # 2. Parse PR URL up-front (when in PR mode) so an invalid PR fails before
-    #    any issue work, and so a no-issue run can alias its comment/state
-    #    thread to the PR (GitHub treats PRs as issues for the comments API).
-    pr_owner: Optional[str] = None
-    pr_repo: Optional[str] = None
-    pr_number: Optional[int] = None
-    if pr_url is not None:
-        pr_parsed = _parse_pr_url(pr_url)
-        if not pr_parsed:
-            return False, f"Invalid GitHub PR URL: {pr_url}", 0.0, ""
-        pr_owner, pr_repo, pr_number = pr_parsed
-
-    # 3. Resolve the source issue. The issue is OPTIONAL in PR mode (#1292):
-    #    with no issue the PR is reviewed on its own merits, the issue fetch
-    #    is skipped, and the issue context stays empty (never the literal
-    #    "None") so the step prompts do merit review.
-    # None, "", whitespace, or null-like strings all mean merit-review mode,
-    # matching the orchestrator's own has_issue derivation at line 1846.
-    has_issue = bool((issue_url or "").strip()) and issue_url not in ("null", "None")
+    # 4. Fetch the already-validated optional issue.
     if has_issue:
-        parsed = _parse_issue_url(issue_url)
-        if not parsed:
-            return False, f"Invalid GitHub issue URL: {issue_url}", 0.0, ""
-
-        owner, repo, issue_number = parsed
 
         if not quiet:
             console.print(
@@ -1575,11 +1798,17 @@ def run_agentic_checkup(
             ["api", f"repos/{owner}/{repo}/issues/{issue_number}"]
         )
         if not success:
+            if terra_sol:
+                return _terra_sol_early_failure(
+                    f"Failed to fetch issue: {issue_json}"
+                )
             return False, f"Failed to fetch issue: {issue_json}", 0.0, ""
 
         try:
             issue_data = json.loads(issue_json)
         except json.JSONDecodeError:
+            if terra_sol:
+                return _terra_sol_early_failure("Failed to parse issue JSON")
             return False, "Failed to parse issue JSON", 0.0, ""
 
         raw_title = issue_data.get("title", "")
@@ -1594,15 +1823,6 @@ def run_agentic_checkup(
         )
         effective_issue_url = issue_url
     else:
-        # No issue: the comment/state thread is the PR itself.
-        if pr_url is None or pr_owner is None or pr_repo is None or pr_number is None:
-            return (
-                False,
-                "No issue URL and no PR URL provided; nothing to check.",
-                0.0,
-                "",
-            )
-        owner, repo, issue_number = pr_owner, pr_repo, pr_number
         raw_title = ""
         raw_full_content = ""
         effective_issue_url = ""
@@ -1611,7 +1831,7 @@ def run_agentic_checkup(
     title = _escape_format_braces(raw_title)
     full_content = _escape_format_braces(raw_full_content)
 
-    # 4. Load project context
+    # 5. Load project context
     architecture, _ = _load_architecture_json(project_root)
     raw_arch_json_str = (
         json.dumps(architecture, indent=2)
@@ -1629,6 +1849,11 @@ def run_agentic_checkup(
 
     full_suite_source = (full_suite_source or "local").strip().lower()
     if full_suite_source not in {"local", "github-checks"}:
+        if terra_sol:
+            return _terra_sol_early_failure(
+                "--full-suite-source must be 'local' or 'github-checks', "
+                f"got {full_suite_source!r}."
+            )
         return (
             False,
             "--full-suite-source must be 'local' or 'github-checks', "
@@ -1758,16 +1983,28 @@ def run_agentic_checkup(
             final_gate_canonical_status=final_gate_canonical_status,
         )
         hosted_agentic_mode = hosted_artifact_reservation is not None
+        # In terra_sol mode both roles run on the GPT-5.6 Codex provider so
+        # that fixer (Terra) and reviewer (Sol) share the same model family
+        # while keeping their execution contexts and audit evidence distinct.
+        effective_reviewers = "codex" if terra_sol else reviewers
+        effective_reviewer = "codex" if terra_sol else reviewer
+        effective_fixer = "codex" if terra_sol else fixer
+        # There is no distinct GPT-5.6 Codex fallback role. Ignore caller
+        # fallbacks in Terra/Sol mode so Claude/Gemini can never take over
+        # either authoritative role after a Codex failure.
+        effective_reviewer_fallback = None if terra_sol else reviewer_fallback
+        effective_fixer_fallback = None if terra_sol else fixer_fallback
+        effective_allow_same = allow_same_reviewer_fixer or terra_sol
         loop_config = ReviewLoopConfig(
             # Hosted fallback/mirror settings are additive evidence only: they
             # must not change the canonical review-loop provider set or prompt.
             # Per-role hosted commands are still serialized below for the
             # artifact, but canonical execution uses the caller's reviewers.
-            reviewers=parse_reviewers(reviewers),
-            reviewer=reviewer,
-            fixer=fixer,
-            reviewer_fallback=reviewer_fallback,
-            fixer_fallback=fixer_fallback,
+            reviewers=parse_reviewers(effective_reviewers),
+            reviewer=effective_reviewer,
+            fixer=effective_fixer,
+            reviewer_fallback=effective_reviewer_fallback,
+            fixer_fallback=effective_fixer_fallback,
             review_only=review_only or no_fix,
             no_fix=no_fix,
             max_rounds=max_review_rounds,
@@ -1781,7 +2018,7 @@ def run_agentic_checkup(
             blocking_severities=parse_severity_list(blocking_severities),
             clean_reviewer_states=parse_state_list(clean_reviewer_states),
             fallback_reviewer_on_failure=fallback_reviewer_on_failure,
-            allow_same_reviewer_fixer=allow_same_reviewer_fixer,
+            allow_same_reviewer_fixer=effective_allow_same,
             enable_gates=enable_gates,
             gate_timeout=gate_timeout,
             gate_allow=tuple(gate_allow),
@@ -1801,13 +2038,14 @@ def run_agentic_checkup(
             # caller. Hosted fallback/mirror commands are artifact metadata;
             # keeping them in a separate field prevents the non-authoritative
             # env contract from steering ``_reviewer_command_block``.
-            reviewer_commands=parse_reviewer_commands(reviewers),
+            reviewer_commands=parse_reviewer_commands(effective_reviewers),
             artifact_reviewer_commands=parse_reviewer_commands(hosted_reviewers),
             agentic_artifact_sink=(
                 hosted_artifact_reservation.write_private_bytes
                 if hosted_artifact_reservation is not None
                 else None
             ),
+            terra_sol=terra_sol,
         )
         # Reviewers/fixers may run repository tests too. Keep the outer stable
         # transport slot out of every provider/test child while the private
@@ -1918,6 +2156,29 @@ def run_agentic_checkup(
         result = _run_review_loop_layer()
         return _require_hosted_publication(
             result, hosted_artifact_reservation, canonical_passed=None
+        )
+
+    # Terra/Sol bounded convergence mode: Sol can finish early when clean, but
+    # a non-clean run stops at the caller-selected round cap (default five).
+    # Cost and duration remain intentionally uncapped so each allowed round can
+    # get a decisive Sol result.
+    if terra_sol:
+        if not pr_context_ready:
+            return _terra_sol_early_failure("--terra-sol requires --pr.")
+        assert pr_number is not None
+        # The returned loop boolean means "trustworthy report produced", not
+        # "Sol is clean". The prior verdict was cleared immediately after URL
+        # parsing above; derive the CLI result only from this run's state.
+        _loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer()
+        ship = _review_loop_ship_verdict(
+            load_final_state(project_root, issue_number, pr_number),
+            has_issue=has_issue,
+            require_terra_sol_model=True,
+        )
+        return _require_hosted_publication(
+            (ship, loop_message, loop_cost, loop_model),
+            hosted_artifact_reservation,
+            canonical_passed=ship,
         )
 
     # For the final gate, snapshot PR context BEFORE Layer 1 so Layer 2 reviews
@@ -2043,8 +2304,11 @@ def run_agentic_checkup(
                 pr_owner is not None and pr_repo is not None and pr_number is not None
             )
             if layer1_step5_evidence_for_review:
-                clear_final_state(project_root, issue_number, pr_number)
-                if load_final_state(project_root, issue_number, pr_number) is not None:
+                if (
+                    not clear_final_state(project_root, issue_number, pr_number)
+                    or load_final_state(project_root, issue_number, pr_number)
+                    is not None
+                ):
                     return (
                         False,
                         (
@@ -2245,12 +2509,14 @@ def run_agentic_checkup(
             if not quiet:
                 console.print(f"[green]{github_checks_message}[/green]")
 
-        clear_final_state(project_root, issue_number, pr_number)
-        if load_final_state(project_root, issue_number, pr_number) is not None:
-            # ``clear_final_state`` swallows a non-fatal unlink error; if a stale
-            # verdict still survives, a Layer 2 that exits before finalizing
-            # (e.g. a role error) would let us read the PRIOR run's clean verdict
-            # as this run's. Fail closed rather than risk a false ship.
+        if (
+            not clear_final_state(project_root, issue_number, pr_number)
+            or load_final_state(project_root, issue_number, pr_number) is not None
+        ):
+            # A Layer 2 that exits before finalizing (e.g. a role error) must
+            # never let us read the PRIOR run's clean verdict as this run's.
+            # The clear helper verifies physical absence independently of
+            # parsing, so unreadable or malformed state cannot look deleted.
             return (
                 False,
                 (

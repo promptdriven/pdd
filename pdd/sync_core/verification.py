@@ -63,6 +63,20 @@ _PDD_1875_COMPOSED_PROFILE_BYTES = (
     "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
 )
 
+# PR #2171 updates the Terra/Sol bounded-review workflow and its generated
+# command-completion prompts together.  These eight requirement transitions
+# were composed against main before their profile rows could be installed as
+# dormant authority.  Keep the one reviewed candidate bound to its complete
+# policy/profile and prompt bytes; it grants no reusable transition authority.
+_TERRA_SOL_COMPOSED_SCHEMA_2_HISTORY = (
+    "0b00131438c93244513b77346ae2649d1073414621f30f536e2f6ae55ee7d9ee",
+    "0b00131438c93244513b77346ae2649d1073414621f30f536e2f6ae55ee7d9ee",
+)
+_TERRA_SOL_COMPOSED_PROFILE_BYTES = (
+    "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
+    "033591bdbf15b8833802a91b20eb6d5e86dd870f200a49598a9bb5a145eb6f16",
+)
+
 
 class VerificationProfileError(ValueError):
     """Raised when protected verification-profile data cannot be parsed."""
@@ -661,6 +675,73 @@ _PDD_1875_COMPOSED_REQUIREMENT_TRANSITIONS = (
         "e0f5f0173e29379d84dd34934b3221b5ae0f5c9c7b745ea35cb73699cb6162b1",
         _PDD_1875_COMPOSED_PROFILE_BYTES[0],
         _PDD_1875_COMPOSED_PROFILE_BYTES[1],
+    ),
+)
+
+_TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_checkup_python.prompt",
+        "python",
+        "1812c6d204e346d0745403c908a47e5d4d42b53612efd61efbe40af04ba4b868",
+        "6ffbc126545fc817d69c784521b32ca947fd6b120b891ab8f8a8f3f7ee4885bb",
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[0],
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_common_python.prompt",
+        "python",
+        "e6568d79e16a7638ef275c71858d1c2468f593b1369ea602312524a9fef0b37c",
+        "11aa8636691deb2c6e1dd1051ba46cb06947bb1a65335914868647e8240cede9",
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[0],
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/checkup_agentic_artifact_python.prompt",
+        "python",
+        "dc4db042ae408dcd90c0dcfe4fb9607421e331f024f56de8e22ca1272d0df1f7",
+        "460c5c8f6ec93da5aa0d3ee30d41d5dfbda05e4631c79354c1a16e6818b45a16",
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[0],
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/checkup_review_loop_python.prompt",
+        "python",
+        "c5ec02fb049e1359da107067d65e725b3ad0a8cca4da6fd31328821f6b6d1c73",
+        "ee5a910b670cba4ad6a7f32617288783cf0fee8e843bc012e70e17a29e2a937b",
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[0],
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/checkup_python.prompt",
+        "python",
+        "b453bb71475123c5545a37dd23bbff9f057d960b775c0e977151ee98a9b976e0",
+        "c91feaa808d1c69a971626bbaedd813ecddae6d39d70711fc4c23a809c88a91a",
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[0],
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/pdd_completion_bash.prompt",
+        "bash",
+        "8ff68a8b73b323eaa876e51d15411c649ab4bd7aa1d90e23adcdbf4a08b5aa45",
+        "e4c8b74fe2b4781e63d8c7d3a4b5f685b14895d68fdf3622f692a2c494bf115f",
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[0],
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/pdd_completion_fish.prompt",
+        "fish",
+        "ff9102336506e75466d9dc36af6a3afc93b0d07161df4ae76d7aa21267517675",
+        "372e2e41f95d2d71e42dbf9a722cd8cf296e69c36c091f8461443b40b66a9504",
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[0],
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/pdd_completion_zsh.prompt",
+        "zsh",
+        "8a808a26292b9d46d515e8e12de6a8877fb5fdae8e4365c7285067fa216466cf",
+        "5d05ee3fcc959bfba1312b3d2ded6c2329ef1f6df0f532e855ac5a345ec6a107",
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[0],
+        _TERRA_SOL_COMPOSED_PROFILE_BYTES[1],
     ),
 )
 
@@ -1692,6 +1773,7 @@ def _is_exact_combined_requirement_reconciliation(
         (_LEGACY_PDD_1989_SCHEMA_2_HISTORY, _LEGACY_PDD_1989_PROFILE_BYTES),
         (_PR1971_COMBINED_SCHEMA_2_HISTORY, _PR1971_COMBINED_PROFILE_BYTES),
         (_PDD_1875_COMPOSED_SCHEMA_2_HISTORY, _PDD_1875_COMPOSED_PROFILE_BYTES),
+        (_TERRA_SOL_COMPOSED_SCHEMA_2_HISTORY, _TERRA_SOL_COMPOSED_PROFILE_BYTES),
     }
 
 
@@ -2175,6 +2257,57 @@ def _load_requirement_transition_authorizations(
         read_git_blob(root, manifest.base_ref, PROFILE_PATH),
         read_git_blob(root, manifest.head_ref, PROFILE_PATH),
     )
+    terra_sol_reconciliation = (
+        is_pdd_repository
+        and protected_policy is not None
+        and candidate_policy is not None
+        and policies[0] is not None
+        and policies[1] is not None
+        and (
+            hashlib.sha256(protected_policy).hexdigest(),
+            hashlib.sha256(candidate_policy).hexdigest(),
+        )
+        == _TERRA_SOL_COMPOSED_SCHEMA_2_HISTORY
+        and (
+            hashlib.sha256(policies[0]).hexdigest(),
+            hashlib.sha256(policies[1]).hexdigest(),
+        )
+        == _TERRA_SOL_COMPOSED_PROFILE_BYTES
+    )
+    terra_sol_consumed_state = (
+        is_pdd_repository
+        and protected_policy is not None
+        and candidate_policy is not None
+        and policies[0] is not None
+        and policies[1] is not None
+        and (
+            hashlib.sha256(protected_policy).hexdigest(),
+            hashlib.sha256(candidate_policy).hexdigest(),
+        )
+        == _TERRA_SOL_COMPOSED_SCHEMA_2_HISTORY
+        and (
+            hashlib.sha256(policies[0]).hexdigest(),
+            hashlib.sha256(policies[1]).hexdigest(),
+        )
+        == (
+            _TERRA_SOL_COMPOSED_PROFILE_BYTES[1],
+            _TERRA_SOL_COMPOSED_PROFILE_BYTES[1],
+        )
+    )
+    if terra_sol_reconciliation or terra_sol_consumed_state:
+        # This candidate predates a dormant policy installation.  Expose only
+        # its reviewed transitions while consuming the exact profile update,
+        # then retain those transitions only at the exact consumed state.
+        terra_sol_identities = {
+            (item.prompt_path, item.language_id)
+            for item in _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS
+        }
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id) not in terra_sol_identities
+        ) + _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS
+        authority.update(_TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS)
     pr1971_reconciliation = _is_exact_pr1971_pytest_reconciliation(
         manifest, (protected_policy, candidate_policy), policies, candidate
     )
@@ -2182,7 +2315,7 @@ def _load_requirement_transition_authorizations(
         # Historical #1971 is accepted only as its complete, byte-bound
         # reconciliation; it is never installed as general replay authority.
         authority.update(_PR1971_COMBINED_REQUIREMENT_TRANSITIONS)
-    prompt_paths = {item.prompt_path for item in (*protected_rows, *candidate_rows)}
+    prompt_paths = {item.prompt_path for item in (*protected_rows, *candidate)}
     prompts = {
         prompt_path: (
             read_git_blob(
@@ -2258,7 +2391,13 @@ def _load_requirement_transition_authorizations(
         if item not in protected
         and not (is_pdd_repository and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS)
     )
-    if legacy_pdd1989_reconciliation or pr1971_reconciliation or pdd1875_reconciliation:
+    if (
+        legacy_pdd1989_reconciliation
+        or pr1971_reconciliation
+        or pdd1875_reconciliation
+        or terra_sol_reconciliation
+        or terra_sol_consumed_state
+    ):
         # The exact historical pair both installed and consumed its authority
         # before Phase-A isolation existed; validate it as consumption below.
         new_authorizations = ()
@@ -2275,6 +2414,8 @@ def _load_requirement_transition_authorizations(
                 and not legacy_pdd1989_reconciliation
                 and not pr1971_reconciliation
                 and not pdd1875_reconciliation
+                and not terra_sol_reconciliation
+                and not terra_sol_consumed_state
             ):
                 raise VerificationProfileError(
                     "candidate legacy bootstrap requirement transition changes "
