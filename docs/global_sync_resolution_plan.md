@@ -1,7 +1,7 @@
 # Global Sync Resolution Plan
 
 Status: implementation in progress; acceptance gates remain red
-Last updated: 2026-07-19
+Last updated: 2026-07-22
 Tracking epic: [promptdriven/pdd#1932](https://github.com/promptdriven/pdd/issues/1932)
 Primary consumer: `promptdriven/pdd_cloud`
 
@@ -31,11 +31,68 @@ itself, prove that those bytes express the same intent.
 
 ## 2. Evidence and current state
 
+### Authoritative live checkpoint (2026-07-22)
+
+This checkpoint controls current execution. Older snapshots and attempt ledgers in
+this document remain evidence lineage only; they must not be used to select a
+release vehicle, profile denominator, or current blocker.
+
+- Protected `main` is [`4597a4d1a1ace37dcf4aa4129cb193f9e2268524`](https://github.com/promptdriven/pdd/commit/4597a4d1a1ace37dcf4aa4129cb193f9e2268524).
+  Its verification-profile registry has 469 profiles: 4 profiles with a
+  non-human-attestation obligation, 465 human-attestation-only profiles, and
+  SHA-256 `79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836`.
+  This is the live PDD denominator; historical 468/1/467 snapshots below are
+  not current state.
+- [PR #2252](https://github.com/promptdriven/pdd/pull/2252) replaced the
+  over-scoped #2231 ledger update. Terra HIGH implemented it; Sol HIGH approved
+  exact head `e82addcb425eee96968ebcf76b50df9d4f26ca98` after one bounded
+  correction; all 12 hosted checks passed; it merged as
+  [`75ad09774b539100f163cdd10ab3a25542406b68`](https://github.com/promptdriven/pdd/commit/75ad09774b539100f163cdd10ab3a25542406b68).
+  It records #2229 only as merged Layer 1 package-boundary evidence. It does
+  not claim a released wheel, deployment, certification, or a passed Gate 2.
+- #2231 is closed and preserved as historical evidence. It must not be
+  reopened or merged: it mixed mutable scheduling and incident governance with
+  certification evidence and its live-main/profile facts were stale.
+- The score remains 0/10 gates and 0/7 qualifying nights. No released checker
+  digest, protected lifecycle row, pdd_cloud canary, Certificate A, or
+  Certificate B exists.
+- The single current blocker is a protected standalone-checker wheel release
+  with an exact pinned digest and clean installed-wheel proof. [PR #2230](https://github.com/promptdriven/pdd/pull/2230)
+  is an obsolete-base preauthorization with a failed JavaScript CodeQL job and
+  is not mergeable as-is; replace or rebaseline it from current protected main
+  before implementing the release lane. OCI is later-layer work. [PR #2241](https://github.com/promptdriven/pdd/pull/2241)
+  is hosted-green but behind current main and its current head was not the
+  Sol-reviewed head; it must be rebased and reviewed only after the released
+  wheel digest exists. [PR #2242](https://github.com/promptdriven/pdd/pull/2242)
+  is stacked on an obsolete base with failed/cancelled auto-heal evidence and
+  is not a current release vehicle.
+- The current ledger source still records the pre-#2252 `e10bd9b` profile
+  snapshot in some gate-specific historical rows. A subsequent evidence-only
+  ledger update must reconcile those rows to this checkpoint; until then this
+  plan is the authoritative current-state summary and no historical row may be
+  promoted as live evidence.
+
+#### Current delivery order
+
+1. Close Gate 1's remaining lifecycle-state evidence without fabricating a
+   gate pass.
+2. Recreate the checker-release authorization from current main, release the
+   standalone wheel, pin its exact wheel and dependency-lock digests, and prove
+   clean installed-wheel execution with no candidate-controlled inputs.
+3. Record the released evidence, then rebase and review the sealed OCI lane;
+   OCI provenance may bind only the exact released wheel digest.
+4. In disjoint files, create the current 465-unit PDD coverage partition,
+   external append-only anchor, and separately released reference verifier.
+5. Continue gates 3-8 in dependency order; start qualifying nights only after
+   those protected gates pass. Certificate A is an intermediate integrity
+   milestone; Certificate B still requires both repositories and 100% machine
+   verification.
+
 ### Historical critical-path snapshot (2026-07-18)
 
 This retained diagnostic snapshot is not a release prerequisite. The current
-ledger-generation promotion and Gate 2 blocker are recorded in the 2026-07-19
-live rebaseline below. Protected PDD profiles
+ledger-generation promotion and Gate 2 blocker are recorded in the 2026-07-22
+authoritative checkpoint above. Protected PDD profiles
 demand only the `pytest` validator, so undemanded Vitest, Jest, and Playwright
 work is frozen with PR #1995 and does not block gates 1-6. It does not authorize
 a release, merge #1995, or claim global certification; the ten-step sequence
@@ -647,7 +704,10 @@ retain exact SHA and hosted-artifact values.
 
 <!-- global-sync-ledger-source: global_sync_evidence_ledger_source.yaml -->
 
-#### 2026-07-19 live rebaseline and recommendation disposition
+#### Historical 2026-07-19 live rebaseline and recommendation disposition
+
+This section is retained for chronology. Its profile counts, PR queue, and
+same-day blocker are superseded by the 2026-07-22 authoritative checkpoint.
 
 Progress is reported by closed evidence gates, never by commit count or local
 test volume. The live scoreboard is `0/10` passed and the qualifying nightly
@@ -787,7 +847,7 @@ sets are disjoint:
 - **C, certification data:** build the PDD demand matrix and ledger generator,
   then build PDD/pdd_cloud inventories, machine profiles, and evidence without
   touching A or B production modules. Once profile generation exists and before
-  gate 5 completes, partition all 467 current human-only PDD units into:
+  gate 5 completes, partition all 465 current human-only PDD units into:
   obligations derivable from existing tests, units requiring new tests, and
   candidates for protected expected-managed narrowing with named exclusions.
   Surface that partition for a human scoping decision before gate 6 begins.
@@ -2606,29 +2666,26 @@ predicate requires `candidate_controlled_verifier_inputs == 0`.
 
 ## 12. Immediate next actions
 
-1. Preserve #2213 and #2216 as historical prerequisite evidence. Gate 1 PR
-   [#2214](https://github.com/promptdriven/pdd/pull/2214) was reviewed at
-   `6301d6c613199604702c2c3242fc8b837960d586`, passed Unit run
-   [29674097485](https://github.com/promptdriven/pdd/actions/runs/29674097485)
-   (job [88158086892](https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086892)),
-   Package job [88158086891](https://github.com/promptdriven/pdd/actions/runs/29674097485/job/88158086891),
-   [CodeQL run 29674096680](https://github.com/promptdriven/pdd/actions/runs/29674096680),
-   [heal run 29674097086](https://github.com/promptdriven/pdd/actions/runs/29674097086),
-   and [auto-heal 88158092713](https://github.com/promptdriven/pdd/runs/88158092713),
-   then merged as `63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee`. This advances
-   Machine promotion records only Gate 1 `implemented`, `hosted_green`, and
-   `merged`: local and independent-review narrative evidence remains
-   in-progress until a distinct protected verifier can prove those dimensions.
-   The global score remains `0/10` and no release or certificate is claimed.
-2. Treat #2223 and #2224 as merged prerequisites only, and preserve closed,
-   unmerged #2225 as diagnostic evidence that cannot advance Gate 2. The single
-   canonical blocker is `gate2-standalone-checker-package-boundary`; its
-   same-day deliverable, bounded to under 24 hours, is the standalone checker
-   extraction manifest/package-boundary PR: a non-`pdd` top-level package with
-   checker-only dependencies, strict lock/RECORD salvage, and the exact z3
-   compatible-wheel regression. It does not release, containerize, or certify.
-3. Only after that boundary is released may the sealed Git-capable OCI runtime
-   and protected checker/OCI/workflow expectation pins be pursued. Certificate A
-   and Certificate B intent is unchanged; neither is claimed by these layers.
-4. Before gate 5 completes, generate the 467-unit gate-6 coverage partition and
-   obtain the required human scoping decision.
+1. Preserve #2213, #2216, #2214, #2219, #2223, #2224, #2225, and closed #2231
+   as historical evidence. Do not reopen #2231 or treat frozen #1995 diagnostics
+   as a release vehicle. [PR #2252](https://github.com/promptdriven/pdd/pull/2252)
+   is the merged evidence-only record for #2229's Layer 1 package boundary.
+2. Reconcile the remaining Gate 1 lifecycle-state record from exact protected
+   evidence. This must not mark Gate 1 passed until its gate predicate is
+   actually satisfied.
+3. Replace or rebaseline #2230 from current protected main, correct its
+   JavaScript CodeQL failure, bind review to the new SHA, and merge only after
+   one green hosted round. Then implement and release the standalone checker
+   wheel with exact wheel/dependency-lock digests and clean installed-wheel
+   proof. This is the single critical blocker.
+4. Record the released checker evidence in the ledger. Only then rebase and
+   review the OCI authorization/implementation lane; it may bind only the
+   exact released wheel digest and cannot itself advance certification.
+5. In parallel and in disjoint files, generate the 465-unit Gate 6 coverage
+   partition, build the external append-only anchor, and release the independent
+   reference verifier. Obtain the human scoping decision before Gate 6 claims
+   coverage progress.
+6. Reconcile stale gate-specific profile rows in the machine-readable ledger to
+   protected main `4597a4d1a1ace37dcf4aa4129cb193f9e2268524` before using them
+   as current evidence. Preserve the older rows as historical snapshots rather
+   than overwriting their provenance.
