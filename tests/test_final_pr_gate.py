@@ -822,7 +822,7 @@ class TestFinalGateLibrary:
         ), patch(
             "pdd.agentic_checkup.run_github_checks_gate",
             return_value=(False, "No GitHub checks found", "abc123"),
-        ), patch(
+        ) as checks_mock, patch(
             "pdd.agentic_checkup._github_checks_nonblocking_docs_only_pr",
             return_value=True,
         ) as eligible, patch(
@@ -843,6 +843,7 @@ class TestFinalGateLibrary:
         assert success is True, msg
         assert "waived for docs/static-only PR" in msg
         eligible.assert_called_once_with("o", "r", 1)
+        checks_mock.assert_not_called()
         loop_mock.assert_called_once()
 
     def test_github_checks_failure_posts_parseable_gate_report(self, tmp_path: Path) -> None:

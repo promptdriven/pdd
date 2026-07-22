@@ -2242,22 +2242,36 @@ def run_agentic_checkup(
             assert (
                 pr_owner is not None and pr_repo is not None and pr_number is not None
             )
-            github_success, github_checks_message, _github_head = (
-                run_github_checks_gate(
-                    project_root,
-                    pr_owner,
-                    pr_repo,
-                    pr_number,
-                    quiet=quiet,
-                    required_only=False,
-                )
-            )
-            if not github_success and not (
+            # A docs/static-only PR is explicitly eligible for the non-blocking
+            # policy.  Decide that before polling: the check gate can wait for
+            # its full timeout when a repository has no applicable workflows,
+            # defeating the purpose of the waiver and needlessly consuming a
+            # final-gate review reservation.
+            docs_only_nonblocking = (
                 not github_checks_blocking
                 and _github_checks_nonblocking_docs_only_pr(
                     pr_owner, pr_repo, pr_number
                 )
-            ):
+            )
+            if docs_only_nonblocking:
+                github_success = False
+                github_checks_waived = True
+                github_checks_message = (
+                    "GitHub checks not polled — non-blocking GitHub checks "
+                    "waived for docs/static-only PR."
+                )
+            else:
+                github_success, github_checks_message, _github_head = (
+                    run_github_checks_gate(
+                        project_root,
+                        pr_owner,
+                        pr_repo,
+                        pr_number,
+                        quiet=quiet,
+                        required_only=False,
+                    )
+                )
+            if not github_success and not docs_only_nonblocking:
                 report = _format_github_checks_gate_failure_report(
                     pr_url=pr_url or "",
                     issue_url=issue_url or "",
@@ -2310,7 +2324,7 @@ def run_agentic_checkup(
                     hosted_artifact_reservation,
                     canonical_passed=False,
                 )
-            if not github_success:
+            if not github_success and not docs_only_nonblocking:
                 github_checks_waived = True
                 github_checks_message = (
                     f"{github_checks_message} — non-blocking GitHub checks "
