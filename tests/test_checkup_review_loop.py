@@ -16196,7 +16196,40 @@ def test_read_only_claude_role_allows_only_hosted_pdd_data_companion(
     assert result[0] is True
     assert observed["claude_policy"]["addDirs"] == [
         str(companion),
-        str(companion.parent),
+    ]
+    assert observed["claude_policy"]["readOnlyRoots"] == [
+        str(worktree),
+        str(companion),
     ]
     assert "-p no:cacheprovider" in observed["pytest_addopts"]
     assert "PYTEST_ADDOPTS" not in os.environ
+
+
+def test_read_only_companion_allows_missing_hosted_sibling_data(
+    tmp_path: Path,
+) -> None:
+    """The lazy hosted sibling is declared before its data directory exists."""
+    from pdd.agentic_common import (
+        _take_filesystem_policy_snapshot,
+        validate_claude_policy,
+    )
+    from pdd.checkup_review_loop import _read_only_companion_dirs
+
+    worktree = tmp_path / ".pdd" / "worktrees" / "checkup-pr-5"
+    worktree.mkdir(parents=True)
+    (worktree / "data").symlink_to("../pdd/data")
+
+    companion_dirs = _read_only_companion_dirs(worktree)
+    assert companion_dirs == [
+        str(tmp_path / ".pdd" / "worktrees" / "pdd" / "data"),
+    ]
+    policy = validate_claude_policy(
+        {
+            "allowedTools": "Read,Grep,Glob",
+            "addDirs": companion_dirs,
+            "writableRoots": [],
+            "readOnlyRoots": [str(worktree), *companion_dirs],
+        }
+    )
+    snapshot = _take_filesystem_policy_snapshot(worktree, policy)
+    assert snapshot.escaped_symlink_targets == {}

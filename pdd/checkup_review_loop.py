@@ -4446,14 +4446,14 @@ def _run_role_task(
         # Hosted checkup worktrees expose PDD's fixture data through the
         # repository-owned ``data -> ../pdd/data`` symlink.  That data is an
         # immutable companion input, not a provider write target.  Declare the
-        # resolved target as an additional read-only directory so the
-        # filesystem-policy audit does not mistake the pre-existing host link
-        # for a reviewer-created symlink escape.
+        # verified sibling-PDD roots explicitly read-only as well as adding
+        # them to Claude's read scope.  This keeps the audit and the provider
+        # invocation on the same root set.
         companion_dirs = _read_only_companion_dirs(cwd) if read_only else []
         claude_policy = (
             {
                 "allowedTools": "Read,Grep,Glob",
-                "readOnlyRoots": [str(cwd)],
+                "readOnlyRoots": [str(cwd), *companion_dirs],
                 "writableRoots": [],
                 "addDirs": companion_dirs,
             }
@@ -4502,18 +4502,29 @@ def _read_only_companion_dirs(cwd: Path) -> List[str]:
     """
     data_link = cwd / "data"
     try:
-        if not data_link.is_symlink() or os.readlink(data_link) != "../pdd/data":
+        if not data_link.is_symlink():
             return []
-        target = data_link.resolve(strict=True)
+        raw_target = os.readlink(data_link)
     except OSError:
         return []
-    if not target.is_dir() or target.name != "data" or target.parent.name != "pdd":
+    # The hosted runtime deliberately creates the sibling PDD worktree lazily.
+    # During a read-only review its ``data`` directory can therefore be absent,
+    # even though the checked-out fixture link is valid and must remain audited.
+    # Validate the exact repository-owned link lexically rather than requiring
+    # the delayed companion target to exist.
+    if raw_target != "../pdd/data":
+        return []
+    target = (data_link.parent / raw_target).resolve(strict=False)
+    expected_target = cwd.resolve(strict=True).parent / "pdd" / "data"
+    if target != expected_target.resolve(strict=False):
+        return []
+    if target.parent.exists() and target.parent.is_symlink():
         return []
     # The audit preserves a symlink's resolved path while some provider
-    # wrappers normalize declared roots to their worktree boundary.  Include
-    # both the immutable data directory and its verified sibling-PDD root so
-    # either representation recognizes the same pre-existing fixture link.
-    return [str(target), str(target.parent)]
+    # wrappers normalize declared roots to their worktree boundary.  The exact
+    # target is sufficient for the audit and does not expose its whole sibling
+    # worktree to a reviewer.
+    return [str(target)]
 
 
 def _review_parse_repair_prompt(raw_output: str, context: ReviewLoopContext) -> str:
