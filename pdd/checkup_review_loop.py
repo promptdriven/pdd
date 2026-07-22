@@ -4422,6 +4422,7 @@ def _run_role_task(
         "GIT_CONFIG_VALUE_0",
     )
     saved_git_guard = {key: os.environ.get(key) for key in git_guard_keys}
+    saved_pytest_addopts = os.environ.get("PYTEST_ADDOPTS")
     if read_only:
         os.environ["CODEX_SANDBOX_MODE"] = "read-only"
         for key in credential_keys:
@@ -4430,13 +4431,31 @@ def _run_role_task(
         os.environ["GIT_CONFIG_COUNT"] = "1"
         os.environ["GIT_CONFIG_KEY_0"] = "credential.helper"
         os.environ["GIT_CONFIG_VALUE_0"] = ""
+        # A reviewer is allowed to inspect and, where useful, execute tests,
+        # but pytest's cache provider writes ``.pytest_cache`` into the
+        # read-only PR worktree.  Disable only that disposable cache for this
+        # scoped role so the filesystem audit keeps detecting real source or
+        # Git metadata writes rather than failing on test-run bookkeeping.
+        cache_disable = "-p no:cacheprovider"
+        current_pytest_addopts = os.environ.get("PYTEST_ADDOPTS", "").strip()
+        if cache_disable not in current_pytest_addopts:
+            os.environ["PYTEST_ADDOPTS"] = (
+                f"{current_pytest_addopts} {cache_disable}".strip()
+            )
     try:
+        # Hosted checkup worktrees expose PDD's fixture data through the
+        # repository-owned ``data -> ../pdd/data`` symlink.  That data is an
+        # immutable companion input, not a provider write target.  Declare the
+        # resolved target as an additional read-only directory so the
+        # filesystem-policy audit does not mistake the pre-existing host link
+        # for a reviewer-created symlink escape.
+        companion_dirs = _read_only_companion_dirs(cwd) if read_only else []
         claude_policy = (
             {
                 "allowedTools": "Read,Grep,Glob",
                 "readOnlyRoots": [str(cwd)],
                 "writableRoots": [],
-                "addDirs": [],
+                "addDirs": companion_dirs,
             }
             if read_only and provider == "anthropic"
             else None
@@ -4466,6 +4485,31 @@ def _run_role_task(
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
+            if saved_pytest_addopts is None:
+                os.environ.pop("PYTEST_ADDOPTS", None)
+            else:
+                os.environ["PYTEST_ADDOPTS"] = saved_pytest_addopts
+
+
+def _read_only_companion_dirs(cwd: Path) -> List[str]:
+    """Return the narrowly recognized hosted PDD data companion, if present.
+
+    A target repository may contain the fixture link ``data -> ../pdd/data``.
+    The hosting runtime creates its sibling ``pdd`` worktree and keeps it
+    outside the target checkout.  The link is therefore safe to expose as a
+    read-only companion directory, but arbitrary repository symlinks retain
+    the fail-closed filesystem-audit behavior.
+    """
+    data_link = cwd / "data"
+    try:
+        if not data_link.is_symlink() or os.readlink(data_link) != "../pdd/data":
+            return []
+        target = data_link.resolve(strict=True)
+    except OSError:
+        return []
+    if not target.is_dir() or target.name != "data" or target.parent.name != "pdd":
+        return []
+    return [str(target)]
 
 
 def _review_parse_repair_prompt(raw_output: str, context: ReviewLoopContext) -> str:

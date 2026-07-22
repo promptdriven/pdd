@@ -15970,6 +15970,7 @@ def test_write_final_gate_fallback_artifact_canonical_fail(tmp_path):
         )
         assert result[0] is True
         assert (observed["claude_policy"] is not None) is expects_policy
+
 class TestTargetPromptsRootResolution1957:
     """Checkup repair must resolve owning prompts against the TARGET repo's
     prompt layout, not pdd's self-hosted ``pdd/prompts`` tree (issue #1957).
@@ -16157,3 +16158,42 @@ class TestTargetPromptsRootResolution1957:
             _check_architecture_registry_edit_guard(tmp_path, ["src/foo.py"])
             is None
         )
+
+
+def test_read_only_claude_role_allows_only_hosted_pdd_data_companion(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """The host-created fixture data link is an audited read-only companion."""
+    import pdd.checkup_review_loop as mod
+
+    worktree = tmp_path / "target"
+    companion = tmp_path / "pdd" / "data"
+    worktree.mkdir()
+    companion.mkdir(parents=True)
+    (worktree / "data").symlink_to("../pdd/data")
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+    observed: Dict[str, Any] = {}
+
+    def fake_task(**kwargs: Any):
+        observed.update(kwargs)
+        observed["pytest_addopts"] = os.environ.get("PYTEST_ADDOPTS", "")
+        return True, "ok", 0.0, "claude"
+
+    monkeypatch.setattr(mod, "run_agentic_task", fake_task)
+    result = mod._run_role_task(
+        "claude",
+        "review",
+        worktree,
+        verbose=False,
+        quiet=True,
+        label="hosted-data-companion-policy",
+        timeout=30.0,
+        max_retries=0,
+        reasoning_time=None,
+        read_only=True,
+    )
+
+    assert result[0] is True
+    assert observed["claude_policy"]["addDirs"] == [str(companion)]
+    assert "-p no:cacheprovider" in observed["pytest_addopts"]
+    assert "PYTEST_ADDOPTS" not in os.environ

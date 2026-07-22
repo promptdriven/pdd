@@ -1029,6 +1029,35 @@ def _filter_redundant_directory_changes(
     return filtered
 
 
+def _filter_linked_git_metadata_root_mtime_changes(
+    paths: List[Path],
+    cwd: Path,
+    before: _FilesystemPolicySnapshot,
+    after: _FilesystemPolicySnapshot,
+) -> List[Path]:
+    """Ignore a linked-worktree metadata-root mtime with no file mutation.
+
+    Merely opening a linked worktree can update the mtime of its gitdir.  That
+    directory timestamp is not evidence of a provider write; all observable
+    Git metadata file creation, deletion, or content edits remain in the
+    snapshot and continue to fail the read-only policy.
+    """
+    metadata_roots = {
+        _audit_entry_path(root) for root in _linked_git_metadata_roots(cwd)
+    }
+    return [
+        path
+        for path in paths
+        if not (
+            path in metadata_roots
+            and _is_directory_change(path, before, after)
+            and not any(
+                other != path and _path_is_within(other, path) for other in paths
+            )
+        )
+    ]
+
+
 def _escaped_symlink_target_for_path(
     path: Path,
     before: _FilesystemPolicySnapshot,
@@ -1065,25 +1094,31 @@ def _audit_filesystem_policy(
         if after.files.get(path) == signature
     }
     changed_paths = sorted(
-        _filter_redundant_directory_changes(
-            [
-                path for path in comparison_paths
-                if (
-                    before.files.get(path) != after.files.get(path)
-                    or (
-                        path in pdd_owned_log_signatures
-                        and after.files.get(path) != pdd_owned_log_signatures[path]
+        _filter_linked_git_metadata_root_mtime_changes(
+            _filter_redundant_directory_changes(
+                [
+                    path for path in comparison_paths
+                    if (
+                        before.files.get(path) != after.files.get(path)
+                        or (
+                            path in pdd_owned_log_signatures
+                            and after.files.get(path)
+                            != pdd_owned_log_signatures[path]
+                        )
                     )
-                )
-                and not _is_trusted_pdd_owned_log_change(
-                    path,
-                    after.files.get(path),
-                    pdd_owned_log_signatures,
-                )
-            ],
+                    and not _is_trusted_pdd_owned_log_change(
+                        path,
+                        after.files.get(path),
+                        pdd_owned_log_signatures,
+                    )
+                ],
+                before,
+                after,
+                trusted_pdd_log_paths,
+            ),
+            cwd,
             before,
             after,
-            trusted_pdd_log_paths,
         ),
         key=str,
     )

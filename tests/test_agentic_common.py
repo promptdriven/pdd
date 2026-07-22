@@ -1639,6 +1639,58 @@ def test_run_agentic_task_claude_policy_audits_linked_worktree_git_metadata(
     assert str(common_ref) in result.changed_files
 
 
+def test_run_agentic_task_claude_policy_ignores_linked_git_metadata_root_mtime(
+    tmp_path, mock_env
+):
+    """A gitdir directory timestamp alone is not an observable write."""
+    workspace = tmp_path / "workspace"
+    writable_root = workspace / "src"
+    common_git_dir = tmp_path / "repo.git"
+    worktree_git_dir = common_git_dir / "worktrees" / "workspace"
+    writable_root.mkdir(parents=True)
+    worktree_git_dir.mkdir(parents=True)
+    (workspace / ".git").write_text(
+        f"gitdir: {worktree_git_dir}\n",
+        encoding="utf-8",
+    )
+    (worktree_git_dir / "commondir").write_text("../..\n", encoding="utf-8")
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    def fake_provider(*_args, **_kwargs):
+        os.utime(worktree_git_dir, None)
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task(
+            "Inspect linked worktree", workspace, claude_policy=policy
+        )
+
+    assert result.success is True
+    assert str(worktree_git_dir) not in result.changed_files
+
+
 def test_anthropic_claude_policy_builds_read_glob_add_dirs_no_session_json_command(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
 ):
