@@ -5342,6 +5342,7 @@ def run_agentic_task(
     single_provider_attempt: bool = False,
     background_safe: bool = False,
     include_log_bodies: bool = True,
+    accept_failed_output: Optional[Callable[[str], bool]] = None,
 ) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
@@ -5389,6 +5390,11 @@ def run_agentic_task(
             provider exactly once, with no retries, provider fallback, or routing
             escalation. Intended for side-effecting tasks that must not run
             more than once.
+        accept_failed_output: Optional semantic acceptance callback for a
+            provider response that carries a complete result despite its
+            transport envelope reporting failure. The callback is deliberately
+            opt-in and must validate the full response; ordinary provider
+            errors retain their normal fail-closed retry/fallback path.
 
     Returns:
         AgenticTaskResult(success, output_text, cost_usd, provider_used, usage).
@@ -5636,6 +5642,16 @@ def run_agentic_task(
                 total_cost += cost
                 actual_model = provider_result[3]
                 usage = provider_result[4] if len(provider_result) > 4 else None
+                # Claude Code can surface ``is_error: true`` after a tool-level
+                # failure even when the assistant emitted a complete, structured
+                # result. Let a workflow opt in to accepting only a response it
+                # can validate semantically. Auth, quota, empty, and malformed
+                # envelopes keep their normal fail-closed behavior.
+                if not success and accept_failed_output is not None:
+                    try:
+                        success = bool(accept_failed_output(output))
+                    except Exception:  # pragma: no cover - callback isolation
+                        success = False
                 last_output = output
                 # Keep requested/effective routing separate from provider-observed
                 # provenance. A successful result's model_id must never be filled

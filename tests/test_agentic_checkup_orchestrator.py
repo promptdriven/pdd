@@ -25,6 +25,7 @@ from pdd.agentic_checkup_orchestrator import (
     _discard_clean_run_side_effects,
     _format_pr_changed_files_for_prompt,
     _format_step_abort_message,
+    _has_complete_step7_report,
     _get_state_dir,
     _is_step_timeout_failure,
     _load_step5_shell_evidence_from_memory,
@@ -36,6 +37,7 @@ from pdd.agentic_checkup_orchestrator import (
     _parse_failure_signal_block,
     _prune_rewound_checkup_state,
     _pr_base_tracking_ref,
+    _run_single_step,
     _run_step5_shell_first_evidence,
     _select_step5_python_tests,
     _step7_human_success_report_passed,
@@ -57,6 +59,66 @@ STEP7_VERDICT_JSON = (
     '```'
 )
 ALL_ISSUES_FIXED = f"All Issues Fixed\n{STEP7_VERDICT_JSON}"
+
+
+class TestStep7ErrorEnvelopeRecovery:
+    """Only complete, machine-readable Step 7 reports may bypass transport failure."""
+
+    def test_accepts_complete_failing_verdict_for_normal_gate_classification(self):
+        report = (
+            "## Step 7/8: Verification & Final Report\n"
+            "```json\n"
+            '{"success": false, "message": "full suite timed out", '
+            '"issues": [], "changed_files": []}\n'
+            "```"
+        )
+
+        assert _has_complete_step7_report(report) is True
+
+    def test_rejects_partial_or_non_step7_provider_output(self):
+        assert _has_complete_step7_report(
+            "## Step 7/8: Verification & Final Report\npartial response"
+        ) is False
+        assert _has_complete_step7_report(
+            "Not logged in · Please run /login"
+        ) is False
+
+    def test_step7_wires_the_strict_acceptance_callback(self, tmp_path):
+        report = (
+            "## Step 7/8: Verification & Final Report\n"
+            "```json\n"
+            '{"success": false, "message": "full suite timed out", '
+            '"issues": [], "changed_files": []}\n'
+            "```"
+        )
+        with patch(
+            "pdd.agentic_checkup_orchestrator.load_prompt_template",
+            return_value="verify {issue_url}",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.preprocess",
+            return_value="verify {issue_url}",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.substitute_template_variables",
+            return_value="verify issue",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.run_agentic_task",
+            return_value=(False, "provider error", 0.0, "anthropic"),
+        ) as run_task:
+            _run_single_step(
+                7,
+                "verify",
+                {"issue_url": "https://example.invalid/issues/1"},
+                cwd=tmp_path,
+                step_cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                label="step7",
+                timeout_adder=0.0,
+            )
+
+        callback = run_task.call_args.kwargs["accept_failed_output"]
+        assert callback(report) is True
+        assert callback("Not logged in · Please run /login") is False
 
 # Round-8 Finding 1: the Step 5 prompt REQUIRES a structured
 # ``failure_signal`` block, and the orchestrator now fails closed when

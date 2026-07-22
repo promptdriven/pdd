@@ -3426,6 +3426,35 @@ output: |
 # Internal: run a single step
 # ---------------------------------------------------------------------------
 
+def _has_complete_step7_report(output: str) -> bool:
+    """Return whether an error envelope still carries a complete Step 7 verdict.
+
+    Claude can mark a session as ``is_error`` after a tool command times out
+    while still returning the assistant's complete final verification report.
+    The provider error remains fail-closed unless this exact Step 7 shape has a
+    parseable verdict payload. The normal Step 7 gate subsequently decides
+    whether that verdict passes, so a complete *failing* report is preserved as
+    a checkup failure rather than being misclassified as provider exhaustion.
+    """
+    text = (output or "").strip()
+    if not text.startswith("## Step 7/8: Verification & Final Report"):
+        return False
+    try:
+        from .agentic_checkup import (  # pylint: disable=import-outside-toplevel
+            _extract_json_from_text,
+        )
+
+        payload = _extract_json_from_text(text)
+    except Exception:
+        return False
+    return bool(
+        isinstance(payload, dict)
+        and isinstance(payload.get("success"), bool)
+        and isinstance(payload.get("message"), str)
+        and isinstance(payload.get("issues"), list)
+        and isinstance(payload.get("changed_files"), list)
+    )
+
 def _run_single_step(
     step_num: Union[int, float],
     name: str,
@@ -3477,6 +3506,9 @@ def _run_single_step(
         reasoning_time=reasoning_time,
         steers=steers,
         set_git_work_tree=False,
+        accept_failed_output=(
+            _has_complete_step7_report if step_num == 7 else None
+        ),
     )
     return (success, output, cost, model)
 

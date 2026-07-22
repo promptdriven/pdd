@@ -11412,6 +11412,46 @@ def test_is_error_true_returns_failure(mock_cwd, mock_env, mock_load_model_data,
     )
 
 
+def test_accept_failed_output_preserves_validated_claude_result(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+):
+    """A caller may recover only a response it validates semantically."""
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    report = (
+        "## Step 7/8: Verification & Final Report\n"
+        "```json\n"
+        '{"success": false, "message": "full suite timed out", '
+        '"issues": [], "changed_files": []}\n'
+        "```"
+    )
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result",
+        "is_error": True,
+        "result": report,
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    success, output, _cost, provider = run_agentic_task(
+        "Verify the PR",
+        mock_cwd,
+        max_retries=1,
+        accept_failed_output=lambda value: value.startswith(
+            "## Step 7/8: Verification & Final Report"
+        ) and '"success": false' in value,
+    )
+
+    assert success is True
+    assert provider == "anthropic"
+    assert output == report
+
+
 def test_false_positive_retries_in_single_provider_config(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Single-provider config (anthropic-only, the cloud one-session case):
     transient empty-result success must retry on the same provider with
