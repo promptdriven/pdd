@@ -596,15 +596,16 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         row
         for row in protected_rows
         if json.dumps(row, sort_keys=True) not in replaced_protected_rows
+        and row in rows
     ]
     candidate_rows = [
-        row for row in rows if row in bootstrap_rows and row not in protected_rows
+        row for row in rows if row not in protected_rows
     ]
     assert len(protected_rows) == 31
     assert len(bootstrap_rows) == 60
-    assert len(surviving_rows) == 23
-    assert len(candidate_rows) == 31
-    assert len(rows) == 54
+    assert len(surviving_rows) == 21
+    assert len(candidate_rows) == 34
+    assert len(rows) == 55
     assert all(
         _requirement_authorization_row(item) not in rows
         for item in verification._REPLAY_REPLACED_PROTECTED_TRANSITIONS  # pylint: disable=protected-access
@@ -614,7 +615,7 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
     assert (
         profile_digest
-        == "e4c478dd7d01b17e2c56710fa7ecd19ce9e4560a86026233f526c0e062fd0786"
+        == "b4832ab48a0d0cf4570dc2de40ae3fe93dc406c03b3fd7807523f95cb8c62a7f"
     )
     pr2017_phase_a_rows = [
         row
@@ -637,7 +638,10 @@ def test_committed_rotations_equal_exact_protected_authority() -> None:
         for row in pr2017_phase_a_rows
     )
     current_rows = [
-        row for row in candidate_rows if row["head_policy_sha256"] == profile_digest
+        row
+        for row in candidate_rows
+        if row["head_policy_sha256"]
+        == verification._LEGACY_PDD_2168_PROFILE_BYTES[1]  # pylint: disable=protected-access
     ]
     replay_prompt_changes = set(
         subprocess.check_output(

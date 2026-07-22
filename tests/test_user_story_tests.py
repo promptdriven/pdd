@@ -104,7 +104,9 @@ def test_user_story_tests_detect_fail(tmp_path):
     story = stories_dir / "story__failure.md"
     story.write_text("As a user...", encoding="utf-8")
 
-    changes = [{"prompt_name": "foo_python.prompt", "change_instructions": "Add support"}]
+    changes = [
+        {"prompt_name": "foo_python.prompt", "change_instructions": "Add support"}
+    ]
 
     with patch("pdd.user_story_tests.detect_change") as mock_detect:
         mock_detect.return_value = (changes, 0.5, "gpt-test")
@@ -165,7 +167,9 @@ def test_user_story_tests_fail_fast(tmp_path):
     (stories_dir / "story__one.md").write_text("story", encoding="utf-8")
     (stories_dir / "story__two.md").write_text("story", encoding="utf-8")
 
-    changes = [{"prompt_name": "foo_python.prompt", "change_instructions": "Add support"}]
+    changes = [
+        {"prompt_name": "foo_python.prompt", "change_instructions": "Add support"}
+    ]
 
     with patch("pdd.user_story_tests.detect_change") as mock_detect:
         mock_detect.return_value = (changes, 0.5, "gpt-test")
@@ -219,6 +223,43 @@ def test_user_story_tests_uses_story_prompt_metadata_subset(tmp_path):
     assert captured_prompt_inputs == [[str(prompt_one)]]
 
 
+def test_user_story_tests_resolves_cwd_relative_metadata_with_absolute_prompts_dir(
+    tmp_path, monkeypatch
+):
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("prompt", encoding="utf-8")
+    story = stories_dir / "story__cwd_relative_metadata.md"
+    story.write_text(
+        "<!-- pdd-story-prompts: prompts/foo_python.prompt -->\n\nAs a user...",
+        encoding="utf-8",
+    )
+
+    captured_prompt_inputs = []
+
+    def fake_detect(prompt_paths, *_args, **_kwargs):
+        captured_prompt_inputs.append(prompt_paths)
+        return ([], 0.1, "gpt-test")
+
+    with patch("pdd.user_story_tests.detect_change", side_effect=fake_detect):
+        passed, results, cost, model = run_user_story_tests(
+            prompts_dir=str(prompts_dir.resolve()),
+            stories_dir=str(stories_dir),
+            quiet=True,
+        )
+
+    assert passed is True
+    assert results[0]["passed"] is True
+    assert cost == 0.1
+    assert model == "gpt-test"
+    assert captured_prompt_inputs == [[str(prompt_path)]]
+
+
 def test_user_story_tests_unresolved_story_metadata_fails(tmp_path):
     prompts_dir = tmp_path / "prompts"
     stories_dir = tmp_path / "user_stories"
@@ -241,7 +282,10 @@ def test_user_story_tests_unresolved_story_metadata_fails(tmp_path):
 
     assert passed is False
     assert results[0]["passed"] is False
-    assert "No prompts from pdd-story-prompts metadata could be resolved." in results[0]["error"]
+    assert (
+        "No prompts from pdd-story-prompts metadata could be resolved."
+        in results[0]["error"]
+    )
     assert cost == 0.0
     assert model == ""
     mock_detect.assert_not_called()
@@ -258,7 +302,9 @@ def test_user_story_tests_caches_story_prompt_links(tmp_path):
     story = stories_dir / "story__cache_links.md"
     story.write_text("As a user...", encoding="utf-8")
 
-    changes = [{"prompt_name": "one_python.prompt", "change_instructions": "Change one"}]
+    changes = [
+        {"prompt_name": "one_python.prompt", "change_instructions": "Change one"}
+    ]
 
     with patch("pdd.user_story_tests.detect_change") as mock_detect:
         mock_detect.return_value = (changes, 0.2, "gpt-test")
@@ -368,7 +414,9 @@ def test_cache_story_prompt_links_updates_metadata(tmp_path):
     story = stories_dir / "story__new.md"
     story.write_text("As a user...", encoding="utf-8")
 
-    changes = [{"prompt_name": "two_python.prompt", "change_instructions": "Change two"}]
+    changes = [
+        {"prompt_name": "two_python.prompt", "change_instructions": "Change two"}
+    ]
 
     with patch("pdd.user_story_tests.detect_change") as mock_detect:
         mock_detect.return_value = (changes, 0.4, "gpt-test")
@@ -416,7 +464,9 @@ def test_cache_story_prompt_links_empty_detection_uses_story_text_refs(tmp_path)
     assert "<!-- pdd-story-prompts: two_python.prompt -->" in updated_story
 
 
-def test_cache_story_prompt_links_empty_detection_falls_back_to_full_prompt_set(tmp_path):
+def test_cache_story_prompt_links_empty_detection_falls_back_to_full_prompt_set(
+    tmp_path,
+):
     prompts_dir = tmp_path / "prompts"
     stories_dir = tmp_path / "user_stories"
     prompts_dir.mkdir()
@@ -497,9 +547,12 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
     prompt_one.write_text("Handle file uploads.", encoding="utf-8")
     prompt_two.write_text("Send notifications.", encoding="utf-8")
 
-    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
-        "pdd.user_story_tests._llm_generate_story_markdown",
-        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+    with (
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+        ),
     ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
@@ -530,13 +583,15 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
     assert "## Acceptance Criteria" not in story_text
     assert "<persona>" not in story_text
     # The CONTRACT file is a separate sibling under contracts/.
-    contract_path = output_path.parent / "contracts" / (
-        output_path.name[len("story__"):-len(".md")] + ".contract.md"
+    contract_path = (
+        output_path.parent
+        / "contracts"
+        / (output_path.name[len("story__") : -len(".md")] + ".contract.md")
     )
     assert contract_path.exists()
     contract_text = contract_path.read_text(encoding="utf-8")
     assert "pdd-story-contract" in contract_text
-    assert 'issue-ref=' in contract_text
+    assert "issue-ref=" in contract_text
     assert "story-hash=" in contract_text
     assert "## Covers" in contract_text
     assert "## Acceptance Criteria" in contract_text
@@ -551,9 +606,12 @@ def test_generate_user_story_links_prompt_inputs_without_detection(tmp_path):
     prompt_one.write_text("Handle file uploads.", encoding="utf-8")
     prompt_two.write_text("Send notifications.", encoding="utf-8")
 
-    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
-        "pdd.user_story_tests._llm_generate_story_markdown",
-        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+    with (
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+        ),
     ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
@@ -580,10 +638,13 @@ def test_generate_user_story_uses_input_links_when_detection_raises(tmp_path):
     prompt = prompts_dir / "offline_python.prompt"
     prompt.write_text("Generate an offline-safe report.", encoding="utf-8")
 
-    with patch(
-        "pdd.user_story_tests._llm_generate_story_markdown",
-        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
-    ), patch("pdd.user_story_tests.detect_change") as mock_detect:
+    with (
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+        ),
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+    ):
         mock_detect.side_effect = RuntimeError("provider unavailable")
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt)],
@@ -634,13 +695,17 @@ def test_generate_user_story_derives_unit_test_ready_details_from_issue(tmp_path
         "- Rejecting a valid CSV",
         "- Logging raw uploaded cell values",
     )
-    with patch(
-        "pdd.user_story_tests._llm_generate_story_markdown",
-        return_value=(csv_story, 0.05, "story-model"),
-    ), patch(
-        "pdd.user_story_tests._llm_generate_story_contract",
-        return_value=(csv_contract, 0.02, "contract-model"),
-    ), patch("pdd.user_story_tests.detect_change") as mock_detect:
+    with (
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(csv_story, 0.05, "story-model"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_contract",
+            return_value=(csv_contract, 0.02, "contract-model"),
+        ),
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+    ):
         success, _, _, _, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt)],
             issue=issue_src,
@@ -668,15 +733,20 @@ def test_generate_user_story_seeds_covers_and_negative_cases(tmp_path):
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
 
-    fixture_path = Path(__file__).resolve().parent / "fixtures" / "contract_rules_python.prompt"
+    fixture_path = (
+        Path(__file__).resolve().parent / "fixtures" / "contract_rules_python.prompt"
+    )
     prompt_content = fixture_path.read_text(encoding="utf-8")
 
     prompt_one = prompts_dir / "contract_rules_python.prompt"
     prompt_one.write_text(prompt_content, encoding="utf-8")
 
-    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
-        "pdd.user_story_tests._llm_generate_story_markdown",
-        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+    with (
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+        ),
     ):
         success, _, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one)],
@@ -688,7 +758,9 @@ def test_generate_user_story_seeds_covers_and_negative_cases(tmp_path):
     assert success is True
     mock_detect.assert_not_called()
     # Covers/Negative Cases live in the generated contract, not the human story.
-    contract_text = _contract_path_for_story(Path(story_file)).read_text(encoding="utf-8")
+    contract_text = _contract_path_for_story(Path(story_file)).read_text(
+        encoding="utf-8"
+    )
     assert "- R1: Upload returns a summary report" in contract_text
     assert "## Negative Cases" in contract_text
 
@@ -697,7 +769,9 @@ def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
 
-    fixture_path = Path(__file__).resolve().parent / "fixtures" / "contract_rules_python.prompt"
+    fixture_path = (
+        Path(__file__).resolve().parent / "fixtures" / "contract_rules_python.prompt"
+    )
     prompt_content = fixture_path.read_text(encoding="utf-8")
 
     prompt_one = prompts_dir / "contract_rules_python.prompt"
@@ -705,9 +779,12 @@ def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
     prompt_two = prompts_dir / "other_python.prompt"
     prompt_two.write_text("Handle other stuff.", encoding="utf-8")
 
-    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
-        "pdd.user_story_tests._llm_generate_story_markdown",
-        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+    with (
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+        ),
     ):
         success, _, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
@@ -718,7 +795,9 @@ def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
 
     assert success is True
     mock_detect.assert_not_called()
-    contract_text = _contract_path_for_story(Path(story_file)).read_text(encoding="utf-8")
+    contract_text = _contract_path_for_story(Path(story_file)).read_text(
+        encoding="utf-8"
+    )
     assert "- R1: Upload returns a summary report" in contract_text
 
 
@@ -872,9 +951,10 @@ def test_generate_user_story_uses_llm_output(tmp_path):
     )
 
     fake_llm = {"result": _LLM_STORY_MD, "cost": 0.05, "model_name": "story-model"}
-    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
-        "pdd.llm_invoke.llm_invoke", return_value=fake_llm
-    ) as mock_llm:
+    with (
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch("pdd.llm_invoke.llm_invoke", return_value=fake_llm) as mock_llm,
+    ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
             issue=_write_issue(tmp_path),
@@ -912,12 +992,16 @@ def test_generate_user_story_context_story_protects_per_source_attribution(tmp_p
     prompt_one = prompts_dir / "context_python.prompt"
     prompt_one.write_text(_CONTEXT_PROMPT_BASE, encoding="utf-8")
 
-    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
-        "pdd.user_story_tests._llm_generate_story_markdown",
-        return_value=(_CONTEXT_HUMAN_STORY, 0.05, "story-model"),
-    ), patch(
-        "pdd.user_story_tests._llm_generate_story_contract",
-        return_value=(_CONTEXT_CONTRACT_MD, 0.02, "contract-model"),
+    with (
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(_CONTEXT_HUMAN_STORY, 0.05, "story-model"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_contract",
+            return_value=(_CONTEXT_CONTRACT_MD, 0.02, "contract-model"),
+        ),
     ):
         success, _, _, _, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
@@ -930,7 +1014,9 @@ def test_generate_user_story_context_story_protects_per_source_attribution(tmp_p
     assert linked_prompts == ["context_python.prompt"]
     mock_detect.assert_not_called()
     story_text = Path(story_file).read_text(encoding="utf-8")
-    contract_text = _contract_path_for_story(Path(story_file)).read_text(encoding="utf-8")
+    contract_text = _contract_path_for_story(Path(story_file)).read_text(
+        encoding="utf-8"
+    )
     # The concrete, regression-catching requirements live in the CONTRACT.
     assert "per-source token attribution" in contract_text
     assert "Aggregate-only token totals are not sufficient" in contract_text
@@ -948,10 +1034,12 @@ def test_generate_user_story_context_story_protects_per_source_attribution(tmp_p
         assert "Codex" not in text
         assert "Copilot" not in text
     assert "<pdd-reason>" not in story_text
-    assert "\"type\": \"cli\"" not in story_text
+    assert '"type": "cli"' not in story_text
 
 
-def test_run_user_story_tests_passes_then_fails_for_harmful_context_prompt_change(tmp_path):
+def test_run_user_story_tests_passes_then_fails_for_harmful_context_prompt_change(
+    tmp_path,
+):
     """Show the same `pdd context` story passing the original prompt and failing
     after a harmful aggregate-only prompt mutation that drops the usage box."""
     prompts_dir = tmp_path / "prompts"
@@ -992,26 +1080,34 @@ def test_run_user_story_tests_passes_then_fails_for_harmful_context_prompt_chang
         assert "per-source token attribution" in story_content
         assert "Aggregate-only token totals are not sufficient" in story_content
         if "Attribute tokens per source segment" in prompt_text:
-            detect_trace.append("PASS: original prompt still requires per-source attribution")
+            detect_trace.append(
+                "PASS: original prompt still requires per-source attribution"
+            )
             return [], 0.1, "gpt-test"
         if "Report only aggregate token totals" in prompt_text:
             detect_trace.append("FAIL: mutated prompt reports aggregate-only totals")
             return harmful_changes, 0.2, "gpt-test"
-        raise AssertionError("test fixture prompt must be original or aggregate-only mutation")
+        raise AssertionError(
+            "test fixture prompt must be original or aggregate-only mutation"
+        )
 
     with patch("pdd.user_story_tests.detect_change", side_effect=fake_detect):
-        baseline_passed, baseline_results, baseline_cost, baseline_model = run_user_story_tests(
-            prompts_dir=str(prompts_dir),
-            stories_dir=str(stories_dir),
-            quiet=True,
-            fail_fast=True,
+        baseline_passed, baseline_results, baseline_cost, baseline_model = (
+            run_user_story_tests(
+                prompts_dir=str(prompts_dir),
+                stories_dir=str(stories_dir),
+                quiet=True,
+                fail_fast=True,
+            )
         )
         prompt_one.write_text(_CONTEXT_PROMPT_AGGREGATE_ONLY, encoding="utf-8")
-        mutated_passed, mutated_results, mutated_cost, mutated_model = run_user_story_tests(
-            prompts_dir=str(prompts_dir),
-            stories_dir=str(stories_dir),
-            quiet=True,
-            fail_fast=True,
+        mutated_passed, mutated_results, mutated_cost, mutated_model = (
+            run_user_story_tests(
+                prompts_dir=str(prompts_dir),
+                stories_dir=str(stories_dir),
+                quiet=True,
+                fail_fast=True,
+            )
         )
 
     assert baseline_passed is True
@@ -1050,8 +1146,9 @@ def test_generate_user_story_fails_when_llm_errors(tmp_path):
     prompt_one = prompts_dir / "upload_python.prompt"
     prompt_one.write_text("Handle file uploads.", encoding="utf-8")
 
-    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
-        "pdd.llm_invoke.llm_invoke", side_effect=RuntimeError("no provider key")
+    with (
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch("pdd.llm_invoke.llm_invoke", side_effect=RuntimeError("no provider key")),
     ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
@@ -1081,8 +1178,9 @@ def test_generate_user_story_fails_when_llm_output_malformed(tmp_path):
     # No '## Story' heading at all — not a valid human story.
     malformed = "# User Story: x\n\nThis prose has no Story section heading.\n"
     bad_llm = {"result": malformed, "cost": 0.05, "model_name": "story-model"}
-    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
-        "pdd.llm_invoke.llm_invoke", return_value=bad_llm
+    with (
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch("pdd.llm_invoke.llm_invoke", return_value=bad_llm),
     ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
@@ -1117,8 +1215,9 @@ def test_generate_user_story_accepts_minimal_human_story(tmp_path):
         "As a user, I can upload a file, so that I get a report.\n"
     )
     good_llm = {"result": minimal, "cost": 0.05, "model_name": "story-model"}
-    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
-        "pdd.llm_invoke.llm_invoke", return_value=good_llm
+    with (
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch("pdd.llm_invoke.llm_invoke", return_value=good_llm),
     ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
@@ -1144,9 +1243,12 @@ def test_generate_writes_two_files_human_story_and_contract(tmp_path):
     prompt_one = prompts_dir / "upload_python.prompt"
     prompt_one.write_text("Handle file uploads.", encoding="utf-8")
 
-    with patch("pdd.user_story_tests.detect_change"), patch(
-        "pdd.user_story_tests._llm_generate_story_markdown",
-        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+    with (
+        patch("pdd.user_story_tests.detect_change"),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+        ),
     ):
         success, _, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one)],
@@ -1173,8 +1275,11 @@ def test_generate_writes_two_files_human_story_and_contract(tmp_path):
     assert "story-hash=" in contract_text
     # Contract carries the machine-checkable sections + candidate prompts.
     for section in (
-        "## Covers", "## Acceptance Criteria", "## Oracle",
-        "## Negative Cases", "## Candidate Prompts",
+        "## Covers",
+        "## Acceptance Criteria",
+        "## Oracle",
+        "## Negative Cases",
+        "## Candidate Prompts",
     ):
         assert section in contract_text
 
@@ -1187,12 +1292,16 @@ def test_generate_contract_failure_is_non_blocking(tmp_path):
     prompt_one = prompts_dir / "upload_python.prompt"
     prompt_one.write_text("Handle file uploads.", encoding="utf-8")
 
-    with patch("pdd.user_story_tests.detect_change"), patch(
-        "pdd.user_story_tests._llm_generate_story_markdown",
-        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
-    ), patch(
-        "pdd.user_story_tests._llm_generate_story_contract",
-        return_value=(None, 0.0, "contract-model"),
+    with (
+        patch("pdd.user_story_tests.detect_change"),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_contract",
+            return_value=(None, 0.0, "contract-model"),
+        ),
     ):
         success, message, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one)],
@@ -1217,9 +1326,12 @@ def test_sync_regenerates_contract_when_story_changes(tmp_path):
     prompt_one.write_text("Handle file uploads.", encoding="utf-8")
     issue_src = _write_issue(tmp_path)
 
-    with patch("pdd.user_story_tests.detect_change"), patch(
-        "pdd.user_story_tests._llm_generate_story_markdown",
-        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+    with (
+        patch("pdd.user_story_tests.detect_change"),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+        ),
     ):
         _, _, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one)],
@@ -1309,8 +1421,9 @@ def test_generate_user_story_fails_when_llm_output_contains_placeholders(tmp_pat
         "1. Given <state>, when <action>, then <detail>.\n"
     )
     bad_llm = {"result": placeholder_story, "cost": 0.05, "model_name": "story-model"}
-    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
-        "pdd.llm_invoke.llm_invoke", return_value=bad_llm
+    with (
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch("pdd.llm_invoke.llm_invoke", return_value=bad_llm),
     ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
@@ -1385,9 +1498,10 @@ def test_generate_user_story_requires_issue(tmp_path):
     prompt_one = prompts_dir / "upload_python.prompt"
     prompt_one.write_text("Handle file uploads.", encoding="utf-8")
 
-    with patch("pdd.llm_invoke.llm_invoke") as mock_llm, patch(
-        "pdd.user_story_tests._llm_generate_story_markdown"
-    ) as mock_author:
+    with (
+        patch("pdd.llm_invoke.llm_invoke") as mock_llm,
+        patch("pdd.user_story_tests._llm_generate_story_markdown") as mock_author,
+    ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
             issue=None,
@@ -1432,9 +1546,10 @@ def test_generate_user_story_authors_from_issue_not_prompt(tmp_path):
         captured["input_json"] = input_json
         return {"result": _LLM_STORY_MD, "cost": 0.05, "model_name": "story-model"}
 
-    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
-        "pdd.llm_invoke.llm_invoke", side_effect=fake_llm
-    ) as mock_llm:
+    with (
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch("pdd.llm_invoke.llm_invoke", side_effect=fake_llm) as mock_llm,
+    ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
             issue=issue_src,
@@ -1520,12 +1635,15 @@ def test_resolve_issue_source_pull_url_uses_gh(tmp_path):
 
 
 def test_resolve_issue_source_bare_number_infers_repo(tmp_path):
-    with patch(
-        "pdd.user_story_tests._infer_repo_slug", return_value="promptdriven/pdd"
-    ) as mock_repo, patch(
-        "pdd.user_story_tests._fetch_issue_via_gh",
-        return_value=("T", "B"),
-    ) as mock_fetch:
+    with (
+        patch(
+            "pdd.user_story_tests._infer_repo_slug", return_value="promptdriven/pdd"
+        ) as mock_repo,
+        patch(
+            "pdd.user_story_tests._fetch_issue_via_gh",
+            return_value=("T", "B"),
+        ) as mock_fetch,
+    ):
         title, body, ref = resolve_issue_source("#1356")
 
     mock_repo.assert_called_once()
@@ -1541,9 +1659,11 @@ def test_resolve_issue_source_unresolvable_returns_none(tmp_path):
         assert resolve_issue_source("123") == (None, None, None)
     # gh failure surfaces as unresolved.
     with patch("pdd.user_story_tests._fetch_issue_via_gh", return_value=None):
-        assert resolve_issue_source(
-            "https://github.com/promptdriven/pdd/issues/1"
-        ) == (None, None, None)
+        assert resolve_issue_source("https://github.com/promptdriven/pdd/issues/1") == (
+            None,
+            None,
+            None,
+        )
 
 
 def test_user_story_fix_happy_path(tmp_path):
@@ -1563,14 +1683,24 @@ def test_user_story_fix_happy_path(tmp_path):
 
     ctx = SimpleNamespace(obj={})
 
-    with patch("pdd.user_story_tests.discover_prompt_files") as mock_discover, \
-         patch("pdd.user_story_tests.detect_change") as mock_detect, \
-         patch("pdd.user_story_tests.get_extension", return_value=".py"), \
-         patch("pdd.change_main.change_main") as mock_change, \
-         patch("pdd.user_story_tests.run_user_story_tests") as mock_story_tests:
+    with (
+        patch("pdd.user_story_tests.discover_prompt_files") as mock_discover,
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch("pdd.user_story_tests.get_extension", return_value=".py"),
+        patch("pdd.change_main.change_main") as mock_change,
+        patch("pdd.user_story_tests.run_user_story_tests") as mock_story_tests,
+    ):
         mock_discover.return_value = [prompt_path]
-        mock_detect.return_value = ([{"prompt_name": "calc_python.prompt"}], 0.1, "detect-model")
-        mock_change.return_value = (f"Modified prompt saved to {prompt_path}", 0.2, "change-model")
+        mock_detect.return_value = (
+            [{"prompt_name": "calc_python.prompt"}],
+            0.1,
+            "detect-model",
+        )
+        mock_change.return_value = (
+            f"Modified prompt saved to {prompt_path}",
+            0.2,
+            "change-model",
+        )
         mock_story_tests.return_value = (True, [], 0.3, "verify-model")
 
         success, message, cost, model, changed_files = run_user_story_fix(
@@ -1609,14 +1739,24 @@ def test_user_story_fix_uses_pdd_src_dir_override(tmp_path, monkeypatch):
 
     ctx = SimpleNamespace(obj={})
 
-    with patch("pdd.user_story_tests.discover_prompt_files") as mock_discover, \
-         patch("pdd.user_story_tests.detect_change") as mock_detect, \
-         patch("pdd.user_story_tests.get_extension", return_value=".py"), \
-         patch("pdd.change_main.change_main") as mock_change, \
-         patch("pdd.user_story_tests.run_user_story_tests") as mock_story_tests:
+    with (
+        patch("pdd.user_story_tests.discover_prompt_files") as mock_discover,
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch("pdd.user_story_tests.get_extension", return_value=".py"),
+        patch("pdd.change_main.change_main") as mock_change,
+        patch("pdd.user_story_tests.run_user_story_tests") as mock_story_tests,
+    ):
         mock_discover.return_value = [prompt_path]
-        mock_detect.return_value = ([{"prompt_name": "calc_python.prompt"}], 0.1, "detect-model")
-        mock_change.return_value = (f"Modified prompt saved to {prompt_path}", 0.2, "change-model")
+        mock_detect.return_value = (
+            [{"prompt_name": "calc_python.prompt"}],
+            0.1,
+            "detect-model",
+        )
+        mock_change.return_value = (
+            f"Modified prompt saved to {prompt_path}",
+            0.2,
+            "change-model",
+        )
         mock_story_tests.return_value = (True, [], 0.3, "verify-model")
 
         success, _, _, _, changed_files = run_user_story_fix(
@@ -1648,14 +1788,24 @@ def test_user_story_fix_treats_plain_error_message_as_failure(tmp_path):
 
     ctx = SimpleNamespace(obj={})
 
-    with patch("pdd.user_story_tests.discover_prompt_files") as mock_discover, \
-         patch("pdd.user_story_tests.detect_change") as mock_detect, \
-         patch("pdd.user_story_tests.get_extension", return_value=".py"), \
-         patch("pdd.change_main.change_main") as mock_change, \
-         patch("pdd.user_story_tests.run_user_story_tests") as mock_story_tests:
+    with (
+        patch("pdd.user_story_tests.discover_prompt_files") as mock_discover,
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch("pdd.user_story_tests.get_extension", return_value=".py"),
+        patch("pdd.change_main.change_main") as mock_change,
+        patch("pdd.user_story_tests.run_user_story_tests") as mock_story_tests,
+    ):
         mock_discover.return_value = [prompt_path]
-        mock_detect.return_value = ([{"prompt_name": "calc_python.prompt"}], 0.1, "detect-model")
-        mock_change.return_value = ("Error during prompt modification: failure", 0.2, "change-model")
+        mock_detect.return_value = (
+            [{"prompt_name": "calc_python.prompt"}],
+            0.1,
+            "detect-model",
+        )
+        mock_change.return_value = (
+            "Error during prompt modification: failure",
+            0.2,
+            "change-model",
+        )
 
         success, message, cost, model, changed_files = run_user_story_fix(
             ctx=ctx,
@@ -1695,9 +1845,7 @@ def test_user_story_fix_detect_and_change_are_contract_aware(tmp_path):
     story_path.write_text("## Story\nAs a user I want calc.\n", encoding="utf-8")
     contract_path = _contract_path_for_story(story_path)
     contract_path.parent.mkdir(parents=True, exist_ok=True)
-    contract_text = (
-        "## Acceptance Criteria\n1. CONTRACT_ONLY_CRITERION must hold.\n"
-    )
+    contract_text = "## Acceptance Criteria\n1. CONTRACT_ONLY_CRITERION must hold.\n"
     contract_path.write_text(contract_text, encoding="utf-8")
 
     detected_oracle = {}
@@ -1708,18 +1856,23 @@ def test_user_story_fix_detect_and_change_are_contract_aware(tmp_path):
         return ([{"prompt_name": "calc_python.prompt"}], 0.1, "detect-model")
 
     def fake_change_main(**kwargs):
-        change_prompt_contents["text"] = Path(
-            kwargs["change_prompt_file"]
-        ).read_text(encoding="utf-8")
+        change_prompt_contents["text"] = Path(kwargs["change_prompt_file"]).read_text(
+            encoding="utf-8"
+        )
         return (f"Modified prompt saved to {prompt_path}", 0.2, "change-model")
 
     ctx = SimpleNamespace(obj={})
 
-    with patch("pdd.user_story_tests.discover_prompt_files", return_value=[prompt_path]), \
-         patch("pdd.user_story_tests.detect_change", side_effect=fake_detect_change), \
-         patch("pdd.user_story_tests.get_extension", return_value=".py"), \
-         patch("pdd.change_main.change_main", side_effect=fake_change_main), \
-         patch("pdd.user_story_tests.run_user_story_tests", return_value=(True, [], 0.3, "verify-model")):
+    with (
+        patch("pdd.user_story_tests.discover_prompt_files", return_value=[prompt_path]),
+        patch("pdd.user_story_tests.detect_change", side_effect=fake_detect_change),
+        patch("pdd.user_story_tests.get_extension", return_value=".py"),
+        patch("pdd.change_main.change_main", side_effect=fake_change_main),
+        patch(
+            "pdd.user_story_tests.run_user_story_tests",
+            return_value=(True, [], 0.3, "verify-model"),
+        ),
+    ):
         success, message, cost, model, changed_files = run_user_story_fix(
             ctx=ctx,
             story_file=str(story_path),
@@ -1754,13 +1907,26 @@ def test_user_story_fix_without_contract_passes_story_directly(tmp_path):
 
     ctx = SimpleNamespace(obj={})
 
-    with patch("pdd.user_story_tests.discover_prompt_files", return_value=[prompt_path]), \
-         patch("pdd.user_story_tests.detect_change",
-               return_value=([{"prompt_name": "calc_python.prompt"}], 0.1, "detect-model")), \
-         patch("pdd.user_story_tests.get_extension", return_value=".py"), \
-         patch("pdd.change_main.change_main",
-               return_value=(f"Modified prompt saved to {prompt_path}", 0.2, "change-model")) as mock_change, \
-         patch("pdd.user_story_tests.run_user_story_tests", return_value=(True, [], 0.3, "verify-model")):
+    with (
+        patch("pdd.user_story_tests.discover_prompt_files", return_value=[prompt_path]),
+        patch(
+            "pdd.user_story_tests.detect_change",
+            return_value=([{"prompt_name": "calc_python.prompt"}], 0.1, "detect-model"),
+        ),
+        patch("pdd.user_story_tests.get_extension", return_value=".py"),
+        patch(
+            "pdd.change_main.change_main",
+            return_value=(
+                f"Modified prompt saved to {prompt_path}",
+                0.2,
+                "change-model",
+            ),
+        ) as mock_change,
+        patch(
+            "pdd.user_story_tests.run_user_story_tests",
+            return_value=(True, [], 0.3, "verify-model"),
+        ),
+    ):
         success, *_ = run_user_story_fix(
             ctx=ctx,
             story_file=str(story_path),
@@ -1771,6 +1937,335 @@ def test_user_story_fix_without_contract_passes_story_directly(tmp_path):
     assert success is True
     # No contract => change_main is handed the story path itself.
     assert mock_change.call_args[1]["change_prompt_file"] == str(story_path)
+
+
+# Issue #1873 — diagnostic failure output
+
+
+def test_failure_diagnostic_output_quiet_false(tmp_path, capsys, monkeypatch):
+    """R1: full diagnostic block appears on failure when quiet=False."""
+    monkeypatch.chdir(tmp_path)
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("prompt", encoding="utf-8")
+    story = stories_dir / "story__failure.md"
+    story.write_text("As a user...", encoding="utf-8")
+
+    changes = [
+        {"prompt_name": "foo_python.prompt", "change_instructions": "Add support for X"}
+    ]
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = (changes, 0.5, "gpt-test")
+        passed, results, _cost, _model = run_user_story_tests(
+            prompts_dir="prompts",
+            stories_dir="user_stories",
+            quiet=False,
+        )
+
+    assert passed is False
+    captured = capsys.readouterr()
+    # Normalize output: rprint may wrap long paths across lines.
+    out = captured.out.replace("\n", "")
+    assert "FAIL" in out
+    assert "user_stories/story__failure.md" in out
+    assert "Evaluated prompts:" in out
+    assert "prompts/foo_python.prompt" in out
+    assert "Missing or stale behavior:" in out
+    assert "prompts/foo_python.prompt: Add support for X" in out
+    assert "Next step:" in out
+    assert "pdd fix user_stories/story__failure.md" in out
+
+
+def test_failure_diagnostic_output_quiet_true(tmp_path, capsys, monkeypatch):
+    """R2: diagnostic block is suppressed when quiet=True."""
+    monkeypatch.chdir(tmp_path)
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("prompt", encoding="utf-8")
+    story = stories_dir / "story__failure.md"
+    story.write_text("As a user...", encoding="utf-8")
+
+    changes = [
+        {"prompt_name": "foo_python.prompt", "change_instructions": "Add support for X"}
+    ]
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = (changes, 0.5, "gpt-test")
+        passed, results, _cost, _model = run_user_story_tests(
+            prompts_dir="prompts",
+            stories_dir="user_stories",
+            quiet=True,
+        )
+
+    assert passed is False
+    captured = capsys.readouterr()
+    out = captured.out
+    assert "Evaluated prompts:" not in out
+    assert "Missing or stale behavior:" not in out
+    assert "Next step:" not in out
+
+
+def test_failure_diagnostic_metadata_resolution_failure(tmp_path, capsys, monkeypatch):
+    """Unresolved metadata is an incomplete evaluation, not semantic drift."""
+    monkeypatch.chdir(tmp_path)
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("prompt", encoding="utf-8")
+    story = stories_dir / "story__noprompts.md"
+    story.write_text(
+        "As a user...\n<!-- pdd-story-prompts: nonexistent_python.prompt -->\n",
+        encoding="utf-8",
+    )
+
+    passed, results, _cost, _model = run_user_story_tests(
+        prompts_dir="prompts",
+        stories_dir="user_stories",
+        quiet=False,
+    )
+
+    assert passed is False
+    assert (
+        results[0]["error"]
+        == "No prompts from pdd-story-prompts metadata could be resolved."
+    )
+    captured = capsys.readouterr()
+    # Normalize output: rprint may wrap long paths across lines.
+    out = captured.out.replace("\n", "")
+    assert "UNKNOWN" in out
+    assert "Story was not successfully evaluated:" in out
+    assert "Evaluated prompts:" in out
+    assert "- none" in out
+    assert "Unresolved prompt references:" in out
+    assert "nonexistent_python.prompt" in out
+    assert "Missing or stale behavior:" not in out
+    assert "repair the pdd-story-prompts metadata, then retry" in out
+    assert "pdd fix" not in out
+
+
+def test_partial_unresolved_metadata_is_incomplete_after_evaluating_resolved_prompt(
+    tmp_path, capsys, monkeypatch
+):
+    """A partial provider result cannot become PASS or semantic FAIL."""
+    monkeypatch.chdir(tmp_path)
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+    resolved = prompts_dir / "resolved_python.prompt"
+    resolved.write_text("prompt", encoding="utf-8")
+    story = stories_dir / "story__partial.md"
+    story.write_text(
+        "As a user...\n"
+        "<!-- pdd-story-prompts: prompts/resolved_python.prompt, prompts/missing_python.prompt -->\n",
+        encoding="utf-8",
+    )
+
+    with patch(
+        "pdd.user_story_tests.detect_change", return_value=([], 0.2, "gpt-test")
+    ) as detector:
+        passed, results, cost, model = run_user_story_tests(
+            prompts_dir="prompts", stories_dir="user_stories", quiet=False
+        )
+
+    assert passed is False
+    assert detector.call_args.args[0] == ["prompts/resolved_python.prompt"]
+    assert results[0]["evaluation_status"] == "incomplete"
+    assert results[0]["evaluated_prompts"] == ["prompts/resolved_python.prompt"]
+    assert results[0]["unresolved_prompts"] == ["prompts/missing_python.prompt"]
+    assert results[0]["changes"] == []
+    assert cost == 0.2
+    assert model == "gpt-test"
+    out = capsys.readouterr().out.replace("\n", "")
+    assert "UNKNOWN user_stories/story__partial.md" in out
+    assert "Evaluated prompts:" in out
+    assert "prompts/resolved_python.prompt" in out
+    assert "Unresolved prompt references:" in out
+    assert "prompts/missing_python.prompt" in out
+    assert "Missing or stale behavior:" not in out
+    assert "pdd fix" not in out
+
+
+def test_failure_diagnostic_output_preserves_rich_markup_characters(
+    tmp_path, capsys, monkeypatch
+):
+    """Diagnostic paths and instructions must not be parsed as Rich markup."""
+    monkeypatch.chdir(tmp_path)
+    prompt_dir = tmp_path / "prompts" / "frontend" / "app" / "[tenant]" / "queues"
+    stories_dir = tmp_path / "user_stories"
+    prompt_dir.mkdir(parents=True)
+    stories_dir.mkdir()
+
+    prompt_path = prompt_dir / "page_TypeScriptReact.prompt"
+    prompt_path.write_text("Render tenant queue page.", encoding="utf-8")
+    story = stories_dir / "story__tenant_queue.md"
+    story.write_text(
+        "As an operator, I can inspect tenant queue state.\n"
+        "<!-- pdd-story-prompts: prompts/frontend/app/[tenant]/queues/page_TypeScriptReact.prompt -->\n",
+        encoding="utf-8",
+    )
+
+    changes = [
+        {
+            "prompt_name": "page_TypeScriptReact.prompt",
+            "change_instructions": "Guarantee app/[tenant]/queues shows slot state.",
+        }
+    ]
+
+    with patch(
+        "pdd.user_story_tests.detect_change",
+        return_value=(changes, 0.5, "gpt-test"),
+    ):
+        passed, _results, _cost, _model = run_user_story_tests(
+            prompts_dir="prompts",
+            stories_dir="user_stories",
+            quiet=False,
+        )
+
+    assert passed is False
+    out = capsys.readouterr().out.replace("\n", "")
+    assert "prompts/frontend/app/[tenant]/queues/page_TypeScriptReact.prompt" in out
+    assert "app/[tenant]/queues shows slot state" in out
+    assert "pdd fix user_stories/story__tenant_queue.md" in out
+
+
+def _write_two_failing_stories(tmp_path):
+    """Create two explicitly linked stories for deterministic diagnostic tests."""
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    for slug in ("alpha", "beta"):
+        (prompts_dir / f"{slug}.prompt").write_text(
+            f"Current {slug} behavior.", encoding="utf-8"
+        )
+        (stories_dir / f"story__{slug}.md").write_text(
+            f"As a user, I need new {slug} behavior.\n"
+            f"<!-- pdd-story-prompts: prompts/{slug}.prompt -->\n",
+            encoding="utf-8",
+        )
+
+
+def test_failure_diagnostic_fail_fast_prints_complete_first_block_only(
+    tmp_path, capsys, monkeypatch
+):
+    """Fail-fast completes the first diagnostic before suppressing later stories."""
+    monkeypatch.chdir(tmp_path)
+    _write_two_failing_stories(tmp_path)
+    first_changes = [
+        {
+            "prompt_name": "alpha.prompt",
+            "change_instructions": "Add alpha retry behavior.",
+        }
+    ]
+
+    with patch(
+        "pdd.user_story_tests.detect_change",
+        return_value=(first_changes, 0.1, "gpt-test"),
+    ) as detector:
+        passed, results, _cost, _model = run_user_story_tests(
+            prompts_dir="prompts",
+            stories_dir="user_stories",
+            quiet=False,
+            fail_fast=True,
+        )
+
+    assert passed is False
+    assert detector.call_count == 1
+    assert [result["story"] for result in results] == [
+        "user_stories/story__alpha.md"
+    ]
+    output = capsys.readouterr().out
+    expected_first_block = (
+        "FAIL user_stories/story__alpha.md\n"
+        "\n"
+        "  Evaluated prompts:\n"
+        "  - prompts/alpha.prompt\n"
+        "  Missing or stale behavior:\n"
+        "  - prompts/alpha.prompt: Add alpha retry behavior.\n"
+        "  Next step:  pdd fix user_stories/story__alpha.md\n"
+    )
+    assert expected_first_block in output
+    assert "story__beta.md" not in output
+    assert "prompts/beta.prompt" not in output
+
+
+def test_failure_diagnostic_no_fail_fast_prints_complete_block_for_every_failure(
+    tmp_path, capsys, monkeypatch
+):
+    """No-fail-fast reports a complete actionable diagnostic for each failure."""
+    monkeypatch.chdir(tmp_path)
+    _write_two_failing_stories(tmp_path)
+    changes_by_story = [
+        (
+            [
+                {
+                    "prompt_name": "alpha.prompt",
+                    "change_instructions": "Add alpha retry behavior.",
+                }
+            ],
+            0.1,
+            "gpt-test",
+        ),
+        (
+            [
+                {
+                    "prompt_name": "beta.prompt",
+                    "change_instructions": "Add beta audit behavior.",
+                }
+            ],
+            0.2,
+            "gpt-test",
+        ),
+    ]
+
+    with patch(
+        "pdd.user_story_tests.detect_change", side_effect=changes_by_story
+    ) as detector:
+        passed, results, _cost, _model = run_user_story_tests(
+            prompts_dir="prompts",
+            stories_dir="user_stories",
+            quiet=False,
+            fail_fast=False,
+        )
+
+    assert passed is False
+    assert detector.call_count == 2
+    assert [result["story"] for result in results] == [
+        "user_stories/story__alpha.md",
+        "user_stories/story__beta.md",
+    ]
+    output = capsys.readouterr().out
+    expected_blocks = (
+        "FAIL user_stories/story__alpha.md\n"
+        "\n"
+        "  Evaluated prompts:\n"
+        "  - prompts/alpha.prompt\n"
+        "  Missing or stale behavior:\n"
+        "  - prompts/alpha.prompt: Add alpha retry behavior.\n"
+        "  Next step:  pdd fix user_stories/story__alpha.md\n"
+        "FAIL user_stories/story__beta.md\n"
+        "\n"
+        "  Evaluated prompts:\n"
+        "  - prompts/beta.prompt\n"
+        "  Missing or stale behavior:\n"
+        "  - prompts/beta.prompt: Add beta audit behavior.\n"
+        "  Next step:  pdd fix user_stories/story__beta.md\n"
+    )
+    assert expected_blocks in output
 
 
 def test_cache_story_prompt_links_honors_explicit_prompts(tmp_path, monkeypatch):
