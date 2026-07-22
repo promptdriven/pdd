@@ -208,6 +208,7 @@ def _repository(tmp_path: Path) -> Path:
     (root / "prompts/widget_python.prompt").write_text("REQ-1: Build widget\n")
     return root
 
+
 def _manifest(root: Path, base: str, head: str):
     return build_unit_manifest(root, base_ref=base, head_ref=head)
 
@@ -246,6 +247,8 @@ def test_candidate_cannot_delete_protected_obligation(tmp_path) -> None:
     assert any(
         "removed protected obligation" in item for item in profiles.invalid_reasons
     )
+
+
 def test_candidate_cannot_remap_protected_validator(tmp_path) -> None:
     """Candidate policy cannot remap a protected validator."""
     root = _repository(tmp_path)
@@ -805,7 +808,9 @@ def _stale_authority_sequence(
         target = root / unrelated_target
         target.parent.mkdir()
         target.write_bytes(unrelated_v1)
-        (root / unrelated_path).symlink_to("../canonical-prompts/unrelated_python.prompt")
+        (root / unrelated_path).symlink_to(
+            "../canonical-prompts/unrelated_python.prompt"
+        )
         (root / ".pdd/sync-aliases.json").write_text(
             json.dumps(
                 {
@@ -963,7 +968,9 @@ def test_retire_unreachable_2058_authority_after_1790_consumes_first(tmp_path) -
     ]
 
 
-def test_schema_3_upgrade_with_empty_retirements_rejects_rewritten_history(tmp_path) -> None:
+def test_schema_3_upgrade_with_empty_retirements_rejects_rewritten_history(
+    tmp_path,
+) -> None:
     """A schema-3 upgrade cannot reformat a protected schema-2 authorization row."""
     state = _stale_authority_sequence(tmp_path)
     state.policy_path.write_text(
@@ -975,7 +982,9 @@ def test_schema_3_upgrade_with_empty_retirements_rejects_rewritten_history(tmp_p
     )
     candidate = _commit(state.root, "rewrite history during empty schema-3 upgrade")
 
-    with pytest.raises(VerificationProfileError, match="rewrites protected representation"):
+    with pytest.raises(
+        VerificationProfileError, match="rewrites protected representation"
+    ):
         load_verification_profiles(
             state.root, _manifest(state.root, state.stale_base, candidate)
         )
@@ -1003,8 +1012,12 @@ def test_schema_3_history_rejects_rewrite_without_new_retirement(tmp_path) -> No
     state.policy_path.write_text(json.dumps(policy))
     candidate = _commit(state.root, "rewrite stationary schema-3 history")
 
-    with pytest.raises(VerificationProfileError, match="rewrites protected representation"):
-        load_verification_profiles(state.root, _manifest(state.root, protected, candidate))
+    with pytest.raises(
+        VerificationProfileError, match="rewrites protected representation"
+    ):
+        load_verification_profiles(
+            state.root, _manifest(state.root, protected, candidate)
+        )
 
 
 def test_schema_3_phase_b_consumption_keeps_stationary_history(tmp_path) -> None:
@@ -1017,7 +1030,9 @@ def test_schema_3_phase_b_consumption_keeps_stationary_history(tmp_path) -> None
     state.profile_path.write_bytes(state.profile_v3)
     candidate = _commit(state.root, "consume protected schema-3 authority")
 
-    profiles = load_verification_profiles(state.root, _manifest(state.root, protected, candidate))
+    profiles = load_verification_profiles(
+        state.root, _manifest(state.root, protected, candidate)
+    )
     assert not profiles.invalid_reasons
 
 
@@ -1045,7 +1060,9 @@ def test_retirement_reissue_rejects_same_candidate_byte_changes(
         )
 
 
-def test_retirement_reissue_rejects_unrelated_managed_prompt_byte_drift(tmp_path) -> None:
+def test_retirement_reissue_rejects_unrelated_managed_prompt_byte_drift(
+    tmp_path,
+) -> None:
     """Retirement Phase A binds every expected prompt, not only its target row."""
     state = _stale_authority_sequence(tmp_path, include_unrelated=True)
     (state.root / state.unrelated_path).write_bytes(
@@ -1124,10 +1141,14 @@ def test_consuming_reissued_authority_rejects_unrelated_managed_prompt_drift(
     candidate = _commit(state.root, "consume authority with unrelated drift")
 
     with pytest.raises(VerificationProfileError, match="unmanaged prompt bytes"):
-        load_verification_profiles(state.root, _manifest(state.root, reissue, candidate))
+        load_verification_profiles(
+            state.root, _manifest(state.root, reissue, candidate)
+        )
 
 
-def test_consuming_reissued_authority_allows_unchanged_unrelated_prompts(tmp_path) -> None:
+def test_consuming_reissued_authority_allows_unchanged_unrelated_prompts(
+    tmp_path,
+) -> None:
     """Phase B remains usable when only its exact protected prompt changes."""
     state = _stale_authority_sequence(tmp_path, include_unrelated=True)
     state.policy_path.write_text(json.dumps(_retirement_policy(state)))
@@ -1137,7 +1158,9 @@ def test_consuming_reissued_authority_allows_unchanged_unrelated_prompts(tmp_pat
     state.profile_path.write_bytes(state.profile_v3)
     candidate = _commit(state.root, "consume fresh authority only")
 
-    profiles = load_verification_profiles(state.root, _manifest(state.root, reissue, candidate))
+    profiles = load_verification_profiles(
+        state.root, _manifest(state.root, reissue, candidate)
+    )
     assert not profiles.invalid_reasons
 
 
@@ -1153,9 +1176,9 @@ def test_retirement_history_preserves_protected_json_representation(
         base = state.stale_base
     elif mutation == "row-path":
         policy["requirement_rotations"][1] = dict(state.stale)
-        policy["requirement_rotations"][1]["prompt_path"] = (
-            "prompts/./gadget_python.prompt"
-        )
+        policy["requirement_rotations"][1][
+            "prompt_path"
+        ] = "prompts/./gadget_python.prompt"
         policy["requirement_rotation_retirements"][0]["obsolete"] = policy[
             "requirement_rotations"
         ][1]
@@ -1171,11 +1194,15 @@ def test_retirement_history_preserves_protected_json_representation(
     state.policy_path.write_text(json.dumps(policy))
     candidate = _commit(state.root, f"rewrite retirement history {mutation}")
 
-    with pytest.raises(VerificationProfileError, match="rewrites protected representation"):
+    with pytest.raises(
+        VerificationProfileError, match="rewrites protected representation"
+    ):
         load_verification_profiles(state.root, _manifest(state.root, base, candidate))
 
 
-@pytest.mark.parametrize("location", ["top", "row", "retirement", "obsolete", "replacement"])
+@pytest.mark.parametrize(
+    "location", ["top", "row", "retirement", "obsolete", "replacement"]
+)
 def test_rotation_policy_rejects_duplicate_json_members_at_every_nesting_level(
     tmp_path, location
 ) -> None:
@@ -1187,15 +1214,9 @@ def test_rotation_policy_rejects_duplicate_json_members_at_every_nesting_level(
         {"obsolete": state.stale, "replacement": state.replacement},
         separators=(",", ":"),
     )
-    duplicate_retirement = (
-        f'{{"obsolete":{row},"obsolete":{row},"replacement":{row}}}'
-    )
-    duplicate_obsolete = (
-        f'{{"obsolete":{duplicate_row},"replacement":{row}}}'
-    )
-    duplicate_replacement = (
-        f'{{"obsolete":{row},"replacement":{duplicate_row}}}'
-    )
+    duplicate_retirement = f'{{"obsolete":{row},"obsolete":{row},"replacement":{row}}}'
+    duplicate_obsolete = f'{{"obsolete":{duplicate_row},"replacement":{row}}}'
+    duplicate_replacement = f'{{"obsolete":{row},"replacement":{duplicate_row}}}'
     retirement_value = {
         "retirement": duplicate_retirement,
         "obsolete": duplicate_obsolete,
@@ -1206,7 +1227,9 @@ def test_rotation_policy_rejects_duplicate_json_members_at_every_nesting_level(
         f'"requirement_rotation_retirements":[{retirement_value}]}}'
     )
     if location == "top":
-        payload = payload.replace('"schema_version":3,', '"schema_version":3,"schema_version":3,')
+        payload = payload.replace(
+            '"schema_version":3,', '"schema_version":3,"schema_version":3,'
+        )
     elif location == "row":
         payload = (
             f'{{"schema_version":2,"rotations":[],'
@@ -1269,7 +1292,7 @@ def test_retirement_record_rejects_ambiguous_or_nonexact_history(
         policy["requirement_rotation_retirements"][0]["obsolete"] = dict(state.stale)
         policy["requirement_rotation_retirements"][0]["obsolete"][
             "head_prompt_sha256"
-        ] = "0" * 64
+        ] = ("0" * 64)
     elif mutation == "duplicate":
         policy["requirement_rotation_retirements"].append(
             {"obsolete": state.stale, "replacement": state.replacement}
@@ -1870,7 +1893,9 @@ def _estimate_inputs(raw: bytes):
                 tuple(sorted(row["required_requirement_ids"])),
                 tuple(
                     sorted(
-                        verification._obligation(item)  # pylint: disable=protected-access
+                        verification._obligation(
+                            item
+                        )  # pylint: disable=protected-access
                         for item in row["obligations"]
                     )
                 ),
@@ -1894,16 +1919,20 @@ def _estimate_updates(monkeypatch, head_profile, head_prompts, head_rotation=Non
         base_ref="protected-base",
         head_ref="candidate-head",
     )
-    authorizations, prompts, _new_authorizations = verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
-        ROOT, manifest
+    authorizations, prompts, _new_authorizations = (
+        verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
+            ROOT, manifest
+        )
     )
-    updates, invalid = verification._authorized_requirement_updates(  # pylint: disable=protected-access
-        ROOT,
-        manifest,
-        _estimate_inputs(PROFILE_FILE.read_bytes()),
-        _estimate_inputs(head_profile),
-        authorizations,
-        prompts,
+    updates, invalid = (
+        verification._authorized_requirement_updates(  # pylint: disable=protected-access
+            ROOT,
+            manifest,
+            _estimate_inputs(PROFILE_FILE.read_bytes()),
+            _estimate_inputs(head_profile),
+            authorizations,
+            prompts,
+        )
     )
     return authorizations, updates, invalid
 
@@ -1945,14 +1974,20 @@ def test_expected_requirement_update_restamps_bound_test_obligations() -> None:
     )
     candidate = verification._ProfileInput(  # pylint: disable=protected-access
         (current,),
-        tuple(sorted((
-            verification.replace(human, requirement_ids=(current,)),
-            verification.replace(test_obligation, requirement_ids=(current,)),
-        ))),
+        tuple(
+            sorted(
+                (
+                    verification.replace(human, requirement_ids=(current,)),
+                    verification.replace(test_obligation, requirement_ids=(current,)),
+                )
+            )
+        ),
     )
 
-    update, reason = verification._expected_requirement_update(  # pylint: disable=protected-access
-        authorization, protected, candidate
+    update, reason = (
+        verification._expected_requirement_update(  # pylint: disable=protected-access
+            authorization, protected, candidate
+        )
     )
 
     assert reason is None
@@ -1973,13 +2008,11 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     target_prompts, _target_profile = _estimate_target_bytes()
     for rule in ESTIMATE_REQUIREMENT_ROTATIONS:
         prompt_path = rule["prompt_path"]
-        assert (
-            hashlib.sha256((ROOT / prompt_path).read_bytes()).hexdigest()
-            == (rule["base_prompt_sha256"])
+        assert hashlib.sha256((ROOT / prompt_path).read_bytes()).hexdigest() == (
+            rule["base_prompt_sha256"]
         )
-        assert (
-            hashlib.sha256(target_prompts[prompt_path]).hexdigest()
-            == (rule["head_prompt_sha256"])
+        assert hashlib.sha256(target_prompts[prompt_path]).hexdigest() == (
+            rule["head_prompt_sha256"]
         )
 
     current_inputs = _estimate_inputs(PROFILE_FILE.read_bytes())
@@ -1998,8 +2031,7 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     assert not updates
 
 
-def test_estimate_contract_rotations_share_one_exact_profile_transition(
-) -> None:
+def test_estimate_contract_rotations_share_one_exact_profile_transition() -> None:
     """The dormant #2058 row has one exact profile binding and replacement."""
     target_prompts, target_profile = _estimate_target_bytes()
     protected = _estimate_inputs(PROFILE_FILE.read_bytes())
@@ -2018,8 +2050,10 @@ def test_estimate_contract_rotations_share_one_exact_profile_transition(
         assert hashlib.sha256(target_prompts[rule["prompt_path"]]).hexdigest() == (
             authorization.bindings.head_prompt_sha256
         )
-        update, reason = verification._expected_requirement_update(  # pylint: disable=protected-access
-            authorization, protected[unit_id], candidate[unit_id]
+        update, reason = (
+            verification._expected_requirement_update(  # pylint: disable=protected-access
+                authorization, protected[unit_id], candidate[unit_id]
+            )
         )
         assert reason is None
         assert update is not None

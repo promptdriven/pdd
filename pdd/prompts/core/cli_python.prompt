@@ -56,7 +56,7 @@
      - When `--review-examples` is supplied, set `ctx.obj["review_examples"] = True` AND initialize `ctx.obj["grounding_review_decisions"] = []` so downstream grounding consumers can append per-module review decisions (`{"module": str, "decision": "accept"|"reject", "reason": Optional[str]}`) for the evidence-manifest writer to record under `generation.grounding.reviewed`. When `--review-examples` is not supplied, do NOT pre-create the key — the manifest writer treats its absence as "no review observed" and records `reviewed: false`.
      - Only set `strength`/`temperature` in `ctx.obj` if explicitly provided.
      - Early Actions: Handle `--list-contexts` and `--context` validation (against `list_available_contexts()`). Run `auto_update()` unless `PDD_AUTO_UPDATE=false`.
-  - Show onboarding reminder via `_should_show_onboarding_reminder` for human-output invocations only; suppress it for machine JSON mode so stdout remains one parseable JSON document.
+  - Show onboarding reminder via `_should_show_onboarding_reminder` for human-output invocations only; suppress it in quiet mode, estimate mode, and machine JSON mode so stdout remains clean and machine-readable.
      - Output Capture: If `--core-dump` enabled, wrap `sys.stdout/stderr` with `OutputCapture` and store in `ctx.obj`.
 
   4. **Result Callback (`process_commands`)**:

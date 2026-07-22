@@ -88,4 +88,12 @@
     Step 4. If verbose is True, pretty print the extracted changes_list using Rich Markdown function. Include token counts and costs. The list will contain a dictionary with the following keys "prompt_name" and "change_instructions".
     Step 5. Return the 'changes_list', the 'total_cost' from both `llm_invoke` calls, and 'model_name' used for the detect_change_LLM prompt.
 
-% Ensure that the function handles potential errors gracefully, such as missing files or invalid input.
+% Ensure that the function handles potential errors gracefully, such as missing
+% files or invalid input. Provider, authentication, timeout, parsing, and other
+% detector exceptions must propagate unchanged to the caller, which owns their
+% classification and user-facing recovery guidance. Never print or log
+% `str(exception)`, `repr(exception)`, exception arguments, tracebacks, or other
+% raw exception content: those values may contain credentials, provider payloads,
+% or private prompt text. The detector may retain the existing missing-file
+% warning and verbose successful-result output, but an exception path itself
+% must emit no console output at normal verbosity or in quiet callers.
