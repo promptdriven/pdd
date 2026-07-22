@@ -770,9 +770,12 @@ class TestDeterministicChangeJudges:
         "guidance",
         (
             (
-                "The runner should allow a maximum of 3 attempts. If the 3rd "
-                "attempt also fails due to a connection error, `run_pipeline` "
-                "must propagate the final exception to the caller."
+                "If `fetch_data` raises a connection error during execution, "
+                "`run_pipeline(url, db)` must catch this error and retry the "
+                "entire pipeline from the beginning (starting with `fetch_data`). "
+                "The pipeline runner should allow a maximum of 3 attempts. If "
+                "the 3rd attempt also fails due to a connection error, "
+                "`run_pipeline` must propagate the final exception to the caller."
             ),
             (
                 "Use at most 3 attempts. If the third attempt still fails due "
