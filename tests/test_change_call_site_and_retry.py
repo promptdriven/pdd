@@ -383,17 +383,22 @@ def _fallback_action_state(text: str) -> tuple[bool, bool]:
     return affirmative, False
 
 
-def _inverse_action_state(unit: str) -> tuple[bool, bool]:
-    """Classify only a self-contained ``ACTION when EXHAUSTED`` unit."""
+def _inverse_action_state(
+    prompt_output: str, unit: str
+) -> tuple[bool, bool, bool]:
+    """Classify exhaustion and action in one ``ACTION when EXHAUSTED`` unit."""
     connectors = tuple(re.finditer(r"\b(?:when|once|after)\b", unit, re.IGNORECASE))
     for connector in reversed(connectors):
         condition = unit[connector.start() :].strip()
-        if not _INVERSE_EXHAUSTION_PATTERN.fullmatch(condition):
+        exhaustion = _INVERSE_EXHAUSTION_PATTERN.fullmatch(condition)
+        if exhaustion is None or not _exhaustion_ordinal_matches_bound(
+            prompt_output, exhaustion
+        ):
             continue
         action_text = unit[: connector.start()].strip()
         action, rejected = _fallback_action_state(action_text)
-        return action, rejected
-    return False, False
+        return True, action, rejected
+    return False, False, False
 
 
 def _is_immediate_contradiction(units: tuple[str, ...], index: int) -> bool:
@@ -457,6 +462,18 @@ def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
     has_exhaustion = False
     has_action = False
     for index, unit in enumerate(units):
+        inverse_exhaustion, inverse_action, inverse_rejected = _inverse_action_state(
+            prompt_output, unit
+        )
+        if inverse_exhaustion:
+            has_exhaustion = True
+        if (
+            inverse_action
+            and not inverse_rejected
+            and not _is_immediate_contradiction(units, index)
+        ):
+            has_action = True
+            break
         for exhaustion in _RETRY_EXHAUSTION_PATTERN.finditer(unit):
             prefix = unit[: exhaustion.start()]
             if not _exhaustion_ordinal_matches_bound(prompt_output, exhaustion):
@@ -470,14 +487,6 @@ def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
             has_exhaustion = True
             suffix = unit[exhaustion.end() :]
             action, rejected = _fallback_action_state(suffix)
-            if (
-                action
-                and not rejected
-                and not _is_immediate_contradiction(units, index)
-            ):
-                has_action = True
-                break
-            action, rejected = _inverse_action_state(unit)
             if (
                 action
                 and not rejected
