@@ -897,6 +897,60 @@ class TestDeterministicChangeJudges:
         "guidance",
         (
             (
+                "Use 3 attempts. If validation fails, propagate the final error "
+                "once the third attempt fails due to a connection error."
+            ),
+            (
+                "Use 3 attempts. If authentication fails, raise the final error "
+                "after the third attempt fails."
+            ),
+            (
+                "Use 3 attempts. Unless validation succeeds, propagate the final "
+                "error once the third attempt fails."
+            ),
+            (
+                "Use 3 attempts. Before validation completes, raise the final "
+                "error after the third attempt fails."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_inverse_action_in_unrelated_branch(
+        self, guidance: str
+    ) -> None:
+        """An unrelated preceding condition cannot gate the inverse fallback."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use 3 attempts. Record each retry for diagnostics. Propagate the "
+                "final error once the third attempt fails due to a connection error."
+            ),
+            (
+                "Use 3 attempts. If retries are exhausted, propagate the final "
+                "error after the third attempt fails."
+            ),
+            (
+                "Use 3 attempts. Raise the final error once the third attempt "
+                "fails due to a connection error."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_accepts_isolated_inverse_action(
+        self, guidance: str
+    ) -> None:
+        """Nonconditional prose and retry conditions preserve inverse fallback."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
                 "Use a maximum of 1 attempt. If the first attempt also fails, "
                 "raise the final error."
             ),
