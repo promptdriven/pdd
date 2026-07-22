@@ -79,7 +79,9 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"all\s+(?:retry\s+)?attempts?\s+"
     r"(?:(?:have|has|are|were)\s+)?fail(?:s|ed)?|"
     r"all\s+\d+\s+(?:retry\s+)?attempts?\s+"
-    r"(?:(?:have|has|are|were)\s+)?fail(?:s|ed)?|"
+    r"(?:(?:have|has|are|were)\s+)?fail(?:s|ed)?"
+    r"(?:\s+due\s+to\s+(?:(?:an?|the)\s+)?"
+    r"(?:[\w-]+\s+){0,4}?(?:errors?|exceptions?|failures?))?|"
     r"(?:if|when)\s+[\w\s]+fail(?:s|ed)?\s+on\s+(?:the\s+)?"
     r"\d+(?:st|nd|rd|th)\s+attempt|"
     r"(?:if|when)\s+(?:the\s+)?\d+(?:st|nd|rd|th)\s+attempt\s+"
@@ -213,8 +215,13 @@ _INVERSE_EXHAUSTION_PATTERN = re.compile(
     r"^\s*(?:when|once|after)\s+(?:"
     r"(?:the\s+)?(?:max(?:imum)?\s+)?(?:retry\s+)?(?:attempts?|retries)\s+"
     r"(?:(?:is|are|have\s+been|has\s+been)\s+)?(?:exhausted|fail(?:s|ed)?)|"
-    r"all\s+(?:\d+\s+)?(?:retry\s+)?(?:attempts?|retries)\s+"
+    r"all\s+(?:retry\s+)?(?:attempts?|retries)\s+"
     r"(?:(?:are|have\s+been)\s+)?(?:exhausted|fail(?:s|ed)?)|"
+    r"all\s+\d+\s+(?:retry\s+)?(?:attempts?|retries)\s+"
+    r"(?:(?:(?:are|have\s+been)\s+)?exhausted|"
+    r"(?:(?:are|have\s+been)\s+)?fail(?:s|ed)?"
+    r"(?:\s+due\s+to\s+(?:(?:an?|the)\s+)?"
+    r"(?:[\w-]+\s+){0,4}?(?:errors?|exceptions?|failures?))?)|"
     r"(?:the\s+)?(?:retry\s+)?limit\s+"
     r"(?:(?:is|has\s+been)\s+)?(?:reached|exceeded|exhausted)|"
     r"(?:the\s+)?max(?:imum)?\s+number\s+of\s+attempts?\s+"
@@ -662,6 +669,81 @@ class TestDeterministicChangeJudges:
         missing = _judge_retry_fallback("Retry up to 3 times.")
         assert not missing.passed
         assert "exhaust" in missing.reasoning
+
+    def test_retry_fallback_judge_accepts_all_attempts_failure_cause_tail(
+        self,
+    ) -> None:
+        """A bounded failure cause may precede the explicit fallback action."""
+        judgment = _judge_retry_fallback(
+            "If all 3 attempts fail due to connection errors, run_pipeline "
+            "must propagate the final connection error to the caller."
+        )
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Propagate the final connection error when all 3 attempts "
+                "fail due to connection errors."
+            ),
+            (
+                "Raise the final error after all 3 attempts fail due to a "
+                "transient connection error."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_accepts_inverse_failure_cause_tail(
+        self, guidance: str
+    ) -> None:
+        """A bounded failure cause also supports action-first word order."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            "If all 3 attempts fail due to connection errors, keep retrying.",
+            (
+                "If all 3 attempts fail due to connection errors, the final "
+                "connection error remains available for inspection."
+            ),
+            "If all 3 attempts fail due to connection errors, return success.",
+            (
+                "If all 3 attempts fail due to connection errors, run_pipeline "
+                "must not propagate the final connection error."
+            ),
+            (
+                "Do not propagate the final connection error when all 3 attempts "
+                "fail due to connection errors."
+            ),
+            (
+                "Keep retrying when all 3 attempts fail due to connection errors."
+            ),
+            (
+                "The final connection error remains available for inspection when "
+                "all 3 attempts fail due to connection errors."
+            ),
+            "Return success after all 3 attempts fail due to connection errors.",
+            (
+                "Propagate the final connection error when all 3 attempts fail due "
+                "to connection errors. Keep retrying."
+            ),
+            (
+                "Propagate the final connection error when not all 3 attempts fail "
+                "due to connection errors."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_cause_tail_without_fallback(
+        self, guidance: str
+    ) -> None:
+        """A failure cause does not weaken fallback-action requirements."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed
 
     @pytest.mark.parametrize(
         "guidance",
