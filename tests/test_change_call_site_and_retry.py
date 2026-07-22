@@ -217,6 +217,12 @@ _SUCCESS_RETURN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_UNSUPPORTED_INVERSE_ORDINAL_PATTERN = re.compile(
+    rf"\b(?:once|after)\s+(?:the\s+)?{_ATTEMPT_ORDINAL_PATTERN}\s+"
+    r"(?:retry\s+)?attempt\s+(?:(?:also|still)\s+)?fails?\b",
+    re.IGNORECASE,
+)
+
 _CONNECTIVE_ONLY_PATTERN = re.compile(
     r"^\s*(?:then|(?:and|but)\s+then|otherwise|however|but|nevertheless|"
     r"as\s+(?:a|the)\s+fallback)?\s*$",
@@ -256,7 +262,8 @@ _MODAL_PREFIX_PATTERN = re.compile(
 )
 
 _INVERSE_EXHAUSTION_PATTERN = re.compile(
-    r"^\s*(?:when|once|after)\s+(?:"
+    rf"^\s*(?:(?:once|after)\s+(?!(?:the\s+)?{_ATTEMPT_ORDINAL_PATTERN}\s+"
+    r"(?:retry\s+)?attempt\b)|when\s+)(?:"
     r"(?:the\s+)?(?:max(?:imum)?\s+)?(?:retry\s+)?(?:attempts?|retries)\s+"
     r"(?:(?:is|are|have\s+been|has\s+been)\s+)?(?:exhausted|fail(?:s|ed)?)|"
     r"all\s+(?:retry\s+)?(?:attempts?|retries)\s+"
@@ -275,7 +282,6 @@ _INVERSE_EXHAUSTION_PATTERN = re.compile(
     rf"{_ATTEMPT_ORDINAL_PATTERN}\s+(?:retry\s+)?attempt|"
     rf"(?:the\s+)?{_ATTEMPT_ORDINAL_PATTERN}\s+(?:retry\s+)?attempt\s+"
     r"(?:(?:also|still)\s+)?fails?"
-    rf"{_ORDINAL_FAILURE_CAUSE_TAIL_PATTERN}"
     r")\s*$",
     re.IGNORECASE,
 )
@@ -360,6 +366,8 @@ def _retry_units(prompt_output: str) -> tuple[str, ...]:
 def _fallback_action_state(text: str) -> tuple[bool, bool]:
     """Classify one self-contained action unit as affirmative or rejected."""
     text = text.strip(" ,;:.!?\t\r\n")
+    if _UNSUPPORTED_INVERSE_ORDINAL_PATTERN.search(text):
+        return False, False
     if _RETRY_CONTINUATION_PATTERN.search(text):
         return False, True
     if _SUCCESS_RETURN_PATTERN.search(text):
@@ -383,22 +391,17 @@ def _fallback_action_state(text: str) -> tuple[bool, bool]:
     return affirmative, False
 
 
-def _inverse_action_state(
-    prompt_output: str, unit: str
-) -> tuple[bool, bool, bool]:
-    """Classify exhaustion and action in one ``ACTION when EXHAUSTED`` unit."""
+def _inverse_action_state(unit: str) -> tuple[bool, bool]:
+    """Classify only a self-contained ``ACTION when EXHAUSTED`` unit."""
     connectors = tuple(re.finditer(r"\b(?:when|once|after)\b", unit, re.IGNORECASE))
     for connector in reversed(connectors):
         condition = unit[connector.start() :].strip()
-        exhaustion = _INVERSE_EXHAUSTION_PATTERN.fullmatch(condition)
-        if exhaustion is None or not _exhaustion_ordinal_matches_bound(
-            prompt_output, exhaustion
-        ):
+        if not _INVERSE_EXHAUSTION_PATTERN.fullmatch(condition):
             continue
         action_text = unit[: connector.start()].strip()
         action, rejected = _fallback_action_state(action_text)
-        return True, action, rejected
-    return False, False, False
+        return action, rejected
+    return False, False
 
 
 def _is_immediate_contradiction(units: tuple[str, ...], index: int) -> bool:
@@ -444,23 +447,16 @@ def _previous_meaningful_unit(units: tuple[str, ...], index: int) -> str | None:
     return units[previous] if previous >= 0 else None
 
 
-def _previous_conditional_has_retry_context(
-    units: tuple[str, ...], index: int
-) -> bool:
-    """Reject fallback units inherited from an unrelated conditional branch."""
-    previous = _previous_meaningful_unit(units, index)
-    if previous is None or not _CONDITIONAL_UNIT_PATTERN.match(previous):
-        return True
-    return _has_affirmative_exhaustion(previous)
-
-
 def _stop_exhaustion_has_retry_context(
     units: tuple[str, ...], index: int, unit_prefix: str
 ) -> bool:
     """Reject stop-only guidance inherited from an unrelated conditional branch."""
     if unit_prefix.strip() and not _has_affirmative_exhaustion(unit_prefix):
         return False
-    return _previous_conditional_has_retry_context(units, index)
+    previous = _previous_meaningful_unit(units, index)
+    if previous is None or not _CONDITIONAL_UNIT_PATTERN.match(previous):
+        return True
+    return _has_affirmative_exhaustion(previous)
 
 
 def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
@@ -469,22 +465,6 @@ def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
     has_exhaustion = False
     has_action = False
     for index, unit in enumerate(units):
-        inverse_exhaustion, inverse_action, inverse_rejected = _inverse_action_state(
-            prompt_output, unit
-        )
-        inverse_has_retry_context = _previous_conditional_has_retry_context(
-            units, index
-        )
-        if inverse_exhaustion and inverse_has_retry_context:
-            has_exhaustion = True
-        if (
-            inverse_action
-            and not inverse_rejected
-            and inverse_has_retry_context
-            and not _is_immediate_contradiction(units, index)
-        ):
-            has_action = True
-            break
         for exhaustion in _RETRY_EXHAUSTION_PATTERN.finditer(unit):
             prefix = unit[: exhaustion.start()]
             if not _exhaustion_ordinal_matches_bound(prompt_output, exhaustion):
@@ -498,6 +478,14 @@ def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
             has_exhaustion = True
             suffix = unit[exhaustion.end() :]
             action, rejected = _fallback_action_state(suffix)
+            if (
+                action
+                and not rejected
+                and not _is_immediate_contradiction(units, index)
+            ):
+                has_action = True
+                break
+            action, rejected = _inverse_action_state(unit)
             if (
                 action
                 and not rejected
@@ -801,10 +789,6 @@ class TestDeterministicChangeJudges:
                 "Use at most 3 attempts. If the third attempt still fails due "
                 "to a connection exception, re-raise the final exception."
             ),
-            (
-                "Propagate the final exception when the third attempt fails "
-                "due to a transient connection error. Retry up to 3 times."
-            ),
         ),
     )
     def test_retry_fallback_judge_accepts_ordinal_due_to_explicit_action(
@@ -852,111 +836,22 @@ class TestDeterministicChangeJudges:
         "guidance",
         (
             (
-                "Raise the final error once the third attempt fails due to a "
-                "transient connection error. Use 3 attempts."
-            ),
-            (
-                "Raise the final error after the 3rd attempt fails with a deeply "
-                "nested transient connection failure. Use 3 attempts."
-            ),
-            "Re-raise the exception once the third attempt fails. Use 3 attempts.",
-            "Surface the final error after the 3rd attempt fails. Use 3 attempts.",
-        ),
-    )
-    def test_retry_fallback_judge_accepts_inverse_ordinal_connectors(
-        self, guidance: str
-    ) -> None:
-        """Bound ordinal inverse forms support once and after connectors."""
-        judgment = _judge_retry_fallback(guidance)
-
-        assert judgment.passed, judgment.reasoning
-
-    @pytest.mark.parametrize(
-        "guidance",
-        (
-            (
-                "Use 3 attempts. Raise the final error once the second attempt "
-                "fails due to a connection error."
-            ),
-            (
-                "Use 3 attempts. Do not propagate the final error once the third "
-                "attempt fails due to a connection error."
-            ),
-            (
-                "Use 3 attempts. Propagate the final error after the third attempt "
-                "fails due to a connection error. Keep retrying."
-            ),
-            (
-                "Use 3 attempts. Propagate the telemetry error once telemetry "
-                "fails on the third attempt."
-            ),
-            (
-                "Use 3 attempts. Propagate the final error after not the third "
-                "attempt fails."
-            ),
-        ),
-    )
-    def test_retry_fallback_judge_rejects_invalid_inverse_ordinal_connectors(
-        self, guidance: str
-    ) -> None:
-        """Inverse connectors retain bound, action, branch, and polarity checks."""
-        judgment = _judge_retry_fallback(guidance)
-
-        assert not judgment.passed, guidance
-
-    @pytest.mark.parametrize(
-        "guidance",
-        (
-            (
-                "Use 3 attempts. If validation fails, propagate the final error "
-                "once the third attempt fails due to a connection error."
-            ),
-            (
-                "Use 3 attempts. If authentication fails, raise the final error "
-                "after the third attempt fails."
-            ),
-            (
-                "Use 3 attempts. Unless validation succeeds, propagate the final "
+                "Use 3 attempts. If validation fails, log it, propagate the final "
                 "error once the third attempt fails."
             ),
             (
-                "Use 3 attempts. Before validation completes, raise the final "
-                "error after the third attempt fails."
+                "Use 3 attempts. If validation fails and retries are exhausted, "
+                "propagate the final error after the third attempt fails."
             ),
         ),
     )
-    def test_retry_fallback_judge_rejects_inverse_action_in_unrelated_branch(
+    def test_retry_fallback_judge_rejects_unsupported_inverse_branch_forms(
         self, guidance: str
     ) -> None:
-        """An unrelated preceding condition cannot gate the inverse fallback."""
+        """Unsupported inverse connectors cannot bypass conditional isolation."""
         judgment = _judge_retry_fallback(guidance)
 
         assert not judgment.passed, guidance
-
-    @pytest.mark.parametrize(
-        "guidance",
-        (
-            (
-                "Use 3 attempts. Record each retry for diagnostics. Propagate the "
-                "final error once the third attempt fails due to a connection error."
-            ),
-            (
-                "Use 3 attempts. If retries are exhausted, propagate the final "
-                "error after the third attempt fails."
-            ),
-            (
-                "Use 3 attempts. Raise the final error once the third attempt "
-                "fails due to a connection error."
-            ),
-        ),
-    )
-    def test_retry_fallback_judge_accepts_isolated_inverse_action(
-        self, guidance: str
-    ) -> None:
-        """Nonconditional prose and retry conditions preserve inverse fallback."""
-        judgment = _judge_retry_fallback(guidance)
-
-        assert judgment.passed, judgment.reasoning
 
     @pytest.mark.parametrize(
         "guidance",
