@@ -3,7 +3,9 @@
 import atexit
 import logging
 import os
+import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -35,6 +37,49 @@ os.environ["HOME"] = _PYTEST_FAKE_HOME
 os.environ["CODEX_HOME"] = os.path.join(_PYTEST_FAKE_HOME, ".codex")
 
 import pytest
+
+
+CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
+
+
+def skip_if_authenticated_candidate_lacks_refs(
+    root: Path, purpose: str, *refs: str
+) -> None:
+    """Skip absent history only for the exact authenticated candidate checkout."""
+    missing_refs = [
+        ref
+        for ref in refs
+        if subprocess.run(
+            ["git", "cat-file", "-e", f"{ref}^{{commit}}"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+        ).returncode
+        != 0
+    ]
+    if not missing_refs or os.getenv("PDD_CLOUD_SOURCE_IDENTITY_MODE") != (
+        CANDIDATE_ONLY_SOURCE_MODE
+    ):
+        return
+
+    candidate_sha = os.getenv("PDD_CANDIDATE_SHA", "")
+    candidate_tree = os.getenv("PDD_CANDIDATE_TREE", "")
+    if re.fullmatch(r"[0-9a-f]{40}", candidate_sha) is None or re.fullmatch(
+        r"[0-9a-f]{40}", candidate_tree
+    ) is None:
+        return
+
+    actual_identity = subprocess.run(
+        ["git", "rev-parse", "HEAD^{commit}", "HEAD^{tree}"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if actual_identity.returncode != 0:
+        return
+    if actual_identity.stdout.splitlines() == [candidate_sha, candidate_tree]:
+        pytest.skip(f"requires {purpose}: " + ", ".join(missing_refs))
 from dotenv import load_dotenv
 from pdd.llm_invoke import InsufficientCreditsError
 

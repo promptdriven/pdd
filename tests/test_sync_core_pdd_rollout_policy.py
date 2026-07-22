@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
-import os
 import re
 import subprocess
 import sys
+import tarfile
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -27,6 +28,7 @@ from pdd.sync_core.manifest import (
 )
 from pdd.sync_core.types import InventoryStatus, UnitId
 from pdd.sync_core.verification import PROFILE_PATH as PROFILE_REL_PATH
+from tests.conftest import skip_if_authenticated_candidate_lacks_refs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,7 +43,6 @@ EXPECTED_MANAGED_UNITS = 469
 # onto.
 PDD_1989_ACTUAL_BASE = "39a60ec06dc065a70ad63077b6f873aca95cbf45"
 PDD_1989_ACTUAL_HEAD = "131f86d83e7f2058af861b8ee7bde432bbbf5027"
-CANDIDATE_ONLY_SOURCE_MODE = "candidate-tree-v1"
 PR_2017_PHASE_A_BASE = "c887daba0d171585658f8205e79316e5f36f82c6"
 PR_2017_PHASE_A_HEAD = "2cacc91f90759ff45f1ad976da3b773e1a5f07a5"
 REPLAY_PROTECTED_BASE = "e10bd9b3d0d5ac94d1a56af88f5abf07cf8af775"
@@ -316,6 +317,31 @@ def _commit(root: Path, message: str) -> str:
     ).strip()
 
 
+def _synthetic_current_tree_repo(root: Path) -> str:
+    """Recommit current tracked bytes without requiring candidate ancestors."""
+    root.mkdir()
+    archive = subprocess.check_output(["git", "archive", "HEAD"], cwd=ROOT)
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source:
+        source.extractall(root, filter="data")
+    _git(root, "init", "-q")
+    _git(root, "add", "-f", ".")
+    _git(
+        root,
+        "-c",
+        "user.name=PDD test",
+        "-c",
+        "user.email=pdd@example.test",
+        "commit",
+        "-qm",
+        "synthetic current tree",
+    )
+    base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    _git(root, "update-ref", "refs/remotes/origin/main", base)
+    return base
+
+
 def _requirements(prompt_path: PurePosixPath) -> list[str]:
     raw = (ROOT / prompt_path).read_bytes()
     explicit = sorted(set(REQUIREMENT_ID.findall(raw.decode("utf-8"))))
@@ -330,49 +356,6 @@ def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
         return resolved.read_bytes() if resolved.is_file() else None
 
     monkeypatch.setattr(verification, "read_git_blob", protected_read)
-
-
-def _skip_if_required_git_history_missing(root: Path, *refs: str) -> None:
-    """Skip absent history only in an identity-bound candidate-only checkout."""
-    missing_refs = [
-        ref
-        for ref in refs
-        if subprocess.run(
-            ["git", "cat-file", "-e", f"{ref}^{{commit}}"],
-            cwd=root,
-            check=False,
-            capture_output=True,
-            text=True,
-        ).returncode
-        != 0
-    ]
-    if not missing_refs:
-        return
-    if os.getenv("PDD_CLOUD_SOURCE_IDENTITY_MODE") != CANDIDATE_ONLY_SOURCE_MODE:
-        return
-
-    candidate_sha = os.getenv("PDD_CANDIDATE_SHA", "")
-    candidate_tree = os.getenv("PDD_CANDIDATE_TREE", "")
-    if not re.fullmatch(r"[0-9a-f]{40}", candidate_sha) or not re.fullmatch(
-        r"[0-9a-f]{40}", candidate_tree
-    ):
-        return
-
-    actual_identity = subprocess.run(
-        ["git", "rev-parse", "HEAD^{commit}", "HEAD^{tree}"],
-        cwd=root,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if actual_identity.returncode != 0:
-        return
-    actual_parts = actual_identity.stdout.splitlines()
-    if actual_parts == [candidate_sha, candidate_tree]:
-        pytest.skip(
-            "requires local git history for #1989 exact-base verification: "
-            + ", ".join(missing_refs)
-        )
 
 
 def test_pdd_protected_inventory_is_complete_and_exact() -> None:
@@ -480,6 +463,9 @@ def test_detector_contract_rotation_is_exact_and_consumed() -> None:
 
 def test_story_regression_transition_is_exact_and_consumed() -> None:
     """Consume only the exact #2204-protected prompt/profile transition."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT, "exact replay history", REPLAY_PROTECTED_BASE
+    )
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = [
         row
@@ -569,6 +555,9 @@ def _requirement_authorization_row(authorization) -> dict[str, str]:
 )
 def test_pdd1875_composed_reconciliation_is_exact(mutated_input: str) -> None:
     """The #2260 gate rejects a byte mutation on every reviewed boundary."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT, "exact #1875 protected history", PDD_1875_PROTECTED_BASE
+    )
     inputs = {
         "base_policy": _git_blob(
             PDD_1875_PROTECTED_BASE,
@@ -601,6 +590,9 @@ def test_pdd1875_composed_reconciliation_is_exact(mutated_input: str) -> None:
 )
 def test_pdd1875_composed_reconciliation_binds_prompt_bytes(authorization) -> None:
     """Each reviewed profile transition remains bound to its exact prompt pair."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT, "exact #1875 protected history", PDD_1875_PROTECTED_BASE
+    )
     base_profile = _git_blob(PDD_1875_PROTECTED_BASE, PROFILE_FILE)
     candidate_profile = PROFILE_FILE.read_bytes()
     base_prompt = _git_blob(PDD_1875_PROTECTED_BASE, ROOT / authorization.prompt_path)
@@ -624,6 +616,12 @@ def test_pdd1875_composed_reconciliation_binds_prompt_bytes(authorization) -> No
 
 def test_committed_rotations_equal_exact_protected_authority() -> None:
     """Keep protected history before exact replay and dormant bindings."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact rollout authority history",
+        REPLAY_PROTECTED_BASE,
+        PDD_1875_PROTECTED_BASE,
+    )
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     rows = policy["requirement_rotations"]
     protected_policy = json.loads(
@@ -801,6 +799,12 @@ def _git_blob(ref: str, path: Path) -> bytes:
 
 def test_pr1971_combined_profile_reconciliation_is_exact() -> None:
     """Retain #1971's four-byte reconciliation, independent of this replay."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact #1971 protected history",
+        PR_1971_COMBINED_BASE,
+        PR_1971_COMBINED_HEAD,
+    )
     base_policy = _git_blob(PR_1971_COMBINED_BASE, ROTATION_FILE)
     base_profile = _git_blob(PR_1971_COMBINED_BASE, PROFILE_FILE)
     head_policy = _git_blob(PR_1971_COMBINED_HEAD, ROTATION_FILE)
@@ -825,6 +829,12 @@ def test_pr1971_combined_profile_reconciliation_is_exact() -> None:
 
 def test_pr1971_combined_profile_reconciliation_is_consumed() -> None:
     """The historical ee9→e10 transition consumes all exact obligations."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact #1971 protected history",
+        PR_1971_COMBINED_BASE,
+        PR_1971_COMBINED_HEAD,
+    )
     manifest = build_unit_manifest(
         ROOT, base_ref=PR_1971_COMBINED_BASE, head_ref=PR_1971_COMBINED_HEAD
     )
@@ -846,6 +856,12 @@ def test_pr1971_combined_profile_reconciliation_is_consumed() -> None:
 
 def test_pr1971_combined_history_rejects_foreign_repository() -> None:
     """Exact #1971 bytes never grant authority outside the PDD repository."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact #1971 protected history",
+        PR_1971_COMBINED_BASE,
+        PR_1971_COMBINED_HEAD,
+    )
     manifest = build_unit_manifest(
         ROOT, base_ref=PR_1971_COMBINED_BASE, head_ref=PR_1971_COMBINED_HEAD
     )
@@ -871,6 +887,12 @@ def test_pr1971_combined_history_rejects_foreign_repository() -> None:
 
 def test_pr1971_reordered_obligation_bytes_are_rejected() -> None:
     """The historical exception is byte-bound, so a semantic reorder fails."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact #1971 protected history",
+        PR_1971_COMBINED_BASE,
+        PR_1971_COMBINED_HEAD,
+    )
     base_policy = _git_blob(PR_1971_COMBINED_BASE, ROTATION_FILE)
     base_profile = _git_blob(PR_1971_COMBINED_BASE, PROFILE_FILE)
     payload = json.loads(_git_blob(PR_1971_COMBINED_HEAD, PROFILE_FILE))
@@ -892,6 +914,12 @@ def test_pr1971_pytest_obligation_semantic_mutations_are_rejected(
     mutation: str,
 ) -> None:
     """#1971's pytest addition accepts only its exact protected fields."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact #1971 protected history",
+        PR_1971_COMBINED_BASE,
+        PR_1971_COMBINED_HEAD,
+    )
     base, base_invalid = verification._load_inputs(  # pylint: disable=protected-access
         ROOT, PR_1971_COMBINED_BASE, REPOSITORY_ID, {}
     )
@@ -1402,8 +1430,9 @@ def test_bootstrap_install_cannot_change_active_rotation_authority(
 
 def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     """The #1989 transition table must load a complete exact-base profile set."""
-    _skip_if_required_git_history_missing(
+    skip_if_authenticated_candidate_lacks_refs(
         ROOT,
+        "local git history for #1989 exact-base verification",
         PDD_1989_ACTUAL_BASE,
         PDD_1989_ACTUAL_HEAD,
     )
@@ -1424,6 +1453,9 @@ def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
 
 def test_pr2017_phase_a_is_dormant_on_current_protected_base() -> None:
     """The prerequisite installs authority without consuming protected bytes."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT, "exact #1875 protected history", PDD_1875_PROTECTED_BASE
+    )
     manifest = build_unit_manifest(
         ROOT, base_ref=PDD_1875_PROTECTED_BASE, head_ref="HEAD"
     )
@@ -1439,6 +1471,12 @@ def test_pr2017_phase_a_is_dormant_on_current_protected_base() -> None:
 
 def test_replay_transitions_cover_the_actual_protected_base() -> None:
     """The replay transitions must load a complete exact-base profile set."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact replay history",
+        REPLAY_PROTECTED_BASE,
+        PDD_1875_PROTECTED_BASE,
+    )
     manifest = build_unit_manifest(
         ROOT, base_ref=REPLAY_PROTECTED_BASE, head_ref=PDD_1875_PROTECTED_BASE
     )
@@ -1453,6 +1491,12 @@ def test_replay_transitions_cover_the_actual_protected_base() -> None:
 
 def test_pr2017_phase_a_is_dormant_on_its_exact_protected_base() -> None:
     """The PR #2017 prerequisite installs authority without consuming bytes."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact #2017 protected history",
+        PR_2017_PHASE_A_BASE,
+        PR_2017_PHASE_A_HEAD,
+    )
     manifest = build_unit_manifest(
         ROOT, base_ref=PR_2017_PHASE_A_BASE, head_ref=PR_2017_PHASE_A_HEAD
     )
@@ -1497,29 +1541,34 @@ def test_pdd1989_history_guard_skips_verified_candidate_only_repo(
         pytest.skip.Exception,
         match="requires local git history for #1989 exact-base verification",
     ):
-        _skip_if_required_git_history_missing(
+        skip_if_authenticated_candidate_lacks_refs(
             repo,
+            "local git history for #1989 exact-base verification",
             PDD_1989_ACTUAL_BASE,
             PDD_1989_ACTUAL_HEAD,
         )
 
 
+@pytest.mark.parametrize("marker", (None, "candidate-tree-v2"))
 def test_pdd1989_history_guard_does_not_skip_without_verified_marker(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, marker: str | None
 ) -> None:
     """Ordinary shallow checkouts keep the exact-base assertion fail-closed."""
     repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
+    if marker is not None:
+        monkeypatch.setenv("PDD_CLOUD_SOURCE_IDENTITY_MODE", marker)
     monkeypatch.setenv("PDD_CANDIDATE_SHA", candidate_sha)
     monkeypatch.setenv("PDD_CANDIDATE_TREE", candidate_tree)
 
-    _skip_if_required_git_history_missing(
+    skip_if_authenticated_candidate_lacks_refs(
         repo,
+        "local git history for #1989 exact-base verification",
         PDD_1989_ACTUAL_BASE,
         PDD_1989_ACTUAL_HEAD,
     )
 
 
-@pytest.mark.parametrize("mismatch", ("sha", "tree"))
+@pytest.mark.parametrize("mismatch", ("sha", "tree", "sha-format", "tree-format"))
 def test_pdd1989_history_guard_does_not_skip_mismatched_candidate_identity(
     tmp_path: Path, monkeypatch, mismatch: str
 ) -> None:
@@ -1527,12 +1576,17 @@ def test_pdd1989_history_guard_does_not_skip_mismatched_candidate_identity(
     repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
     if mismatch == "sha":
         candidate_sha = "0" * 40
-    else:
+    elif mismatch == "tree":
         candidate_tree = "0" * 40
+    elif mismatch == "sha-format":
+        candidate_sha = "not-a-sha"
+    else:
+        candidate_tree = "not-a-tree"
     _set_candidate_only_identity(monkeypatch, candidate_sha, candidate_tree)
 
-    _skip_if_required_git_history_missing(
+    skip_if_authenticated_candidate_lacks_refs(
         repo,
+        "local git history for #1989 exact-base verification",
         PDD_1989_ACTUAL_BASE,
         PDD_1989_ACTUAL_HEAD,
     )
@@ -1547,8 +1601,9 @@ def test_pdd1989_history_guard_does_not_skip_missing_candidate_identity(
     _set_candidate_only_identity(monkeypatch, candidate_sha, candidate_tree)
     monkeypatch.delenv(missing)
 
-    _skip_if_required_git_history_missing(
+    skip_if_authenticated_candidate_lacks_refs(
         repo,
+        "local git history for #1989 exact-base verification",
         PDD_1989_ACTUAL_BASE,
         PDD_1989_ACTUAL_HEAD,
     )
@@ -1561,7 +1616,9 @@ def test_pdd1989_history_guard_does_not_hide_missing_repository_identity(
     repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
     _set_candidate_only_identity(monkeypatch, candidate_sha, candidate_tree)
 
-    _skip_if_required_git_history_missing(repo, candidate_sha, candidate_sha)
+    skip_if_authenticated_candidate_lacks_refs(
+        repo, "repository identity verification", candidate_sha, candidate_sha
+    )
     with pytest.raises(
         manifest_module.ManifestError,
         match=r"base and head must contain \.pdd/repository-id",
@@ -2055,14 +2112,7 @@ def test_profile_candidate_accounts_for_foundation_paths_from_protected_base(
 ) -> None:
     """A profile candidate cannot supply ownership missing from its protected base."""
     root = tmp_path / "profile-candidate"
-    subprocess.run(
-        ["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(root)],
-        check=True,
-        capture_output=True,
-    )
-    base = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=root, text=True
-    ).strip()
+    base = _synthetic_current_tree_repo(root)
 
     (root / ".pdd" / "verification-profiles.json").write_text(
         '{"schema_version": 1, "profiles": []}\n', encoding="utf-8"
@@ -2104,11 +2154,7 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         for path in PREAUTHORIZED_CHILD_PATHS
     }
     root = tmp_path / "preauthorized-child-paths"
-    subprocess.run(
-        ["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(root)],
-        check=True,
-        capture_output=True,
-    )
+    _synthetic_current_tree_repo(root)
 
     # A child PR can itself add a preauthorized path.  Build the protected base
     # explicitly so this regression continues to exercise absent-path routing
@@ -2185,45 +2231,8 @@ def test_gate1_paths_compose_with_protected_preauthorization(
     tmp_path: Path,
 ) -> None:
     """A branch-only checkout composes Gate 1 paths from protected preauth."""
-    protected_source = tmp_path / "protected-preauth-source"
     root = tmp_path / "gate1-preauth-composition"
-    subprocess.run(
-        ["git", "init", "-q", str(protected_source)],
-        check=True,
-        capture_output=True,
-    )
-    _git(
-        protected_source,
-        "fetch",
-        "-q",
-        "--no-tags",
-        str(ROOT),
-        "HEAD:refs/heads/protected-preauth",
-    )
-    assert subprocess.check_output(
-        ["git", "for-each-ref", "--format=%(refname)"],
-        cwd=protected_source,
-        text=True,
-    ).splitlines() == ["refs/heads/protected-preauth"]
-    subprocess.run(
-        [
-            "git",
-            "clone",
-            "-q",
-            "--no-hardlinks",
-            "--single-branch",
-            "--branch",
-            "protected-preauth",
-            str(protected_source),
-            str(root),
-        ],
-        check=True,
-        capture_output=True,
-    )
-    protected_base = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=root, text=True
-    ).strip()
-    _git(root, "update-ref", "refs/remotes/origin/main", protected_base)
+    protected_base = _synthetic_current_tree_repo(root)
     assert not any(
         "global-sync-gate1" in ref
         for ref in subprocess.check_output(
@@ -2353,14 +2362,7 @@ def test_global_sync_runtime_lock_composes_without_sibling_authority(
 ) -> None:
     """Protected preauthorization admits the exact lock and rejects a sibling."""
     root = tmp_path / "runtime-lock-preauthorization"
-    subprocess.run(
-        ["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(root)],
-        check=True,
-        capture_output=True,
-    )
-    base = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=root, text=True
-    ).strip()
+    base = _synthetic_current_tree_repo(root)
     exact = next(iter(GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS))
     exact_path = root / exact
     exact_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2439,45 +2441,8 @@ def test_standalone_checker_package_boundary_composes_offline_and_fails_closed(
     tmp_path: Path,
 ) -> None:
     """A branch-only checkout admits only the exact standalone boundary."""
-    protected_source = tmp_path / "protected-preauth-source"
     root = tmp_path / "standalone-checker-preauth-composition"
-    subprocess.run(
-        ["git", "init", "-q", str(protected_source)],
-        check=True,
-        capture_output=True,
-    )
-    _git(
-        protected_source,
-        "fetch",
-        "-q",
-        "--no-tags",
-        str(ROOT),
-        "HEAD:refs/heads/protected-preauth",
-    )
-    assert subprocess.check_output(
-        ["git", "for-each-ref", "--format=%(refname)"],
-        cwd=protected_source,
-        text=True,
-    ).splitlines() == ["refs/heads/protected-preauth"]
-    subprocess.run(
-        [
-            "git",
-            "clone",
-            "-q",
-            "--no-hardlinks",
-            "--single-branch",
-            "--branch",
-            "protected-preauth",
-            str(protected_source),
-            str(root),
-        ],
-        check=True,
-        capture_output=True,
-    )
-    protected_base = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=root, text=True
-    ).strip()
-    _git(root, "update-ref", "refs/remotes/origin/main", protected_base)
+    protected_base = _synthetic_current_tree_repo(root)
     assert not any(
         "standalone-checker" in ref
         for ref in subprocess.check_output(
@@ -2566,45 +2531,8 @@ def test_global_sync_ledger_paths_compose_with_protected_preauthorization(
     tmp_path: Path,
 ) -> None:
     """A branch-only checkout composes ledger paths from protected preauth."""
-    protected_source = tmp_path / "protected-preauth-source"
     root = tmp_path / "global-sync-ledger-preauth-composition"
-    subprocess.run(
-        ["git", "init", "-q", str(protected_source)],
-        check=True,
-        capture_output=True,
-    )
-    _git(
-        protected_source,
-        "fetch",
-        "-q",
-        "--no-tags",
-        str(ROOT),
-        "HEAD:refs/heads/protected-preauth",
-    )
-    assert subprocess.check_output(
-        ["git", "for-each-ref", "--format=%(refname)"],
-        cwd=protected_source,
-        text=True,
-    ).splitlines() == ["refs/heads/protected-preauth"]
-    subprocess.run(
-        [
-            "git",
-            "clone",
-            "-q",
-            "--no-hardlinks",
-            "--single-branch",
-            "--branch",
-            "protected-preauth",
-            str(protected_source),
-            str(root),
-        ],
-        check=True,
-        capture_output=True,
-    )
-    protected_base = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=root, text=True
-    ).strip()
-    _git(root, "update-ref", "refs/remotes/origin/main", protected_base)
+    protected_base = _synthetic_current_tree_repo(root)
     assert not any(
         "global-sync-ledger" in ref
         for ref in subprocess.check_output(
@@ -2666,6 +2594,12 @@ def test_global_sync_ledger_paths_compose_with_protected_preauthorization(
 
 def test_pr2017_absent_metadata_authorization_is_exact_six_path_set() -> None:
     """PR #2017 adds only its reviewed metadata-path authorization rows."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact #2017 protected history",
+        PR_2017_PHASE_A_BASE,
+        PR_2017_PHASE_A_HEAD,
+    )
     base_ownership = json.loads(
         subprocess.check_output(
             [
@@ -2875,6 +2809,9 @@ def test_replay_bootstrap_weakening_exception_fails_closed(
 
 def test_story_bootstrap_is_repository_bound(monkeypatch) -> None:
     """The exact paths are not a generic candidate-only ownership escape."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT, "repository identity verification", "HEAD"
+    )
     _bootstrap_head_entry_fixture(monkeypatch)
     result = _bootstrap_ownership_rules(
         ROOT,

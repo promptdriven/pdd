@@ -22,6 +22,7 @@ from pdd.sync_core.adapter_demand_verifier import (
     build_adapter_demand,
     canonical_json,
 )
+from tests.conftest import skip_if_authenticated_candidate_lacks_refs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +32,12 @@ EXPECTED_PROTECTED_MAIN_SHA = "c712cbb7e08c157757a238cb8e49d65a9a3a2239"
 
 def test_adapter_demand_protected_registry_matches_committed_artifact() -> None:
     """The committed artifact is the exact canonical protected-Git result."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact protected adapter-demand history",
+        PROFILE_EVIDENCE_SOURCE_SHA,
+        PROTECTED_MAIN_SHA,
+    )
     assert PROTECTED_MAIN_SHA == EXPECTED_PROTECTED_MAIN_SHA
     demand = build_adapter_demand(
         ROOT,
@@ -52,6 +59,12 @@ def test_adapter_demand_protected_registry_matches_committed_artifact() -> None:
 
 def test_adapter_demand_cli_writes_exact_canonical_artifact(tmp_path: Path) -> None:
     """The ledger-controlled command reproduces the committed evidence bytes."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact protected adapter-demand history",
+        PROFILE_EVIDENCE_SOURCE_SHA,
+        PROTECTED_MAIN_SHA,
+    )
     output = tmp_path / "adapter-demand.json"
     result = subprocess.run(
         [
@@ -247,31 +260,42 @@ def test_adapter_demand_rejects_dash_prefixed_outputs_without_deletion(
     assert invalid_path.read_text(encoding="utf-8") == "retain this invalid path"
 
 
-def test_adapter_demand_cli_rejects_required_validator_mismatch(tmp_path: Path) -> None:
+def test_adapter_demand_cli_rejects_required_validator_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """A controlling command cannot claim a validator the registry does not demand."""
-    result = subprocess.run(
+    root, source_sha, profile_bytes, repository_id = _minimal_protected_registry(
+        tmp_path
+    )
+    _configure_minimal_protected_registry(
+        monkeypatch, source_sha, source_sha, profile_bytes, repository_id
+    )
+    output = tmp_path / "should-not-exist.json"
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(
+        sys,
+        "argv",
         [
-            sys.executable,
-            "-m",
-            "pdd.sync_core.adapter_demand_verifier",
+            "adapter-demand-verifier",
             "--pdd-profiles",
             ".pdd/verification-profiles.json",
             "--profile-evidence-source-sha",
-            PROFILE_EVIDENCE_SOURCE_SHA,
+            source_sha,
             "--protected-main-sha",
-            PROTECTED_MAIN_SHA,
+            source_sha,
             "--output",
-            str(tmp_path / "should-not-exist.json"),
+            str(output),
             "--require-exact-validators",
             "vitest",
         ],
-        cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
     )
-    assert result.returncode == 1
-    assert "required machine validators do not match" in result.stderr
+    with pytest.raises(SystemExit) as exc_info:
+        adapter_demand_verifier.main()
+    assert exc_info.value.code == 1
+    assert "required machine validators do not match" in capsys.readouterr().err
+    assert not output.exists()
 
 
 def test_adapter_demand_rejects_duplicate_profile_json_members() -> None:
@@ -339,13 +363,21 @@ def test_adapter_demand_identifies_unknown_machine_adapters() -> None:
     assert summary.unknown_adapters == ("unrecognized",)
 
 
-def test_adapter_demand_rejects_unpinned_digest() -> None:
+def test_adapter_demand_rejects_unpinned_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A caller cannot substitute a different mutable registry digest."""
+    root, source_sha, profile_bytes, repository_id = _minimal_protected_registry(
+        tmp_path
+    )
+    _configure_minimal_protected_registry(
+        monkeypatch, source_sha, source_sha, profile_bytes, repository_id
+    )
     with pytest.raises(AdapterDemandError, match="digest does not match"):
         build_adapter_demand(
-            ROOT,
-            PROFILE_EVIDENCE_SOURCE_SHA,
-            PROTECTED_MAIN_SHA,
+            root,
+            source_sha,
+            source_sha,
             PROFILE_PATH,
             "0" * 64,
         )
@@ -473,6 +505,24 @@ def _git(root: Path, *arguments: str) -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
+
+
+def _minimal_protected_registry(tmp_path: Path) -> tuple[Path, str, bytes, str]:
+    """Create one immutable synthetic registry without relying on PDD history."""
+    root = tmp_path / "minimal-protected-registry"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "verifier@example.com")
+    _git(root, "config", "user.name", "Verifier Test")
+    profile_bytes = json.dumps(_human_profile_payload(), sort_keys=True).encode("utf-8")
+    policy = root / PROFILE_PATH
+    policy.parent.mkdir()
+    policy.write_bytes(profile_bytes)
+    repository_id = "11111111-1111-1111-1111-111111111111"
+    (root / ".pdd" / "repository-id").write_text(repository_id, encoding="ascii")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "synthetic protected registry")
+    return root, _git(root, "rev-parse", "HEAD"), profile_bytes, repository_id
 
 
 def _configure_minimal_protected_registry(
