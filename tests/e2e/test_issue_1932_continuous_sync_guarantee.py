@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
 from typing import Callable, Dict, List
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -17,6 +18,7 @@ from pdd.sync_determine_operation import get_pdd_file_paths
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+COMMAND_TIMEOUT_SECONDS = 30.0
 
 
 def _env() -> Dict[str, str]:
@@ -30,19 +32,52 @@ def _env() -> Dict[str, str]:
     return env
 
 
+def _terminate(process: subprocess.Popen[str]) -> None:
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGKILL)
+        else:  # pragma: no cover - exercised on Windows
+            process.kill()
+    except (ProcessLookupError, PermissionError):
+        process.kill()
+
+
 def _run(
     cwd: Path,
     args: List[str],
     *,
     check: bool = True,
+    timeout: float = COMMAND_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
+    process = subprocess.Popen(
         args,
         cwd=str(cwd),
         env=_env(),
         text=True,
-        capture_output=True,
-        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=os.name == "posix",
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        _terminate(process)
+        stdout, stderr = process.communicate()
+        raise AssertionError(
+            f"{args} timed out after {timeout}s\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+        ) from exc
+    except BaseException:
+        # pytest-timeout interrupts the active frame. Reap this command and any
+        # descendants before preserving that external exception.
+        _terminate(process)
+        process.communicate()
+        raise
+
+    result = subprocess.CompletedProcess(
+        args=args,
+        returncode=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
     )
     if check and result.returncode != 0:
         raise AssertionError(
@@ -53,6 +88,44 @@ def _run(
 
 def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return _run(cwd, ["git", *args], check=check)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_run_timeout_kills_isolated_process_group(tmp_path: Path) -> None:
+    """The test CLI wrapper must not orphan descendants when a child stalls."""
+    process = Mock(pid=43210, returncode=None)
+    process.communicate.side_effect = [
+        subprocess.TimeoutExpired(cmd=["stalled"], timeout=0.01),
+        ("partial stdout", "partial stderr"),
+    ]
+
+    with (
+        patch.object(subprocess, "Popen", return_value=process) as popen,
+        patch.object(os, "killpg") as killpg,
+        pytest.raises(AssertionError, match="timed out after 0.01s"),
+    ):
+        _run(tmp_path, ["stalled"], timeout=0.01)
+
+    assert popen.call_args.kwargs["start_new_session"] is True
+    killpg.assert_called_once_with(process.pid, signal.SIGKILL)
+    assert process.communicate.call_count == 2
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_run_external_interrupt_kills_isolated_process_group(tmp_path: Path) -> None:
+    """A global pytest timeout must not bypass child cleanup."""
+    process = Mock(pid=43210, returncode=None)
+    process.communicate.side_effect = [KeyboardInterrupt, ("", "")]
+
+    with (
+        patch.object(subprocess, "Popen", return_value=process),
+        patch.object(os, "killpg") as killpg,
+        pytest.raises(KeyboardInterrupt),
+    ):
+        _run(tmp_path, ["interrupted"])
+
+    killpg.assert_called_once_with(process.pid, signal.SIGKILL)
+    assert process.communicate.call_count == 2
 
 
 def _pdd_json(cwd: Path, *args: str, check: bool = True) -> dict:
@@ -525,42 +598,43 @@ def test_issue_1996_metadata_enumeration_stops_at_remaining_budget(
     assert enumerated == 3
 
 
-@pytest.mark.parametrize(
-    ("name", "path", "edit", "classification"),
-    [
-        (
-            "doc",
-            "docs/widget.md",
-            lambda p: p.write_text("Widget docs v2\n", encoding="utf-8"),
-            "DOC_CHANGED",
+DRIFT_CASES = [
+    (
+        "doc",
+        "docs/widget.md",
+        lambda p: p.write_text("Widget docs v2\n", encoding="utf-8"),
+        "DOC_CHANGED",
+    ),
+    (
+        "prompt",
+        "prompts/widget_python.prompt",
+        lambda p: p.write_text(
+            "Build a deterministic widget with a new requirement.\n"
+            "<include>docs/widget.md</include>\n",
+            encoding="utf-8",
         ),
-        (
-            "prompt",
-            "prompts/widget_python.prompt",
-            lambda p: p.write_text(
-                "Build a deterministic widget with a new requirement.\n"
-                "<include>docs/widget.md</include>\n",
-                encoding="utf-8",
-            ),
-            "PROMPT_CHANGED",
+        "PROMPT_CHANGED",
+    ),
+    (
+        "code",
+        "src/widget.py",
+        lambda p: p.write_text("def value():\n    return 2\n", encoding="utf-8"),
+        "CODE_CHANGED",
+    ),
+    (
+        "test",
+        "tests/test_widget.py",
+        lambda p: p.write_text(
+            "from src.widget import value\n\n\ndef test_value():\n    assert value() in {1, 2}\n",
+            encoding="utf-8",
         ),
-        (
-            "code",
-            "src/widget.py",
-            lambda p: p.write_text("def value():\n    return 2\n", encoding="utf-8"),
-            "CODE_CHANGED",
-        ),
-        (
-            "test",
-            "tests/test_widget.py",
-            lambda p: p.write_text(
-                "from src.widget import value\n\n\ndef test_value():\n    assert value() in {1, 2}\n",
-                encoding="utf-8",
-            ),
-            "TEST_CHANGED",
-        ),
-    ],
-)
+        "TEST_CHANGED",
+    ),
+]
+
+
+@pytest.mark.parametrize(("name", "path", "edit", "classification"), DRIFT_CASES)
+@pytest.mark.timeout(90)
 def test_issue_1932_all_consumers_classify_without_blind_healing(
     pdd_project: Path,
     name: str,
@@ -574,6 +648,18 @@ def test_issue_1932_all_consumers_classify_without_blind_healing(
 
     _assert_all_consumers_classify(pdd_project, classification)
     assert _last_ledger_classification(pdd_project) == classification
+
+
+@pytest.mark.parametrize(
+    ("path", "edit"),
+    [(path, edit) for _name, path, edit, _classification in DRIFT_CASES],
+)
+def test_issue_1932_reconcile_heal_is_disabled_without_metadata_mutation(
+    pdd_project: Path,
+    path: str,
+    edit: Callable[[Path], None],
+) -> None:
+    edit(pdd_project / path)
 
     fingerprint_before = (pdd_project / ".pdd/meta/widget_python.json").read_text(
         encoding="utf-8"
