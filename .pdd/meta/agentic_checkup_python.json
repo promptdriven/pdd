@@ -1,13 +1,13 @@
 {
   "pdd_version": "0.0.307.dev0",
-  "timestamp": "2026-07-21T23:00:00+00:00",
+  "timestamp": "2026-07-22T00:07:35+00:00",
   "command": "fix",
-  "prompt_hash": "502ed043ab10c65e8bcda9d6abf78be7caadb4b160ef4a315d884d4b0c068824",
-  "code_hash": "83fd567abea9620d404bd4631ed00cb80396dfc3858039c7f9ca467513e4c4fc",
+  "prompt_hash": "5e3c7b8c8b4de47cd8171820298f1b5ba190508b9bbb70d8a49da579ef6a7509",
+  "code_hash": "ce60023b12268fb9d16aecc608586375fa925d6ade7d28cbf1d6b089a8d4e939",
   "example_hash": "ba5795976c73f371926d7e5f6b64ad003c8cbcd843b256310a4095481a8a60ac",
-  "test_hash": "f1fc1eb6ca72c68fbafd840d8b87ceeec9fe620dec1c7e9b6d60f168a126ab9f",
+  "test_hash": "fc470e84812ac1d06d6f5323be13ea7e6e81e0a344f2271af2243b82ca9edddc",
   "test_files": {
-    "test_agentic_checkup.py": "f1fc1eb6ca72c68fbafd840d8b87ceeec9fe620dec1c7e9b6d60f168a126ab9f",
+    "test_agentic_checkup.py": "fc470e84812ac1d06d6f5323be13ea7e6e81e0a344f2271af2243b82ca9edddc",
     "test_agentic_checkup_orchestrator.py": "14a4d1db5c8e98e5d544be09d166b2b73f7432b2cd27a5fe20d5245aaa19221f",
     "test_agentic_checkup_step5_pass_evidence.py": "a9d5ac08e1cbf1326ab352cffdfbb3bc84c280327b70413ef6f982860bf89e44"
   },
@@ -15,7 +15,7 @@
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",
     "context/agentic_checkup_orchestrator_example.py": "295a9ae294e22224d3c447f13c462854bfe4e526cebc89bcbba417ea514c7ef2",
-    "context/checkup_review_loop_example.py": "dd746c9b9ce96cab83cf1aeacf3d4c548ebbe33b606f9fed7e0f22d8a83e9ad5",
+    "context/checkup_review_loop_example.py": "4a4b20597d31402c314087bc8cb32d9653bdcca7204ebfdf53bd259e34b81001",
     "context/ci_validation_example.py": "06b910b216f68af58862e76712ccf82bae1bdf87f3fa95b043408fb079f45ce0",
     "context/agentic_sync_example.py": "aa9683f1a26841f3cae854e72cce38636f0859d8dd2f7672fa14e412afdef884",
     "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3"

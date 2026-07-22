@@ -369,6 +369,28 @@ def clear_final_state(cwd: Path, issue_number: int, pr_number: int) -> None:
     return None
 
 
+def write_terra_sol_progress(
+    *,
+    artifacts_dir: Path,
+    max_rounds: int,
+    round_number: int,
+    phase: str,
+    terminal_reason: str = "",
+    max_rounds_reached: bool = False,
+) -> None:
+    """Persist the bounded Terra/Sol watchdog state for external consumers.
+
+    The helper writes ``terra-sol-progress.json`` below ``artifacts_dir`` with
+    the current round, configured maximum, phase, terminal reason, and
+    ``max_rounds_reached`` flag, then updates process-level agentic progress.
+    Persistence and progress-update exceptions propagate to the caller. An
+    outer dispatcher starting a fresh invocation must therefore clear and
+    verify removal of stale ``final-state.json`` first, and fail closed without
+    downstream execution if this initial publication raises.
+    """
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Artifact contract (filenames + payload shapes that downstream tooling
 # depends on; emitted under `<git_root>/.pdd/checkup-review-loop/issue-{N}-pr-{M}/`)

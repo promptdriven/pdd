@@ -1683,12 +1683,6 @@ def run_agentic_checkup(
             / "checkup-review-loop"
             / f"issue-{issue_number}-pr-{pr_number}"
         )
-        write_terra_sol_progress(
-            artifacts_dir=terra_sol_artifacts_dir,
-            max_rounds=max_review_rounds,
-            round_number=0,
-            phase="initializing",
-        )
 
         def _terra_sol_early_failure(
             message: str,
@@ -1709,6 +1703,24 @@ def run_agentic_checkup(
                     "Terra/Sol could not clear the stale review-loop verdict at "
                     ".pdd/checkup-review-loop/; refusing to trust a prior run."
                 )
+            )
+        try:
+            write_terra_sol_progress(
+                artifacts_dir=terra_sol_artifacts_dir,
+                max_rounds=max_review_rounds,
+                round_number=0,
+                phase="initializing",
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            # The stale verdict is already gone. Do not continue into hosted,
+            # GitHub, project, or provider work without a current watchdog
+            # record, and do not retry through the same failing writer.
+            return (
+                False,
+                "Failed to publish initial Terra/Sol watchdog progress; "
+                "the stale verdict was cleared and the review did not start.",
+                0.0,
+                "",
             )
 
     # Establish hosted public-placeholder provenance after Terra/Sol has

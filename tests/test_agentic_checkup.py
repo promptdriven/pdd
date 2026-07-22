@@ -1106,6 +1106,48 @@ class TestRunAgenticCheckup:
         assert "GitHub CLI" in progress["terminal_reason"]
         assert progress["terminal_reason"] != "old run passed"
 
+    def test_terra_sol_progress_failure_clears_stale_state_and_stops(
+        self, monkeypatch, tmp_path
+    ):
+        """A failed initial watchdog write cannot preserve or follow a stale PASS."""
+        import pdd.agentic_checkup as mod
+
+        stale_path = (
+            tmp_path
+            / ".pdd"
+            / "checkup-review-loop"
+            / "issue-2-pr-2"
+            / "final-state.json"
+        )
+        stale_path.parent.mkdir(parents=True)
+        stale_path.write_text('{"fresh_final_status":"clean"}', encoding="utf-8")
+        monkeypatch.setattr(mod, "_find_project_root", lambda _cwd: tmp_path)
+
+        def fail_initial_progress(**_kwargs):
+            assert not stale_path.exists()
+            raise OSError("simulated progress persistence failure")
+
+        monkeypatch.setattr(mod, "write_terra_sol_progress", fail_initial_progress)
+        check_gh = MagicMock(side_effect=AssertionError("must stop before gh I/O"))
+        review_loop = MagicMock(side_effect=AssertionError("review must not start"))
+        monkeypatch.setattr(mod, "_check_gh_cli", check_gh)
+        monkeypatch.setattr(mod, "run_checkup_review_loop", review_loop)
+
+        success, message, cost, model = mod.run_agentic_checkup(
+            "https://github.com/owner/repo/issues/2",
+            pr_url="https://github.com/owner/repo/pull/2",
+            terra_sol=True,
+            cwd=tmp_path,
+        )
+
+        assert success is False
+        assert "Failed to publish initial Terra/Sol watchdog progress" in message
+        assert cost == 0.0
+        assert model == ""
+        assert not stale_path.exists()
+        check_gh.assert_not_called()
+        review_loop.assert_not_called()
+
     def test_terra_sol_clears_stale_state_before_hosted_reservation_failure(
         self, monkeypatch, tmp_path
     ):
