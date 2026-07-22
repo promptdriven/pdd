@@ -101,6 +101,10 @@ _WORD_ATTEMPT_ORDINAL_VALUES = {
     word: value
     for value, word in enumerate(_WORD_ATTEMPT_ORDINALS, start=1)
 }
+_ORDINAL_FAILURE_CAUSE_TAIL_PATTERN = (
+    r"(?:\s+(?:with|due\s+to)\s+(?:(?:an?|the)\s+)?"
+    r"(?:[\w-]+\s+){0,4}?(?:errors?|exceptions?|failures?))?"
+)
 
 _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"\b(?:"
@@ -127,8 +131,7 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     rf"(?:if|when)\s+(?:the\s+)?{_ATTEMPT_ORDINAL_PATTERN}\s+"
     r"(?:retry\s+)?attempt\s+"
     r"(?:(?:also|still)\s+)?fail(?:s|ed)?"
-    r"(?:\s+with\s+(?:(?:a|an|the)\s+)?(?:connection\s+)?"
-    r"(?:error|exception|failure))?|"
+    rf"{_ORDINAL_FAILURE_CAUSE_TAIL_PATTERN}|"
     r"(?:if|when)\s+(?:the\s+)?(?:connection\s+)?"
     r"(?:error|exception|failure)\s+(?:still\s+)?"
     r"(?:persist(?:s|ed)?|remain(?:s|ed)?)\s+after\s+(?:the\s+)?"
@@ -272,6 +275,7 @@ _INVERSE_EXHAUSTION_PATTERN = re.compile(
     rf"{_ATTEMPT_ORDINAL_PATTERN}\s+(?:retry\s+)?attempt|"
     rf"(?:the\s+)?{_ATTEMPT_ORDINAL_PATTERN}\s+(?:retry\s+)?attempt\s+"
     r"(?:(?:also|still)\s+)?fails?"
+    rf"{_ORDINAL_FAILURE_CAUSE_TAIL_PATTERN}"
     r")\s*$",
     re.IGNORECASE,
 )
