@@ -16194,6 +16194,9 @@ def test_read_only_claude_role_allows_only_hosted_pdd_data_companion(
     )
 
     assert result[0] is True
-    assert observed["claude_policy"]["addDirs"] == [str(companion)]
+    assert observed["claude_policy"]["addDirs"] == [
+        str(companion),
+        str(companion.parent),
+    ]
     assert "-p no:cacheprovider" in observed["pytest_addopts"]
     assert "PYTEST_ADDOPTS" not in os.environ

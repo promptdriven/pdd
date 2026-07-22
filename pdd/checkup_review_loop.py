@@ -4509,7 +4509,11 @@ def _read_only_companion_dirs(cwd: Path) -> List[str]:
         return []
     if not target.is_dir() or target.name != "data" or target.parent.name != "pdd":
         return []
-    return [str(target)]
+    # The audit preserves a symlink's resolved path while some provider
+    # wrappers normalize declared roots to their worktree boundary.  Include
+    # both the immutable data directory and its verified sibling-PDD root so
+    # either representation recognizes the same pre-existing fixture link.
+    return [str(target), str(target.parent)]
 
 
 def _review_parse_repair_prompt(raw_output: str, context: ReviewLoopContext) -> str:
