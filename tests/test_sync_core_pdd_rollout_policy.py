@@ -1360,13 +1360,15 @@ def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     assert profiles.coverage == 1.0
 
 
-def test_pr2017_phase_a_is_dormant_on_current_protected_base() -> None:
-    """The prerequisite installs authority without consuming protected bytes."""
+def test_pdd1875_phase_a_is_dormant_on_its_composed_head() -> None:
+    """The #1875 prerequisite stays dormant at its exact composed head."""
     skip_if_authenticated_candidate_lacks_refs(
         ROOT, "exact #1875 protected history", PDD_1875_PROTECTED_BASE
     )
     manifest = build_unit_manifest(
-        ROOT, base_ref=PDD_1875_PROTECTED_BASE, head_ref="HEAD"
+        ROOT,
+        base_ref=PDD_1875_PROTECTED_BASE,
+        head_ref=PDD_1875_COMPOSED_HEAD,
     )
 
     profiles = load_verification_profiles(ROOT, manifest)
@@ -1530,8 +1532,8 @@ def test_pdd1989_history_guard_does_not_hide_missing_repository_identity(
         build_unit_manifest(repo, base_ref=candidate_sha, head_ref=candidate_sha)
 
 
-def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> None:
-    """An adopted rotation must not leave profile requirements stale."""
+def test_current_profile_reconciliation_matches_current_prompt_and_profile_rows() -> None:
+    """An adopted exact transition must not leave profile requirements stale."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     profile_payload = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
@@ -1540,6 +1542,11 @@ def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> N
         for row in policy["requirement_rotations"]
         if row["head_policy_sha256"] == profile_digest
     ]
+    current_rows.extend(
+        _requirement_authorization_row(authorization)
+        for authorization in verification._TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+        if authorization.bindings.head_policy_sha256 == profile_digest
+    )
     assert current_rows
     profiles = {
         (row["prompt_path"], row["language_id"]): row
