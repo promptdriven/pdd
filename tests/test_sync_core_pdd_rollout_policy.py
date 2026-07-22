@@ -28,7 +28,10 @@ from pdd.sync_core.manifest import (
 )
 from pdd.sync_core.types import InventoryStatus, UnitId
 from pdd.sync_core.verification import PROFILE_PATH as PROFILE_REL_PATH
-from tests.conftest import skip_if_authenticated_candidate_lacks_refs
+from tests.conftest import (
+    authenticated_candidate_missing_refs,
+    skip_if_authenticated_candidate_lacks_refs,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1530,23 +1533,16 @@ def _set_candidate_only_identity(
     monkeypatch.setenv("PDD_CANDIDATE_TREE", candidate_tree)
 
 
-def test_pdd1989_history_guard_skips_verified_candidate_only_repo(
+def test_pdd1989_history_guard_accepts_verified_candidate_only_repo(
     tmp_path: Path, monkeypatch
 ) -> None:
     """A verified candidate-only Git checkout intentionally lacks ancestors."""
     repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
     _set_candidate_only_identity(monkeypatch, candidate_sha, candidate_tree)
 
-    with pytest.raises(
-        pytest.skip.Exception,
-        match="requires local git history for #1989 exact-base verification",
-    ):
-        skip_if_authenticated_candidate_lacks_refs(
-            repo,
-            "local git history for #1989 exact-base verification",
-            PDD_1989_ACTUAL_BASE,
-            PDD_1989_ACTUAL_HEAD,
-        )
+    assert authenticated_candidate_missing_refs(
+        repo, PDD_1989_ACTUAL_BASE, PDD_1989_ACTUAL_HEAD
+    ) == (PDD_1989_ACTUAL_BASE, PDD_1989_ACTUAL_HEAD)
 
 
 @pytest.mark.parametrize("marker", (None, "candidate-tree-v2"))
