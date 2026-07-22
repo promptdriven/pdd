@@ -93,6 +93,17 @@ _LOWER_HEX_32_RE = re.compile(r"[0-9a-f]{32}\Z")
 # publication and are not safe substitutes.
 HOSTED_AGENTIC_ARTIFACT_CAPABILITY = "prepublication-snapshot-v2"
 
+# GitHub-checks is normally a required full-suite source.  A hosted caller can
+# explicitly relax that only for PRs that cannot contain executable changes.
+# Keep this list deliberately narrow and fail closed for unrecognised paths.
+_NON_EXECUTABLE_PR_SUFFIXES = (
+    ".md", ".markdown", ".mdx", ".rst", ".adoc", ".png", ".jpg", ".jpeg",
+    ".gif", ".svg", ".webp", ".ico", ".pdf",
+)
+_NON_EXECUTABLE_PR_BASENAMES = frozenset(
+    {"license", "notice", "changelog", "authors", "contributors"}
+)
+
 
 def _env_flag_enabled(value: Optional[str]) -> bool:
     """Return True for the small truthy vocabulary used by hosted env flags."""
@@ -913,6 +924,43 @@ def _fetch_pr_changed_files(owner: str, repo: str, pr_number: int) -> str:
     return "\n".join(lines) if lines else "No changed files reported."
 
 
+def _is_non_executable_pr_path(path: str) -> bool:
+    """Return whether ``path`` is safely documentation/static-only."""
+    normalized = path.strip().lower()
+    if not normalized or normalized.endswith("/"):
+        return False
+    name = normalized.rsplit("/", 1)[-1]
+    return name in _NON_EXECUTABLE_PR_BASENAMES or name.endswith(
+        _NON_EXECUTABLE_PR_SUFFIXES
+    )
+
+
+def _github_checks_nonblocking_docs_only_pr(
+    owner: str, repo: str, pr_number: int
+) -> bool:
+    """Fail closed unless every changed PR file is docs/static-only.
+
+    This intentionally uses GitHub's PR inventory rather than the local
+    checkout: the check gate itself is GitHub-backed, and a stale worktree must
+    not turn an executable PR into a waived one.
+    """
+    success, output = _run_gh_command(
+        ["api", f"repos/{owner}/{repo}/pulls/{pr_number}/files?per_page=100"]
+    )
+    if not success:
+        return False
+    try:
+        files = json.loads(output)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(files, list) or not files or len(files) >= 100:
+        return False
+    paths = [item.get("filename") for item in files if isinstance(item, dict)]
+    return len(paths) == len(files) and all(
+        isinstance(path, str) and _is_non_executable_pr_path(path) for path in paths
+    )
+
+
 def _fetch_pr_conversation(owner: str, repo: str, pr_number: int) -> str:
     """Fetch PR issue-thread comments, which often explain direction changes."""
     success, output = _run_gh_command(
@@ -1398,6 +1446,7 @@ def run_agentic_checkup(
     pr_url: Optional[str] = None,
     test_scope: str = "full",
     full_suite_source: str = "local",
+    github_checks_blocking: bool = True,
     review_loop: bool = False,
     final_gate: bool = False,
     review_only: bool = False,
@@ -1633,6 +1682,19 @@ def run_agentic_checkup(
             False,
             "--full-suite-source must be 'local' or 'github-checks', "
             f"got {full_suite_source!r}.",
+            0.0,
+            "",
+        )
+
+    if not isinstance(github_checks_blocking, bool):
+        return False, "github_checks_blocking must be a boolean.", 0.0, ""
+    if not github_checks_blocking and (
+        not final_gate or full_suite_source != "github-checks"
+    ):
+        return (
+            False,
+            "Non-blocking GitHub checks require --final-gate with "
+            "--full-suite-source github-checks.",
             0.0,
             "",
         )
@@ -2172,6 +2234,7 @@ def run_agentic_checkup(
         # fail-closed). ``issue_number`` is the PR number when no issue was
         # given; in that mode the issue-alignment gate is skipped.
         github_checks_message: Optional[str] = None
+        github_checks_waived = False
         if (
             full_suite_source == "github-checks"
             and not layer1_step5_evidence_for_review
@@ -2189,7 +2252,12 @@ def run_agentic_checkup(
                     required_only=False,
                 )
             )
-            if not github_success:
+            if not github_success and not (
+                not github_checks_blocking
+                and _github_checks_nonblocking_docs_only_pr(
+                    pr_owner, pr_repo, pr_number
+                )
+            ):
                 report = _format_github_checks_gate_failure_report(
                     pr_url=pr_url or "",
                     issue_url=issue_url or "",
@@ -2242,6 +2310,12 @@ def run_agentic_checkup(
                     hosted_artifact_reservation,
                     canonical_passed=False,
                 )
+            if not github_success:
+                github_checks_waived = True
+                github_checks_message = (
+                    f"{github_checks_message} — non-blocking GitHub checks "
+                    "waived for docs/static-only PR."
+                )
             if not quiet:
                 console.print(f"[green]{github_checks_message}[/green]")
 
@@ -2283,7 +2357,12 @@ def run_agentic_checkup(
             has_issue=has_issue,
         )
         total_cost = orch_cost + loop_cost
-        checks_clause = "GitHub checks gate passed; " if github_checks_message else ""
+        if github_checks_waived:
+            checks_clause = "GitHub checks gate waived for docs/static-only PR; "
+        elif github_checks_message:
+            checks_clause = "GitHub checks gate passed; "
+        else:
+            checks_clause = ""
         message = (
             "Final gate: Layer 1 (PR checkup) passed; "
             f"{checks_clause}"

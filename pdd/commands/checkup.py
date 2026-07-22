@@ -380,6 +380,15 @@ def _emit_agentic_review_loop_json(
     ),
 )
 @click.option(
+    "--github-checks-blocking/--github-checks-non-blocking",
+    "github_checks_blocking",
+    default=True,
+    help=(
+        "Require GitHub checks when they are the final-gate suite source. "
+        "The non-blocking form is allowed only for a docs/static-only PR."
+    ),
+)
+@click.option(
     "--review-loop",
     is_flag=True,
     default=False,
@@ -789,6 +798,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     issue_url_opt: Optional[str],
     test_scope: str,
     full_suite_source: str,
+    github_checks_blocking: bool,
     review_loop: bool,
     agentic_review_loop: bool,
     adversarial_prompt: str,
@@ -1463,6 +1473,18 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 "tests with GitHub checks.",
                 param_hint="'--final-gate'",
             )
+        if not github_checks_blocking and full_suite_source != "github-checks":
+            raise click.BadParameter(
+                "--github-checks-non-blocking requires --full-suite-source "
+                "github-checks.",
+                param_hint="'--github-checks-non-blocking'",
+            )
+    elif not github_checks_blocking:
+        raise click.BadParameter(
+            "--github-checks-non-blocking requires --final-gate with "
+            "--full-suite-source github-checks.",
+            param_hint="'--github-checks-non-blocking'",
+        )
     if review_loop and start_step is not None:
         raise click.BadParameter(
             "--start-step applies to the legacy checkup workflow, not --review-loop.",
@@ -1610,6 +1632,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             pr_url=pr_url,
             test_scope=test_scope,
             full_suite_source=full_suite_source,
+            github_checks_blocking=github_checks_blocking,
             start_step_override=start_step_override,
             review_loop=review_loop,
             agentic_review_loop=agentic_review_loop,

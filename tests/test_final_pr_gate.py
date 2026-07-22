@@ -25,6 +25,7 @@ from pdd.agentic_checkup import (
     _classify_layer1_failure_category,
     _format_github_checks_gate_failure_report,
     _format_layer1_failure_report,
+    _github_checks_nonblocking_docs_only_pr,
     _review_loop_ship_verdict,
     run_agentic_checkup,
 )
@@ -178,6 +179,20 @@ class TestShipVerdictPredicate:
         state = _clean_final_state()
         state["reviewer_status"] = {"codex": "findings"}
         assert _review_loop_ship_verdict(state, has_issue=True) is False
+
+
+class TestNonblockingGithubChecks:
+    def test_docs_only_pr_is_eligible(self) -> None:
+        files = json.dumps([{"filename": "docs/guide.md"}, {"filename": "logo.svg"}])
+        with patch("pdd.agentic_checkup._run_gh_command", return_value=(True, files)):
+            assert _github_checks_nonblocking_docs_only_pr("o", "r", 1) is True
+
+    def test_code_or_unavailable_inventory_fails_closed(self) -> None:
+        code = json.dumps([{"filename": "docs/guide.md"}, {"filename": "app/main.py"}])
+        with patch("pdd.agentic_checkup._run_gh_command", return_value=(True, code)):
+            assert _github_checks_nonblocking_docs_only_pr("o", "r", 1) is False
+        with patch("pdd.agentic_checkup._run_gh_command", return_value=(False, "error")):
+            assert _github_checks_nonblocking_docs_only_pr("o", "r", 1) is False
 
     def test_issue_not_aligned_fails(self) -> None:
         state = _clean_final_state()
@@ -784,6 +799,52 @@ class TestFinalGateLibrary:
         checks_mock.assert_called_once()
         loop_mock.assert_not_called()
 
+    def test_nonblocking_docs_only_checks_failure_reaches_layer2(
+        self, tmp_path: Path
+    ) -> None:
+        def loop(*_a, **_kw):
+            _write_final_state(
+                tmp_path, issue_number=2, pr_number=1, payload=_clean_final_state()
+            )
+            return (True, "review ok", 2.0, "codex")
+
+        with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
+            "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
+        ), patch("pdd.agentic_checkup._fetch_comments", return_value=""), patch(
+            "pdd.agentic_checkup._find_project_root", return_value=tmp_path
+        ), patch(
+            "pdd.agentic_checkup._load_architecture_json", return_value=({}, None)
+        ), patch("pdd.agentic_checkup._load_pddrc_content", return_value=""), patch(
+            "pdd.agentic_checkup._fetch_pr_context", return_value=""
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+            return_value=(True, "targeted checkup ok", 1.0, "model"),
+        ), patch(
+            "pdd.agentic_checkup.run_github_checks_gate",
+            return_value=(False, "No GitHub checks found", "abc123"),
+        ), patch(
+            "pdd.agentic_checkup._github_checks_nonblocking_docs_only_pr",
+            return_value=True,
+        ) as eligible, patch(
+            "pdd.agentic_checkup.run_checkup_review_loop", side_effect=loop
+        ) as loop_mock:
+            success, msg, _cost, _model = run_agentic_checkup(
+                issue_url=ISSUE_URL,
+                quiet=True,
+                no_fix=False,
+                use_github_state=False,
+                pr_url=PR_URL,
+                final_gate=True,
+                test_scope="targeted",
+                full_suite_source="github-checks",
+                github_checks_blocking=False,
+            )
+
+        assert success is True, msg
+        assert "waived for docs/static-only PR" in msg
+        eligible.assert_called_once_with("o", "r", 1)
+        loop_mock.assert_called_once()
+
     def test_github_checks_failure_posts_parseable_gate_report(self, tmp_path: Path) -> None:
         with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
             "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
@@ -1156,6 +1217,26 @@ class TestFinalGateCli:
         assert kwargs["final_gate"] is True
         assert kwargs["full_suite_source"] == "github-checks"
         assert kwargs["test_scope"] == "targeted"
+
+    def test_forwards_nonblocking_github_checks(self) -> None:
+        runner = CliRunner()
+        with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+            run_checkup.return_value = (True, "clean", 0.25, "codex")
+            result = runner.invoke(
+                checkup,
+                [
+                    "--pr", PR_URL,
+                    "--issue", ISSUE_URL,
+                    "--final-gate",
+                    "--full-suite-source", "github-checks",
+                    "--test-scope", "targeted",
+                    "--github-checks-non-blocking",
+                ],
+                obj={"quiet": True, "verbose": False},
+            )
+
+        assert result.exit_code == 0, result.output
+        assert run_checkup.call_args.kwargs["github_checks_blocking"] is False
 
     def test_rejects_none_full_suite_source(self) -> None:
         runner = CliRunner()
