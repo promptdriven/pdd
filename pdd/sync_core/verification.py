@@ -59,15 +59,26 @@ _LEGACY_PDD_2168_PROFILE_BYTES = (
     "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
     "e4c478dd7d01b17e2c56710fa7ecd19ce9e4560a86026233f526c0e062fd0786",
 )
+# #2168 was subsequently merged onto the #1998-composed current main.  Keep
+# that rebased pair distinct from the original reviewed candidate so both byte
+# histories remain explicit rather than rewriting either one.
+_PDD_2168_REBASED_SCHEMA_2_HISTORY = (
+    "0b00131438c93244513b77346ae2649d1073414621f30f536e2f6ae55ee7d9ee",
+    "474fa05c3a0844b37fe9767a7db64e159781edb92db7b784e7f45d1592380823",
+)
+_PDD_2168_REBASED_PROFILE_BYTES = (
+    "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
+    "b4832ab48a0d0cf4570dc2de40ae3fe93dc406c03b3fd7807523f95cb8c62a7f",
+)
 # PR #1875 was reviewed before the #1998 campaign reached main.  Keep its
 # exact historical reconciliation distinct from #2168's final-gate transition.
 _PDD_1875_COMPOSED_SCHEMA_2_HISTORY = (
+    "2b96e538280ebb79db86d0dece4791d80f46dadcc93ba6ab4ad81182b9491d5f",
     "85fd63ba8a0b8e5e4d514d4bd96c5f7ac423c8fea3c413a074ef7bdf3acec880",
-    "0b00131438c93244513b77346ae2649d1073414621f30f536e2f6ae55ee7d9ee",
 )
 _PDD_1875_COMPOSED_PROFILE_BYTES = (
+    "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
     "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
-    "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
 )
 
 
@@ -214,7 +225,7 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
         "python",
         "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
-        "08e0c842d842974340b7ed3424f71fa20379c6922aaa6cfbca232d7d83a9a255",
+        "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
         "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
     ),
@@ -436,7 +447,7 @@ _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS = (
         "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
         "fce5b7e4354b4953ca629016cdc048c5b7d593cea1179b2ef497094934bc85c3",
         "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
-        "e4c478dd7d01b17e2c56710fa7ecd19ce9e4560a86026233f526c0e062fd0786",
+        "b4832ab48a0d0cf4570dc2de40ae3fe93dc406c03b3fd7807523f95cb8c62a7f",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_common_python.prompt",
@@ -444,7 +455,21 @@ _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS = (
         "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
         "3d5cd383fe74fe03e16653b942d775f04332680b7541c10fa529eebbd8e26851",
         "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
-        "e4c478dd7d01b17e2c56710fa7ecd19ce9e4560a86026233f526c0e062fd0786",
+        "b4832ab48a0d0cf4570dc2de40ae3fe93dc406c03b3fd7807523f95cb8c62a7f",
+    ),
+)
+
+# PR #1875 consumed the earlier checkup-orchestrator transition while its
+# profile bytes were composed by the replay campaign. It remains a distinct,
+# immutable historical pair from #2168's later final-gate transition.
+_PDD_1875_CHECKUP_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
+        "python",
+        "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
+        "08e0c842d842974340b7ed3424f71fa20379c6922aaa6cfbca232d7d83a9a255",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
     ),
 )
 
@@ -925,6 +950,7 @@ _REPLAY_REQUIREMENT_REPLACEMENTS = frozenset(
 # legacy profile-byte guard for every other candidate.
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _REPLAY_REPLACED_PROTECTED_TRANSITIONS
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_1875_CHECKUP_REQUIREMENT_TRANSITIONS
 
 
 # One long-lived pre-schema-2 unit first becomes managed in pdd#1790. Bind its
@@ -1720,6 +1746,7 @@ def _is_exact_combined_requirement_reconciliation(
         (_LEGACY_PDD_1989_SCHEMA_2_HISTORY, _LEGACY_PDD_1989_PROFILE_BYTES),
         (_PR1971_COMBINED_SCHEMA_2_HISTORY, _PR1971_COMBINED_PROFILE_BYTES),
         (_LEGACY_PDD_2168_SCHEMA_2_HISTORY, _LEGACY_PDD_2168_PROFILE_BYTES),
+        (_PDD_2168_REBASED_SCHEMA_2_HISTORY, _PDD_2168_REBASED_PROFILE_BYTES),
         (_PDD_1875_COMPOSED_SCHEMA_2_HISTORY, _PDD_1875_COMPOSED_PROFILE_BYTES),
     }
 
@@ -1766,12 +1793,12 @@ def _is_exact_pdd2168_reconciliation(
             hashlib.sha256(rotation_policies[0]).hexdigest(),
             hashlib.sha256(rotation_policies[1]).hexdigest(),
         )
-        == _LEGACY_PDD_2168_SCHEMA_2_HISTORY
+        == _PDD_2168_REBASED_SCHEMA_2_HISTORY
         and (
             hashlib.sha256(profile_policies[0]).hexdigest(),
             hashlib.sha256(profile_policies[1]).hexdigest(),
         )
-        == _LEGACY_PDD_2168_PROFILE_BYTES
+        == _PDD_2168_REBASED_PROFILE_BYTES
     )
 
 
@@ -2004,6 +2031,7 @@ def _validate_schema_2_history_representation(
         in {
             _LEGACY_PDD_1989_SCHEMA_2_HISTORY,
             _LEGACY_PDD_2168_SCHEMA_2_HISTORY,
+            _PDD_2168_REBASED_SCHEMA_2_HISTORY,
             _PDD_1875_COMPOSED_SCHEMA_2_HISTORY,
         }
     ):
@@ -2323,6 +2351,10 @@ def _load_requirement_transition_authorizations(
                 _LEGACY_PDD_2168_PROFILE_BYTES,
             ),
             (
+                _PDD_2168_REBASED_SCHEMA_2_HISTORY,
+                _PDD_2168_REBASED_PROFILE_BYTES,
+            ),
+            (
                 _PDD_1875_COMPOSED_SCHEMA_2_HISTORY,
                 _PDD_1875_COMPOSED_PROFILE_BYTES,
             ),
@@ -2353,6 +2385,7 @@ def _load_requirement_transition_authorizations(
                     in (
                         _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
                         + _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS
+                        + _PDD_1875_CHECKUP_REQUIREMENT_TRANSITIONS
                     )
                 )
                 and policies[0] != policies[1]
@@ -2612,6 +2645,22 @@ def _authorized_requirement_updates(
     pdd2168_replay_continuation = _is_exact_pdd2168_replay_continuation(
         manifest, rotation_policies, policies
     )
+    pdd1875_reconciliation = (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and _is_exact_combined_requirement_reconciliation(
+            rotation_policies[0], rotation_policies[1], policies[0], policies[1]
+        )
+        and (
+            hashlib.sha256(rotation_policies[0]).hexdigest(),
+            hashlib.sha256(rotation_policies[1]).hexdigest(),
+        )
+        == _PDD_1875_COMPOSED_SCHEMA_2_HISTORY
+        and (
+            hashlib.sha256(policies[0]).hexdigest(),
+            hashlib.sha256(policies[1]).hexdigest(),
+        )
+        == _PDD_1875_COMPOSED_PROFILE_BYTES
+    )
     context = _RequirementTransitionContext(
         root, manifest, base, head, policies, prompts
     )
@@ -2621,7 +2670,16 @@ def _authorized_requirement_updates(
             authorization.prompt_path,
             authorization.language_id,
         )
-        if pdd2168_reconciliation and authorization in _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS:
+        if (
+            pdd2168_reconciliation
+            and authorization in _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS
+        ):
+            updates[unit_id] = head[unit_id]
+            continue
+        if (
+            pdd1875_reconciliation
+            and authorization in _PDD_1875_CHECKUP_REQUIREMENT_TRANSITIONS
+        ):
             updates[unit_id] = head[unit_id]
             continue
         if pdd2168_replay_continuation and authorization in (

@@ -197,29 +197,33 @@ PREAUTHORIZED_CHILD_PATHS = (
     | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
     | {
-    ".github/toolchains/playwright_manifest.py",
-    ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
-    ".pdd/meta/checkup_agentic_artifact_python.json",
-    ".pdd/meta/story_regression_python.json",
-    "ci/cloud-batch/cloud-regression-runner.py",
-    "context/checkup_agentic_artifact_example.py",
-    "tests/test_checkup_agentic_artifact.py",
-    "tests/test_cloud_batch_cloud_regression_runner.py",
-    "tests/test_unit_tests_workflow.py",
-    "tests/test_ci_drift_heal_example_contract.py",
-    "tests/test_sync_core_runner_jest.py",
-    "tests/test_sync_core_runner_vitest.py",
-    "tests/test_sync_core_runner_playwright.py",
-    "tests/test_cloud_global_dry_run.py",
-    "tests/test_continuous_sync_path_policy.py",
-    "pdd/sync_core/human_attestation.py",
-    "tests/test_sync_core_human_attestation.py",
-    ".pdd/meta/ci_detect_changed_modules_python.json",
-    ".pdd/meta/evidence_manifest_python.json",
-    ".pdd/meta/story_detection_result_python.json",
-    "pdd/schemas/story_detection_result.schema.json",
-    "pdd/schemas/story_detection_scope.schema.json",
-    "tests/test_story_detection_result.py",
+        ".pdd/meta/user_story_tests_python.json",
+        ".pdd/meta/user_story_tests_python_run.json",
+        ".github/toolchains/playwright_manifest.py",
+        ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
+        ".pdd/meta/checkup_agentic_artifact_python.json",
+        ".pdd/meta/story_regression_python.json",
+        "ci/cloud-batch/cloud-regression-runner.py",
+        "context/checkup_agentic_artifact_example.py",
+        "tests/test_checkup_agentic_artifact.py",
+        "tests/test_cloud_batch_cloud_regression_runner.py",
+        "tests/test_unit_tests_workflow.py",
+        "tests/test_ci_drift_heal_example_contract.py",
+        "tests/test_sync_core_runner_jest.py",
+        "tests/test_sync_core_runner_vitest.py",
+        "tests/test_sync_core_runner_playwright.py",
+        "tests/test_cloud_global_dry_run.py",
+        "tests/test_continuous_sync_path_policy.py",
+        "pdd/sync_core/human_attestation.py",
+        "tests/test_sync_core_human_attestation.py",
+        ".pdd/meta/ci_detect_changed_modules_python.json",
+        ".pdd/meta/evidence_manifest_python.json",
+        ".pdd/meta/story_detection_result_python.json",
+        "pdd/schemas/story_detection_result.schema.json",
+        "pdd/schemas/story_detection_scope.schema.json",
+        "scripts/manual_validate_pr_1875.py",
+        "tests/test_e2e_story_failure_diagnostics.py",
+        "tests/test_story_detection_result.py",
     }
 )
 PREAUTHORIZED_CHILD_OWNERSHIP = {
@@ -827,9 +831,7 @@ def test_exact_bootstrap_row_installs_from_legacy_protected_source(
 ) -> None:
     """The exact in-code trust root can perform the first schema-2 install."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
-    authorization = verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS[
-        0
-    ]  # pylint: disable=protected-access
+    authorization = verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS[0]  # pylint: disable=protected-access
     rotations = policy["rotations"] if protected_source != "absent" else []
     protected_payload = {"schema_version": 1, "rotations": rotations}
     if protected_source == "schema-1-old-row":
@@ -872,9 +874,7 @@ def test_exact_bootstrap_row_rejects_profile_byte_mutation(
     monkeypatch, profile_source: str
 ) -> None:
     """A legacy bootstrap cannot install while profile bytes drift."""
-    authorization = verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS[
-        0
-    ]  # pylint: disable=protected-access
+    authorization = verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS[0]  # pylint: disable=protected-access
     candidate = json.dumps(
         {
             "schema_version": 2,
@@ -883,9 +883,7 @@ def test_exact_bootstrap_row_rejects_profile_byte_mutation(
         }
     ).encode()
     protected_profile = (
-        None
-        if profile_source == "absent"
-        else b'{"schema_version":1,"profiles":[]}\n'
+        None if profile_source == "absent" else b'{"schema_version":1,"profiles":[]}\n'
     )
     candidate_profile = b'{\n  "schema_version": 1, "profiles": []\n}\n'
 
@@ -914,9 +912,7 @@ def test_exact_bootstrap_row_rejects_profile_byte_mutation(
 
 def test_exact_replay_row_can_bind_changed_profile_bytes(monkeypatch) -> None:
     """Only the reviewed replay tuple may carry its exact profile transition."""
-    authorization = verification._REPLAY_PROFILE_REQUIREMENT_TRANSITIONS[
-        0
-    ]  # pylint: disable=protected-access
+    authorization = verification._REPLAY_PROFILE_REQUIREMENT_TRANSITIONS[0]  # pylint: disable=protected-access
     candidate = json.dumps(
         {
             "schema_version": 2,
@@ -951,9 +947,7 @@ def test_exact_replay_row_can_bind_changed_profile_bytes(monkeypatch) -> None:
 
 def test_non_pdd_replay_row_remains_a_new_authorization(monkeypatch) -> None:
     """A foreign repository cannot bypass managed-prompt isolation with replay data."""
-    authorization = verification._REPLAY_PROMPT_REQUIREMENT_TRANSITIONS[
-        0
-    ]  # pylint: disable=protected-access
+    authorization = verification._REPLAY_PROMPT_REQUIREMENT_TRANSITIONS[0]  # pylint: disable=protected-access
     protected = json.dumps(
         {
             "schema_version": 2,
@@ -1010,9 +1004,7 @@ def test_non_pdd_replay_row_remains_a_new_authorization(monkeypatch) -> None:
 
 def test_legacy_replay_history_exemption_is_repository_bound(monkeypatch) -> None:
     """Only PDD may read the reviewed non-append-only #1989 history pair."""
-    first, second = verification._REPLAY_PROMPT_REQUIREMENT_TRANSITIONS[
-        :2
-    ]  # pylint: disable=protected-access
+    first, second = verification._REPLAY_PROMPT_REQUIREMENT_TRANSITIONS[:2]  # pylint: disable=protected-access
     protected = json.dumps(
         {
             "schema_version": 2,
@@ -1076,9 +1068,7 @@ def test_legacy_schema_1_bootstrap_rejects_malformed_envelope(
 ) -> None:
     """Historical rows are ignored as authority only after strict parsing."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
-    authorization = verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS[
-        0
-    ]  # pylint: disable=protected-access
+    authorization = verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS[0]  # pylint: disable=protected-access
     protected_payload = {
         "schema_version": 1,
         "rotations": policy["rotations"],
@@ -1200,9 +1190,7 @@ def test_bootstrap_install_cannot_change_active_rotation_authority(
 ) -> None:
     """Legacy bootstrap changes only the envelope, never active authority."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
-    authorization = verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS[
-        0
-    ]  # pylint: disable=protected-access
+    authorization = verification._BOOTSTRAP_REQUIREMENT_TRANSITIONS[0]  # pylint: disable=protected-access
     rotations = policy["rotations"]
     protected = (
         None
@@ -1275,7 +1263,9 @@ def test_pr2017_phase_a_is_dormant_on_current_protected_base() -> None:
 
 def test_replay_transitions_cover_the_actual_protected_base() -> None:
     """The replay transitions must load a complete exact-base profile set."""
-    manifest = build_unit_manifest(ROOT, base_ref=REPLAY_PROTECTED_BASE, head_ref="HEAD")
+    manifest = build_unit_manifest(
+        ROOT, base_ref=REPLAY_PROTECTED_BASE, head_ref=PDD_1875_PROTECTED_BASE
+    )
     profiles = load_verification_profiles(ROOT, manifest)
 
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
@@ -1422,9 +1412,10 @@ def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> N
     for rotation in current_rows:
         prompt_path = ROOT / rotation["prompt_path"]
         expected_requirement = rotation["to_requirement_id"]
-        assert hashlib.sha256(prompt_path.read_bytes()).hexdigest() == rotation[
-            "head_prompt_sha256"
-        ]
+        assert (
+            hashlib.sha256(prompt_path.read_bytes()).hexdigest()
+            == rotation["head_prompt_sha256"]
+        )
         assert expected_requirement == (
             f"CONTRACT-SHA256:{rotation['head_prompt_sha256']}"
         )
@@ -1436,6 +1427,8 @@ def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> N
             if item["validator_id"] == "threshold-ed25519"
         )
         assert human["requirement_ids"] == [expected_requirement]
+
+
 @pytest.mark.parametrize(
     "field,replacement",
     (
@@ -1991,9 +1984,7 @@ def test_gate1_paths_are_exactly_preauthorized() -> None:
     """Only the four reviewed Gate 1 paths receive absent-path authority."""
     ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
     rules = {row["pattern"]: row for row in ownership["rules"]}
-    assert {
-        path: rules.get(path) for path in GATE1_PREAUTHORIZED_PATHS
-    } == {
+    assert {path: rules.get(path) for path in GATE1_PREAUTHORIZED_PATHS} == {
         path: {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
         for path in GATE1_PREAUTHORIZED_PATHS
     }
@@ -2099,9 +2090,7 @@ def test_gate1_paths_compose_with_protected_preauthorization(
         assert result.returncode == 0, result.stderr
         assert not result.stdout.strip()
 
-    manifest = build_unit_manifest(
-        root, base_ref="origin/main", head_ref="HEAD"
-    )
+    manifest = build_unit_manifest(root, base_ref="origin/main", head_ref="HEAD")
     records = {
         item.candidate_id.artifact_relpath.as_posix(): item
         for item in manifest.candidates
@@ -2113,8 +2102,7 @@ def test_gate1_paths_compose_with_protected_preauthorization(
     assert all(
         item.inventory.value == "HUMAN_OWNED"
         and item.candidate_id.role == "human-maintained"
-        and item.ownership_provenance
-        == f"protected-ownership:pdd-maintainers:{path}"
+        and item.ownership_provenance == f"protected-ownership:pdd-maintainers:{path}"
         for path, item in records.items()
     )
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
@@ -2147,8 +2135,7 @@ def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
     ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
     rules = {row["pattern"]: row for row in ownership["rules"]}
     assert {
-        path: rules.get(path)
-        for path in GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
+        path: rules.get(path) for path in GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
     } == {
         path: {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
         for path in GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
@@ -2335,13 +2322,16 @@ def test_standalone_checker_package_boundary_composes_offline_and_fails_closed(
     _git(root, "add", "-f", ".pdd/global-sync/standalone-checker-modules.json")
     exact_head = _commit(root, "compose synthetic standalone checker boundary")
 
-    assert set(
-        subprocess.check_output(
-            ["git", "diff", "--name-only", "origin/main...HEAD"],
-            cwd=root,
-            text=True,
-        ).splitlines()
-    ) == STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    assert (
+        set(
+            subprocess.check_output(
+                ["git", "diff", "--name-only", "origin/main...HEAD"],
+                cwd=root,
+                text=True,
+            ).splitlines()
+        )
+        == STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    )
     for detector in (
         "scripts/ci_detect_changed_modules.py",
         "pdd/ci_detect_changed_modules.py",
@@ -2369,8 +2359,7 @@ def test_standalone_checker_package_boundary_composes_offline_and_fails_closed(
     assert all(
         item.inventory.value == "HUMAN_OWNED"
         and item.candidate_id.role == "human-maintained"
-        and item.ownership_provenance
-        == f"protected-ownership:pdd-maintainers:{path}"
+        and item.ownership_provenance == f"protected-ownership:pdd-maintainers:{path}"
         for path, item in records.items()
     )
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
@@ -2384,9 +2373,9 @@ def test_standalone_checker_package_boundary_composes_offline_and_fails_closed(
     unauthorized_manifest = build_unit_manifest(
         root, base_ref=exact_head, head_ref=unauthorized_head
     )
-    assert {
-        Path(path) for path in FUTURE_STANDALONE_CHECKER_UNAUTHORIZED_PATHS
-    } <= set(unauthorized_manifest.unaccounted_tracked_paths)
+    assert {Path(path) for path in FUTURE_STANDALONE_CHECKER_UNAUTHORIZED_PATHS} <= set(
+        unauthorized_manifest.unaccounted_tracked_paths
+    )
     assert {
         f"{path}: tracked path has no ownership rule"
         for path in FUTURE_STANDALONE_CHECKER_UNAUTHORIZED_PATHS
@@ -2489,8 +2478,7 @@ def test_global_sync_ledger_paths_compose_with_protected_preauthorization(
     assert all(
         item.inventory.value == "HUMAN_OWNED"
         and item.candidate_id.role == "human-maintained"
-        and item.ownership_provenance
-        == f"protected-ownership:pdd-maintainers:{path}"
+        and item.ownership_provenance == f"protected-ownership:pdd-maintainers:{path}"
         for path, item in records.items()
     )
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
@@ -2646,8 +2634,7 @@ def test_replay_bootstrap_requires_each_exact_ordinary_candidate_rule(
     )
 
     expected = tuple(
-        replace(rule, preauthorize_absent=True)
-        for rule in _REPLAY_HUMAN_OWNERSHIP[1:]
+        replace(rule, preauthorize_absent=True) for rule in _REPLAY_HUMAN_OWNERSHIP[1:]
     )
     assert result == expected
 
@@ -2656,7 +2643,9 @@ def test_replay_bootstrap_requires_each_exact_ordinary_candidate_rule(
     "mutation",
     ("mutated", "repository", "path", "present-in-base"),
 )
-def test_replay_bootstrap_weakening_exception_fails_closed(monkeypatch, mutation) -> None:
+def test_replay_bootstrap_weakening_exception_fails_closed(
+    monkeypatch, mutation
+) -> None:
     """Only the reviewed, absent exact replay paths may bridge policy stages."""
     head_rules = tuple(_REPLAY_HUMAN_OWNERSHIP)
     repository_id = REPOSITORY_ID
@@ -2679,7 +2668,8 @@ def test_replay_bootstrap_weakening_exception_fails_closed(monkeypatch, mutation
         "read_git_tree_entry",
         lambda _root, ref, path: (
             object()
-            if (ref == "head" and path in paths) or (ref == "base" and path in base_paths)
+            if (ref == "head" and path in paths)
+            or (ref == "base" and path in base_paths)
             else None
         ),
     )
@@ -2693,8 +2683,7 @@ def test_replay_bootstrap_weakening_exception_fails_closed(monkeypatch, mutation
     )
     monkeypatch.setattr(decommission_module, "read_git_blob", lambda *_args: b"{}")
     effective_rules = tuple(
-        replace(rule, preauthorize_absent=True)
-        for rule in _REPLAY_HUMAN_OWNERSHIP
+        replace(rule, preauthorize_absent=True) for rule in _REPLAY_HUMAN_OWNERSHIP
     )
     invalid = decommission_module.control_transition_invalid(
         ROOT, "base", "head", effective_rules, head_rules, pairs
