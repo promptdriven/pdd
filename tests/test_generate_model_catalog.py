@@ -770,7 +770,7 @@ def test_committed_csv_places_unranked_fable_at_end_of_anthropic_block():
     ).splitlines()
     fable_row = (
         "Anthropic,claude-fable-5,10.0,50.0,0,0,platform-default,"
-        ",ANTHROPIC_API_KEY,128000,True,adaptive,,False,1000000"
+        ",ANTHROPIC_API_KEY,0,True,adaptive,,False,1000000"
     )
     idx = lines.index(fable_row)
 
@@ -818,7 +818,7 @@ def test_build_rows_preserves_fable_contract_when_litellm_knows_it(monkeypatch):
     ]
 
     assert len(fable_rows) == 1
-    assert fable_rows[0]["max_reasoning_tokens"] == 128000
+    assert fable_rows[0]["max_reasoning_tokens"] == 0
     assert fable_rows[0]["context_limit"] == 1_000_000
 
 

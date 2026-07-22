@@ -174,7 +174,7 @@
     - CSV columns: reasoning_type ('budget', 'effort', 'adaptive', 'none'), max_reasoning_tokens.
     - 'budget': Calculate budget_tokens = int(time * max_reasoning_tokens), pass provider-specific thinking parameters (e.g., Anthropic 'thinking' param with type="enabled").
     - 'effort': Map time to "low"/"medium"/"high". For OpenAI gpt-5* only, an explicit `PDD_REASONING_EFFORT` overrides that mapping, then validate the final value against the selected model's actual contract: GPT-5.6 supports `{none, low, medium, high, xhigh, max}`; GPT-5.5 and GPT-5.4 non-Pro families support `{none, low, medium, high, xhigh}`; their Pro variants support `{medium, high, xhigh}`; GPT-5.3-Codex supports `{low, medium, high, xhigh}`; GPT-5.2 supports `{none, low, medium, high, xhigh}`; GPT-5.1 supports `{none, low, medium, high}`; legacy GPT-5 supports `{minimal, low, medium, high}` and GPT-5 Pro only `{high}`. Reject unsupported values with the selected model and allowed set in the error rather than forwarding a backend-invalid identity. Pass reasoning={effort, summary:"auto"} for the Responses API. Other models continue to use the time-derived reasoning_effort.
-    - 'adaptive': Anthropic and Azure AI Claude Opus 4.7+. Normalize provider labels by stripping/lowercasing and treating underscores as spaces, so both bundled `Azure AI` and custom/project `azure_ai` rows trigger the Azure branch. Map time to effort. Anthropic rows send top-level thinking={type:"adaptive", display:"summarized"} plus reasoning_effort so LiteLLM maps effort into output_config.effort. Azure AI rows must send extra_body={thinking:{type:"adaptive", display:"summarized"}, output_config:{effort}} because AzureAIStudioConfig's OpenAI-style optional-param filtering drops top-level thinking/reasoning_effort before transform_request; LiteLLM preserves extra_body and forwards that wire payload. Legacy thinking.type="enabled" 400s on these models.
+    - 'adaptive': Anthropic and Azure AI Claude Opus 4.7+ and Anthropic Claude Fable 5. Normalize provider labels by stripping/lowercasing and treating underscores as spaces, so both bundled `Azure AI` and custom/project `azure_ai` rows trigger the Azure branch. Map time to effort. Anthropic rows send top-level thinking={type:"adaptive", display:"summarized"} plus reasoning_effort so LiteLLM maps effort into output_config.effort. Azure AI rows must send extra_body={thinking:{type:"adaptive", display:"summarized"}, output_config:{effort}} because AzureAIStudioConfig's OpenAI-style optional-param filtering drops top-level thinking/reasoning_effort before transform_request; LiteLLM preserves extra_body and forwards that wire payload. Legacy thinking.type="enabled" 400s on these models. Fable's 128k maximum is an output limit, not a configurable thinking budget, so its `max_reasoning_tokens` value is 0.
     - 'none': No reasoning parameters.
 
 % LLM Invocation:
@@ -234,8 +234,8 @@
     - If model doesn't support structured output, parse response as JSON and validate.
 
 % Response Processing:
-    - Extract result from response.choices[0].message.content.
-    - Handle None content: Retry with cache bypass (modify prompt slightly).
+    - Extract result from response.choices[0].message.content. Preserve Anthropic's raw `stop_reason="refusal"` through LiteLLM's provider-specific message fields because LiteLLM versions that map it to generic `stop` otherwise leave only empty content.
+    - Handle an Anthropic refusal with empty content by trying the next model candidate; do not retry the same request as a cache bypass. Handle other None content as a likely cache issue and retry with cache bypass (modify prompt slightly).
     - Handle malformed JSON (excessive trailing newlines causing truncation): Retry with cache bypass.
     - Parse JSON strings: Try fenced ```json blocks first, then balanced JSON object extraction, then fence cleaning.
     - Repair truncated JSON by attempting various closures.

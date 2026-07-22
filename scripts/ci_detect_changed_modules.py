@@ -49,11 +49,6 @@ EXCLUDED_MODULE_BASENAMES = {
     # it can enter interactive agent auth while trying to rewrite the full
     # generator, and the reviewed manifest/schema/tests are the audit surface.
     "generate_model_catalog",
-    # Direct provider dispatch is integration-sensitive: Fable's adaptive
-    # request shape is covered by focused invocation tests, while a headless
-    # prompt regeneration can produce an unusable usage example. Keep this
-    # module on the reviewed direct-code path rather than auto-healing it.
-    "llm_invoke",
 }
 
 # Prompt file names follow prompts/[subdir/...]/{basename}_{language}.prompt.

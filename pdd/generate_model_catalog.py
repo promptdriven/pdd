@@ -669,10 +669,11 @@ def _infer_max_reasoning_tokens(model_id: str, litellm_provider: str, entry: dic
     if root in _ANTHROPIC_PROVIDERS:
         if _is_adaptive_claude_model(model_id, litellm_provider):
             # adaptive serialization doesn't read this value, but match the
-            # reviewed direct-provider contract. Fable retains its full 128k
-            # reasoning allowance; the Opus adaptive rows retain their 16k cap.
+            # reviewed direct-provider contract. Fable's 128k is an output
+            # limit, not a configurable thinking budget; its adaptive rows
+            # therefore report no max reasoning-token value.
             if _normalize_model_name(model_id) == "claude-fable-5":
-                return 128000
+                return 0
             return 16000
         return 128000
     return 0
@@ -1394,7 +1395,7 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "model_rank_source": "platform-default",
         "base_url": "",
         "api_key": "ANTHROPIC_API_KEY",
-        "max_reasoning_tokens": 128000,
+        "max_reasoning_tokens": 0,
         "structured_output": True,
         "reasoning_type": "adaptive",
         "location": "",

@@ -253,6 +253,43 @@ if _AnthropicConfigOpus47 is not None:
     except Exception as _err:  # pylint: disable=broad-except
         logger.error("[opus_4_7_patch] map_openai_params patch failed: %s", _err)
 
+    # LiteLLM 1.84 maps Anthropic's `stop_reason="refusal"` to the generic
+    # OpenAI `stop` reason and emits an empty message. Preserve the original
+    # provider signal so response processing can fall back instead of treating
+    # a legitimate safety refusal as a corrupt cache entry.
+    try:
+        _existing_transform = _AnthropicConfigOpus47.transform_parsed_response
+        if not getattr(_existing_transform, "_pdd_refusal_reason_patched", False):
+            _orig_transform_parsed_response = _existing_transform
+
+            def _patched_transform_parsed_response(
+                self, completion_response, *args, **kwargs
+            ):  # pylint: disable=function-redefined
+                result = _orig_transform_parsed_response(
+                    self, completion_response, *args, **kwargs
+                )
+                if not isinstance(completion_response, dict):
+                    return result
+                stop_reason = completion_response.get("stop_reason")
+                if stop_reason != "refusal":
+                    return result
+                try:
+                    message = result.choices[0].message
+                    fields = getattr(message, "provider_specific_fields", None)
+                    fields = dict(fields) if isinstance(fields, dict) else {}
+                    fields["anthropic_stop_reason"] = stop_reason
+                    message.provider_specific_fields = fields
+                except (AttributeError, IndexError, TypeError):
+                    logger.warning("[anthropic_refusal_patch] Could not preserve refusal signal")
+                return result
+
+            _patched_transform_parsed_response._pdd_refusal_reason_patched = True
+            _AnthropicConfigOpus47.transform_parsed_response = (
+                _patched_transform_parsed_response
+            )
+    except Exception as _err:  # pylint: disable=broad-except
+        logger.error("[anthropic_refusal_patch] transform patch failed: %s", _err)
+
 # Bedrock Converse uses AmazonConverseConfig — a separate class that does
 # NOT inherit from AnthropicConfig — so the patches above don't reach it
 # directly. In 1.80.x, Converse's `map_openai_params` calls
@@ -547,6 +584,27 @@ class SchemaValidationError(Exception):
         super().__init__(message)
         self.raw_response = raw_response
         self.item_index = item_index
+
+
+class ProviderRefusalError(Exception):
+    """Raised when a provider returns a successful but unusable refusal.
+
+    This is separate from cache corruption: callers should try the next model
+    candidate rather than retrying the same request with cache bypass.
+    """
+
+
+def _response_was_refused(response_item: Any) -> bool:
+    """Return whether LiteLLM preserved Anthropic's refusal stop reason."""
+    try:
+        message = response_item.choices[0].message
+        fields = getattr(message, "provider_specific_fields", None)
+        if isinstance(fields, dict) and fields.get("anthropic_stop_reason") == "refusal":
+            return True
+        refusal = getattr(message, "refusal", None)
+        return isinstance(refusal, str) and bool(refusal)
+    except (AttributeError, IndexError, TypeError):
+        return False
 
 
 class CloudFallbackError(Exception):
@@ -6144,6 +6202,10 @@ def llm_invoke(
 
                         # Check if raw_result is None (likely cached corrupted data)
                         if raw_result is None:
+                            if _response_was_refused(resp_item):
+                                raise ProviderRefusalError(
+                                    f"{model_name_litellm} refused response item {i}"
+                                )
                             logger.warning(f"[WARNING] LLM returned None content for item {i}, likely due to corrupted cache. Retrying with cache bypass...")
                             # Retry with cache bypass by modifying the prompt slightly
                             if (
@@ -6719,6 +6781,18 @@ def llm_invoke(
                 if verbose:
                     logger.debug(f"Raw response that failed validation: {repr(e.raw_response)}")
                 break  # Break inner loop, try next model candidate
+
+            except ProviderRefusalError as e:
+                last_exception = e
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.provider_refusal",
+                    attempt_id=attempt_id,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                )
+                logger.warning("[REFUSAL] %s. Trying next model.", e)
+                break
 
             except litellm.ContextWindowExceededError as e:
                 # Post-call safety net: model rejected prompt as too large after the pre-call

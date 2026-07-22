@@ -6196,6 +6196,58 @@ class TestLlmInvokeWithMockedLLM:
 
         assert result["result"] == "Retry success"
 
+    def test_anthropic_refusal_falls_back_without_cache_retry(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """A Fable refusal must advance to another candidate, not retry itself."""
+        csv_path = tmp_path / "models.csv"
+        csv_path.write_text(
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_reasoning_tokens\n"
+            "Anthropic,claude-fable-5,1,2,1300,KEY_A,True,adaptive,0\n"
+            "OpenAI,model-b,1,2,1200,KEY_B,True,none,0\n"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("KEY_A", "sk-aaaa1234567890123456")
+        monkeypatch.setenv("KEY_B", "sk-bbbb1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "claude-fable-5")
+
+        refusal_message = MagicMock()
+        refusal_message.content = None
+        refusal_message.provider_specific_fields = {"anthropic_stop_reason": "refusal"}
+        refusal_choice = MagicMock()
+        refusal_choice.message = refusal_message
+        refusal_response = MagicMock()
+        refusal_response.choices = [refusal_choice]
+        refusal_response._hidden_params = {}
+
+        success_message = MagicMock()
+        success_message.content = "fallback success"
+        success_choice = MagicMock()
+        success_choice.message = success_message
+        success_choice.finish_reason = "stop"
+        success_response = MagicMock()
+        success_response.choices = [success_choice]
+        success_response._hidden_params = {}
+
+        with patch.object(
+            llm_mod.litellm,
+            "completion",
+            side_effect=[refusal_response, success_response],
+        ) as completion:
+            result = llm_mod.llm_invoke(
+                prompt="Say {greeting}",
+                input_json={"greeting": "hello"},
+                strength=0.5,
+                use_cloud=False,
+            )
+
+        assert completion.call_count == 2
+        assert result["result"] == "fallback success"
+        assert result["model_name"] == "model-b"
+        assert result["attempted_models"] == ["claude-fable-5", "model-b"]
+
     def test_all_models_fail_raises_runtime_error(self, llm_mod, tmp_path, monkeypatch):
         csv_path = self._make_csv_file(tmp_path)
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
