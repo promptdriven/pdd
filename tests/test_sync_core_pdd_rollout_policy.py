@@ -1552,7 +1552,7 @@ def test_pdd1989_history_guard_does_not_skip_without_verified_marker(
     """Ordinary shallow checkouts keep the exact-base assertion fail-closed."""
     repo, candidate_sha, candidate_tree = _candidate_only_repo(tmp_path)
     if marker is None:
-        monkeypatch.delenv("PDD_CLOUD_SOURCE_IDENTITY_MODE")
+        monkeypatch.delenv("PDD_CLOUD_SOURCE_IDENTITY_MODE", raising=False)
     else:
         monkeypatch.setenv("PDD_CLOUD_SOURCE_IDENTITY_MODE", marker)
     monkeypatch.setenv("PDD_CANDIDATE_SHA", candidate_sha)
