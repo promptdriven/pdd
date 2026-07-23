@@ -2676,6 +2676,16 @@ def _has_thinking_or_reasoning_payload(litellm_kwargs: Dict[str, Any]) -> bool:
 # a Gemini 3 variant.
 _GEMINI_3_RE = re.compile(r"gemini-3(?:\.\d+)?(?=$|[-_./\s])", re.IGNORECASE)
 
+# Gemini 3.6 Flash and Gemini 3.5 Flash-Lite deprecated the sampling
+# parameters below. Match the stable IDs through any LiteLLM provider prefix,
+# and allow Google's normal dated/preview suffixes without broadening the rule
+# to older Gemini releases that still accept caller-controlled sampling.
+_GEMINI_NO_SAMPLING_RE = re.compile(
+    r"gemini-(?:3\.6-flash|3\.5-flash-lite)(?=$|[-_./\s])",
+    re.IGNORECASE,
+)
+_DEPRECATED_GEMINI_SAMPLING_PARAMETERS = ("temperature", "top_p", "top_k")
+
 
 def _is_gemini_3_model(model_name: Any) -> bool:
     """Return True when *model_name* belongs to the Gemini 3 family.
@@ -2697,6 +2707,40 @@ def _is_gemini_3_model(model_name: Any) -> bool:
     if not isinstance(model_name, str) or not model_name:
         return False
     return bool(_GEMINI_3_RE.search(model_name))
+
+
+def _drop_deprecated_gemini_sampling_parameters(
+    litellm_kwargs: Dict[str, Any], model_name: Any, verbose: bool = False
+) -> bool:
+    """Remove sampling fields deprecated by current Gemini Flash models.
+
+    Google ignores these fields for Gemini 3.6 Flash and Gemini 3.5
+    Flash-Lite and documents that future model generations will reject them.
+    The filtering is deliberately limited to those model families so older
+    Gemini and non-Gemini models retain their existing sampling behavior.
+
+    Returns True when at least one parameter was removed.
+    """
+    if not isinstance(model_name, str) or not model_name:
+        return False
+    if not _GEMINI_NO_SAMPLING_RE.search(model_name):
+        return False
+
+    removed = [
+        parameter
+        for parameter in _DEPRECATED_GEMINI_SAMPLING_PARAMETERS
+        if parameter in litellm_kwargs
+    ]
+    for parameter in removed:
+        litellm_kwargs.pop(parameter, None)
+
+    if removed and verbose:
+        logger.info(
+            "[INFO] %s does not use deprecated sampling parameters; omitted: %s",
+            model_name,
+            ", ".join(removed),
+        )
+    return bool(removed)
 
 
 def _maybe_clamp_gemini_3_temperature(
@@ -2786,6 +2830,10 @@ def _completion_with_attribution(
     kwargs: Dict[str, Any],
 ) -> Any:
     """Call litellm.completion while emitting safe attribution metadata."""
+    # Cache-bypass retries construct fresh kwargs. Apply the model contract at
+    # this shared boundary so none of those fallback paths can reintroduce
+    # deprecated Gemini sampling fields.
+    _drop_deprecated_gemini_sampling_parameters(kwargs, model)
     _emit_llm_attribution(
         context,
         "llm_invoke.litellm_request",
@@ -5121,14 +5169,6 @@ def llm_invoke(
                 # Use a local adjustable temperature to allow provider-specific fallbacks.
                 litellm_kwargs["temperature"] = current_temperature
 
-            # Gemini 3 family clamp: temperature < 1.0 is documented by litellm
-            # to cause infinite loops and degraded reasoning. Apply BEFORE the
-            # batch/single split so both litellm.completion and
-            # litellm.batch_completion paths are protected. See
-            # _maybe_clamp_gemini_3_temperature for the rationale.
-            if _maybe_clamp_gemini_3_temperature(litellm_kwargs, model_name_litellm, verbose):
-                current_temperature = 1
-
             # --- Resolve API key / credentials ---
             # The CSV api_key field may be:
             #   - Single env var (e.g. "ANTHROPIC_API_KEY") → pass as api_key=
@@ -6029,6 +6069,18 @@ def llm_invoke(
                             except (TypeError, ValueError):
                                 thinking["budget_tokens"] = effective_output_cap
 
+                # Gemini 3.6 Flash and 3.5 Flash-Lite deprecate all sampling
+                # parameters. Filter immediately before the batch/single split
+                # so later request construction cannot reintroduce them. Older
+                # Gemini 3 models retain the existing temperature=1 clamp.
+                if not _drop_deprecated_gemini_sampling_parameters(
+                    litellm_kwargs, model_name_litellm, verbose
+                ):
+                    if _maybe_clamp_gemini_3_temperature(
+                        litellm_kwargs, model_name_litellm, verbose
+                    ):
+                        current_temperature = 1
+
                 call_type_for_attribution = "batch_completion" if use_batch_mode else "completion"
                 _emit_llm_attribution(
                     attribution_context,
@@ -6067,11 +6119,8 @@ def llm_invoke(
                                 current_temperature = 1
                     except Exception:
                         pass
-                    # Gemini 3 temperature clamp now happens once, early —
-                    # see _maybe_clamp_gemini_3_temperature in section 5 above.
-                    # Both litellm.completion and litellm.batch_completion
-                    # paths are protected by the early clamp, so no per-call
-                    # override is needed here.
+                    # Gemini sampling compatibility is applied once before the
+                    # batch/single split, so no per-call override is needed.
                     if verbose:
                         logger.info(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
                     response = litellm.completion(**litellm_kwargs, timeout=LLM_CALL_TIMEOUT)
