@@ -465,7 +465,7 @@ def _get_filepath_from_architecture(
     Looks up the module in architecture.json that matches the given prompt
     filename and returns its filepath field if present.
 
-    Args:
+    Args: 
         architecture_path: Path to architecture.json file.
         prompt_filename: The prompt filename to search for (e.g., "models_findings_Python.prompt").
         basename: Optional basename for alternative matching (e.g., "models_findings").
@@ -490,19 +490,39 @@ def _get_filepath_from_architecture(
         context_name = _resolve_context_name_for_basename(basename) if basename else None
 
         # Try exact filename match first
-        for module in modules:
-            if not isinstance(module, dict):
-                continue
-            if module.get("filename") == prompt_filename:
-                return module.get("filepath"), module.get("filename")
+        exact_matches = [
+            module for module in modules
+            if isinstance(module, dict) and module.get("filename") == prompt_filename
+        ]
+        if len(exact_matches) == 1:
+            return exact_matches[0].get("filepath"), exact_matches[0].get("filename")
+        elif len(exact_matches) > 1:
+            if basename and "/" in basename:
+                safe_matches = [
+                    module for module in exact_matches
+                    if _module_filepath_matches_basename(module.get("filepath"), basename, context_name=context_name)
+                ]
+                if len(safe_matches) == 1:
+                    return safe_matches[0].get("filepath"), safe_matches[0].get("filename")
+            return None, None
 
         # Try case-insensitive filename match
         prompt_filename_lower = prompt_filename.lower()
-        for module in modules:
-            if not isinstance(module, dict):
-                continue
-            if module.get("filename", "").lower() == prompt_filename_lower:
-                return module.get("filepath"), module.get("filename")
+        ci_matches = [
+            module for module in modules
+            if isinstance(module, dict) and module.get("filename", "").lower() == prompt_filename_lower
+        ]
+        if len(ci_matches) == 1:
+            return ci_matches[0].get("filepath"), ci_matches[0].get("filename")
+        elif len(ci_matches) > 1:
+            if basename and "/" in basename:
+                safe_matches = [
+                    module for module in ci_matches
+                    if _module_filepath_matches_basename(module.get("filepath"), basename, context_name=context_name)
+                ]
+                if len(safe_matches) == 1:
+                    return safe_matches[0].get("filepath"), safe_matches[0].get("filename")
+            return None, None
 
         # Try basename + language match if provided
         if basename and language:
@@ -515,12 +535,21 @@ def _get_filepath_from_architecture(
             for candidate_basename in basename_candidates:
                 expected_filename = f"{candidate_basename}_{language}.prompt"
                 expected_filename_lower = expected_filename.lower()
-                for module in modules:
-                    if not isinstance(module, dict):
-                        continue
-                    module_filename = module.get("filename", "")
-                    if module_filename.lower() == expected_filename_lower:
-                        return module.get("filepath"), module.get("filename")
+                cand_matches = [
+                    module for module in modules
+                    if isinstance(module, dict) and module.get("filename", "").lower() == expected_filename_lower
+                ]
+                if len(cand_matches) == 1:
+                    return cand_matches[0].get("filepath"), cand_matches[0].get("filename")
+                elif len(cand_matches) > 1:
+                    if "/" in basename:
+                        safe_matches = [
+                            module for module in cand_matches
+                            if _module_filepath_matches_basename(module.get("filepath"), basename, context_name=context_name)
+                        ]
+                        if len(safe_matches) == 1:
+                            return safe_matches[0].get("filepath"), safe_matches[0].get("filename")
+                    return None, None
 
             # Nested basenames must not borrow an unrelated flat architecture entry.
             # Only accept a flat filename match when the module filepath also aligns
@@ -542,7 +571,6 @@ def _get_filepath_from_architecture(
 
     except (FileNotFoundError, json.JSONDecodeError, TypeError):
         return None, None
-
 
 @dataclass
 class Fingerprint:

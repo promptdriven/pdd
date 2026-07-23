@@ -4398,3 +4398,146 @@ def test_augment_architecture_from_pr_branch_dict_format_merges_modules(tmp_path
         "Dict-format PR architecture modules should be merged, "
         "but isinstance(pr_arch, list) check at agentic_sync.py:167 silently drops them"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1677 (cycle 1): ambiguous 'main' stem must be resolved via branch context
+# ---------------------------------------------------------------------------
+
+
+class TestAgenticSyncDisambiguatesViabranchContext:
+    """Issue #1677 cycle 1 regression: LLM returns bare 'main' with two arch entries.
+
+    Live regression: pdd_cloud PR #3890 (2026-07-23).  Architecture had two 'main'
+    entries (``backend/functions/main.py`` and
+    ``extensions/github_pdd_app/terraform/main.tf``).  LLM emitted short module
+    ``"main"``.  After Bug 1 + Bug 2 were fixed in this branch, the ambiguity filter
+    _filter_invalid_basenames now correctly rejects bare ``"main"`` — but the current
+    code then gives up with "No valid modules to sync" instead of consulting the git
+    branch context to find the unambiguous path-qualified form.
+
+    Required behaviour (after fix):
+    - When ``stem_to_canonical["main"]`` is ``None`` (ambiguous) AND branch context
+      contains exactly one entry whose tail matches ``"main"``, that entry's path-
+      qualified form (``"backend/functions/main"``) must be used as the canonical
+      target for the child sync subprocess.
+    - ``module_targets["main"] == "backend/functions/main"``
+    - ``AsyncSyncRunner`` is constructed and runs (not a dead-end error return).
+
+    The test uses ``side_effect`` to simulate two calls to
+    ``_detect_modules_from_branch_diff``:
+    - Call 1 (step 7 initial detection, line ~2022): returns ``[]`` → LLM path taken,
+      LLM returns bare ``"main"``.
+    - Call 2 (disambiguation step in the fix): returns
+      ``["backend/functions/main"]`` → exactly one tail match for ``"main"`` →
+      canonical form resolved.
+
+    On current code only one call is made (returns ``[]``), the filter rejects
+    ``"main"`` as ambiguous, ``modules_to_sync`` becomes ``[]``, and
+    ``AsyncSyncRunner`` is never constructed → first assertion FAILS.
+    """
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"main": []}, []),
+    )
+    @patch(
+        "pdd.agentic_sync.load_prompt_template",
+        return_value="template {issue_content} {architecture_json}",
+    )
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_ambiguous_main_stem_resolved_via_branch_context(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_branch_diff,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_runner_cls,
+    ):
+        """LLM bare 'main' + two arch entries → branch context resolves to canonical.
+
+        Regression fixture for pdd_cloud PR #3890 (2026-07-23):
+        ``backend/functions/main.py`` and
+        ``extensions/github_pdd_app/terraform/main.tf`` both share the ``"main"``
+        basename stem.  The LLM identifier returned bare ``"main"``.
+
+        Expected after fix:
+        - ``AsyncSyncRunner`` is constructed (sync proceeds, not a dead-end error).
+        - ``module_targets["main"] == "backend/functions/main"`` (canonical form
+          derived from the one branch-diff entry whose tail is ``"main"``).
+        """
+        architecture = [
+            {
+                "filename": "main_Python.prompt",
+                "filepath": "backend/functions/main.py",
+                "dependencies": [],
+            },
+            {
+                "filename": "main_Terraform.prompt",
+                "filepath": "extensions/github_pdd_app/terraform/main.tf",
+                "dependencies": [],
+            },
+        ]
+        mock_gh_cmd.return_value = (
+            True,
+            json.dumps({"title": "Fix main function", "body": "Fix the main entry point", "comments_url": ""}),
+        )
+        mock_load_arch.return_value = (architecture, Path("/tmp/architecture.json"))
+
+        # Call 1 (step 7 initial branch detection): empty → LLM runs
+        # Call 2 (disambiguation after ambiguity detected): provides branch context
+        mock_branch_diff.side_effect = [[], ["backend/functions/main"]]
+
+        # LLM returns bare "main" — ambiguous given two architecture entries
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["main"]\nDEPS_VALID: true',
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"main": Path("/tmp")}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "done", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        run_agentic_sync(
+            "https://github.com/owner/repo/issues/1677",
+            quiet=True,
+        )
+
+        # On current code: _filter_invalid_basenames correctly rejects bare "main"
+        # (Bug 1+2 fix counts both arch entries → count=2 → ambiguous).
+        # modules_to_sync becomes [] → function returns early with
+        # "No valid modules to sync" before AsyncSyncRunner is ever constructed.
+        # After fix: branch context (call 2) provides exactly one tail-match for
+        # "main" ("backend/functions/main"), the fix substitutes the canonical form,
+        # and sync proceeds normally.
+        assert mock_runner_cls.called, (
+            "Bug #1677 (cycle 1, pdd_cloud PR #3890 regression 2026-07-23): "
+            "bare 'main' was correctly rejected by _filter_invalid_basenames "
+            "(two arch entries share the 'main' stem: backend/functions/main.py "
+            "and extensions/github_pdd_app/terraform/main.tf), but the fix must "
+            "then consult branch_modules to disambiguate before giving up. "
+            "AsyncSyncRunner was never constructed — the parent workflow terminated "
+            "leaving pdd_cloud PR #3890 incomplete."
+        )
+        runner_kwargs = mock_runner_cls.call_args.kwargs
+        module_targets = runner_kwargs.get("module_targets", {})
+        assert module_targets.get("main") == "backend/functions/main", (
+            f"Bug #1677 (cycle 1): after branch-context disambiguation, "
+            f"module_targets['main'] must be 'backend/functions/main' (the one "
+            f"branch-diff entry whose tail matches the bare 'main' stem), not "
+            f"{module_targets.get('main')!r}. Without this, the child sync "
+            f"subprocess receives bare 'main' and stops as ambiguous."
+        )

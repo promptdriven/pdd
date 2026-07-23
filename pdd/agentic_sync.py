@@ -26,6 +26,7 @@ from .agentic_sync_runner import (
     AsyncSyncRunner,
     _architecture_entry_aliases,
     _basename_from_architecture_filename,
+    _basename_from_architecture_filepath,
     _find_pdd_executable,
     build_dep_graph_from_architecture_data,
 )
@@ -350,8 +351,12 @@ def _filter_invalid_basenames(
     # Build basename counts from architecture.json filenames.
     # A count > 1 means the basename is ambiguous (e.g. "auth" from both
     # commands/auth_python.prompt and server/routes/auth_python.prompt).
-    from collections import Counter
-    basename_counts: Counter = Counter()
+    # We track distinct canonical module ids (filepath or filename) per stem
+    # to avoid double-counting when both filename and filepath contribute the
+    # same stem for the same entry (e.g. "layout" from both
+    # "layout_TypeScriptReact.prompt" and "layout.tsx" in the same entry).
+    from collections import Counter, defaultdict
+    stem_to_module_ids: defaultdict = defaultdict(set)
     for entry in architecture:
         if not isinstance(entry, dict):
             continue
@@ -366,10 +371,15 @@ def _filter_invalid_basenames(
         if filename.endswith("_LLM.prompt"):
             continue
 
+        # Canonical module id: use filepath when available (most stable identity),
+        # fall back to filename. This ensures filename and filepath contributions
+        # from the same entry do not inflate the count.
+        canonical_id = entry.get("filepath") or filename
+
         # Try standard extraction (handles _python.prompt, _typescript.prompt, etc.)
         basename = extract_module_from_include(filename)
         if basename:
-            basename_counts[basename] += 1
+            stem_to_module_ids[basename].add(canonical_id)
         else:
             # Fallback for non-prompt filenames (e.g. "GitHubAppCTA.tsx" from
             # frontend/architecture.json). Strip known code extensions first,
@@ -380,7 +390,7 @@ def _filter_invalid_basenames(
                     stem = stem[: -len(ext)]
                     break
             if stem:
-                basename_counts[stem] += 1
+                stem_to_module_ids[stem].add(canonical_id)
 
         # Also extract basename from filepath (e.g. "src/app/dashboard/page.tsx"
         # -> "page"). The filename field may use a different convention
@@ -388,19 +398,20 @@ def _filter_invalid_basenames(
         filepath = entry.get("filepath", "")
         if filepath and not filepath.endswith("_LLM.prompt"):
             fp_stem = Path(filepath).stem  # "page" from "page.tsx"
-            if fp_stem and fp_stem not in basename_counts:
-                basename_counts[fp_stem] += 1
+            if fp_stem:
+                stem_to_module_ids[fp_stem].add(canonical_id)
 
-    known_basenames = set(basename_counts.keys())
+    # Convert to counts of distinct modules per stem.
+    basename_counts: Counter = Counter({stem: len(ids) for stem, ids in stem_to_module_ids.items()})
 
     valid = []
     for m in candidate_modules:
-        if m in known_basenames:
-            # Exact match (e.g. "agentic_bug_orchestrator")
+        if m in basename_counts and basename_counts[m] == 1:
+            # Exact unambiguous match (e.g. "agentic_bug_orchestrator")
             valid.append(m)
         elif "/" in m:
             tail = m.rsplit("/", 1)[-1]
-            if tail in known_basenames:
+            if tail in basename_counts:
                 # Path-qualified basename from branch diff (e.g.
                 # "frontend/components/layout/Sidebar"). The directory path
                 # already disambiguates even if the bare tail appears multiple
@@ -413,7 +424,6 @@ def _filter_invalid_basenames(
         else:
             invalid.append(m)
     return valid, invalid
-
 
 def _load_architecture_json(
     project_root: Path,
@@ -2130,6 +2140,29 @@ def run_agentic_sync(
     if invalid_basenames:
         if not quiet:
             console.print(f"[yellow]Warning: Skipping {len(invalid_basenames)} basenames not found in architecture.json: {invalid_basenames}[/yellow]")
+
+    # 9.5.1 Disambiguate rejected basenames using branch context (second call).
+    # When a bare stem like "main" is rejected as ambiguous (two architecture entries
+    # share the same leaf name), a second call to _detect_modules_from_branch_diff
+    # can provide the disambiguating path context.  If exactly one branch module's
+    # tail matches the rejected stem, re-accept the bare basename and record the
+    # path-qualified canonical form for child sync subprocess dispatch.
+    # Fixes pdd_cloud PR #3890 (2026-07-23): bare "main" terminated the sync
+    # instead of resolving to "backend/functions/main" via branch context.
+    branch_context_overrides: Dict[str, str] = {}
+    if invalid_basenames:
+        _branch_context_modules = _detect_modules_from_branch_diff(project_root)
+        if _branch_context_modules:
+            _still_invalid = []
+            for _bare in invalid_basenames:
+                _tail_matches = [bm for bm in _branch_context_modules if bm.rsplit("/", 1)[-1] == _bare]
+                if len(_tail_matches) == 1:
+                    branch_context_overrides[_bare] = _tail_matches[0]
+                    modules_to_sync.append(_bare)
+                else:
+                    _still_invalid.append(_bare)
+            invalid_basenames = _still_invalid
+
     if not modules_to_sync:
         msg = f"No valid modules to sync (all basenames were invalid: {invalid_basenames})"
         if use_github_state:
@@ -2258,6 +2291,37 @@ def run_agentic_sync(
         "cwd": project_root,
     } if use_github_state else None
 
+    # Build module_targets mapping from architecture filepath data.
+    # Maps each bare basename to the canonical path-qualified form derived from
+    # architecture.json filepath, so child sync subprocesses receive the correct
+    # path rather than an ambiguous bare leaf basename (e.g. "page" →
+    # "frontend/src/app/login/page" when architecture filepath is unambiguous).
+    stem_to_canonical: Dict[str, Optional[str]] = {}
+    for _entry in (architecture or []):
+        if not isinstance(_entry, dict):
+            continue
+        _filepath = _entry.get("filepath", "")
+        if not _filepath or _filepath.endswith("_LLM.prompt"):
+            continue
+        _canonical = _basename_from_architecture_filepath(_filepath)
+        if not _canonical:
+            continue
+        _stem = Path(_filepath).stem
+        if _stem in stem_to_canonical:
+            if stem_to_canonical[_stem] != _canonical:
+                stem_to_canonical[_stem] = None  # ambiguous — two entries share the same stem
+        else:
+            stem_to_canonical[_stem] = _canonical
+    module_targets: Dict[str, str] = {}
+    for _m in modules_to_sync:
+        if "/" in _m:
+            module_targets[_m] = _m  # already path-qualified — keep as-is
+        else:
+            _resolved = stem_to_canonical.get(_m)
+            if _resolved is None and _m in branch_context_overrides:
+                _resolved = branch_context_overrides[_m]
+            module_targets[_m] = _resolved if _resolved else _m
+
     if durable:
         runner = DurableSyncRunner(
             basenames=modules_to_sync,
@@ -2286,6 +2350,7 @@ def run_agentic_sync(
             issue_url=issue_url,
             module_cwds=module_cwds,
             initial_cost=llm_cost,
+            module_targets=module_targets,
         )
 
     runner_success, runner_msg, total_cost = runner.run()
