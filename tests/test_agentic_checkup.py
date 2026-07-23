@@ -614,6 +614,37 @@ class TestRunAgenticCheckup:
         assert model == "anthropic"
         mock_orchestrator.assert_called_once()
 
+    @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="pddrc: test")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_fresh_start_is_forwarded_to_orchestrator(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_orchestrator,
+    ):
+        mock_gh_cmd.side_effect = [
+            (True, json.dumps({"title": "Check CRM", "body": "Run full checkup"})),
+            (True, "[]"),
+        ]
+        mock_orchestrator.return_value = (True, "Checkup complete", 0.50, "anthropic")
+
+        success, _msg, _cost, _model = run_agentic_checkup(
+            "https://github.com/owner/repo/issues/1", quiet=True, fresh_start=True
+        )
+
+        assert success
+        assert mock_orchestrator.call_args.kwargs["fresh_start"] is True
+
     @patch("pdd.agentic_checkup._post_error_comment")
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")

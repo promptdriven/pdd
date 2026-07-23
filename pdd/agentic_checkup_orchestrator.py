@@ -6382,6 +6382,7 @@ def run_agentic_checkup_orchestrator(
     test_scope: str = "full",
     defer_step5_to_github_checks: bool = False,
     start_step_override: Optional[Union[int, float]] = None,
+    fresh_start: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """Public entry point for the agentic checkup orchestrator.
 
@@ -6423,6 +6424,7 @@ def run_agentic_checkup_orchestrator(
             test_scope=test_scope,
             defer_step5_to_github_checks=defer_step5_to_github_checks,
             start_step_override=start_step_override,
+            _force_skip_state_load=fresh_start,
         )
 
     # PR-mode rerun loop. ``refresh_count`` is initialized from disk so a
@@ -6467,7 +6469,7 @@ def run_agentic_checkup_orchestrator(
                 # on restarts so a flaky GH state load can't reload
                 # stale cached step outputs even if clear_workflow_state's
                 # DELETE silently failed.
-                _force_skip_state_load=is_restart_iteration,
+                _force_skip_state_load=(fresh_start or is_restart_iteration),
                 # External review Finding 2: replay the previous
                 # iteration's posted-step-comments set so dedup is
                 # honored across restarts.

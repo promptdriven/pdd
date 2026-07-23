@@ -1599,6 +1599,7 @@ def run_agentic_checkup(
     gate_timeout: float = 60.0,
     gate_allow: Tuple[str, ...] = (),
     start_step_override: Optional[Union[int, float]] = None,
+    fresh_start: bool = False,
     cwd: Optional[Path] = None,
     prompt_repair: str = "off",
     max_prompt_repair_rounds: int = 1,
@@ -2341,6 +2342,7 @@ def run_agentic_checkup(
                         final_gate and full_suite_source == "github-checks"
                     ),
                     start_step_override=start_step_override,
+                    fresh_start=fresh_start,
                 )
             )
     except Exception as exc:

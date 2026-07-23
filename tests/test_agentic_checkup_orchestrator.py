@@ -308,6 +308,28 @@ class TestHappyPath:
         assert cost == pytest.approx(1.0)  # 10 steps x 0.1 each
         assert model == "gpt-4"
 
+    def test_fresh_start_skips_persisted_workflow_state(
+        self, mock_dependencies, default_args
+    ):
+        """A requested fresh start cannot silently resume a cached checkup."""
+        mock_run, _, _, _ = mock_dependencies
+        stale_state = {
+            "last_completed_step": 7,
+            "step_outputs": {"7": ALL_ISSUES_FIXED},
+            "total_cost": 9.0,
+        }
+        with patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(stale_state, 123),
+        ) as load_state:
+            success, message, _cost, _model = run_agentic_checkup_orchestrator(
+                **default_args, fresh_start=True
+            )
+
+        assert success is True, message
+        load_state.assert_not_called()
+        assert mock_run.call_count == 10
+
     def test_cost_accumulation(self, mock_dependencies, default_args):
         """Costs from all steps should be accumulated."""
         mock_run, _, _, _ = mock_dependencies

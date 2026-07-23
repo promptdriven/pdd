@@ -321,6 +321,12 @@ def _emit_agentic_review_loop_json(
     help="Recovery override: start the legacy checkup workflow from this step.",
 )
 @click.option(
+    "--fresh-start",
+    is_flag=True,
+    default=False,
+    help="Discard persisted checkup workflow state and run every step from the beginning.",
+)
+@click.option(
     "--no-github-state",
     is_flag=True,
     default=False,
@@ -808,6 +814,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     no_fix: bool,
     timeout_adder: float,
     start_step: Optional[str],
+    fresh_start: bool,
     no_github_state: bool,
     pr_url: Optional[str],
     issue_url_opt: Optional[str],
@@ -1527,6 +1534,12 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "--start-step applies to the legacy checkup workflow, not --review-loop.",
             param_hint="'--start-step'",
         )
+    if fresh_start and start_step is not None:
+        raise click.BadParameter(
+            "--fresh-start cannot be combined with --start-step; a fresh start "
+            "always begins at step 1.",
+            param_hint="'--fresh-start'",
+        )
     if review_only and not review_loop:
         raise click.BadParameter(
             "--review-only requires --review-loop.",
@@ -1671,6 +1684,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             full_suite_source=full_suite_source,
             github_checks_blocking=github_checks_blocking,
             start_step_override=start_step_override,
+            fresh_start=fresh_start,
             review_loop=review_loop,
             agentic_review_loop=agentic_review_loop,
             agentic_artifact_path=(
