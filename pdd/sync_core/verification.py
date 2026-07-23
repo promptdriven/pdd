@@ -77,6 +77,19 @@ _TERRA_SOL_COMPOSED_PROFILE_BYTES = (
     "033591bdbf15b8833802a91b20eb6d5e86dd870f200a49598a9bb5a145eb6f16",
 )
 
+# Gemini 3.6 installs two future prompt transitions after the Terra/Sol
+# reconciliation was consumed. Bind that policy evolution and the only
+# permitted current/future profile bytes exactly so the historical Terra/Sol
+# overlay cannot become generic replay authority.
+_GEMINI_36_PHASE_A_SCHEMA_2_HISTORY = (
+    "0b00131438c93244513b77346ae2649d1073414621f30f536e2f6ae55ee7d9ee",
+    "e53927642e3ffbe1655bb7e10f9d298fb33833b3598b47d3019be2fcf922da36",
+)
+_GEMINI_36_PROFILE_BYTES = (
+    "033591bdbf15b8833802a91b20eb6d5e86dd870f200a49598a9bb5a145eb6f16",
+    "c3f9d1344b067ba8640db6da706a8c17f13fcd47b09805b786e58a65fca6169e",
+)
+
 
 class VerificationProfileError(ValueError):
     """Raised when protected verification-profile data cannot be parsed."""
@@ -2294,7 +2307,57 @@ def _load_requirement_transition_authorizations(
             _TERRA_SOL_COMPOSED_PROFILE_BYTES[1],
         )
     )
-    if terra_sol_reconciliation or terra_sol_consumed_state:
+    policy_digests = (
+        (
+            hashlib.sha256(protected_policy).hexdigest(),
+            hashlib.sha256(candidate_policy).hexdigest(),
+        )
+        if protected_policy is not None and candidate_policy is not None
+        else None
+    )
+    profile_digests = (
+        (
+            hashlib.sha256(policies[0]).hexdigest(),
+            hashlib.sha256(policies[1]).hexdigest(),
+        )
+        if policies[0] is not None and policies[1] is not None
+        else None
+    )
+    gemini_36_terra_sol_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        in {
+            (
+                _GEMINI_36_PHASE_A_SCHEMA_2_HISTORY,
+                (_GEMINI_36_PROFILE_BYTES[0], _GEMINI_36_PROFILE_BYTES[0]),
+            ),
+            (
+                (
+                    _GEMINI_36_PHASE_A_SCHEMA_2_HISTORY[1],
+                    _GEMINI_36_PHASE_A_SCHEMA_2_HISTORY[1],
+                ),
+                (_GEMINI_36_PROFILE_BYTES[0], _GEMINI_36_PROFILE_BYTES[0]),
+            ),
+            (
+                (
+                    _GEMINI_36_PHASE_A_SCHEMA_2_HISTORY[1],
+                    _GEMINI_36_PHASE_A_SCHEMA_2_HISTORY[1],
+                ),
+                _GEMINI_36_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _GEMINI_36_PHASE_A_SCHEMA_2_HISTORY[1],
+                    _GEMINI_36_PHASE_A_SCHEMA_2_HISTORY[1],
+                ),
+                (_GEMINI_36_PROFILE_BYTES[1], _GEMINI_36_PROFILE_BYTES[1]),
+            ),
+        }
+    )
+    if (
+        terra_sol_reconciliation
+        or terra_sol_consumed_state
+        or gemini_36_terra_sol_state
+    ):
         # This candidate predates a dormant policy installation.  Expose only
         # its reviewed transitions while consuming the exact profile update,
         # then retain those transitions only at the exact consumed state.
@@ -2416,6 +2479,7 @@ def _load_requirement_transition_authorizations(
                 and not pdd1875_reconciliation
                 and not terra_sol_reconciliation
                 and not terra_sol_consumed_state
+                and not gemini_36_terra_sol_state
             ):
                 raise VerificationProfileError(
                     "candidate legacy bootstrap requirement transition changes "
