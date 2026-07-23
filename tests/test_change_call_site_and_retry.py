@@ -799,6 +799,83 @@ class TestDeterministicChangeJudges:
 
         assert judgment.passed, judgment.reasoning
 
+    def test_retry_fallback_judge_accepts_cloud_let_propagate_output(self) -> None:
+        """The exact release-gate output states an explicit final action."""
+        guidance = """\
+Build a Python data-import pipeline with three steps:
+1. `fetch_data(url)` — downloads JSON from a URL.
+2. `parse_data(raw)` — parses the JSON into records.
+3. `load_data(records, db)` — inserts records into a database.
+
+The pipeline runner `run_pipeline(url, db)` calls these in sequence.
+
+If `fetch_data(url)` raises a connection error (such as a network-related
+exception), `run_pipeline(url, db)` must catch this exception and retry the
+entire pipeline from the beginning.
+- Implement a retry limit of up to 3 attempts in total.
+- If the 3rd attempt still fails with a connection error, `run_pipeline` must
+  let the connection exception propagate to the caller.
+"""
+
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use at most 3 attempts. If the third attempt fails, let the "
+                "connection exception propagate to the caller."
+            ),
+            (
+                "Retry up to 3 times. If the 3rd attempt still fails, the "
+                "runner must let the final error propagate."
+            ),
+            (
+                "Use a maximum of 3 attempts. If the third attempt fails, "
+                "run_pipeline should explicitly let that exception propagate."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_accepts_let_error_propagate(
+        self, guidance: str
+    ) -> None:
+        """Explicitly letting an error propagate is affirmative fallback."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            "Use 3 attempts. If the third attempt fails, let it happen.",
+            (
+                "Use 3 attempts. If the third attempt fails, the runner must "
+                "not let the exception propagate."
+            ),
+            "Use 3 attempts. If the third attempt fails, let metrics propagate.",
+            "Use 3 attempts. If the third attempt fails, let success propagate.",
+            (
+                "Use 3 attempts. If the third attempt fails, let the exception "
+                "propagate and keep retrying."
+            ),
+            "If a connection error occurs, let the exception propagate.",
+            "Let the connection exception propagate to the caller.",
+            (
+                "Use 3 attempts. If validation fails, let the connection "
+                "exception propagate. If the third attempt fails."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_unsafe_let_forms(
+        self, guidance: str
+    ) -> None:
+        """Vague, negated, unrelated, or unbounded ``let`` is not fallback."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
+
     @pytest.mark.parametrize(
         "guidance",
         (
