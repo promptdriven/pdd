@@ -2975,7 +2975,13 @@ def _authorized_requirement_updates(
                 + _PDD_2168_TERRA_CONTINUATION_REQUIREMENT_TRANSITIONS
             )
         ):
-            updates[unit_id] = head[unit_id]
+            # Estimation callers deliberately load a sparse subset of profile
+            # rows.  The exact-state shortcut may still enumerate the full
+            # historical transition list, so only materialize a transition
+            # whose candidate unit was actually supplied.  Normal manifest
+            # verification supplies every unit and retains the same authority.
+            if unit_id in head:
+                updates[unit_id] = head[unit_id]
             continue
         if pdd2168_replay_continuation and authorization in (
             _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
