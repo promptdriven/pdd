@@ -1343,6 +1343,68 @@ def _post_final_gate_report(
     return f" Final report post failed for: {', '.join(failed)}."
 
 
+def _post_final_gate_success(
+    *,
+    owner: str,
+    repo: str,
+    issue_number: int,
+    pr_owner: str,
+    pr_repo: str,
+    pr_number: int,
+    has_issue: bool,
+    pr_url: str,
+    issue_url: str,
+    cwd: Path,
+    use_github_state: bool,
+) -> str:
+    """Post the terminal Step 8 success only after the complete gate passed.
+
+    Step 7 is the review-loop's evidence report.  It can be posted even when
+    findings remain, so it must never double as the final success signal.  A
+    Step 8 comment is therefore emitted only after Layer 1, Layer 2, and the
+    hosted-artifact publication contract have all passed.
+    """
+    if not use_github_state:
+        return ""
+
+    issue_line = issue_url if has_issue and issue_url else "not provided"
+    body = "\n".join(
+        [
+            "## Step 8/8: Final Gate Successful",
+            "",
+            f"PR: {pr_url}",
+            f"Issue: {issue_line}",
+            "final-gate-status: passed",
+            "final-gate-stage: complete",
+            "",
+            "Layer 1 PR checkup and the Step 7/8 review-loop final report both passed.",
+            "This checkup run is complete and ready for review.",
+        ]
+    )
+    pr_posted = post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
+    issue_posted = True
+    if has_issue:
+        issue_posted = post_step_comment(
+            repo_owner=owner,
+            repo_name=repo,
+            issue_number=issue_number,
+            step_num=8,
+            total_steps=8,
+            description="Final Gate Successful",
+            output=body,
+            cwd=cwd,
+            body=body,
+        )
+    if pr_posted and issue_posted:
+        return ""
+    failed = []
+    if not pr_posted:
+        failed.append("PR")
+    if not issue_posted:
+        failed.append("issue")
+    return f" Final Step 8 success post failed for: {', '.join(failed)}."
+
+
 def _review_loop_ship_verdict(
     final_state: Optional[Dict[str, Any]],
     *,
@@ -2653,11 +2715,28 @@ def run_agentic_checkup(
             # shippable; surface that distinctly from a loop that errored.
             message += " — verdict: not shippable (findings remain or "
             message += "verification is unverified)."
-        return _require_hosted_publication(
+        result = _require_hosted_publication(
             (ship, message, total_cost, (loop_model or orch_model)),
             hosted_artifact_reservation,
             canonical_passed=ship,
         )
+        if result[0]:
+            post_suffix = _post_final_gate_success(
+                owner=owner,
+                repo=repo,
+                issue_number=issue_number,
+                pr_owner=pr_owner,
+                pr_repo=pr_repo,
+                pr_number=pr_number,
+                has_issue=has_issue,
+                pr_url=pr_url or "",
+                issue_url=issue_url or "",
+                cwd=project_root,
+                use_github_state=use_github_state,
+            )
+            if post_suffix:
+                return result[0], result[1] + post_suffix, result[2], result[3]
+        return result
 
     # 6. Parse JSON report from step 7 output
     # The orchestrator returns "Checkup complete" only after enforcing Step 7's
