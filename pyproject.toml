@@ -67,7 +67,7 @@ dependencies = [
     "google-cloud-aiplatform>=1.3",
     "openai>=1.99.5",
     "pillow-heif==1.3.0",
-    "Pillow==12.2.0",
+    "Pillow==12.3.0",
     "textual",
     "python-dotenv==1.2.2",
     "PyYAML==6.0.3",
