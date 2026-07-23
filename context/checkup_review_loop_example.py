@@ -13,7 +13,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -161,6 +161,13 @@ class ReviewLoopConfig:
     # Hosted fallback/mirror commands serialized as artifact metadata only;
     # canonical reviewer prompts consume ``reviewer_commands`` above.
     artifact_reviewer_commands: Dict[str, str] = field(default_factory=dict)
+    # Hosted callers can retain final artifact bytes in trusted parent memory.
+    agentic_artifact_sink: Optional[Callable[[bytes], None]] = field(
+        default=None, repr=False
+    )
+    # Bounded Codex-only Terra/Sol convergence. The configured positive
+    # ``max_rounds`` is authoritative; clean Sol may finish early.
+    terra_sol: bool = False
 
 
 @dataclass
@@ -263,6 +270,12 @@ class ReviewLoopState:
     # config-time same-role run; ``"degraded (<role> unavailable)"`` only when
     # role independence was relaxed at runtime because a family was down.
     role_independence: str = "independent"
+    # Terra/Sol audit state. Role observations are distinct so missing Sol
+    # evidence can never inherit a valid Terra model.
+    terra_sol_mode: bool = False
+    max_rounds: Optional[int] = None
+    sol_model: str = ""
+    terra_model: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -345,13 +358,36 @@ def load_final_state(
     }
 
 
-def clear_final_state(cwd: Path, issue_number: int, pr_number: int) -> None:
-    """Delete any stale ``final-state.json`` before a fresh review-loop run.
+def clear_final_state(cwd: Path, issue_number: int, pr_number: int) -> bool:
+    """Delete and verify absence of stale ``final-state.json``.
 
     Ensures a later ``load_final_state`` cannot mistake a prior run's verdict for
     the current one. A run that returns before ``_finalize`` writes no new file,
-    so the post-clear absence reads as fail-closed. ``FileNotFoundError`` and
-    other ``OSError``s are swallowed.
+    so the post-clear absence reads as fail-closed. Returns ``True`` only when
+    the filesystem slot is physically absent; deletion and verification errors
+    return ``False`` and callers stop without consulting JSON parsing.
+    """
+    return True
+
+
+def write_terra_sol_progress(
+    *,
+    artifacts_dir: Path,
+    max_rounds: int,
+    round_number: int,
+    phase: str,
+    terminal_reason: str = "",
+    max_rounds_reached: bool = False,
+) -> None:
+    """Persist the bounded Terra/Sol watchdog state for external consumers.
+
+    The helper writes ``terra-sol-progress.json`` below ``artifacts_dir`` with
+    the current round, configured maximum, phase, terminal reason, and
+    ``max_rounds_reached`` flag, then updates process-level agentic progress.
+    Persistence and progress-update exceptions propagate to the caller. An
+    outer dispatcher starting a fresh invocation must therefore clear and
+    verify removal of stale ``final-state.json`` first, and fail closed without
+    downstream execution if this initial publication raises.
     """
     return None
 
@@ -464,8 +500,18 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
     "total_cost": 1.23,
     "last_model": "codex",
     "max_rounds_reached": False,
+    "rounds_completed": 1,
+    "max_rounds": 5,
     "max_cost_reached": False,
     "max_duration_reached": False,
+    # Terra/Sol-only identity fields are null in this ordinary independent run.
+    # A Terra/Sol clean verdict sets mode=true, reviewer/status to Codex/clean,
+    # and requires a delimiter-bounded, exact-case GPT-5.6 ``sol_model``.
+    "terra_sol_mode": False,
+    "sol_review_status": None,
+    "sol_model": None,
+    "terra_model": None,
+    "terra_fixer": None,
     "fix_attempts_by_key": {},
     "dispute_notes_by_key": {},
     "reviewer_feedback_by_key": {},
@@ -490,7 +536,9 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
             "changed_files": ["tests/test_foo.py", "pdd/foo.py"],
             "dispositions": {EXAMPLE_NORMALIZED_FINDING["key"]: "fixed"},
             "rationales": {
-                EXAMPLE_NORMALIZED_FINDING["key"]: "Added the missing regression coverage.",
+                EXAMPLE_NORMALIZED_FINDING[
+                    "key"
+                ]: "Added the missing regression coverage.",
             },
             "round_number": 1,
             "fixer_result": "attempted",
@@ -587,6 +635,7 @@ def _demo() -> None:
     """Print the public contract this example documents."""
     import sys
     import os
+
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
     # Verify the runtime module exposes the documented public surface.
@@ -615,9 +664,15 @@ def _demo() -> None:
         print(f"  - {name}")
     print()
     print("Role aliases via parse_reviewers():")
-    print(f"  parse_reviewers('chatgpt,anthropic') -> {parse_reviewers('chatgpt,anthropic')}")
-    print(f"  parse_reviewers('openai,google')     -> {parse_reviewers('openai,google')}")
-    print(f"  parse_reviewers(['codex', 'claude']) -> {parse_reviewers(['codex', 'claude'])}")
+    print(
+        f"  parse_reviewers('chatgpt,anthropic') -> {parse_reviewers('chatgpt,anthropic')}"
+    )
+    print(
+        f"  parse_reviewers('openai,google')     -> {parse_reviewers('openai,google')}"
+    )
+    print(
+        f"  parse_reviewers(['codex', 'claude']) -> {parse_reviewers(['codex', 'claude'])}"
+    )
     print()
     print("Example final-report header:")
     print(EXAMPLE_FINAL_REPORT_HEADER)
