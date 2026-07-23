@@ -85,6 +85,11 @@ CHECKUP_STEP_MAX_RETRIES: Dict[Union[int, float], int] = {
 }
 
 TOTAL_STEPS = 8
+# A stale/live worktree cleanup must never hold a hosted checkup indefinitely.
+# Worktree removal is normally local metadata and completes in seconds; a
+# bounded failure lets the executor report a real error instead of consuming
+# the whole job while Git waits on a locked filesystem or child process.
+WORKTREE_REMOVE_TIMEOUT_SECONDS = 120.0
 
 # Canonical checkup step table — the single source of truth for the step
 # dispatch order, the fix-verify loop subset, and the stable telemetry id. Each
@@ -373,8 +378,15 @@ def _remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]:
             cwd=cwd,
             capture_output=True,
             check=True,
+            timeout=WORKTREE_REMOVE_TIMEOUT_SECONDS,
         )
         return True, ""
+    except subprocess.TimeoutExpired:
+        return (
+            False,
+            "Timed out removing existing worktree after "
+            f"{WORKTREE_REMOVE_TIMEOUT_SECONDS:.0f}s.",
+        )
     except subprocess.CalledProcessError as e:
         return False, e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
 
