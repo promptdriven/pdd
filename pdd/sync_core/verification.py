@@ -70,15 +70,29 @@ _PDD_2168_REBASED_PROFILE_BYTES = (
     "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
     "b4832ab48a0d0cf4570dc2de40ae3fe93dc406c03b3fd7807523f95cb8c62a7f",
 )
-# PR #1875 was reviewed before the #1998 campaign reached main.  Keep its
-# exact historical reconciliation distinct from #2168's final-gate transition.
-_PDD_1875_COMPOSED_SCHEMA_2_HISTORY = (
+# The replay campaign first composed the protected #1875 base.  It remains a
+# separate exact history: later #1875 transition authorizations may not erase
+# the protected-base evidence.
+_PDD_1875_COMPOSED_BASE_SCHEMA_2_HISTORY = (
     "2b96e538280ebb79db86d0dece4791d80f46dadcc93ba6ab4ad81182b9491d5f",
     "85fd63ba8a0b8e5e4d514d4bd96c5f7ac423c8fea3c413a074ef7bdf3acec880",
 )
-_PDD_1875_COMPOSED_PROFILE_BYTES = (
+_PDD_1875_COMPOSED_BASE_PROFILE_BYTES = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
     "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
+)
+
+# PR #1875 then consumed its four composed prompt transitions on the protected
+# 85fd/fe80 base and produced the 0b00/79ac candidate.  These bytes are also
+# the policy/profile boundary that #2168 was later rebased onto, but the
+# transition authorizations below remain the immutable #1875 evidence.
+_PDD_1875_COMPOSED_SCHEMA_2_HISTORY = (
+    "85fd63ba8a0b8e5e4d514d4bd96c5f7ac423c8fea3c413a074ef7bdf3acec880",
+    "0b00131438c93244513b77346ae2649d1073414621f30f536e2f6ae55ee7d9ee",
+)
+_PDD_1875_COMPOSED_PROFILE_BYTES = (
+    "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
+    "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
 )
 
 
@@ -1747,6 +1761,10 @@ def _is_exact_combined_requirement_reconciliation(
         (_PR1971_COMBINED_SCHEMA_2_HISTORY, _PR1971_COMBINED_PROFILE_BYTES),
         (_LEGACY_PDD_2168_SCHEMA_2_HISTORY, _LEGACY_PDD_2168_PROFILE_BYTES),
         (_PDD_2168_REBASED_SCHEMA_2_HISTORY, _PDD_2168_REBASED_PROFILE_BYTES),
+        (
+            _PDD_1875_COMPOSED_BASE_SCHEMA_2_HISTORY,
+            _PDD_1875_COMPOSED_BASE_PROFILE_BYTES,
+        ),
         (_PDD_1875_COMPOSED_SCHEMA_2_HISTORY, _PDD_1875_COMPOSED_PROFILE_BYTES),
     }
 
@@ -2032,6 +2050,7 @@ def _validate_schema_2_history_representation(
             _LEGACY_PDD_1989_SCHEMA_2_HISTORY,
             _LEGACY_PDD_2168_SCHEMA_2_HISTORY,
             _PDD_2168_REBASED_SCHEMA_2_HISTORY,
+            _PDD_1875_COMPOSED_BASE_SCHEMA_2_HISTORY,
             _PDD_1875_COMPOSED_SCHEMA_2_HISTORY,
         }
     ):
@@ -2353,6 +2372,10 @@ def _load_requirement_transition_authorizations(
             (
                 _PDD_2168_REBASED_SCHEMA_2_HISTORY,
                 _PDD_2168_REBASED_PROFILE_BYTES,
+            ),
+            (
+                _PDD_1875_COMPOSED_BASE_SCHEMA_2_HISTORY,
+                _PDD_1875_COMPOSED_BASE_PROFILE_BYTES,
             ),
             (
                 _PDD_1875_COMPOSED_SCHEMA_2_HISTORY,
