@@ -465,7 +465,7 @@ def _get_filepath_from_architecture(
     Looks up the module in architecture.json that matches the given prompt
     filename and returns its filepath field if present.
 
-    Args: 
+    Args:
         architecture_path: Path to architecture.json file.
         prompt_filename: The prompt filename to search for (e.g., "models_findings_Python.prompt").
         basename: Optional basename for alternative matching (e.g., "models_findings").
