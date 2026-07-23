@@ -22,6 +22,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
@@ -29,6 +30,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 from rich.console import Console
 
 from .agentic_common import (
+    JOB_TIMEOUT_MARGIN_SECONDS,
     provider_failure_workflow,
     DEFAULT_MAX_RETRIES,
     _sanitize_comment_body,
@@ -3506,13 +3508,23 @@ def _run_single_step(
 
     formatted_prompt = substitute_template_variables(prompt_template, context)
 
+    step_timeout = CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0) + timeout_adder
+    # ``run_agentic_task`` otherwise gives its retry cascade up to twice the
+    # passed timeout.  Checkup step timeouts are workflow-step budgets, not
+    # per-retry allowances: a silent build/interface/fix step must return to
+    # the orchestrator at its configured bound so the run can report or
+    # continue safely.  The shared runner reserves its cleanup margin from a
+    # supplied deadline, hence the compensating margin here preserves the
+    # advertised step timeout for the actual provider attempt.
+    step_deadline = time.time() + step_timeout + JOB_TIMEOUT_MARGIN_SECONDS
     success, output, cost, model = run_agentic_task(
         instruction=formatted_prompt,
         cwd=step_cwd,
         verbose=verbose,
         quiet=quiet,
         label=label,
-        timeout=CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0) + timeout_adder,
+        timeout=step_timeout,
+        deadline=step_deadline,
         stall_timeout=CHECKUP_STEP_STALL_TIMEOUTS.get(step_num),
         max_retries=CHECKUP_STEP_MAX_RETRIES.get(step_num, DEFAULT_MAX_RETRIES),
         reasoning_time=reasoning_time,

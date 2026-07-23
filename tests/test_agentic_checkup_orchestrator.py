@@ -1841,6 +1841,25 @@ class TestTimeouts:
                 f"Step {label}: expected timeout={expected}, got {timeout}"
             )
 
+    def test_step_timeout_bounds_the_entire_retry_chain(
+        self, mock_dependencies, default_args, monkeypatch
+    ):
+        """A step timeout must not be silently multiplied by retries."""
+        import pdd.agentic_checkup_orchestrator as mod
+
+        mock_run, _, _, _ = mock_dependencies
+        monkeypatch.setattr(mod.time, "time", lambda: 1_000.0)
+
+        run_agentic_checkup_orchestrator(**default_args)
+
+        for call_obj in mock_run.call_args_list:
+            label = call_obj.kwargs.get("label", "")
+            step_num = self._label_to_step_num(label)
+            timeout = CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0)
+            assert call_obj.kwargs["deadline"] == (
+                1_000.0 + timeout + mod.JOB_TIMEOUT_MARGIN_SECONDS
+            )
+
     def test_checkup_steps_disable_git_worktree_env(self, mock_dependencies, default_args):
         """Checkup agent steps must not leak GIT_WORK_TREE into repo test suites."""
         mock_run, _, _, _ = mock_dependencies
