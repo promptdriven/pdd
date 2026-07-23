@@ -1006,6 +1006,67 @@ def test_build_rows_includes_vertex_gemini_3_5_flash_ga_default(monkeypatch):
     assert row["interactive_only"] is False
 
 
+def test_build_rows_includes_new_gemini_flash_ga_routes_without_fake_scores(
+    monkeypatch,
+):
+    """New GA Gemini routes survive LiteLLM registry lag without fake ELO."""
+    fake_litellm = type("L", (), {"model_cost": {
+        "vertex_ai/zai-org/glm-4.7-maas": {
+            "mode": "chat",
+            "input_cost_per_token": 0.6e-6,
+            "output_cost_per_token": 2.2e-6,
+            "litellm_provider": "vertex_ai",
+            "supports_function_calling": True,
+        },
+    }})
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    monkeypatch.setattr(gmc, "_fetch_arena_elo", lambda **_kw: {})
+
+    rows = gmc.build_rows()
+    by_model = {row["model"]: row for row in rows}
+    expected = {
+        "gemini/gemini-3.6-flash": (1.5, 7.5, "Google Gemini"),
+        "vertex_ai/gemini-3.6-flash": (1.5, 7.5, "Google Vertex AI"),
+        "gemini/gemini-3.5-flash-lite": (0.3, 2.5, "Google Gemini"),
+        "vertex_ai/gemini-3.5-flash-lite": (0.3, 2.5, "Google Vertex AI"),
+    }
+
+    for model, (input_price, output_price, provider) in expected.items():
+        row = by_model[model]
+        assert row["provider"] == provider
+        assert row["input"] == input_price
+        assert row["output"] == output_price
+        assert row["coding_arena_elo"] == 0
+        assert row["model_rank_score"] == 0
+        assert row["model_rank_source"] == "platform-default"
+        assert row["context_limit"] == 1_048_576
+        assert row["structured_output"] is True
+        assert row["interactive_only"] is False
+
+
+def test_committed_csv_includes_new_gemini_flash_ga_routes():
+    """The bundled runtime catalog carries all supported direct/Vertex IDs."""
+    import csv
+
+    csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        by_model = {row["model"]: row for row in csv.DictReader(handle)}
+
+    expected_prices = {
+        "gemini/gemini-3.6-flash": ("1.5", "7.5"),
+        "vertex_ai/gemini-3.6-flash": ("1.5", "7.5"),
+        "gemini/gemini-3.5-flash-lite": ("0.3", "2.5"),
+        "vertex_ai/gemini-3.5-flash-lite": ("0.3", "2.5"),
+    }
+    for model, prices in expected_prices.items():
+        row = by_model[model]
+        assert (row["input"], row["output"]) == prices
+        assert row["coding_arena_elo"] == "0"
+        assert row["model_rank_score"] == "0"
+        assert row["model_rank_source"] == "platform-default"
+        assert row["context_limit"] == "1048576"
+
+
 def test_committed_csv_includes_vertex_gemini_3_5_flash_ga_default():
     """Issue #1364 / #1136: the committed catalog must ship the GA Vertex
     Gemini Flash row so PDD_MODEL_DEFAULT=vertex_ai/gemini-3.5-flash resolves

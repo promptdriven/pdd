@@ -104,6 +104,8 @@ Google Gemini,gemini/gemini-3.1-pro-preview,2.0,12.0,1456,11000,deepswe-solve-ra
 Google Gemini,gemini/gemini-3.1-pro-preview-customtools,2.0,12.0,1456,11000,deepswe-solve-rate,,GEMINI_API_KEY,0,True,effort,,False,
 Google Gemini,gemini/gemini-3-flash-preview,0.5,3.0,1437,10500,deepswe-solve-rate,,GEMINI_API_KEY,0,True,effort,,False,
 Google Gemini,gemini/gemini-2.5-flash,0.3,2.5,1300,1300,static-prefix,,GEMINI_API_KEY,0,True,effort,,False,
+Google Gemini,gemini/gemini-3.5-flash-lite,0.3,2.5,0,0,platform-default,,GEMINI_API_KEY,0,True,effort,,False,1048576
+Google Gemini,gemini/gemini-3.6-flash,1.5,7.5,0,0,platform-default,,GEMINI_API_KEY,0,True,effort,,False,1048576
 Google Vertex AI,vertex_ai/claude-opus-4-7,5.0,25.0,1565,15400,deepswe-solve-rate,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global,False,
 Google Vertex AI,vertex_ai/claude-sonnet-4-6,3.0,15.0,1525,13200,deepswe-solve-rate,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global,False,
 Google Vertex AI,gemini-3.5-flash,1.5,9.0,1442,12800,deepswe-solve-rate,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global,False,
@@ -123,6 +125,8 @@ Google Vertex AI,vertex_ai/deepseek-ai/deepseek-r1-0528-maas,1.35,5.4,1370,1370,
 Google Vertex AI,vertex_ai/moonshotai/kimi-k2-thinking-maas,0.6,2.5,1333,1333,static-prefix,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,none,global,False,
 Google Vertex AI,vertex_ai/claude-haiku-4-5,1.0,5.0,1316,1316,arena-elo-fallback,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global,False,
 Google Vertex AI,vertex_ai/minimaxai/minimax-m2-maas,0.3,1.2,1313,1313,static-prefix,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,none,global,False,
+Google Vertex AI,vertex_ai/gemini-3.5-flash-lite,0.3,2.5,0,0,platform-default,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global,False,1048576
+Google Vertex AI,vertex_ai/gemini-3.6-flash,1.5,7.5,0,0,platform-default,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global,False,1048576
 Heroku,heroku/claude-4-sonnet,3.0,15.0,1350,1350,static-prefix,,HEROKU_API_KEY,0,True,none,,False,
 Hyperbolic,hyperbolic/deepseek-ai/DeepSeek-R1-0528,3.0,3.0,1370,1370,static-prefix,,HYPERBOLIC_API_KEY,0,True,none,,False,
 Hyperbolic,hyperbolic/deepseek-ai/DeepSeek-R1,2.0,2.0,1340,1340,static-prefix,,HYPERBOLIC_API_KEY,0,True,none,,False,

@@ -56,6 +56,7 @@ PDD_1875_PROTECTED_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
 # prompt/profile reconciliations on the active branch.
 PDD_1875_COMPOSED_HEAD = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 TERRA_SOL_PROTECTED_BASE = "b27837fd7fbf681bdec2b7eb311348b642b27979"
+TERRA_SOL_COMPOSED_HEAD = "b3902318c35c279e49e6397838825c95bd568942"
 PR_1971_COMBINED_PROFILE_DIGEST = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
 )
@@ -632,9 +633,9 @@ def test_terra_sol_composed_reconciliation_is_exact(mutated_input: str) -> None:
     )
     inputs = {
         "base_policy": _git_blob(TERRA_SOL_PROTECTED_BASE, ROTATION_FILE),
-        "candidate_policy": ROTATION_FILE.read_bytes(),
+        "candidate_policy": _git_blob(TERRA_SOL_COMPOSED_HEAD, ROTATION_FILE),
         "base_profile": _git_blob(TERRA_SOL_PROTECTED_BASE, PROFILE_FILE),
-        "candidate_profile": PROFILE_FILE.read_bytes(),
+        "candidate_profile": _git_blob(TERRA_SOL_COMPOSED_HEAD, PROFILE_FILE),
     }
 
     assert verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
@@ -663,9 +664,11 @@ def test_terra_sol_composed_reconciliation_binds_prompt_bytes(authorization) -> 
         ROOT, "exact Terra/Sol protected history", TERRA_SOL_PROTECTED_BASE
     )
     base_profile = _git_blob(TERRA_SOL_PROTECTED_BASE, PROFILE_FILE)
-    candidate_profile = PROFILE_FILE.read_bytes()
+    candidate_profile = _git_blob(TERRA_SOL_COMPOSED_HEAD, PROFILE_FILE)
     base_prompt = _git_blob(TERRA_SOL_PROTECTED_BASE, ROOT / authorization.prompt_path)
-    candidate_prompt = (ROOT / authorization.prompt_path).read_bytes()
+    candidate_prompt = _git_blob(
+        TERRA_SOL_COMPOSED_HEAD, ROOT / authorization.prompt_path
+    )
 
     assert verification._transition_bytes_match(  # pylint: disable=protected-access
         authorization,
@@ -689,7 +692,7 @@ def test_terra_sol_composed_reconciliation_consumes_only_reviewed_scope() -> Non
         ROOT, "exact Terra/Sol protected history", TERRA_SOL_PROTECTED_BASE
     )
     manifest = build_unit_manifest(
-        ROOT, base_ref=TERRA_SOL_PROTECTED_BASE, head_ref="HEAD"
+        ROOT, base_ref=TERRA_SOL_PROTECTED_BASE, head_ref=TERRA_SOL_COMPOSED_HEAD
     )
 
     profiles = load_verification_profiles(ROOT, manifest)
@@ -697,6 +700,50 @@ def test_terra_sol_composed_reconciliation_consumes_only_reviewed_scope() -> Non
     assert not manifest.invalid_reasons
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
+
+
+def _new_requirement_authorizations(
+    base_ref: str, head_ref: str
+) -> tuple[verification._RequirementTransitionAuthorization, ...]:  # pylint: disable=protected-access
+    """Load newly installed rows through the production exact-ref boundary."""
+    manifest = build_unit_manifest(ROOT, base_ref=base_ref, head_ref=head_ref)
+    approved_aliases = verification.load_protected_aliases(ROOT, manifest)
+    base, base_invalid = verification._load_inputs(  # pylint: disable=protected-access
+        ROOT, manifest.base_ref, manifest.repository_id, approved_aliases
+    )
+    head, head_invalid = verification._load_inputs(  # pylint: disable=protected-access
+        ROOT, manifest.head_ref, manifest.repository_id, approved_aliases
+    )
+    assert not base_invalid
+    assert not head_invalid
+    _, _, new_authorizations = (
+        verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
+            ROOT, manifest, base, head, approved_aliases
+        )
+    )
+    return new_authorizations
+
+
+def test_gemini_phase_a_policy_binds_exactly_two_future_authorizations() -> None:
+    """The stable Phase-A policy contains only the two reviewed Gemini rows."""
+    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    current_profile, future_profile = verification._GEMINI_36_PROFILE_BYTES
+    rows = {
+        (item["prompt_path"], item["language_id"])
+        for item in policy["requirement_rotations"]
+        if item["base_policy_sha256"] == current_profile
+        and item["head_policy_sha256"] == future_profile
+    }
+
+    assert rows == {
+        ("pdd/prompts/generate_model_catalog_python.prompt", "python"),
+        ("pdd/prompts/llm_invoke_python.prompt", "python"),
+    }
+
+
+def test_gemini_phase_b_base_has_no_synthetic_new_authorizations() -> None:
+    """The merged Phase-A state cannot block later prompt-only consumption."""
+    assert _new_requirement_authorizations("HEAD", "HEAD") == ()
 
 
 def _git_blob(ref: str, path: Path) -> bytes:

@@ -8071,7 +8071,7 @@ class TestIssue796TypeScriptPythonValidation:
 
 
 # ============================================================================
-# TESTS: Gemini 3 temperature clamp (litellm warning prevention)
+# TESTS: Gemini 3 sampling compatibility
 # ============================================================================
 #
 # litellm emits the following warning when a Gemini 3 model is invoked with
@@ -8210,6 +8210,162 @@ class TestGemini3TemperatureClamp:
         accidentally make ``""`` truthy."""
         is_g3 = llm_mod._is_gemini_3_model
         assert is_g3("") is False
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "gemini/gemini-3.6-flash",
+            "vertex_ai/gemini-3.6-flash",
+            "gemini/gemini-3.5-flash-lite",
+            "vertex_ai/gemini-3.5-flash-lite",
+            "gemini-3.6-flash-preview-07-2026",
+        ],
+    )
+    def test_current_gemini_flash_models_drop_deprecated_sampling_parameters(
+        self, llm_mod, model_name
+    ):
+        kwargs = {
+            "temperature": 0.2,
+            "top_p": 0.8,
+            "top_k": 40,
+            "max_tokens": 123,
+        }
+
+        changed = llm_mod._drop_deprecated_gemini_sampling_parameters(
+            kwargs, model_name
+        )
+
+        assert changed is True
+        assert "temperature" not in kwargs
+        assert "top_p" not in kwargs
+        assert "top_k" not in kwargs
+        assert kwargs["max_tokens"] == 123
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "gemini/gemini-3.5-flash",
+            "vertex_ai/gemini-3.1-pro-preview",
+            "gemini/gemini-2.5-flash",
+            "openai/gpt-5.6",
+        ],
+    )
+    def test_sampling_parameter_drop_does_not_affect_older_or_other_models(
+        self, llm_mod, model_name
+    ):
+        kwargs = {"temperature": 0.2, "top_p": 0.8, "top_k": 40}
+
+        changed = llm_mod._drop_deprecated_gemini_sampling_parameters(
+            kwargs, model_name
+        )
+
+        assert changed is False
+        assert kwargs == {"temperature": 0.2, "top_p": 0.8, "top_k": 40}
+
+    @pytest.mark.parametrize(
+        ("provider", "model_name"),
+        [
+            ("Google Gemini", "gemini/gemini-3.6-flash"),
+            ("Google Vertex AI", "vertex_ai/gemini-3.5-flash-lite"),
+        ],
+    )
+    def test_current_gemini_flash_single_completion_omits_temperature(
+        self, llm_mod, tmp_path, monkeypatch, provider, model_name
+    ):
+        csv_path = self._make_csv(tmp_path, provider, model_name)
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", model_name)
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(
+            llm_mod.litellm, "completion", side_effect=capture_completion
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json={"topic": "physics"},
+                strength=0.5,
+                temperature=0.1,
+                time=0.0,
+                use_cloud=False,
+            )
+
+        assert "temperature" not in captured_kwargs
+        assert "top_p" not in captured_kwargs
+        assert "top_k" not in captured_kwargs
+
+    def test_current_gemini_flash_batch_completion_omits_sampling_parameters(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        model_name = "vertex_ai/gemini-3.6-flash"
+        csv_path = self._make_csv(tmp_path, "Google Vertex AI", model_name)
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", model_name)
+        captured_kwargs = {}
+
+        def capture_batch_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return [self._make_mock_response()]
+
+        with patch.object(
+            llm_mod.litellm,
+            "batch_completion",
+            side_effect=capture_batch_completion,
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json=[{"topic": "physics"}],
+                strength=0.5,
+                temperature=0.0,
+                time=0.0,
+                use_batch_mode=True,
+                use_cloud=False,
+            )
+
+        assert "temperature" not in captured_kwargs
+        assert "top_p" not in captured_kwargs
+        assert "top_k" not in captured_kwargs
+
+    def test_cache_bypass_completion_boundary_drops_sampling_parameters(
+        self, llm_mod
+    ):
+        """All three cache-bypass retry paths use this shared boundary."""
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        retry_kwargs = {
+            "model": "vertex_ai/gemini-3.6-flash",
+            "messages": [{"role": "user", "content": "retry"}],
+            "temperature": 1,
+            "top_p": 0.9,
+            "top_k": 20,
+        }
+        with patch.object(
+            llm_mod.litellm, "completion", side_effect=capture_completion
+        ):
+            llm_mod._completion_with_attribution(
+                context={},
+                attempt_id="retry-1",
+                call_type="completion_retry_cache_bypass",
+                model=retry_kwargs["model"],
+                provider="google vertex ai",
+                api_key_name="GOOGLE_APPLICATION_CREDENTIALS",
+                kwargs=retry_kwargs,
+            )
+
+        assert "temperature" not in captured_kwargs
+        assert "top_p" not in captured_kwargs
+        assert "top_k" not in captured_kwargs
 
     # ------------------------------------------------------------------
     # Pre-flight: Gemini 3 Flash with low temperature
