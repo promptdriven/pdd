@@ -276,29 +276,6 @@ test: ensure-dev-deps
 	@cd $(STAGING_DIR)
 	@conda run -n pdd --no-capture-output PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview PDD_RUN_REAL_LLM_TESTS=1 PDD_RUN_LLM_TESTS=1 PDD_PATH=$(abspath $(PDD_DIR)) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv -n auto $(TESTS_DIR)
 
-.PHONY: test-gemini-3-6-live
-test-gemini-3-6-live: ensure-dev-deps
-	@test -n "$${GOOGLE_CLOUD_PROJECT:-$${VERTEXAI_PROJECT:-}}" || { \
-		echo "Set GOOGLE_CLOUD_PROJECT or VERTEXAI_PROJECT to a non-production Vertex project."; \
-		exit 2; \
-	}
-	@test -f "$${GOOGLE_APPLICATION_CREDENTIALS:-$${HOME}/.config/gcloud/application_default_credentials.json}" || { \
-		echo "Set GOOGLE_APPLICATION_CREDENTIALS or run 'gcloud auth application-default login'."; \
-		exit 2; \
-	}
-	@test "$${GOOGLE_CLOUD_PROJECT:-$${VERTEXAI_PROJECT:-}}" != "prompt-driven-development" || { \
-		echo "Refusing to run Gemini live acceptance tests against production."; \
-		exit 2; \
-	}
-	@conda run -n pdd --no-capture-output env \
-		PDD_RUN_REAL_LLM_TESTS=1 \
-		PDD_MODEL_DEFAULT=vertex_ai/gemini-3.6-flash \
-		PDD_FORCE_LOCAL=1 \
-		GOOGLE_APPLICATION_CREDENTIALS="$${GOOGLE_APPLICATION_CREDENTIALS:-$${HOME}/.config/gcloud/application_default_credentials.json}" \
-		VERTEXAI_LOCATION=global \
-		PYTHONPATH=$(CURDIR):$$PYTHONPATH \
-		python -m pytest -m real tests/test_gemini_3_6_live.py -vv
-
 # Run tests with coverage
 coverage: ensure-dev-deps
 	@echo "Running tests with coverage"
