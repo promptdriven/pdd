@@ -229,10 +229,7 @@ _CONNECTIVE_ONLY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_ACTION_LIST_PREFIX_PATTERN = re.compile(
-    r"^\s*(?:(?:[-*+]|\d+[.)])\s+)+",
-    re.IGNORECASE,
-)
+_NESTED_LIST_ACTION_PATTERN = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
 
 _ACTION_ADVERBS = (
     r"(?:(?:immediately|gracefully|clearly|explicitly|directly|finally)\s+)*"
@@ -376,7 +373,8 @@ def _retry_units(prompt_output: str) -> tuple[str, ...]:
 def _fallback_action_state(text: str) -> tuple[bool, bool]:
     """Classify one self-contained action unit as affirmative or rejected."""
     text = text.strip(" ,;:.!?\t\r\n")
-    text = _ACTION_LIST_PREFIX_PATTERN.sub("", text)
+    if _NESTED_LIST_ACTION_PATTERN.match(text):
+        return False, False
     if _UNSUPPORTED_INVERSE_ORDINAL_PATTERN.search(text):
         return False, False
     if _RETRY_CONTINUATION_PATTERN.search(text):
@@ -847,6 +845,11 @@ entire pipeline from the beginning.
                 "Use a maximum of 3 attempts. If the third attempt fails, "
                 "run_pipeline should explicitly let that exception propagate."
             ),
+            (
+                "Use at most 3 attempts.\n"
+                "- If the third attempt fails, `run_pipeline` must let the "
+                "connection exception propagate to the caller."
+            ),
         ),
     )
     def test_retry_fallback_judge_accepts_let_error_propagate(
@@ -909,29 +912,6 @@ entire pipeline from the beginning.
             (
                 "Use at most 3 attempts.\n"
                 "- If the third attempt fails:\n"
-                "  - let the connection exception propagate to the caller."
-            ),
-            (
-                "Use at most 3 attempts.\n"
-                "  * If the third attempt fails:\n"
-                "    * `run_pipeline` must let the final error propagate upstream."
-            ),
-        ),
-    )
-    def test_retry_fallback_judge_accepts_nested_markdown_let_action(
-        self, guidance: str
-    ) -> None:
-        """Nested list markers do not obscure a bounded terminal action."""
-        judgment = _judge_retry_fallback(guidance)
-
-        assert judgment.passed, judgment.reasoning
-
-    @pytest.mark.parametrize(
-        "guidance",
-        (
-            (
-                "Use at most 3 attempts.\n"
-                "- If the third attempt fails:\n"
                 "  - do not let the connection exception propagate to the caller."
             ),
             (
@@ -941,12 +921,36 @@ entire pipeline from the beginning.
                 "- If the third attempt fails:\n"
                 "  - log retry metrics."
             ),
+            (
+                "Use at most 3 attempts.\n"
+                "- If validation fails:\n"
+                "  - If the third attempt fails:\n"
+                "    - let the connection exception propagate to the caller."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- If authentication fails:\n"
+                "  - If the third attempt fails:\n"
+                "    - `run_pipeline` must let the final error propagate upstream."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- Unless validation succeeds:\n"
+                "  - If the third attempt fails:\n"
+                "    - let the connection exception propagate to the caller."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- Before validation completes:\n"
+                "  - If the third attempt fails:\n"
+                "    - `run_pipeline` must let the final error propagate upstream."
+            ),
         ),
     )
     def test_retry_fallback_judge_rejects_nested_markdown_sibling_actions(
         self, guidance: str
     ) -> None:
-        """List normalization does not cross negated or unrelated branches."""
+        """Unsupported nested list actions cannot weaken clause isolation."""
         judgment = _judge_retry_fallback(guidance)
 
         assert not judgment.passed, guidance
