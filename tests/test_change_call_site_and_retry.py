@@ -862,6 +862,22 @@ entire pipeline from the beginning.
                 "Use 3 attempts. If the third attempt fails, let the exception "
                 "propagate and keep retrying."
             ),
+            (
+                "Use 3 attempts. If the third attempt fails, let the connection "
+                "exception propagate no further."
+            ),
+            (
+                "Use 3 attempts. If the third attempt fails, let the connection "
+                "exception propagate and swallow it before it reaches the caller."
+            ),
+            (
+                "Use 3 attempts. If the third attempt fails, let the connection "
+                "exception propagate only when debug mode is enabled."
+            ),
+            (
+                "Use 3 attempts. If the third attempt fails, let the connection "
+                "exception propagate to telemetry, not the caller."
+            ),
             "If a connection error occurs, let the exception propagate.",
             "Let the connection exception propagate to the caller.",
             (
@@ -874,6 +890,54 @@ entire pipeline from the beginning.
         self, guidance: str
     ) -> None:
         """Vague, negated, unrelated, or unbounded ``let`` is not fallback."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use at most 3 attempts.\n"
+                "- If the third attempt fails:\n"
+                "  - let the connection exception propagate to the caller."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "  * If the third attempt fails:\n"
+                "    * `run_pipeline` must let the final error propagate upstream."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_accepts_nested_markdown_let_action(
+        self, guidance: str
+    ) -> None:
+        """Nested list markers do not obscure a bounded terminal action."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use at most 3 attempts.\n"
+                "- If the third attempt fails:\n"
+                "  - do not let the connection exception propagate to the caller."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- If validation fails:\n"
+                "  - let the connection exception propagate to the caller.\n"
+                "- If the third attempt fails:\n"
+                "  - log retry metrics."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_nested_markdown_sibling_actions(
+        self, guidance: str
+    ) -> None:
+        """List normalization does not cross negated or unrelated branches."""
         judgment = _judge_retry_fallback(guidance)
 
         assert not judgment.passed, guidance
