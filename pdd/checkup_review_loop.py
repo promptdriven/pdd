@@ -4799,7 +4799,14 @@ def _run_role_task(
     read_only: bool = False,
     model_override: Optional[str] = None,
 ) -> Tuple[bool, str, float, str]:
-    provider_deadline: Optional[float] = None
+    # ``run_agentic_task`` permits its own retry budget up to twice the passed
+    # timeout.  A review-loop role's timeout is a role-wide bound, not a
+    # per-retry allowance: otherwise a nominal 15-minute review can silently
+    # consume 30 minutes before the loop can report or try its fallback.
+    # Always give the shared runner an epoch deadline for this role; when the
+    # enclosing loop is tighter, preserve that earlier deadline instead.
+    role_remaining = timeout
+    provider_deadline: Optional[float] = time.time() + role_remaining
     if deadline is not None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -4809,11 +4816,12 @@ def _run_role_task(
                 0.0,
                 "",
             )
-        timeout = min(timeout, remaining)
+        role_remaining = min(role_remaining, remaining)
+        timeout = role_remaining
         # ``run_agentic_task`` owns retry/backoff and expects an epoch deadline,
         # while the review loop deliberately uses monotonic time.  Convert the
         # one remaining-duration snapshot instead of mixing clock domains.
-        provider_deadline = time.time() + remaining
+        provider_deadline = time.time() + role_remaining
     provider = ROLE_TO_PROVIDER.get(role, role)
     if model_override is not None and provider != "openai":
         return (
