@@ -240,6 +240,8 @@ _DIRECT_ACTION_PATTERNS = tuple(
     for body in (
         r"(?:re[- ]?)?rais(?:e|ed)\b.{0,96}",
         r"(?:surface|propagate|abort|skip)\b.{0,96}",
+        r"let\s+(?:(?:the|a|an|this|that)\s+)?"
+        r"(?:[\w-]+\s+){0,4}(?:errors?|exceptions?)\s+propagate\b.{0,64}",
         r"return\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
         r"log\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
         r"fail\s+with\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
