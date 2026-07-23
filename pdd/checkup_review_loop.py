@@ -118,6 +118,11 @@ PR_API_CHANGED_FILES_MAX_CHARS = 20000
 PROVIDER_STRUCTURED_TEXT_MAX_CHARS = 4000
 PROVIDER_FINDINGS_MAX_ITEMS = 200
 PROVIDER_FIX_ITEMS_MAX_ITEMS = 200
+# A review provider normally records transcript progress while it reasons or
+# runs tools.  When that transcript stays quiet, waiting for the full hard
+# timeout (and its retry) turns a transient parked session into a long-running
+# job that can never produce a terminal final-gate verdict.
+REVIEW_LOOP_STALL_TIMEOUT_SECONDS = 300.0
 PROVIDER_CHANGED_FILES_MAX_ITEMS = 200
 PROVIDER_CHANGED_FILE_MAX_CHARS = 1000
 PERSISTED_FIXES_MAX_ITEMS = 100
@@ -4887,6 +4892,11 @@ def _run_role_task(
                 reasoning_time=reasoning_time,
                 deadline=provider_deadline,
                 claude_policy=claude_policy,
+                # Keep the hard per-role timeout for substantive reviews, while
+                # ending a genuinely quiescent interactive session in time for the
+                # loop to report/fallback instead of silently parking the final
+                # gate.  A deadline-shortened call cannot outlive its budget.
+                stall_timeout=min(REVIEW_LOOP_STALL_TIMEOUT_SECONDS, timeout),
                 include_log_bodies=False,
             )
             # AgenticTaskResult retains ``provider`` as its legacy fourth
