@@ -724,14 +724,18 @@ def _new_requirement_authorizations(
     return new_authorizations
 
 
-def test_gemini_phase_a_installs_only_two_new_authorizations() -> None:
-    """Phase A keeps its Gemini rows without reissuing Terra/Sol authority."""
-    new_authorizations = _new_requirement_authorizations("origin/main", "HEAD")
+def test_gemini_phase_a_policy_binds_exactly_two_future_authorizations() -> None:
+    """The stable Phase-A policy contains only the two reviewed Gemini rows."""
+    policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    current_profile, future_profile = verification._GEMINI_36_PROFILE_BYTES
+    rows = {
+        (item["prompt_path"], item["language_id"])
+        for item in policy["requirement_rotations"]
+        if item["base_policy_sha256"] == current_profile
+        and item["head_policy_sha256"] == future_profile
+    }
 
-    assert {
-        (item.prompt_path.as_posix(), item.language_id)
-        for item in new_authorizations
-    } == {
+    assert rows == {
         ("pdd/prompts/generate_model_catalog_python.prompt", "python"),
         ("pdd/prompts/llm_invoke_python.prompt", "python"),
     }
