@@ -40,7 +40,18 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from rich.console import Console
 
@@ -52,11 +63,14 @@ from .agentic_checkup_orchestrator import (
 )
 from .agentic_common import (
     DEFAULT_MAX_RETRIES,
+    clear_agentic_progress,
     provider_failure_workflow,
     run_agentic_task,
+    set_agentic_progress,
 )
 from .agentic_e2e_fix_orchestrator import push_with_retry
 from .architecture_registry import extract_modules
+from .routing_policy import CODEX_MODEL_DEFAULT
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -122,6 +136,13 @@ ALL_SEVERITIES = {"blocker", "critical", "medium", "low", "nit", "info"}
 DEFAULT_REVIEWER = "codex"
 DEFAULT_FIXER = "claude"
 DEFAULT_REVIEWERS = ("codex", "claude")
+TERRA_SOL_REVIEWER = "codex"
+TERRA_SOL_FIXER = "codex"
+TERRA_SOL_MODEL_PREFIX = "gpt-5.6"
+TERRA_SOL_MODEL = CODEX_MODEL_DEFAULT
+_TERRA_SOL_MODEL_RE = re.compile(
+    rf"{re.escape(TERRA_SOL_MODEL_PREFIX)}(?:$|[-._/][a-z0-9][a-z0-9._/-]*)\Z"
+)
 EXTERNAL_STATUS_FINDING_MARKERS: Tuple[str, ...] = (
     "action required",
     "action_required",
@@ -877,10 +898,155 @@ class ReviewLoopConfig:
     agentic_artifact_sink: Optional[Callable[[bytes], None]] = field(
         default=None, repr=False
     )
+    # APPENDED — bounded Terra/Sol convergence mode (issue #2170). When True,
+    # Sol and Terra are Codex/GPT-5.6 only. ``max_rounds`` remains authoritative
+    # (default five, caller-configurable); cost and duration are intentionally
+    # not caps for this mode. A non-clean result at the round boundary is a
+    # failed, ``max_rounds_reached`` verdict rather than a false clean result.
+    terra_sol: bool = False
 
     def __post_init__(self) -> None:
+        if self.terra_sol:
+            if (
+                isinstance(self.max_rounds, bool)
+                or not isinstance(self.max_rounds, int)
+                or self.max_rounds < 1
+            ):
+                raise ValueError("Terra/Sol max_rounds must be a positive integer.")
+            if self.no_fix or self.review_only:
+                raise ValueError(
+                    "Terra/Sol mode requires Terra fixes; no_fix and review_only "
+                    "are incompatible"
+                )
+            # Enforce the issue #2170 role contract at the configuration
+            # boundary, not only in the CLI dispatcher. Direct callers (notably
+            # pdd_cloud) cannot retain Claude/Gemini roles or fallbacks.
+            self.reviewers = (TERRA_SOL_REVIEWER,)
+            self.reviewer = TERRA_SOL_REVIEWER
+            self.fixer = TERRA_SOL_FIXER
+            self.reviewer_fallback = None
+            self.fixer_fallback = None
+            self.fallback_reviewer_on_failure = False
+            self.allow_same_reviewer_fixer = True
+            self.fresh_final_review_role = TERRA_SOL_REVIEWER
         if self.no_fix:
             self.review_only = True
+
+
+def _is_terra_sol_model(model: object) -> bool:
+    """Return whether exact provider evidence identifies the GPT-5.6 family.
+
+    Model identifiers are case-sensitive and may not contain surrounding
+    whitespace. Variants must be delimiter-bounded so sibling names such as
+    ``gpt-5.60`` and ``gpt-5.6evil`` cannot cross the trust boundary.
+    """
+    return _TERRA_SOL_MODEL_RE.fullmatch(str(model or "")) is not None
+
+
+def _record_terra_sol_model_observation(
+    state: "ReviewLoopState",
+    config: ReviewLoopConfig,
+    *,
+    role: str,
+    model: object,
+) -> None:
+    """Record one provider observation without borrowing another role's model."""
+    observed = str(model or "")
+    if config.terra_sol:
+        # Missing/wrong evidence is itself authoritative evidence for this
+        # invocation. Never retain a prior role's successful model in its place.
+        state.last_model = observed
+        if role == "sol":
+            state.sol_model = observed
+        elif role == "terra":
+            state.terra_model = observed
+    elif observed:
+        state.last_model = observed
+
+
+def _publish_terra_sol_progress(
+    artifacts_dir: Path,
+    config: ReviewLoopConfig,
+    state: "ReviewLoopState",
+    *,
+    round_number: int,
+    phase: str,
+    terminal_reason: str = "",
+) -> None:
+    """Publish bounded Terra/Sol watchdog state at every phase transition."""
+    if not config.terra_sol:
+        return
+    write_terra_sol_progress(
+        artifacts_dir=artifacts_dir,
+        max_rounds=config.max_rounds,
+        round_number=round_number,
+        phase=phase,
+        terminal_reason=terminal_reason,
+        max_rounds_reached=state.max_rounds_reached,
+    )
+
+
+def write_terra_sol_progress(
+    *,
+    artifacts_dir: Path,
+    max_rounds: int,
+    round_number: int,
+    phase: str,
+    terminal_reason: str = "",
+    max_rounds_reached: bool = False,
+) -> None:
+    """Publish watchdog state when the outer dispatcher has no loop state yet."""
+    # ``terminal_reason`` can contain a provider or subprocess failure string.
+    # Treat it as secret-bearing: persist only a digest so watchdog consumers
+    # can correlate terminal states without retaining credentials in an
+    # on-disk artifact (or in the interrupt/core-dump progress context).
+    reason_present = bool(terminal_reason)
+    reason_sha256 = (
+        hashlib.sha256(terminal_reason.encode("utf-8", errors="replace")).hexdigest()
+        if reason_present
+        else None
+    )
+    payload = {
+        "schema": "pdd.checkup.terra_sol_progress.v1",
+        "current_round": round_number,
+        "max_rounds": max_rounds,
+        "phase": phase,
+        "terminal": reason_present,
+        "terminal_reason_present": reason_present,
+        "terminal_reason_sha256": reason_sha256,
+        "max_rounds_reached": max_rounds_reached,
+    }
+    _write_artifact(
+        artifacts_dir / "terra-sol-progress.json",
+        json.dumps(payload, indent=2, sort_keys=True),
+    )
+    set_agentic_progress(
+        workflow="terra-sol-checkup",
+        current_step=max(0, round_number),
+        total_steps=max_rounds,
+        step_name=(f"{phase}: terminal reason redacted" if reason_present else phase),
+        completed_steps=list(range(1, max(0, round_number))),
+    )
+
+
+def _enforce_terra_sol_task_model(
+    config: ReviewLoopConfig,
+    result: Tuple[bool, str, float, str],
+) -> Tuple[bool, str, float, str]:
+    """Fail a successful Terra/Sol task closed when model evidence is absent/wrong."""
+    success, output, cost, model = result
+    if not config.terra_sol or not success:
+        return result
+    if _is_terra_sol_model(model):
+        return result
+    observed = str(model or "missing").strip() or "missing"
+    return (
+        False,
+        "Terra/Sol requires an observed GPT-5.6 Codex model; "
+        f"provider reported {observed!r}.",
+        cost,
+        model,
+    )
 
 
 @dataclass
@@ -1152,6 +1318,19 @@ class ReviewLoopState:
     # weaker guarantee. Kept in the appended field block so positional
     # construction stays stable.
     role_independence: str = "independent"
+    # Set at loop entry when ``config.terra_sol`` is True so the final
+    # report and ``final-state.json`` carry an explicit Terra/Sol audit marker.
+    terra_sol_mode: bool = False
+    # Persist the configured round cap alongside observed consumption. This is
+    # deliberately appended after every existing state field so positional
+    # construction remains stable. A later invocation is a fresh authoritative
+    # run; these values are audit evidence, not a cross-invocation checkpoint.
+    max_rounds: Optional[int] = None
+    # Terra/Sol provider observations are role-scoped. ``last_model`` remains
+    # the backwards-compatible last-dispatch field, while these fields prevent
+    # a valid Terra observation from being serialized as missing Sol evidence.
+    sol_model: str = ""
+    terra_model: str = ""
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -1218,10 +1397,17 @@ def run_checkup_review_loop(
         active_reviewer=reviewer,
         original_reviewer=reviewer,
         same_role_review_fix=same_role_review_fix,
+        terra_sol_mode=config.terra_sol,
+        max_rounds=config.max_rounds,
     )
     loop_start_monotonic = time.monotonic()
     state.started_monotonic = loop_start_monotonic
-    deadline = loop_start_monotonic + (config.max_minutes * 60.0)
+    # Terra/Sol has a bounded round count but deliberately no provider duration
+    # cap: pass ``None`` so each of the configured rounds can obtain a decisive
+    # Sol result rather than being cut off by the ordinary max-minutes deadline.
+    deadline: Optional[float] = (
+        None if config.terra_sol else loop_start_monotonic + (config.max_minutes * 60.0)
+    )
     worktree, setup_error = _setup_pr_worktree(
         cwd,
         context.pr_owner,
@@ -1238,8 +1424,18 @@ def run_checkup_review_loop(
         state.stop_reason = f"Failed to set up PR worktree: {setup_error}"
         state.reviewer_status[reviewer] = "failed"
         report = _finalize(context, state, roles, artifacts_dir)
+        _publish_terra_sol_progress(
+            artifacts_dir,
+            config,
+            state,
+            round_number=0,
+            phase="terminal",
+            terminal_reason=state.stop_reason,
+        )
         _maybe_write_agentic_artifact(context, config, state)
         _post_review_loop_report(context, report, use_github_state)
+        if config.terra_sol:
+            clear_agentic_progress()
         return True, report, state.total_cost, state.last_model
 
     # Issue #1092: gates need the PR's actual base_ref so
@@ -1420,8 +1616,18 @@ def run_checkup_review_loop(
             "in the loop's worktree.\n",
         )
         report = _finalize(context, state, roles, artifacts_dir)
+        _publish_terra_sol_progress(
+            artifacts_dir,
+            config,
+            state,
+            round_number=0,
+            phase="terminal",
+            terminal_reason=state.stop_reason,
+        )
         _maybe_write_agentic_artifact(context, config, state)
         _post_review_loop_report(context, report, use_github_state)
+        if config.terra_sol:
+            clear_agentic_progress()
         return True, report, state.total_cost, state.last_model
 
     if not quiet:
@@ -1454,17 +1660,29 @@ def run_checkup_review_loop(
         list(initial_step5_findings) if initial_step5_findings else None
     )
     fallback_used = False
-    for round_number in range(1, config.max_rounds + 1):
+    round_number = 0
+    while True:
+        round_number += 1
+        if round_number > config.max_rounds:
+            break
         if _budget_exhausted(config, state, deadline):
             _mark_budget_exhausted(config, state, deadline)
             break
         # Record the round we are actually entering so the agentic artifact can
         # recompute ``max_rounds_reached`` from real consumption (R5).
         state.rounds_completed = round_number
+        _publish_terra_sol_progress(
+            artifacts_dir,
+            config,
+            state,
+            round_number=round_number,
+            phase="review",
+        )
 
         if not quiet:
+            max_display = str(config.max_rounds)
             console.print(
-                f"[bold cyan]--- Review Loop Round {round_number}/{config.max_rounds} ---"
+                f"[bold cyan]--- Review Loop Round {round_number}/{max_display} ---"
                 "[/bold cyan]"
             )
 
@@ -1506,9 +1724,7 @@ def run_checkup_review_loop(
                 status=(
                     hard_review.status
                     if hard_review is not None
-                    else "findings"
-                    if aggregate_findings
-                    else "clean"
+                    else "findings" if aggregate_findings else "clean"
                 ),
                 issue_aligned=(
                     all(item.issue_aligned is not False for item in round_reviews)
@@ -1613,12 +1829,9 @@ def run_checkup_review_loop(
                         and fallback != fixer
                         and _actionable_findings(state, fallback_review.findings)
                         and not any(
-                            role
-                            not in {fixer, fallback, failed_primary_reviewer}
+                            role not in {fixer, fallback, failed_primary_reviewer}
                             for role in _normalize_reviewers(
-                                [config.fixer_fallback]
-                                if config.fixer_fallback
-                                else []
+                                [config.fixer_fallback] if config.fixer_fallback else []
                             )
                         )
                     ):
@@ -1804,7 +2017,26 @@ def run_checkup_review_loop(
                 else:
                     _mark_reviewer_findings_fixed(state, reviewer)
                     state.reviewer_status[reviewer] = "clean"
-                    break
+                    if config.terra_sol:
+                        state.fresh_final_status = "clean"
+                        fresh_findings = _terra_sol_fresh_final_findings(
+                            context=context,
+                            config=config,
+                            state=state,
+                            worktree=worktree,
+                            artifacts_dir=artifacts_dir,
+                            round_number=round_number,
+                            pr_metadata=pr_metadata,
+                            deadline=deadline,
+                            verbose=verbose,
+                            quiet=quiet,
+                        )
+                        if fresh_findings:
+                            fix_findings = fresh_findings
+                        else:
+                            break
+                    else:
+                        break
         else:
             fix_findings = _actionable_findings(state, pending_findings)
             if not fix_findings:
@@ -1829,7 +2061,26 @@ def run_checkup_review_loop(
                     fix_findings = list(gate_findings)
                 else:
                     state.reviewer_status[reviewer] = "clean"
-                    break
+                    if config.terra_sol:
+                        state.fresh_final_status = "clean"
+                        fresh_findings = _terra_sol_fresh_final_findings(
+                            context=context,
+                            config=config,
+                            state=state,
+                            worktree=worktree,
+                            artifacts_dir=artifacts_dir,
+                            round_number=round_number,
+                            pr_metadata=pr_metadata,
+                            deadline=deadline,
+                            verbose=verbose,
+                            quiet=quiet,
+                        )
+                        if fresh_findings:
+                            fix_findings = fresh_findings
+                        else:
+                            break
+                    else:
+                        break
 
         state.reviewer_status[reviewer] = "findings"
         # Capture the worktree HEAD BEFORE the primary fixer runs so the
@@ -1851,6 +2102,13 @@ def run_checkup_review_loop(
         # it just to consume another fallback invocation defeats the
         # one-shot fallback contract.
         active_fixer = state.active_fixer or fixer
+        _publish_terra_sol_progress(
+            artifacts_dir,
+            config,
+            state,
+            round_number=round_number,
+            phase="fix",
+        )
         fix = _run_fix(
             fixer=active_fixer,
             reviewer=reviewer,
@@ -2252,6 +2510,13 @@ def run_checkup_review_loop(
             _mark_budget_exhausted(config, state, deadline)
             break
 
+        _publish_terra_sol_progress(
+            artifacts_dir,
+            config,
+            state,
+            round_number=round_number,
+            phase="verify",
+        )
         verify = _run_review(
             reviewer=reviewer,
             context=context,
@@ -2356,6 +2621,23 @@ def run_checkup_review_loop(
 
         state.reviewer_status[reviewer] = "clean"
         state.fresh_final_status = "clean"
+        fresh_findings = _terra_sol_fresh_final_findings(
+            context=context,
+            config=config,
+            state=state,
+            worktree=worktree,
+            artifacts_dir=artifacts_dir,
+            round_number=round_number,
+            pr_metadata=pr_metadata,
+            deadline=deadline,
+            verbose=verbose,
+            quiet=quiet,
+        )
+        if fresh_findings:
+            pending_findings = fresh_findings
+            continue
+        if state.fresh_final_status != "clean":
+            break
         state.stop_reason = _clean_stop_reason(
             fresh_final=config.require_final_fresh_review
         )
@@ -2379,12 +2661,82 @@ def run_checkup_review_loop(
         state.max_rounds_reached = True
         state.stop_reason = f"Max review rounds reached: {config.max_rounds}."
 
+    _mark_terra_sol_final_round_exhausted(state)
+
+    # Clamp: the while-True guard fires at max_rounds+1; match for-loop semantics.
+    round_number = min(round_number, config.max_rounds)
+
     if (
         state.fresh_final_status == "missing"
         and state.reviewer_status.get(reviewer) == "clean"
     ):
         state.fresh_final_status = "clean"
 
+    if not config.terra_sol:
+        _maybe_run_fresh_final_review_override(
+            context=context,
+            config=config,
+            state=state,
+            worktree=worktree,
+            artifacts_dir=artifacts_dir,
+            round_number=round_number,
+            pr_metadata=pr_metadata,
+            deadline=deadline,
+            verbose=verbose,
+            quiet=quiet,
+        )
+
+    report = _finalize(context, state, roles, artifacts_dir)
+    _publish_terra_sol_progress(
+        artifacts_dir,
+        config,
+        state,
+        round_number=min(round_number, config.max_rounds),
+        phase="terminal",
+        terminal_reason=(
+            "max_rounds_reached"
+            if state.max_rounds_reached
+            else state.stop_reason or "completed"
+        ),
+    )
+    _maybe_write_agentic_artifact(context, config, state)
+    _post_review_loop_report(context, report, use_github_state)
+    if config.terra_sol:
+        clear_agentic_progress()
+    return True, report, state.total_cost, state.last_model
+
+
+def _terra_sol_fresh_final_findings(
+    *,
+    context: ReviewLoopContext,
+    config: ReviewLoopConfig,
+    state: ReviewLoopState,
+    worktree: Path,
+    artifacts_dir: Path,
+    round_number: int,
+    pr_metadata: Optional[Dict[str, Any]],
+    deadline: Optional[float],
+    verbose: bool,
+    quiet: bool,
+) -> List[ReviewFinding]:
+    """Return hosted fresh-Sol findings that must re-enter the Terra loop.
+
+    Hosted execution enables ``agentic_mode``, whose generic fresh-final pass
+    can veto an otherwise-clean primary review. Terra/Sol convergence cannot
+    finalize that veto without giving Terra a chance to fix it. Run the fresh
+    Sol session at the clean boundary, mirror its status onto authoritative
+    Sol state, and return actionable findings to the normal fixer/verifier
+    cycle. A failed/degraded/missing fresh Sol pass stays hard-not-clean.
+    """
+    if not config.terra_sol or not config.agentic_mode:
+        return []
+    _publish_terra_sol_progress(
+        artifacts_dir,
+        config,
+        state,
+        round_number=round_number,
+        phase="review",
+    )
     _maybe_run_fresh_final_review_override(
         context=context,
         config=config,
@@ -2397,11 +2749,22 @@ def run_checkup_review_loop(
         verbose=verbose,
         quiet=quiet,
     )
-
-    report = _finalize(context, state, roles, artifacts_dir)
-    _maybe_write_agentic_artifact(context, config, state)
-    _post_review_loop_report(context, report, use_github_state)
-    return True, report, state.total_cost, state.last_model
+    if state.fresh_final_status != "clean":
+        state.reviewer_status[state.active_reviewer or TERRA_SOL_REVIEWER] = (
+            state.fresh_final_status
+        )
+    if state.fresh_final_status in HARD_NOT_CLEAN_STATES:
+        # Partial rows returned with a failed/degraded/missing Sol verdict are
+        # diagnostic only. They are not an authoritative finding set and must
+        # never enter Terra or be laundered by a later clean session.
+        return []
+    findings = _actionable_findings(state, state.fresh_final_findings)
+    if findings:
+        # The generic override records a terminal stop reason because bounded
+        # agentic mode finalizes here. Terra/Sol instead continues into its
+        # fixer path, so retain the findings but clear the terminal marker.
+        state.stop_reason = ""
+    return findings
 
 
 def _maybe_run_fresh_final_review_override(
@@ -2458,6 +2821,10 @@ def _maybe_run_fresh_final_review_override(
     # fresh-final role must always spin up its own session (see docstring).
     if state.fresh_final_status != "clean":
         return
+    # Each fresh session owns a new result slot. Clear any prior veto before
+    # dispatch so an exception cannot leak stale findings into the current
+    # final artifact or accidentally feed an already-fixed row back to Terra.
+    state.fresh_final_findings = []
     try:
         # Count the session the moment we commit to launching it: a fresh
         # review that raises still consumed an invocation and must be visible
@@ -2476,6 +2843,7 @@ def _maybe_run_fresh_final_review_override(
             mode="fresh-final",
             pr_metadata=pr_metadata,
             deadline=deadline,
+            artifact_suffix=(f"-invocation-{state.fresh_final_review_invocations}"),
         )
         # Preserve the fresh session as a distinct audit identity. In
         # particular, ``--fresh-final-review codex`` must not overwrite the
@@ -2668,9 +3036,18 @@ def _maybe_write_agentic_artifact(
                 "blockers": [],
             }
 
+        # The hosted artifact builder normally recomputes budget exhaustion
+        # from actual use versus configured caps. Terra/Sol keeps its configured
+        # round cap authoritative, but intentionally has no duration or cost
+        # cap; zero only those two fields in the non-mutating snapshot.
+        artifact_config = (
+            replace(config, max_minutes=0.0, max_cost=0.0)
+            if config.terra_sol
+            else config
+        )
         artifact = build_agentic_v1_artifact(
             loop_state=state,
-            config=config,
+            config=artifact_config,
             context=context,
             final_gate_report=final_gate_report,
         )
@@ -2865,9 +3242,7 @@ def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
     reviewer = (
         explicit_reviewer[0]
         if explicit_reviewer
-        else legacy_roles[0]
-        if legacy_roles
-        else DEFAULT_REVIEWER
+        else legacy_roles[0] if legacy_roles else DEFAULT_REVIEWER
     )
     # ``--reviewers`` names independent reviewer passes.  It must never be
     # overloaded as the fixer selection: issue #1788 explicitly requires the
@@ -3842,12 +4217,14 @@ def _run_review(
     fix_result: Optional[FixResult] = None,
     pr_metadata: Optional[Dict[str, Any]] = None,
     deadline: Optional[float] = None,
+    artifact_suffix: str = "",
 ) -> ReviewResult:
+    artifact_mode = f"{mode}{artifact_suffix}"
     candidate_findings = _collect_static_analysis_candidate_findings(
         worktree,
         artifacts_dir,
         round_number=round_number,
-        mode=mode,
+        mode=artifact_mode,
         pr_metadata=pr_metadata,
     )
     # Issue #1433 Bug #4: surface companion prompt + architecture entries
@@ -3895,6 +4272,7 @@ def _run_review(
         artifact_payload = {
             "round": round_number,
             "mode": mode,
+            "artifact_identity": artifact_mode,
             "shown_companions": full_eligible,
             "omitted_companions": omitted_full,
             "truncation": (
@@ -3915,7 +4293,7 @@ def _run_review(
         }
         artifact_path = (
             artifacts_dir
-            / f"round-{round_number}-{mode}-companion-source-of-truth.json"
+            / f"round-{round_number}-{artifact_mode}-companion-source-of-truth.json"
         )
         _write_artifact(artifact_path, json.dumps(artifact_payload, indent=2))
         companion_artifact_relpath = artifact_path.name
@@ -3932,27 +4310,35 @@ def _run_review(
         companion_source_of_truth=companion_source_of_truth,
         companion_artifact_path=companion_artifact_relpath,
     )
-    base = f"round-{round_number}-{mode}-{reviewer}"
+    base = f"round-{round_number}-{artifact_mode}-{reviewer}"
     _write_provider_evidence(
         artifacts_dir, base, "prompt", prompt, agentic_mode=config.agentic_mode
     )
-    success, output, cost, model = _run_role_task(
-        reviewer,
-        prompt,
-        worktree,
-        verbose=verbose,
-        quiet=quiet,
-        label=f"checkup-review-loop-{mode}-{reviewer}-round{round_number}",
-        timeout=900.0 + config.timeout_adder,
-        max_retries=DEFAULT_MAX_RETRIES,
-        reasoning_time=config.reasoning_time,
-        deadline=deadline,
-        read_only=True,
+    success, output, cost, model = _enforce_terra_sol_task_model(
+        config,
+        _run_role_task(
+            reviewer,
+            prompt,
+            worktree,
+            verbose=verbose,
+            quiet=quiet,
+            label=(
+                f"checkup-review-loop-{artifact_mode}-{reviewer}-round{round_number}"
+            ),
+            timeout=900.0 + config.timeout_adder,
+            max_retries=DEFAULT_MAX_RETRIES,
+            reasoning_time=config.reasoning_time,
+            deadline=deadline,
+            read_only=True,
+            model_override=(TERRA_SOL_MODEL if config.terra_sol else None),
+        ),
     )
     state.total_cost += cost
-    state.last_model = model or state.last_model
+    _record_terra_sol_model_observation(state, config, role="sol", model=model)
     if not config.agentic_mode:
-        state.raw_outputs.append((f"{mode}:{reviewer}:round{round_number}", output))
+        state.raw_outputs.append(
+            (f"{artifact_mode}:{reviewer}:round{round_number}", output)
+        )
     _write_provider_evidence(
         artifacts_dir, base, "output", output, agentic_mode=config.agentic_mode
     )
@@ -4010,7 +4396,7 @@ def _run_review(
                 verbose=verbose,
                 quiet=quiet,
                 artifacts_dir=artifacts_dir,
-                mode=mode,
+                mode=artifact_mode,
                 deadline=deadline,
             )
             if repaired is not None:
@@ -4085,21 +4471,25 @@ def _run_review_parse_repair(
     _write_provider_evidence(
         artifacts_dir, base, "prompt", prompt, agentic_mode=config.agentic_mode
     )
-    success, output, cost, model = _run_role_task(
-        reviewer,
-        prompt,
-        worktree,
-        verbose=verbose,
-        quiet=quiet,
-        label=f"checkup-review-loop-parse-repair-{mode}-{reviewer}-round{round_number}",
-        timeout=300.0 + config.timeout_adder,
-        max_retries=DEFAULT_MAX_RETRIES,
-        reasoning_time=config.reasoning_time,
-        deadline=deadline,
-        read_only=True,
+    success, output, cost, model = _enforce_terra_sol_task_model(
+        config,
+        _run_role_task(
+            reviewer,
+            prompt,
+            worktree,
+            verbose=verbose,
+            quiet=quiet,
+            label=f"checkup-review-loop-parse-repair-{mode}-{reviewer}-round{round_number}",
+            timeout=300.0 + config.timeout_adder,
+            max_retries=DEFAULT_MAX_RETRIES,
+            reasoning_time=config.reasoning_time,
+            deadline=deadline,
+            read_only=True,
+            model_override=(TERRA_SOL_MODEL if config.terra_sol else None),
+        ),
     )
     state.total_cost += cost
-    state.last_model = model or state.last_model
+    _record_terra_sol_model_observation(state, config, role="sol", model=model)
     if not config.agentic_mode:
         state.raw_outputs.append(
             (f"{mode}:{reviewer}:round{round_number}:parse-repair", output)
@@ -4156,20 +4546,24 @@ def _run_fix(
     _write_provider_evidence(
         artifacts_dir, base, "prompt", prompt, agentic_mode=config.agentic_mode
     )
-    success, output, cost, model = _run_role_task(
-        fixer,
-        prompt,
-        worktree,
-        verbose=verbose,
-        quiet=quiet,
-        label=f"checkup-review-loop-fix-{fixer}-for-{reviewer}-round{round_number}",
-        timeout=1200.0 + config.timeout_adder,
-        max_retries=DEFAULT_MAX_RETRIES,
-        reasoning_time=config.reasoning_time,
-        deadline=deadline,
+    success, output, cost, model = _enforce_terra_sol_task_model(
+        config,
+        _run_role_task(
+            fixer,
+            prompt,
+            worktree,
+            verbose=verbose,
+            quiet=quiet,
+            label=f"checkup-review-loop-fix-{fixer}-for-{reviewer}-round{round_number}",
+            timeout=1200.0 + config.timeout_adder,
+            max_retries=DEFAULT_MAX_RETRIES,
+            reasoning_time=config.reasoning_time,
+            deadline=deadline,
+            model_override=(TERRA_SOL_MODEL if config.terra_sol else None),
+        ),
     )
     state.total_cost += cost
-    state.last_model = model or state.last_model
+    _record_terra_sol_model_observation(state, config, role="terra", model=model)
     if not config.agentic_mode:
         state.raw_outputs.append(
             (f"fix:{fixer}:for:{reviewer}:round{round_number}", output)
@@ -4239,9 +4633,11 @@ def _write_fix_artifact(
             {
                 "summary": summary,
                 "changed_files": _bounded_changed_files(changed_files),
-                "changed_files_original_count": changed_files_original_count
-                if changed_files_original_count is not None
-                else len(changed_files),
+                "changed_files_original_count": (
+                    changed_files_original_count
+                    if changed_files_original_count is not None
+                    else len(changed_files)
+                ),
                 "changed_files_omitted_count": max(
                     0,
                     (
@@ -4254,21 +4650,29 @@ def _write_fix_artifact(
                 "success": success,
                 "dispositions": _bounded_fix_mapping(dispositions),
                 "rationales": _bounded_fix_mapping(rationales),
-                "dispositions_original_count": dispositions_original_count
-                if dispositions_original_count is not None
-                else len(dispositions),
-                "rationales_original_count": rationales_original_count
-                if rationales_original_count is not None
-                else len(rationales),
+                "dispositions_original_count": (
+                    dispositions_original_count
+                    if dispositions_original_count is not None
+                    else len(dispositions)
+                ),
+                "rationales_original_count": (
+                    rationales_original_count
+                    if rationales_original_count is not None
+                    else len(rationales)
+                ),
                 "fix_items_omitted_count": max(
                     0,
                     max(
-                        dispositions_original_count
-                        if dispositions_original_count is not None
-                        else len(dispositions),
-                        rationales_original_count
-                        if rationales_original_count is not None
-                        else len(rationales),
+                        (
+                            dispositions_original_count
+                            if dispositions_original_count is not None
+                            else len(dispositions)
+                        ),
+                        (
+                            rationales_original_count
+                            if rationales_original_count is not None
+                            else len(rationales)
+                        ),
                     )
                     - PROVIDER_FIX_ITEMS_MAX_ITEMS,
                 ),
@@ -4388,6 +4792,7 @@ def _run_role_task(
     reasoning_time: Optional[float],
     deadline: Optional[float] = None,
     read_only: bool = False,
+    model_override: Optional[str] = None,
 ) -> Tuple[bool, str, float, str]:
     provider_deadline: Optional[float] = None
     if deadline is not None:
@@ -4405,7 +4810,15 @@ def _run_role_task(
         # one remaining-duration snapshot instead of mixing clock domains.
         provider_deadline = time.time() + remaining
     provider = ROLE_TO_PROVIDER.get(role, role)
+    if model_override is not None and provider != "openai":
+        return (
+            False,
+            "A Codex model override cannot be applied to a non-Codex role.",
+            0.0,
+            "",
+        )
     original_codex_sandbox = os.environ.get("CODEX_SANDBOX_MODE")
+    original_codex_model = os.environ.get("CODEX_MODEL")
     credential_keys = (
         "GH_TOKEN",
         "GITHUB_TOKEN",
@@ -4441,7 +4854,9 @@ def _run_role_task(
         if cache_disable not in current_pytest_addopts:
             os.environ["PYTEST_ADDOPTS"] = (
                 f"{current_pytest_addopts} {cache_disable}".strip()
-            )
+        )
+    if model_override is not None:
+        os.environ["CODEX_MODEL"] = model_override
     try:
         # Hosted checkup worktrees expose PDD's fixture data through the
         # repository-owned ``data -> ../pdd/data`` symlink.  That data is an
@@ -4461,7 +4876,7 @@ def _run_role_task(
             else None
         )
         with _forced_provider(provider):
-            return run_agentic_task(
+            result = run_agentic_task(
                 instruction=instruction,
                 cwd=cwd,
                 verbose=verbose,
@@ -4474,11 +4889,26 @@ def _run_role_task(
                 claude_policy=claude_policy,
                 include_log_bodies=False,
             )
+            # AgenticTaskResult retains ``provider`` as its legacy fourth
+            # iterable item. The review loop's fourth item is instead the
+            # provider-observed model used for Terra/Sol provenance, so bridge
+            # its structured field explicitly. Missing evidence stays empty:
+            # a provider label such as ``openai`` must never look like a model.
+            if hasattr(result, "model_id"):
+                success, output, cost, _provider = result
+                return success, output, cost, str(result.model_id or "")
+            # Compatibility for direct legacy tuple/mocked callers, whose
+            # fourth item has always been this helper's model value.
+            return result
     finally:
         if original_codex_sandbox is None:
             os.environ.pop("CODEX_SANDBOX_MODE", None)
         else:
             os.environ["CODEX_SANDBOX_MODE"] = original_codex_sandbox
+        if original_codex_model is None:
+            os.environ.pop("CODEX_MODEL", None)
+        else:
+            os.environ["CODEX_MODEL"] = original_codex_model
         if read_only:
             for key, value in {**saved_credentials, **saved_git_guard}.items():
                 if value is None:
@@ -6370,10 +6800,9 @@ def _record_review(
                 continue
             state.findings_by_key[finding.key] = finding
             state._finding_accounting_reviewer_by_key[finding.key] = result.reviewer
-            state._finding_blocking_by_key[finding.key] = (
-                finding.severity.lower()
-                in {severity.lower() for severity in result.blocking_severities}
-            )
+            state._finding_blocking_by_key[finding.key] = finding.severity.lower() in {
+                severity.lower() for severity in result.blocking_severities
+            }
         else:
             existing.status = finding.status
             existing.evidence = finding.evidence or existing.evidence
@@ -6528,9 +6957,9 @@ def _record_reviewer_feedback(
                 f"{disposition!r}. Reviewer reason: {feedback}"
             )
             if rationale:
-                state.reviewer_feedback_by_key[finding.key] += (
-                    f" Fixer rationale was: {rationale}"
-                )
+                state.reviewer_feedback_by_key[
+                    finding.key
+                ] += f" Fixer rationale was: {rationale}"
 
 
 def _fix_dispute_note(fix: FixResult, finding: ReviewFinding) -> str:
@@ -6559,16 +6988,31 @@ def _fix_dispute_note(fix: FixResult, finding: ReviewFinding) -> str:
 def _budget_exhausted(
     config: ReviewLoopConfig,
     state: ReviewLoopState,
-    deadline: float,
+    deadline: Optional[float],
 ) -> bool:
+    # Terra/Sol has no cost or time cap. Its round guard remains authoritative
+    # in ``run_checkup_review_loop`` so transient failures cannot be mistaken
+    # for a clean Sol result or spin indefinitely.
+    if config.terra_sol:
+        return False
+    if deadline is None:
+        # Bounded callers must always establish a deadline. Fail closed if a
+        # future refactor violates that invariant.
+        return True
     return state.total_cost >= config.max_cost or time.monotonic() >= deadline
 
 
 def _mark_budget_exhausted(
     config: ReviewLoopConfig,
     state: ReviewLoopState,
-    deadline: float,
+    deadline: Optional[float],
 ) -> None:
+    if config.terra_sol:
+        return
+    if deadline is None:
+        state.max_duration_reached = True
+        state.stop_reason = "Review-loop deadline was unavailable."
+        return
     if state.total_cost >= config.max_cost:
         state.max_cost_reached = True
         state.stop_reason = f"Max review cost reached: ${config.max_cost:.2f}."
@@ -7984,8 +8428,9 @@ Required actions:
    `<pdd-dependency>` tags) to match the code change exactly.
 2. Do NOT delete the prompt. Do NOT edit unrelated prompts or code.
 3. Keep the generated code consistent with the repaired prompt (the loop will
-   regenerate it; leave your code edit in place so it is not lost if
-   regeneration is skipped).
+   regenerate it only through an auditable provider/model boundary; leave your
+   code edit in place because Terra/Sol mode deliberately retains the verified
+   GPT-5.6 edit instead of invoking the generic generator).
 
 Report the prompt files you edited. Do not open a PR or run git push."""
 
@@ -8042,6 +8487,12 @@ def _regenerate_module_from_prompt(
             pass
 
 
+_TERRA_SOL_REGENERATION_SKIP_REASON = (
+    "generic code generation skipped in Terra/Sol mode because "
+    "code_generator_main cannot prove a Codex GPT-5.6 provider/model boundary"
+)
+
+
 def _attempt_source_of_truth_repair(
     *,
     context: ReviewLoopContext,
@@ -8062,8 +8513,10 @@ def _attempt_source_of_truth_repair(
     Issue #2047. Splits offenders by kind:
 
       * ``drift`` (registered code changed, owning prompt present but unedited)
-        is REPAIRABLE: one fixer turn edits the owning prompt(s), then a
-        best-effort one-shot regeneration makes the code match.
+        is REPAIRABLE: one fixer turn edits the owning prompt(s). Ordinary mode
+        then attempts best-effort generic regeneration; Terra/Sol mode retains
+        Terra's observed-GPT-5.6 code edit because the generic generator cannot
+        prove the required Codex model boundary.
       * ``missing_prompt`` / ``rename_drift`` are NOT auto-repaired — safely
         re-authoring a destroyed/relocated source of truth (or a brand-new
         prompt contract) is the mis-specification risk the guard exists to
@@ -8115,21 +8568,32 @@ def _attempt_source_of_truth_repair(
         instruction,
         agentic_mode=config.agentic_mode,
     )
-    success, output, cost, model = _run_role_task(
-        active_fixer,
-        instruction,
-        worktree,
-        verbose=verbose,
-        quiet=quiet,
-        label=f"checkup-review-loop-sot-repair-{active_fixer}-round{round_number}",
-        timeout=1200.0 + config.timeout_adder,
-        max_retries=DEFAULT_MAX_RETRIES,
-        reasoning_time=config.reasoning_time,
-        deadline=deadline,
+    success, output, cost, model = _enforce_terra_sol_task_model(
+        config,
+        _run_role_task(
+            active_fixer,
+            instruction,
+            worktree,
+            verbose=verbose,
+            quiet=quiet,
+            label=f"checkup-review-loop-sot-repair-{active_fixer}-round{round_number}",
+            timeout=1200.0 + config.timeout_adder,
+            max_retries=DEFAULT_MAX_RETRIES,
+            reasoning_time=config.reasoning_time,
+            deadline=deadline,
+            model_override=(TERRA_SOL_MODEL if config.terra_sol else None),
+        ),
     )
     state.total_cost += cost
-    if model:
-        state.last_model = model
+    # The strict gate above already rejected surrounding whitespace. Normalize
+    # whitespace-only evidence to the canonical missing value for artifacts;
+    # otherwise a failed call can persist visually ambiguous model evidence.
+    observed_model = str(model or "").strip()
+    details["fixer_model"] = observed_model
+    details["fixer_cost"] = float(cost or 0.0)
+    _record_terra_sol_model_observation(
+        state, config, role="terra", model=observed_model
+    )
     if not config.agentic_mode:
         state.raw_outputs.append(
             (f"sot-repair:{active_fixer}:round{round_number}", output)
@@ -8152,20 +8616,39 @@ def _attempt_source_of_truth_repair(
         )
         details["blocked"] = True
         return details
-    # Best-effort regeneration so the code provably matches the repaired prompt.
     regen_results = []
-    for offender in repairable:
-        regen = _regenerate_module_from_prompt(
-            worktree, offender["code_path"], offender["prompt_path"]
-        )
-        state.total_cost += float(regen.get("cost") or 0.0)
-        regen_results.append(
+    if config.terra_sol:
+        # ``code_generator_main`` is a generic generation boundary. It does
+        # not accept the Codex role/model override used by ``_run_role_task``
+        # and may route through a third provider. Running it here could replace
+        # Terra's GPT-5.6 edit immediately before push while ``last_model``
+        # still names the repair task. The repaired prompt co-edit satisfies
+        # the deterministic source guard, so retain Terra's code and record the
+        # deliberate skip instead of making an unauditable provider call.
+        regen_results.extend(
             {
                 **offender,
-                "regenerated": regen.get("ok"),
-                "regen_error": regen.get("error"),
+                "regenerated": False,
+                "regen_error": "",
+                "regeneration_skipped_reason": _TERRA_SOL_REGENERATION_SKIP_REASON,
             }
+            for offender in repairable
         )
+    else:
+        # Ordinary review-loop mode keeps the existing best-effort generic
+        # regeneration behavior.
+        for offender in repairable:
+            regen = _regenerate_module_from_prompt(
+                worktree, offender["code_path"], offender["prompt_path"]
+            )
+            state.total_cost += float(regen.get("cost") or 0.0)
+            regen_results.append(
+                {
+                    **offender,
+                    "regenerated": regen.get("ok"),
+                    "regen_error": regen.get("error"),
+                }
+            )
     details["repaired"] = regen_results
     # ``blocked`` is provisional here; the caller re-runs the guards and
     # overwrites it with the authoritative residual result.
@@ -8929,8 +9412,19 @@ def _write_final_state(
         "total_cost": state.total_cost,
         "last_model": state.last_model,
         "max_rounds_reached": state.max_rounds_reached,
+        "rounds_completed": state.rounds_completed,
+        "max_rounds": state.max_rounds,
         "max_cost_reached": state.max_cost_reached,
         "max_duration_reached": state.max_duration_reached,
+        "terra_sol_mode": state.terra_sol_mode,
+        "sol_review_status": (
+            state.reviewer_status.get(state.active_reviewer or "", "missing")
+            if state.terra_sol_mode
+            else None
+        ),
+        "sol_model": state.sol_model if state.terra_sol_mode else None,
+        "terra_model": state.terra_model if state.terra_sol_mode else None,
+        "terra_fixer": TERRA_SOL_FIXER if state.terra_sol_mode else None,
         "fix_attempts_by_key": dict(state.fix_attempts_by_key),
         "dispute_notes_by_key": dict(state.dispute_notes_by_key),
         "reviewer_feedback_by_key": dict(state.reviewer_feedback_by_key),
@@ -9034,22 +9528,35 @@ def load_final_state(
     return data if isinstance(data, dict) else None
 
 
-def clear_final_state(cwd: Path, issue_number: int, pr_number: int) -> None:
-    """Delete any stale ``final-state.json`` before a fresh review-loop run.
+def clear_final_state(cwd: Path, issue_number: int, pr_number: int) -> bool:
+    """Delete and verify absence of stale ``final-state.json``.
 
     The final-gate (issue #1406) clears the prior verdict so a later
     ``load_final_state`` read cannot mistake a previous run's clean verdict for
     the current one. A role-error or setup-error path that returns before
     ``_finalize`` writes no new file, so the absence is correctly read as
-    fail-closed.
+    fail-closed. Return ``False`` when deletion or the independent absence
+    check fails; callers must stop rather than infer deletion from a parse
+    failure.
     """
     path = _artifacts_dir(cwd, issue_number, pr_number) / "final-state.json"
     try:
         path.unlink()
     except FileNotFoundError:
-        pass
+        return True
     except OSError:
-        pass
+        return False
+
+    # Verify the filesystem slot itself, independently of JSON parsing.  This
+    # catches unusual unlink implementations and avoids conflating malformed or
+    # unreadable content with successful removal.
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def _scrubbed_gate_run(run: Dict[str, Any]) -> Dict[str, Any]:
@@ -9266,11 +9773,38 @@ def _finalize(
             # builder does not report it as ``verified`` against the now-stale
             # SHA.
             state.validation_stale = True
+    # Finalization can downgrade a seemingly clean final round when the
+    # remote PR head changed or cannot be confirmed. Re-evaluate after that
+    # downgrade, before rendering every final artifact, so a final-round
+    # Terra/Sol run has one consistent cap signal everywhere.
+    _mark_terra_sol_final_round_exhausted(state)
     report = _render_final_report(context, state, reviewers)
     issue_aligned = _resolve_issue_aligned(state)
     _write_artifact(artifacts_dir / "final-report.md", report)
     _write_final_state(artifacts_dir, state, issue_aligned)
     return report
+
+
+def _mark_terra_sol_final_round_exhausted(state: ReviewLoopState) -> None:
+    """Record a non-clean Terra/Sol result that consumed its final round.
+
+    Keep a specific provider, verifier, or stale-head ``stop_reason`` intact;
+    ``max_rounds_reached`` is complementary audit evidence, not a replacement
+    terminal diagnosis.
+    """
+    max_rounds = state.max_rounds
+    reviewer = state.active_reviewer or TERRA_SOL_REVIEWER
+    if (
+        state.terra_sol_mode
+        and isinstance(max_rounds, int)
+        and max_rounds > 0
+        and state.rounds_completed >= max_rounds
+        and not (
+            state.reviewer_status.get(reviewer) == "clean"
+            and state.fresh_final_status == "clean"
+        )
+    ):
+        state.max_rounds_reached = True
 
 
 def _resolve_issue_aligned(state: ReviewLoopState) -> str:
@@ -9386,6 +9920,7 @@ def _render_machine_verdict_block(
         and not state.max_rounds_reached
         and not state.max_cost_reached
         and not state.max_duration_reached
+        and (not state.terra_sol_mode or _is_terra_sol_model(state.sol_model))
     )
     payload = {
         "schema": FINAL_GATE_REPORT_SCHEMA,
@@ -9408,8 +9943,19 @@ def _render_machine_verdict_block(
         "verified_head_sha": verified_sha_line,
         "remote_pr_head_sha": remote_sha_line,
         "max_rounds_reached": state.max_rounds_reached,
+        "rounds_completed": state.rounds_completed,
+        "max_rounds": state.max_rounds,
         "max_cost_reached": state.max_cost_reached,
         "max_duration_reached": state.max_duration_reached,
+        "terra_sol_mode": state.terra_sol_mode,
+        "sol_review_status": (
+            state.reviewer_status.get(state.active_reviewer or "", "missing")
+            if state.terra_sol_mode
+            else None
+        ),
+        "sol_model": state.sol_model if state.terra_sol_mode else None,
+        "terra_model": state.terra_model if state.terra_sol_mode else None,
+        "terra_fixer": TERRA_SOL_FIXER if state.terra_sol_mode else None,
         "findings": [finding.to_dict() for finding in remaining_findings],
     }
     return [
@@ -9467,6 +10013,20 @@ def _render_final_report(
         remote_sha_line = "unknown"
     else:
         remote_sha_line = "none"
+    terra_sol_audit_lines = (
+        [
+            f"sol-reviewer: {state.active_reviewer or TERRA_SOL_REVIEWER}",
+            "sol-review-status: "
+            + state.reviewer_status.get(
+                state.active_reviewer or TERRA_SOL_REVIEWER, "missing"
+            ),
+            f"terra-fixer: {TERRA_SOL_FIXER}",
+            f"terra-sol-model: {state.sol_model or 'none'}",
+            f"terra-model: {state.terra_model or 'none'}",
+        ]
+        if state.terra_sol_mode
+        else []
+    )
     lines = [
         "## Step 7/8: Review Loop Final Report",
         "",
@@ -9485,6 +10045,7 @@ def _render_final_report(
         f"max-rounds-reached: {str(state.max_rounds_reached).lower()}",
         f"max-cost-reached: {str(state.max_cost_reached).lower()}",
         f"max-duration-reached: {str(state.max_duration_reached).lower()}",
+        *terra_sol_audit_lines,
         "",
         "### Summary",
         "",

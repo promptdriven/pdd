@@ -6924,6 +6924,10 @@ def test_codex_provider_returns_model_from_correlated_session_transcript(tmp_pat
             json.dumps(
                 {
                     "type": "turn.completed",
+                    # Codex 0.145 emits the provider label here rather than a
+                    # concrete model. The correlated session transcript below
+                    # is the only acceptable recovery source.
+                    "model": "openai",
                     "usage": {
                         "input_tokens": 10,
                         "output_tokens": 10,
@@ -6989,6 +6993,21 @@ def test_codex_session_model_rejects_uncorrelated_or_non_openai_transcript(tmp_p
     )
 
     assert ac._extract_codex_session_model(thread_id, {"CODEX_HOME": str(tmp_path)}) is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"model": "openai"},
+        {"session": {"model": "codex"}},
+        {"item": {"model": "chatgpt"}},
+    ],
+)
+def test_codex_generic_provider_label_is_not_model_evidence(payload):
+    """Provider names never satisfy the observed-model provenance contract."""
+    import pdd.agentic_common as ac
+
+    assert ac._extract_provider_model_from_data("openai", payload) is None
 
 
 # gpt-5.6-sol is the runtime-verified GPT-5.6 slug on Codex 0.144.1; the bare

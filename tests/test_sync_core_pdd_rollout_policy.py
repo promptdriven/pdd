@@ -49,7 +49,14 @@ REPLAY_PROTECTED_BASE = "e10bd9b3d0d5ac94d1a56af88f5abf07cf8af775"
 PR_1971_COMBINED_BASE = "ee9fcff457b23fb7123bb7e15666c9287409ad0f"
 PR_1971_COMBINED_HEAD = REPLAY_PROTECTED_BASE
 PDD_1875_PROTECTED_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
-PDD_1875_PROTECTED_HEAD = "4597a4d1a1ace37dcf4aa4129cb193f9e2268524"
+# The historical #1875 profile candidate, retained independently from later
+# prompt/profile reconciliations on the active branch.
+PDD_1875_COMPOSED_HEAD = "b27837fd7fbf681bdec2b7eb311348b642b27979"
+TERRA_SOL_PROTECTED_BASE = "b27837fd7fbf681bdec2b7eb311348b642b27979"
+# The Terra/Sol reconciliation is a closed historical pair.  Keep its
+# candidate ref explicit rather than reading the mutable checkout: subsequent
+# final-gate changes must not rewrite this evidence.
+TERRA_SOL_COMPOSED_HEAD = "c5cb6dab5bd1c3e06acc92f926b66b886f84ba2e"
 PR_1971_COMBINED_PROFILE_DIGEST = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
 )
@@ -576,16 +583,16 @@ def test_pdd1875_composed_reconciliation_is_exact(mutated_input: str) -> None:
         ROOT,
         "exact #1875 protected history",
         PDD_1875_PROTECTED_BASE,
-        PDD_1875_PROTECTED_HEAD,
+        PDD_1875_COMPOSED_HEAD,
     )
     inputs = {
         "base_policy": _git_blob(
             PDD_1875_PROTECTED_BASE,
             ROOT / ".pdd/verification-profile-rotations.json",
         ),
-        "candidate_policy": _git_blob(PDD_1875_PROTECTED_HEAD, ROTATION_FILE),
+        "candidate_policy": _git_blob(PDD_1875_COMPOSED_HEAD, ROTATION_FILE),
         "base_profile": _git_blob(PDD_1875_PROTECTED_BASE, PROFILE_FILE),
-        "candidate_profile": _git_blob(PDD_1875_PROTECTED_HEAD, PROFILE_FILE),
+        "candidate_profile": _git_blob(PDD_1875_COMPOSED_HEAD, PROFILE_FILE),
     }
 
     assert verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
@@ -614,14 +621,12 @@ def test_pdd1875_composed_reconciliation_binds_prompt_bytes(authorization) -> No
         ROOT,
         "exact #1875 protected history",
         PDD_1875_PROTECTED_BASE,
-        PDD_1875_PROTECTED_HEAD,
+        PDD_1875_COMPOSED_HEAD,
     )
     base_profile = _git_blob(PDD_1875_PROTECTED_BASE, PROFILE_FILE)
-    candidate_profile = _git_blob(PDD_1875_PROTECTED_HEAD, PROFILE_FILE)
+    candidate_profile = _git_blob(PDD_1875_COMPOSED_HEAD, PROFILE_FILE)
     base_prompt = _git_blob(PDD_1875_PROTECTED_BASE, ROOT / authorization.prompt_path)
-    candidate_prompt = _git_blob(
-        PDD_1875_PROTECTED_HEAD, ROOT / authorization.prompt_path
-    )
+    candidate_prompt = _git_blob(PDD_1875_COMPOSED_HEAD, ROOT / authorization.prompt_path)
 
     assert verification._transition_bytes_match(  # pylint: disable=protected-access
         authorization,
@@ -637,6 +642,84 @@ def test_pdd1875_composed_reconciliation_binds_prompt_bytes(authorization) -> No
         base_prompt,
         candidate_prompt + b" ",
     )
+
+
+@pytest.mark.parametrize(
+    "mutated_input",
+    ("base_policy", "candidate_policy", "base_profile", "candidate_profile"),
+)
+def test_terra_sol_composed_reconciliation_is_exact(mutated_input: str) -> None:
+    """PR #2171 accepts no prompt/profile byte substitution."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT, "exact Terra/Sol protected history", TERRA_SOL_PROTECTED_BASE
+    )
+    inputs = {
+        "base_policy": _git_blob(TERRA_SOL_PROTECTED_BASE, ROTATION_FILE),
+        "candidate_policy": _git_blob(TERRA_SOL_COMPOSED_HEAD, ROTATION_FILE),
+        "base_profile": _git_blob(TERRA_SOL_PROTECTED_BASE, PROFILE_FILE),
+        "candidate_profile": _git_blob(TERRA_SOL_COMPOSED_HEAD, PROFILE_FILE),
+    }
+
+    assert verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
+        inputs["base_policy"],
+        inputs["candidate_policy"],
+        inputs["base_profile"],
+        inputs["candidate_profile"],
+    )
+    inputs[mutated_input] += b" "
+    assert not verification._is_exact_combined_requirement_reconciliation(  # pylint: disable=protected-access
+        inputs["base_policy"],
+        inputs["candidate_policy"],
+        inputs["base_profile"],
+        inputs["candidate_profile"],
+    )
+
+
+@pytest.mark.parametrize(
+    "authorization",
+    verification._TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS,  # pylint: disable=protected-access
+    ids=lambda item: item.prompt_path.name,
+)
+def test_terra_sol_composed_reconciliation_binds_prompt_bytes(authorization) -> None:
+    """Every PR #2171 profile update is bound to its exact prompt pair."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT, "exact Terra/Sol protected history", TERRA_SOL_PROTECTED_BASE
+    )
+    base_profile = _git_blob(TERRA_SOL_PROTECTED_BASE, PROFILE_FILE)
+    candidate_profile = _git_blob(TERRA_SOL_COMPOSED_HEAD, PROFILE_FILE)
+    base_prompt = _git_blob(TERRA_SOL_PROTECTED_BASE, ROOT / authorization.prompt_path)
+    candidate_prompt = _git_blob(TERRA_SOL_COMPOSED_HEAD, ROOT / authorization.prompt_path)
+
+    assert verification._transition_bytes_match(  # pylint: disable=protected-access
+        authorization,
+        base_profile,
+        candidate_profile,
+        base_prompt,
+        candidate_prompt,
+    )
+    assert not verification._transition_bytes_match(  # pylint: disable=protected-access
+        authorization,
+        base_profile,
+        candidate_profile,
+        base_prompt,
+        candidate_prompt + b" ",
+    )
+
+
+def test_terra_sol_composed_reconciliation_consumes_only_reviewed_scope() -> None:
+    """The protected base reaches a complete profile set only via the exact pair."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT, "exact Terra/Sol protected history", TERRA_SOL_PROTECTED_BASE
+    )
+    manifest = build_unit_manifest(
+        ROOT, base_ref=TERRA_SOL_PROTECTED_BASE, head_ref=TERRA_SOL_COMPOSED_HEAD
+    )
+
+    profiles = load_verification_profiles(ROOT, manifest)
+
+    assert not manifest.invalid_reasons
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
 
 
 def _git_blob(ref: str, path: Path) -> bytes:
@@ -1248,9 +1331,16 @@ def test_pdd1989_transitions_cover_the_actual_merged_base() -> None:
     assert profiles.coverage == 1.0
 
 
-def test_pr2017_phase_a_is_dormant_on_current_protected_base() -> None:
-    """The prerequisite installs authority without consuming protected bytes."""
-    manifest = build_unit_manifest(ROOT, base_ref="origin/main", head_ref="HEAD")
+def test_pdd1875_phase_a_is_dormant_on_its_composed_head() -> None:
+    """The #1875 prerequisite stays dormant at its exact composed head."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT, "exact #1875 protected history", PDD_1875_PROTECTED_BASE
+    )
+    manifest = build_unit_manifest(
+        ROOT,
+        base_ref=PDD_1875_PROTECTED_BASE,
+        head_ref=PDD_1875_COMPOSED_HEAD,
+    )
 
     profiles = load_verification_profiles(ROOT, manifest)
 
@@ -1393,8 +1483,8 @@ def test_pdd1989_history_guard_does_not_hide_missing_repository_identity(
         build_unit_manifest(repo, base_ref=candidate_sha, head_ref=candidate_sha)
 
 
-def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> None:
-    """An adopted rotation must not leave profile requirements stale."""
+def test_current_profile_reconciliation_matches_current_prompt_and_profile_rows() -> None:
+    """An adopted exact transition must not leave profile requirements stale."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     profile_payload = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
     profile_digest = hashlib.sha256(PROFILE_FILE.read_bytes()).hexdigest()
@@ -1403,6 +1493,16 @@ def test_current_profile_rotation_matches_current_prompt_and_profile_rows() -> N
         for row in policy["requirement_rotations"]
         if row["head_policy_sha256"] == profile_digest
     ]
+    current_rows.extend(
+        _requirement_authorization_row(authorization)
+        for authorization in verification._TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+        if authorization.bindings.head_policy_sha256 == profile_digest
+    )
+    current_rows.extend(
+        _requirement_authorization_row(authorization)
+        for authorization in verification._PDD_2168_TERRA_CONTINUATION_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+        if authorization.bindings.head_policy_sha256 == profile_digest
+    )
     assert current_rows
     profiles = {
         (row["prompt_path"], row["language_id"]): row

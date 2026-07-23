@@ -3048,6 +3048,12 @@ def _parse_codex_jsonl(lines) -> Dict[str, Any]:
 
 
 _CODEX_THREAD_ID_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+_CODEX_GENERIC_MODEL_LABELS = frozenset({"openai", "codex", "chatgpt"})
+
+
+def _is_generic_codex_model_label(value: object) -> bool:
+    """Return whether a Codex event supplied a provider label, not a model ID."""
+    return str(value or "").strip().lower() in _CODEX_GENERIC_MODEL_LABELS
 
 
 def _extract_codex_session_model(
@@ -8717,14 +8723,22 @@ def _extract_provider_model_from_data(provider: str, data: Dict[str, Any]) -> Op
                     return "+".join(sorted(names)) if len(names) > 1 else names[0]
         elif provider == "openai":
             model = data.get("model")
-            if isinstance(model, str) and model:
+            if (
+                isinstance(model, str)
+                and model
+                and not _is_generic_codex_model_label(model)
+            ):
                 return model
             # Fallback: some Codex schemas place model on session.end / item
             for nested_key in ("session", "item"):
                 nested = data.get(nested_key)
                 if isinstance(nested, dict):
                     nm = nested.get("model")
-                    if isinstance(nm, str) and nm:
+                    if (
+                        isinstance(nm, str)
+                        and nm
+                        and not _is_generic_codex_model_label(nm)
+                    ):
                         return nm
     except Exception:
         return None
