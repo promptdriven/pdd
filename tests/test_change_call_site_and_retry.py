@@ -229,6 +229,8 @@ _CONNECTIVE_ONLY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_NESTED_LIST_ACTION_PATTERN = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
+
 _ACTION_ADVERBS = (
     r"(?:(?:immediately|gracefully|clearly|explicitly|directly|finally)\s+)*"
 )
@@ -240,6 +242,11 @@ _DIRECT_ACTION_PATTERNS = tuple(
     for body in (
         r"(?:re[- ]?)?rais(?:e|ed)\b.{0,96}",
         r"(?:surface|propagate|abort|skip)\b.{0,96}",
+        r"let\s+(?:(?:the|a|an|this|that)\s+)?"
+        r"(?:[\w-]+\s+){0,4}(?:errors?|exceptions?)\s+propagate"
+        r"(?:\s+upstream|\s+(?:back\s+)?to\s+"
+        r"(?:(?:the|a|an|its)\s+)?(?:caller|user|client|upstream|"
+        r"calling\s+(?:code|function)))?",
         r"return\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
         r"log\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
         r"fail\s+with\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
@@ -366,6 +373,8 @@ def _retry_units(prompt_output: str) -> tuple[str, ...]:
 def _fallback_action_state(text: str) -> tuple[bool, bool]:
     """Classify one self-contained action unit as affirmative or rejected."""
     text = text.strip(" ,;:.!?\t\r\n")
+    if _NESTED_LIST_ACTION_PATTERN.match(text):
+        return False, False
     if _UNSUPPORTED_INVERSE_ORDINAL_PATTERN.search(text):
         return False, False
     if _RETRY_CONTINUATION_PATTERN.search(text):
@@ -798,6 +807,153 @@ class TestDeterministicChangeJudges:
         judgment = _judge_retry_fallback(guidance)
 
         assert judgment.passed, judgment.reasoning
+
+    def test_retry_fallback_judge_accepts_cloud_let_propagate_output(self) -> None:
+        """The exact release-gate output states an explicit final action."""
+        guidance = """\
+Build a Python data-import pipeline with three steps:
+1. `fetch_data(url)` — downloads JSON from a URL.
+2. `parse_data(raw)` — parses the JSON into records.
+3. `load_data(records, db)` — inserts records into a database.
+
+The pipeline runner `run_pipeline(url, db)` calls these in sequence.
+
+If `fetch_data(url)` raises a connection error (such as a network-related
+exception), `run_pipeline(url, db)` must catch this exception and retry the
+entire pipeline from the beginning.
+- Implement a retry limit of up to 3 attempts in total.
+- If the 3rd attempt still fails with a connection error, `run_pipeline` must
+  let the connection exception propagate to the caller.
+"""
+
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use at most 3 attempts. If the third attempt fails, let the "
+                "connection exception propagate to the caller."
+            ),
+            (
+                "Retry up to 3 times. If the 3rd attempt still fails, the "
+                "runner must let the final error propagate."
+            ),
+            (
+                "Use a maximum of 3 attempts. If the third attempt fails, "
+                "run_pipeline should explicitly let that exception propagate."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- If the third attempt fails, `run_pipeline` must let the "
+                "connection exception propagate to the caller."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_accepts_let_error_propagate(
+        self, guidance: str
+    ) -> None:
+        """Explicitly letting an error propagate is affirmative fallback."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            "Use 3 attempts. If the third attempt fails, let it happen.",
+            (
+                "Use 3 attempts. If the third attempt fails, the runner must "
+                "not let the exception propagate."
+            ),
+            "Use 3 attempts. If the third attempt fails, let metrics propagate.",
+            "Use 3 attempts. If the third attempt fails, let success propagate.",
+            (
+                "Use 3 attempts. If the third attempt fails, let the exception "
+                "propagate and keep retrying."
+            ),
+            (
+                "Use 3 attempts. If the third attempt fails, let the connection "
+                "exception propagate no further."
+            ),
+            (
+                "Use 3 attempts. If the third attempt fails, let the connection "
+                "exception propagate and swallow it before it reaches the caller."
+            ),
+            (
+                "Use 3 attempts. If the third attempt fails, let the connection "
+                "exception propagate only when debug mode is enabled."
+            ),
+            (
+                "Use 3 attempts. If the third attempt fails, let the connection "
+                "exception propagate to telemetry, not the caller."
+            ),
+            "If a connection error occurs, let the exception propagate.",
+            "Let the connection exception propagate to the caller.",
+            (
+                "Use 3 attempts. If validation fails, let the connection "
+                "exception propagate. If the third attempt fails."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_unsafe_let_forms(
+        self, guidance: str
+    ) -> None:
+        """Vague, negated, unrelated, or unbounded ``let`` is not fallback."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use at most 3 attempts.\n"
+                "- If the third attempt fails:\n"
+                "  - do not let the connection exception propagate to the caller."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- If validation fails:\n"
+                "  - let the connection exception propagate to the caller.\n"
+                "- If the third attempt fails:\n"
+                "  - log retry metrics."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- If validation fails:\n"
+                "  - If the third attempt fails:\n"
+                "    - let the connection exception propagate to the caller."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- If authentication fails:\n"
+                "  - If the third attempt fails:\n"
+                "    - `run_pipeline` must let the final error propagate upstream."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- Unless validation succeeds:\n"
+                "  - If the third attempt fails:\n"
+                "    - let the connection exception propagate to the caller."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- Before validation completes:\n"
+                "  - If the third attempt fails:\n"
+                "    - `run_pipeline` must let the final error propagate upstream."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_nested_markdown_sibling_actions(
+        self, guidance: str
+    ) -> None:
+        """Unsupported nested list actions cannot weaken clause isolation."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
 
     @pytest.mark.parametrize(
         "guidance",
