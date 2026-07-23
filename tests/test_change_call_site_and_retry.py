@@ -229,6 +229,11 @@ _CONNECTIVE_ONLY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_ACTION_LIST_PREFIX_PATTERN = re.compile(
+    r"^\s*(?:(?:[-*+]|\d+[.)])\s+)+",
+    re.IGNORECASE,
+)
+
 _ACTION_ADVERBS = (
     r"(?:(?:immediately|gracefully|clearly|explicitly|directly|finally)\s+)*"
 )
@@ -241,7 +246,10 @@ _DIRECT_ACTION_PATTERNS = tuple(
         r"(?:re[- ]?)?rais(?:e|ed)\b.{0,96}",
         r"(?:surface|propagate|abort|skip)\b.{0,96}",
         r"let\s+(?:(?:the|a|an|this|that)\s+)?"
-        r"(?:[\w-]+\s+){0,4}(?:errors?|exceptions?)\s+propagate\b.{0,64}",
+        r"(?:[\w-]+\s+){0,4}(?:errors?|exceptions?)\s+propagate"
+        r"(?:\s+upstream|\s+(?:back\s+)?to\s+"
+        r"(?:(?:the|a|an|its)\s+)?(?:caller|user|client|upstream|"
+        r"calling\s+(?:code|function)))?",
         r"return\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
         r"log\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
         r"fail\s+with\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
@@ -368,6 +376,7 @@ def _retry_units(prompt_output: str) -> tuple[str, ...]:
 def _fallback_action_state(text: str) -> tuple[bool, bool]:
     """Classify one self-contained action unit as affirmative or rejected."""
     text = text.strip(" ,;:.!?\t\r\n")
+    text = _ACTION_LIST_PREFIX_PATTERN.sub("", text)
     if _UNSUPPORTED_INVERSE_ORDINAL_PATTERN.search(text):
         return False, False
     if _RETRY_CONTINUATION_PATTERN.search(text):
