@@ -1,12 +1,12 @@
 schema_version: 1
-protected_base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+protected_base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
 milestone_order: [M0, M1, M2, M3, M4, M5]
 active_blocker: m0-executable-baseline
 integration:
   owner: integration
   worktree: /Users/gregtanaka/Developer/pdd_cloud/worktrees/pdd/issue-1932-global-sync-m0
   branch: feat/1932-global-sync-m0-20260724
-  base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+  base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
   write_set:
     - scripts/verify_global_sync_execution_contract.py
     - docs/global_sync_execution_state.yaml
@@ -18,7 +18,7 @@ tracks:
     owner: m0-contract
     worktree: /Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/issue-1932-m0-contract
     branch: feat/1932-m0-contract-20260724
-    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
     write_set:
       - scripts/verify_global_sync_execution_contract.py
       - tests/test_global_sync_execution_contract.py
@@ -30,43 +30,49 @@ tracks:
     owner: m0-finalizer-test
     worktree: /Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/issue-1932-m0-finalizer-test
     branch: fix/1932-m0-finalizer-test-20260724
-    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
     write_set: [tests/test_sync_core_reporting.py]
+  - id: m0-reporting-remediation
+    owner: m0-reporting-remediation
+    worktree: /Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/issue-1932-m0-reporting-selection
+    branch: fix/1932-m0-reporting-module-selection-20260724
+    base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
+    write_set: [pdd/sync_core/reporting.py, tests/test_sync_core_reporting.py]
   - id: m0-scope-samples
     owner: m0-scope-samples
     worktree: /Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/issue-1932-m0-scope-samples
     branch: feat/1932-m0-scope-samples-20260724
-    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
     write_set: [docs/global_sync_m0_scope_report.md]
   - id: track-a-repair
     owner: track-a
     worktree: pending
     branch: pending
-    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
     write_set: [pdd/sync_core/planner.py, pdd/sync_core/transaction.py, pdd/sync_core/finalize.py, pdd/sync_core/repair.py, pdd/commands/resolve.py, tests/test_global_sync_vertical_slice.py]
   - id: track-b-runner
     owner: track-b
     worktree: pending
     branch: pending
-    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
     write_set: [pdd/sync_core/runner.py, pdd/sync_core/verification.py, pdd/sync_core/pytest_probe.py, tests/test_sync_core_runner.py, tests/test_sync_core_runner_pytest.py]
   - id: track-c-checker
     owner: track-c
     worktree: pending
     branch: pending
-    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
     write_set: [pdd/sync_core/standalone_package.py, pdd/sync_core/checker_cli.py, pdd/sync_core/released_checker.py, tests/test_sync_core_standalone_package.py]
   - id: track-d-routing
     owner: track-d
     worktree: pending
     branch: pending
-    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
     write_set: [pdd/sync_core/capabilities.py, pdd/continuous_sync.py, pdd/sync_determine_operation.py, pdd/sync_orchestration.py, pdd/sync_main.py, pdd/update_main.py, pdd/ci_drift_heal.py, pdd/sync_core/production_routing_verifier.py]
   - id: track-e-consumer
     owner: track-e
     worktree: pending
     branch: pending
-    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
     write_set: [pdd/sync_core/scan_verifier.py, pdd/sync_core/consumer_ownership_verifier.py, pdd/sync_core/nightly_ledger_verifier.py, .github/workflows/global-sync-merge-group.yml, .github/workflows/global-sync-shadow-nightly.yml]
 required_to_build_components: [vertical-slice-verifier, production-routing-verifier, scan-verifier, consumer-ownership-verifier, nightly-ledger-verifier, reference-verifier, certificate-finalizer, merge-group-workflow, shadow-nightly-workflow, sync-core-runner-pytest-test, global-sync-vertical-slice-test, production-global-sync-verifier]
 ledger_source: docs/global_sync_evidence_ledger_source.yaml
@@ -317,7 +323,7 @@ validation_steps:
     validation_commands: [m0-focused-cli-test]
     reason: "Pending until the supported source and built-wheel environments are captured."
 scoreboard:
-  base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+  base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
   milestone: M0
   working_vertical_slice: pending
   source_wheel_parity: pending

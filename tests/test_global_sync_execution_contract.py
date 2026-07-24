@@ -13,6 +13,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "verify_global_sync_execution_contract.py"
+CURRENT_PROTECTED_BASE_SHA = "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
 
 
 def _module():
@@ -308,3 +309,48 @@ def test_execution_state_records_the_exact_m0_focused_suite_and_owned_m0_paths()
     tracks = {track["id"]: track for track in state["tracks"]}
     assert tracks["m0-finalizer-test"]["write_set"] == ["tests/test_sync_core_reporting.py"]
     assert tracks["m0-scope-samples"]["write_set"] == ["docs/global_sync_m0_scope_report.md"]
+
+
+def test_execution_state_and_generated_ledger_bind_the_protected_kickoff_base() -> None:
+    """Keep active M0 topology and its ledger anchored to the kickoff base."""
+    state = yaml.safe_load(
+        (ROOT / "docs" / "global_sync_execution_state.yaml").read_text(encoding="utf-8")
+    )
+    source = yaml.safe_load(
+        (ROOT / "docs" / "global_sync_evidence_ledger_source.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    generated = yaml.safe_load(
+        (ROOT / "docs" / "global_sync_evidence_ledger.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert state["protected_base_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert state["scoreboard"]["base_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert state["integration"]["base_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert all(
+        track["base_sha"] == CURRENT_PROTECTED_BASE_SHA for track in state["tracks"]
+    )
+    assert source["execution_contract"]["protected_base_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert generated["execution_contract"]["protected_base_sha"] == CURRENT_PROTECTED_BASE_SHA
+    tracks = {track["id"]: track for track in state["tracks"]}
+    reporting = tracks["m0-reporting-remediation"]
+    assert reporting["owner"] == "m0-reporting-remediation"
+    assert reporting["worktree"] == (
+        "/Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/"
+        "issue-1932-m0-reporting-selection"
+    )
+    assert reporting["branch"] == "fix/1932-m0-reporting-module-selection-20260724"
+    assert reporting["base_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert reporting["write_set"] == [
+        "pdd/sync_core/reporting.py", "tests/test_sync_core_reporting.py"
+    ]
+    delivery_tracks = [
+        track for track in state["tracks"] if track["id"].startswith("track-")
+    ]
+    claimed_paths = [
+        path for track in delivery_tracks for path in track["write_set"]
+    ]
+    assert len(claimed_paths) == len(set(claimed_paths))

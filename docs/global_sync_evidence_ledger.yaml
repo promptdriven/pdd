@@ -1,6 +1,6 @@
 schema_version: 5
 execution_contract:
-  protected_base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+  protected_base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
   milestone_order: [M0, M1, M2, M3, M4, M5]
   active_blocker: m0-executable-baseline
   registry_state: docs/global_sync_execution_state.yaml
