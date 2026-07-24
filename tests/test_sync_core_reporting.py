@@ -23,6 +23,7 @@ from pdd.sync_core import (
     FingerprintRecord,
     FingerprintStore,
     PlannedWrite,
+    RunnerExecution,
     SemanticStatus,
     TransactionManager,
     TRUSTED_RUNNER_VERSION,
@@ -228,6 +229,52 @@ def _options(tmp_path: Path, commit: str) -> CanonicalReportOptions:
         replay_ledger_path=tmp_path / "external-trust/replay.json",
         now=NOW,
     )
+
+
+@pytest.fixture
+def signed_passing_finalizer_profile(monkeypatch):
+    """Provide input-bound signed PASS evidence for finalizer semantics tests."""
+
+    def _run_profile(root, profile, binding, issuance, config):
+        assert issuance.signer is SIGNER
+        runner_digest = runner_identity_digest(
+            profile, root=root, ref=binding.head_sha, config=config
+        )
+        attestation_binding = AttestationBinding(
+            profile.unit_id,
+            binding.snapshot_digest,
+            profile.profile_digest,
+            runner_digest,
+            TRUSTED_RUNNER_VERSION,
+            binding.base_sha,
+            binding.head_sha,
+            adapter_identities=config.adapter_identities,
+        )
+        results = tuple(
+            ObligationEvidence(obligation.obligation_id, EvidenceOutcome.PASS)
+            for obligation in profile.obligations
+        )
+        envelope = SIGNER.issue(
+            AttestationRequest(
+                issuance.attestation_id,
+                attestation_binding,
+                results,
+                issuance.nonce,
+                issuance.issued_at,
+            )
+        )
+        executions = tuple(
+            RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.PASS,
+                runner_digest,
+                "test finalizer semantic evidence",
+            )
+            for obligation in profile.obligations
+        )
+        return envelope, executions
+
+    monkeypatch.setattr("pdd.sync_core.finalize.run_profile", _run_profile)
 
 
 def _durable_state(root: Path) -> dict[PurePosixPath, bytes]:
@@ -956,6 +1003,7 @@ def test_validate_command_requires_vitest_command_and_manifest_together(
     assert "manifest" in result.output.lower()
 
 
+@pytest.mark.usefixtures("signed_passing_finalizer_profile")
 def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(
     tmp_path,
 ) -> None:
@@ -1412,7 +1460,10 @@ def test_excluded_project_alias_counterpart_is_invalid_before_finalization(
     prepare.assert_not_called()
 
 
-def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
+@pytest.mark.usefixtures("signed_passing_finalizer_profile")
+def test_trusted_finalizer_second_run_is_zero_write_no_op(
+    tmp_path,
+) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/idempotency.json"
     first = finalize_unit(
@@ -1459,7 +1510,10 @@ def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
         path.write_text(json.dumps(payload, sort_keys=True))
 
 
-def test_trusted_finalizer_rejects_dirty_support_before_reuse(tmp_path) -> None:
+@pytest.mark.usefixtures("signed_passing_finalizer_profile")
+def test_trusted_finalizer_rejects_dirty_support_before_reuse(
+    tmp_path,
+) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/dirty-reuse.json"
     finalize_unit(
@@ -1474,7 +1528,10 @@ def test_trusted_finalizer_rejects_dirty_support_before_reuse(tmp_path) -> None:
         )
 
 
-def test_trusted_finalizer_rejects_allowed_state_renamed_to_support(tmp_path) -> None:
+@pytest.mark.usefixtures("signed_passing_finalizer_profile")
+def test_trusted_finalizer_rejects_allowed_state_renamed_to_support(
+    tmp_path,
+) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/rename-reuse.json"
     finalize_unit(
