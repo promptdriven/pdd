@@ -2,10 +2,23 @@ schema_version: 6
 execution_contract:
   protected_base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
   milestone_order: [M0, M1, M2, M3, M4, M5]
+  milestone_exit_states:
+    M0: [implemented, hosted_green, merged]
+    M1: [implemented, local_green, hosted_green, merged]
+    M2: [implemented, local_green, hosted_green, merged]
+    M3: [implemented, local_green, hosted_green, merged]
+    M4: [implemented, local_green, hosted_green, merged]
+    M5: [implemented, local_green, hosted_green, merged]
   active_blocker: m0-executable-baseline
   registry_state: docs/global_sync_execution_state.yaml
   execution_state_vocabulary: [ARCHIVED, EXISTS, EXTERNAL_PROTECTED, TO_BUILD]
   historical_authority: "The following Gate 1/2 rows remain append-only historical evidence and are non-executable."
+historical_archive:
+  protected_base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
+  base_source_path: "docs/global_sync_evidence_ledger_source.yaml"
+  transformation: "base-steps-to-historical-steps-v1"
+  historical_steps_sha256: "c370b27f10df1723754df3761cc03d67f87600df3c9519d2d051390f76ad12f7"
+  historical_promotion_bundles_sha256: "b83d8c3be6c9e71e0dc2b24b7727429bd578ab1b6ed8cb3284cb568ce7a5a640"
 updated_at: "2026-07-20"
 tracking_issue: "https://github.com/promptdriven/pdd/issues/1932"
 controlling_plan: "docs/global_sync_resolution_plan.md"
@@ -1920,6 +1933,17 @@ milestones:
       active_ledger_uses_m0_m5: true
       archived_gate_rows_are_non_authoritative: true
       supported_baseline_commands_recorded: false
+      hosted_runtime_proof:
+        candidate_sha: null
+        wheel_artifact_sha256: null
+        source_test:
+          run_url: null
+          binding_url: null
+          check_identity: null
+        wheel_test:
+          run_url: null
+          binding_url: null
+          check_identity: null
     blocker_id: m0-executable-baseline
     blocker: "Reconcile the active ledger with the M0 executable baseline and record the exact supported command results; archived Gate evidence cannot advance or block M0."
   - id: M1

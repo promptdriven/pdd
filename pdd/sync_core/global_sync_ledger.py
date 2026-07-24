@@ -7,6 +7,8 @@ Promotion remains a protected review decision recorded with exact evidence in
 the versioned source.
 """
 
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
 import argparse
@@ -15,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Protocol, Sequence
@@ -39,6 +42,19 @@ REQUIRED_GATE_STATE_FIELDS = (
 SOURCE_MARKER = "<!-- global-sync-ledger-source: {source_name} -->"
 HISTORICAL_GATE_COUNT = 10
 MILESTONE_IDS = ("M0", "M1", "M2", "M3", "M4", "M5")
+MILESTONE_EXIT_STATES = {
+    "M0": frozenset({"implemented", "hosted_green", "merged"}),
+    "M1": frozenset({"implemented", "local_green", "hosted_green", "merged"}),
+    "M2": frozenset({"implemented", "local_green", "hosted_green", "merged"}),
+    "M3": frozenset({"implemented", "local_green", "hosted_green", "merged"}),
+    "M4": frozenset({"implemented", "local_green", "hosted_green", "merged"}),
+    "M5": frozenset({"implemented", "local_green", "hosted_green", "merged"}),
+}
+# This commit predates the candidate ledger transformation.  A source-only
+# rewrite cannot change this anchor or the content read from it.
+PROTECTED_HISTORY_BASE_SHA = "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
+HISTORY_BASE_SOURCE_PATH = "docs/global_sync_evidence_ledger_source.yaml"
+HISTORY_TRANSFORMATION = "base-steps-to-historical-steps-v1"
 SHA1 = re.compile(r"[0-9a-f]{40}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 ACTION_RUN_URL = re.compile(r"^/([^/]+/[^/]+)/actions/runs/(\d+)$")
@@ -49,6 +65,9 @@ SUBJECT_RECORD_GATE = "gate"
 SUBJECT_RECORD_MILESTONE = "milestone"
 PROTECTED_VERIFICATION_AUTHORIZATIONS = {
     "github-pr-checks": frozenset({"implemented", "hosted_green", "merged"}),
+    "github-pr-source-wheel-checks": frozenset(
+        {"implemented", "local_green", "hosted_green", "merged", "status"}
+    ),
 }
 GITHUB_BINDING_EXPECTED_FIELDS = {
     "github_actions_run": (
@@ -114,8 +133,11 @@ class GitHubPromotionVerifier:  # pylint: disable=too-few-public-methods
         _validate_subject_shape(subject, "remote promotion")
         _validate_protected_verification(bundle, subject, "remote promotion")
         verification = _require_mapping(bundle, "protected_verification")
-        if verification.get("mode") != "github-pr-checks":
-            raise LedgerError("protected verification mode must be github-pr-checks")
+        if verification.get("mode") not in {
+            "github-pr-checks",
+            "github-pr-source-wheel-checks",
+        }:
+            raise LedgerError("protected verification mode is unsupported by GitHub")
         repository = bundle["repository"]
         pull_request = verification.get("pull_request")
         if not isinstance(pull_request, int) or pull_request < 1:
@@ -302,6 +324,19 @@ def canonical_predicate_digest(predicate: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _canonical_content_digest(value: object, field: str) -> str:
+    """Hash a complete historical projection with JSON's stable representation."""
+    canonical = _canonical_json_value(value, field)
+    encoded = json.dumps(
+        canonical,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _parse_github_binding(binding: dict[str, Any]) -> dict[str, str]:
     url = binding.get("url")
     if not isinstance(url, str):
@@ -371,7 +406,9 @@ def _canonical_pull_validation_command(repository: str, pull_request: int) -> st
     )
 
 
-def _validate_promotion_bundle(bundle: object, name: str) -> dict[str, Any]:
+def _validate_promotion_bundle(  # pylint: disable=too-many-branches
+    bundle: object, name: str
+) -> dict[str, Any]:
     if not isinstance(bundle, dict):
         raise LedgerError(f"promotion bundle {name!r} must be a mapping")
     repository = bundle.get("repository")
@@ -383,6 +420,21 @@ def _validate_promotion_bundle(bundle: object, name: str) -> dict[str, Any]:
     _validate_subject_shape(subject, name)
     _validate_protected_verification(bundle, subject, name)
     verification = _require_mapping(bundle, "protected_verification")
+    mode = verification["mode"]
+    expected_bundle_fields = {
+        "repository",
+        "repository_sha",
+        "head_sha",
+        "subject",
+        "validation_command",
+        "machine_predicate",
+        "artifact_bindings",
+        "protected_verification",
+    }
+    if mode == "github-pr-source-wheel-checks":
+        expected_bundle_fields.add("runtime_evidence")
+    if set(bundle) != expected_bundle_fields:
+        raise LedgerError(f"promotion bundle {name!r} has unexpected fields")
     command = bundle.get("validation_command")
     expected_command = _canonical_pull_validation_command(
         bundle["repository"], verification["pull_request"]
@@ -415,7 +467,61 @@ def _validate_promotion_bundle(bundle: object, name: str) -> dict[str, Any]:
         raise LedgerError(
             f"promotion bundle {name!r} machine predicate is not bound to an artifact"
         )
+    if mode == "github-pr-source-wheel-checks":
+        _validate_runtime_evidence(bundle, name)
     return bundle
+
+
+def _validate_runtime_evidence(bundle: dict[str, Any], name: str) -> None:
+    """Require separately named hosted source and wheel test identities."""
+    runtime = _require_mapping(bundle, "runtime_evidence")
+    if set(runtime) != {
+        "candidate_sha",
+        "wheel_artifact_sha256",
+        "source_test",
+        "wheel_test",
+    }:
+        raise LedgerError(f"promotion bundle {name!r} runtime evidence is malformed")
+    candidate_sha = _require_sha(
+        runtime.get("candidate_sha"), f"promotion bundle {name!r} candidate_sha"
+    )
+    if candidate_sha != bundle["head_sha"]:
+        raise LedgerError(f"promotion bundle {name!r} candidate SHA disagrees with head SHA")
+    wheel_digest = runtime.get("wheel_artifact_sha256")
+    if not isinstance(wheel_digest, str) or SHA256.fullmatch(wheel_digest) is None:
+        raise LedgerError(f"promotion bundle {name!r} wheel artifact digest is malformed")
+    bindings = bundle["artifact_bindings"]
+    test_urls: list[str] = []
+    for field in ("source_test", "wheel_test"):
+        test = runtime.get(field)
+        if not isinstance(test, dict) or set(test) != {
+            "run_url",
+            "binding_url",
+            "check_identity",
+        }:
+            raise LedgerError(f"promotion bundle {name!r} {field} is malformed")
+        run_url = test.get("run_url")
+        binding_url = test.get("binding_url")
+        identity = test.get("check_identity")
+        if not isinstance(run_url, str) or not isinstance(binding_url, str):
+            raise LedgerError(f"promotion bundle {name!r} {field} is malformed")
+        parsed_run = _parse_github_binding({"kind": "github_actions_run", "url": run_url})
+        matching = [
+            binding
+            for binding in bindings
+            if binding["url"] == binding_url
+            and _parse_github_binding(binding)["run_id"] == parsed_run["run_id"]
+            and _binding_identity_name(binding) == identity
+        ]
+        if len(matching) != 1:
+            raise LedgerError(
+                f"promotion bundle {name!r} {field} is not bound to its hosted check"
+            )
+        test_urls.append(binding_url)
+    if len(set(test_urls)) != 2:
+        raise LedgerError(
+            f"promotion bundle {name!r} source and wheel evidence must be distinct"
+        )
 
 
 def _validate_protected_verification(
@@ -528,25 +634,48 @@ def _record_subject(
     }
     if claims["exact_repository_sha"] != claims["merge_sha"]:
         raise LedgerError(f"{record_name} exact_repository_sha must equal merge_sha")
-    return {
+    subject: dict[str, object] = {
         "record": record_identity,
         "required_predicate_sha256": digest,
         "record_claims": claims,
     }
+    runtime_proof = required_predicate.get("hosted_runtime_proof")
+    if runtime_proof is not None:
+        if not isinstance(runtime_proof, dict):
+            raise LedgerError(f"{record_name}.hosted_runtime_proof must be a mapping")
+        subject["runtime_evidence"] = runtime_proof
+    return subject
 
 
 def _promotion_references(
-    record: dict[str, Any], record_name: str, record_identity: dict[str, object]
+    record: dict[str, Any],
+    record_name: str,
+    record_identity: dict[str, object],
+    milestone_exit_states: dict[str, frozenset[str]] | None = None,
 ) -> list[tuple[str, dict[str, object]]]:
     evidence_state = record["evidence_state"]
     passed_states = [
         name for name in REQUIRED_GATE_STATE_FIELDS if evidence_state[name] == "passed"
     ]
     if record["status"] == "passed":
-        if len(passed_states) != len(REQUIRED_GATE_STATE_FIELDS):
-            raise LedgerError(f"{record_name}.status cannot pass before every lifecycle state")
+        required_states = set(REQUIRED_GATE_STATE_FIELDS)
+        if (
+            record_identity.get("kind") == SUBJECT_RECORD_MILESTONE
+            and milestone_exit_states is not None
+        ):
+            milestone_id = record_identity["id"]
+            if not isinstance(milestone_id, str):  # Constructed internally.
+                raise LedgerError(f"{record_name} milestone identity is malformed")
+            required_states = set(milestone_exit_states[milestone_id])
+        if set(passed_states) != required_states:
+            if milestone_exit_states is None:
+                raise LedgerError(
+                    f"{record_name}.status cannot pass before every lifecycle state"
+                )
+            rendered = ", ".join(sorted(required_states))
+            raise LedgerError(f"{record_name}.status requires exactly: {rendered}")
         passed_states.append("status")
-    elif len(passed_states) == len(REQUIRED_GATE_STATE_FIELDS):
+    elif set(passed_states) == set(REQUIRED_GATE_STATE_FIELDS):
         raise LedgerError(f"{record_name} must be passed when every lifecycle state is passed")
     references = record.get("promotion_evidence", {})
     if not isinstance(references, dict):
@@ -571,7 +700,10 @@ def _validate_subject_binding(
 ) -> None:
     """Require a bundle's declared subject to exactly match every reference."""
     subject = _require_mapping(bundle, "subject")
-    if subject != expected:
+    expected_subject = {
+        key: value for key, value in expected.items() if key != "runtime_evidence"
+    }
+    if subject != expected_subject:
         raise LedgerError(f"promotion bundle {name!r} subject does not match its record")
     claims = _require_mapping(subject, "record_claims")
     if bundle["repository"] != claims["repository"]:
@@ -584,6 +716,11 @@ def _validate_subject_binding(
         raise LedgerError(f"promotion bundle {name!r} merge SHA disagrees with subject")
     if bundle["head_sha"] != claims["reviewed_head_sha"]:
         raise LedgerError(f"promotion bundle {name!r} head SHA disagrees with subject")
+    if bundle["protected_verification"]["mode"] == "github-pr-source-wheel-checks":
+        if bundle.get("runtime_evidence") != expected.get("runtime_evidence"):
+            raise LedgerError(
+                f"promotion bundle {name!r} runtime evidence does not match its predicate"
+            )
 
 
 def _require_exact_string_sequence(
@@ -660,8 +797,85 @@ def _validate_historical_steps(
     return promotion_references
 
 
+def _validate_historical_archive(  # pylint: disable=too-many-locals
+    payload: dict[str, Any], source: Path
+) -> None:
+    """Compare archived rows with their immutable protected-base projection."""
+    historical_steps = payload.get("historical_steps")
+    historical_bundles = payload.get("historical_promotion_bundles")
+    if not historical_steps and not historical_bundles:
+        return
+    archive = _require_mapping(payload, "historical_archive")
+    if set(archive) != {
+        "protected_base_sha",
+        "base_source_path",
+        "transformation",
+        "historical_steps_sha256",
+        "historical_promotion_bundles_sha256",
+    }:
+        raise LedgerError("historical_archive has unexpected fields")
+    if (
+        archive.get("protected_base_sha") != PROTECTED_HISTORY_BASE_SHA
+        or archive.get("base_source_path") != HISTORY_BASE_SOURCE_PATH
+        or archive.get("transformation") != HISTORY_TRANSFORMATION
+    ):
+        raise LedgerError("historical_archive must use the protected-base transformation")
+    repository_root = source.resolve().parent.parent
+    command = [
+        "git",
+        "-C",
+        str(repository_root),
+        "--no-replace-objects",
+        "show",
+        f"{PROTECTED_HISTORY_BASE_SHA}:{HISTORY_BASE_SOURCE_PATH}",
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, check=False, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise LedgerError("cannot read protected historical archive base") from exc
+    if result.returncode != 0:
+        raise LedgerError("cannot read protected historical archive base")
+    try:
+        base_payload = yaml.load(result.stdout.decode("utf-8"), Loader=_UniqueKeyLoader)
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise LedgerError("protected historical archive base is malformed") from exc
+    if not isinstance(base_payload, dict):
+        raise LedgerError("protected historical archive base is malformed")
+    base_steps = base_payload.get("steps")
+    base_bundles = base_payload.get("promotion_bundles")
+    if not isinstance(base_steps, list) or not isinstance(base_bundles, dict):
+        raise LedgerError("protected historical archive base is malformed")
+    normalized_steps: list[object] = []
+    for step in historical_steps:
+        if not isinstance(step, dict):
+            raise LedgerError("historical archive steps are malformed")
+        normalized = dict(step)
+        normalized.pop("execution_state", None)
+        normalized_steps.append(normalized)
+    expected_bundles = {
+        name: bundle
+        for name, bundle in base_bundles.items()
+        if name != "ledger_generation_hosted_merge"
+    }
+    if normalized_steps != base_steps or historical_bundles != expected_bundles:
+        raise LedgerError("historical archive differs from protected-base transformation")
+    expected_step_digest = _canonical_content_digest(base_steps, "historical_steps")
+    expected_bundle_digest = _canonical_content_digest(
+        expected_bundles, "historical_promotion_bundles"
+    )
+    if (
+        archive.get("historical_steps_sha256") != expected_step_digest
+        or archive.get("historical_promotion_bundles_sha256") != expected_bundle_digest
+    ):
+        raise LedgerError("historical_archive digest does not match protected base")
+
+
 def _validate_milestone(
-    milestone: object, statuses: set[str], index: int, execution_states: set[str]
+    milestone: object,
+    statuses: set[str],
+    index: int,
+    execution_states: set[str],
+    milestone_exit_states: dict[str, frozenset[str]] | None,
 ) -> list[tuple[str, dict[str, object]]]:
     """Validate one active M0--M5 record and its independently provable claims."""
     record_name = f"milestones[{index}]"
@@ -693,10 +907,13 @@ def _validate_milestone(
         milestone,
         record_name,
         {"kind": SUBJECT_RECORD_MILESTONE, "id": MILESTONE_IDS[index]},
+        milestone_exit_states,
     )
 
 
-def _validate_execution_contract(payload: dict[str, Any]) -> tuple[dict[str, str], set[str]]:
+def _validate_execution_contract(
+    payload: dict[str, Any],
+) -> tuple[dict[str, str], set[str], dict[str, frozenset[str]] | None]:
     """Return canonical live blockers and the controlled execution vocabulary."""
     contract = _require_mapping(payload, "execution_contract")
     if contract.get("milestone_order") != list(MILESTONE_IDS):
@@ -733,12 +950,25 @@ def _validate_execution_contract(payload: dict[str, Any]) -> tuple[dict[str, str
     active_blocker = contract.get("active_blocker")
     if active_blocker not in canonical_blockers:
         raise LedgerError("execution_contract.active_blocker must be canonical")
-    return canonical_blockers, execution_states
+    exit_states_value = contract.get("milestone_exit_states")
+    if exit_states_value is None:
+        return canonical_blockers, execution_states, None
+    if not isinstance(exit_states_value, dict) or set(exit_states_value) != set(MILESTONE_IDS):
+        raise LedgerError("execution_contract.milestone_exit_states is invalid")
+    exit_states: dict[str, frozenset[str]] = {}
+    for milestone_id, required_states in MILESTONE_EXIT_STATES.items():
+        configured = exit_states_value[milestone_id]
+        if not isinstance(configured, list) or set(configured) != required_states:
+            raise LedgerError(
+                f"execution_contract.milestone_exit_states.{milestone_id} is invalid"
+            )
+        exit_states[milestone_id] = required_states
+    return canonical_blockers, execution_states, exit_states
 
 
-def _validate_live_authority(
+def _validate_live_authority(  # pylint: disable=too-many-branches
     payload: dict[str, Any], statuses: set[str], canonical_blockers: dict[str, str],
-    execution_states: set[str]
+    execution_states: set[str], milestone_exit_states: dict[str, frozenset[str]] | None
 ) -> list[tuple[str, dict[str, object]]]:
     """Validate current M0--M5 authority without consulting archived Gate rows."""
     if "steps" in payload:
@@ -746,10 +976,21 @@ def _validate_live_authority(
     milestones = payload.get("milestones")
     if not isinstance(milestones, list) or len(milestones) != len(MILESTONE_IDS):
         raise LedgerError("ledger source field 'milestones' must contain M0 through M5")
+    encountered_nonpassed = False
+    for milestone in milestones:
+        if not isinstance(milestone, dict):
+            continue  # The record validator emits the precise schema error below.
+        if milestone.get("status") == "passed":
+            if encountered_nonpassed:
+                raise LedgerError("milestones must form a contiguous passed prefix")
+        else:
+            encountered_nonpassed = True
     promotion_references: list[tuple[str, dict[str, object]]] = []
     for index, milestone in enumerate(milestones):
         promotion_references.extend(
-            _validate_milestone(milestone, statuses, index, execution_states)
+            _validate_milestone(
+                milestone, statuses, index, execution_states, milestone_exit_states
+            )
         )
     m0 = milestones[0]
     if not isinstance(m0, dict):  # Checked above; narrows the type for the validator.
@@ -851,7 +1092,9 @@ def validate_ledger(  # pylint: disable=too-many-locals,too-many-branches
         raise LedgerError(
             "ledger_generation.trust_boundary must require protected verification"
         )
-    canonical_blockers, execution_states = _validate_execution_contract(payload)
+    canonical_blockers, execution_states, milestone_exit_states = _validate_execution_contract(
+        payload
+    )
     active_references = _promotion_references(
         ledger_generation,
         "ledger_generation",
@@ -859,7 +1102,11 @@ def validate_ledger(  # pylint: disable=too-many-locals,too-many-branches
     )
     active_references.extend(
         _validate_live_authority(
-            payload, statuses, canonical_blockers, execution_states
+            payload,
+            statuses,
+            canonical_blockers,
+            execution_states,
+            milestone_exit_states,
         )
     )
     historical_references = _validate_historical_steps(payload, statuses)
@@ -884,6 +1131,7 @@ def validate_ledger(  # pylint: disable=too-many-locals,too-many-branches
     }
     for name, expected in historical_bundle_subjects.items():
         _validate_subject_binding(validated_historical_bundles[name], name, expected)
+    _validate_historical_archive(payload, source)
     if verify_remote:
         verifier = promotion_verifier or GitHubPromotionVerifier()
         for name in sorted(bundle_subjects):
