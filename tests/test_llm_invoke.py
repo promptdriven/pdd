@@ -4468,8 +4468,6 @@ def test_default_base_model_can_be_none():
     This verifies that the hardcoded DEFAULT_LLM_MODEL is no longer required.
     When PDD_MODEL_DEFAULT env var is not set, DEFAULT_BASE_MODEL should be None,
     and model selection should use the first available model from CSV.
-
-    Related to Issue #296 - proper fix to remove hardcoded model dependency.
     """
     import pdd.llm_invoke as llm_invoke_module
     import importlib
@@ -4484,11 +4482,9 @@ def test_default_base_model_can_be_none():
         # Reload the module to pick up the environment change
         importlib.reload(llm_invoke_module)
 
-        # Check that DEFAULT_BASE_MODEL is None (not the hardcoded gpt-5.1-codex-mini)
         from pdd.llm_invoke import DEFAULT_BASE_MODEL
 
-        assert DEFAULT_BASE_MODEL is None, \
-            f"DEFAULT_BASE_MODEL should be None when PDD_MODEL_DEFAULT is not set, got: {DEFAULT_BASE_MODEL}"
+        assert DEFAULT_BASE_MODEL is None
     finally:
         # Restore original environment
         os.environ.clear()
@@ -6195,6 +6191,181 @@ class TestLlmInvokeWithMockedLLM:
             )
 
         assert result["result"] == "Retry success"
+
+    def test_anthropic_refusal_falls_back_without_cache_retry(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """A Fable refusal must advance to another candidate, not retry itself."""
+        csv_path = tmp_path / "models.csv"
+        csv_path.write_text(
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_reasoning_tokens\n"
+            "Anthropic,claude-fable-5,1,2,1300,KEY_A,True,adaptive,0\n"
+            "OpenAI,model-b,1,2,1200,KEY_B,True,none,0\n"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("KEY_A", "sk-aaaa1234567890123456")
+        monkeypatch.setenv("KEY_B", "sk-bbbb1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "claude-fable-5")
+
+        refusal_message = MagicMock()
+        refusal_message.content = None
+        refusal_message.provider_specific_fields = {"anthropic_stop_reason": "refusal"}
+        refusal_choice = MagicMock()
+        refusal_choice.message = refusal_message
+        refusal_response = MagicMock()
+        refusal_response.choices = [refusal_choice]
+        refusal_response._hidden_params = {}
+
+        success_message = MagicMock()
+        success_message.content = "fallback success"
+        success_choice = MagicMock()
+        success_choice.message = success_message
+        success_choice.finish_reason = "stop"
+        success_response = MagicMock()
+        success_response.choices = [success_choice]
+        success_response._hidden_params = {}
+
+        with patch.object(
+            llm_mod.litellm,
+            "completion",
+            side_effect=[refusal_response, success_response],
+        ) as completion:
+            result = llm_mod.llm_invoke(
+                prompt="Say {greeting}",
+                input_json={"greeting": "hello"},
+                strength=0.5,
+                use_cloud=False,
+            )
+
+        assert completion.call_count == 2
+        assert result["result"] == "fallback success"
+        assert result["model_name"] == "model-b"
+        assert result["attempted_models"] == ["claude-fable-5", "model-b"]
+
+    def test_explicit_fable_env_is_attempted_first_at_default_strength(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """An explicit Fable selection beats high-strength rank ordering.
+
+        Fable has no benchmark rank, so the ordinary 1.0 selector would put
+        ``model-b`` first. Its failure here proves that the fallback is reached
+        only after an actual Fable request was attempted.
+        """
+        csv_path = tmp_path / "models.csv"
+        csv_path.write_text(
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_reasoning_tokens\n"
+            "Anthropic,claude-fable-5,1,2,0,KEY_A,True,adaptive,0\n"
+            "OpenAI,model-b,1,2,1500,KEY_B,True,none,0\n"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("PDD_MODEL_DEFAULT", "claude-fable-5")
+        monkeypatch.setenv("KEY_A", "sk-aaaa1234567890123456")
+        monkeypatch.setenv("KEY_B", "sk-bbbb1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+
+        success_message = MagicMock()
+        success_message.content = "fallback success"
+        success_choice = MagicMock()
+        success_choice.message = success_message
+        success_choice.finish_reason = "stop"
+        success_response = MagicMock()
+        success_response.choices = [success_choice]
+        success_response._hidden_params = {}
+
+        with patch.object(
+            llm_mod.litellm,
+            "completion",
+            side_effect=[Exception("Fable provider failure"), success_response],
+        ) as completion:
+            result = llm_mod.llm_invoke(
+                prompt="Say {greeting}",
+                input_json={"greeting": "hello"},
+                strength=1.0,
+                use_cloud=False,
+            )
+
+        assert [call.kwargs["model"] for call in completion.call_args_list] == [
+            "claude-fable-5",
+            "model-b",
+        ]
+        assert result["attempted_models"] == ["claude-fable-5", "model-b"]
+        assert result["model_name"] == "model-b"
+
+    @pytest.mark.parametrize(
+        "configured_alias",
+        ["claude-opus-5", "anthropic/claude-opus-5"],
+    )
+    def test_explicit_opus_5_alias_invokes_canonical_fable_model(
+        self, llm_mod, tmp_path, monkeypatch, configured_alias
+    ):
+        """Opus 5 CLI vocabulary must never reach Anthropic as a fake model ID."""
+        csv_path = tmp_path / "models.csv"
+        csv_path.write_text(
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_reasoning_tokens\n"
+            "Anthropic,claude-fable-5,1,2,0,KEY_A,True,adaptive,0\n"
+            "OpenAI,model-b,1,2,1500,KEY_B,True,none,0\n"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("PDD_MODEL_DEFAULT", configured_alias)
+        monkeypatch.setenv("KEY_A", "sk-aaaa1234567890123456")
+        monkeypatch.setenv("KEY_B", "sk-bbbb1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+
+        success_message = MagicMock()
+        success_message.content = "Fable success"
+        success_choice = MagicMock()
+        success_choice.message = success_message
+        success_choice.finish_reason = "stop"
+        success_response = MagicMock()
+        success_response.choices = [success_choice]
+        success_response._hidden_params = {}
+
+        with patch.object(
+            llm_mod.litellm,
+            "completion",
+            return_value=success_response,
+        ) as completion:
+            result = llm_mod.llm_invoke(
+                prompt="Say {greeting}",
+                input_json={"greeting": "hello"},
+                strength=1.0,
+                use_cloud=False,
+            )
+
+        assert completion.call_count == 1
+        assert completion.call_args.kwargs["model"] == "claude-fable-5"
+        assert result["model_name"] == "claude-fable-5"
+        assert result["attempted_models"] == ["claude-fable-5"]
+
+    def test_explicit_fable_env_refuses_catalog_surrogate(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """A stale catalog cannot turn an explicit Fable request into Opus."""
+        csv_path = tmp_path / "models.csv"
+        csv_path.write_text(
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_reasoning_tokens\n"
+            "Anthropic,claude-opus-4-7,1,2,1500,KEY_A,True,adaptive,0\n"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("PDD_MODEL_DEFAULT", "claude-fable-5")
+        monkeypatch.setenv("KEY_A", "sk-aaaa1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+
+        with patch.object(llm_mod.litellm, "completion") as completion:
+            with pytest.raises(ValueError, match="Claude Fable 5 was explicitly selected"):
+                llm_mod.llm_invoke(
+                    prompt="Say {greeting}",
+                    input_json={"greeting": "hello"},
+                    strength=1.0,
+                    use_cloud=False,
+                )
+
+        completion.assert_not_called()
 
     def test_all_models_fail_raises_runtime_error(self, llm_mod, tmp_path, monkeypatch):
         csv_path = self._make_csv_file(tmp_path)
@@ -8924,6 +9095,7 @@ def test_map_openai_params_direct_opus_48_emits_adaptive_shape():
     Bedrock Converse and Vertex relay transform classes are covered by the
     dedicated 4.8 relay tests below."""
     for model in (
+        "claude-fable-5",
         "claude-opus-4-8",
         "claude-opus-4.8",
         "vertex_ai/claude-opus-4-8",

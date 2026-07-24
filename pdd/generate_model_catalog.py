@@ -94,6 +94,10 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     # -----------------------------------------------------------------------
     # Anthropic Claude
     # -----------------------------------------------------------------------
+    # Fable 5 has no reviewed Code Arena result yet. Keep its catalog score at
+    # zero rather than inventing benchmark evidence; pdd-opus selects it
+    # explicitly in the GitHub App rather than via rank-based routing.
+    "claude-fable-5": 0,
     "claude-opus-4-8": 1575,            # [EST] provisional, until live arena lists it
     "claude-opus-4-7": 1565,            # [CODE] reviewed WebDev manifest row
     "claude-opus-4-6": 1561,            # [CODE] #1
@@ -626,12 +630,16 @@ def _has_region(model_id: str) -> bool:
 # legacy budget shape. Direct Anthropic and Azure AI Foundry routes enforce
 # this; Bedrock / Vertex relays stay on effort because their adaptive
 # conversion is handled by LiteLLM relay patches in llm_invoke.py.
-_ADAPTIVE_CLAUDE_MODELS = {"claude-opus-4-7", "claude-opus-4-8"}
+_ADAPTIVE_CLAUDE_MODELS = {
+    "claude-fable-5",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+}
 _ADAPTIVE_CLAUDE_PROVIDERS = {"anthropic", "azure_ai"}
 
 
 def _is_adaptive_claude_model(model_id: str, litellm_provider: str) -> bool:
-    """Return True for direct Anthropic/Azure AI Opus 4.7+ rows."""
+    """Return True for direct Anthropic/Azure AI adaptive-thinking rows."""
     root = _get_provider_root(litellm_provider)
     if root not in _ADAPTIVE_CLAUDE_PROVIDERS:
         return False
@@ -661,7 +669,11 @@ def _infer_max_reasoning_tokens(model_id: str, litellm_provider: str, entry: dic
     if root in _ANTHROPIC_PROVIDERS:
         if _is_adaptive_claude_model(model_id, litellm_provider):
             # adaptive serialization doesn't read this value, but match the
-            # validated pdd_cloud backend CSV (backend/functions/.pdd/llm_model.csv)
+            # reviewed direct-provider contract. Fable's 128k is an output
+            # limit, not a configurable thinking budget; its adaptive rows
+            # therefore report no max reasoning-token value.
+            if _normalize_model_name(model_id) == "claude-fable-5":
+                return 0
             return 16000
         return 128000
     return 0
@@ -1366,6 +1378,30 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "location": "",
     },
     {
+        # Claude Fable 5 is Anthropic's generally available flagship model.
+        # It uses adaptive thinking exclusively, has a 1M-token context
+        # window, and is priced at $10 / $50 per million input/output tokens.
+        # Seed the direct row until the installed LiteLLM catalog carries the
+        # model so explicit ANTHROPIC_API_KEY selection remains stable.
+        "provider": "Anthropic",
+        "model": "claude-fable-5",
+        "input": 10.0,
+        "output": 50.0,
+        # Fable has no reviewed Arena/DeepSWE score yet. It is the explicit
+        # pdd-opus target, so preserve this unscored provider-default row
+        # through regeneration without fabricating benchmark evidence.
+        "coding_arena_elo": 0,
+        "model_rank_score": 0,
+        "model_rank_source": "platform-default",
+        "base_url": "",
+        "api_key": "ANTHROPIC_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "adaptive",
+        "location": "",
+        "context_limit": 1_000_000,
+    },
+    {
         # Claude Opus 4.8 (released 2026-05-28) is PDD's default Opus
         # (pdd-opus) but is absent from litellm.model_cost until litellm
         # ships it, so the litellm-driven build loop would drop it. Seed it
@@ -1776,6 +1812,26 @@ def _mandatory_rows_missing_from(
     return missing
 
 
+def _overlay_mandatory_contract_fields(row: dict) -> dict:
+    """Preserve mandatory capability contracts on LiteLLM-derived rows.
+
+    A reviewed score lets a LiteLLM row survive the catalog cutoff, so the
+    duplicate-prevention logic intentionally does not append its mandatory
+    fallback.  Keep capability fields from that fallback on the surviving row
+    rather than allowing a catalog refresh to weaken a reviewed PDD contract.
+    """
+    row_id = (row.get("provider", ""), row.get("model", ""))
+    for default_row in _MANDATORY_MODEL_ROWS:
+        default_id = (default_row.get("provider", ""), default_row.get("model", ""))
+        if row_id != default_id:
+            continue
+        for field in ("max_reasoning_tokens", "context_limit"):
+            if field in default_row:
+                row[field] = default_row[field]
+        break
+    return row
+
+
 # Issue #1269: the ChatGPT/Codex SUBSCRIPTION family is hand-managed. It is
 # billed by a flat-rate ChatGPT plan (not per-token API keys) and is not present
 # in ``litellm.model_cost`` in a curatable form, so it is intentionally skipped
@@ -1956,7 +2012,7 @@ def build_rows(
         # Location (Vertex AI models default to global)
         location = "global" if litellm_provider.startswith("vertex_ai") else ""
 
-        rows.append({
+        generated_row = {
             "provider": display_name,
             "model": model_id,
             "input": input_cost,
@@ -1970,7 +2026,8 @@ def build_rows(
             "structured_output": structured,
             "reasoning_type": reasoning_type,
             "location": location,
-        })
+        }
+        rows.append(_overlay_mandatory_contract_fields(generated_row))
 
     if skipped_previews:
         print(

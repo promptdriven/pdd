@@ -109,6 +109,25 @@ def test_manifest_file_is_checked_in_and_loadable():
     assert index["gpt-5-5-high"]["elo"] == 1500.0
 
 
+def test_fable_catalog_seed_preserves_anthropic_adaptive_contract():
+    rows = _read_catalog_rows()
+    row = next(
+        candidate
+        for candidate in rows
+        if candidate["provider"] == "Anthropic"
+        and candidate["model"] == "claude-fable-5"
+    )
+
+    assert row["api_key"] == "ANTHROPIC_API_KEY"
+    assert row["input"] == "10.0"
+    assert row["output"] == "50.0"
+    assert row["coding_arena_elo"] == "0"
+    assert row["model_rank_score"] == "0"
+    assert row["model_rank_source"] == "platform-default"
+    assert row["reasoning_type"] == "adaptive"
+    assert row["context_limit"] == "1000000"
+
+
 def test_parse_agentic_manifest_indexes_reviewed_aliases():
     payload = _manifest([
         {
@@ -714,6 +733,93 @@ def test_gpt_5_6_openai_api_row_seeded_as_platform_default():
     assert row["model_rank_source"] == "platform-default"
     assert int(row["model_rank_score"]) == 17001  # top-ranked OpenAI API model
     assert int(row["coding_arena_elo"]) == 0       # no invented Arena score
+
+
+def test_fable_mandatory_row_survives_as_unscored_platform_default():
+    """Fable is selected explicitly by pdd-opus, not a benchmark ranking.
+
+    A future LiteLLM catalog refresh must retain the direct Anthropic row even
+    until reviewed Arena/DeepSWE evidence exists. ``platform-default`` is the
+    established mandatory-row exception; the zero rank prevents this row from
+    silently becoming a rank-selected default.
+    """
+    from collections import defaultdict
+
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=[], arena_index={}, elo_source_counts=defaultdict(int)
+    )
+    row = next(
+        candidate
+        for candidate in seeded
+        if candidate["provider"] == "Anthropic"
+        and candidate["model"] == "claude-fable-5"
+    )
+
+    assert row["coding_arena_elo"] == 0
+    assert row["model_rank_score"] == 0
+    assert row["model_rank_source"] == "platform-default"
+    assert gmc._survives_catalog_cutoff(
+        row["coding_arena_elo"], row["model_rank_source"]
+    )
+
+
+def test_committed_csv_places_unranked_fable_at_end_of_anthropic_block():
+    """The committed catalog must retain the generator's rank-descending order."""
+    lines = (_ROOT / "pdd" / "data" / "llm_model.csv").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    fable_row = (
+        "Anthropic,claude-fable-5,10.0,50.0,0,0,platform-default,"
+        ",ANTHROPIC_API_KEY,0,True,adaptive,,False,1000000"
+    )
+    idx = lines.index(fable_row)
+
+    assert lines[idx - 1].startswith("Anthropic,claude-haiku-4-5,")
+    assert lines[idx + 1].startswith("Azure AI,")
+
+
+def test_build_rows_retains_fable_unscored_platform_default():
+    """The full generator retains Fable, not merely the committed CSV seed."""
+    rows = gmc.build_rows()
+    fable_rows = [
+        row
+        for row in rows
+        if row.get("provider") == "Anthropic"
+        and row.get("model") == "claude-fable-5"
+    ]
+
+    assert len(fable_rows) == 1
+    assert fable_rows[0]["coding_arena_elo"] == 0
+    assert fable_rows[0]["model_rank_score"] == 0
+    assert fable_rows[0]["model_rank_source"] == "platform-default"
+
+
+def test_build_rows_preserves_fable_contract_when_litellm_knows_it(monkeypatch):
+    """A reviewed LiteLLM row must not weaken Fable's mandatory capability contract."""
+    fake_litellm = type("L", (), {"model_cost": {
+        "claude-fable-5": {
+            "mode": "chat",
+            "input_cost_per_token": 10e-6,
+            "output_cost_per_token": 50e-6,
+            "litellm_provider": "anthropic",
+            "supports_reasoning": True,
+            "supports_function_calling": True,
+        },
+    }})
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    monkeypatch.setattr(gmc, "_fetch_arena_elo", lambda **_kw: {
+        "claude-fable-5": {"elo": 1600.0, "votes": 1, "raw_name": "claude-fable-5"},
+    })
+    monkeypatch.setattr(gmc, "_fetch_deepswe_elo", lambda **_kw: {})
+
+    fable_rows = [
+        row for row in gmc.build_rows()
+        if row.get("provider") == "Anthropic" and row.get("model") == "claude-fable-5"
+    ]
+
+    assert len(fable_rows) == 1
+    assert fable_rows[0]["max_reasoning_tokens"] == 0
+    assert fable_rows[0]["context_limit"] == 1_000_000
 
 
 def test_gpt_5_6_openai_api_row_deduped_once_litellm_knows_it():

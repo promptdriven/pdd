@@ -22,6 +22,7 @@ Anthropic,claude-opus-4-5,5.0,25.0,1468,1468,arena-elo-fallback,,ANTHROPIC_API_K
 Anthropic,claude-sonnet-4-5,3.0,15.0,1386,1386,arena-elo-fallback,,ANTHROPIC_API_KEY,128000,True,budget,,False,
 Anthropic,claude-4-sonnet-20250514,3.0,15.0,1350,1350,static-prefix,,ANTHROPIC_API_KEY,128000,True,budget,,False,
 Anthropic,claude-haiku-4-5,1.0,5.0,1316,1316,arena-elo-fallback,,ANTHROPIC_API_KEY,128000,True,budget,,False,
+Anthropic,claude-fable-5,10.0,50.0,0,0,platform-default,,ANTHROPIC_API_KEY,0,True,adaptive,,False,1000000
 Azure AI,azure_ai/gpt-5.4,2.5,15.0,1437,15600,deepswe-solve-rate,,AZURE_AI_API_KEY,128000,True,budget,,False,
 Azure AI,azure_ai/claude-opus-4-7,5.0,25.0,1565,15400,deepswe-solve-rate,,AZURE_AI_API_KEY,16000,True,adaptive,,False,
 Azure AI,azure_ai/claude-sonnet-4-6,3.0,15.0,1525,13200,deepswe-solve-rate,,AZURE_AI_API_KEY,128000,True,budget,,False,

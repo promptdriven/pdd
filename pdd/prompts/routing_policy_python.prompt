@@ -5,7 +5,8 @@
   "type": "module",
   "module": {
     "constants": [
-      {"name": "CODEX_MODEL_DEFAULT", "type": "str"}
+      {"name": "CODEX_MODEL_DEFAULT", "type": "str"},
+      {"name": "CLAUDE_MODEL_DEFAULT", "type": "str"}
     ],
     "dataclasses": [
       {"name": "RoutingConfig", "fields": [
@@ -67,6 +68,9 @@ via an optional `routing_policy` keyword argument; all existing callers without
 that argument are unaffected.
 
 % Requirements
+0. **Provider CLI defaults** — expose `CODEX_MODEL_DEFAULT = "gpt-5.6-sol"`
+   and `CLAUDE_MODEL_DEFAULT = "claude-opus-5"`. These are agentic CLI
+   defaults and do not change `llm_invoke.DEFAULT_BASE_MODEL`.
 1. **Dataclass hierarchy** — five plain `@dataclass` classes with no external
    validation library:
    - `RoutingConfig(harness: str = "anthropic", model_tier: int = 2, thinking_effort: EffortLevel = "medium", repeat_runs: int = 1)`
