@@ -50,7 +50,7 @@ m0_bootstrap_allowlist:
 tracks:
   - id: m0-protected-base-prerequisite
     owner: m0-protected-ownership
-    worktree: not-retained
+    worktree: /private/tmp/pdd-1932-m0-protected-ownership
     branch: fix/1932-m0-protected-ownership
     base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
     pull_request: 2302
