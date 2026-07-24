@@ -221,6 +221,8 @@ PREAUTHORIZED_CHILD_PATHS = (
     | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
     | {
+        ".pdd/meta/agentic_architecture_python.json",
+        ".pdd/meta/commands_generate_python.json",
         ".pdd/meta/user_story_tests_python.json",
         ".pdd/meta/user_story_tests_python_run.json",
         ".github/toolchains/playwright_manifest.py",
@@ -1609,6 +1611,11 @@ def test_current_profile_reconciliation_matches_current_prompt_and_profile_rows(
     current_rows.extend(
         _requirement_authorization_row(authorization)
         for authorization in verification._TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+        if authorization.bindings.head_policy_sha256 == profile_digest
+    )
+    current_rows.extend(
+        _requirement_authorization_row(authorization)
+        for authorization in verification._GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
         if authorization.bindings.head_policy_sha256 == profile_digest
     )
     assert current_rows
