@@ -883,6 +883,7 @@ class TestRunAgenticCheckup:
                     "findings": [],
                     "terra_sol_mode": True,
                     "sol_model": "gpt-5.6-sol",
+                    "remote_pr_head_sha": "a" * 40,
                 },
                 True,
             ),
@@ -1743,6 +1744,7 @@ class TestRunAgenticCheckup:
                 "active_reviewer": "codex",
                 "findings": [],
                 "issue_aligned": True,
+                "remote_pr_head_sha": "a" * 40,
             },
         ]
         artifact_path = "/tmp/pdd-cloud/agentic-checkup.json"
@@ -2666,13 +2668,16 @@ def test_post_final_gate_success_posts_terminal_step_to_pr_and_issue(
         has_issue=True,
         pr_url="https://github.com/owner/repo/pull/2",
         issue_url="https://github.com/owner/repo/issues/1",
+        pr_head_sha="ab" * 20,
         cwd=tmp_path,
         use_github_state=True,
     )
 
     assert suffix == ""
-    assert "## Step 8/8: Final Gate Successful" in pr_comment.call_args.args[3]
-    assert "final-gate-status: passed" in pr_comment.call_args.args[3]
+    terminal_body = pr_comment.call_args.args[3]
+    assert "## Step 8/8: Final Gate Successful" in terminal_body
+    assert "final-gate-status: passed" in terminal_body
+    assert f"pr-head-sha: {'ab' * 20}" in terminal_body
     assert step_comment.call_args.kwargs["step_num"] == 8
     assert step_comment.call_args.kwargs["total_steps"] == 8
 
@@ -2696,6 +2701,7 @@ def test_post_final_gate_success_is_not_emitted_without_github_state(
         has_issue=True,
         pr_url="https://github.com/owner/repo/pull/2",
         issue_url="https://github.com/owner/repo/issues/1",
+        pr_head_sha="",
         cwd=tmp_path,
         use_github_state=False,
     )

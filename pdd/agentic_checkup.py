@@ -1354,6 +1354,7 @@ def _post_final_gate_success(
     has_issue: bool,
     pr_url: str,
     issue_url: str,
+    pr_head_sha: str,
     cwd: Path,
     use_github_state: bool,
 ) -> str:
@@ -1376,6 +1377,7 @@ def _post_final_gate_success(
             f"Issue: {issue_line}",
             "final-gate-status: passed",
             "final-gate-stage: complete",
+            f"pr-head-sha: {pr_head_sha}",
             "",
             "Layer 1 PR checkup and the Step 7/8 review-loop final report both passed.",
             "This checkup run is complete and ready for review.",
@@ -1435,6 +1437,15 @@ def _review_loop_ship_verdict(
     if not isinstance(final_state, dict):
         return False
     if final_state.get("fresh_final_status") != "clean":
+        return False
+    remote_pr_head_sha = final_state.get("remote_pr_head_sha")
+    if (
+        not isinstance(remote_pr_head_sha, str)
+        or _LOWER_HEX_40_RE.fullmatch(remote_pr_head_sha) is None
+    ):
+        # A terminal pass must identify the exact remote PR head that survived
+        # the final stale-head check. Without it, the success comment cannot be
+        # authoritatively bound to the reviewed generation.
         return False
     reviewer_status = final_state.get("reviewer_status")
     active = final_state.get("active_reviewer")
@@ -2696,10 +2707,8 @@ def run_agentic_checkup(
                 "pass" if not layer1_step5_evidence_for_review else ""
             ),
         )
-        ship = _review_loop_ship_verdict(
-            load_final_state(project_root, issue_number, pr_number),
-            has_issue=has_issue,
-        )
+        final_state = load_final_state(project_root, issue_number, pr_number)
+        ship = _review_loop_ship_verdict(final_state, has_issue=has_issue)
         total_cost = orch_cost + loop_cost
         if github_checks_waived:
             checks_clause = "GitHub checks gate waived for docs/static-only PR; "
@@ -2733,6 +2742,11 @@ def run_agentic_checkup(
                 has_issue=has_issue,
                 pr_url=pr_url or "",
                 issue_url=issue_url or "",
+                pr_head_sha=str(
+                    final_state.get("remote_pr_head_sha") or ""
+                    if isinstance(final_state, dict)
+                    else ""
+                ),
                 cwd=project_root,
                 use_github_state=use_github_state,
             )

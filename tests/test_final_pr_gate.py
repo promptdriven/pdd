@@ -106,7 +106,7 @@ def _write_layer1_step5_evidence(
     return path
 
 
-def _clean_final_state(*, reviewer: str = "codex", head: str = "deadbeef") -> dict:
+def _clean_final_state(*, reviewer: str = "codex", head: str = "a" * 40) -> dict:
     return {
         "fresh_final_status": "clean",
         "active_reviewer": reviewer,
@@ -114,6 +114,7 @@ def _clean_final_state(*, reviewer: str = "codex", head: str = "deadbeef") -> di
         "issue_aligned": "true",
         "findings": [],
         "verified_head_sha": head,
+        "remote_pr_head_sha": head,
     }
 
 
@@ -169,6 +170,11 @@ class TestShipVerdictPredicate:
 
     def test_missing_state_fails_closed(self) -> None:
         assert _review_loop_ship_verdict(None, has_issue=True) is False
+
+    def test_missing_remote_pr_head_fails_closed(self) -> None:
+        state = _clean_final_state()
+        del state["remote_pr_head_sha"]
+        assert _review_loop_ship_verdict(state, has_issue=True) is False
 
     def test_non_clean_fresh_final_fails(self) -> None:
         state = _clean_final_state()
