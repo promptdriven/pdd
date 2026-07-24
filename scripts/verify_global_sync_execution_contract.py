@@ -248,7 +248,7 @@ def _git_diff_paths(root: Path, protected_base: str, candidate: str) -> list[str
     try:
         result = subprocess.run(
             ["git", "-C", str(root), "diff", "--name-status", "--find-renames",
-             "--find-copies",
+             "--find-copies-harder",
              f"{protected_base}..{candidate}"],
             text=True, capture_output=True, check=False,
         )
