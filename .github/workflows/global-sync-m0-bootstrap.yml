@@ -17,6 +17,10 @@ jobs:
     if: github.event.pull_request.number == 2301 && github.event.pull_request.draft == false
     name: Protected M0 bootstrap gate
     runs-on: ubuntu-latest
+    # This existing GitHub Environment scopes the private-canary credentials;
+    # its settings and secrets are administered outside this workflow.
+    environment:
+      name: pdd-cloud-read
     timeout-minutes: 45
     env:
       EVENT_NAME: pull_request_target

@@ -2488,7 +2488,7 @@ def _synthetic_m0_bootstrap_candidate(
 
     candidate_copy_source = _m0_copy_similarity_bytes(altered_lines={1: "y", 2: "y"})
     candidate_copy_archive = _m0_copy_similarity_bytes(
-        altered_lines={1: "y", 2: "y", 97: "z", 98: "z", 99: "z", 100: "z"}
+        altered_lines={97: "z", 98: "z", 99: "z", 100: "z"}
     )
     for status, path in M0_BOOTSTRAP_ALLOWED_CHANGES:
         if status == "M":
@@ -2585,24 +2585,30 @@ def test_global_sync_m0_bootstrap_policy_is_immutable_and_exact() -> None:
     }
 
 
-def test_global_sync_m0_bootstrap_verifier_rejects_self_authorized_state(
-    tmp_path: Path,
-) -> None:
-    """Candidate state cannot broaden the protected diff or track authority."""
+def _m0_bootstrap_evaluation_fixture(tmp_path: Path):
+    """Build a candidate and protected policy suitable for local verifier checks."""
     verifier = _load_m0_bootstrap_verifier()
-    protected_policy = json.loads(M0_BOOTSTRAP_POLICY_PATH.read_text(encoding="utf-8"))
-    policy = copy.deepcopy(protected_policy)
+    policy = copy.deepcopy(json.loads(M0_BOOTSTRAP_POLICY_PATH.read_text(encoding="utf-8")))
     root = tmp_path / "m0-bootstrap-candidate"
-    base, candidate, source_commit, source_parent = _synthetic_m0_bootstrap_candidate(root, policy)
+    base, candidate, source_commit, source_parent = _synthetic_m0_bootstrap_candidate(
+        root, policy
+    )
     frozen = root / M0_BOOTSTRAP_FROZEN_SAMPLE_PATH
-    frozen_sha256 = hashlib.sha256(frozen.read_bytes()).hexdigest()
     policy["frozen_sample_verifier"] = {
         **policy["frozen_sample_verifier"],
-        "sha256": frozen_sha256,
+        "sha256": hashlib.sha256(frozen.read_bytes()).hexdigest(),
         "source_commit": source_commit,
         "source_parent": source_parent,
     }
     policy["reviewed_source_base_sha"] = source_commit
+    return verifier, policy, root, base, candidate
+
+
+def test_global_sync_m0_bootstrap_verifier_rejects_self_authorized_state(
+    tmp_path: Path,
+) -> None:
+    """Candidate state cannot broaden the protected diff or track authority."""
+    verifier, policy, root, base, candidate = _m0_bootstrap_evaluation_fixture(tmp_path)
     arguments = {
         "repository_root": root,
         "policy": policy,
@@ -2616,8 +2622,6 @@ def test_global_sync_m0_bootstrap_verifier_rejects_self_authorized_state(
     assert proof["violations"] == []
     assert proof["current_protected_base_sha"] == base
     assert proof["candidate_head_sha"] == candidate
-    assert proof["reviewed_source_base_sha"] == source_commit
-    assert proof["reviewed_source_base_is_ancestor_of_workflow_base"] is True
     assert proof["workflow_identity"] == {
         "event_name": "pull_request_target",
         "path": ".github/workflows/global-sync-m0-bootstrap.yml",
@@ -2641,11 +2645,60 @@ def test_global_sync_m0_bootstrap_verifier_rejects_self_authorized_state(
         "replay_sha256": "19af0a731481b27319b768b643ae2a3664ed2fd04507951cc74bd27b28fe2042",
     }
 
-    _git(root, "checkout", "--quiet", source_parent)
+    state_path = root / "docs/global_sync_execution_state.yaml"
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["m0_bootstrap_allowlist"].append("pdd/never-authorized.py")
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    self_authorized = _commit(root, "attempt M0 allowlist self-authorization")
+    assert "candidate-m0-bootstrap-allowlist-does-not-match-policy" in (
+        verifier.evaluate_candidate(
+            **{**arguments, "candidate_head_sha": self_authorized}
+        )["violations"]
+    )
+
+    state["m0_bootstrap_allowlist"] = list(M0_BOOTSTRAP_ALLOWLIST)
+    state["tracks"][0]["write_set"].append("pdd/never-authorized.py")
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    track_self_authorized = _commit(root, "attempt M0 track self-authorization")
+    assert "m0-track-write-set-outside-protected-universe" in verifier.evaluate_candidate(
+        **{**arguments, "candidate_head_sha": track_self_authorized}
+    )["violations"]
+
+    (root / M0_BOOTSTRAP_FROZEN_SAMPLE_PATH).write_text(
+        "candidate changed frozen verifier\n", encoding="utf-8"
+    )
+    frozen_changed = _commit(root, "attempt frozen verifier modification")
+    assert "candidate-touched-frozen-sample-verifier" in verifier.evaluate_candidate(
+        **{**arguments, "candidate_head_sha": frozen_changed}
+    )["violations"]
+
+
+def test_global_sync_m0_bootstrap_requires_a_reachable_reviewed_source_base(
+    tmp_path: Path,
+) -> None:
+    """The reviewed source is fetched/resolved as protected ancestry evidence."""
+    verifier, policy, root, base, candidate = _m0_bootstrap_evaluation_fixture(tmp_path)
+    arguments = {
+        "repository_root": root,
+        "policy": policy,
+        "pr_number": 2301,
+        "protected_base_sha": base,
+        "candidate_head_sha": candidate,
+        "event_name": "pull_request_target",
+        "workflow_base_sha": base,
+    }
+    proof = verifier.evaluate_candidate(**arguments)
+    assert proof["reviewed_source_base_sha"] == policy["reviewed_source_base_sha"]
+    assert proof["reviewed_source_base_is_ancestor_of_workflow_base"] is True
+
+    frozen = policy["frozen_sample_verifier"]
+    assert isinstance(frozen, dict)
+    _git(root, "checkout", "--quiet", str(frozen["source_parent"]))
     _write_m0_bootstrap_file(root, ".m0-unrelated-reviewed-source", b"unrelated\n")
-    unrelated_reviewed_source = _commit(root, "unrelated reviewed source")
     unrelated_policy = copy.deepcopy(policy)
-    unrelated_policy["reviewed_source_base_sha"] = unrelated_reviewed_source
+    unrelated_policy["reviewed_source_base_sha"] = _commit(
+        root, "unrelated reviewed source"
+    )
     unrelated_proof = verifier.evaluate_candidate(
         **{**arguments, "policy": unrelated_policy}
     )
@@ -2658,48 +2711,60 @@ def test_global_sync_m0_bootstrap_verifier_rejects_self_authorized_state(
     stale_proof = verifier.evaluate_candidate(**{**arguments, "policy": stale_policy})
     assert "reviewed-source-base-is-unavailable" in stale_proof["violations"]
 
+
+def test_global_sync_m0_bootstrap_binds_allowed_final_tree_entries(
+    tmp_path: Path,
+) -> None:
+    """Allowed destinations cannot drift to symlinks, executables, or gitlinks."""
+    verifier, policy, root, base, candidate = _m0_bootstrap_evaluation_fixture(tmp_path)
+    arguments = {
+        "repository_root": root,
+        "policy": policy,
+        "pr_number": 2301,
+        "protected_base_sha": base,
+        "candidate_head_sha": candidate,
+        "event_name": "pull_request_target",
+        "workflow_base_sha": base,
+    }
+
+    def assert_final_tree_violation(candidate_head_sha: str) -> None:
+        proof = verifier.evaluate_candidate(
+            **{**arguments, "candidate_head_sha": candidate_head_sha}
+        )
+        assert "candidate-final-tree-entry-does-not-match-protected-policy" in (
+            proof["violations"]
+        )
+
+    path = root / "pdd" / "continuous_sync.py"
+    path.unlink()
+    os.symlink("sync_core/global_sync_ledger.py", path)
+    assert_final_tree_violation(_commit(root, "attempt final symlink mode drift"))
+
     _git(root, "checkout", "--quiet", candidate)
-
-    mode_drift_path = root / "pdd" / "continuous_sync.py"
-    mode_drift_path.unlink()
-    os.symlink("sync_core/global_sync_ledger.py", mode_drift_path)
-    mode_drift = _commit(root, "attempt final symlink mode drift")
-    mode_drift_proof = verifier.evaluate_candidate(
-        **{**arguments, "candidate_head_sha": mode_drift}
-    )
-    assert "candidate-final-tree-entry-does-not-match-protected-policy" in (
-        mode_drift_proof["violations"]
-    )
+    path.chmod(0o755)
+    assert_final_tree_violation(_commit(root, "attempt final executable mode drift"))
 
     _git(root, "checkout", "--quiet", candidate)
-
-    state_path = root / "docs/global_sync_execution_state.yaml"
-    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
-    state["m0_bootstrap_allowlist"].append("pdd/never-authorized.py")
-    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
-    self_authorized = _commit(root, "attempt M0 allowlist self-authorization")
-    self_authorized_proof = verifier.evaluate_candidate(
-        **{**arguments, "candidate_head_sha": self_authorized}
+    _git(
+        root,
+        "update-index",
+        "--cacheinfo",
+        f"160000,{candidate},pdd/continuous_sync.py",
     )
-    assert "candidate-m0-bootstrap-allowlist-does-not-match-policy" in (
-        self_authorized_proof["violations"]
+    _git(
+        root,
+        "-c",
+        "user.name=PDD test",
+        "-c",
+        "user.email=pdd@example.test",
+        "commit",
+        "-m",
+        "attempt final gitlink mode drift",
     )
-
-    state["m0_bootstrap_allowlist"] = list(M0_BOOTSTRAP_ALLOWLIST)
-    state["tracks"][0]["write_set"].append("pdd/never-authorized.py")
-    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
-    track_self_authorized = _commit(root, "attempt M0 track self-authorization")
-    track_proof = verifier.evaluate_candidate(
-        **{**arguments, "candidate_head_sha": track_self_authorized}
-    )
-    assert "m0-track-write-set-outside-protected-universe" in track_proof["violations"]
-
-    frozen.write_text("candidate changed frozen verifier\n", encoding="utf-8")
-    frozen_changed = _commit(root, "attempt frozen verifier modification")
-    frozen_proof = verifier.evaluate_candidate(
-        **{**arguments, "candidate_head_sha": frozen_changed}
-    )
-    assert "candidate-touched-frozen-sample-verifier" in frozen_proof["violations"]
+    gitlink_drift = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    assert_final_tree_violation(gitlink_drift)
 
 
 def test_global_sync_m0_bootstrap_replay_uses_a_protected_sample_ancestor(
@@ -2925,8 +2990,15 @@ def test_global_sync_m0_bootstrap_materializes_only_exact_base_aliases(
     ).read_bytes()
 
 
+def _empty_m0_materialization_destination(root: Path, name: str) -> Path:
+    """Create an empty materialization destination for one hostile-tree case."""
+    destination = root / name
+    destination.mkdir()
+    return destination
+
+
 def test_global_sync_m0_bootstrap_rejects_hostile_materialized_tree_entries(
-    tmp_path: Path,
+    monkeypatch, tmp_path: Path
 ) -> None:
     """Changed aliases, added links, gitlinks, devices, and output links fail closed."""
     verifier = _load_m0_bootstrap_verifier()
@@ -2942,26 +3014,22 @@ def test_global_sync_m0_bootstrap_rejects_hostile_materialized_tree_entries(
     (source / "data").unlink()
     os.symlink("data", source / "data")
     cyclic_alias = _commit(source, "replace alias with cycle")
-    cyclic_destination = tmp_path / "cyclic-data"
-    cyclic_destination.mkdir()
     with pytest.raises(verifier.BootstrapVerificationError):
         verifier.materialize_git_data_tree(
             source,
             cyclic_alias,
-            cyclic_destination,
+            _empty_m0_materialization_destination(tmp_path, "cyclic-data"),
             protected_base_sha=protected_base,
         )
 
     _git(source, "checkout", "--quiet", protected_base)
     os.symlink("pdd/data", source / "candidate-added-link")
     added_link = _commit(source, "add candidate link")
-    added_link_destination = tmp_path / "added-link-data"
-    added_link_destination.mkdir()
     with pytest.raises(verifier.BootstrapVerificationError):
         verifier.materialize_git_data_tree(
             source,
             added_link,
-            added_link_destination,
+            _empty_m0_materialization_destination(tmp_path, "added-link-data"),
             protected_base_sha=protected_base,
         )
 
@@ -2986,13 +3054,11 @@ def test_global_sync_m0_bootstrap_rejects_hostile_materialized_tree_entries(
     gitlink = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=source, text=True
     ).strip()
-    gitlink_destination = tmp_path / "gitlink-data"
-    gitlink_destination.mkdir()
     with pytest.raises(verifier.BootstrapVerificationError):
         verifier.materialize_git_data_tree(
             source,
             gitlink,
-            gitlink_destination,
+            _empty_m0_materialization_destination(tmp_path, "gitlink-data"),
             protected_base_sha=protected_base,
         )
 
@@ -3001,35 +3067,30 @@ def test_global_sync_m0_bootstrap_rejects_hostile_materialized_tree_entries(
         cwd=source,
         input=b"device payload\n",
     ).strip()
-    malformed_tree = b"060000 candidate-device\0" + bytes.fromhex(blob.decode("ascii"))
-    tree = subprocess.check_output(
-        ["git", "hash-object", "-w", "-t", "tree", "--stdin"],
-        cwd=source,
-        input=malformed_tree,
-        text=False,
-    ).strip()
-    device_commit = subprocess.check_output(
-        [
-            "git",
-            "-c",
-            "user.name=PDD test",
-            "-c",
-            "user.email=pdd@example.test",
-            "commit-tree",
-            tree.decode("ascii"),
-        ],
-        cwd=source,
-        input=b"malformed device tree\n",
-    ).strip().decode("ascii")
-    device_destination = tmp_path / "device-data"
-    device_destination.mkdir()
+    tree_entries = verifier._git_tree_entries  # pylint: disable=protected-access
+
+    def device_tree_entries(repository_root: Path, commit_sha: str):
+        entries = tree_entries(repository_root, commit_sha)
+        if commit_sha == protected_base:
+            return {
+                **entries,
+                "candidate-device": {
+                    "mode": "060000",
+                    "object_sha": blob.decode("ascii"),
+                    "object_type": "blob",
+                },
+            }
+        return entries
+
+    monkeypatch.setattr(verifier, "_git_tree_entries", device_tree_entries)
     with pytest.raises(verifier.BootstrapVerificationError):
         verifier.materialize_git_data_tree(
             source,
-            device_commit,
-            device_destination,
+            protected_base,
+            _empty_m0_materialization_destination(tmp_path, "device-data"),
             protected_base_sha=protected_base,
         )
+    monkeypatch.setattr(verifier, "_git_tree_entries", tree_entries)
 
     nofollow_destination = tmp_path / "nofollow-data"
     nofollow_destination.mkdir()
@@ -3077,7 +3138,10 @@ def test_global_sync_m0_bootstrap_workflow_is_base_controlled() -> None:
     assert "--github-token" not in workflow
     assert "if: success()" in workflow
     assert "$RUNNER_TEMP/m0-bootstrap-final-proof.json" in workflow
-    assert "${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}" in workflow
+    assert (
+        "${{ github.event.pull_request.base.sha }}-"
+        "${{ github.event.pull_request.head.sha }}"
+    ) in workflow
     verifier = M0_BOOTSTRAP_VERIFIER_PATH.read_text(encoding="utf-8")
     assert "GIT_CONFIG_COUNT" in verifier
     assert "GIT_CONFIG_KEY_0" in verifier

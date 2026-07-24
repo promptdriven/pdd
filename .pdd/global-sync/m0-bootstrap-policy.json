@@ -1,66 +1,100 @@
 {
   "allowed_changes": [
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "M",
       "path": ".github/workflows/unit-tests.yml"
     },
     {
-      "status": "A",
+      "mode": "100644",
+      "object_type": "blob",
+      "status": "C",
+      "score": 96,
+      "old_path": "docs/global_sync_resolution_plan.md",
       "path": "docs/archive/global_sync_resolution_plan_history_2026-07-22.md"
     },
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "M",
       "path": "docs/global_sync_evidence_ledger.yaml"
     },
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "M",
       "path": "docs/global_sync_evidence_ledger_source.yaml"
     },
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "A",
       "path": "docs/global_sync_execution_state.yaml"
     },
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "A",
       "path": "docs/global_sync_m0_sample_metrics.json"
     },
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "A",
       "path": "docs/global_sync_m0_sample_results.json"
     },
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "A",
       "path": "docs/global_sync_m0_scope_report.md"
     },
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "M",
       "path": "docs/global_sync_resolution_plan.md"
     },
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "M",
       "path": "pdd/continuous_sync.py"
     },
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "M",
       "path": "pdd/sync_core/global_sync_ledger.py"
     },
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "M",
       "path": "pdd/sync_core/reporting.py"
     },
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "A",
       "path": "scripts/verify_global_sync_execution_contract.py"
     },
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "M",
       "path": "tests/test_global_sync_ledger.py"
     },
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "M",
       "path": "tests/test_sync_core_lifecycle_scenarios.py"
     },
     {
+      "mode": "100644",
+      "object_type": "blob",
       "status": "M",
       "path": "tests/test_sync_core_reporting.py"
     }

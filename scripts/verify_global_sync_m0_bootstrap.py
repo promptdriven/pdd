@@ -14,14 +14,13 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
-import io
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import subprocess
 import sys
-import tarfile
 import tempfile
 from typing import Mapping, Sequence
 import urllib.error
@@ -37,6 +36,17 @@ MAX_CANDIDATE_ARCHIVE_BYTES = 64 * 1024 * 1024
 SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 STATUS_PATTERN = re.compile(r"([A-Z])([0-9]{1,3})?")
 CANONICAL_STATUS = frozenset({"A", "C", "D", "M", "R", "T", "U", "X", "B"})
+REGULAR_GIT_MODES = frozenset({"100644", "100755"})
+EXACT_INERT_ALIASES = {
+    "data": "pdd/data",
+    "prompts": "pdd/prompts",
+}
+REQUIRED_COPY_RECORD = {
+    "old_path": "docs/global_sync_resolution_plan.md",
+    "path": "docs/archive/global_sync_resolution_plan_history_2026-07-22.md",
+    "score": 96,
+    "status": "C",
+}
 
 
 class BootstrapVerificationError(ValueError):
@@ -121,14 +131,53 @@ def validate_policy(raw: object) -> dict[str, object]:
     allowed_raw = policy["allowed_changes"]
     if not isinstance(allowed_raw, list) or not allowed_raw:
         raise BootstrapVerificationError("allowed_changes must be a non-empty list")
-    allowed: list[tuple[str, str]] = []
+    allowed: list[dict[str, object]] = []
     for index, item in enumerate(allowed_raw):
-        row = _mapping(item, f"allowed_changes[{index}]", {"path", "status"})
+        if not isinstance(item, dict):
+            raise BootstrapVerificationError(f"allowed_changes[{index}] has an unexpected schema")
+        status = item.get("status")
+        common_keys = {"mode", "object_type", "path", "status"}
+        if status in {"A", "M"}:
+            row = _mapping(item, f"allowed_changes[{index}]", common_keys)
+        elif status == "C":
+            row = _mapping(
+                item,
+                f"allowed_changes[{index}]",
+                common_keys | {"old_path", "score"},
+            )
+        else:
+            raise BootstrapVerificationError("allowed_changes only permits reviewed A/M/C entries")
         status = row["status"]
-        if status not in {"A", "M"}:
-            raise BootstrapVerificationError("allowed_changes only permits reviewed A/M entries")
-        allowed.append((str(status), _validate_path(row["path"], "allowed change path")))
-    allowed_paths = [path for _status, path in allowed]
+        path = _validate_path(row["path"], "allowed change path")
+        mode = row["mode"]
+        if not isinstance(mode, str) or mode not in REGULAR_GIT_MODES:
+            raise BootstrapVerificationError("allowed change mode is not a regular Git mode")
+        if row["object_type"] != "blob":
+            raise BootstrapVerificationError("allowed changes must finish as blob objects")
+        normalized = {
+            "mode": mode,
+            "object_type": "blob",
+            "path": path,
+            "status": status,
+        }
+        if status == "C":
+            score = row["score"]
+            old_path = _validate_path(row["old_path"], "allowed copy source path")
+            if not isinstance(score, int) or score != 96:
+                raise BootstrapVerificationError("allowed copy must use exact C096 similarity")
+            copy_record = {
+                "old_path": old_path,
+                "path": path,
+                "score": score,
+                "status": status,
+            }
+            if copy_record != REQUIRED_COPY_RECORD:
+                raise BootstrapVerificationError(
+                    "allowed copy is not the protected resolution-plan C096"
+                )
+            normalized.update(copy_record)
+        allowed.append(normalized)
+    allowed_paths = [str(row["path"]) for row in allowed]
     if len(allowed_paths) != len(set(allowed_paths)) or allowed_paths != sorted(allowed_paths):
         raise BootstrapVerificationError("allowed_changes must be lexically ordered and unique")
 
@@ -203,9 +252,16 @@ def _git(
     *,
     input_bytes: bytes | None = None,
 ) -> bytes:
+    environment = {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
     result = subprocess.run(
         ["git", *arguments],
         cwd=root,
+        env=environment,
         input=input_bytes,
         capture_output=True,
         check=False,
@@ -241,10 +297,122 @@ def _is_ancestor(root: Path, older: str, newer: str) -> bool:
     return result.returncode == 0
 
 
+def _is_shallow_repository(root: Path) -> bool:
+    value = _git(root, ("rev-parse", "--is-shallow-repository")).decode("ascii").strip()
+    if value not in {"true", "false"}:
+        raise BootstrapVerificationError("protected Git shallow-repository state is invalid")
+    return value == "true"
+
+
+def _resolve_reviewed_source_base(root: Path, reviewed_source_base_sha: str) -> str:
+    """Resolve protected reviewed history, deepening a target checkout if needed."""
+    reviewed_source_base_sha = _validate_sha(
+        reviewed_source_base_sha, "reviewed_source_base_sha"
+    )
+    try:
+        resolved = _resolve_commit(root, reviewed_source_base_sha)
+    except BootstrapVerificationError:
+        resolved = ""
+    try:
+        shallow = _is_shallow_repository(root)
+    except BootstrapVerificationError:
+        shallow = False
+    if resolved and not shallow:
+        return resolved
+    if shallow:
+        _git(root, ("fetch", "--no-tags", "--unshallow", "origin"))
+    elif not resolved:
+        _git(root, ("fetch", "--no-tags", "origin", reviewed_source_base_sha))
+    return _resolve_commit(root, reviewed_source_base_sha)
+
+
 def _read_git_blob(root: Path, commit: str, path: str) -> bytes:
     _validate_sha(commit, "blob commit SHA")
     _validate_path(path, "blob path")
     return _git(root, ("show", f"{commit}:{path}"))
+
+
+def _read_git_blob_object(root: Path, object_sha: str) -> bytes:
+    """Read a blob object already bound by a parsed Git tree entry."""
+    _validate_sha(object_sha, "blob object SHA")
+    return _git(root, ("cat-file", "blob", object_sha))
+
+
+def _git_tree_entries(root: Path, commit_sha: str) -> dict[str, dict[str, str]]:
+    """Parse one recursive Git tree without consulting a worktree path."""
+    commit_sha = _resolve_commit(root, commit_sha)
+    raw = _git(root, ("ls-tree", "-rz", "--full-tree", "-r", commit_sha))
+    entries: dict[str, dict[str, str]] = {}
+    for raw_entry in raw.split(b"\0"):
+        if not raw_entry:
+            continue
+        try:
+            metadata, raw_path = raw_entry.split(b"\t", 1)
+            mode, object_type, object_sha = metadata.decode("ascii").split(" ")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise BootstrapVerificationError("Git tree entry is malformed") from error
+        path = _decode_candidate_path(raw_path)
+        _validate_sha(object_sha, "Git tree object SHA")
+        if path in entries:
+            raise BootstrapVerificationError("Git tree contains duplicate paths")
+        entries[path] = {
+            "mode": mode,
+            "object_sha": object_sha,
+            "object_type": object_type,
+        }
+    return entries
+
+
+def _policy_diff_record(row: Mapping[str, object]) -> dict[str, object]:
+    """Project a validated policy row into its exact name-status record."""
+    record: dict[str, object] = {
+        "path": row["path"],
+        "status": row["status"],
+    }
+    if row["status"] == "C":
+        record["old_path"] = row["old_path"]
+        record["score"] = row["score"]
+    return record
+
+
+def _final_tree_binding(
+    root: Path, policy: Mapping[str, object], candidate_head_sha: str
+) -> tuple[list[str], list[dict[str, object]]]:
+    """Bind every allowed destination to its exact final Git mode and type."""
+    try:
+        entries = _git_tree_entries(root, candidate_head_sha)
+    except BootstrapVerificationError:
+        return ["candidate-final-tree-is-unreadable"], []
+    allowed = policy["allowed_changes"]
+    assert isinstance(allowed, list)
+    proof_entries: list[dict[str, object]] = []
+    violations: list[str] = []
+    for row in allowed:
+        assert isinstance(row, dict)
+        path = str(row["path"])
+        expected_mode = str(row["mode"])
+        expected_object_type = str(row["object_type"])
+        actual = entries.get(path)
+        proof_entry: dict[str, object] = {
+            "expected_mode": expected_mode,
+            "expected_object_type": expected_object_type,
+            "path": path,
+        }
+        if actual is None:
+            proof_entry["actual_mode"] = None
+            proof_entry["actual_object_type"] = None
+            violations.append("candidate-final-tree-entry-does-not-match-protected-policy")
+        else:
+            proof_entry["actual_mode"] = actual["mode"]
+            proof_entry["actual_object_type"] = actual["object_type"]
+            proof_entry["object_sha"] = actual["object_sha"]
+            if (
+                actual["mode"] != expected_mode
+                or actual["object_type"] != expected_object_type
+            ):
+                violations.append("candidate-final-tree-entry-does-not-match-protected-policy")
+        proof_entries.append(proof_entry)
+    return sorted(set(violations)), proof_entries
 
 
 def parse_name_status(raw: bytes) -> tuple[dict[str, object], ...]:
@@ -438,6 +606,7 @@ def _base_proof(
     workflow_base_sha: str,
     diff_digest: str | None,
     violations: Sequence[str],
+    reviewed_source_base_is_ancestor_of_workflow_base: bool | None = None,
 ) -> dict[str, object]:
     workflow = policy["workflow"]
     assert isinstance(workflow, dict)
@@ -447,6 +616,10 @@ def _base_proof(
         "diff_sha256": diff_digest,
         "policy_sha256": canonical_policy_digest(policy),
         "pr_number": pr_number,
+        "reviewed_source_base_is_ancestor_of_workflow_base": (
+            reviewed_source_base_is_ancestor_of_workflow_base
+        ),
+        "reviewed_source_base_sha": policy["reviewed_source_base_sha"],
         "schema_version": 1,
         "violations": sorted(set(violations)),
         "workflow_base_sha": workflow_base_sha,
@@ -493,6 +666,26 @@ def evaluate_candidate(
     if not _is_ancestor(repository_root, resolved_base, resolved_head):
         violations.append("candidate-head-is-not-descended-from-current-protected-base")
     try:
+        reviewed_source_base = _resolve_reviewed_source_base(
+            repository_root, str(policy["reviewed_source_base_sha"])
+        )
+        reviewed_source_is_ancestor = _is_ancestor(
+            repository_root, reviewed_source_base, resolved_workflow_base
+        )
+    except BootstrapVerificationError:
+        return _base_proof(
+            policy=policy,
+            pr_number=pr_number,
+            protected_base_sha=resolved_base,
+            candidate_head_sha=resolved_head,
+            workflow_base_sha=resolved_workflow_base,
+            diff_digest=None,
+            violations=[*violations, "reviewed-source-base-is-unavailable"],
+            reviewed_source_base_is_ancestor_of_workflow_base=False,
+        )
+    if not reviewed_source_is_ancestor:
+        violations.append("reviewed-source-base-is-not-an-ancestor-of-workflow-base")
+    try:
         changes, diff_digest = _diff_records(repository_root, resolved_base, resolved_head)
     except BootstrapVerificationError:
         return _base_proof(
@@ -503,18 +696,18 @@ def evaluate_candidate(
             workflow_base_sha=resolved_workflow_base,
             diff_digest=None,
             violations=[*violations, "candidate-diff-is-unreadable"],
+            reviewed_source_base_is_ancestor_of_workflow_base=reviewed_source_is_ancestor,
         )
+    allowed_changes = policy["allowed_changes"]
+    assert isinstance(allowed_changes, list)
     expected = tuple(
-        (str(row["status"]), str(row["path"]))
-        for row in policy["allowed_changes"]  # type: ignore[index]
+        _policy_diff_record(row) for row in allowed_changes if isinstance(row, dict)
     )
-    actual = tuple(
-        (str(change["status"]), str(change["path"]))
-        for change in changes
-        if "old_path" not in change
-    )
-    if any("old_path" in change for change in changes) or actual != expected:
+    if len(expected) != len(allowed_changes) or tuple(changes) != expected:
         violations.append("candidate-diff-does-not-match-protected-policy")
+    final_tree_violations, final_tree_proof = _final_tree_binding(
+        repository_root, policy, resolved_head
+    )
     state_violations = _candidate_state_violations(
         repository_root, policy, resolved_head, resolved_base
     )
@@ -528,9 +721,16 @@ def evaluate_candidate(
         candidate_head_sha=resolved_head,
         workflow_base_sha=resolved_workflow_base,
         diff_digest=diff_digest,
-        violations=[*violations, *state_violations, *frozen_violations],
+        violations=[
+            *violations,
+            *final_tree_violations,
+            *state_violations,
+            *frozen_violations,
+        ],
+        reviewed_source_base_is_ancestor_of_workflow_base=reviewed_source_is_ancestor,
     )
     proof["diff"] = {"changes": list(changes), "sha256": diff_digest}
+    proof["final_tree"] = {"entries": final_tree_proof}
     proof["frozen_sample_verifier"] = frozen_proof
     return proof
 
@@ -561,10 +761,38 @@ def sampled_implementation_proof(
     sampled_sha: str | None = None
     post_sample_digest: str | None = None
     changes: tuple[dict[str, object], ...] = ()
+    result_path = str(replay["result_path"])
+    allowed_changes = policy["allowed_changes"]
+    assert isinstance(allowed_changes, list)
+    result_policy_rows = [
+        row
+        for row in allowed_changes
+        if isinstance(row, dict) and row.get("path") == result_path
+    ]
+    if len(result_policy_rows) != 1:
+        raise BootstrapVerificationError("replay result path has no exact tree policy")
+    result_policy = result_policy_rows[0]
     try:
-        artifact = _read_git_blob(
-            repository_root, candidate_head_sha, str(replay["result_path"])
-        )
+        result_entry = _git_tree_entries(repository_root, candidate_head_sha).get(result_path)
+    except BootstrapVerificationError:
+        result_entry = None
+    if (
+        result_entry is None
+        or result_policy["mode"] != "100644"
+        or result_policy["object_type"] != "blob"
+        or result_entry["mode"] != "100644"
+        or result_entry["object_type"] != "blob"
+    ):
+        violations.append("sample-result-path-is-not-an-allowed-regular-blob")
+        return {
+            "post_sample_changes": [],
+            "post_sample_diff_sha256": None,
+            "sampled_implementation_is_ancestor_of_candidate": False,
+            "sampled_implementation_sha": None,
+            "violations": violations,
+        }
+    try:
+        artifact = _read_git_blob(repository_root, candidate_head_sha, result_path)
         if len(artifact) > MAX_CANDIDATE_STATE_BYTES:
             raise BootstrapVerificationError("sample artifact exceeds byte limit")
         payload = json.loads(artifact)
@@ -584,6 +812,15 @@ def sampled_implementation_proof(
         sampled_sha = _resolve_commit(repository_root, sampled_sha)
     except BootstrapVerificationError:
         violations.append("sampled-implementation-is-unavailable")
+        return {
+            "post_sample_changes": [],
+            "post_sample_diff_sha256": None,
+            "sampled_implementation_is_ancestor_of_candidate": False,
+            "sampled_implementation_sha": sampled_sha,
+            "violations": violations,
+        }
+    if sampled_sha == candidate_head_sha:
+        violations.append("sampled-implementation-must-precede-candidate")
         return {
             "post_sample_changes": [],
             "post_sample_diff_sha256": None,
@@ -612,6 +849,13 @@ def sampled_implementation_proof(
             "old_path" in change and change.get("old_path") not in allowed_paths
         ):
             violations.append("post-sample-diff-outside-protected-allowlist")
+    result_changes = [change for change in changes if change.get("path") == result_path]
+    if (
+        len(result_changes) != 1
+        or "old_path" in result_changes[0]
+        or result_changes[0].get("status") not in {"A", "M"}
+    ):
+        violations.append("sample-result-path-was-not-added-or-modified-after-sample")
     return {
         "post_sample_changes": list(changes),
         "post_sample_diff_sha256": post_sample_digest,
@@ -621,41 +865,196 @@ def sampled_implementation_proof(
     }
 
 
-def materialize_git_data_tree(root: Path, commit_sha: str, destination: Path) -> None:
-    """Materialize regular Git blobs as read-only data without a checkout."""
+def _prepare_materialization_destination(destination: Path) -> None:
+    """Require an empty real directory before any candidate bytes are written."""
+    try:
+        destination_stat = destination.lstat()
+        is_empty = next(destination.iterdir(), None) is None
+    except OSError as error:
+        raise BootstrapVerificationError("materialization destination is unavailable") from error
+    if (
+        stat.S_ISLNK(destination_stat.st_mode)
+        or not stat.S_ISDIR(destination_stat.st_mode)
+        or not is_empty
+    ):
+        raise BootstrapVerificationError(
+            "materialization destination is not an empty real directory"
+        )
+
+
+def _open_materialized_directory(destination: Path) -> int:
+    """Open the destination with an OS-level no-follow guarantee."""
+    try:
+        return os.open(
+            destination,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+    except OSError as error:
+        raise BootstrapVerificationError(
+            "materialization destination cannot be opened safely"
+        ) from error
+
+
+def _write_materialized_blob(destination: Path, path: str, content: bytes) -> None:
+    """Write one read-only blob while rejecting symlinked parents and collisions."""
+    _validate_path(path, "materialized path")
+    components = PurePosixPath(path).parts
+    directory_fd = _open_materialized_directory(destination)
+    try:
+        for component in components[:-1]:
+            try:
+                child_fd = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+            except FileNotFoundError:
+                try:
+                    os.mkdir(component, mode=0o700, dir_fd=directory_fd)
+                    child_fd = os.open(
+                        component,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=directory_fd,
+                    )
+                except OSError as error:
+                    raise BootstrapVerificationError(
+                        "materialized directory cannot be created safely"
+                    ) from error
+            except OSError as error:
+                raise BootstrapVerificationError(
+                    "materialized directory cannot be opened safely"
+                ) from error
+            os.close(directory_fd)
+            directory_fd = child_fd
+        try:
+            file_fd = os.open(
+                components[-1],
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o400,
+                dir_fd=directory_fd,
+            )
+        except OSError as error:
+            raise BootstrapVerificationError(
+                "materialized blob cannot be written safely"
+            ) from error
+        try:
+            view = memoryview(content)
+            while view:
+                written = os.write(file_fd, view)
+                if written <= 0:
+                    raise BootstrapVerificationError("materialized blob write was incomplete")
+                view = view[written:]
+            os.fchmod(file_fd, 0o400)
+        finally:
+            os.close(file_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _approved_inert_aliases(
+    root: Path,
+    protected_base_sha: str | None,
+    entries: Mapping[str, Mapping[str, str]],
+) -> dict[str, str]:
+    """Return only exact, unchanged protected aliases eligible for regular copies."""
+    aliases = {
+        path: entry
+        for path, entry in entries.items()
+        if entry["mode"] == "120000" or entry["object_type"] != "blob"
+    }
+    if not aliases:
+        return {}
+    if protected_base_sha is None:
+        raise BootstrapVerificationError("candidate tree contains an unapproved link or non-blob")
+    protected_entries = _git_tree_entries(root, protected_base_sha)
+    approved: dict[str, str] = {}
+    for path, entry in aliases.items():
+        expected_target = EXACT_INERT_ALIASES.get(path)
+        if (
+            expected_target is None
+            or entry["mode"] != "120000"
+            or entry["object_type"] != "blob"
+            or protected_entries.get(path) != entry
+        ):
+            raise BootstrapVerificationError(
+                "candidate tree contains an unapproved link or non-blob"
+            )
+        try:
+            target = _read_git_blob_object(root, entry["object_sha"]).decode("utf-8")
+        except (BootstrapVerificationError, UnicodeDecodeError) as error:
+            raise BootstrapVerificationError("protected inert alias is unreadable") from error
+        if target != expected_target:
+            raise BootstrapVerificationError("protected inert alias target is not exact")
+        approved[path] = target
+    return approved
+
+
+def materialize_git_data_tree(
+    root: Path,
+    commit_sha: str,
+    destination: Path,
+    *,
+    protected_base_sha: str | None = None,
+) -> None:
+    """Materialize safe Git blobs and exact protected aliases without a checkout."""
     commit_sha = _resolve_commit(root, commit_sha)
-    archive = _git(root, ("archive", "--format=tar", commit_sha))
-    if len(archive) > MAX_CANDIDATE_ARCHIVE_BYTES:
-        raise BootstrapVerificationError("candidate archive exceeds byte limit")
-    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as stream:
-        members = stream.getmembers()
-        total = 0
-        for member in members:
-            _validate_path(member.name.rstrip("/"), "candidate archive member")
-            if not (member.isdir() or member.isfile()):
-                raise BootstrapVerificationError("candidate archive contains a non-regular entry")
-            total += member.size
-            if total > MAX_CANDIDATE_ARCHIVE_BYTES:
-                raise BootstrapVerificationError("candidate archive exceeds content limit")
-        for member in members:
-            target = destination / member.name
-            if member.isdir():
-                target.mkdir(parents=True, exist_ok=True)
-                target.chmod(0o700)
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            source = stream.extractfile(member)
-            if source is None:
-                raise BootstrapVerificationError("candidate archive member cannot be read")
-            target.write_bytes(source.read())
-            target.chmod(0o400)
+    if protected_base_sha is not None:
+        protected_base_sha = _resolve_commit(root, protected_base_sha)
+    _prepare_materialization_destination(destination)
+    entries = _git_tree_entries(root, commit_sha)
+    aliases = _approved_inert_aliases(root, protected_base_sha, entries)
+    regular_entries: dict[str, Mapping[str, str]] = {}
+    for path, entry in entries.items():
+        if path == ".git" or path.startswith(".git/"):
+            raise BootstrapVerificationError("candidate tree attempts to materialize Git metadata")
+        if path in aliases:
+            continue
+        if entry["mode"] not in REGULAR_GIT_MODES or entry["object_type"] != "blob":
+            raise BootstrapVerificationError("candidate tree contains a non-regular entry")
+        regular_entries[path] = entry
+
+    materialized: set[str] = set()
+    total_bytes = 0
+    blob_cache: dict[str, bytes] = {}
+
+    def materialize(path: str, entry: Mapping[str, str]) -> None:
+        nonlocal total_bytes
+        if path in materialized:
+            raise BootstrapVerificationError("candidate tree materialization has a path collision")
+        object_sha = entry["object_sha"]
+        content = blob_cache.get(object_sha)
+        if content is None:
+            content = _read_git_blob_object(root, object_sha)
+            blob_cache[object_sha] = content
+        total_bytes += len(content)
+        if total_bytes > MAX_CANDIDATE_ARCHIVE_BYTES:
+            raise BootstrapVerificationError("candidate materialization exceeds content limit")
+        _write_materialized_blob(destination, path, content)
+        materialized.add(path)
+
+    for path, entry in sorted(regular_entries.items()):
+        materialize(path, entry)
+    for alias, source_prefix in sorted(aliases.items()):
+        source_entries = [
+            (path, entry)
+            for path, entry in regular_entries.items()
+            if path.startswith(source_prefix + "/")
+        ]
+        if not source_entries:
+            raise BootstrapVerificationError(
+                "protected inert alias target is not a regular subtree"
+            )
+        for path, entry in sorted(source_entries):
+            alias_path = alias + path[len(source_prefix) :]
+            materialize(alias_path, entry)
     git_dir = _git(root, ("rev-parse", "--absolute-git-dir")).decode("utf-8").strip()
-    (destination / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
+    _write_materialized_blob(destination, ".git", f"gitdir: {git_dir}\n".encode("utf-8"))
 
 
 def _run_frozen_replay(
     *,
     repository_root: Path,
+    protected_base_sha: str,
     sampled_implementation_sha: str,
     policy: Mapping[str, object],
     pdd_cloud_git_dir: Path,
@@ -675,7 +1074,10 @@ def _run_frozen_replay(
         candidate_root = temporary_root / "candidate-data"
         candidate_root.mkdir(mode=0o700)
         materialize_git_data_tree(
-            repository_root, sampled_implementation_sha, candidate_root
+            repository_root,
+            sampled_implementation_sha,
+            candidate_root,
+            protected_base_sha=protected_base_sha,
         )
         canary_root = temporary_root / "pdd-cloud-canary-data"
         canary_root.mkdir(mode=0o700)
@@ -931,6 +1333,8 @@ def _load_prior_proof(
         "current_protected_base_sha": arguments.protected_base_sha,
         "policy_sha256": canonical_policy_digest(policy),
         "pr_number": arguments.pr_number,
+        "reviewed_source_base_is_ancestor_of_workflow_base": True,
+        "reviewed_source_base_sha": policy["reviewed_source_base_sha"],
         "workflow_base_sha": arguments.workflow_base_sha,
     }
     if any(prior.get(key) != value for key, value in expected.items()):
@@ -1040,6 +1444,7 @@ def main() -> int:  # pylint: disable=too-many-return-statements
                 )
                 replay_artifact = _run_frozen_replay(
                     repository_root=arguments.repository_root,
+                    protected_base_sha=str(proof["current_protected_base_sha"]),
                     sampled_implementation_sha=str(sampled["sampled_implementation_sha"]),
                     policy=policy,
                     pdd_cloud_git_dir=arguments.pdd_cloud_git_dir,
