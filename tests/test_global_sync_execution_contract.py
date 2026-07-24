@@ -169,3 +169,20 @@ def test_execution_contract_requires_plan_named_to_build_components_and_real_sta
         validate_cli=False,
     )
     assert errors == []
+
+
+def test_execution_state_records_the_exact_m0_focused_suite_and_owned_m0_paths() -> None:
+    state = yaml.safe_load(
+        (ROOT / "docs" / "global_sync_execution_state.yaml").read_text(encoding="utf-8")
+    )
+    commands = {command["id"]: command for command in state["command_registry"]}
+    assert commands["m0-focused-cli-test"]["argv"] == [
+        "python", "-m", "pytest",
+        "tests/test_sync_core_cli.py",
+        "tests/test_sync_core_transaction.py",
+        "tests/test_sync_core_reporting.py",
+        "tests/test_sync_core_standalone_package.py",
+    ]
+    tracks = {track["id"]: track for track in state["tracks"]}
+    assert tracks["m0-finalizer-test"]["write_set"] == ["tests/test_sync_core_reporting.py"]
+    assert tracks["m0-scope-samples"]["write_set"] == ["docs/global_sync_m0_scope_report.md"]
