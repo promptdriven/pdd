@@ -286,7 +286,7 @@ def submit_cloud_checkup_job(
         try:
             body = response.json()
             detail = body.get("error") or body.get("message") or response.text[:200]
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             detail = response.text[:200]
         raise CloudCheckupError(
             f"Cloud checkup submission failed ({response.status_code}): {detail}"
@@ -294,7 +294,7 @@ def submit_cloud_checkup_job(
 
     try:
         data = response.json()
-    except Exception as exc:
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         raise CloudCheckupError(
             f"Cloud returned non-JSON submission response: {response.text[:200]}"
         ) from exc
@@ -365,7 +365,7 @@ def poll_cloud_checkup_job(
             try:
                 body = response.json()
                 detail = body.get("error") or body.get("message") or response.text[:200]
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught
                 detail = response.text[:200]
             raise CloudCheckupError(
                 f"Status poll failed ({response.status_code}): {detail}"
@@ -373,7 +373,7 @@ def poll_cloud_checkup_job(
 
         try:
             data = response.json()
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             raise CloudCheckupError(
                 f"Non-JSON status response: {response.text[:200]}"
             ) from exc

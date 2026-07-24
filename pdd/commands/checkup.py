@@ -17,7 +17,6 @@ from ..agentic_change import _parse_pr_url
 from ..agentic_checkup import run_agentic_checkup
 from ..checkup_prompt_main import build_prompt_source_set_report, run_checkup_prompt
 from ..cloud_checkup_job import CloudCheckupError, run_cloud_checkup
-from ..core.cloud import CloudConfig
 from ..checkup_target import (
     CheckupTargetKind,
     classify_checkup_target,
@@ -1687,7 +1686,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         if not quiet:
             _billing_note = "PDD Cloud credit"
             click.echo(f"Billing: {_billing_note}")
-            click.echo(f"Mode: cloud-job (fully non-local)")
+            click.echo("Mode: cloud-job (fully non-local)")
         try:
             _result = run_cloud_checkup(
                 pr_url=pr_url,
