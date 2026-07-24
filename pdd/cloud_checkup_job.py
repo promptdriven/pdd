@@ -549,16 +549,7 @@ def run_cloud_checkup(
     )
 
     if not quiet:
-        # Print only a prefix of the job_id — the full ID originates from an
-        # HTTP response, and CodeQL's data-flow analysis treats HTTP-sourced
-        # strings as potentially sensitive.  The prefix is enough for log
-        # correlation without logging a credential-shaped value.
-        _job_id_prefix = job.job_id[:8] if job.job_id else "?"
-        print(
-            f"[pdd cloud] Submitted checkup job {_job_id_prefix}… "
-            f"(billing: {job.billing_source}). Polling for completion…",
-            flush=True,
-        )
+        print("[pdd cloud] Checkup job submitted. Polling for completion…", flush=True)
 
     return poll_cloud_checkup_job(
         job,

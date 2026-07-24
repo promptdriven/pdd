@@ -1746,7 +1746,6 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             click.echo(f"Status: {_status}")
             click.echo(f"Message: {_result.message}")
             click.echo(f"Cost: ${_result.cost_usd:.4f}")
-            click.echo(f"Billing: {_result.billing_source}")
             echo_model_line(_result.model)
 
         if not _result.success:
