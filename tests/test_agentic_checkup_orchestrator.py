@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import datetime as _dt
+import inspect
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -11,7 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pdd.agentic_common import DEFAULT_MAX_RETRIES
+from pdd.agentic_checkup import run_agentic_checkup
+from pdd.agentic_common import DEFAULT_MAX_RETRIES, run_agentic_task
 from pdd.agentic_checkup_orchestrator import (
     CHECKUP_STEP_STALL_TIMEOUTS,
     CHECKUP_STEP_TIMEOUTS,
@@ -59,6 +62,85 @@ STEP7_VERDICT_JSON = (
     '```'
 )
 ALL_ISSUES_FIXED = f"All Issues Fixed\n{STEP7_VERDICT_JSON}"
+
+
+class TestCheckupInterfaceSourceOfTruth:
+    """Prevent checkup runtime, prompt, and architecture interface drift."""
+
+    @staticmethod
+    def _prompt_interface(prompt_name: str) -> dict:
+        root = Path(__file__).resolve().parent.parent
+        prompt = (root / "pdd" / "prompts" / prompt_name).read_text(
+            encoding="utf-8"
+        )
+        match = re.search(
+            r"<pdd-interface>\s*(\{.*?\})\s*</pdd-interface>",
+            prompt,
+            re.DOTALL,
+        )
+        assert match is not None, f"missing pdd-interface in {prompt_name}"
+        return json.loads(match.group(1))
+
+    @pytest.mark.parametrize(
+        ("prompt_name", "function_name", "runtime_function", "added_parameters"),
+        [
+            (
+                "agentic_common_python.prompt",
+                "run_agentic_task",
+                run_agentic_task,
+                ("accept_failed_output",),
+            ),
+            (
+                "agentic_checkup_python.prompt",
+                "run_agentic_checkup",
+                run_agentic_checkup,
+                ("github_checks_blocking", "fresh_start"),
+            ),
+            (
+                "agentic_checkup_orchestrator_python.prompt",
+                "run_agentic_checkup_orchestrator",
+                run_agentic_checkup_orchestrator,
+                ("fresh_start",),
+            ),
+        ],
+    )
+    def test_runtime_prompt_and_architecture_interfaces_stay_in_sync(
+        self,
+        prompt_name: str,
+        function_name: str,
+        runtime_function: object,
+        added_parameters: tuple[str, ...],
+    ) -> None:
+        """New runtime parameters must update both declarative contract layers."""
+        root = Path(__file__).resolve().parent.parent
+        prompt_function = next(
+            function
+            for function in self._prompt_interface(prompt_name)["module"]["functions"]
+            if function["name"] == function_name
+        )
+        architecture = json.loads(
+            (root / "architecture.json").read_text(encoding="utf-8")
+        )
+        architecture_module = next(
+            module
+            for module in architecture
+            if module.get("filename") == prompt_name
+        )
+        architecture_function = next(
+            function
+            for function in architecture_module["interface"]["module"]["functions"]
+            if function["name"] == function_name
+        )
+
+        runtime_parameters = inspect.signature(runtime_function).parameters
+        for parameter in added_parameters:
+            assert parameter in runtime_parameters
+            assert re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(parameter)}"
+                r"(?:\s*:[^=,)]+)?\s*=",
+                prompt_function["signature"],
+            ), f"{parameter} is missing from {prompt_name}"
+        assert architecture_function["signature"] == prompt_function["signature"]
 
 
 class TestStep7ErrorEnvelopeRecovery:

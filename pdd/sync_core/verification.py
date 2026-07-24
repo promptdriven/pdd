@@ -109,7 +109,7 @@ _TERRA_SOL_COMPOSED_PROFILE_BYTES = (
     "033591bdbf15b8833802a91b20eb6d5e86dd870f200a49598a9bb5a145eb6f16",
 )
 # #2168 was then merged onto the reviewed Terra/Sol state. The raw rotation
-# policy is unchanged; this exact pair permits only the two combined prompt
+# policy is unchanged; this exact pair permits only the three combined prompt
 # transitions and their resulting profile bytes.
 _PDD_2168_TERRA_CONTINUATION_SCHEMA_2_HISTORY = (
     "0b00131438c93244513b77346ae2649d1073414621f30f536e2f6ae55ee7d9ee",
@@ -117,7 +117,7 @@ _PDD_2168_TERRA_CONTINUATION_SCHEMA_2_HISTORY = (
 )
 _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES = (
     "033591bdbf15b8833802a91b20eb6d5e86dd870f200a49598a9bb5a145eb6f16",
-    "665d7986122ff5a1b1774770c41bb124b622b9041682aa23ec7f5968cb504517",
+    "ea8502f8765d229587323bd5d5763866acd2b8e390bb5c8c58ceb035f99daf43",
 )
 
 # Gemini 3.6 installs two future prompt transitions after the Terra/Sol
@@ -852,10 +852,18 @@ _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS = (
 
 _PDD_2168_TERRA_CONTINUATION_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_checkup_python.prompt",
+        "python",
+        "6ffbc126545fc817d69c784521b32ca947fd6b120b891ab8f8a8f3f7ee4885bb",
+        "fcf6ac41bfcf91a1289bb175036df1dd02c2e712c3482e7bc58efa6031f525f3",
+        _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[0],
+        _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
         "python",
         "08e0c842d842974340b7ed3424f71fa20379c6922aaa6cfbca232d7d83a9a255",
-        "fce5b7e4354b4953ca629016cdc048c5b7d593cea1179b2ef497094934bc85c3",
+        "bd868518d46fa67b4fc449f35130553623f9faed8bfb825c5fb88b22ea555fdc",
         _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[0],
         _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[1],
     ),
@@ -863,7 +871,7 @@ _PDD_2168_TERRA_CONTINUATION_REQUIREMENT_TRANSITIONS = (
         "pdd/prompts/agentic_common_python.prompt",
         "python",
         "11aa8636691deb2c6e1dd1051ba46cb06947bb1a65335914868647e8240cede9",
-        "8d1bfc88a2c99c0674a1c93df9915081b6e92881ddcb4abb6d267570677b9a18",
+        "dd052c431b7ba192fd8527ae7d387effa9d8e8e74cfee023231792fc3fc7d187",
         _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[0],
         _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[1],
     ),
