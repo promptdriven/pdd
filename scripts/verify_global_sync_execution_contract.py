@@ -247,7 +247,8 @@ def _git_diff_paths(root: Path, protected_base: str, candidate: str) -> list[str
     """Return the exact protected-base..candidate changed paths, fail-closed."""
     try:
         result = subprocess.run(
-            ["git", "-C", str(root), "diff", "--name-only", "--diff-filter=ACMR",
+            ["git", "-C", str(root), "diff", "--name-status", "--find-renames",
+             "--find-copies",
              f"{protected_base}..{candidate}"],
             text=True, capture_output=True, check=False,
         )
@@ -255,7 +256,22 @@ def _git_diff_paths(root: Path, protected_base: str, candidate: str) -> list[str
         raise ValueError(f"cannot inspect protected-base candidate diff: {error}") from error
     if result.returncode:
         raise ValueError("cannot inspect protected-base candidate diff")
-    return [path for path in result.stdout.splitlines() if path]
+    paths: list[str] = []
+    for line in result.stdout.splitlines():
+        fields = line.split("\t")
+        if not fields or not fields[0]:
+            raise ValueError("protected-base candidate diff returned malformed status")
+        if fields[0][0] in {"R", "C"}:
+            if len(fields) != 3 or not all(fields[1:]):
+                raise ValueError("protected-base candidate diff returned malformed rename/copy")
+            paths.extend(fields[1:])
+        elif fields[0][0] in {"A", "D", "M", "T", "U", "X", "B"}:
+            if len(fields) != 2 or not fields[1]:
+                raise ValueError("protected-base candidate diff returned malformed path")
+            paths.append(fields[1])
+        else:
+            raise ValueError("protected-base candidate diff returned unknown status")
+    return paths
 
 
 def _resolved_candidate_sha(root: Path, candidate_sha: str | None) -> str | None:
@@ -353,12 +369,12 @@ def _promotion_errors(state: dict[str, Any], registry: list[dict[str, Any]]) -> 
             errors.append(f"{command.get('id')}: EXISTS requires predecessor {predecessor} promotion")
             continue
         evidence = command.get("merged_introducer_evidence")
-        candidate = promotion.get("candidate_sha")
-        if (not isinstance(evidence, dict) or evidence.get("sha") != candidate
+        introducer_sha = evidence.get("sha") if isinstance(evidence, dict) else None
+        if (not isinstance(introducer_sha, str) or not SHA1.fullmatch(introducer_sha)
                 or command.get("introducing_pr") in {None, "", "pending"}
                 or command.get("component_binding") != command.get("id")
-                or command.get("last_source_validation_sha") != candidate
-                or command.get("last_wheel_validation_sha") != candidate):
+                or command.get("last_source_validation_sha") != introducer_sha
+                or command.get("last_wheel_validation_sha") != introducer_sha):
             errors.append(f"{command.get('id')}: EXISTS requires merged introducer and exact component/source/wheel bindings")
     return errors
 
@@ -520,8 +536,21 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None,
     integration = state.get("integration")
     if not isinstance(integration, dict) or integration.get("base_sha") != base:
         _error(errors, "state integration topology must bind the protected base")
-    if state.get("active_blocker") != "m0-executable-baseline":
-        _error(errors, "active blocker must be m0-executable-baseline")
+    scoreboard = state.get("scoreboard", {})
+    current_milestone = scoreboard.get("milestone", "M0") if isinstance(scoreboard, dict) else "M0"
+    if current_milestone not in MILESTONES:
+        _error(errors, "scoreboard milestone must use M0-M5 vocabulary")
+    elif current_milestone == "M0":
+        if state.get("active_blocker") != "m0-executable-baseline":
+            _error(errors, "M0 active blocker must be m0-executable-baseline")
+    else:
+        promotions = state.get("milestone_promotions", {})
+        if (not isinstance(promotions, dict) or not isinstance(promotions.get("M0"), dict)
+                or promotions["M0"].get("state") != "passed"):
+            _error(errors, "post-M0 current milestone requires an M0 passed promotion")
+        if (not isinstance(state.get("active_blocker"), str)
+                or state.get("active_blocker") == "m0-executable-baseline"):
+            _error(errors, "post-M0 current milestone requires a non-M0 active blocker")
     for required in ("integration", "tracks"):
         if required not in state:
             _error(errors, f"state missing integration topology: {required}")
@@ -620,9 +649,6 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None,
 
     _validate_plan_commands(plan_text, registry, errors)
 
-    current_milestone = state.get("scoreboard", {}).get("milestone", "M0")
-    if current_milestone not in MILESTONES:
-        _error(errors, "scoreboard milestone must use M0-M5 vocabulary")
     for name, (command_id, expected_argv) in FUTURE_COMPONENTS.items():
         if name not in plan_text and command_id not in set(state.get("required_to_build_components", [])):
             continue
@@ -658,7 +684,7 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None,
     if not isinstance(source_contract, dict):
         _error(errors, "ledger source must contain execution_contract")
     else:
-        for key, expected in (("protected_base_sha", base), ("milestone_order", MILESTONES), ("active_blocker", "m0-executable-baseline")):
+        for key, expected in (("protected_base_sha", base), ("milestone_order", MILESTONES), ("active_blocker", state.get("active_blocker"))):
             if source_contract.get(key) != expected:
                 label = "base SHA" if key == "protected_base_sha" else key
                 _error(errors, f"plan/state/ledger disagreement for {label}")

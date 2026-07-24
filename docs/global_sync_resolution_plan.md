@@ -163,8 +163,10 @@ The first implementation deliverable is
 - Generated ledger state disagrees with this active plan or the recorded base
   SHA.
 - An unpromoted M0 candidate changes a path outside its exact bootstrap
-  allowlist or its recorded M0 topology/write sets. Pending A-E track write
-  sets do not expand that allowlist.
+  allowlist or its recorded M0 topology/write sets. The protected-base to
+  candidate comparison includes additions, modifications, deletions, and both
+  endpoints of renames/copies. Pending A-E track write sets do not expand that
+  allowlist.
 - A future component is relabeled from `TO_BUILD` before its milestone's
   protected predecessor passes, or without merged-introducer and exact
   component/source/wheel bindings.
@@ -186,8 +188,11 @@ with `m0-executable-baseline`, and make active ledger rows use the same
 M0-M5 milestone IDs, order, current base SHA, and executable-state vocabulary as
 this plan. A future command remains `TO_BUILD` until its milestone. It becomes
 `EXISTS` only after predecessor protected-passed evidence, a merged introducer,
-and matching component/source/wheel bindings; it may not be claimed as executed
-or passed before then.
+and matching component/source/wheel bindings. The predecessor proof and the
+introducer SHA are separate: a component binds its own merged introducer and
+validation SHA. After M0 promotes, the scoreboard and active blocker advance to
+the next milestone instead of retaining a permanent M0 label; it may not be
+claimed as executed or passed before then.
 
 The protected unit-test workflow must run both:
 
