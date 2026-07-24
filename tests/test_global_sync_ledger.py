@@ -1219,7 +1219,10 @@ def test_execution_contract_records_wheel_copied_test_closure() -> None:
     assert 'manifest_relpath = Path(".pdd/global-sync/standalone-checker-modules.json")' in workflow
     assert "from pdd.sync_core.standalone_package import load_standalone_manifest" in workflow
     assert "manifest = load_standalone_manifest(source)" in workflow
-    assert 'closure.extend(Path("pdd/sync_core") / module for module in manifest["modules"])' in workflow
+    assert (
+        'closure.extend(Path("pdd/sync_core") / module for module in manifest["modules"])'
+        in workflow
+    )
     assert 'all(path not in package.parents for path in fixture_paths)' in workflow
     assert 'relative.is_absolute() or ".." in relative.parts' in workflow
     assert "standalone fixture source must be a regular file" in workflow
@@ -1249,7 +1252,11 @@ def test_execution_contract_requires_pinned_deterministic_sample_replay() -> Non
     assert commands["m0-deterministic-sample-replay"]["argv"][3:7] == [
         "{pdd_repo}", "--base-sha", "{candidate_sha}", "--closure-limit"
     ]
-    step = next(step for step in state["validation_steps"] if step["id"] == "m0-deterministic-sample-replay")
+    step = next(
+        step
+        for step in state["validation_steps"]
+        if step["id"] == "m0-deterministic-sample-replay"
+    )
     assert step["executable"] is True
     assert step["required_runtime_binding"]["deterministic_output"] == (
         "byte-equal-to-committed-sample-results"
