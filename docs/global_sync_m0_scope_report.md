@@ -110,31 +110,43 @@ committed verifier. It is not a migration result and is not used below.
 
 ## Candidate outcomes
 
-All ten outcomes below are direct fields from
-`global_sync_m0_sample_results.json`. “Rejected” is the required fail-closed
-result for the eight profile candidates and the ownership candidate. The one
-accepted fingerprint is accepted only for public-API serialization and
-round-trip under semantic `UNKNOWN`; it is not trusted evidence.
+The ten positive controls are temporary, non-production fingerprint migrations.
+Each is bound through the public manifest, profile, snapshot, and fingerprint
+APIs, but remains non-promotable because it has no trusted attestation.
 
-| ID | Kind | Sample path | Public-API outcome |
-| --- | --- | --- | --- |
-| `01-profile` | profile | `pdd/prompts/commands/checkup_python.prompt` | `rejected-by-public-profile-api` |
-| `02-profile` | profile | `pdd/prompts/sync_main_python.prompt` | `rejected-by-public-profile-api` |
-| `03-profile` | profile | `pdd/prompts/core/cli_python.prompt` | `rejected-by-public-profile-api` |
-| `04-profile` | profile | `pdd/prompts/sync_orchestration_python.prompt` | `rejected-by-public-profile-api` |
-| `05-profile` | profile | `pdd/prompts/Makefile_makefile.prompt` | `rejected-by-public-profile-api` |
-| `06-profile` | profile | `pdd/prompts/auto_deps_main_python.prompt` | `rejected-by-public-profile-api` |
-| `07-profile` | profile | `pdd/prompts/ci_detect_changed_modules_python.prompt` | `rejected-by-public-profile-api` |
-| `08-profile` | profile | `pdd/prompts/frontend/components/DependencyViewer_typescriptreact.prompt` | `rejected-by-public-profile-api` |
-| `09-ownership` | ownership | `.pdd/sync-ownership.json` | `rejected-by-public-manifest-api:ManifestError` |
-| `10-fingerprint` | fingerprint | `pdd/prompts/_keyring_timeout_python.prompt` | `accepted-by-public-fingerprint-api-semantic-unknown` |
+| ID | Category | Prompt | Bound artifact | Outcome |
+| --- | --- | --- | --- | --- |
+| `01-nested-config` | nested-config | `pdd/prompts/agentic_architecture_python.prompt` | `pdd/agentic_architecture.py` | accepted-by-public-manifest-profile-snapshot-fingerprint-apis |
+| `02-include-closure` | include-closure | `pdd/prompts/commands/checkup_python.prompt` | `pdd/commands/checkup.py` | accepted-by-public-manifest-profile-snapshot-fingerprint-apis |
+| `03-duplicate-basename` | duplicate-basename | `pdd/prompts/core/duplicate_cli_guard_python.prompt` | `pdd/core/duplicate_cli_guard.py` | accepted-by-public-manifest-profile-snapshot-fingerprint-apis |
+| `04-human-owned-test` | human-owned-test | `pdd/prompts/bug_to_unit_test_python.prompt` | `pdd/bug_to_unit_test.py` | accepted-by-public-manifest-profile-snapshot-fingerprint-apis |
+| `05-multi-file-example-test` | multi-file-example-test | `pdd/prompts/agentic_test_generate_python.prompt` | `pdd/agentic_test_generate.py` | accepted-by-public-manifest-profile-snapshot-fingerprint-apis |
+| `06-executable-artifact` | executable-artifact | `pdd/prompts/pre_checkup_gate_python.prompt` | `pdd/pre_checkup_gate.py` | accepted-by-public-manifest-profile-snapshot-fingerprint-apis |
+| `07-architecture-override` | architecture-override | `pdd/prompts/architecture_sync_python.prompt` | `pdd/architecture_sync.py` | accepted-by-public-manifest-profile-snapshot-fingerprint-apis |
+| `08-runtime-dependency` | runtime-dependency | `pdd/prompts/architecture_registry_python.prompt` | `pdd/architecture_registry.py` | accepted-by-public-manifest-profile-snapshot-fingerprint-apis |
+| `09-historically-problematic-adjacent-control` | historically-problematic-adjacent-control | `pdd/prompts/checkup_agent_python.prompt` | `pdd/checkup_agent.py` | accepted-by-public-manifest-profile-snapshot-fingerprint-apis |
+| `10-cross-language` | cross-language | `pdd/prompts/frontend/constants_typescript.prompt` | `pdd/frontend/constants.ts` | accepted-by-public-manifest-profile-snapshot-fingerprint-apis |
 
-The profile candidates are intentionally rejected by
-`load_verification_profiles`; the ownership candidate is intentionally
-rejected by `build_unit_manifest` with `ManifestError`. Neither rejection
-is a migration success. The fingerprint candidate round-trips through
-`FingerprintStore`, but its semantic status is `UNKNOWN`, so it is neither
-attested nor a promotion signal.
+All ten report `accepted-by-public-manifest-profile-snapshot-fingerprint-apis`
+with semantic `UNKNOWN`; this verifies a temporary binding, not a trusted
+promotion. The exact `promotion_reason` for every positive row is
+`temporary non-production patch has no trusted attestation`.
+
+| Negative ID | Path | Exact outcome |
+| --- | --- | --- |
+| `01-profile` | `pdd/prompts/commands/checkup_python.prompt` | rejected-by-public-profile-api |
+| `09-ownership` | `.pdd/sync-ownership.json` | rejected-by-public-manifest-api:ManifestError |
+
+The executable Makefile, historically problematic `sync_main`, and nested
+`sync_orchestration` representatives currently have no valid public-API
+migration because their required include `path/to/file.txt` is absent. The
+artifact records explicit product-decision-required outcomes:
+
+| Category | Path | Exact outcome | Reason | Adjacent control |
+| --- | --- | --- | --- | --- |
+| executable-artifact | `pdd/prompts/Makefile_makefile.prompt` | product-decision-required-no-valid-public-api-migration | required include `path/to/file.txt` is absent | `06-executable-artifact` |
+| historically-problematic | `pdd/prompts/sync_main_python.prompt` | product-decision-required-no-valid-public-api-migration | required include `path/to/file.txt` is absent | `09-historically-problematic-adjacent-control` |
+| nested-config | `pdd/prompts/sync_orchestration_python.prompt` | product-decision-required-no-valid-public-api-migration | required include `path/to/file.txt` is absent | `01-nested-config` |
 
 The result artifact also records the binary patch size and SHA-256 for every
 candidate. Those patch bytes are transient verifier evidence, not checked-in
@@ -150,13 +162,13 @@ that a candidate passed.
 
 | Measurement | Recorded value |
 | --- | ---: |
-| Inventory elapsed time | 25.497711 s |
-| Inventory peak RSS | 320,733,184 B |
+| Inventory elapsed time | 22.331175 s |
+| Inventory peak RSS | 316,932,096 B |
 | Inventory subprocess calls | 1,086 |
-| Closure elapsed time | 2.323471 s |
-| Closure peak RSS | 320,733,184 B |
+| Closure elapsed time | 2.256716 s |
+| Closure peak RSS | 316,948,480 B |
 | Closure subprocess calls | 120 |
-| Deterministic report size | 8,586 B |
+| Deterministic report size | 14,057 B |
 
 The verifier measures elapsed time with `time.perf_counter()`, RSS with
 `resource.getrusage(RUSAGE_SELF).ru_maxrss`, and subprocess calls by counting
