@@ -145,6 +145,20 @@ GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS = {
     "pdd/sync_core/global_sync_ledger.py",
     "tests/test_global_sync_ledger.py",
 }
+GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS = {
+    "docs/archive/global_sync_resolution_plan_history_2026-07-22.md",
+    "docs/global_sync_execution_state.yaml",
+    "docs/global_sync_m0_sample_metrics.json",
+    "docs/global_sync_m0_sample_results.json",
+    "docs/global_sync_m0_scope_report.md",
+    "scripts/verify_global_sync_execution_contract.py",
+    "scripts/verify_global_sync_m0_samples.py",
+}
+GLOBAL_SYNC_M0_UNAUTHORIZED_SIBLING_PATHS = {
+    "docs/archive/global_sync_resolution_plan_history_2026-07-23.md",
+    "docs/global_sync_m0_unreviewed.json",
+    "scripts/verify_global_sync_m0_unreviewed.py",
+}
 GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/runtime-linux-x86_64-cp312.lock",
 }
@@ -200,6 +214,7 @@ PREAUTHORIZED_CHILD_PATHS = (
     | ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
     | GATE1_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS
+    | GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
     | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
@@ -2284,6 +2299,29 @@ def test_global_sync_ledger_paths_are_exactly_preauthorized() -> None:
     } == GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS
 
 
+def test_global_sync_m0_paths_are_exactly_preauthorized() -> None:
+    """Only the reviewed M0 evidence paths receive absent-path authority."""
+    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    rules = {row["pattern"]: row for row in ownership["rules"]}
+    assert len(GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS) == 7
+    assert {
+        path: rules.get(path) for path in GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS
+    } == {
+        path: {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
+        for path in GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS
+    }
+    preauthorized = {
+        row["pattern"]
+        for row in ownership["rules"]
+        if row.get("preauthorize_absent", False)
+    }
+    assert not preauthorized & GLOBAL_SYNC_M0_UNAUTHORIZED_SIBLING_PATHS
+    assert all(
+        not path.endswith("/") and not any(token in path for token in ("*", "?", "["))
+        for path in GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS
+    )
+
+
 def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
     """Only the reviewed Linux CPython 3.12 target lock receives authority."""
     ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
@@ -2555,6 +2593,54 @@ def test_global_sync_ledger_paths_compose_with_protected_preauthorization(
         for path, item in records.items()
     )
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+
+
+def test_global_sync_m0_paths_compose_without_sibling_authority(
+    tmp_path: Path,
+) -> None:
+    """Protected M0 authority admits only the reviewed evidence paths."""
+    root = tmp_path / "global-sync-m0-preauthorization"
+    base = _synthetic_current_tree_repo(root)
+    for path in GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS:
+        candidate = root / path
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text("reviewed M0 evidence\n", encoding="utf-8")
+        _git(root, "add", "-f", path)
+    exact_head = _commit(root, "add reviewed M0 evidence")
+
+    exact_manifest = build_unit_manifest(root, base_ref=base, head_ref=exact_head)
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in exact_manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix()
+        in GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS
+    }
+    assert set(records) == GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS
+    assert not exact_manifest.unaccounted_tracked_paths
+    assert not exact_manifest.invalid_reasons
+    assert all(
+        item.inventory.value == "HUMAN_OWNED"
+        and item.candidate_id.role == "human-maintained"
+        and item.ownership_provenance == f"protected-ownership:pdd-maintainers:{path}"
+        for path, item in records.items()
+    )
+
+    for path in GLOBAL_SYNC_M0_UNAUTHORIZED_SIBLING_PATHS:
+        candidate = root / path
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text("unreviewed M0 evidence\n", encoding="utf-8")
+        _git(root, "add", "-f", path)
+    sibling_head = _commit(root, "attempt unreviewed M0 evidence")
+    sibling_manifest = build_unit_manifest(
+        root, base_ref=exact_head, head_ref=sibling_head
+    )
+    assert {
+        Path(path) for path in GLOBAL_SYNC_M0_UNAUTHORIZED_SIBLING_PATHS
+    } <= set(sibling_manifest.unaccounted_tracked_paths)
+    assert {
+        f"{path}: tracked path has no ownership rule"
+        for path in GLOBAL_SYNC_M0_UNAUTHORIZED_SIBLING_PATHS
+    } <= set(sibling_manifest.invalid_reasons)
 
 
 def test_pr2017_absent_metadata_authorization_is_exact_six_path_set() -> None:
