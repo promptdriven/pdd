@@ -167,6 +167,9 @@ GLOBAL_SYNC_M0_BOOTSTRAP_PROTECTED_PATHS = {
     ".pdd/global-sync/m0-bootstrap-policy.json",
     "scripts/verify_global_sync_m0_bootstrap.py",
 }
+GLOBAL_SYNC_M0_BOOTSTRAP_POLICY_PREAUTHORIZED_PATHS = {
+    ".pdd/global-sync/m0-bootstrap-policy.json",
+}
 M0_BOOTSTRAP_POLICY_PATH = ROOT / ".pdd" / "global-sync" / "m0-bootstrap-policy.json"
 M0_BOOTSTRAP_VERIFIER_PATH = ROOT / "scripts" / "verify_global_sync_m0_bootstrap.py"
 M0_BOOTSTRAP_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "global-sync-m0-bootstrap.yml"
@@ -2771,6 +2774,7 @@ def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
     } == (
         GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
         | STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS
+        | GLOBAL_SYNC_M0_BOOTSTRAP_POLICY_PREAUTHORIZED_PATHS
     )
     assert (
         STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS
