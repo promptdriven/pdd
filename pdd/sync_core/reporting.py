@@ -375,5 +375,13 @@ def build_canonical_report(
 
 def _module_identity(prompt_path: PurePosixPath) -> str:
     """Return the prompt-root-relative, language-stripped module identity."""
-    relative = prompt_path.relative_to("prompts")
-    return relative.with_suffix("").as_posix().rsplit("_", 1)[0]
+    for prompts_root in (
+        PurePosixPath("prompts"),
+        PurePosixPath("pdd/prompts"),
+    ):
+        try:
+            relative = prompt_path.relative_to(prompts_root)
+        except ValueError:
+            continue
+        return relative.with_suffix("").as_posix().rsplit("_", 1)[0]
+    raise ValueError(f"prompt path is outside supported prompt roots: {prompt_path}")
