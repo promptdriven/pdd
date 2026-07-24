@@ -941,6 +941,7 @@ gate_2_package_boundary_pr:
   scope: "Layer 1 standalone non-pdd package boundary only; local candidate digest is deterministic evidence only, not a released digest, and this does not establish release, deployment, certification, or a Gate 2 pass."
 steps:
   - order: 1
+    execution_state: ARCHIVED
     name: "Reviewable implementation foundations"
     status: in-progress
     last_state_change: "2026-07-18"
@@ -1008,6 +1009,7 @@ steps:
     blocker: "Release the protected standalone checker wheel and record its exact digest/pin; OCI is a later layer or pending prerequisite, and no certificate is claimed."
     owning_pr: "https://github.com/promptdriven/pdd/pull/2214"
   - order: 2
+    execution_state: ARCHIVED
     name: "Standalone checker extraction, sealed OCI, and protected pin wiring"
     status: in-progress
     last_state_change: "2026-07-20"
@@ -1077,6 +1079,7 @@ steps:
     owning_pr: "https://github.com/promptdriven/pdd/pull/2229 (merged Layer 1 package boundary only)"
     diagnostic_evidence_pr: "https://github.com/promptdriven/pdd/pull/2225 (closed unmerged; diagnostic only; cannot advance Gate 2)"
   - order: 3
+    execution_state: ARCHIVED
     name: "Transactional generation-to-staging and crash recovery"
     status: pending
     last_state_change: "2026-07-18"
@@ -1115,6 +1118,7 @@ steps:
     blocker: "Protected checker release is unavailable."
     owning_pr: null
   - order: 4
+    execution_state: ARCHIVED
     name: "Complete demanded protected runner adapters"
     status: in-progress
     last_state_change: "2026-07-18"
@@ -1547,6 +1551,7 @@ steps:
     archived_blocker: "The superseded diagnostic contract would have required a final #1995 correction. It is non-operative and cannot block any gate."
     archived_owning_pr: "https://github.com/promptdriven/pdd/pull/1995"
   - order: 5
+    execution_state: ARCHIVED
     name: "Canonical production routing"
     status: pending
     last_state_change: "2026-07-18"
@@ -1577,6 +1582,7 @@ steps:
     blocker: "Steps 2-4 are incomplete."
     owning_pr: null
   - order: 6
+    execution_state: ARCHIVED
     name: "PDD complete inventory, profiles, and trusted evidence"
     status: pending
     last_state_change: "2026-07-18"
@@ -1622,6 +1628,7 @@ steps:
     blocker: "Create machine obligations and current trusted machine evidence for every remaining unit after canonical routing and the protected checker release are complete: 467 on protected main, or 471 if all PR #1995 candidate units remain expected."
     owning_pr: null
   - order: 7
+    execution_state: ARCHIVED
     name: "Released PDD pin and pdd_cloud migration"
     status: pending
     last_state_change: "2026-07-18"
@@ -1656,6 +1663,7 @@ steps:
     blocker: "Step 6 is incomplete."
     owning_pr: null
   - order: 8
+    execution_state: ARCHIVED
     name: "Protected merge-group lifecycle lane and real pdd_cloud canary"
     status: pending
     last_state_change: "2026-07-18"
@@ -1695,6 +1703,7 @@ steps:
     blocker: "Released checker and both repository migrations are incomplete."
     owning_pr: null
   - order: 9
+    execution_state: ARCHIVED
     name: "Seven consecutive full nightly certificates"
     status: pending
     last_state_change: "2026-07-18"
@@ -1757,6 +1766,7 @@ steps:
     blocker: "Steps 1-8 must be stable before the first qualifying UTC night."
     owning_pr: null
   - order: 10
+    execution_state: ARCHIVED
     name: "Final independent certificate verification"
     status: pending
     last_state_change: "2026-07-18"

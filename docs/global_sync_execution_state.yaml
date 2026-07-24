@@ -4,8 +4,8 @@ milestone_order: [M0, M1, M2, M3, M4, M5]
 active_blocker: m0-executable-baseline
 integration:
   owner: integration
-  worktree: issue-1932-integration
-  branch: feat/1932-integration
+  worktree: /Users/gregtanaka/Developer/pdd_cloud/worktrees/pdd/issue-1932-global-sync-m0
+  branch: feat/1932-global-sync-m0-20260724
   base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
   write_set:
     - scripts/verify_global_sync_execution_contract.py
@@ -14,9 +14,9 @@ integration:
     - docs/global_sync_evidence_ledger.yaml
     - .github/workflows/unit-tests.yml
 tracks:
-  - id: m0-bootstrap
-    owner: integration
-    worktree: issue-1932-m0-contract
+  - id: m0-contract
+    owner: m0-contract
+    worktree: /Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/issue-1932-m0-contract
     branch: feat/1932-m0-contract-20260724
     base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
     write_set:
@@ -26,36 +26,49 @@ tracks:
       - docs/global_sync_evidence_ledger_source.yaml
       - docs/global_sync_evidence_ledger.yaml
       - .github/workflows/unit-tests.yml
+  - id: m0-finalizer-test
+    owner: m0-finalizer-test
+    worktree: /Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/issue-1932-m0-finalizer-test
+    branch: fix/1932-m0-finalizer-test-20260724
+    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    write_set: [tests/test_sync_core_reporting.py, tests/test_sync_core_transaction.py]
+  - id: m0-scope-samples
+    owner: m0-scope-samples
+    worktree: /Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/issue-1932-m0-scope-samples
+    branch: feat/1932-m0-scope-samples-20260724
+    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    write_set: [docs/global_sync_m0_scope_samples.md]
   - id: track-a-repair
     owner: track-a
     worktree: pending
     branch: pending
     base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
-    write_set: [pdd/sync_core]
+    write_set: [pdd/sync_core/planner.py, pdd/sync_core/transaction.py, pdd/sync_core/finalize.py, pdd/sync_core/repair.py, pdd/commands/resolve.py, tests/test_global_sync_vertical_slice.py]
   - id: track-b-runner
     owner: track-b
     worktree: pending
     branch: pending
     base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
-    write_set: [pdd/sync_core/runner.py]
+    write_set: [pdd/sync_core/runner.py, pdd/sync_core/verification.py, pdd/sync_core/pytest_probe.py, tests/test_sync_core_runner.py, tests/test_sync_core_runner_pytest.py]
   - id: track-c-checker
     owner: track-c
     worktree: pending
     branch: pending
     base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
-    write_set: [pdd/sync_core/released_checker.py]
+    write_set: [pdd/sync_core/standalone_package.py, pdd/sync_core/checker_cli.py, pdd/sync_core/released_checker.py, tests/test_sync_core_standalone_package.py]
   - id: track-d-routing
     owner: track-d
     worktree: pending
     branch: pending
     base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
-    write_set: [pdd/sync_orchestration.py]
+    write_set: [pdd/sync_core/capabilities.py, pdd/continuous_sync.py, pdd/sync_determine_operation.py, pdd/sync_orchestration.py, pdd/sync_main.py, pdd/update_main.py, pdd/ci_drift_heal.py, pdd/sync_core/production_routing_verifier.py]
   - id: track-e-consumer
     owner: track-e
     worktree: pending
     branch: pending
     base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
-    write_set: [pdd/sync_core/consumer_ownership_verifier.py]
+    write_set: [pdd/sync_core/scan_verifier.py, pdd/sync_core/consumer_ownership_verifier.py, pdd/sync_core/nightly_ledger_verifier.py, .github/workflows/global-sync-merge-group.yml, .github/workflows/global-sync-shadow-nightly.yml]
+required_to_build_components: [vertical-slice-verifier, production-routing-verifier, scan-verifier, consumer-ownership-verifier, nightly-ledger-verifier, reference-verifier, certificate-finalizer, merge-group-workflow, shadow-nightly-workflow, sync-core-runner-pytest-test, global-sync-vertical-slice-test, production-global-sync-verifier]
 ledger_source: docs/global_sync_evidence_ledger_source.yaml
 generated_ledger: docs/global_sync_evidence_ledger.yaml
 command_registry:
@@ -233,6 +246,36 @@ command_registry:
     introducing_pr: pending
     last_source_validation_sha: null
     last_wheel_validation_sha: null
+  - id: sync-core-runner-pytest-test
+    state: TO_BUILD
+    kind: test
+    argv: [python, -m, pytest, tests/test_sync_core_runner_pytest.py]
+    owner: track-b
+    introducing_milestone: M1
+    earliest_invocable_milestone: M1
+    introducing_pr: pending
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: global-sync-vertical-slice-test
+    state: TO_BUILD
+    kind: test
+    argv: [python, -m, pytest, tests/test_global_sync_vertical_slice.py]
+    owner: track-a
+    introducing_milestone: M1
+    earliest_invocable_milestone: M1
+    introducing_pr: pending
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: production-global-sync-verifier
+    state: TO_BUILD
+    kind: module
+    argv: [python, -m, pdd.sync_core.production_global_sync_verifier]
+    owner: track-d
+    introducing_milestone: M4
+    earliest_invocable_milestone: M4
+    introducing_pr: pending
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
   - id: historical-sync-certify
     state: ARCHIVED
     kind: console
@@ -266,5 +309,21 @@ validation_steps:
     executable: false
     validation_commands: [m0-focused-cli-test]
     reason: "Pending until the supported source and built-wheel environments are captured."
+scoreboard:
+  base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+  milestone: M0
+  working_vertical_slice: pending
+  source_wheel_parity: pending
+  pdd_canary: pending
+  pdd_cloud_canary: pending
+  canonical_mutators_routed: "0/0"
+  focused_full_tests: "0/0/0"
+  shadow_runs: "0 consecutive, pending"
+  released_checker_digest: pending
+  enforcement: off
+  active_stop_the_line_risk: "current source CLI and focused suite dependency closure"
+  human_decision_needed: none
+  track_status: "A=pending B=pending C=pending D=pending E=pending"
+  next_integration: "M0 supported dependency closure and focused baseline evidence"
 historical_non_executable:
   stale_ledger_authority: "Gate 1/2 release and checker claims are archived historical evidence; they do not authorize M0-M5 execution."

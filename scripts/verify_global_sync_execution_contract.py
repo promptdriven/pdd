@@ -5,12 +5,13 @@ The evidence ledger renderer protects bytes and promotion evidence.  This
 companion deliberately checks the active execution metadata: commands that
 look plausible in prose must resolve to real, correctly-parented interfaces.
 """
-# pylint: disable=too-many-branches,too-many-locals,too-many-return-statements,too-many-statements,line-too-long
+# pylint: disable=too-many-boolean-expressions,too-many-branches,too-many-locals,too-many-return-statements,too-many-statements,line-too-long
 
 from __future__ import annotations
 
 import argparse
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,41 @@ import yaml
 
 STATES = frozenset({"EXISTS", "TO_BUILD", "EXTERNAL_PROTECTED", "ARCHIVED"})
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M5"]
+SHA1 = re.compile(r"^[0-9a-f]{40}$")
+PLAN_TO_BUILD = {
+    "pdd.sync_core.vertical_slice_verifier": (
+        "vertical-slice-verifier", ["python", "-m", "pdd.sync_core.vertical_slice_verifier"]
+    ),
+    "pdd.sync_core.production_routing_verifier": (
+        "production-routing-verifier", ["python", "-m", "pdd.sync_core.production_routing_verifier"]
+    ),
+    "pdd.sync_core.scan_verifier": (
+        "scan-verifier", ["python", "-m", "pdd.sync_core.scan_verifier"]
+    ),
+    "pdd.sync_core.consumer_ownership_verifier": (
+        "consumer-ownership-verifier", ["python", "-m", "pdd.sync_core.consumer_ownership_verifier"]
+    ),
+    "pdd.sync_core.nightly_ledger_verifier": (
+        "nightly-ledger-verifier", ["python", "-m", "pdd.sync_core.nightly_ledger_verifier"]
+    ),
+    "pdd-sync-reference-verifier": ("reference-verifier", ["pdd-sync-reference-verifier"]),
+    "pdd-sync-certificate-finalizer": ("certificate-finalizer", ["pdd-sync-certificate-finalizer"]),
+    ".github/workflows/global-sync-merge-group.yml": (
+        "merge-group-workflow", [".github/workflows/global-sync-merge-group.yml"]
+    ),
+    ".github/workflows/global-sync-shadow-nightly.yml": (
+        "shadow-nightly-workflow", [".github/workflows/global-sync-shadow-nightly.yml"]
+    ),
+    "tests/test_sync_core_runner_pytest.py": (
+        "sync-core-runner-pytest-test", ["python", "-m", "pytest", "tests/test_sync_core_runner_pytest.py"]
+    ),
+    "tests/test_global_sync_vertical_slice.py": (
+        "global-sync-vertical-slice-test", ["python", "-m", "pytest", "tests/test_global_sync_vertical_slice.py"]
+    ),
+    "pdd.sync_core.production_global_sync_verifier": (
+        "production-global-sync-verifier", ["python", "-m", "pdd.sync_core.production_global_sync_verifier"]
+    ),
+}
 REQUIRED_COMMAND_FIELDS = (
     "id", "state", "argv", "owner", "introducing_milestone",
     "earliest_invocable_milestone", "introducing_pr",
@@ -85,7 +121,7 @@ def _component_errors(command: dict[str, Any], root: Path) -> list[str]:
     return []
 
 
-def _cli_errors(command: dict[str, Any], python: str | None, label: str, root: Path) -> list[str]:
+def _cli_errors(command: dict[str, Any], python: str, label: str, root: Path) -> list[str]:
     command_id = command["id"]
     argv = command["argv"]
     if command.get("kind") != "console":
@@ -100,11 +136,13 @@ def _cli_errors(command: dict[str, Any], python: str | None, label: str, root: P
         errors = [f"{command_id}: wrong Click parent; nested pdd commands are not canonical"]
         errors.extend(f"{command_id}: documented option {option!r} is not accepted by {label} CLI" for option in command.get("documented_options", []))
         return errors
-    launcher = ["pdd"] if python is None else [python, "-m", "pdd"]
-    result = subprocess.run(
-        [*launcher, words[0], "--help"], cwd=root, text=True,
-        capture_output=True, check=False,
-    )
+    try:
+        result = subprocess.run(
+            [python, "-m", "pdd", words[0], "--help"], cwd=root, text=True,
+            capture_output=True, check=False,
+        )
+    except OSError as error:
+        return [f"{command_id}: {label} CLI launcher failed: {error}"]
     if result.returncode:
         return [f"{command_id}: {label} CLI does not accept {' '.join(argv)}"]
     help_text = result.stdout + result.stderr
@@ -179,11 +217,16 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None, validate_c
             for message in _component_errors(command, root):
                 _error(errors, message)
         if validate_cli and command.get("state") == "EXISTS":
-            for message in _cli_errors(command, None, "source", root):
+            for message in _cli_errors(command, sys.executable, "source", root):
                 _error(errors, message)
             if wheel_python:
                 for message in _cli_errors(command, wheel_python, "built-wheel", root):
                     _error(errors, message)
+
+        for field in ("last_source_validation_sha", "last_wheel_validation_sha"):
+            value = command.get(field)
+            if value is not None and (not isinstance(value, str) or not SHA1.fullmatch(value)):
+                _error(errors, f"{command_id}: {field} must be null or an exact 40-character SHA")
 
     steps = state.get("validation_steps", [])
     if not isinstance(steps, list):
@@ -208,6 +251,27 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None, validate_c
             _error(errors, f"invoked command is absent from registry: {command_id}")
         elif command.get("state") in {"TO_BUILD", "ARCHIVED"}:
             _error(errors, f"{command_id}: {command['state']} command is invoked before implementation")
+        elif command.get("state") == "EXTERNAL_PROTECTED":
+            digest = command.get("artifact_digest")
+            identity = command.get("control_plane_identity")
+            if (
+                not isinstance(digest, str)
+                or not digest.startswith("sha256:")
+                or digest == "pending"
+                or not isinstance(identity, str)
+                or not identity
+                or identity == "pending"
+            ):
+                _error(errors, f"{command_id}: EXTERNAL_PROTECTED command has pending binding at invocation")
+
+    required_ids = set(state.get("required_to_build_components", []))
+    for name, (command_id, expected_argv) in PLAN_TO_BUILD.items():
+        if name in plan_text or command_id in required_ids:
+            command = by_id.get(command_id)
+            if command is None:
+                _error(errors, f"missing plan-named TO_BUILD component: {command_id}")
+            elif command.get("state") != "TO_BUILD" or command.get("argv") != expected_argv:
+                _error(errors, f"{command_id}: plan-named component must be TO_BUILD with exact argv")
 
     source_relative = state.get("ledger_source")
     generated_relative = state.get("generated_ledger")
@@ -237,6 +301,12 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None, validate_c
             for key, expected in (("command_registry", registry), ("validation_steps", steps)):
                 if source_contract.get(key) != expected:
                     _error(errors, f"plan/state/ledger disagreement for {key}")
+    legacy_steps = source.get("steps", [])
+    if not isinstance(legacy_steps, list):
+        _error(errors, "ledger steps must be a list")
+    for step in legacy_steps:
+        if not isinstance(step, dict) or step.get("execution_state") != "ARCHIVED":
+            _error(errors, "legacy step must declare execution_state: ARCHIVED")
     return errors
 
 
