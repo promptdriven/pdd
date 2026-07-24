@@ -95,6 +95,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".github/workflows/oci-checker-runtime.yml",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".github/workflows/pdd-secrets-dispatch.yml",
       "role": "human-maintained"
     },
@@ -114,6 +121,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".gitignore",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/global-sync/oci-checker-runtime.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -858,6 +872,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "ci/cloud-batch/verify-secret-logs.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "ci/sync-checker/Dockerfile",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -6172,6 +6193,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "pdd/sync_core/native/vitest_fd_cloexec.c",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "pdd/sync_core/oci_runtime.py",
       "preauthorize_absent": true,
       "role": "human-maintained"
     },
@@ -13597,6 +13625,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_sync_core_manifest.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_sync_core_oci_runtime.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
