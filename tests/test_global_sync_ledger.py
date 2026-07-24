@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import copy
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pytest
@@ -23,6 +25,8 @@ from pdd.sync_core.global_sync_ledger import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CONTRACT_SCRIPT = ROOT / "scripts" / "verify_global_sync_execution_contract.py"
+CURRENT_PROTECTED_BASE_SHA = "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
 STATE_FIELDS = (
     "implemented",
     "local_green",
@@ -1055,3 +1059,165 @@ def test_global_sync_ledger_rejects_duplicate_yaml_keys() -> None:
     payload = load_unique_yaml(ROOT / "docs" / "global_sync_evidence_ledger.yaml")
 
     assert payload["schema_version"] == 6
+
+
+# Execution-contract tests live here because the ledger is the architecture-owned
+# authority for its state and promotion records.  Keeping them together prevents
+# the test-to-architecture ownership map from silently losing coverage.
+def _execution_contract_module():
+    spec = importlib.util.spec_from_file_location("execution_contract", CONTRACT_SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _write_execution_contract(tmp_path: Path) -> tuple[Path, Path, Path]:
+    plan = tmp_path / "plan.md"
+    plan.write_text("# Plan\\n\\nM0 M1 M2 M3 M4 M5\\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "scripts" / "present.py").write_text("pass\\n", encoding="utf-8")
+    (tmp_path / "tests" / "test_present.py").write_text("pass\\n", encoding="utf-8")
+    base = "a" * 40
+    registry = [{
+        "id": "present-script", "state": "EXISTS", "kind": "script",
+        "argv": ["python", "scripts/present.py"], "owner": "integration",
+        "introducing_milestone": "M0", "earliest_invocable_milestone": "M0",
+        "introducing_pr": "local", "last_source_validation_sha": None,
+        "last_wheel_validation_sha": None,
+    }]
+    state = {
+        "schema_version": 1, "protected_base_sha": base,
+        "milestone_order": ["M0", "M1", "M2", "M3", "M4", "M5"],
+        "active_blocker": "m0-executable-baseline",
+        "preflight": {"protected_base_ref": "origin/main", "protected_base_sha": base,
+                      "source_checkout_clean": "pending-m0-validation"},
+        "integration": {"owner": "integration", "base_sha": base,
+                        "write_set": ["scripts/present.py"]},
+        "m0_bootstrap_allowlist": ["scripts/present.py"],
+        "tracks": [{"id": "m0-bootstrap", "owner": "integration", "base_sha": base,
+                    "write_set": ["scripts/present.py"]}],
+        "command_registry": registry,
+        "validation_steps": [{"id": "m0", "milestone": "M0", "executable": True,
+                              "validation_commands": ["present-script"]}],
+        "ledger_source": "docs/ledger_source.yaml", "generated_ledger": "docs/ledger.yaml",
+    }
+    ledger = {"execution_contract": {
+        "protected_base_sha": base, "milestone_order": state["milestone_order"],
+        "active_blocker": state["active_blocker"], "command_registry": registry,
+        "validation_steps": state["validation_steps"],
+    }}
+    state_path = tmp_path / "docs" / "state.yaml"
+    source_path = tmp_path / "docs" / "ledger_source.yaml"
+    output_path = tmp_path / "docs" / "ledger.yaml"
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    source_path.write_text(yaml.safe_dump(ledger, sort_keys=False), encoding="utf-8")
+    output_path.write_bytes(source_path.read_bytes())
+    return plan, state_path, tmp_path
+
+
+def test_execution_contract_rejects_unlisted_feature_diff_before_m0(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, state_path, root = _write_execution_contract(tmp_path)
+    module = _execution_contract_module()
+    monkeypatch.setattr(module, "_git_diff_paths", lambda *_args: [
+        "scripts/present.py", "pdd/sync_core/planner.py"
+    ])
+    errors = module.verify(plan, state_path, root=root, validate_cli=False,
+                           candidate_sha="b" * 40)
+    assert any("M0 bootstrap allowlist" in error and "planner.py" in error for error in errors)
+
+
+def test_execution_contract_rejects_unrecorded_m0_diff_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan, state_path, root = _write_execution_contract(tmp_path)
+    module = _execution_contract_module()
+    monkeypatch.setattr(module, "_git_diff_paths", lambda *_args: ["scripts/unrecorded.py"])
+    errors = module.verify(plan, state_path, root=root, validate_cli=False,
+                           candidate_sha="b" * 40)
+    assert any("topology/write sets" in error and "unrecorded.py" in error for error in errors)
+
+
+def test_execution_contract_allows_m1_exists_only_after_m0_promotion(
+    tmp_path: Path
+) -> None:
+    plan, state_path, root = _write_execution_contract(tmp_path)
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["command_registry"].append({
+        "id": "m1-component", "state": "EXISTS", "kind": "script",
+        "argv": ["python", "scripts/present.py"], "owner": "track-a",
+        "introducing_milestone": "M1", "earliest_invocable_milestone": "M1",
+        "introducing_pr": "merged-pr", "merged_introducer_evidence": {"sha": "b" * 40},
+        "component_binding": "m1-component", "last_source_validation_sha": "b" * 40,
+        "last_wheel_validation_sha": "b" * 40,
+    })
+    state["milestone_promotions"] = {"M0": {
+        "state": "passed", "hosted_proof": "https://example.invalid/m0-proof",
+        "candidate_sha": "b" * 40, "wheel_artifact_sha256": "c" * 64,
+    }}
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    ledger = yaml.safe_load((root / "docs" / "ledger_source.yaml").read_text(encoding="utf-8"))
+    ledger["execution_contract"]["command_registry"] = state["command_registry"]
+    for name in ("ledger_source.yaml", "ledger.yaml"):
+        (root / "docs" / name).write_text(yaml.safe_dump(ledger, sort_keys=False), encoding="utf-8")
+    assert _execution_contract_module().verify(plan, state_path, root=root, validate_cli=False) == []
+
+
+def test_execution_contract_rejects_premature_m1_relabel(tmp_path: Path) -> None:
+    plan, state_path, root = _write_execution_contract(tmp_path)
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["command_registry"][0].update({
+        "id": "m1-component", "state": "EXISTS", "owner": "track-a",
+        "introducing_milestone": "M1", "earliest_invocable_milestone": "M1",
+        "introducing_pr": "merged-pr",
+    })
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    ledger = yaml.safe_load((root / "docs" / "ledger_source.yaml").read_text(encoding="utf-8"))
+    ledger["execution_contract"]["command_registry"] = state["command_registry"]
+    for name in ("ledger_source.yaml", "ledger.yaml"):
+        (root / "docs" / name).write_text(yaml.safe_dump(ledger, sort_keys=False), encoding="utf-8")
+    errors = _execution_contract_module().verify(plan, state_path, root=root, validate_cli=False)
+    assert any("predecessor M0 promotion" in error for error in errors)
+
+
+def test_execution_contract_rejects_wheel_probe_that_imports_checkout_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wheel_root = tmp_path / "wheel-environment"
+    wheel_python = wheel_root / "bin" / "python"
+    wheel_python.parent.mkdir(parents=True)
+    wheel_python.write_text("placeholder\\n", encoding="utf-8")
+    checkout = tmp_path / "checkout"
+    package = checkout / "pdd" / "__init__.py"
+    package.parent.mkdir(parents=True)
+    package.write_text("\\n", encoding="utf-8")
+
+    def fake_run(_: list[str], **__: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stderr="", stdout=(
+            f'{{"prefix": "{wheel_root}", "pdd_file": "{package}"}}\n'))
+
+    module = _execution_contract_module()
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    errors = module._cli_errors(  # pylint: disable=protected-access
+        {"id": "wheel", "kind": "console", "argv": ["pdd", "certify"]},
+        str(wheel_python), "built-wheel", checkout,
+    )
+    assert any("checkout source" in error for error in errors)
+
+
+def test_execution_state_records_exact_m0_focused_suite_and_allowlist() -> None:
+    state = yaml.safe_load((ROOT / "docs" / "global_sync_execution_state.yaml").read_text(
+        encoding="utf-8"))
+    commands = {command["id"]: command for command in state["command_registry"]}
+    assert commands["m0-focused-cli-test"]["argv"][-4:] == [
+        "tests/test_sync_core_cli.py", "tests/test_sync_core_transaction.py",
+        "tests/test_sync_core_reporting.py", "tests/test_sync_core_standalone_package.py",
+    ]
+    assert "tests/test_global_sync_execution_contract.py" not in state[
+        "m0_bootstrap_allowlist"]
+    assert "docs/global_sync_resolution_plan.md" in state["m0_bootstrap_allowlist"]
+    assert CURRENT_PROTECTED_BASE_SHA == state["protected_base_sha"]
