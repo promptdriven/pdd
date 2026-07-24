@@ -86,7 +86,7 @@ jq -e '
 ' "$artifact_root/docs/global_sync_m0_sample_results.json"
 jq -e '
   .base_sha == "a452fdcb04dced3eb94a90659b31bcce0db06088" and
-  .deterministic_report_bytes == 8586
+  .deterministic_report_bytes == 14057
 ' "$artifact_root/docs/global_sync_m0_sample_metrics.json"
 shasum -a 256 \
   "$artifact_root/docs/global_sync_m0_sample_results.json" \
