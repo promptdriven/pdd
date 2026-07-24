@@ -4404,6 +4404,7 @@ def _has_invalid_python_code(obj: Any, field_name: str = "") -> bool:
 # =============================================================================
 
 import contextvars
+from contextlib import contextmanager
 
 # Module-level cache for the routing table. None = not yet loaded.
 _TASK_ROUTING_TABLE: Optional[List[Dict[str, str]]] = None
@@ -4414,6 +4415,22 @@ _TASK_ROUTING_TABLE: Optional[List[Dict[str, str]]] = None
 _ROUTER_MODEL_OVERRIDE: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
     "pdd_router_model_override", default=None
 )
+
+
+@contextmanager
+def model_override_scope(model: Optional[str]):
+    """Apply an exact model override to nested ``llm_invoke`` calls.
+
+    The override is request-local through ``ContextVar`` and therefore safe
+    for concurrent cloud requests. Blank values preserve normal model
+    selection. The previous value is always restored when the scope exits.
+    """
+    requested = str(model).strip() if model is not None else ""
+    token = _ROUTER_MODEL_OVERRIDE.set(requested or None)
+    try:
+        yield
+    finally:
+        _ROUTER_MODEL_OVERRIDE.reset(token)
 
 # Effort level -> llm_invoke's 0-1 ``time`` scale.
 _EFFORT_TO_TIME: Dict[str, float] = {

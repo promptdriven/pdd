@@ -4492,6 +4492,19 @@ def test_default_base_model_can_be_none():
         importlib.reload(llm_invoke_module)
 
 
+def test_model_override_scope_is_nested_and_restored():
+    """Cloud handlers can route nested calls without process-global env state."""
+    import pdd.llm_invoke as llm_mod
+
+    assert llm_mod._ROUTER_MODEL_OVERRIDE.get() is None
+    with llm_mod.model_override_scope("claude-opus-5"):
+        assert llm_mod._ROUTER_MODEL_OVERRIDE.get() == "claude-opus-5"
+        with llm_mod.model_override_scope("claude-fable-5"):
+            assert llm_mod._ROUTER_MODEL_OVERRIDE.get() == "claude-fable-5"
+        assert llm_mod._ROUTER_MODEL_OVERRIDE.get() == "claude-opus-5"
+    assert llm_mod._ROUTER_MODEL_OVERRIDE.get() is None
+
+
 # =============================================================================
 # DETAILED TEST PLAN
 # =============================================================================
