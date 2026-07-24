@@ -194,6 +194,13 @@ def test_execution_contract_rejects_installed_wheel_bound_to_another_digest(
     assert any("does not bind" in error for error in errors)
 
 
+def test_execution_contract_rejects_candidate_label_not_matching_checkout() -> None:
+    errors = _module()._candidate_checkout_errors(  # pylint: disable=protected-access
+        "a" * 40, ROOT
+    )
+    assert any("does not match" in error for error in errors)
+
+
 def test_execution_contract_rejects_ledger_base_and_registry_disagreement(tmp_path: Path) -> None:
     _, state_path, root = _verify(tmp_path)
     ledger = yaml.safe_load((root / "docs" / "ledger_source.yaml").read_text(encoding="utf-8"))

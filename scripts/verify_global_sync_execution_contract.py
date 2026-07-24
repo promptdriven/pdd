@@ -317,6 +317,20 @@ def _wheel_binding_errors(wheel_python: str, wheel_artifact: Path | None,
     return []
 
 
+def _candidate_checkout_errors(candidate_sha: str | None, root: Path) -> list[str]:
+    """Bind the runtime candidate label to this checkout without mutating it."""
+    if candidate_sha is None or not (root / ".git").exists():
+        return []
+    try:
+        result = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                                text=True, capture_output=True, check=False)
+    except OSError as error:
+        return [f"candidate checkout preflight failed: {error}"]
+    if result.returncode or result.stdout.strip() != candidate_sha:
+        return ["candidate SHA does not match the checkout that built the wheel"]
+    return []
+
+
 def _walk_references(value: Any, key: str | None = None) -> Iterable[str]:
     if isinstance(value, dict):
         for child_key, child in value.items():
@@ -360,6 +374,8 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None,
         _error(errors, "candidate SHA must be an exact lowercase 40-character SHA")
     if wheel_python:
         for message in _wheel_binding_errors(wheel_python, wheel_artifact, candidate_sha, root):
+            _error(errors, message)
+        for message in _candidate_checkout_errors(candidate_sha, root):
             _error(errors, message)
 
     preflight = state.get("preflight")
