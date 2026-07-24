@@ -34,10 +34,12 @@ from pdd.sync_core import (
     encode_fingerprint,
     evidence_relpath,
     finalize_unit,
+    load_attestation,
     load_verification_profiles,
     runner_identity_digest,
 )
 from pdd.sync_core.identity import initialize_repository_identity
+from pdd.sync_core.reporting import module_identity
 from pdd.sync_core.types import ObligationEvidence
 from pdd.ci_drift_heal import main as ci_drift_heal_main
 from pdd.commands.sync_core import baseline as baseline_command
@@ -718,6 +720,48 @@ def test_scoped_canonical_compatibility_uses_selected_counts_and_qualified_names
     assert report["units"][0]["basename"] == "commands/foo"
 
 
+def test_package_local_compatibility_keeps_qualified_duplicate_module_names(
+    tmp_path, monkeypatch
+) -> None:
+    """Legacy projection uses the same exact prompt-root identity as filtering."""
+    canonical = {
+        "ok": True,
+        "counts": {"managed_units": 2, "trusted_in_sync": 2, "drifted": 0,
+                   "unbaselined": 0, "corrupt": 0, "unknown": 0,
+                   "conflict": 0, "failed": 0, "invalid": 0},
+        "units": [
+            {"subject": "pdd/prompts/commands/foo_python.prompt",
+             "baseline": "CURRENT", "semantic": "PASS", "in_sync": True,
+             "reason": "trusted", "changed_roles": []},
+            {"subject": "pdd/prompts/jobs/foo_python.prompt",
+             "baseline": "CURRENT", "semantic": "PASS", "in_sync": True,
+             "reason": "trusted", "changed_roles": []},
+        ],
+    }
+    monkeypatch.setattr(
+        "pdd.continuous_sync.build_canonical_report", lambda *_args, **_kwargs: canonical
+    )
+    monkeypatch.setattr("pdd.continuous_sync.canonical_sync_enabled", lambda _root: True)
+
+    report = build_compatibility_report(consumer="reconcile", root=tmp_path)
+
+    assert [item["basename"] for item in report["units"]] == [
+        "commands/foo", "jobs/foo"
+    ]
+    assert module_identity(PurePosixPath("pdd/prompts/commands/foo_python.prompt")) == (
+        "commands/foo"
+    )
+    assert module_identity(PurePosixPath("pdd/prompts/jobs/foo_python.prompt")) == (
+        "jobs/foo"
+    )
+    for unsafe_path in (
+        "pdd/prompts-archive/commands/foo_python.prompt",
+        "prompts/../pdd/prompts/commands/foo_python.prompt",
+    ):
+        with pytest.raises(ValueError, match="outside supported prompt roots"):
+            module_identity(PurePosixPath(unsafe_path))
+
+
 def test_real_manifest_path_qualified_module_selects_one_duplicate_leaf(tmp_path) -> None:
     root, _commit = _repository(tmp_path)
     for scope in ("commands", "jobs"):
@@ -1041,11 +1085,14 @@ def test_validate_command_requires_vitest_command_and_manifest_together(
     assert "manifest" in result.output.lower()
 
 
-@pytest.mark.usefixtures("signed_passing_finalizer_profile")
 def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(
     tmp_path,
 ) -> None:
     root, commit = _repository(tmp_path)
+    manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
+    profile = load_verification_profiles(root, manifest).profiles[0]
+    unit = manifest.managed_units[0]
+    snapshot = build_unit_snapshot(root, manifest, unit, profile)
     result = finalize_unit(
         root,
         PurePosixPath("prompts/widget_python.prompt"),
@@ -1055,6 +1102,19 @@ def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(
         replay_ledger_path=tmp_path / "external-trust/finalizer.json",
     )
     assert result.transaction.phase.value == "COMMITTED"
+    envelope = load_attestation(root, result.attestation_id)
+    assert envelope.binding.subject == unit.unit_id
+    assert envelope.binding.snapshot_digest == snapshot.digest()
+    assert envelope.binding.profile_digest == profile.profile_digest
+    assert envelope.binding.base_sha == commit
+    assert envelope.binding.checked_sha == commit
+    assert envelope.binding.tool_version == TRUSTED_RUNNER_VERSION
+    assert envelope.binding.runner_digest == runner_identity_digest(
+        profile, root=root, ref=commit
+    )
+    assert envelope.results == (
+        ObligationEvidence("pytest", EvidenceOutcome.PASS),
+    )
     _git(root, "add", ".pdd/meta/v2", ".pdd/evidence/v2")
     _git(root, "commit", "-q", "-m", "commit trusted sync evidence")
     finalized_commit = _git(root, "rev-parse", "HEAD")
