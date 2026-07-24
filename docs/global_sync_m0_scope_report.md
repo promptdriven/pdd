@@ -195,8 +195,9 @@ This validates metadata serialization and read-back, not trusted verification
 or a denominator reduction.
 
 M0 does **not** depend on Track A's M1 staging artifact-repair executor. The
-remaining M0 sample blockers are narrower: the fail-closed ownership rejection
-and invalid closure/input data. The current canonical report completes; it
+remaining M0 sample blockers are narrower: the absent external replay ledger,
+the fail-closed ownership rejection, and invalid closure/input data. The
+current canonical report completes; it
 does not exhibit a profile-loader no-result condition, and the registry and
 manifest denominators match.
 
@@ -212,17 +213,15 @@ each installed a 180-second `SIGALRM` bound and completed normally.
 | Case | Result | Time | Peak RSS | Subprocess calls | Report size |
 | --- | --- | ---: | ---: | ---: | ---: |
 | Full read-only inventory (`build_unit_manifest`) | completed: 469 managed/expected, 3,114 candidates, zero invalid/unaccounted | 5.194 s | 316,440,576 B | 16 | 151 B summary |
-| Full canonical inventory/classification (`build_canonical_report`) | completed, exit 0: 469 units; 469 complete profiles; no profile/manifest mismatch | 22.029 s | 318,046,208 B | 1,078 | 102,980 B |
-| Representative package-local module filter (`commands/checkup`) | **failed before selection** in the isolated d842-plus-fix run: legacy `prompts`-root `ValueError`; this contradicts the separately observed integration filter completion and requires reconciliation before claiming the fix is validated at this input | 22.183 s | 313,786,368 B | 1,078 | none |
+| Full canonical inventory/classification (`build_canonical_report`) | completed, exit 0: 469 units; 469 complete profiles; no profile/manifest mismatch | 42.371 s | 317,390,848 B | 2,028 | 118,200 B |
+| Representative package-local module filter (`commands/checkup`) | completed, exit 0: one selected `pdd/prompts/commands/checkup_python.prompt`; package-local module identity works | 22.910 s | 310,329,344 B | 1,092 | 961 B |
 | Alphabetical 20-successful-unit closure | completed after continuing past 40 invalid candidates | 24.326 s | 312,344,576 B | 1,194 | 7,608 B |
 
 The full report is red, not because of a loader crash or a denominator gap,
-but because it reports one invalid-count condition and six errors: an
-`architecture.json` zero-match mapping for `context/python_preamble.prompt`,
-the absent external replay ledger, and four requirement-transition binding
-mismatches (`agentic_checkup`, `agentic_common`, `checkup_review_loop`, and
-`commands/checkup`). Its resulting status counts are 469 corrupt and 469
-failed, zero trusted/current evidence, and `ok=false`.
+but because the external attestation replay ledger is not configured. Its only
+aggregate error is that absent ledger. The resulting status counts are 206
+drifted, 262 unbaselined, 263 unknown, 205 failed, one conflict, zero corrupt,
+and zero trusted/current evidence; `ok=false`.
 
 The 20 closure successes were reached only after 40 invalid candidates. The
 first was the known missing `path/to/file.txt`; others include unapproved
@@ -238,16 +237,31 @@ The exact benchmark input was a disposable detached clone at `d8423f5…` with
 only `2c1b5adac` (`fix(sync): support package-local report module identities`)
 cherry-picked locally; its temporary commit was `4a4b7eb17`. Thus Git inputs
 were exactly `d8423f5…` while the reporting module-selection correction was in
-effect. No production file was changed. The full-run command was:
+effect. No production file was changed. The full-run wrapper was:
 
 ```bash
-PDD_NO_AUTO_UPDATE=1 /opt/homebrew/Caskroom/miniforge/base/envs/pdd/bin/python \
-  /tmp/m0_current_full_harness.py /tmp/pdd-m0-current-fixed.TFpdS3/pdd
+cd /tmp/pdd-m0-current-fixed.TFpdS3/pdd
+env -u VIRTUAL_ENV -u PYTHONHOME -u PYTHONPATH -u PDD_PATH \
+  PDD_NO_AUTO_UPDATE=1 /opt/homebrew/Caskroom/miniforge/base/envs/pdd/bin/python \
+  - /tmp/pdd-m0-current-fixed.TFpdS3/pdd <<'PY'
+# 180-second build_canonical_report measurement harness
+PY
 ```
 
 It ran in a PTY to obtain the authoritative child status: exit 0 before the
 180-second bound. The harness measured `resource` peak RSS and normal
 subprocess execution, then emitted the compact result JSON above.
+
+The representative filter was rerun by feeding its harness through standard
+input while the temporary checkout was the working directory, with
+`VIRTUAL_ENV`, `PYTHONHOME`, `PYTHONPATH`, and `PDD_PATH` unset. Provenance
+printed `pdd.sync_core.reporting` from that checkout at temporary commit
+`4a4b7eb17` and showed `_module_identity` accepting both `prompts` and
+`pdd/prompts`. The earlier contradictory result ran a script from `/tmp`,
+whose import path selected a stale parent-worktree reporting module; it is
+superseded by the fixed-source result above. The full benchmark was also
+rerun with this checkout-first standard-input harness; its table row records
+that fixed-source result.
 
 ## 4. pdd_cloud canary selection
 
@@ -299,14 +313,14 @@ only their dependent milestones; they do not block local M1 engineering.
 M0 early-scope/scale is not promotable. The completed full report clears the
 prior profile-loader and denominator-mismatch claims: it has 469 profiles, 465
 human-only and four machine-obligation profiles, matching 469 manifest units.
-Its genuine blockers are the report's architecture/transition-binding/trust
-errors, the ownership-policy rejection for the human-owned-test candidate, and
-invalid include/symlink closure data. The isolated package-local filter result
-also needs reconciliation before the reporting-fix validation can be called
-complete. The legacy `pdd sync` zero-unit runs remain failed interface
-evidence, not blockers on an M1 repair executor. The default remains to retain
-all 469 expected-managed units; no coverage waiver or denominator reduction is
-authorized. These results do not claim M0 or M1 success.
+Its genuine blockers are the missing trust/replay-ledger control, the
+ownership-policy rejection for the human-owned-test candidate, and invalid
+include/symlink closure data. The package-local reporting filter now completes
+against the exact current input. The legacy `pdd sync` zero-unit runs remain
+failed interface evidence, not blockers on an M1 repair executor. The default
+remains to retain all 469 expected-managed units; no coverage waiver or
+denominator reduction is authorized. These results do not claim M0 or M1
+success.
 
 Report integrity was checked with:
 
