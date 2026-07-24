@@ -134,7 +134,16 @@ jobs:
           print(*values)
           PY
           )
-          test "$base_sha" = "$(git rev-parse HEAD)"
+          git cat-file -e "$base_sha^{commit}"
+          git merge-base --is-ancestor "$base_sha" HEAD
+          while IFS= read -r changed; do
+            case "$changed" in
+              docs/global_sync_m0_sample_results.json|docs/global_sync_m0_sample_metrics.json|docs/global_sync_m0_scope_report.md|.github/workflows/unit-tests.yml|docs/global_sync_execution_state.yaml|scripts/verify_global_sync_execution_contract.py|tests/test_global_sync_ledger.py) ;;
+              *) echo "sample-affecting path changed after sampled base: $changed" >&2; exit 1 ;;
+            esac
+          done < <(git diff --name-only "$base_sha..HEAD")
+          sampled_root="$RUNNER_TEMP/pdd-m0-sampled-implementation"
+          git worktree add --detach "$sampled_root" "$base_sha"
           canary="$RUNNER_TEMP/pdd-cloud-canary"
           git init -q "$canary"
           git -C "$canary" remote add origin https://github.com/promptdriven/pdd_cloud.git
@@ -143,8 +152,8 @@ jobs:
           git -C "$canary" checkout -q --detach "$pdd_cloud_sha"
           test "$(git -C "$canary" rev-parse HEAD)" = "$pdd_cloud_sha"
           replay="$RUNNER_TEMP/global-sync-m0-sample-replay.json"
-          python scripts/verify_global_sync_m0_samples.py \
-            --root "$GITHUB_WORKSPACE" --base-sha "$base_sha" \
+          python "$sampled_root/scripts/verify_global_sync_m0_samples.py" \
+            --root "$sampled_root" --base-sha "$base_sha" \
             --closure-limit 20 --pdd-cloud-root "$canary" \
             --pdd-cloud-sha "$pdd_cloud_sha" --output "$replay"
           cmp "$replay" "$artifact"

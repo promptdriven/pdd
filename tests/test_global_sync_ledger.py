@@ -1220,8 +1220,11 @@ def test_execution_contract_requires_pinned_deterministic_sample_replay() -> Non
     )
     assert "Replay deterministic global-sync M0 samples against pinned canary" in workflow
     assert 'git -C "$canary" fetch --no-tags origin "$pdd_cloud_sha"' in workflow
-    assert 'test "$base_sha" = "$(git rev-parse HEAD)"' in workflow
-    assert "--closure-limit 20 --pdd-cloud-root \"$canary\"" in workflow
+    assert 'git merge-base --is-ancestor "$base_sha" HEAD' in workflow
+    assert 'git worktree add --detach "$sampled_root" "$base_sha"' in workflow
+    assert 'sample-affecting path changed after sampled base: $changed' in workflow
+    assert 'python "$sampled_root/scripts/verify_global_sync_m0_samples.py"' in workflow
+    assert '--root "$sampled_root" --base-sha "$base_sha"' in workflow
     assert 'cmp "$replay" "$artifact"' in workflow
     state = yaml.safe_load((ROOT / "docs" / "global_sync_execution_state.yaml").read_text(
         encoding="utf-8"
@@ -1235,6 +1238,22 @@ def test_execution_contract_requires_pinned_deterministic_sample_replay() -> Non
     assert step["required_runtime_binding"]["deterministic_output"] == (
         "byte-equal-to-committed-sample-results"
     )
+    assert step["required_runtime_binding"]["post_sample_diff"] == (
+        "evidence-and-control-plane-paths-only"
+    )
+
+
+def test_execution_contract_rejects_sample_implementation_changes_after_replay_base() -> None:
+    """Only evidence/control-plane paths may follow the sampled implementation."""
+    workflow = (ROOT / ".github" / "workflows" / "unit-tests.yml").read_text(
+        encoding="utf-8"
+    )
+    policy = workflow.split('while IFS= read -r changed; do', 1)[1].split(
+        'done < <(git diff --name-only "$base_sha..HEAD")', 1
+    )[0]
+    assert "scripts/verify_global_sync_m0_samples.py" not in policy
+    assert "pdd/sync_core/" not in policy
+    assert '*) echo "sample-affecting path changed after sampled base: $changed"' in policy
 
 
 def test_execution_contract_retains_complete_concordant_registry_coverage(tmp_path: Path) -> None:

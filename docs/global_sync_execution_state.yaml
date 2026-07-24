@@ -448,10 +448,11 @@ validation_steps:
     executable: true
     validation_commands: [m0-deterministic-sample-replay]
     required_runtime_binding:
-      base_sha: exact-candidate-head
+      base_sha: exact-sampled-implementation-ancestor
       pdd_cloud_sha: exact-committed-canary-sha
       closure_limit: 20
       deterministic_output: byte-equal-to-committed-sample-results
+      post_sample_diff: evidence-and-control-plane-paths-only
   - id: m4-production-global-sync-verification
     milestone: M4
     executable: false
