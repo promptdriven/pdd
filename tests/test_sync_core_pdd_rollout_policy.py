@@ -2327,14 +2327,14 @@ def _workflow_value_references_secret(value: object, secret_names: tuple[str, ..
     if isinstance(value, list):
         return any(_workflow_value_references_secret(child, secret_names) for child in value)
     return isinstance(value, str) and any(
-        f"secrets.{secret_name}" in value for secret_name in secret_names
+        secret_name.casefold() in value.casefold() for secret_name in secret_names
     )
 
 
-def test_auto_heal_app_secret_consumers_use_restricted_environment() -> None:
-    """Every App-secret consumer is bound to the main-restricted environment."""
-    workflow = yaml.safe_load(AUTO_HEAL_WORKFLOW_PATH.read_text(encoding="utf-8"))
-    jobs = workflow["jobs"]
+def _assert_auto_heal_app_secret_consumers_are_restricted(
+    jobs: dict[str, dict[str, object]],
+) -> None:
+    """Require the only App-secret consumer to be the restricted heal job."""
     app_secret_names = ("PDD_CLOUD_APP_ID", "PDD_CLOUD_APP_PRIVATE_KEY")
     consumer_jobs = {
         job_name
@@ -2348,6 +2348,38 @@ def test_auto_heal_app_secret_consumers_use_restricted_environment() -> None:
         jobs[job_name].get("environment") == "pdd-cloud-read"
         for job_name in consumer_jobs
     )
+
+
+def test_auto_heal_app_secret_consumers_use_restricted_environment() -> None:
+    """Every App-secret consumer is bound to the main-restricted environment."""
+    workflow = yaml.safe_load(AUTO_HEAL_WORKFLOW_PATH.read_text(encoding="utf-8"))
+
+    _assert_auto_heal_app_secret_consumers_are_restricted(workflow["jobs"])
+
+
+@pytest.mark.parametrize(
+    "secret_reference",
+    (
+        "${{ secrets.pdd_cloud_app_id }}",
+        "${{ secrets['PDD_CLOUD_APP_PRIVATE_KEY'] }}",
+    ),
+)
+def test_auto_heal_rejects_second_job_with_alternate_app_secret_syntax(
+    secret_reference: str,
+) -> None:
+    """Case-insensitive dot and bracket secret references cannot bypass the job gate."""
+    jobs = {
+        "heal": {
+            "environment": "pdd-cloud-read",
+            "steps": [{"with": {"app-id": "${{ secrets.PDD_CLOUD_APP_ID }}"}}],
+        },
+        "unprotected-app-consumer": {
+            "steps": [{"env": {"APP_CREDENTIAL": secret_reference}}],
+        },
+    }
+
+    with pytest.raises(AssertionError):
+        _assert_auto_heal_app_secret_consumers_are_restricted(jobs)
 
 
 def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
