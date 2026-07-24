@@ -56,7 +56,7 @@ the two artifacts into the documentation checkout from which it is invoked.
 
 ```bash
 set -eu
-base_sha=315f03def92d160024190c57d2bed525ab976e38
+base_sha=a452fdcb04dced3eb94a90659b31bcce0db06088
 cloud_sha=09f9d3fea71c4c0ed6655f2acd5e95b14a32c3c8
 source_root="$(mktemp -d /tmp/pdd-global-sync-m0.XXXXXX)"
 artifact_root="$(pwd)"
@@ -79,13 +79,13 @@ env -u VIRTUAL_ENV -u PYTHONHOME -u PYTHONPATH -u PDD_PATH \
   --metrics-output "$artifact_root/docs/global_sync_m0_sample_metrics.json"
 
 jq -e '
-  .base_sha == "315f03def92d160024190c57d2bed525ab976e38" and
+  .base_sha == "a452fdcb04dced3eb94a90659b31bcce0db06088" and
   .pdd_cloud_sha == "09f9d3fea71c4c0ed6655f2acd5e95b14a32c3c8" and
   (.cases | length) == 10 and
   (.closure.requested == 20 and .closure.completed == 20)
 ' "$artifact_root/docs/global_sync_m0_sample_results.json"
 jq -e '
-  .base_sha == "315f03def92d160024190c57d2bed525ab976e38" and
+  .base_sha == "a452fdcb04dced3eb94a90659b31bcce0db06088" and
   .deterministic_report_bytes == 8586
 ' "$artifact_root/docs/global_sync_m0_sample_metrics.json"
 shasum -a 256 \
@@ -185,7 +185,7 @@ disposable detached PDD checkout at
 (`fix(sync): support package-local report module identities`) cherry-picked
 locally. The resulting temporary commit was recorded as `4a4b7eb17`. The
 temporary checkout was not production state. The new verifier's
-315f03def inventory and closure measurements supplement these results; they do
+a452fdcb inventory and closure measurements supplement these results; they do
 not claim to reproduce the full canonical classification or module-filter
 benchmark.
 
