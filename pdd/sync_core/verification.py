@@ -132,6 +132,21 @@ _GEMINI_36_PROFILE_BYTES = (
     "033591bdbf15b8833802a91b20eb6d5e86dd870f200a49598a9bb5a145eb6f16",
     "c3f9d1344b067ba8640db6da706a8c17f13fcd47b09805b786e58a65fca6169e",
 )
+# PR #2168 can be consumed after Gemini 3.6 Phase A installs its dormant
+# rotation rows.  Gemini changes only the rotation-policy bytes at this stage;
+# #2168 changes the profile bytes.  Bind that cross-branch composition exactly
+# so neither transition becomes generic replay authority.
+_PDD_2168_GEMINI_36_SCHEMA_2_STATE = (
+    _GEMINI_36_PHASE_A_SCHEMA_2_HISTORY[1],
+    _GEMINI_36_PHASE_A_SCHEMA_2_HISTORY[1],
+)
+_PDD_2168_GEMINI_36_PROFILE_STATES = (
+    _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES,
+    (
+        _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[1],
+        _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[1],
+    ),
+)
 
 
 class VerificationProfileError(ValueError):
@@ -2025,6 +2040,29 @@ def _is_exact_pdd2168_terra_consumed_state(
     )
 
 
+def _is_exact_pdd2168_gemini_36_composed_state(
+    manifest: UnitManifest,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+) -> bool:
+    """Recognize #2168 consumed on the exact Gemini 3.6 Phase-A policy."""
+    if None in (*rotation_policies, *profile_policies):
+        return False
+    return (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and (
+            hashlib.sha256(rotation_policies[0]).hexdigest(),
+            hashlib.sha256(rotation_policies[1]).hexdigest(),
+        )
+        == _PDD_2168_GEMINI_36_SCHEMA_2_STATE
+        and (
+            hashlib.sha256(profile_policies[0]).hexdigest(),
+            hashlib.sha256(profile_policies[1]).hexdigest(),
+        )
+        in _PDD_2168_GEMINI_36_PROFILE_STATES
+    )
+
+
 def _candidate_authorization_is_strictly_dormant(
     manifest: UnitManifest,
     base: Mapping[UnitId, _ProfileInput],
@@ -2591,7 +2629,16 @@ def _load_requirement_transition_authorizations(
     pdd2168_terra_consumed_state = _is_exact_pdd2168_terra_consumed_state(
         manifest, (protected_policy, candidate_policy), policies
     )
-    if pdd2168_terra_continuation or pdd2168_terra_consumed_state:
+    pdd2168_gemini_36_composed_state = (
+        _is_exact_pdd2168_gemini_36_composed_state(
+            manifest, (protected_policy, candidate_policy), policies
+        )
+    )
+    if (
+        pdd2168_terra_continuation
+        or pdd2168_terra_consumed_state
+        or pdd2168_gemini_36_composed_state
+    ):
         continuation_identities = {
             (item.prompt_path, item.language_id)
             for item in (
@@ -2708,6 +2755,7 @@ def _load_requirement_transition_authorizations(
         or terra_sol_consumed_state
         or pdd2168_terra_continuation
         or pdd2168_terra_consumed_state
+        or pdd2168_gemini_36_composed_state
     ):
         # The exact historical pair both installed and consumed its authority
         # before Phase-A isolation existed; validate it as consumption below.
@@ -2742,6 +2790,7 @@ def _load_requirement_transition_authorizations(
                 and not terra_sol_consumed_state
                 and not pdd2168_terra_continuation
                 and not pdd2168_terra_consumed_state
+                and not pdd2168_gemini_36_composed_state
                 and not gemini_36_terra_sol_state
             ):
                 raise VerificationProfileError(
@@ -3003,6 +3052,11 @@ def _authorized_requirement_updates(
     pdd2168_terra_consumed_state = _is_exact_pdd2168_terra_consumed_state(
         manifest, rotation_policies, policies
     )
+    pdd2168_gemini_36_composed_state = (
+        _is_exact_pdd2168_gemini_36_composed_state(
+            manifest, rotation_policies, policies
+        )
+    )
     pdd1875_reconciliation = (
         manifest.repository_id == _PDD_REPOSITORY_ID
         and _is_exact_combined_requirement_reconciliation(
@@ -3041,7 +3095,11 @@ def _authorized_requirement_updates(
             updates[unit_id] = head[unit_id]
             continue
         if (
-            (pdd2168_terra_continuation or pdd2168_terra_consumed_state)
+            (
+                pdd2168_terra_continuation
+                or pdd2168_terra_consumed_state
+                or pdd2168_gemini_36_composed_state
+            )
             and authorization
             in (
                 _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS
