@@ -36,6 +36,7 @@
      - **Dry run guard**: `--dry-run` is only valid with `--incremental --experimental-prd` PRD/GitHub issue mode.
      - In Incremental PRD dry-run output, label returned paths as `Would change files:` instead of `Output files:` because dry-run must not imply files were written.
      - **Agentic Mode**: If `prompt_file` matches a GitHub issue URL without `--incremental`, call `run_agentic_architecture(issue_url=prompt_file, skip_prompts=skip_prompts, target_dir=output_dir, use_github_state=not no_github_state, project_root=project_root, ...)`.
+     - **Failure status**: When either agentic architecture mode returns `success=False`, print its failure message, mark the command failed in `ctx.obj`, and return no result so the CLI result callback exits nonzero. A handled filesystem or orchestration failure must never become an exit-0 no-op.
      - **Standard Mode**: Validate `prompt_file` vs `--template` exclusivity. Resolve templates via `load_template`. Parse `env` as `KEY=VALUE` or `KEY` (from `os.environ`).
      - **Snapshot context**: `--snapshot-context` is valid only in standard prompt-file generation mode for this change. Forward `snapshot_context=True` to `code_generator_main`. If it is combined with agentic GitHub issue mode, incremental PRD mode, or unsupported dry-run routing, raise `click.UsageError` with a clear message instead of silently ignoring it.
      - **Guardrail**: Reject `--dry-run` outside Incremental PRD Mode.
