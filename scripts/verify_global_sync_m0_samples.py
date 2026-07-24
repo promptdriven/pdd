@@ -116,8 +116,14 @@ def _commit(root: Path, message: str) -> str:
 
 
 def _patch_bytes(root: Path) -> bytes:
+    stage = _git(root, "add", "-A", capture=True)
+    if stage.returncode:
+        raise ValueError("cannot stage temporary candidate patch")
     result = subprocess.run(
-        ["git", "diff", "--binary", "HEAD"], cwd=root, capture_output=True, check=False
+        ["git", "diff", "--cached", "--binary", "HEAD"],
+        cwd=root,
+        capture_output=True,
+        check=False,
     )
     if result.returncode or not result.stdout:
         raise ValueError("candidate patch was not generated")
@@ -125,10 +131,10 @@ def _patch_bytes(root: Path) -> bytes:
 
 
 def _reset_candidate(root: Path, base_sha: str) -> None:
-    result = _git(root, "reset", "--hard", base_sha)
+    result = _git(root, "reset", "--hard", "--quiet", base_sha, capture=True)
     if result.returncode:
         raise ValueError("cannot reset temporary candidate clone")
-    result = _git(root, "clean", "-ffd")
+    result = _git(root, "clean", "-ffdq", capture=True)
     if result.returncode:
         raise ValueError("cannot clean temporary candidate clone")
 
