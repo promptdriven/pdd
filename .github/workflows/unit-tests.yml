@@ -152,7 +152,16 @@ jobs:
           git -C "$canary" checkout -q --detach "$pdd_cloud_sha"
           test "$(git -C "$canary" rev-parse HEAD)" = "$pdd_cloud_sha"
           replay="$RUNNER_TEMP/global-sync-m0-sample-replay.json"
-          python "$sampled_root/scripts/verify_global_sync_m0_samples.py" \
+          SAMPLED_ROOT="$sampled_root" env -u PDD_PATH PYTHONPATH="$sampled_root" python - <<'PY'
+          import os
+          from pathlib import Path
+          import pdd
+          sampled = Path(os.environ["SAMPLED_ROOT"]).resolve()
+          package = Path(pdd.__file__).resolve()
+          if sampled not in package.parents:
+              raise SystemExit(f"sample replay imported pdd outside sampled root: {package}")
+          PY
+          env -u PDD_PATH PYTHONPATH="$sampled_root" python "$sampled_root/scripts/verify_global_sync_m0_samples.py" \
             --root "$sampled_root" --base-sha "$base_sha" \
             --closure-limit 20 --pdd-cloud-root "$canary" \
             --pdd-cloud-sha "$pdd_cloud_sha" --output "$replay"

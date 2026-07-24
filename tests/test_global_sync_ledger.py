@@ -1225,6 +1225,8 @@ def test_execution_contract_requires_pinned_deterministic_sample_replay() -> Non
     assert 'sample-affecting path changed after sampled base: $changed' in workflow
     assert 'python "$sampled_root/scripts/verify_global_sync_m0_samples.py"' in workflow
     assert '--root "$sampled_root" --base-sha "$base_sha"' in workflow
+    assert 'env -u PDD_PATH PYTHONPATH="$sampled_root"' in workflow
+    assert 'sample replay imported pdd outside sampled root: {package}' in workflow
     assert 'cmp "$replay" "$artifact"' in workflow
     state = yaml.safe_load((ROOT / "docs" / "global_sync_execution_state.yaml").read_text(
         encoding="utf-8"
