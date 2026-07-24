@@ -16,6 +16,8 @@ import click
 from ..agentic_change import _parse_pr_url
 from ..agentic_checkup import run_agentic_checkup
 from ..checkup_prompt_main import build_prompt_source_set_report, run_checkup_prompt
+from ..cloud_checkup_job import CloudCheckupError, run_cloud_checkup
+from ..core.cloud import CloudConfig
 from ..checkup_target import (
     CheckupTargetKind,
     classify_checkup_target,
@@ -777,6 +779,32 @@ def _emit_agentic_review_loop_json(
     help="With prompt targets: read-only finding summary (non-fatal; no exit-code change).",
 )
 @click.option(
+    "--cloud-job",
+    "cloud_job",
+    is_flag=True,
+    default=False,
+    help=(
+        "Submit the ``--pr`` checkup to PDD Cloud for fully non-local execution. "
+        "Requires PDD Cloud authentication (run ``pdd auth login``). "
+        "PDD Cloud handles repository checkout, test execution, "
+        "reviewer/fixer stages (including Codex), Git operations, and "
+        "credit accounting — no local Codex installation or local Codex "
+        "credentials are required. Cannot be combined with --local. "
+        "The billing source (PDD Cloud credit) is printed before dispatch."
+    ),
+)
+@click.option(
+    "--fresh-start",
+    "fresh_start",
+    is_flag=True,
+    default=False,
+    help=(
+        "With --cloud-job: ask the executor to start the checkup from a "
+        "clean state (no resumed prior run). Without --cloud-job this flag "
+        "is a no-op and is accepted for forward compatibility."
+    ),
+)
+@click.option(
     "-h",
     "--help",
     "show_help",
@@ -799,6 +827,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     no_fix: bool,
     timeout_adder: float,
     start_step: Optional[str],
+    cloud_job: bool,
+    fresh_start: bool,
     no_github_state: bool,
     pr_url: Optional[str],
     issue_url_opt: Optional[str],
@@ -1374,6 +1404,22 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     # ``--issue`` (no ``--pr``) is rejected — a standalone issue belongs in
     # default issue mode as the positional TARGET, not the ``--pr`` companion.
     pr_mode = pr_url is not None
+
+    # --cloud-job requires --pr and is incompatible with --local.
+    if cloud_job and not pr_mode:
+        raise click.BadParameter(
+            "--cloud-job requires --pr (PR mode). "
+            "Cloud execution submits the PR checkup to PDD Cloud.",
+            param_hint="'--cloud-job'",
+        )
+    if cloud_job and ctx.obj.get("local", False):
+        raise click.BadParameter(
+            "--cloud-job cannot be combined with --local. "
+            "Use one or the other: --local for local execution, "
+            "--cloud-job for fully non-local PDD Cloud execution.",
+            param_hint="'--cloud-job'",
+        )
+
     if test_scope == "targeted" and not pr_mode:
         raise click.BadParameter(
             "--test-scope targeted requires --pr (PR mode).",
@@ -1629,6 +1675,85 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 failure_category="private_path_reservation_failed",
             )
             raise click.exceptions.Exit(1)
+
+    # --- Cloud-job dispatch path (--cloud-job) ---
+    if cloud_job:
+        _local_flag = ctx.obj.get("local", False)
+        if _local_flag:
+            raise click.BadParameter(
+                "--cloud-job cannot be combined with --local.",
+                param_hint="'--cloud-job'",
+            )
+        if not quiet:
+            _billing_note = "PDD Cloud credit"
+            click.echo(f"Billing: {_billing_note}")
+            click.echo(f"Mode: cloud-job (fully non-local)")
+        try:
+            _result = run_cloud_checkup(
+                pr_url=pr_url,
+                issue_url=issue_url_opt,
+                test_scope=test_scope,
+                full_suite_source=full_suite_source,
+                review_loop=review_loop,
+                final_gate=final_gate,
+                agentic_review_loop=agentic_review_loop,
+                reviewer=reviewer,
+                fixer=fixer,
+                reviewers=reviewers,
+                reviewer_fallback=reviewer_fallback,
+                fixer_fallback=fixer_fallback,
+                allow_same_reviewer_fixer=allow_same_reviewer_fixer,
+                max_review_rounds=max_review_rounds,
+                max_review_cost=max_review_cost,
+                max_review_minutes=max_review_minutes,
+                require_all_reviewers_clean=require_all_reviewers_clean,
+                continue_on_reviewer_limit=continue_on_reviewer_limit,
+                require_final_fresh_review=require_final_fresh_review,
+                blocking_severities=blocking_severities,
+                clean_reviewer_states=clean_reviewer_states,
+                fallback_reviewer_on_failure=fallback_reviewer_on_failure,
+                no_fix=no_fix,
+                review_only=review_only,
+                fresh_final_review=fresh_final_review,
+                adversarial_prompt=adversarial_prompt,
+                enable_gates=not no_gates,
+                gate_timeout=gate_timeout,
+                gate_allow=tuple(gate_allow),
+                timeout_adder=timeout_adder,
+                no_github_state=no_github_state,
+                terra_sol=terra_sol,
+                fresh_start=fresh_start,
+                quiet=quiet,
+                verbose=verbose,
+            )
+        except CloudCheckupError as exc:
+            click.echo(f"Cloud checkup error: {exc}", err=True)
+            raise click.exceptions.Exit(1) from exc
+
+        # Emit bounded remote output.
+        for _line in _result.output_lines:
+            click.echo(_line)
+
+        # Provider-limit metadata (secret-safe, even in quiet mode).
+        if _result.provider_meta:
+            import json as _json  # pylint: disable=import-outside-toplevel
+            click.echo(
+                f"[pdd cloud] provider-meta: {_json.dumps(_result.provider_meta)}",
+                err=True,
+            )
+
+        if not quiet:
+            _status = "Success" if _result.success else "Failed"
+            click.echo(f"Status: {_status}")
+            click.echo(f"Message: {_result.message}")
+            click.echo(f"Cost: ${_result.cost_usd:.4f}")
+            click.echo(f"Billing: {_result.billing_source}")
+            echo_model_line(_result.model)
+
+        if not _result.success:
+            raise click.exceptions.Exit(_result.exit_code or 1)
+
+        return _result.message, _result.cost_usd, _result.model
 
     try:
         success, message, cost, model = run_agentic_checkup(
