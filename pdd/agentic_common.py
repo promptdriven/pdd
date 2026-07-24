@@ -2205,6 +2205,13 @@ CLAUDE_CODE_INTERACTIVE_MODE: str = "interactive"
 # synthetic auth row); the interval throttles those checks inside the PTY loop.
 INTERACTIVE_AUTH_FASTFAIL_GRACE_SECONDS: float = 2.0
 INTERACTIVE_AUTH_FASTFAIL_INTERVAL_SECONDS: float = 1.0
+# Claude's alternate-screen composer does not always expose stable prompt text
+# in the PTY stream. The task is a PDD-owned positional argument, so bounded
+# startup Enter retries are safe; stop retrying as soon as the job-bound wrapper
+# is recognized and submitted.
+_INTERACTIVE_STARTUP_ENTER_SECONDS: float = 1.0
+_INTERACTIVE_STARTUP_ENTER_RETRY_SECONDS: float = 3.0
+_INTERACTIVE_STARTUP_ENTER_MAX: int = 5
 # Issue #1714: no-progress (stall) watchdog. A parked interactive TUI keeps the
 # PTY busy with spinner frames even after the model has stalled, so PTY byte
 # flow is NOT a progress signal — only growth of the session transcript (new
@@ -7767,6 +7774,44 @@ def _claude_interactive_needs_trust_confirmation(output_tail: str) -> bool:
     )
 
 
+def _claude_interactive_needs_theme_confirmation(output_tail: str) -> bool:
+    """Detect Claude Code's first-run theme picker.
+
+    The TUI renders this screen before it accepts the positional task. Match
+    the whitespace/control-sequence-insensitive labels rather than a menu
+    number so minor layout changes do not strand hosted runs.
+    """
+    cleaned = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output_tail)
+    cleaned = re.sub(r"\x1b[@-Z\\-_]", "", cleaned)
+    compact = re.sub(r"[^a-z0-9]+", "", cleaned.lower())
+    return "textstyle" in compact and "darkmode" in compact and "lightmode" in compact
+
+
+def _claude_interactive_task_waiting_for_submit(
+    output_tail: str,
+    job_id: str,
+) -> bool:
+    """Detect PDD's own positional task waiting in Claude's composer.
+
+    Newer Claude Code builds can render the final positional prompt without
+    submitting it. Restrict auto-submit to the wrapper PDD constructed for this
+    exact job; arbitrary user or model text must never trigger an Enter.
+    """
+    cleaned = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output_tail)
+    cleaned = re.sub(r"\x1b[@-Z\\-_]", "", cleaned)
+    compact = re.sub(r"[^a-z0-9]+", "", cleaned.lower())
+    full_wrapper = (
+        "readthefileat" in compact
+        and "pddreply" in compact
+        and (job_id.lower() in compact or "successtrueorfalse" in compact)
+    )
+    wrapped_tail = (
+        "callthemcptoolpddreply" in compact
+        and "donotstopuntilpddreply" in compact
+    )
+    return full_wrapper or wrapped_tail
+
+
 def _run_interactive_pty_until_reply(
     cmd: List[str],
     *,
@@ -7803,6 +7848,8 @@ def _run_interactive_pty_until_reply(
     output_chunks: List[str] = []
     proc: Optional[subprocess.Popen] = None
     trust_confirmed = False
+    theme_confirmed = False
+    task_submitted = False
     try:
         proc = subprocess.Popen(
             cmd,
@@ -7818,6 +7865,8 @@ def _run_interactive_pty_until_reply(
         slave_fd = -1
         start = time.time()
         deadline = start + timeout
+        startup_enter_count = 0
+        next_startup_enter_at = start + _INTERACTIVE_STARTUP_ENTER_SECONDS
         # Issue #1365: throttled post-launch auth-failure check. First check is
         # deferred by a grace window so a healthy session has time to start a
         # real turn before we inspect its transcript. The transcript path is
@@ -7926,6 +7975,15 @@ def _run_interactive_pty_until_reply(
                 tail = "".join(output_chunks)[-MAX_ERROR_SNIPPET_LENGTH:]
                 return False, f"Claude interactive mode timed out. Output tail: {tail}", 0.0, None
 
+            if (
+                startup_enter_count < _INTERACTIVE_STARTUP_ENTER_MAX
+                and output_chunks
+                and now >= next_startup_enter_at
+            ):
+                os.write(master_fd, b"\r")
+                startup_enter_count += 1
+                next_startup_enter_at += _INTERACTIVE_STARTUP_ENTER_RETRY_SECONDS
+
             readable, _, _ = select.select([master_fd], [], [], min(0.2, remaining))
             if master_fd in readable:
                 try:
@@ -7935,11 +7993,27 @@ def _run_interactive_pty_until_reply(
                 if chunk:
                     decoded = chunk.decode("utf-8", errors="replace")
                     output_chunks.append(decoded)
+                    output_tail = "".join(output_chunks)[-4000:]
                     if not trust_confirmed:
-                        output_tail = "".join(output_chunks)[-4000:]
                         if _claude_interactive_needs_trust_confirmation(output_tail):
                             os.write(master_fd, b"\r")
                             trust_confirmed = True
+                    if (
+                        not theme_confirmed
+                        and _claude_interactive_needs_theme_confirmation(output_tail)
+                    ):
+                        os.write(master_fd, b"\r")
+                        theme_confirmed = True
+                    if (
+                        not task_submitted
+                        and _claude_interactive_task_waiting_for_submit(
+                            output_tail,
+                            job_id,
+                        )
+                    ):
+                        os.write(master_fd, b"\r")
+                        task_submitted = True
+                        startup_enter_count = _INTERACTIVE_STARTUP_ENTER_MAX
 
         if reply_path.exists():
             return _parse_claude_interactive_reply(reply_path, job_id)
