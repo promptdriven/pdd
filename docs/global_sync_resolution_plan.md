@@ -395,26 +395,30 @@ Only the integration owner edits:
 - `docs/global_sync_evidence_ledger.yaml`
 
 Tracks expose integration patches or requested symbols rather than editing these
-files. Integration order is M0 bootstrap, A interface, B runner contract, A+B
-vertical slice, built PDD application wheel, D routing, C standalone checker,
-then E consumer/shadow. Independent tests continue while earlier commits
-integrate.
+files. Integration order is M0 bootstrap; A interface, B runner contract, E
+canary fixture, and C's local checker build in parallel; A+B+E source vertical
+slice; built PDD application wheel; M1 and the Track A interface freeze; D
+routing; M2; then C release plus E shadow rollout for M3. Independent tests
+continue while their declared prerequisites integrate.
 
 The dependency graph is:
 
 ```text
-M0 executable baseline
-├── A repair core ───────────────┐
-├── B pytest authority ─────────┼── M1 working vertical slice
-├── built PDD application wheel ┤
-└── E pdd_cloud canary/sample ──┘
-├── C standalone checker build ────────────────┐
-                                  ├── D production routing ── M2
-                                  ├── C protected release ─── M3
-                                  └── E shadow migration ──── M3
-                                       └── M4 enforcement
-                                            └── M5 optional certification
+M0 -> {A repair core, B pytest authority, E canary, C checker build,
+       D read-only inventory}
+A + B + E canary -> source vertical slice -> PDD application wheel -> M1
+M1 -> D production routing -> M2
+M1 -> E shadow migration
+C checker build + required M2 routing checks + E shadow migration -> M3
+M2 + M3 -> M4 -> optional M5
 ```
+
+Track D performs inventory only until M1 passes; no routing implementation may
+start against an unfrozen repair interface. The PDD application wheel is built
+from the integrated source vertical slice, not as an independent child of M0.
+Track C can build independently after M0, but its protected release and M3 exit
+wait for the release-relevant M2 routing checks. M4 requires both complete M2 and
+complete M3.
 
 ## 6. Milestones and executable exit gates
 
@@ -719,11 +723,15 @@ count, evidence-row count, or local implementation claims.
    - Track A builds the staged repair vertical slice.
    - Track B closes the pytest authority contract.
    - Track C builds, but does not publish, the standalone checker wheel.
-   - Track E turns the disposable scope results into bounded migration patches
-     and the real pdd_cloud canary fixture.
-   - Track D implements routing against Track A's frozen interface.
+   - Track E builds the real pdd_cloud canary fixture, prepares shadow
+     infrastructure, and drafts—but does not apply—bounded migration patches.
+   - Track D continues read-only legacy-mutator inventory only.
 6. Integrate A+B+E into the source vertical slice, then build and test the PDD
-   application wheel. Continue Track C's standalone checker independently for
-   M3 release.
-7. Do not start OCI, anchor, independent reference-verifier, seven-night, or
+   application wheel. Pass M1 and freeze Track A's repair interface before Track
+   D begins routing implementation or Track E applies bounded migrations.
+7. Run Track D routing and Track E migration/shadow work in parallel while Track
+   C continues package tests. Complete M2, then use C's build plus the required
+   M2 routing checks to publish the checker and complete M3. Start M4 only after
+   both M2 and M3 pass.
+8. Do not start OCI, anchor, independent reference-verifier, seven-night, or
    finalizer work until M4 is complete and M5 is explicitly authorized.
