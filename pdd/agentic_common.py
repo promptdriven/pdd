@@ -44,7 +44,7 @@ from enum import Enum
 from rich.console import Console
 
 from pdd.routing_policy import (
-    CLAUDE_MODEL_DEFAULT,
+    canonicalize_claude_cli_model,
     CODEX_MODEL_DEFAULT,
     RoutingConfig,
     RoutingPolicy,
@@ -3169,6 +3169,7 @@ CODEX_CACHE_WRITE_MULTIPLIER = 1.25
 # Cache read is 90% discount, cache write is 25% premium over input
 ANTHROPIC_PRICING_BY_FAMILY = {
     "opus": Pricing(15.0, 75.0, 0.1),       # Claude Opus 4
+    "fable": Pricing(10.0, 50.0, 0.1),      # Claude Fable 5
     "sonnet": Pricing(3.0, 15.0, 0.1),      # Claude Sonnet 4
     "haiku": Pricing(0.80, 4.0, 0.1),       # Claude Haiku 3.5
 }
@@ -3193,7 +3194,7 @@ _PROVIDER_MODEL_ENV: Dict[str, str] = {
 
 
 def _get_provider_model(provider: str) -> Optional[str]:
-    """Return the requested model for *provider* from its env var.
+    """Return the command-boundary model for *provider* from its env var.
 
     Claude Code and Codex fall back to PDD's provider-specific defaults when
     their overrides are unset; other providers return ``None`` to signal
@@ -3202,11 +3203,11 @@ def _get_provider_model(provider: str) -> Optional[str]:
     env_var = _PROVIDER_MODEL_ENV.get(provider)
     if not env_var:
         return None
+    if provider == "anthropic":
+        return canonicalize_claude_cli_model(os.environ.get(env_var))
     value = os.environ.get(env_var) or ""
     if value.strip():
         return value.strip()
-    if provider == "anthropic":
-        return CLAUDE_MODEL_DEFAULT
     return CODEX_MODEL_DEFAULT if provider == "openai" else None
 
 
@@ -4985,7 +4986,11 @@ def _anthropic_pricing_family_from_model_name(model_name: Optional[str]) -> Opti
     """Return the Anthropic pricing family implied by an observed model name."""
     if not isinstance(model_name, str) or not model_name:
         return None
-    name_lower = model_name.lower()
+    name_lower = model_name.lower().replace("_", "-")
+    # PDD's user-facing Opus 5 compatibility alias is Anthropic Fable 5, not
+    # the separately priced Opus family. Check it before the broad opus match.
+    if "fable" in name_lower or "claude-opus-5" in name_lower:
+        return "fable"
     if "opus" in name_lower:
         return "opus"
     if "haiku" in name_lower:
@@ -5004,6 +5009,8 @@ def _anthropic_pricing_family_from_model_usage(
         family = _anthropic_pricing_family_from_model_name(str(model_name))
         if family == "opus":
             return "opus"
+        if family == "fable":
+            selected = "fable"
         if family == "haiku" and selected is None:
             selected = "haiku"
         elif family == "sonnet" and selected is None:
@@ -7226,7 +7233,7 @@ def _build_claude_interactive_command(
     else:
         cmd.append("--dangerously-skip-permissions")
 
-    claude_model = env.get("CLAUDE_MODEL") or CLAUDE_MODEL_DEFAULT
+    claude_model = canonicalize_claude_cli_model(env.get("CLAUDE_MODEL"))
     cmd.extend(["--model", claude_model])
 
     if normalized_policy is not None and normalized_policy["allowedTools"] is None:
@@ -8163,8 +8170,9 @@ def _run_with_provider(
                 "--dangerously-skip-permissions",
                 "--output-format", "json",
             ]
-        # An explicit CLAUDE_MODEL wins; otherwise Claude Code uses Opus 5.
-        claude_model = env.get("CLAUDE_MODEL") or CLAUDE_MODEL_DEFAULT
+        # Preserve Opus 5 as PDD's requested identity, but pass Claude Code's
+        # verified Fable 5 provider ID at the process boundary.
+        claude_model = canonicalize_claude_cli_model(env.get("CLAUDE_MODEL"))
         cmd.extend(["--model", claude_model])
         if reasoning_effort:
             cmd.extend(["--effort", reasoning_effort])

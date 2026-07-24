@@ -19,7 +19,25 @@ from pdd.reasoning import EffortLevel
 
 log = logging.getLogger(__name__)
 CODEX_MODEL_DEFAULT = "gpt-5.6-sol"
+# ``claude-opus-5`` is PDD's user-facing compatibility/default name.  Claude
+# Code itself accepts the provider's canonical Fable 5 ID instead.
 CLAUDE_MODEL_DEFAULT = "claude-opus-5"
+CLAUDE_CLI_MODEL_DEFAULT = "claude-fable-5"
+
+
+def canonicalize_claude_cli_model(model: Optional[str] = None) -> str:
+    """Return the verified Claude Code model ID for a requested model.
+
+    PDD exposes Opus 5 as a compatibility name for the Claude Code default,
+    but Anthropic's CLI accepts Fable 5's provider ID.  Keep every other
+    explicit model unchanged so users can select any Claude Code-supported
+    identifier directly.
+    """
+    requested = (model or "").strip() or CLAUDE_MODEL_DEFAULT
+    normalized = requested.lower().replace("_", "-")
+    if normalized in {"claude-opus-5", "anthropic/claude-opus-5"}:
+        return CLAUDE_CLI_MODEL_DEFAULT
+    return requested
 
 
 @dataclass

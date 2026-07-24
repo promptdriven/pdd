@@ -6,6 +6,8 @@ import time
 import pytest
 
 from pdd.routing_policy import (
+    canonicalize_claude_cli_model,
+    CLAUDE_CLI_MODEL_DEFAULT,
     CLAUDE_MODEL_DEFAULT,
     CODEX_MODEL_DEFAULT,
     RoutingConfig,
@@ -22,6 +24,22 @@ from pdd.routing_policy import (
 def test_agentic_provider_model_defaults_are_scoped():
     assert CODEX_MODEL_DEFAULT == "gpt-5.6-sol"
     assert CLAUDE_MODEL_DEFAULT == "claude-opus-5"
+    assert CLAUDE_CLI_MODEL_DEFAULT == "claude-fable-5"
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [
+        (None, "claude-fable-5"),
+        ("   ", "claude-fable-5"),
+        ("claude-opus-5", "claude-fable-5"),
+        ("anthropic/claude-opus-5", "claude-fable-5"),
+        ("claude-fable-5", "claude-fable-5"),
+        ("claude-sonnet-4-5", "claude-sonnet-4-5"),
+    ],
+)
+def test_canonicalize_claude_cli_model_preserves_non_aliases(requested, expected):
+    assert canonicalize_claude_cli_model(requested) == expected
 
 
 def test_default_policy_has_task_class_rows_and_default_fallback():

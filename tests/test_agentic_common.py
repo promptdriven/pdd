@@ -46,6 +46,7 @@ from pdd.agentic_common import (
     _extract_anthropic_standard_usage,
     _extract_json_from_output,
     _find_cli_binary,
+    _get_provider_model,
     _is_permanent_error,
     _is_structured_provider_json_prefix,
     _parse_claude_interactive_reply,
@@ -620,7 +621,7 @@ def test_build_claude_interactive_command_bypasses_print_mode(tmp_path):
 
 
 def test_build_claude_interactive_command_defaults_to_opus_5(tmp_path):
-    """Interactive Claude Code uses the same Opus 5 default as print mode."""
+    """Interactive Claude Code canonicalizes its Opus 5 default to Fable."""
     cmd = _build_claude_interactive_command(
         cli_path="/bin/claude",
         prompt_path=tmp_path / ".agentic_prompt_test.txt",
@@ -630,7 +631,32 @@ def test_build_claude_interactive_command_defaults_to_opus_5(tmp_path):
         env={},
     )
 
-    assert cmd[cmd.index("--model") + 1] == "claude-opus-5"
+    assert cmd[cmd.index("--model") + 1] == "claude-fable-5"
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [
+        ("claude-opus-5", "claude-fable-5"),
+        ("anthropic/claude-opus-5", "claude-fable-5"),
+        ("claude-fable-5", "claude-fable-5"),
+        ("claude-haiku-4-5", "claude-haiku-4-5"),
+    ],
+)
+def test_build_claude_interactive_command_canonicalizes_only_opus_5_alias(
+    tmp_path, requested, expected
+):
+    """Claude Code receives only verified model IDs at its argv boundary."""
+    cmd = _build_claude_interactive_command(
+        cli_path="/bin/claude",
+        prompt_path=tmp_path / ".agentic_prompt_test.txt",
+        config_path=tmp_path / "mcp_config.json",
+        job_id="job-123",
+        session_id="11111111-2222-4333-8444-555555555555",
+        env={"CLAUDE_MODEL": requested},
+    )
+
+    assert cmd[cmd.index("--model") + 1] == expected
 
 
 def test_claude_policy_capability_contract_declared_and_validated():
@@ -6648,7 +6674,48 @@ def test_claude_no_model_env_var_defaults_to_opus_5(mock_cwd, mock_env, mock_loa
     # Verify the Claude Code-specific default was passed.
     args, kwargs = mock_subprocess.call_args
     cmd = args[0]
-    assert cmd[cmd.index("--model") + 1] == "claude-opus-5"
+    assert cmd[cmd.index("--model") + 1] == "claude-fable-5"
+
+
+def test_claude_opus_5_env_alias_is_canonicalized_for_print_mode(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """An explicit Opus 5 request never reaches Claude Code as an invalid ID."""
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["CLAUDE_MODEL"] = "claude-opus-5"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done.", "total_cost_usd": 0.05, "is_error": False,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    success, _, _, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success
+    assert provider == "anthropic"
+    cmd = mock_subprocess.call_args.args[0]
+    assert cmd[cmd.index("--model") + 1] == "claude-fable-5"
+
+
+@pytest.mark.parametrize(
+    ("requested", "effective"),
+    [
+        (None, "claude-fable-5"),
+        ("claude-opus-5", "claude-fable-5"),
+        ("claude-fable-5", "claude-fable-5"),
+        ("claude-sonnet-4-5", "claude-sonnet-4-5"),
+    ],
+)
+def test_claude_audit_fallback_matches_effective_command_model(
+    monkeypatch, requested, effective
+):
+    """Audit fallback agrees with the model ID supplied to Claude Code."""
+    if requested is None:
+        monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    else:
+        monkeypatch.setenv("CLAUDE_MODEL", requested)
+
+    assert _get_provider_model("anthropic") == effective
 
 
 # ---------------------------------------------------------------------------
@@ -9653,6 +9720,40 @@ def test_anthropic_cost_opus_model_detection():
     pricing = ANTHROPIC_PRICING_BY_FAMILY["opus"]
     expected = (1000 / 1_000_000) * pricing.input_per_million + (1000 / 1_000_000) * pricing.output_per_million
     assert cost == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "claude-fable-5",
+        "anthropic/claude-fable-5",
+        "claude-opus-5",
+        "anthropic/claude-opus-5",
+    ],
+)
+def test_anthropic_cost_fable_5_names_use_catalog_rates(model_name):
+    """Fable and PDD's Opus 5 alias use the catalog's $10/$50 rates."""
+    cost = _calculate_anthropic_cost({
+        "usage": {"input_tokens": 1_000_000, "output_tokens": 1_000_000},
+        "modelUsage": {model_name: {}},
+    })
+
+    assert cost == pytest.approx(60.0)
+
+
+def test_anthropic_cost_fable_5_uses_existing_cache_semantics():
+    """Fable cache reads/writes retain the shared 0.1x/1.25x treatment."""
+    cost = _calculate_anthropic_cost({
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 1_000_000,
+            "cache_creation_input_tokens": 1_000_000,
+        },
+        "modelUsage": {"claude-fable-5": {}},
+    })
+
+    assert cost == pytest.approx(13.5)
 
 
 def test_anthropic_cost_no_usage():
