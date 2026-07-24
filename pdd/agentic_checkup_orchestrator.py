@@ -22,6 +22,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
@@ -29,6 +30,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 from rich.console import Console
 
 from .agentic_common import (
+    JOB_TIMEOUT_MARGIN_SECONDS,
     provider_failure_workflow,
     DEFAULT_MAX_RETRIES,
     _sanitize_comment_body,
@@ -85,6 +87,11 @@ CHECKUP_STEP_MAX_RETRIES: Dict[Union[int, float], int] = {
 }
 
 TOTAL_STEPS = 8
+# A stale/live worktree cleanup must never hold a hosted checkup indefinitely.
+# Worktree removal is normally local metadata and completes in seconds; a
+# bounded failure lets the executor report a real error instead of consuming
+# the whole job while Git waits on a locked filesystem or child process.
+WORKTREE_REMOVE_TIMEOUT_SECONDS = 120.0
 
 # Canonical checkup step table — the single source of truth for the step
 # dispatch order, the fix-verify loop subset, and the stable telemetry id. Each
@@ -373,8 +380,15 @@ def _remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]:
             cwd=cwd,
             capture_output=True,
             check=True,
+            timeout=WORKTREE_REMOVE_TIMEOUT_SECONDS,
         )
         return True, ""
+    except subprocess.TimeoutExpired:
+        return (
+            False,
+            "Timed out removing existing worktree after "
+            f"{WORKTREE_REMOVE_TIMEOUT_SECONDS:.0f}s.",
+        )
     except subprocess.CalledProcessError as e:
         return False, e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
 
@@ -505,6 +519,40 @@ def _refresh_pr_base_ref(
         remote_target = f"https://github.com/{pr_owner}/{pr_repo}.git"
 
     base_local_ref = _pr_base_tracking_ref(pr_number)
+    shallow_repo = False
+    try:
+        shallow_probe = subprocess.run(
+            [git_cmd, "rev-parse", "--is-shallow-repository"],
+            cwd=git_root,
+            capture_output=True,
+            env=git_env,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        shallow_repo = (
+            shallow_probe.returncode == 0
+            and str(shallow_probe.stdout or "").strip().lower() == "true"
+        )
+    except (OSError, subprocess.SubprocessError):
+        # The authoritative fetch and downstream merge-base gate still fail
+        # closed if the probe is unavailable; do not turn a diagnostic probe
+        # into a second failure surface.
+        shallow_repo = False
+
+    fetch_args = [
+        git_cmd,
+        "fetch",
+        remote_target,
+        f"refs/heads/{base_ref}:{base_local_ref}",
+        "--force",
+    ]
+    if shallow_repo:
+        # Fetching the base tip alone does not remove Git's shallow boundary:
+        # merge-base still refuses to traverse HEAD even when its parent object
+        # is present. Hosted PR clones commonly have this depth-1 shape.
+        fetch_args.append("--unshallow")
+
     try:
         # Bounded timeout so a stalled transport (auth prompt, dead
         # remote, transient hang) cannot hold the review loop forever.
@@ -513,13 +561,7 @@ def _refresh_pr_base_ref(
         # discovery. 60s matches the default per-gate timeout so the
         # operator sees a single consistent upper bound.
         subprocess.run(
-            [
-                git_cmd,
-                "fetch",
-                remote_target,
-                f"refs/heads/{base_ref}:{base_local_ref}",
-                "--force",
-            ],
+            fetch_args,
             cwd=git_root,
             capture_output=True,
             env=git_env,
@@ -1358,6 +1400,66 @@ def _step7_passed(
             )
 
     return True, ""
+
+
+def _step7_repairable_failure_signal(step7_output: str) -> str:
+    """Return a Step-6 signal for a structured, repairable Step-7 failure.
+
+    A GitHub-checks final gate deliberately defers its Step-5 full-suite
+    decision.  That makes its deterministic Step-5 result clean, even when
+    the subsequent targeted verifier finds an in-scope defect. Preserve that
+    verifier evidence for the next iteration so the fixer has an actionable,
+    bounded input rather than repeating the clean probe forever.
+
+    Parser failures and out-of-scope findings return an empty string: neither
+    authorizes a speculative mutation.
+    """
+    from .agentic_checkup import (  # pylint: disable=import-outside-toplevel
+        _extract_json_from_text,
+    )
+
+    payload = _extract_json_from_text(step7_output or "")
+    if not isinstance(payload, dict) or payload.get("success") is not False:
+        return ""
+    issues = payload.get("issues")
+    if not isinstance(issues, list):
+        return ""
+
+    actionable: List[Dict[str, Any]] = []
+    nonblocking_scopes = {
+        "out-of-scope", "outside-pr", "outside-pr-scope", "non-blocking",
+        "baseline", "project", "project-wide", "repo", "repository", "global",
+    }
+    for issue in issues:
+        if not isinstance(issue, dict) or issue.get("fixed") is True:
+            continue
+        if issue.get("in_scope") is False or _step7_nonblocking_reason(issue):
+            continue
+        scope = str(
+            issue.get("scope") or issue.get("verification_scope")
+            or issue.get("pr_scope") or ""
+        ).strip().lower().replace("_", "-")
+        if scope not in nonblocking_scopes:
+            actionable.append(issue)
+
+    if not actionable:
+        return ""
+    identifiers = ", ".join(
+        str(issue.get("file") or issue.get("module") or "Step 7 finding")
+        for issue in actionable
+    )
+    return _normalised_failure_signal_text(
+        step7_output,
+        {
+            "command": "Step 7 targeted PR verification",
+            "exit_code": "1",
+            "status": "fail",
+            "failing_ids": identifiers,
+            "artifact_path": "inline",
+            "output": step7_output,
+        },
+        [],
+    )
 
 
 def _step7_human_success_report_passed(
@@ -3366,6 +3468,35 @@ output: |
 # Internal: run a single step
 # ---------------------------------------------------------------------------
 
+def _has_complete_step7_report(output: str) -> bool:
+    """Return whether an error envelope still carries a complete Step 7 verdict.
+
+    Claude can mark a session as ``is_error`` after a tool command times out
+    while still returning the assistant's complete final verification report.
+    The provider error remains fail-closed unless this exact Step 7 shape has a
+    parseable verdict payload. The normal Step 7 gate subsequently decides
+    whether that verdict passes, so a complete *failing* report is preserved as
+    a checkup failure rather than being misclassified as provider exhaustion.
+    """
+    text = (output or "").strip()
+    if not text.startswith("## Step 7/8: Verification & Final Report"):
+        return False
+    try:
+        from .agentic_checkup import (  # pylint: disable=import-outside-toplevel
+            _extract_json_from_text,
+        )
+
+        payload = _extract_json_from_text(text)
+    except Exception:
+        return False
+    return bool(
+        isinstance(payload, dict)
+        and isinstance(payload.get("success"), bool)
+        and isinstance(payload.get("message"), str)
+        and isinstance(payload.get("issues"), list)
+        and isinstance(payload.get("changed_files"), list)
+    )
+
 def _run_single_step(
     step_num: Union[int, float],
     name: str,
@@ -3405,18 +3536,31 @@ def _run_single_step(
 
     formatted_prompt = substitute_template_variables(prompt_template, context)
 
+    step_timeout = CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0) + timeout_adder
+    # ``run_agentic_task`` otherwise gives its retry cascade up to twice the
+    # passed timeout.  Checkup step timeouts are workflow-step budgets, not
+    # per-retry allowances: a silent build/interface/fix step must return to
+    # the orchestrator at its configured bound so the run can report or
+    # continue safely.  The shared runner reserves its cleanup margin from a
+    # supplied deadline, hence the compensating margin here preserves the
+    # advertised step timeout for the actual provider attempt.
+    step_deadline = time.time() + step_timeout + JOB_TIMEOUT_MARGIN_SECONDS
     success, output, cost, model = run_agentic_task(
         instruction=formatted_prompt,
         cwd=step_cwd,
         verbose=verbose,
         quiet=quiet,
         label=label,
-        timeout=CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0) + timeout_adder,
+        timeout=step_timeout,
+        deadline=step_deadline,
         stall_timeout=CHECKUP_STEP_STALL_TIMEOUTS.get(step_num),
         max_retries=CHECKUP_STEP_MAX_RETRIES.get(step_num, DEFAULT_MAX_RETRIES),
         reasoning_time=reasoning_time,
         steers=steers,
         set_git_work_tree=False,
+        accept_failed_output=(
+            _has_complete_step7_report if step_num == 7 else None
+        ),
     )
     return (success, output, cost, model)
 
@@ -3741,11 +3885,24 @@ def _run_agentic_checkup_orchestrator_inner(
         # Validate cached state — find actual last successful step.
         if cached_outputs:
             actual_last_success: Union[int, float] = 0
+            cached_step7_repair_signal = _step7_repairable_failure_signal(
+                cached_outputs.get("7", "")
+            )
             for sn in STEP_ORDER:
                 # Fractional steps use "_" in state keys: 6.1 -> "6_1"
                 state_key = str(sn).replace(".", "_")
                 output_val = cached_outputs.get(state_key, "")
                 if not output_val:
+                    # Deferred GitHub-checks runs legitimately omit fixer
+                    # outputs when Steps 3-5 are clean. A later structured,
+                    # in-scope Step 7 failure proves those steps were skipped,
+                    # not interrupted; retain that verdict for iteration 2.
+                    if (
+                        cached_step7_repair_signal
+                        and sn in (6.1, 6.2, 6.3)
+                    ):
+                        actual_last_success = sn
+                        continue
                     break
                 if output_val.startswith("FAILED:"):
                     break
@@ -4823,13 +4980,19 @@ def _run_agentic_checkup_orchestrator_inner(
         # If start_step > 7 and we're mid-loop, the previous iteration's
         # step 7 completed without "All Issues Fixed" — start a fresh
         # iteration.
-        if (start_step > 7 and fix_verify_iteration > 0
-                and fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS):
+        between_iterations_resume = (
+            start_step > 7
+            and fix_verify_iteration > 0
+            and fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS
+        )
+        if between_iterations_resume:
             step6_1_out = step_outputs.get("6_1", step_outputs.get("6", ""))
             previous_fixes += f"\n\nIteration {fix_verify_iteration} fixes:\n{step6_1_out}"
-            fix_verify_iteration += 1
             start_step = 3
-            resuming_mid_iteration = True  # Already incremented
+            # Let the normal loop entry increment to the next iteration.
+            # Pre-incrementing here makes an iteration-2 resume become 3
+            # before the ``< MAX`` guard and silently skips the final attempt.
+            resuming_mid_iteration = False
 
         step7_output = ""
 
@@ -4850,6 +5013,11 @@ def _run_agentic_checkup_orchestrator_inner(
         # that bypass possible.
         fixer_invoked = any(
             k in step_outputs for k in ("6_1", "6_2", "6_3")
+        )
+        step7_repair_signal = (
+            _step7_repairable_failure_signal(step_outputs.get("7", ""))
+            if between_iterations_resume
+            else ""
         )
 
         while fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS:
@@ -4917,6 +5085,7 @@ def _run_agentic_checkup_orchestrator_inner(
                     and step3_clean
                     and step4_clean
                     and step5_clean
+                    and not step7_repair_signal
                     and step_num in (6.1, 6.2, 6.3)
                 ):
                     continue
@@ -5199,6 +5368,15 @@ def _run_agentic_checkup_orchestrator_inner(
                         context["step5_failure_signal"] = ""
                         context["step5_failure_signal_missing"] = ""
 
+                    # A deferred GitHub-checks Step 5 is intentionally clean
+                    # until Layer 2 reports a concrete in-scope defect. On the
+                    # following iteration, preserve that evidence for the
+                    # fixer instead of repeating the deterministic placeholder.
+                    if step7_repair_signal:
+                        step5_clean = False
+                        context["step5_failure_signal"] = step7_repair_signal
+                        context["step5_failure_signal_missing"] = ""
+
                 if step_num == 7:
                     step7_output = output
 
@@ -5220,8 +5398,11 @@ def _run_agentic_checkup_orchestrator_inner(
                 context["step7_output"] = step7_output
                 _save_state()
 
-            # Check exit condition: legacy marker or structured Step-7 pass.
-            if "All Issues Fixed" in step7_output or step7_gate_passed:
+            step7_repair_signal = _step7_repairable_failure_signal(step7_output)
+
+            # Only the structured Step-7 gate may end a fix loop. A model can
+            # quote the legacy marker while its JSON still reports failure.
+            if step7_gate_passed:
                 if not quiet:
                     console.print("[green]All issues fixed — exiting loop.[/green]")
                 break
@@ -5249,9 +5430,7 @@ def _run_agentic_checkup_orchestrator_inner(
             step_outputs["7"] = step7_output
             context["step7_output"] = step7_output
             _save_state()
-        final_loop_verified = (
-            "All Issues Fixed" in step7_output or final_step7_gate_passed
-        )
+        final_loop_verified = final_step7_gate_passed
 
         if fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS and not final_loop_verified:
             max_msg = (
@@ -6231,6 +6410,7 @@ def run_agentic_checkup_orchestrator(
     test_scope: str = "full",
     defer_step5_to_github_checks: bool = False,
     start_step_override: Optional[Union[int, float]] = None,
+    fresh_start: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """Public entry point for the agentic checkup orchestrator.
 
@@ -6272,6 +6452,7 @@ def run_agentic_checkup_orchestrator(
             test_scope=test_scope,
             defer_step5_to_github_checks=defer_step5_to_github_checks,
             start_step_override=start_step_override,
+            _force_skip_state_load=fresh_start,
         )
 
     # PR-mode rerun loop. ``refresh_count`` is initialized from disk so a
@@ -6316,7 +6497,7 @@ def run_agentic_checkup_orchestrator(
                 # on restarts so a flaky GH state load can't reload
                 # stale cached step outputs even if clear_workflow_state's
                 # DELETE silently failed.
-                _force_skip_state_load=is_restart_iteration,
+                _force_skip_state_load=(fresh_start or is_restart_iteration),
                 # External review Finding 2: replay the previous
                 # iteration's posted-step-comments set so dedup is
                 # honored across restarts.

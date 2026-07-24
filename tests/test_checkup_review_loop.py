@@ -71,6 +71,76 @@ def _json(status: str, findings: List[Dict[str, str]] | None = None) -> str:
     )
 
 
+def test_credential_limit_failure_is_not_sent_to_parse_repair() -> None:
+    """A provider cap is terminal diagnostics, not malformed review JSON.
+
+    This is the exact permanent-provider envelope from the aborted staging6
+    checkup.  Re-asking the already exhausted reviewer to "repair" it can only
+    consume more of the final-gate budget before the fallback reviewer runs.
+    """
+    import pdd.checkup_review_loop as mod
+
+    output = (
+        "Provider openai reported a permanent error (credential-limit); "
+        "skipping retries.\n"
+        "PDD_PROVIDER_LIMIT provider=openai status=credential_limit "
+        "reason=usage_limit reset_at=2026-07-29T00:37:00Z "
+        "reset_source=parsed_text"
+    )
+    result = mod.ReviewResult(
+        reviewer="codex",
+        status="failed",
+        issue_aligned=None,
+        findings=[],
+    )
+
+    assert mod._should_attempt_parse_repair(output, result) is False
+
+
+def test_role_task_sets_role_wide_deadline_for_credential_limit_retry_chain(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed Codex reviewer must return to fallback within its one role budget."""
+    import pdd.checkup_review_loop as mod
+
+    observed: Dict[str, Any] = {}
+    monkeypatch.setattr(mod.time, "time", lambda: 10_000.0)
+    monkeypatch.setattr(mod.time, "monotonic", lambda: 100.0)
+
+    def exhausted_codex(**kwargs: Any) -> Tuple[bool, str, float, str]:
+        observed.update(kwargs)
+        return (
+            False,
+            "Provider openai reported a permanent error (credential-limit); "
+            "skipping retries.",
+            0.0,
+            "openai",
+        )
+
+    monkeypatch.setattr(mod, "run_agentic_task", exhausted_codex)
+
+    success, output, _cost, _model = mod._run_role_task(
+        role="codex",
+        instruction="Review the PR.",
+        cwd=tmp_path,
+        verbose=False,
+        quiet=True,
+        label="credential-limit-role-deadline",
+        timeout=900.0,
+        max_retries=3,
+        reasoning_time=None,
+        # Hosted final-gate budget was 150 minutes.  The per-reviewer role
+        # still must be capped at 15 minutes, rather than inheriting all of
+        # that outer budget for provider retries.
+        deadline=9_100.0,
+    )
+
+    assert success is False
+    assert "credential-limit" in output
+    assert observed["timeout"] == 900.0
+    assert observed["deadline"] == 10_900.0
+
+
 @pytest.mark.parametrize(
     "base",
     [
@@ -16187,7 +16257,6 @@ def test_write_final_gate_fallback_artifact_canonical_fail(tmp_path):
         assert result[0] is True
         assert (observed["claude_policy"] is not None) is expects_policy
 
-
 # ---------------------------------------------------------------------------
 # Terra/Sol bounded convergence loop (issue #2170)
 # ---------------------------------------------------------------------------
@@ -17464,7 +17533,6 @@ class TestTerraSolBoundedLoop:
 
         assert result[0] is True
 
-
 class TestTargetPromptsRootResolution1957:
     """Checkup repair must resolve owning prompts against the TARGET repo's
     prompt layout, not pdd's self-hosted ``pdd/prompts`` tree (issue #1957).
@@ -17638,4 +17706,82 @@ class TestTargetPromptsRootResolution1957:
         self._seed_external_repo(tmp_path)
         # No architecture.json edit and every registered pair present on disk
         # under the target layout → nothing to enforce.
-        assert _check_architecture_registry_edit_guard(tmp_path, ["src/foo.py"]) is None
+        assert (
+            _check_architecture_registry_edit_guard(tmp_path, ["src/foo.py"])
+            is None
+        )
+
+
+def test_read_only_claude_role_allows_only_hosted_pdd_data_companion(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """The host-created fixture data link is an audited read-only companion."""
+    import pdd.checkup_review_loop as mod
+
+    worktree = tmp_path / "target"
+    companion = tmp_path / "pdd" / "data"
+    worktree.mkdir()
+    companion.mkdir(parents=True)
+    (worktree / "data").symlink_to("../pdd/data")
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+    observed: Dict[str, Any] = {}
+
+    def fake_task(**kwargs: Any):
+        observed.update(kwargs)
+        observed["pytest_addopts"] = os.environ.get("PYTEST_ADDOPTS", "")
+        return True, "ok", 0.0, "claude"
+
+    monkeypatch.setattr(mod, "run_agentic_task", fake_task)
+    result = mod._run_role_task(
+        "claude",
+        "review",
+        worktree,
+        verbose=False,
+        quiet=True,
+        label="hosted-data-companion-policy",
+        timeout=30.0,
+        max_retries=0,
+        reasoning_time=None,
+        read_only=True,
+    )
+
+    assert result[0] is True
+    assert observed["claude_policy"]["addDirs"] == [
+        str(companion),
+    ]
+    assert observed["claude_policy"]["readOnlyRoots"] == [
+        str(worktree),
+        str(companion),
+    ]
+    assert "-p no:cacheprovider" in observed["pytest_addopts"]
+    assert "PYTEST_ADDOPTS" not in os.environ
+
+
+def test_read_only_companion_allows_missing_hosted_sibling_data(
+    tmp_path: Path,
+) -> None:
+    """The lazy hosted sibling is declared before its data directory exists."""
+    from pdd.agentic_common import (
+        _take_filesystem_policy_snapshot,
+        validate_claude_policy,
+    )
+    from pdd.checkup_review_loop import _read_only_companion_dirs
+
+    worktree = tmp_path / ".pdd" / "worktrees" / "checkup-pr-5"
+    worktree.mkdir(parents=True)
+    (worktree / "data").symlink_to("../pdd/data")
+
+    companion_dirs = _read_only_companion_dirs(worktree)
+    assert companion_dirs == [
+        str(tmp_path / ".pdd" / "worktrees" / "pdd" / "data"),
+    ]
+    policy = validate_claude_policy(
+        {
+            "allowedTools": "Read,Grep,Glob",
+            "addDirs": companion_dirs,
+            "writableRoots": [],
+            "readOnlyRoots": [str(worktree), *companion_dirs],
+        }
+    )
+    snapshot = _take_filesystem_policy_snapshot(worktree, policy)
+    assert snapshot.escaped_symlink_targets == {}

@@ -321,6 +321,12 @@ def _emit_agentic_review_loop_json(
     help="Recovery override: start the legacy checkup workflow from this step.",
 )
 @click.option(
+    "--fresh-start",
+    is_flag=True,
+    default=False,
+    help="Discard persisted checkup workflow state and run every step from the beginning.",
+)
+@click.option(
     "--no-github-state",
     is_flag=True,
     default=False,
@@ -377,6 +383,15 @@ def _emit_agentic_review_loop_json(
         "uses Layer 1 local full-suite evidence. 'github-checks' requires "
         "--test-scope targeted and gates on GitHub checks for the current PR "
         "head before Layer 2."
+    ),
+)
+@click.option(
+    "--github-checks-blocking/--github-checks-non-blocking",
+    "github_checks_blocking",
+    default=True,
+    help=(
+        "Require GitHub checks when they are the final-gate suite source. "
+        "The non-blocking form is allowed only for a docs/static-only PR."
     ),
 )
 @click.option(
@@ -799,11 +814,13 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     no_fix: bool,
     timeout_adder: float,
     start_step: Optional[str],
+    fresh_start: bool,
     no_github_state: bool,
     pr_url: Optional[str],
     issue_url_opt: Optional[str],
     test_scope: str,
     full_suite_source: str,
+    github_checks_blocking: bool,
     review_loop: bool,
     agentic_review_loop: bool,
     adversarial_prompt: str,
@@ -1500,10 +1517,28 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 "tests with GitHub checks.",
                 param_hint="'--final-gate'",
             )
+        if not github_checks_blocking and full_suite_source != "github-checks":
+            raise click.BadParameter(
+                "--github-checks-non-blocking requires --full-suite-source "
+                "github-checks.",
+                param_hint="'--github-checks-non-blocking'",
+            )
+    elif not github_checks_blocking:
+        raise click.BadParameter(
+            "--github-checks-non-blocking requires --final-gate with "
+            "--full-suite-source github-checks.",
+            param_hint="'--github-checks-non-blocking'",
+        )
     if review_loop and start_step is not None:
         raise click.BadParameter(
             "--start-step applies to the legacy checkup workflow, not --review-loop.",
             param_hint="'--start-step'",
+        )
+    if fresh_start and start_step is not None:
+        raise click.BadParameter(
+            "--fresh-start cannot be combined with --start-step; a fresh start "
+            "always begins at step 1.",
+            param_hint="'--fresh-start'",
         )
     if review_only and not review_loop:
         raise click.BadParameter(
@@ -1647,7 +1682,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             pr_url=pr_url,
             test_scope=test_scope,
             full_suite_source=full_suite_source,
+            github_checks_blocking=github_checks_blocking,
             start_step_override=start_step_override,
+            fresh_start=fresh_start,
             review_loop=review_loop,
             agentic_review_loop=agentic_review_loop,
             agentic_artifact_path=(

@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import hashlib
 import hmac
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -615,6 +614,37 @@ class TestRunAgenticCheckup:
         assert model == "anthropic"
         mock_orchestrator.assert_called_once()
 
+    @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="pddrc: test")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_fresh_start_is_forwarded_to_orchestrator(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_orchestrator,
+    ):
+        mock_gh_cmd.side_effect = [
+            (True, json.dumps({"title": "Check CRM", "body": "Run full checkup"})),
+            (True, "[]"),
+        ]
+        mock_orchestrator.return_value = (True, "Checkup complete", 0.50, "anthropic")
+
+        success, _msg, _cost, _model = run_agentic_checkup(
+            "https://github.com/owner/repo/issues/1", quiet=True, fresh_start=True
+        )
+
+        assert success
+        assert mock_orchestrator.call_args.kwargs["fresh_start"] is True
+
     @patch("pdd.agentic_checkup._post_error_comment")
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
@@ -853,6 +883,7 @@ class TestRunAgenticCheckup:
                     "findings": [],
                     "terra_sol_mode": True,
                     "sol_model": "gpt-5.6-sol",
+                    "remote_pr_head_sha": "a" * 40,
                 },
                 True,
             ),
@@ -1713,6 +1744,7 @@ class TestRunAgenticCheckup:
                 "active_reviewer": "codex",
                 "findings": [],
                 "issue_aligned": True,
+                "remote_pr_head_sha": "a" * 40,
             },
         ]
         artifact_path = "/tmp/pdd-cloud/agentic-checkup.json"
@@ -1721,13 +1753,21 @@ class TestRunAgenticCheckup:
         monkeypatch.setenv(
             "PDD_AGENTIC_CHECKUP_REVIEWERS", "gemini:/review,claude:/review"
         )
+        final_pr_comment = Mock(return_value=True)
+        final_step_comment = Mock(return_value=True)
+        monkeypatch.setattr(
+            "pdd.agentic_checkup.post_pr_comment", final_pr_comment
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_checkup.post_step_comment", final_step_comment
+        )
 
         success, msg, cost, model = run_agentic_checkup(
             "https://github.com/owner/repo/issues/1",
             quiet=True,
             pr_url="https://github.com/owner/repo/pull/2",
             final_gate=True,
-            use_github_state=False,
+            use_github_state=True,
         )
 
         assert success is True
@@ -1756,6 +1796,8 @@ class TestRunAgenticCheckup:
         # is still finalized only after Layer 2 produces the ship verdict.
         loop_context = mock_review_loop.call_args.kwargs["context"]
         assert loop_context.final_gate_canonical_status == "pass"
+        assert "## Step 8/8: Final Gate Successful" in final_pr_comment.call_args.args[3]
+        assert final_step_comment.call_args.kwargs["step_num"] == 8
 
     def test_prepare_hosted_artifact_replaces_stale_pass(self, tmp_path):
         path = tmp_path / "agentic.json"
@@ -2605,3 +2647,109 @@ def test_final_gate_github_checks_failure_writes_canonical_fail_artifact(
     assert data["authority"] == "canonical_fail_agentic_not_authoritative"
     assert data["layer1"]["status"] == "fail"
     assert data["head_sha"] == "ab" * 20
+
+
+def test_post_final_gate_success_posts_terminal_step_to_pr_and_issue(
+    tmp_path, monkeypatch
+):
+    mod = __import__("pdd.agentic_checkup", fromlist=["_"])
+    pr_comment = Mock(return_value=True)
+    step_comment = Mock(return_value=True)
+    monkeypatch.setattr(mod, "post_pr_comment", pr_comment)
+    monkeypatch.setattr(mod, "post_step_comment", step_comment)
+
+    suffix = mod._post_final_gate_success(
+        owner="owner",
+        repo="repo",
+        issue_number=1,
+        pr_owner="owner",
+        pr_repo="repo",
+        pr_number=2,
+        has_issue=True,
+        pr_url="https://github.com/owner/repo/pull/2",
+        issue_url="https://github.com/owner/repo/issues/1",
+        pr_head_sha="ab" * 20,
+        cwd=tmp_path,
+        use_github_state=True,
+    )
+
+    assert suffix == ""
+    terminal_body = pr_comment.call_args.args[3]
+    assert "## Step 8/8: Final Gate Successful" in terminal_body
+    assert "final-gate-status: passed" in terminal_body
+    assert f"pr-head-sha: {'ab' * 20}" in terminal_body
+    assert step_comment.call_args.kwargs["step_num"] == 8
+    assert step_comment.call_args.kwargs["total_steps"] == 8
+
+
+def test_post_final_gate_success_is_not_emitted_without_github_state(
+    tmp_path, monkeypatch
+):
+    mod = __import__("pdd.agentic_checkup", fromlist=["_"])
+    pr_comment = Mock(return_value=True)
+    step_comment = Mock(return_value=True)
+    monkeypatch.setattr(mod, "post_pr_comment", pr_comment)
+    monkeypatch.setattr(mod, "post_step_comment", step_comment)
+
+    suffix = mod._post_final_gate_success(
+        owner="owner",
+        repo="repo",
+        issue_number=1,
+        pr_owner="owner",
+        pr_repo="repo",
+        pr_number=2,
+        has_issue=True,
+        pr_url="https://github.com/owner/repo/pull/2",
+        issue_url="https://github.com/owner/repo/issues/1",
+        pr_head_sha="",
+        cwd=tmp_path,
+        use_github_state=False,
+    )
+
+    assert suffix == ""
+    pr_comment.assert_not_called()
+    step_comment.assert_not_called()
+
+
+def test_hosted_cloud_publisher_suppresses_pre_cas_final_gate_comments(
+    tmp_path, monkeypatch
+):
+    """Hosted PDD yields authority to the cloud terminal CAS/outbox publisher."""
+    mod = __import__("pdd.agentic_checkup", fromlist=["_"])
+    pr_comment = Mock(return_value=True)
+    step_comment = Mock(return_value=True)
+    monkeypatch.setenv("PDD_HOSTED_FINAL_GATE_CLOUD_PUBLISH", "1")
+    monkeypatch.setattr(mod, "post_pr_comment", pr_comment)
+    monkeypatch.setattr(mod, "post_step_comment", step_comment)
+
+    success_suffix = mod._post_final_gate_success(
+        owner="owner",
+        repo="repo",
+        issue_number=1,
+        pr_owner="owner",
+        pr_repo="repo",
+        pr_number=2,
+        has_issue=True,
+        pr_url="https://github.com/owner/repo/pull/2",
+        issue_url="https://github.com/owner/repo/issues/1",
+        pr_head_sha="ab" * 20,
+        cwd=tmp_path,
+        use_github_state=True,
+    )
+    failure_suffix = mod._post_final_gate_report(
+        owner="owner",
+        repo="repo",
+        issue_number=1,
+        pr_owner="owner",
+        pr_repo="repo",
+        pr_number=2,
+        has_issue=True,
+        body="final-gate-status: failed",
+        cwd=tmp_path,
+        use_github_state=True,
+    )
+
+    assert success_suffix == ""
+    assert failure_suffix == ""
+    pr_comment.assert_not_called()
+    step_comment.assert_not_called()

@@ -83,6 +83,7 @@ _TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 _HOSTED_ARTIFACT_ENV_KEYS = (
     "PDD_CHECKUP_FALLBACK_MIRROR",
     "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH",
+    "PDD_HOSTED_FINAL_GATE_CLOUD_PUBLISH",
 )
 _HOSTED_RECEIPT_KEY_ENV = "PDD_AGENTIC_CHECKUP_RECEIPT_KEY"
 _HOSTED_RECEIPT_RUN_ID_ENV = "PDD_AGENTIC_CHECKUP_RECEIPT_RUN_ID"
@@ -94,6 +95,17 @@ _LOWER_HEX_32_RE = re.compile(r"[0-9a-f]{32}\Z")
 # exact marker; older receipt producers reread the public pathname after
 # publication and are not safe substitutes.
 HOSTED_AGENTIC_ARTIFACT_CAPABILITY = "prepublication-snapshot-v2"
+
+# GitHub-checks is normally a required full-suite source.  A hosted caller can
+# explicitly relax that only for PRs that cannot contain executable changes.
+# Keep this list deliberately narrow and fail closed for unrecognised paths.
+_NON_EXECUTABLE_PR_SUFFIXES = (
+    ".md", ".markdown", ".mdx", ".rst", ".adoc", ".png", ".jpg", ".jpeg",
+    ".gif", ".svg", ".webp", ".ico", ".pdf",
+)
+_NON_EXECUTABLE_PR_BASENAMES = frozenset(
+    {"license", "notice", "changelog", "authors", "contributors"}
+)
 
 
 def _env_flag_enabled(value: Optional[str]) -> bool:
@@ -964,6 +976,43 @@ def _fetch_pr_changed_files(owner: str, repo: str, pr_number: int) -> str:
     return "\n".join(lines) if lines else "No changed files reported."
 
 
+def _is_non_executable_pr_path(path: str) -> bool:
+    """Return whether ``path`` is safely documentation/static-only."""
+    normalized = path.strip().lower()
+    if not normalized or normalized.endswith("/"):
+        return False
+    name = normalized.rsplit("/", 1)[-1]
+    return name in _NON_EXECUTABLE_PR_BASENAMES or name.endswith(
+        _NON_EXECUTABLE_PR_SUFFIXES
+    )
+
+
+def _github_checks_nonblocking_docs_only_pr(
+    owner: str, repo: str, pr_number: int
+) -> bool:
+    """Fail closed unless every changed PR file is docs/static-only.
+
+    This intentionally uses GitHub's PR inventory rather than the local
+    checkout: the check gate itself is GitHub-backed, and a stale worktree must
+    not turn an executable PR into a waived one.
+    """
+    success, output = _run_gh_command(
+        ["api", f"repos/{owner}/{repo}/pulls/{pr_number}/files?per_page=100"]
+    )
+    if not success:
+        return False
+    try:
+        files = json.loads(output)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(files, list) or not files or len(files) >= 100:
+        return False
+    paths = [item.get("filename") for item in files if isinstance(item, dict)]
+    return len(paths) == len(files) and all(
+        isinstance(path, str) and _is_non_executable_pr_path(path) for path in paths
+    )
+
+
 def _fetch_pr_conversation(owner: str, repo: str, pr_number: int) -> str:
     """Fetch PR issue-thread comments, which often explain direction changes."""
     success, output = _run_gh_command(
@@ -1268,7 +1317,11 @@ def _post_final_gate_report(
     use_github_state: bool,
 ) -> str:
     """Best-effort post of a final-gate report to PR and issue threads."""
-    if not use_github_state or not body.strip():
+    if (
+        not use_github_state
+        or not body.strip()
+        or _env_flag_enabled(os.environ.get("PDD_HOSTED_FINAL_GATE_CLOUD_PUBLISH"))
+    ):
         return ""
 
     pr_posted = post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
@@ -1293,6 +1346,72 @@ def _post_final_gate_report(
     if not issue_posted:
         failed.append("issue")
     return f" Final report post failed for: {', '.join(failed)}."
+
+
+def _post_final_gate_success(
+    *,
+    owner: str,
+    repo: str,
+    issue_number: int,
+    pr_owner: str,
+    pr_repo: str,
+    pr_number: int,
+    has_issue: bool,
+    pr_url: str,
+    issue_url: str,
+    pr_head_sha: str,
+    cwd: Path,
+    use_github_state: bool,
+) -> str:
+    """Post the terminal Step 8 success only after the complete gate passed.
+
+    Step 7 is the review-loop's evidence report.  It can be posted even when
+    findings remain, so it must never double as the final success signal.  A
+    Step 8 comment is therefore emitted only after Layer 1, Layer 2, and the
+    hosted-artifact publication contract have all passed.
+    """
+    if not use_github_state or _env_flag_enabled(
+        os.environ.get("PDD_HOSTED_FINAL_GATE_CLOUD_PUBLISH")
+    ):
+        return ""
+
+    issue_line = issue_url if has_issue and issue_url else "not provided"
+    body = "\n".join(
+        [
+            "## Step 8/8: Final Gate Successful",
+            "",
+            f"PR: {pr_url}",
+            f"Issue: {issue_line}",
+            "final-gate-status: passed",
+            "final-gate-stage: complete",
+            f"pr-head-sha: {pr_head_sha}",
+            "",
+            "Layer 1 PR checkup and the Step 7/8 review-loop final report both passed.",
+            "This checkup run is complete and ready for review.",
+        ]
+    )
+    pr_posted = post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
+    issue_posted = True
+    if has_issue:
+        issue_posted = post_step_comment(
+            repo_owner=owner,
+            repo_name=repo,
+            issue_number=issue_number,
+            step_num=8,
+            total_steps=8,
+            description="Final Gate Successful",
+            output=body,
+            cwd=cwd,
+            body=body,
+        )
+    if pr_posted and issue_posted:
+        return ""
+    failed = []
+    if not pr_posted:
+        failed.append("PR")
+    if not issue_posted:
+        failed.append("issue")
+    return f" Final Step 8 success post failed for: {', '.join(failed)}."
 
 
 def _review_loop_ship_verdict(
@@ -1325,6 +1444,15 @@ def _review_loop_ship_verdict(
     if not isinstance(final_state, dict):
         return False
     if final_state.get("fresh_final_status") != "clean":
+        return False
+    remote_pr_head_sha = final_state.get("remote_pr_head_sha")
+    if (
+        not isinstance(remote_pr_head_sha, str)
+        or _LOWER_HEX_40_RE.fullmatch(remote_pr_head_sha) is None
+    ):
+        # A terminal pass must identify the exact remote PR head that survived
+        # the final stale-head check. Without it, the success comment cannot be
+        # authoritatively bound to the reviewed generation.
         return False
     reviewer_status = final_state.get("reviewer_status")
     active = final_state.get("active_reviewer")
@@ -1466,6 +1594,7 @@ def run_agentic_checkup(
     pr_url: Optional[str] = None,
     test_scope: str = "full",
     full_suite_source: str = "local",
+    github_checks_blocking: bool = True,
     review_loop: bool = False,
     final_gate: bool = False,
     review_only: bool = False,
@@ -1488,6 +1617,7 @@ def run_agentic_checkup(
     gate_timeout: float = 60.0,
     gate_allow: Tuple[str, ...] = (),
     start_step_override: Optional[Union[int, float]] = None,
+    fresh_start: bool = False,
     cwd: Optional[Path] = None,
     prompt_repair: str = "off",
     max_prompt_repair_rounds: int = 1,
@@ -1862,6 +1992,19 @@ def run_agentic_checkup(
             "",
         )
 
+    if not isinstance(github_checks_blocking, bool):
+        return False, "github_checks_blocking must be a boolean.", 0.0, ""
+    if not github_checks_blocking and (
+        not final_gate or full_suite_source != "github-checks"
+    ):
+        return (
+            False,
+            "Non-blocking GitHub checks require --final-gate with "
+            "--full-suite-source github-checks.",
+            0.0,
+            "",
+        )
+
     # check → repair → recheck cycle for changed prompt files (Issue #1422).
     # Uses the full pdd.prompt_source_set_report.v1 structured report as the
     # repair oracle (not just lint), then re-verifies before the orchestrator runs.
@@ -2217,6 +2360,7 @@ def run_agentic_checkup(
                         final_gate and full_suite_source == "github-checks"
                     ),
                     start_step_override=start_step_override,
+                    fresh_start=fresh_start,
                 )
             )
     except Exception as exc:
@@ -2436,6 +2580,7 @@ def run_agentic_checkup(
         # fail-closed). ``issue_number`` is the PR number when no issue was
         # given; in that mode the issue-alignment gate is skipped.
         github_checks_message: Optional[str] = None
+        github_checks_waived = False
         if (
             full_suite_source == "github-checks"
             and not layer1_step5_evidence_for_review
@@ -2443,17 +2588,36 @@ def run_agentic_checkup(
             assert (
                 pr_owner is not None and pr_repo is not None and pr_number is not None
             )
-            github_success, github_checks_message, _github_head = (
-                run_github_checks_gate(
-                    project_root,
-                    pr_owner,
-                    pr_repo,
-                    pr_number,
-                    quiet=quiet,
-                    required_only=False,
+            # A docs/static-only PR is explicitly eligible for the non-blocking
+            # policy.  Decide that before polling: the check gate can wait for
+            # its full timeout when a repository has no applicable workflows,
+            # defeating the purpose of the waiver and needlessly consuming a
+            # final-gate review reservation.
+            docs_only_nonblocking = (
+                not github_checks_blocking
+                and _github_checks_nonblocking_docs_only_pr(
+                    pr_owner, pr_repo, pr_number
                 )
             )
-            if not github_success:
+            if docs_only_nonblocking:
+                github_success = False
+                github_checks_waived = True
+                github_checks_message = (
+                    "GitHub checks not polled — non-blocking GitHub checks "
+                    "waived for docs/static-only PR."
+                )
+            else:
+                github_success, github_checks_message, _github_head = (
+                    run_github_checks_gate(
+                        project_root,
+                        pr_owner,
+                        pr_repo,
+                        pr_number,
+                        quiet=quiet,
+                        required_only=False,
+                    )
+                )
+            if not github_success and not docs_only_nonblocking:
                 report = _format_github_checks_gate_failure_report(
                     pr_url=pr_url or "",
                     issue_url=issue_url or "",
@@ -2506,6 +2670,12 @@ def run_agentic_checkup(
                     hosted_artifact_reservation,
                     canonical_passed=False,
                 )
+            if not github_success and not docs_only_nonblocking:
+                github_checks_waived = True
+                github_checks_message = (
+                    f"{github_checks_message} — non-blocking GitHub checks "
+                    "waived for docs/static-only PR."
+                )
             if not quiet:
                 console.print(f"[green]{github_checks_message}[/green]")
 
@@ -2544,12 +2714,15 @@ def run_agentic_checkup(
                 "pass" if not layer1_step5_evidence_for_review else ""
             ),
         )
-        ship = _review_loop_ship_verdict(
-            load_final_state(project_root, issue_number, pr_number),
-            has_issue=has_issue,
-        )
+        final_state = load_final_state(project_root, issue_number, pr_number)
+        ship = _review_loop_ship_verdict(final_state, has_issue=has_issue)
         total_cost = orch_cost + loop_cost
-        checks_clause = "GitHub checks gate passed; " if github_checks_message else ""
+        if github_checks_waived:
+            checks_clause = "GitHub checks gate waived for docs/static-only PR; "
+        elif github_checks_message:
+            checks_clause = "GitHub checks gate passed; "
+        else:
+            checks_clause = ""
         message = (
             "Final gate: Layer 1 (PR checkup) passed; "
             f"{checks_clause}"
@@ -2560,11 +2733,33 @@ def run_agentic_checkup(
             # shippable; surface that distinctly from a loop that errored.
             message += " — verdict: not shippable (findings remain or "
             message += "verification is unverified)."
-        return _require_hosted_publication(
+        result = _require_hosted_publication(
             (ship, message, total_cost, (loop_model or orch_model)),
             hosted_artifact_reservation,
             canonical_passed=ship,
         )
+        if result[0]:
+            post_suffix = _post_final_gate_success(
+                owner=owner,
+                repo=repo,
+                issue_number=issue_number,
+                pr_owner=pr_owner,
+                pr_repo=pr_repo,
+                pr_number=pr_number,
+                has_issue=has_issue,
+                pr_url=pr_url or "",
+                issue_url=issue_url or "",
+                pr_head_sha=str(
+                    final_state.get("remote_pr_head_sha") or ""
+                    if isinstance(final_state, dict)
+                    else ""
+                ),
+                cwd=project_root,
+                use_github_state=use_github_state,
+            )
+            if post_suffix:
+                return result[0], result[1] + post_suffix, result[2], result[3]
+        return result
 
     # 6. Parse JSON report from step 7 output
     # The orchestrator returns "Checkup complete" only after enforcing Step 7's

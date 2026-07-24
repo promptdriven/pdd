@@ -243,3 +243,112 @@ class TestInteractivePtyStallAbort:
             f"watchdog took {elapsed:.1f}s; expected abort shortly after "
             f"stall_timeout={stall_timeout}s, well under hard timeout={hard_timeout}s"
         )
+
+    def test_first_run_theme_then_unsent_positional_task_reaches_mcp_reply(
+        self, tmp_path
+    ):
+        """A current Claude TUI may consume the positional task during its
+        first-run theme picker, then leave it in the composer rather than send
+        it.  PDD owns this interactive launch, so it must advance the known
+        first-run screen and submit the pre-supplied task exactly once.
+
+        This is the hosted failure from staging execution ``pdd-executor-job-
+        tccrs`` in miniature: before the task is submitted Claude creates no
+        JSONL transcript and cannot call ``pdd_reply``.  A timeout/watchdog
+        merely limits waste; it does not make the final-gate reviewer usable.
+        """
+        from pdd.agentic_common import _run_interactive_pty_until_reply
+
+        reply_path = tmp_path / "reply.json"
+        job_id = "theme-positional-job"
+        # The fixture intentionally behaves like a new Claude TUI: the first
+        # Enter accepts the theme, the second sends the positional task that is
+        # visibly sitting in the composer, and only then can it call pdd_reply.
+        # It never creates a transcript, matching the affected hosted launch.
+        first_run_tui = [
+            sys.executable,
+            "-u",
+            "-c",
+            "import json, os, sys, time\n"
+            "sys.stdout.write('Text style\\n1. Dark mode\\n2. Light mode\\nEnter to confirm\\n'); sys.stdout.flush()\n"
+            "if not sys.stdin.buffer.read(1): raise SystemExit(2)\n"
+            f"sys.stdout.write(\"Read the file at prompt.txt and execute it. When finished, call the MCP tool pdd_reply with job_id='{job_id}', success=true or false. Do not stop until pdd_reply has been called successfully. Press Enter to send\\\\n\"); sys.stdout.flush()\n"
+            "if not sys.stdin.buffer.read(1): raise SystemExit(3)\n"
+            "open(os.environ['PDD_TEST_REPLY_PATH'], 'w').write(json.dumps({'job_id': os.environ['PDD_TEST_JOB_ID'], 'success': True, 'text': 'submitted', 'cost_usd': 0, 'model': 'claude-test'}))\n"
+            "time.sleep(10)\n",
+        ]
+
+        success, message, cost, model = _run_interactive_pty_until_reply(
+            first_run_tui,
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "PDD_TEST_REPLY_PATH": str(reply_path),
+                "PDD_TEST_JOB_ID": job_id,
+            },
+            timeout=1.0,
+            reply_path=reply_path,
+            job_id=job_id,
+            # The exact staging symptom is no transcript at all; this test
+            # asserts that PDD unblocks it rather than merely classifying it as
+            # a watchdog timeout.
+            stall_timeout=None,
+        )
+
+        assert success is True, message
+        assert message == "submitted"
+        assert cost == 0.0
+        assert model == "claude-test"
+
+    def test_unstable_composer_gets_bounded_startup_enter(
+        self, tmp_path, monkeypatch
+    ):
+        """Claude's alternate-screen composer can expose only repaint frames.
+
+        Because PDD launched this TUI with its own positional task, a small
+        bounded startup Enter retry is safe and necessary even when prompt text
+        is not stably recoverable from the PTY stream.
+        """
+        from pdd import agentic_common
+
+        monkeypatch.setattr(
+            agentic_common, "_INTERACTIVE_STARTUP_ENTER_SECONDS", 0.1, raising=False
+        )
+        monkeypatch.setattr(
+            agentic_common, "_INTERACTIVE_STARTUP_ENTER_RETRY_SECONDS", 0.1, raising=False
+        )
+        monkeypatch.setattr(
+            agentic_common, "_INTERACTIVE_STARTUP_ENTER_MAX", 2, raising=False
+        )
+
+        reply_path = tmp_path / "reply.json"
+        job_id = "unstable-composer-job"
+        unstable_tui = [
+            sys.executable,
+            "-u",
+            "-c",
+            "import json, os, sys, time\n"
+            "sys.stdout.write('\\x1b[2K\\r-'); sys.stdout.flush()\n"
+            "if not sys.stdin.buffer.read(1): raise SystemExit(2)\n"
+            "open(os.environ['PDD_TEST_REPLY_PATH'], 'w').write(json.dumps({'job_id': os.environ['PDD_TEST_JOB_ID'], 'success': True, 'text': 'submitted', 'cost_usd': 0, 'model': 'claude-test'}))\n"
+            "time.sleep(10)\n",
+        ]
+
+        success, message, _cost, _model = (
+            agentic_common._run_interactive_pty_until_reply(
+                unstable_tui,
+                cwd=tmp_path,
+                env={
+                    **os.environ,
+                    "PDD_TEST_REPLY_PATH": str(reply_path),
+                    "PDD_TEST_JOB_ID": job_id,
+                },
+                timeout=0.8,
+                reply_path=reply_path,
+                job_id=job_id,
+                stall_timeout=None,
+            )
+        )
+
+        assert success is True, message
+        assert message == "submitted"

@@ -47,6 +47,27 @@ def _step7_clean_output(label: str = "All Issues Fixed") -> str:
     return f"{label}\n{STEP7_CLEAN_JSON}"
 
 
+def test_remove_worktree_times_out_instead_of_parking_checkup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A locked Git worktree must fail closed, not park the hosted executor."""
+    import pdd.agentic_checkup_orchestrator as orchestrator
+
+    observed: dict[str, object] = {}
+
+    def fake_run(*args: object, **kwargs: object) -> None:
+        observed.update(kwargs)
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(orchestrator.subprocess, "run", fake_run)
+
+    success, message = orchestrator._remove_worktree(tmp_path, tmp_path / "worktree")
+
+    assert success is False
+    assert "timed out removing existing worktree" in message.lower()
+    assert observed["timeout"] == orchestrator.WORKTREE_REMOVE_TIMEOUT_SECONDS
+
+
 # Issue #1212: Step 5 must emit a structured ``failure_signal`` fenced block
 # (the orchestrator fails CLOSED when it is missing/malformed, so a stubbed
 # Step 5 that returns plain prose is now treated as an unverified failure).

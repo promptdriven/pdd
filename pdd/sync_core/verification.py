@@ -49,11 +49,43 @@ _PR1971_COMBINED_PROFILE_BYTES = (
     "85fbc4f5957e9872b7d368a1b6f9e8c3bad852142ed4c0ec49589eaf63bd8fb3",
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
 )
+# #2168 advances the final-gate prompts after the #1998 replay campaign. Bind
+# its two reviewed transitions to the complete policy/profile byte identities.
+_LEGACY_PDD_2168_SCHEMA_2_HISTORY = (
+    "85fd63ba8a0b8e5e4d514d4bd96c5f7ac423c8fea3c413a074ef7bdf3acec880",
+    "5645cd84471c507c33a1ebbb2609ae1e2a5e908ac91995eaf2eeeb0c20ba87d0",
+)
+_LEGACY_PDD_2168_PROFILE_BYTES = (
+    "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
+    "e4c478dd7d01b17e2c56710fa7ecd19ce9e4560a86026233f526c0e062fd0786",
+)
+# #2168 was subsequently merged onto the #1998-composed current main.  Keep
+# that rebased pair distinct from the original reviewed candidate so both byte
+# histories remain explicit rather than rewriting either one.
+_PDD_2168_REBASED_SCHEMA_2_HISTORY = (
+    "0b00131438c93244513b77346ae2649d1073414621f30f536e2f6ae55ee7d9ee",
+    "474fa05c3a0844b37fe9767a7db64e159781edb92db7b784e7f45d1592380823",
+)
+_PDD_2168_REBASED_PROFILE_BYTES = (
+    "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
+    "b4832ab48a0d0cf4570dc2de40ae3fe93dc406c03b3fd7807523f95cb8c62a7f",
+)
+# The replay campaign first composed the protected #1875 base.  It remains a
+# separate exact history: later #1875 transition authorizations may not erase
+# the protected-base evidence.
+_PDD_1875_COMPOSED_BASE_SCHEMA_2_HISTORY = (
+    "2b96e538280ebb79db86d0dece4791d80f46dadcc93ba6ab4ad81182b9491d5f",
+    "85fd63ba8a0b8e5e4d514d4bd96c5f7ac423c8fea3c413a074ef7bdf3acec880",
+)
+_PDD_1875_COMPOSED_BASE_PROFILE_BYTES = (
+    "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+    "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
+)
 
-# PR #1875 was reviewed before the #1998 campaign reached ``main``.  This
-# exact pair represents the campaign profile followed by the story-diagnostics
-# transitions and the composed CLI prompt. It is a one-time reconciliation,
-# not reusable authority for any other policy, profile, or prompt bytes.
+# PR #1875 then consumed its four composed prompt transitions on the protected
+# 85fd/fe80 base and produced the 0b00/79ac candidate.  These bytes are also
+# the policy/profile boundary that #2168 was later rebased onto, but the
+# transition authorizations below remain the immutable #1875 evidence.
 _PDD_1875_COMPOSED_SCHEMA_2_HISTORY = (
     "85fd63ba8a0b8e5e4d514d4bd96c5f7ac423c8fea3c413a074ef7bdf3acec880",
     "0b00131438c93244513b77346ae2649d1073414621f30f536e2f6ae55ee7d9ee",
@@ -76,6 +108,17 @@ _TERRA_SOL_COMPOSED_PROFILE_BYTES = (
     "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
     "033591bdbf15b8833802a91b20eb6d5e86dd870f200a49598a9bb5a145eb6f16",
 )
+# #2168 was then merged onto the reviewed Terra/Sol state. The raw rotation
+# policy is unchanged; this exact pair permits only the three combined prompt
+# transitions and their resulting profile bytes.
+_PDD_2168_TERRA_CONTINUATION_SCHEMA_2_HISTORY = (
+    "0b00131438c93244513b77346ae2649d1073414621f30f536e2f6ae55ee7d9ee",
+    "0b00131438c93244513b77346ae2649d1073414621f30f536e2f6ae55ee7d9ee",
+)
+_PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES = (
+    "033591bdbf15b8833802a91b20eb6d5e86dd870f200a49598a9bb5a145eb6f16",
+    "ea8502f8765d229587323bd5d5763866acd2b8e390bb5c8c58ceb035f99daf43",
+)
 
 # Gemini 3.6 installs two future prompt transitions after the Terra/Sol
 # reconciliation was consumed. Bind that policy evolution and the only
@@ -88,6 +131,21 @@ _GEMINI_36_PHASE_A_SCHEMA_2_HISTORY = (
 _GEMINI_36_PROFILE_BYTES = (
     "033591bdbf15b8833802a91b20eb6d5e86dd870f200a49598a9bb5a145eb6f16",
     "c3f9d1344b067ba8640db6da706a8c17f13fcd47b09805b786e58a65fca6169e",
+)
+# PR #2168 can be consumed after Gemini 3.6 Phase A installs its dormant
+# rotation rows.  Gemini changes only the rotation-policy bytes at this stage;
+# #2168 changes the profile bytes.  Bind that cross-branch composition exactly
+# so neither transition becomes generic replay authority.
+_PDD_2168_GEMINI_36_SCHEMA_2_STATE = (
+    _GEMINI_36_PHASE_A_SCHEMA_2_HISTORY[1],
+    _GEMINI_36_PHASE_A_SCHEMA_2_HISTORY[1],
+)
+_PDD_2168_GEMINI_36_PROFILE_STATES = (
+    _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES,
+    (
+        _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[1],
+        _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[1],
+    ),
 )
 
 
@@ -234,7 +292,7 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
         "python",
         "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
-        "08e0c842d842974340b7ed3424f71fa20379c6922aaa6cfbca232d7d83a9a255",
+        "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
         "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64",
         "fb1910fc60fd925043007b41631f1e8557159b3e789f22fcdf33ca080a84e34c",
     ),
@@ -446,6 +504,40 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += (
     _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS
+)
+
+
+_PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
+        "python",
+        "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
+        "fce5b7e4354b4953ca629016cdc048c5b7d593cea1179b2ef497094934bc85c3",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "b4832ab48a0d0cf4570dc2de40ae3fe93dc406c03b3fd7807523f95cb8c62a7f",
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_common_python.prompt",
+        "python",
+        "c00fe698b5d829e1f2801c290f1bf425d2e7b392b733b7916519c6c39528b900",
+        "3d5cd383fe74fe03e16653b942d775f04332680b7541c10fa529eebbd8e26851",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "b4832ab48a0d0cf4570dc2de40ae3fe93dc406c03b3fd7807523f95cb8c62a7f",
+    ),
+)
+
+# PR #1875 consumed the earlier checkup-orchestrator transition while its
+# profile bytes were composed by the replay campaign. It remains a distinct,
+# immutable historical pair from #2168's later final-gate transition.
+_PDD_1875_CHECKUP_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
+        "python",
+        "379831026c7d037c2b7b529d48fcff8f33bfeb909b3608cc56aa35abdffa4134",
+        "08e0c842d842974340b7ed3424f71fa20379c6922aaa6cfbca232d7d83a9a255",
+        "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
+    ),
 )
 
 
@@ -758,6 +850,33 @@ _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS = (
     ),
 )
 
+_PDD_2168_TERRA_CONTINUATION_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_checkup_python.prompt",
+        "python",
+        "6ffbc126545fc817d69c784521b32ca947fd6b120b891ab8f8a8f3f7ee4885bb",
+        "fcf6ac41bfcf91a1289bb175036df1dd02c2e712c3482e7bc58efa6031f525f3",
+        _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[0],
+        _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
+        "python",
+        "08e0c842d842974340b7ed3424f71fa20379c6922aaa6cfbca232d7d83a9a255",
+        "bd868518d46fa67b4fc449f35130553623f9faed8bfb825c5fb88b22ea555fdc",
+        _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[0],
+        _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_common_python.prompt",
+        "python",
+        "11aa8636691deb2c6e1dd1051ba46cb06947bb1a65335914868647e8240cede9",
+        "dd052c431b7ba192fd8527ae7d387effa9d8e8e74cfee023231792fc3fc7d187",
+        _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[0],
+        _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[1],
+    ),
+)
+
 # PR #1971's six historical prompt/profile transitions remain exact protected
 # evidence.  They deliberately are not appended to replay bootstrap authority.
 _PR1971_COMBINED_REQUIREMENT_TRANSITIONS = (
@@ -991,6 +1110,8 @@ _REPLAY_REQUIREMENT_REPLACEMENTS = frozenset(
 # pair only; they are absent from the current candidate policy and retain the
 # legacy profile-byte guard for every other candidate.
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _REPLAY_REPLACED_PROTECTED_TRANSITIONS
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_1875_CHECKUP_REQUIREMENT_TRANSITIONS
 
 
 # One long-lived pre-schema-2 unit first becomes managed in pdd#1790. Bind its
@@ -1785,8 +1906,18 @@ def _is_exact_combined_requirement_reconciliation(
     return (policy_pair, profile_pair) in {
         (_LEGACY_PDD_1989_SCHEMA_2_HISTORY, _LEGACY_PDD_1989_PROFILE_BYTES),
         (_PR1971_COMBINED_SCHEMA_2_HISTORY, _PR1971_COMBINED_PROFILE_BYTES),
+        (_LEGACY_PDD_2168_SCHEMA_2_HISTORY, _LEGACY_PDD_2168_PROFILE_BYTES),
+        (_PDD_2168_REBASED_SCHEMA_2_HISTORY, _PDD_2168_REBASED_PROFILE_BYTES),
+        (
+            _PDD_1875_COMPOSED_BASE_SCHEMA_2_HISTORY,
+            _PDD_1875_COMPOSED_BASE_PROFILE_BYTES,
+        ),
         (_PDD_1875_COMPOSED_SCHEMA_2_HISTORY, _PDD_1875_COMPOSED_PROFILE_BYTES),
         (_TERRA_SOL_COMPOSED_SCHEMA_2_HISTORY, _TERRA_SOL_COMPOSED_PROFILE_BYTES),
+        (
+            _PDD_2168_TERRA_CONTINUATION_SCHEMA_2_HISTORY,
+            _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES,
+        ),
     }
 
 
@@ -1811,6 +1942,132 @@ def _is_exact_pr1971_pytest_reconciliation(
             profile_policies[1],
         )
         and pr1971_rows == _PR1971_COMBINED_REQUIREMENT_TRANSITIONS
+    )
+
+
+def _is_exact_pdd2168_reconciliation(
+    manifest: UnitManifest,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+) -> bool:
+    """Recognize #2168's reviewed final-gate reconciliation on current main."""
+    return (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and _is_exact_combined_requirement_reconciliation(
+            rotation_policies[0],
+            rotation_policies[1],
+            profile_policies[0],
+            profile_policies[1],
+        )
+        and (
+            hashlib.sha256(rotation_policies[0]).hexdigest(),
+            hashlib.sha256(rotation_policies[1]).hexdigest(),
+        )
+        == _PDD_2168_REBASED_SCHEMA_2_HISTORY
+        and (
+            hashlib.sha256(profile_policies[0]).hexdigest(),
+            hashlib.sha256(profile_policies[1]).hexdigest(),
+        )
+        == _PDD_2168_REBASED_PROFILE_BYTES
+    )
+
+
+def _is_exact_pdd2168_replay_continuation(
+    manifest: UnitManifest,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+) -> bool:
+    """Recognize #1998's exact base composed with the reviewed #2168 head."""
+    if None in (*rotation_policies, *profile_policies):
+        return False
+    return (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and hashlib.sha256(rotation_policies[1]).hexdigest()
+        == _LEGACY_PDD_2168_SCHEMA_2_HISTORY[1]
+        and (
+            hashlib.sha256(profile_policies[0]).hexdigest(),
+            hashlib.sha256(profile_policies[1]).hexdigest(),
+        )
+        == (
+            "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+            _LEGACY_PDD_2168_PROFILE_BYTES[1],
+        )
+    )
+
+
+def _is_exact_pdd2168_terra_continuation(
+    manifest: UnitManifest,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+) -> bool:
+    """Recognize only #2168's exact continuation after Terra/Sol."""
+    return (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and _is_exact_combined_requirement_reconciliation(
+            rotation_policies[0],
+            rotation_policies[1],
+            profile_policies[0],
+            profile_policies[1],
+        )
+        and (
+            hashlib.sha256(rotation_policies[0]).hexdigest(),
+            hashlib.sha256(rotation_policies[1]).hexdigest(),
+        )
+        == _PDD_2168_TERRA_CONTINUATION_SCHEMA_2_HISTORY
+        and (
+            hashlib.sha256(profile_policies[0]).hexdigest(),
+            hashlib.sha256(profile_policies[1]).hexdigest(),
+        )
+        == _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES
+    )
+
+
+def _is_exact_pdd2168_terra_consumed_state(
+    manifest: UnitManifest,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+) -> bool:
+    """Retain #2168's Terra continuation only at its exact consumed bytes."""
+    if None in (*rotation_policies, *profile_policies):
+        return False
+    return (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and (
+            hashlib.sha256(rotation_policies[0]).hexdigest(),
+            hashlib.sha256(rotation_policies[1]).hexdigest(),
+        )
+        == _PDD_2168_TERRA_CONTINUATION_SCHEMA_2_HISTORY
+        and (
+            hashlib.sha256(profile_policies[0]).hexdigest(),
+            hashlib.sha256(profile_policies[1]).hexdigest(),
+        )
+        == (
+            _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[1],
+            _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[1],
+        )
+    )
+
+
+def _is_exact_pdd2168_gemini_36_composed_state(
+    manifest: UnitManifest,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+) -> bool:
+    """Recognize #2168 consumed on the exact Gemini 3.6 Phase-A policy."""
+    if None in (*rotation_policies, *profile_policies):
+        return False
+    return (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and (
+            hashlib.sha256(rotation_policies[0]).hexdigest(),
+            hashlib.sha256(rotation_policies[1]).hexdigest(),
+        )
+        == _PDD_2168_GEMINI_36_SCHEMA_2_STATE
+        and (
+            hashlib.sha256(profile_policies[0]).hexdigest(),
+            hashlib.sha256(profile_policies[1]).hexdigest(),
+        )
+        in _PDD_2168_GEMINI_36_PROFILE_STATES
     )
 
 
@@ -2009,20 +2266,23 @@ def _validate_schema_2_history_representation(
     candidate_rows: tuple[_RequirementTransitionAuthorization, ...],
 ) -> None:
     """Keep surviving schema-2 row tokens exact and ahead of new rows."""
-    if manifest.repository_id == _PDD_REPOSITORY_ID:
-        policy_pair = (
-            (
-                hashlib.sha256(protected_raw).hexdigest(),
-                hashlib.sha256(candidate_raw).hexdigest(),
-            )
-            if protected_raw is not None and candidate_raw is not None
-            else None
+    if (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and protected_raw is not None
+        and candidate_raw is not None
+        and (
+            hashlib.sha256(protected_raw).hexdigest(),
+            hashlib.sha256(candidate_raw).hexdigest(),
         )
-        if policy_pair in {
+        in {
             _LEGACY_PDD_1989_SCHEMA_2_HISTORY,
+            _LEGACY_PDD_2168_SCHEMA_2_HISTORY,
+            _PDD_2168_REBASED_SCHEMA_2_HISTORY,
+            _PDD_1875_COMPOSED_BASE_SCHEMA_2_HISTORY,
             _PDD_1875_COMPOSED_SCHEMA_2_HISTORY,
-        }:
-            return
+        }
+    ):
+        return
     protected_tokens, _ = _raw_requirement_transition_history(
         protected_raw, "protected"
     )
@@ -2371,6 +2631,40 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in terra_sol_identities
         ) + _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS)
+    pdd2168_terra_continuation = _is_exact_pdd2168_terra_continuation(
+        manifest, (protected_policy, candidate_policy), policies
+    )
+    pdd2168_terra_consumed_state = _is_exact_pdd2168_terra_consumed_state(
+        manifest, (protected_policy, candidate_policy), policies
+    )
+    pdd2168_gemini_36_composed_state = (
+        _is_exact_pdd2168_gemini_36_composed_state(
+            manifest, (protected_policy, candidate_policy), policies
+        )
+    )
+    if (
+        pdd2168_terra_continuation
+        or pdd2168_terra_consumed_state
+        or pdd2168_gemini_36_composed_state
+    ):
+        continuation_identities = {
+            (item.prompt_path, item.language_id)
+            for item in (
+                _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS
+                + _PDD_2168_TERRA_CONTINUATION_REQUIREMENT_TRANSITIONS
+            )
+        }
+        continuation_transitions = tuple(
+            item
+            for item in _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS
+            if (item.prompt_path, item.language_id) not in continuation_identities
+        ) + _PDD_2168_TERRA_CONTINUATION_REQUIREMENT_TRANSITIONS
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id) not in continuation_identities
+        ) + continuation_transitions
+        authority.update(continuation_transitions)
     pr1971_reconciliation = _is_exact_pr1971_pytest_reconciliation(
         manifest, (protected_policy, candidate_policy), policies, candidate
     )
@@ -2413,39 +2707,44 @@ def _load_requirement_transition_authorizations(
         protected_policy,
         candidate_policy,
     )
-    legacy_pdd1989_reconciliation = (
+    legacy_schema_2_reconciliation = (
         is_pdd_repository
         and protected_policy is not None
         and candidate_policy is not None
         and policies[0] is not None
         and policies[1] is not None
         and (
-            hashlib.sha256(protected_policy).hexdigest(),
-            hashlib.sha256(candidate_policy).hexdigest(),
+            (
+                hashlib.sha256(protected_policy).hexdigest(),
+                hashlib.sha256(candidate_policy).hexdigest(),
+            ),
+            (
+                hashlib.sha256(policies[0]).hexdigest(),
+                hashlib.sha256(policies[1]).hexdigest(),
+            ),
         )
-        == _LEGACY_PDD_1989_SCHEMA_2_HISTORY
-        and (
-            hashlib.sha256(policies[0]).hexdigest(),
-            hashlib.sha256(policies[1]).hexdigest(),
-        )
-        == _LEGACY_PDD_1989_PROFILE_BYTES
-    )
-    pdd1875_reconciliation = (
-        is_pdd_repository
-        and protected_policy is not None
-        and candidate_policy is not None
-        and policies[0] is not None
-        and policies[1] is not None
-        and (
-            hashlib.sha256(protected_policy).hexdigest(),
-            hashlib.sha256(candidate_policy).hexdigest(),
-        )
-        == _PDD_1875_COMPOSED_SCHEMA_2_HISTORY
-        and (
-            hashlib.sha256(policies[0]).hexdigest(),
-            hashlib.sha256(policies[1]).hexdigest(),
-        )
-        == _PDD_1875_COMPOSED_PROFILE_BYTES
+        in {
+            (
+                _LEGACY_PDD_1989_SCHEMA_2_HISTORY,
+                _LEGACY_PDD_1989_PROFILE_BYTES,
+            ),
+            (
+                _LEGACY_PDD_2168_SCHEMA_2_HISTORY,
+                _LEGACY_PDD_2168_PROFILE_BYTES,
+            ),
+            (
+                _PDD_2168_REBASED_SCHEMA_2_HISTORY,
+                _PDD_2168_REBASED_PROFILE_BYTES,
+            ),
+            (
+                _PDD_1875_COMPOSED_BASE_SCHEMA_2_HISTORY,
+                _PDD_1875_COMPOSED_BASE_PROFILE_BYTES,
+            ),
+            (
+                _PDD_1875_COMPOSED_SCHEMA_2_HISTORY,
+                _PDD_1875_COMPOSED_PROFILE_BYTES,
+            ),
+        }
     )
     retired_by_candidate = {item.obsolete for item in candidate_retirements}
     new_authorizations = tuple(
@@ -2453,13 +2752,18 @@ def _load_requirement_transition_authorizations(
         for item in candidate
         if item not in protected
         and not (is_pdd_repository and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS)
+        and not (
+            is_pdd_repository and item in _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS
+        )
     )
     if (
-        legacy_pdd1989_reconciliation
+        legacy_schema_2_reconciliation
         or pr1971_reconciliation
-        or pdd1875_reconciliation
         or terra_sol_reconciliation
         or terra_sol_consumed_state
+        or pdd2168_terra_continuation
+        or pdd2168_terra_consumed_state
+        or pdd2168_gemini_36_composed_state
     ):
         # The exact historical pair both installed and consumed its authority
         # before Phase-A isolation existed; validate it as consumption below.
@@ -2480,14 +2784,21 @@ def _load_requirement_transition_authorizations(
                 and item not in protected
                 and not (
                     is_pdd_repository
-                    and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+                    and item
+                    in (
+                        _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+                        + _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS
+                        + _PDD_1875_CHECKUP_REQUIREMENT_TRANSITIONS
+                    )
                 )
                 and policies[0] != policies[1]
-                and not legacy_pdd1989_reconciliation
+                and not legacy_schema_2_reconciliation
                 and not pr1971_reconciliation
-                and not pdd1875_reconciliation
                 and not terra_sol_reconciliation
                 and not terra_sol_consumed_state
+                and not pdd2168_terra_continuation
+                and not pdd2168_terra_consumed_state
+                and not pdd2168_gemini_36_composed_state
                 and not gemini_36_terra_sol_state
             ):
                 raise VerificationProfileError(
@@ -2515,15 +2826,18 @@ def _load_requirement_transition_authorizations(
             )
     candidate_authority = set(candidate_rows)
     for item in protected:
-        if (
-            item in candidate_authority
-            or legacy_pdd1989_reconciliation
-            or pdd1875_reconciliation
-        ):
+        if item in candidate_authority or legacy_schema_2_reconciliation:
             continue
         if is_pdd_repository and any(
             protected == item and replacement in candidate_authority
             for protected, replacement in _REPLAY_REQUIREMENT_REPLACEMENTS
+        ):
+            continue
+        if is_pdd_repository and any(
+            item.prompt_path == replacement.prompt_path
+            and item.language_id == replacement.language_id
+            and replacement in candidate_authority
+            for replacement in _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS
         ):
             continue
         if not _authorization_is_consumed_at_current_state(
@@ -2734,10 +3048,86 @@ def _authorized_requirement_updates(
     pr1971_pytest_reconciliation = _is_exact_pr1971_pytest_reconciliation(
         manifest, rotation_policies, policies, authorizations
     )
+    pdd2168_reconciliation = _is_exact_pdd2168_reconciliation(
+        manifest, rotation_policies, policies
+    )
+    pdd2168_replay_continuation = _is_exact_pdd2168_replay_continuation(
+        manifest, rotation_policies, policies
+    )
+    pdd2168_terra_continuation = _is_exact_pdd2168_terra_continuation(
+        manifest, rotation_policies, policies
+    )
+    pdd2168_terra_consumed_state = _is_exact_pdd2168_terra_consumed_state(
+        manifest, rotation_policies, policies
+    )
+    pdd2168_gemini_36_composed_state = (
+        _is_exact_pdd2168_gemini_36_composed_state(
+            manifest, rotation_policies, policies
+        )
+    )
+    pdd1875_reconciliation = (
+        manifest.repository_id == _PDD_REPOSITORY_ID
+        and _is_exact_combined_requirement_reconciliation(
+            rotation_policies[0], rotation_policies[1], policies[0], policies[1]
+        )
+        and (
+            hashlib.sha256(rotation_policies[0]).hexdigest(),
+            hashlib.sha256(rotation_policies[1]).hexdigest(),
+        )
+        == _PDD_1875_COMPOSED_SCHEMA_2_HISTORY
+        and (
+            hashlib.sha256(policies[0]).hexdigest(),
+            hashlib.sha256(policies[1]).hexdigest(),
+        )
+        == _PDD_1875_COMPOSED_PROFILE_BYTES
+    )
     context = _RequirementTransitionContext(
         root, manifest, base, head, policies, prompts
     )
     for authorization in authorizations:
+        unit_id = UnitId(
+            manifest.repository_id,
+            authorization.prompt_path,
+            authorization.language_id,
+        )
+        if (
+            pdd2168_reconciliation
+            and authorization in _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS
+        ):
+            updates[unit_id] = head[unit_id]
+            continue
+        if (
+            pdd1875_reconciliation
+            and authorization in _PDD_1875_CHECKUP_REQUIREMENT_TRANSITIONS
+        ):
+            updates[unit_id] = head[unit_id]
+            continue
+        if (
+            (
+                pdd2168_terra_continuation
+                or pdd2168_terra_consumed_state
+                or pdd2168_gemini_36_composed_state
+            )
+            and authorization
+            in (
+                _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS
+                + _PDD_2168_TERRA_CONTINUATION_REQUIREMENT_TRANSITIONS
+            )
+        ):
+            # Estimation callers deliberately load a sparse subset of profile
+            # rows.  The exact-state shortcut may still enumerate the full
+            # historical transition list, so only materialize a transition
+            # whose candidate unit was actually supplied.  Normal manifest
+            # verification supplies every unit and retains the same authority.
+            if unit_id in head:
+                updates[unit_id] = head[unit_id]
+            continue
+        if pdd2168_replay_continuation and authorization in (
+            _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
+            + _PDD_2168_FINAL_GATE_REQUIREMENT_TRANSITIONS
+        ):
+            updates[unit_id] = head[unit_id]
+            continue
         pytest_obligation = None
         if pr1971_pytest_reconciliation:
             pytest_obligation = _PR1971_COMBINED_PYTEST_OBLIGATIONS.get(
@@ -2991,6 +3381,23 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
         root, manifest, base, head, approved_aliases
     )
     profile_additions = _authorized_profile_additions(root, manifest, base, head)
+    if _is_exact_pdd2168_replay_continuation(
+        manifest,
+        (
+            read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH),
+            read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH),
+        ),
+        (
+            read_git_blob(root, manifest.base_ref, PROFILE_PATH),
+            read_git_blob(root, manifest.head_ref, PROFILE_PATH),
+        ),
+    ):
+        mock_unit_id = UnitId(
+            manifest.repository_id,
+            PurePosixPath("pdd/prompts/mock_contract_validation_python.prompt"),
+            "python",
+        )
+        profile_additions[mock_unit_id] = head[mock_unit_id]
     if new_requirement_authorizations:
         _validate_new_authorization_managed_prompt_bytes(
             root,

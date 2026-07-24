@@ -16,10 +16,9 @@ Bug 2 fix target: pdd/sync_main.py lines 1297-1316
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-from typing import Any, Dict, Generator
-from unittest.mock import MagicMock, call, patch
+from typing import Any, Dict
+from unittest.mock import MagicMock, patch
 
 import click
 import pytest
@@ -1345,6 +1344,57 @@ class TestCheckupReviewLoopCoverage:
             f"_run_role_task forwarded timeout={call_timeout}, "
             f"expected {explicit_timeout}."
         )
+
+    def test_run_role_task_uses_bounded_no_progress_watchdog(self, tmp_path):
+        """A silent reviewer must not consume multiple full hard timeouts."""
+        import pdd.checkup_review_loop as mod
+
+        mock_task = MagicMock(return_value=(True, "Review done", 0.05, "codex"))
+        with patch("pdd.checkup_review_loop.run_agentic_task", mock_task):
+            result = mod._run_role_task(
+                role="codex",
+                instruction="Review this code",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                label="checkup-review-stall-watchdog-test",
+                timeout=900.0,
+                max_retries=3,
+                reasoning_time=None,
+            )
+
+        assert result[0] is True
+        assert mock_task.call_args.kwargs["stall_timeout"] == (
+            mod.REVIEW_LOOP_STALL_TIMEOUT_SECONDS
+        )
+
+    def test_run_role_task_caps_retry_chain_at_role_timeout(self, tmp_path, monkeypatch):
+        """The role timeout must bound retries, not each individual retry."""
+        import pdd.checkup_review_loop as mod
+
+        observed = {}
+        monkeypatch.setattr(mod.time, "time", lambda: 1_000.0)
+
+        def fake_task(**kwargs):
+            observed.update(kwargs)
+            return True, "Review done", 0.05, "codex"
+
+        monkeypatch.setattr(mod, "run_agentic_task", fake_task)
+        result = mod._run_role_task(
+            role="codex",
+            instruction="Review this code",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+            label="checkup-review-role-deadline-test",
+            timeout=900.0,
+            max_retries=3,
+            reasoning_time=None,
+        )
+
+        assert result[0] is True
+        assert observed["timeout"] == 900.0
+        assert observed["deadline"] == 1_900.0
 
 
 # ===========================================================================

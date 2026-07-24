@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import datetime as _dt
+import inspect
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -11,7 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pdd.agentic_common import DEFAULT_MAX_RETRIES
+from pdd.agentic_checkup import run_agentic_checkup
+from pdd.agentic_common import DEFAULT_MAX_RETRIES, run_agentic_task
 from pdd.agentic_checkup_orchestrator import (
     CHECKUP_STEP_STALL_TIMEOUTS,
     CHECKUP_STEP_TIMEOUTS,
@@ -25,6 +28,7 @@ from pdd.agentic_checkup_orchestrator import (
     _discard_clean_run_side_effects,
     _format_pr_changed_files_for_prompt,
     _format_step_abort_message,
+    _has_complete_step7_report,
     _get_state_dir,
     _is_step_timeout_failure,
     _load_step5_shell_evidence_from_memory,
@@ -36,9 +40,11 @@ from pdd.agentic_checkup_orchestrator import (
     _parse_failure_signal_block,
     _prune_rewound_checkup_state,
     _pr_base_tracking_ref,
+    _run_single_step,
     _run_step5_shell_first_evidence,
     _select_step5_python_tests,
     _step7_human_success_report_passed,
+    _step7_repairable_failure_signal,
     _targeted_non_code_step5_result,
     run_agentic_checkup_orchestrator,
 )
@@ -56,6 +62,145 @@ STEP7_VERDICT_JSON = (
     '```'
 )
 ALL_ISSUES_FIXED = f"All Issues Fixed\n{STEP7_VERDICT_JSON}"
+
+
+class TestCheckupInterfaceSourceOfTruth:
+    """Prevent checkup runtime, prompt, and architecture interface drift."""
+
+    @staticmethod
+    def _prompt_interface(prompt_name: str) -> dict:
+        root = Path(__file__).resolve().parent.parent
+        prompt = (root / "pdd" / "prompts" / prompt_name).read_text(
+            encoding="utf-8"
+        )
+        match = re.search(
+            r"<pdd-interface>\s*(\{.*?\})\s*</pdd-interface>",
+            prompt,
+            re.DOTALL,
+        )
+        assert match is not None, f"missing pdd-interface in {prompt_name}"
+        return json.loads(match.group(1))
+
+    @pytest.mark.parametrize(
+        ("prompt_name", "function_name", "runtime_function", "added_parameters"),
+        [
+            (
+                "agentic_common_python.prompt",
+                "run_agentic_task",
+                run_agentic_task,
+                ("accept_failed_output",),
+            ),
+            (
+                "agentic_checkup_python.prompt",
+                "run_agentic_checkup",
+                run_agentic_checkup,
+                ("github_checks_blocking", "fresh_start"),
+            ),
+            (
+                "agentic_checkup_orchestrator_python.prompt",
+                "run_agentic_checkup_orchestrator",
+                run_agentic_checkup_orchestrator,
+                ("fresh_start",),
+            ),
+        ],
+    )
+    def test_runtime_prompt_and_architecture_interfaces_stay_in_sync(
+        self,
+        prompt_name: str,
+        function_name: str,
+        runtime_function: object,
+        added_parameters: tuple[str, ...],
+    ) -> None:
+        """New runtime parameters must update both declarative contract layers."""
+        root = Path(__file__).resolve().parent.parent
+        prompt_function = next(
+            function
+            for function in self._prompt_interface(prompt_name)["module"]["functions"]
+            if function["name"] == function_name
+        )
+        architecture = json.loads(
+            (root / "architecture.json").read_text(encoding="utf-8")
+        )
+        architecture_module = next(
+            module
+            for module in architecture
+            if module.get("filename") == prompt_name
+        )
+        architecture_function = next(
+            function
+            for function in architecture_module["interface"]["module"]["functions"]
+            if function["name"] == function_name
+        )
+
+        runtime_parameters = inspect.signature(runtime_function).parameters
+        for parameter in added_parameters:
+            assert parameter in runtime_parameters
+            assert re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(parameter)}"
+                r"(?:\s*:[^=,)]+)?\s*=",
+                prompt_function["signature"],
+            ), f"{parameter} is missing from {prompt_name}"
+        assert architecture_function["signature"] == prompt_function["signature"]
+
+
+class TestStep7ErrorEnvelopeRecovery:
+    """Only complete, machine-readable Step 7 reports may bypass transport failure."""
+
+    def test_accepts_complete_failing_verdict_for_normal_gate_classification(self):
+        report = (
+            "## Step 7/8: Verification & Final Report\n"
+            "```json\n"
+            '{"success": false, "message": "full suite timed out", '
+            '"issues": [], "changed_files": []}\n'
+            "```"
+        )
+
+        assert _has_complete_step7_report(report) is True
+
+    def test_rejects_partial_or_non_step7_provider_output(self):
+        assert _has_complete_step7_report(
+            "## Step 7/8: Verification & Final Report\npartial response"
+        ) is False
+        assert _has_complete_step7_report(
+            "Not logged in · Please run /login"
+        ) is False
+
+    def test_step7_wires_the_strict_acceptance_callback(self, tmp_path):
+        report = (
+            "## Step 7/8: Verification & Final Report\n"
+            "```json\n"
+            '{"success": false, "message": "full suite timed out", '
+            '"issues": [], "changed_files": []}\n'
+            "```"
+        )
+        with patch(
+            "pdd.agentic_checkup_orchestrator.load_prompt_template",
+            return_value="verify {issue_url}",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.preprocess",
+            return_value="verify {issue_url}",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.substitute_template_variables",
+            return_value="verify issue",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.run_agentic_task",
+            return_value=(False, "provider error", 0.0, "anthropic"),
+        ) as run_task:
+            _run_single_step(
+                7,
+                "verify",
+                {"issue_url": "https://example.invalid/issues/1"},
+                cwd=tmp_path,
+                step_cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                label="step7",
+                timeout_adder=0.0,
+            )
+
+        callback = run_task.call_args.kwargs["accept_failed_output"]
+        assert callback(report) is True
+        assert callback("Not logged in · Please run /login") is False
 
 # Round-8 Finding 1: the Step 5 prompt REQUIRES a structured
 # ``failure_signal`` block, and the orchestrator now fails closed when
@@ -244,6 +389,28 @@ class TestHappyPath:
         assert mock_run.call_count == 10
         assert cost == pytest.approx(1.0)  # 10 steps x 0.1 each
         assert model == "gpt-4"
+
+    def test_fresh_start_skips_persisted_workflow_state(
+        self, mock_dependencies, default_args
+    ):
+        """A requested fresh start cannot silently resume a cached checkup."""
+        mock_run, _, _, _ = mock_dependencies
+        stale_state = {
+            "last_completed_step": 7,
+            "step_outputs": {"7": ALL_ISSUES_FIXED},
+            "total_cost": 9.0,
+        }
+        with patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(stale_state, 123),
+        ) as load_state:
+            success, message, _cost, _model = run_agentic_checkup_orchestrator(
+                **default_args, fresh_start=True
+            )
+
+        assert success is True, message
+        load_state.assert_not_called()
+        assert mock_run.call_count == 10
 
     def test_cost_accumulation(self, mock_dependencies, default_args):
         """Costs from all steps should be accumulated."""
@@ -1778,6 +1945,25 @@ class TestTimeouts:
                 f"Step {label}: expected timeout={expected}, got {timeout}"
             )
 
+    def test_step_timeout_bounds_the_entire_retry_chain(
+        self, mock_dependencies, default_args, monkeypatch
+    ):
+        """A step timeout must not be silently multiplied by retries."""
+        import pdd.agentic_checkup_orchestrator as mod
+
+        mock_run, _, _, _ = mock_dependencies
+        monkeypatch.setattr(mod.time, "time", lambda: 1_000.0)
+
+        run_agentic_checkup_orchestrator(**default_args)
+
+        for call_obj in mock_run.call_args_list:
+            label = call_obj.kwargs.get("label", "")
+            step_num = self._label_to_step_num(label)
+            timeout = CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0)
+            assert call_obj.kwargs["deadline"] == (
+                1_000.0 + timeout + mod.JOB_TIMEOUT_MARGIN_SECONDS
+            )
+
     def test_checkup_steps_disable_git_worktree_env(self, mock_dependencies, default_args):
         """Checkup agent steps must not leak GIT_WORK_TREE into repo test suites."""
         mock_run, _, _, _ = mock_dependencies
@@ -2778,6 +2964,88 @@ class TestFixVerifyLoop:
         """MAX_FIX_VERIFY_ITERATIONS constant should be 3."""
         assert MAX_FIX_VERIFY_ITERATIONS == 3
 
+    def test_structured_step7_failure_yields_fixer_signal_not_legacy_exit(self):
+        """A quoted legacy marker cannot suppress a repairable PR finding."""
+        report = """All Issues Fixed
+```json
+{
+  "success": false,
+  "issue_aligned": false,
+  "message": "The PR still misses the empty-input contract.",
+  "issues": [{
+    "severity": "medium",
+    "scope": "pr",
+    "file": "verification/namespace.py",
+    "fixed": false
+  }]
+}
+```"""
+
+        signal = _step7_repairable_failure_signal(report)
+
+        assert "status: fail" in signal
+        assert "verification/namespace.py" in signal
+        assert "All Issues Fixed" in signal
+
+    def test_structured_step7_out_of_scope_failure_does_not_signal_fixer(self):
+        """The final gate cannot turn unrelated findings into mutations."""
+        report = """```json
+{
+  "success": false,
+  "issues": [{
+    "severity": "medium",
+    "scope": "out-of-scope",
+    "file": "unrelated/project.py",
+    "fixed": false
+  }]
+}
+```"""
+
+        assert _step7_repairable_failure_signal(report) == ""
+
+    def test_deferred_step5_runs_fixer_after_structured_step7_failure(self, tmp_path):
+        """A deferred Layer 1 pass must not strand a Layer 2 PR finding."""
+        labels: List[str] = []
+        blocked_step7 = """All Issues Fixed
+```json
+{
+  "success": false,
+  "issue_aligned": false,
+  "message": "The PR still misses the empty-input contract.",
+  "issues": [{
+    "severity": "medium",
+    "scope": "pr",
+    "file": "verification/namespace.py",
+    "fixed": false
+  }]
+}
+```"""
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if step_num == 7 and label == "step7_iter1":
+                return (True, blocked_step7, 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.1, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, message, _, _ = run_agentic_checkup_orchestrator(
+                **{
+                    **_PR_ARGS_1212,
+                    "cwd": tmp_path,
+                    "defer_step5_to_github_checks": True,
+                }
+            )
+
+        assert success is True, message
+        assert "step6_1_iter1" not in labels
+        assert "step6_1_iter2" in labels
+        assert "step7_iter2" in labels
+
     def test_single_pass_clean(self, mock_dependencies, default_args):
         """Step 7 returns 'All Issues Fixed' on iter 1 -> loop runs once."""
         mock_run, _, _, _ = mock_dependencies
@@ -3360,6 +3628,79 @@ class TestBetweenIterationsResume:
         # Should NOT have any iter1 labels (all were completed before resume)
         assert not any("iter1" in lbl for lbl in called_labels)
 
+    @pytest.mark.parametrize("completed_iteration", [1, 2])
+    def test_pr_resume_preserves_structured_step7_repair_signal(
+        self, tmp_path, completed_iteration
+    ):
+        """A deferred final-gate finding must still invoke the fixer after resume."""
+        labels: List[str] = []
+        blocked_step7 = """All Issues Fixed
+```json
+{
+  "success": false,
+  "issue_aligned": false,
+  "issues": [{
+    "scope": "pr",
+    "file": "verification/namespace.py",
+    "fixed": false
+  }]
+}
+```"""
+        state = {
+            "workflow": "checkup",
+            "issue_number": 99,
+            "issue_url": _PR_ARGS_1212["issue_url"],
+            "last_completed_step": 7,
+            "step_outputs": {
+                "1": "ok",
+                "2": "ok",
+                "3": "ok",
+                "4": "ok",
+                "5": "ok",
+                "7": blocked_step7,
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "worktree_path": str(tmp_path / "wt"),
+            "fix_verify_iteration": completed_iteration,
+            "previous_fixes": "",
+            "mode": "pr",
+            "pr_number": 200,
+            "pr_owner": "o",
+            "pr_repo": "r",
+            "pr_head_sha": _PR_META_1212["head_sha"],
+            "pr_test_scope": "targeted",
+            "defer_step5_to_github_checks": True,
+        }
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.1, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            loaded_state=(state, None),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, message, _, _ = run_agentic_checkup_orchestrator(
+                **{
+                    **_PR_ARGS_1212,
+                    "cwd": tmp_path,
+                    "defer_step5_to_github_checks": True,
+                }
+            )
+
+        assert success is True, message
+        next_iteration = completed_iteration + 1
+        assert f"step3_iter{next_iteration}" in labels
+        assert f"step6_1_iter{next_iteration}" in labels
+        assert f"step7_iter{next_iteration}" in labels
+
 
 # ---------------------------------------------------------------------------
 # Trusted step-comment wiring
@@ -3666,6 +4007,102 @@ class TestRefreshPrBaseRefTimeout:
         assert "base_ref_fetch_error" not in md
         assert not marker.exists()
 
+    def test_refresh_pr_base_ref_repairs_shallow_pr_ancestry(self, tmp_path):
+        """A depth-1 PR checkout must gain enough history for ``base...HEAD``.
+
+        Fetching only the base tip does not repair Git's shallow boundary:
+        even when the parent object is now present, ``merge-base`` refuses to
+        traverse through a commit recorded in ``.git/shallow``. Hosted checkup
+        clones use this shape, so the refreshed base ref must also deepen the
+        PR checkout before deterministic changed-file gates run.
+        """
+        from pdd.agentic_checkup_orchestrator import (
+            _pr_base_tracking_ref,
+            _refresh_pr_base_ref,
+        )
+        from pdd.checkup_review_loop import _pr_changed_files_all
+
+        remote = tmp_path / "remote.git"
+        seed = tmp_path / "seed"
+        worktree = tmp_path / "worktree"
+        subprocess.run(
+            ["git", "init", "--bare", "-q", "-b", "main", str(remote)],
+            check=True,
+        )
+        subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
+        (seed / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=seed, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "-m",
+                "base",
+                "-q",
+            ],
+            cwd=seed,
+            check=True,
+        )
+        subprocess.run(["git", "switch", "-q", "-c", "feature"], cwd=seed, check=True)
+        (seed / "feature.py").write_text("FEATURE = True\n", encoding="utf-8")
+        subprocess.run(["git", "add", "feature.py"], cwd=seed, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "-m",
+                "feature",
+                "-q",
+            ],
+            cwd=seed,
+            check=True,
+        )
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=seed, check=True)
+        subprocess.run(
+            ["git", "push", "-q", "origin", "main", "feature"],
+            cwd=seed,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "-q",
+                "--depth=1",
+                "--branch=feature",
+                remote.as_uri(),
+                str(worktree),
+            ],
+            check=True,
+        )
+        assert (worktree / ".git" / "shallow").exists()
+
+        metadata = {"base_ref": "main"}
+        with patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value=remote.as_uri(),
+        ):
+            _refresh_pr_base_ref(worktree, "o", "r", 10, metadata, quiet=True)
+
+        base_local_ref = _pr_base_tracking_ref(10)
+        merge_base = subprocess.run(
+            ["git", "merge-base", "HEAD", base_local_ref],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert merge_base.returncode == 0, merge_base.stderr
+        assert _pr_changed_files_all(worktree, metadata) == ["feature.py"]
+
 
 # ---------------------------------------------------------------------------
 # Issue #1212 — checkup --pr hides test failures, lets fixer push unrelated
@@ -3722,6 +4159,7 @@ def _pr_patches_1212(
     git_changed_files: Optional[List[str]] = None,
     commit_push_return=(True, "No changes to commit"),
     pr_metadata: Optional[Dict] = None,
+    loaded_state=(None, None),
 ) -> tuple:
     """Return a tuple of context-manager patchers for a PR-fix-mode run.
 
@@ -3742,7 +4180,10 @@ def _pr_patches_1212(
               return_value=git_changed_files or []),
         patch("pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
               return_value=commit_push_return),
-        patch("pdd.agentic_checkup_orchestrator.load_workflow_state", return_value=(None, None)),
+        patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=loaded_state,
+        ),
         patch("pdd.agentic_checkup_orchestrator.save_workflow_state", return_value=None),
         patch("pdd.agentic_checkup_orchestrator.clear_workflow_state"),
         patch("pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
