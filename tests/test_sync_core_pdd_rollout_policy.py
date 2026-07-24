@@ -7,7 +7,9 @@ import hashlib
 import io
 import importlib.util
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
 import tarfile
@@ -178,9 +180,14 @@ M0_BOOTSTRAP_FROZEN_SAMPLE_SHA256 = (
     "b260026e022e60128ae4d782b316e51bed5524713bf4196909c5d7f6d7079c2c"
 )
 M0_BOOTSTRAP_SOURCE_COMMIT = "00d10dd86de01996c17a2414c00c9746fae24e88"
+M0_BOOTSTRAP_REVIEWED_SOURCE_BASE = "ca2d9cd8ac9264b614b484efed5a9eb3b0730c52"
+M0_BOOTSTRAP_COPY_SOURCE_PATH = "docs/global_sync_resolution_plan.md"
+M0_BOOTSTRAP_COPY_DESTINATION_PATH = (
+    "docs/archive/global_sync_resolution_plan_history_2026-07-22.md"
+)
 M0_BOOTSTRAP_ALLOWED_CHANGES = (
     ("M", ".github/workflows/unit-tests.yml"),
-    ("A", "docs/archive/global_sync_resolution_plan_history_2026-07-22.md"),
+    ("C", M0_BOOTSTRAP_COPY_DESTINATION_PATH),
     ("M", "docs/global_sync_evidence_ledger.yaml"),
     ("M", "docs/global_sync_evidence_ledger_source.yaml"),
     ("A", "docs/global_sync_execution_state.yaml"),
@@ -197,6 +204,17 @@ M0_BOOTSTRAP_ALLOWED_CHANGES = (
     ("M", "tests/test_sync_core_reporting.py"),
 )
 M0_BOOTSTRAP_ALLOWLIST = tuple(path for _status, path in M0_BOOTSTRAP_ALLOWED_CHANGES)
+M0_BOOTSTRAP_COPY_CHANGE = {
+    "mode": "100644",
+    "object_type": "blob",
+    "old_path": M0_BOOTSTRAP_COPY_SOURCE_PATH,
+    "path": M0_BOOTSTRAP_COPY_DESTINATION_PATH,
+    "score": 96,
+    "status": "C",
+}
+M0_BOOTSTRAP_FINAL_TREE_ENTRIES = {
+    path: ("100644", "blob") for _status, path in M0_BOOTSTRAP_ALLOWED_CHANGES
+}
 M0_BOOTSTRAP_INTEGRATION_WRITE_SET = (
     "scripts/verify_global_sync_execution_contract.py",
     "tests/test_global_sync_ledger.py",
@@ -2434,6 +2452,16 @@ def _m0_bootstrap_candidate_state(policy: dict[str, object], base: str) -> dict[
     }
 
 
+def _m0_copy_similarity_bytes(*, altered_lines: dict[int, str]) -> bytes:
+    """Return deterministic 64-byte chunks for an exact C096 Git copy test."""
+    rows = []
+    for number in range(1, 101):
+        marker = altered_lines.get(number, "x")
+        rows.append(f"line-{number:03d}-{marker * 54}\n".encode("ascii"))
+    assert all(len(row) == 64 for row in rows)
+    return b"".join(rows)
+
+
 def _synthetic_m0_bootstrap_candidate(
     root: Path, policy: dict[str, object],
 ) -> tuple[str, str, str, str]:
@@ -2444,14 +2472,37 @@ def _synthetic_m0_bootstrap_candidate(
     source_parent = _commit(root, "sample verifier source parent")
     _write_m0_bootstrap_file(root, M0_BOOTSTRAP_FROZEN_SAMPLE_PATH, b"frozen sample\n")
     source_commit = _commit(root, "frozen sample verifier source")
+    protected_copy_source = _m0_copy_similarity_bytes(altered_lines={})
     for status, path in M0_BOOTSTRAP_ALLOWED_CHANGES:
         if status == "M":
-            _write_m0_bootstrap_file(root, path, b"protected base\n")
+            _write_m0_bootstrap_file(
+                root,
+                path,
+                (
+                    protected_copy_source
+                    if path == M0_BOOTSTRAP_COPY_SOURCE_PATH
+                    else b"protected base\n"
+                ),
+            )
     base = _commit(root, "protected base")
 
+    candidate_copy_source = _m0_copy_similarity_bytes(altered_lines={1: "y", 2: "y"})
+    candidate_copy_archive = _m0_copy_similarity_bytes(
+        altered_lines={1: "y", 2: "y", 97: "z", 98: "z", 99: "z", 100: "z"}
+    )
     for status, path in M0_BOOTSTRAP_ALLOWED_CHANGES:
         if status == "M":
-            _write_m0_bootstrap_file(root, path, b"candidate data\n")
+            _write_m0_bootstrap_file(
+                root,
+                path,
+                (
+                    candidate_copy_source
+                    if path == M0_BOOTSTRAP_COPY_SOURCE_PATH
+                    else b"candidate data\n"
+                ),
+            )
+        elif status == "C":
+            _write_m0_bootstrap_file(root, path, candidate_copy_archive)
         elif path != "docs/global_sync_execution_state.yaml":
             _write_m0_bootstrap_file(root, path, b"candidate data\n")
     state = _m0_bootstrap_candidate_state(policy, base)
@@ -2490,10 +2541,15 @@ def test_global_sync_m0_bootstrap_policy_is_immutable_and_exact() -> None:
     assert policy["schema_version"] == 1
     assert policy["repository"] == "promptdriven/pdd"
     assert policy["pull_request_number"] == 2301
-    assert policy["reviewed_source_base_sha"] == "ca2d9cd8ac9264b614b484efed5a9eb3b0730c52"
+    assert policy["reviewed_source_base_sha"] == M0_BOOTSTRAP_REVIEWED_SOURCE_BASE
     assert tuple(
         (row["status"], row["path"]) for row in policy["allowed_changes"]
     ) == M0_BOOTSTRAP_ALLOWED_CHANGES
+    assert policy["allowed_changes"][1] == M0_BOOTSTRAP_COPY_CHANGE
+    assert {
+        row["path"]: (row["mode"], row["object_type"])
+        for row in policy["allowed_changes"]
+    } == M0_BOOTSTRAP_FINAL_TREE_ENTRIES
     assert policy["state_projection"] == {
         "integration_write_set": list(M0_BOOTSTRAP_INTEGRATION_WRITE_SET),
         "m0_bootstrap_allowlist": list(M0_BOOTSTRAP_ALLOWLIST),
@@ -2546,6 +2602,7 @@ def test_global_sync_m0_bootstrap_verifier_rejects_self_authorized_state(
         "source_commit": source_commit,
         "source_parent": source_parent,
     }
+    policy["reviewed_source_base_sha"] = source_commit
     arguments = {
         "repository_root": root,
         "policy": policy,
@@ -2559,9 +2616,17 @@ def test_global_sync_m0_bootstrap_verifier_rejects_self_authorized_state(
     assert proof["violations"] == []
     assert proof["current_protected_base_sha"] == base
     assert proof["candidate_head_sha"] == candidate
+    assert proof["reviewed_source_base_sha"] == source_commit
+    assert proof["reviewed_source_base_is_ancestor_of_workflow_base"] is True
     assert proof["workflow_identity"] == {
         "event_name": "pull_request_target",
         "path": ".github/workflows/global-sync-m0-bootstrap.yml",
+    }
+    assert proof["diff"]["changes"][1] == {
+        "old_path": M0_BOOTSTRAP_COPY_SOURCE_PATH,
+        "path": M0_BOOTSTRAP_COPY_DESTINATION_PATH,
+        "score": 96,
+        "status": "C",
     }
     assert proof == verifier.evaluate_candidate(**arguments)
     assert verifier.parse_name_status(
@@ -2575,6 +2640,38 @@ def test_global_sync_m0_bootstrap_verifier_rejects_self_authorized_state(
         "byte_equal": True,
         "replay_sha256": "19af0a731481b27319b768b643ae2a3664ed2fd04507951cc74bd27b28fe2042",
     }
+
+    _git(root, "checkout", "--quiet", source_parent)
+    _write_m0_bootstrap_file(root, ".m0-unrelated-reviewed-source", b"unrelated\n")
+    unrelated_reviewed_source = _commit(root, "unrelated reviewed source")
+    unrelated_policy = copy.deepcopy(policy)
+    unrelated_policy["reviewed_source_base_sha"] = unrelated_reviewed_source
+    unrelated_proof = verifier.evaluate_candidate(
+        **{**arguments, "policy": unrelated_policy}
+    )
+    assert "reviewed-source-base-is-not-an-ancestor-of-workflow-base" in (
+        unrelated_proof["violations"]
+    )
+
+    stale_policy = copy.deepcopy(policy)
+    stale_policy["reviewed_source_base_sha"] = "f" * 40
+    stale_proof = verifier.evaluate_candidate(**{**arguments, "policy": stale_policy})
+    assert "reviewed-source-base-is-unavailable" in stale_proof["violations"]
+
+    _git(root, "checkout", "--quiet", candidate)
+
+    mode_drift_path = root / "pdd" / "continuous_sync.py"
+    mode_drift_path.unlink()
+    os.symlink("sync_core/global_sync_ledger.py", mode_drift_path)
+    mode_drift = _commit(root, "attempt final symlink mode drift")
+    mode_drift_proof = verifier.evaluate_candidate(
+        **{**arguments, "candidate_head_sha": mode_drift}
+    )
+    assert "candidate-final-tree-entry-does-not-match-protected-policy" in (
+        mode_drift_proof["violations"]
+    )
+
+    _git(root, "checkout", "--quiet", candidate)
 
     state_path = root / "docs/global_sync_execution_state.yaml"
     state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
@@ -2682,6 +2779,70 @@ def test_global_sync_m0_bootstrap_replay_uses_a_protected_sample_ancestor(
     )
 
 
+def test_global_sync_m0_bootstrap_requires_a_distinct_sample_and_regular_result(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The evidence artifact must follow the sample and remain a regular blob."""
+    verifier = _load_m0_bootstrap_verifier()
+    policy = json.loads(M0_BOOTSTRAP_POLICY_PATH.read_text(encoding="utf-8"))
+    root = tmp_path / "sampled-result-boundary"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _write_m0_bootstrap_file(root, "pdd/sampled.py", b"sampled code\n")
+    sampled = _commit(root, "sampled implementation")
+    result_path = str(policy["replay"]["result_path"])
+    _write_m0_bootstrap_file(
+        root,
+        result_path,
+        json.dumps({"base_sha": sampled}).encode("utf-8"),
+    )
+    candidate = _commit(root, "write sampled result")
+
+    good_proof = verifier.sampled_implementation_proof(
+        repository_root=root,
+        policy=policy,
+        candidate_head_sha=candidate,
+    )
+    assert good_proof["violations"] == []
+    assert good_proof["post_sample_changes"] == [
+        {"path": result_path, "status": "A"}
+    ]
+
+    read_blob = verifier._read_git_blob  # pylint: disable=protected-access
+
+    def self_referential_sample(
+        repository_root: Path, commit_sha: str, path: str
+    ) -> bytes:
+        if commit_sha == candidate and path == result_path:
+            return json.dumps({"base_sha": candidate}).encode("utf-8")
+        return read_blob(repository_root, commit_sha, path)
+
+    monkeypatch.setattr(verifier, "_read_git_blob", self_referential_sample)
+    same_commit_proof = verifier.sampled_implementation_proof(
+        repository_root=root,
+        policy=policy,
+        candidate_head_sha=candidate,
+    )
+    assert "sampled-implementation-must-precede-candidate" in (
+        same_commit_proof["violations"]
+    )
+
+    _git(root, "checkout", "--quiet", candidate)
+    result = root / result_path
+    result.unlink()
+    os.symlink("../global_sync_m0_sample_metrics.json", result)
+    non_regular_candidate = _commit(root, "replace sampled result with symlink")
+    monkeypatch.setattr(verifier, "_read_git_blob", read_blob)
+    non_regular_proof = verifier.sampled_implementation_proof(
+        repository_root=root,
+        policy=policy,
+        candidate_head_sha=non_regular_candidate,
+    )
+    assert "sample-result-path-is-not-an-allowed-regular-blob" in (
+        non_regular_proof["violations"]
+    )
+
+
 def test_global_sync_m0_bootstrap_materializes_private_canary_as_inert_data(
     tmp_path: Path,
 ) -> None:
@@ -2722,6 +2883,169 @@ def test_global_sync_m0_bootstrap_materializes_private_canary_as_inert_data(
     ).strip() == canary_sha
 
 
+def test_global_sync_m0_bootstrap_materializes_only_exact_base_aliases(
+    tmp_path: Path,
+) -> None:
+    """The two reviewed aliases become contained, non-symlink data copies."""
+    verifier = _load_m0_bootstrap_verifier()
+    source = tmp_path / "sampled-tree"
+    source.mkdir()
+    _git(source, "init", "-q")
+    _write_m0_bootstrap_file(source, "pdd/data/fixture.txt", b"data fixture\n")
+    _write_m0_bootstrap_file(source, "pdd/prompts/fixture.prompt", b"prompt fixture\n")
+    os.symlink("pdd/data", source / "data")
+    os.symlink("pdd/prompts", source / "prompts")
+    protected_base = _commit(source, "protected aliases")
+    _write_m0_bootstrap_file(source, "pdd/sampled.py", b"sampled implementation\n")
+    candidate = _commit(source, "sampled implementation")
+
+    destination = tmp_path / "inert-data"
+    destination.mkdir()
+    verifier.materialize_git_data_tree(
+        source,
+        candidate,
+        destination,
+        protected_base_sha=protected_base,
+    )
+
+    for alias, target_file in (
+        ("data", "fixture.txt"),
+        ("prompts", "fixture.prompt"),
+    ):
+        alias_path = destination / alias
+        assert alias_path.is_dir()
+        assert not alias_path.is_symlink()
+        assert stat.S_ISDIR(alias_path.lstat().st_mode)
+        assert (alias_path / target_file).read_bytes().endswith(b"fixture\n")
+    assert (destination / "pdd" / "data" / "fixture.txt").read_bytes() == (
+        destination / "data" / "fixture.txt"
+    ).read_bytes()
+    assert (destination / "pdd" / "prompts" / "fixture.prompt").read_bytes() == (
+        destination / "prompts" / "fixture.prompt"
+    ).read_bytes()
+
+
+def test_global_sync_m0_bootstrap_rejects_hostile_materialized_tree_entries(
+    tmp_path: Path,
+) -> None:
+    """Changed aliases, added links, gitlinks, devices, and output links fail closed."""
+    verifier = _load_m0_bootstrap_verifier()
+    source = tmp_path / "hostile-sampled-tree"
+    source.mkdir()
+    _git(source, "init", "-q")
+    _write_m0_bootstrap_file(source, "pdd/data/fixture.txt", b"data fixture\n")
+    _write_m0_bootstrap_file(source, "pdd/prompts/fixture.prompt", b"prompt fixture\n")
+    os.symlink("pdd/data", source / "data")
+    os.symlink("pdd/prompts", source / "prompts")
+    protected_base = _commit(source, "protected aliases")
+
+    (source / "data").unlink()
+    os.symlink("data", source / "data")
+    cyclic_alias = _commit(source, "replace alias with cycle")
+    cyclic_destination = tmp_path / "cyclic-data"
+    cyclic_destination.mkdir()
+    with pytest.raises(verifier.BootstrapVerificationError):
+        verifier.materialize_git_data_tree(
+            source,
+            cyclic_alias,
+            cyclic_destination,
+            protected_base_sha=protected_base,
+        )
+
+    _git(source, "checkout", "--quiet", protected_base)
+    os.symlink("pdd/data", source / "candidate-added-link")
+    added_link = _commit(source, "add candidate link")
+    added_link_destination = tmp_path / "added-link-data"
+    added_link_destination.mkdir()
+    with pytest.raises(verifier.BootstrapVerificationError):
+        verifier.materialize_git_data_tree(
+            source,
+            added_link,
+            added_link_destination,
+            protected_base_sha=protected_base,
+        )
+
+    _git(source, "checkout", "--quiet", protected_base)
+    _git(
+        source,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"160000,{protected_base},vendor/candidate-gitlink",
+    )
+    _git(
+        source,
+        "-c",
+        "user.name=PDD test",
+        "-c",
+        "user.email=pdd@example.test",
+        "commit",
+        "-m",
+        "add candidate gitlink",
+    )
+    gitlink = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=source, text=True
+    ).strip()
+    gitlink_destination = tmp_path / "gitlink-data"
+    gitlink_destination.mkdir()
+    with pytest.raises(verifier.BootstrapVerificationError):
+        verifier.materialize_git_data_tree(
+            source,
+            gitlink,
+            gitlink_destination,
+            protected_base_sha=protected_base,
+        )
+
+    blob = subprocess.check_output(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=source,
+        input=b"device payload\n",
+    ).strip()
+    malformed_tree = b"060000 candidate-device\0" + bytes.fromhex(blob.decode("ascii"))
+    tree = subprocess.check_output(
+        ["git", "hash-object", "-w", "-t", "tree", "--stdin"],
+        cwd=source,
+        input=malformed_tree,
+        text=False,
+    ).strip()
+    device_commit = subprocess.check_output(
+        [
+            "git",
+            "-c",
+            "user.name=PDD test",
+            "-c",
+            "user.email=pdd@example.test",
+            "commit-tree",
+            tree.decode("ascii"),
+        ],
+        cwd=source,
+        input=b"malformed device tree\n",
+    ).strip().decode("ascii")
+    device_destination = tmp_path / "device-data"
+    device_destination.mkdir()
+    with pytest.raises(verifier.BootstrapVerificationError):
+        verifier.materialize_git_data_tree(
+            source,
+            device_commit,
+            device_destination,
+            protected_base_sha=protected_base,
+        )
+
+    nofollow_destination = tmp_path / "nofollow-data"
+    nofollow_destination.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.symlink(outside, nofollow_destination / "data")
+    with pytest.raises(verifier.BootstrapVerificationError):
+        verifier.materialize_git_data_tree(
+            source,
+            protected_base,
+            nofollow_destination,
+            protected_base_sha=protected_base,
+        )
+    assert not (outside / "fixture.txt").exists()
+
+
 def test_global_sync_m0_bootstrap_workflow_is_base_controlled() -> None:
     """The privileged target workflow checks only base code and inert Git data."""
     workflow = M0_BOOTSTRAP_WORKFLOW_PATH.read_text(encoding="utf-8")
@@ -2729,6 +3053,12 @@ def test_global_sync_m0_bootstrap_workflow_is_base_controlled() -> None:
     assert not re.search(r"^  pull_request:$", workflow, flags=re.MULTILINE)
     assert "contents: read" in workflow
     assert "pull-requests: read" in workflow
+    assert re.search(
+        r"^  protected-m0-bootstrap:\n(?:.*\n)*?    environment:\n"
+        r"      name: pdd-cloud-read$",
+        workflow,
+        flags=re.MULTILINE,
+    )
     assert "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683" in workflow
     assert "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065" in workflow
     assert "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1" in workflow
