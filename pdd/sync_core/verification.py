@@ -90,18 +90,6 @@ _GEMINI_36_PROFILE_BYTES = (
     "c3f9d1344b067ba8640db6da706a8c17f13fcd47b09805b786e58a65fca6169e",
 )
 
-# The generate reliability hotfix rotates two opaque prompt requirements and
-# rebases the dormant generate transition. Preserve the prior consumed state
-# and admit only this exact policy/profile evolution and its consumed result.
-_GENERATE_RELIABILITY_SCHEMA_2_HISTORY = (
-    "e53927642e3ffbe1655bb7e10f9d298fb33833b3598b47d3019be2fcf922da36",
-    "3b5117e0ef31b19b68d7190f0753e7aacaef3f75133cabfe4c2470afe87c0a95",
-)
-_GENERATE_RELIABILITY_PROFILE_BYTES = (
-    "033591bdbf15b8833802a91b20eb6d5e86dd870f200a49598a9bb5a145eb6f16",
-    "2885c95a2d45969754ff96f3c392be5082acfa817abba047b7e3933164217352",
-)
-
 
 class VerificationProfileError(ValueError):
     """Raised when protected verification-profile data cannot be parsed."""
@@ -458,25 +446,6 @@ _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS = (
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += (
     _PDD_1989_COMPOSED_ESTIMATE_REQUIREMENT_TRANSITIONS
-)
-
-_GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS = (
-    _exact_bootstrap_requirement_transition(
-        "pdd/prompts/agentic_architecture_python.prompt",
-        "python",
-        "2c9c70c851e1af7c0af70a9c9ce960f96a6c3bcce7edadef570457bed96987d4",
-        "ccd3140fd902ef48c76835008535a1c486ca63169ee7b41cffc3757c03505ddc",
-        _GENERATE_RELIABILITY_PROFILE_BYTES[0],
-        _GENERATE_RELIABILITY_PROFILE_BYTES[1],
-    ),
-    _exact_bootstrap_requirement_transition(
-        "pdd/prompts/commands/generate_python.prompt",
-        "python",
-        "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f",
-        "91bbf9390f5489d3dbc3c8671d490feb4a7764d89270d2211875758c44a6ac2c",
-        _GENERATE_RELIABILITY_PROFILE_BYTES[0],
-        _GENERATE_RELIABILITY_PROFILE_BYTES[1],
-    ),
 )
 
 
@@ -1818,10 +1787,6 @@ def _is_exact_combined_requirement_reconciliation(
         (_PR1971_COMBINED_SCHEMA_2_HISTORY, _PR1971_COMBINED_PROFILE_BYTES),
         (_PDD_1875_COMPOSED_SCHEMA_2_HISTORY, _PDD_1875_COMPOSED_PROFILE_BYTES),
         (_TERRA_SOL_COMPOSED_SCHEMA_2_HISTORY, _TERRA_SOL_COMPOSED_PROFILE_BYTES),
-        (
-            _GENERATE_RELIABILITY_SCHEMA_2_HISTORY,
-            _GENERATE_RELIABILITY_PROFILE_BYTES,
-        ),
     }
 
 
@@ -2358,25 +2323,6 @@ def _load_requirement_transition_authorizations(
         if policies[0] is not None and policies[1] is not None
         else None
     )
-    generate_reliability_state = is_pdd_repository and (
-        (policy_digests, profile_digests)
-        in {
-            (
-                _GENERATE_RELIABILITY_SCHEMA_2_HISTORY,
-                _GENERATE_RELIABILITY_PROFILE_BYTES,
-            ),
-            (
-                (
-                    _GENERATE_RELIABILITY_SCHEMA_2_HISTORY[1],
-                    _GENERATE_RELIABILITY_SCHEMA_2_HISTORY[1],
-                ),
-                (
-                    _GENERATE_RELIABILITY_PROFILE_BYTES[1],
-                    _GENERATE_RELIABILITY_PROFILE_BYTES[1],
-                ),
-            ),
-        }
-    )
     gemini_36_terra_sol_state = is_pdd_repository and (
         (policy_digests, profile_digests)
         in {
@@ -2411,7 +2357,6 @@ def _load_requirement_transition_authorizations(
         terra_sol_reconciliation
         or terra_sol_consumed_state
         or gemini_36_terra_sol_state
-        or generate_reliability_state
     ):
         # This candidate predates a dormant policy installation.  Expose only
         # its reviewed transitions while consuming the exact profile update,
@@ -2426,17 +2371,6 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in terra_sol_identities
         ) + _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS)
-    if generate_reliability_state:
-        reliability_identities = {
-            (item.prompt_path, item.language_id)
-            for item in _GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS
-        }
-        candidate = tuple(
-            item
-            for item in candidate
-            if (item.prompt_path, item.language_id) not in reliability_identities
-        ) + _GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS
-        authority.update(_GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS)
     pr1971_reconciliation = _is_exact_pr1971_pytest_reconciliation(
         manifest, (protected_policy, candidate_policy), policies, candidate
     )
@@ -2530,15 +2464,12 @@ def _load_requirement_transition_authorizations(
         # The exact historical pair both installed and consumed its authority
         # before Phase-A isolation existed; validate it as consumption below.
         new_authorizations = ()
-    elif gemini_36_terra_sol_state or generate_reliability_state:
+    elif gemini_36_terra_sol_state:
         # The exact Gemini policy states retain Terra/Sol's historical overlay
         # for stationary evaluation, but those synthetic rows are not newly
         # installed authority. Keep the two genuine Gemini rows visible during
         # Phase A and exclude only the overlay so Phase B can consume them.
         terra_sol_authority = set(_TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS)
-        terra_sol_authority.update(
-            _GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS
-        )
         new_authorizations = tuple(
             item for item in new_authorizations if item not in terra_sol_authority
         )
