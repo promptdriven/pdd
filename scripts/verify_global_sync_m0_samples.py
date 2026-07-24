@@ -6,7 +6,7 @@ exist only in a temporary shared clone and are removed before this program
 returns.  The primary JSON is deliberately deterministic; timing and RSS are
 emitted only to the optional metrics JSON.
 """
-# pylint: disable=too-many-branches,too-many-locals,too-many-statements,line-too-long,subprocess-run-check
+# pylint: disable=too-many-branches,too-many-locals,too-many-statements,line-too-long,subprocess-run-check,wrong-import-position
 
 from __future__ import annotations
 
@@ -68,6 +68,12 @@ def require_sample_paths(root: Path, sample_paths: tuple[str, ...]) -> None:
     missing = [path for path in sample_paths if not (root / path).is_file()]
     if missing:
         raise ValueError("required sample paths are absent: " + ", ".join(missing))
+
+
+def require_profile_rejection(case_id: str, invalid_reasons: tuple[str, ...]) -> None:
+    """Fail closed when a deliberately unauthorized profile patch appears valid."""
+    if not invalid_reasons:
+        raise ValueError(f"{case_id}: candidate unexpectedly bypassed profile validation")
 
 
 def deterministic_payload(
@@ -155,16 +161,12 @@ def _profile_case(root: Path, base_sha: str, path: str, index: int) -> dict[str,
     candidate_sha = _commit(root, f"m0 sample {case_id}")
     manifest = build_unit_manifest(root, base_ref=base_sha, head_ref=candidate_sha)
     profiles = load_verification_profiles(root, manifest)
-    if not profiles.invalid_reasons:
-        raise ValueError(f"{case_id}: candidate unexpectedly bypassed profile validation")
+    require_profile_rejection(case_id, profiles.invalid_reasons)
     _reset_candidate(root, base_sha)
     return {
         "id": case_id, "kind": "profile", "sample_path": path,
         "patch_sha256": hashlib.sha256(patch).hexdigest(), "patch_bytes": len(patch),
         "outcome": "rejected-by-public-profile-api",
-        "invalid_digest": hashlib.sha256(
-            "\n".join(profiles.invalid_reasons).encode()
-        ).hexdigest(),
     }
 
 
@@ -328,7 +330,15 @@ def run(root: Path, base_sha: str, closure_limit: int, sample_paths: tuple[str, 
         base_sha=base_sha, partition=partition, cases=cases,
         closure={"requested": closure_limit, "completed": completed, "invalid": closure_invalid},
     )
-    metrics = {"schema_version": 1, "base_sha": base_sha, "inventory": inventory_metrics, "closure": closure_metrics}
+    metrics = {
+        "schema_version": 1,
+        "base_sha": base_sha,
+        "inventory": inventory_metrics,
+        "closure": closure_metrics,
+        "deterministic_report_bytes": len(
+            json.dumps(deterministic, sort_keys=True, separators=(",", ":")).encode()
+        ),
+    }
     return deterministic, metrics
 
 

@@ -53,3 +53,8 @@ def test_m0_samples_requires_all_named_inputs(tmp_path: Path) -> None:
             tmp_path,
             ("pdd/prompts/one_python.prompt", "pdd/prompts/two_python.prompt"),
         )
+
+
+def test_m0_samples_rejects_an_invalid_patch_false_pass() -> None:
+    with pytest.raises(ValueError, match="bypassed profile validation"):
+        _module().require_profile_rejection("01-profile", ())
