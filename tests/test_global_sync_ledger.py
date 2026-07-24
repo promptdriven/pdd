@@ -1213,6 +1213,30 @@ def test_execution_contract_records_wheel_copied_test_closure() -> None:
     ]
 
 
+def test_execution_contract_requires_pinned_deterministic_sample_replay() -> None:
+    """Protected CI must replay the exact committed M0 sample artifact."""
+    workflow = (ROOT / ".github" / "workflows" / "unit-tests.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "Replay deterministic global-sync M0 samples against pinned canary" in workflow
+    assert 'git -C "$canary" fetch --no-tags origin "$pdd_cloud_sha"' in workflow
+    assert 'test "$base_sha" = "$(git rev-parse HEAD)"' in workflow
+    assert "--closure-limit 20 --pdd-cloud-root \"$canary\"" in workflow
+    assert 'cmp "$replay" "$artifact"' in workflow
+    state = yaml.safe_load((ROOT / "docs" / "global_sync_execution_state.yaml").read_text(
+        encoding="utf-8"
+    ))
+    commands = {command["id"]: command for command in state["command_registry"]}
+    assert commands["m0-deterministic-sample-replay"]["argv"][3:7] == [
+        "{pdd_repo}", "--base-sha", "{candidate_sha}", "--closure-limit"
+    ]
+    step = next(step for step in state["validation_steps"] if step["id"] == "m0-deterministic-sample-replay")
+    assert step["executable"] is True
+    assert step["required_runtime_binding"]["deterministic_output"] == (
+        "byte-equal-to-committed-sample-results"
+    )
+
+
 def test_execution_contract_retains_complete_concordant_registry_coverage(tmp_path: Path) -> None:
     plan, state, root = _write_execution_contract(tmp_path)
     assert _execution_contract_module().verify(plan, state, root=root, validate_cli=False) == []

@@ -117,6 +117,38 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]" pytest-timeout
 
+      - name: Replay deterministic global-sync M0 samples against pinned canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact="docs/global_sync_m0_sample_results.json"
+          read -r base_sha pdd_cloud_sha < <(python - "$artifact" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          values = (payload.get("base_sha"), payload.get("pdd_cloud_sha"))
+          if not all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) for value in values):
+              raise SystemExit("sample artifact must bind exact lowercase base_sha and pdd_cloud_sha")
+          print(*values)
+          PY
+          )
+          test "$base_sha" = "$(git rev-parse HEAD)"
+          canary="$RUNNER_TEMP/pdd-cloud-canary"
+          git init -q "$canary"
+          git -C "$canary" remote add origin https://github.com/promptdriven/pdd_cloud.git
+          git -C "$canary" fetch --no-tags origin "$pdd_cloud_sha"
+          git -C "$canary" cat-file -e "$pdd_cloud_sha^{commit}"
+          git -C "$canary" checkout -q --detach "$pdd_cloud_sha"
+          test "$(git -C "$canary" rev-parse HEAD)" = "$pdd_cloud_sha"
+          replay="$RUNNER_TEMP/global-sync-m0-sample-replay.json"
+          python scripts/verify_global_sync_m0_samples.py \
+            --root "$GITHUB_WORKSPACE" --base-sha "$base_sha" \
+            --closure-limit 20 --pdd-cloud-root "$canary" \
+            --pdd-cloud-sha "$pdd_cloud_sha" --output "$replay"
+          cmp "$replay" "$artifact"
+
       - name: Verify protected global-sync evidence-ledger drift
         env:
           GH_TOKEN: ${{ github.token }}
