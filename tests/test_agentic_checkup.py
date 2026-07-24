@@ -2709,3 +2709,47 @@ def test_post_final_gate_success_is_not_emitted_without_github_state(
     assert suffix == ""
     pr_comment.assert_not_called()
     step_comment.assert_not_called()
+
+
+def test_hosted_cloud_publisher_suppresses_pre_cas_final_gate_comments(
+    tmp_path, monkeypatch
+):
+    """Hosted PDD yields authority to the cloud terminal CAS/outbox publisher."""
+    mod = __import__("pdd.agentic_checkup", fromlist=["_"])
+    pr_comment = Mock(return_value=True)
+    step_comment = Mock(return_value=True)
+    monkeypatch.setenv("PDD_HOSTED_FINAL_GATE_CLOUD_PUBLISH", "1")
+    monkeypatch.setattr(mod, "post_pr_comment", pr_comment)
+    monkeypatch.setattr(mod, "post_step_comment", step_comment)
+
+    success_suffix = mod._post_final_gate_success(
+        owner="owner",
+        repo="repo",
+        issue_number=1,
+        pr_owner="owner",
+        pr_repo="repo",
+        pr_number=2,
+        has_issue=True,
+        pr_url="https://github.com/owner/repo/pull/2",
+        issue_url="https://github.com/owner/repo/issues/1",
+        pr_head_sha="ab" * 20,
+        cwd=tmp_path,
+        use_github_state=True,
+    )
+    failure_suffix = mod._post_final_gate_report(
+        owner="owner",
+        repo="repo",
+        issue_number=1,
+        pr_owner="owner",
+        pr_repo="repo",
+        pr_number=2,
+        has_issue=True,
+        body="final-gate-status: failed",
+        cwd=tmp_path,
+        use_github_state=True,
+    )
+
+    assert success_suffix == ""
+    assert failure_suffix == ""
+    pr_comment.assert_not_called()
+    step_comment.assert_not_called()

@@ -83,6 +83,7 @@ _TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 _HOSTED_ARTIFACT_ENV_KEYS = (
     "PDD_CHECKUP_FALLBACK_MIRROR",
     "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH",
+    "PDD_HOSTED_FINAL_GATE_CLOUD_PUBLISH",
 )
 _HOSTED_RECEIPT_KEY_ENV = "PDD_AGENTIC_CHECKUP_RECEIPT_KEY"
 _HOSTED_RECEIPT_RUN_ID_ENV = "PDD_AGENTIC_CHECKUP_RECEIPT_RUN_ID"
@@ -1316,7 +1317,11 @@ def _post_final_gate_report(
     use_github_state: bool,
 ) -> str:
     """Best-effort post of a final-gate report to PR and issue threads."""
-    if not use_github_state or not body.strip():
+    if (
+        not use_github_state
+        or not body.strip()
+        or _env_flag_enabled(os.environ.get("PDD_HOSTED_FINAL_GATE_CLOUD_PUBLISH"))
+    ):
         return ""
 
     pr_posted = post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
@@ -1365,7 +1370,9 @@ def _post_final_gate_success(
     Step 8 comment is therefore emitted only after Layer 1, Layer 2, and the
     hosted-artifact publication contract have all passed.
     """
-    if not use_github_state:
+    if not use_github_state or _env_flag_enabled(
+        os.environ.get("PDD_HOSTED_FINAL_GATE_CLOUD_PUBLISH")
+    ):
         return ""
 
     issue_line = issue_url if has_issue and issue_url else "not provided"
