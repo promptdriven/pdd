@@ -44,6 +44,7 @@ from enum import Enum
 from rich.console import Console
 
 from pdd.routing_policy import (
+    CLAUDE_MODEL_DEFAULT,
     CODEX_MODEL_DEFAULT,
     RoutingConfig,
     RoutingPolicy,
@@ -3194,8 +3195,9 @@ _PROVIDER_MODEL_ENV: Dict[str, str] = {
 def _get_provider_model(provider: str) -> Optional[str]:
     """Return the requested model for *provider* from its env var.
 
-    Codex falls back to PDD's shared platform default when its override is
-    unset; other providers return ``None`` to signal provider-owned defaults.
+    Claude Code and Codex fall back to PDD's provider-specific defaults when
+    their overrides are unset; other providers return ``None`` to signal
+    provider-owned defaults.
     """
     env_var = _PROVIDER_MODEL_ENV.get(provider)
     if not env_var:
@@ -3203,6 +3205,8 @@ def _get_provider_model(provider: str) -> Optional[str]:
     value = os.environ.get(env_var) or ""
     if value.strip():
         return value.strip()
+    if provider == "anthropic":
+        return CLAUDE_MODEL_DEFAULT
     return CODEX_MODEL_DEFAULT if provider == "openai" else None
 
 
@@ -5644,8 +5648,6 @@ def run_agentic_task(
                     estimate_method = "unavailable"
                 if capability.get("routing_class") == "opaque":
                     model_selection_outcome = "unconfirmed"
-                elif provider == "anthropic" and not os.environ.get("CLAUDE_MODEL"):
-                    model_selection_outcome = "fixed_by_config"
                 elif provider != candidates[0]:
                     model_selection_outcome = "fallback"
                 else:
@@ -7224,9 +7226,8 @@ def _build_claude_interactive_command(
     else:
         cmd.append("--dangerously-skip-permissions")
 
-    claude_model = env.get("CLAUDE_MODEL")
-    if claude_model:
-        cmd.extend(["--model", claude_model])
+    claude_model = env.get("CLAUDE_MODEL") or CLAUDE_MODEL_DEFAULT
+    cmd.extend(["--model", claude_model])
 
     if normalized_policy is not None and normalized_policy["allowedTools"] is None:
         try:
@@ -8162,10 +8163,9 @@ def _run_with_provider(
                 "--dangerously-skip-permissions",
                 "--output-format", "json",
             ]
-        # Allow model override via CLAUDE_MODEL env var (Issue #318)
-        claude_model = env.get("CLAUDE_MODEL")
-        if claude_model:
-            cmd.extend(["--model", claude_model])
+        # An explicit CLAUDE_MODEL wins; otherwise Claude Code uses Opus 5.
+        claude_model = env.get("CLAUDE_MODEL") or CLAUDE_MODEL_DEFAULT
+        cmd.extend(["--model", claude_model])
         if reasoning_effort:
             cmd.extend(["--effort", reasoning_effort])
     elif provider == "google":

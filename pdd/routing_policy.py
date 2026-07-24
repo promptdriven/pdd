@@ -19,6 +19,7 @@ from pdd.reasoning import EffortLevel
 
 log = logging.getLogger(__name__)
 CODEX_MODEL_DEFAULT = "gpt-5.6-sol"
+CLAUDE_MODEL_DEFAULT = "claude-opus-5"
 
 
 @dataclass

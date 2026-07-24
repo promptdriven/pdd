@@ -619,6 +619,20 @@ def test_build_claude_interactive_command_bypasses_print_mode(tmp_path):
     assert "job-123" in cmd[-1]
 
 
+def test_build_claude_interactive_command_defaults_to_opus_5(tmp_path):
+    """Interactive Claude Code uses the same Opus 5 default as print mode."""
+    cmd = _build_claude_interactive_command(
+        cli_path="/bin/claude",
+        prompt_path=tmp_path / ".agentic_prompt_test.txt",
+        config_path=tmp_path / "mcp_config.json",
+        job_id="job-123",
+        session_id="11111111-2222-4333-8444-555555555555",
+        env={},
+    )
+
+    assert cmd[cmd.index("--model") + 1] == "claude-opus-5"
+
+
 def test_claude_policy_capability_contract_declared_and_validated():
     from pdd.agentic_common import (
         AgenticUnsupportedSemanticsError,
@@ -6612,8 +6626,8 @@ def test_claude_model_env_var_passed_to_cli(mock_cwd, mock_env, mock_load_model_
     )
 
 
-def test_claude_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
-    """When CLAUDE_MODEL env var is NOT set, no --model flag in claude CLI command."""
+def test_claude_no_model_env_var_defaults_to_opus_5(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """When CLAUDE_MODEL is unset, Claude Code defaults to Opus 5."""
     mock_shutil_which.return_value = "/bin/claude"
     # Deliberately NOT setting CLAUDE_MODEL
 
@@ -6631,10 +6645,10 @@ def test_claude_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_
     assert success
     assert provider == "anthropic"
 
-    # Verify --model flag was NOT passed
+    # Verify the Claude Code-specific default was passed.
     args, kwargs = mock_subprocess.call_args
     cmd = args[0]
-    assert "--model" not in cmd, f"Did not expect --model in command, got: {cmd}"
+    assert cmd[cmd.index("--model") + 1] == "claude-opus-5"
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,8 @@ import time
 import pytest
 
 from pdd.routing_policy import (
+    CLAUDE_MODEL_DEFAULT,
+    CODEX_MODEL_DEFAULT,
     RoutingConfig,
     RoutingRecord,
     default_policy,
@@ -15,6 +17,11 @@ from pdd.routing_policy import (
     resolve_model_for_tier,
     select_config,
 )
+
+
+def test_agentic_provider_model_defaults_are_scoped():
+    assert CODEX_MODEL_DEFAULT == "gpt-5.6-sol"
+    assert CLAUDE_MODEL_DEFAULT == "claude-opus-5"
 
 
 def test_default_policy_has_task_class_rows_and_default_fallback():

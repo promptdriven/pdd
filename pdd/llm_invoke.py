@@ -1336,10 +1336,9 @@ else:
     # Silently proceed if .env is optional
     logger.debug(f".env file not found at {ENV_PATH}. API keys might need to be provided manually.")
 
-# Default model if PDD_MODEL_DEFAULT is not set. ``claude-opus-5`` is PDD's
-# user-facing default and is canonicalized to Anthropic's real
-# ``claude-fable-5`` provider identifier at model-selection time.
-DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", "claude-opus-5")
+# Default model if PDD_MODEL_DEFAULT is not set
+# No hardcoded default - will use first available model from CSV if None
+DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", None)
 
 # --- LiteLLM Cache Configuration (S3 compatible for GCS, with SQLite fallback) ---
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
@@ -3319,8 +3318,6 @@ def _is_explicit_claude_fable_selection(model_name: Optional[str]) -> bool:
 
 def _prioritize_explicit_fable_candidate(
     candidates: List[Dict[str, Any]],
-    *,
-    require_candidate: bool = True,
 ) -> List[Dict[str, Any]]:
     """Return Fable first, preserving the original order as fallback.
 
@@ -3335,8 +3332,6 @@ def _prioritize_explicit_fable_candidate(
         if str(candidate.get("model", "")).strip().lower() == "claude-fable-5"
     ]
     if not fable_candidates:
-        if not require_candidate:
-            return candidates
         raise ValueError(
             "Claude Fable 5 was explicitly selected, but the active model "
             "catalog has no 'claude-fable-5' row. Add that row or use the "
@@ -5044,15 +5039,7 @@ def llm_invoke(
         # Resolve the base model from PDD_MODEL_DEFAULT at CALL time (not the
         # import-frozen DEFAULT_BASE_MODEL) so an in-process override such as
         # `pdd sync --model` takes effect this run (issue #1269).
-        _configured_default_model = os.getenv("PDD_MODEL_DEFAULT")
-        _effective_default_model = (
-            _configured_default_model
-            if _configured_default_model is not None
-            else DEFAULT_BASE_MODEL
-        )
-        _implicit_default_model = (
-            _configured_default_model is None and model_override is None
-        )
+        _effective_default_model = os.getenv("PDD_MODEL_DEFAULT", DEFAULT_BASE_MODEL)
         # Diagnostic for the CSV-shadowing trap (issue #1269): llm_invoke prefers
         # ~/.pdd/llm_model.csv and project .pdd/llm_model.csv over the packaged
         # catalog, so an existing install with an older user/project CSV will not
@@ -5112,14 +5099,7 @@ def llm_invoke(
             # point. Fable is unranked, so strength=1.0 otherwise selects a
             # different high-ranked model first. Keep the normal candidates
             # after Fable so fallback begins only after Fable was attempted.
-            candidate_models = _prioritize_explicit_fable_candidate(
-                candidate_models,
-                # The packaged catalog contains Fable 5, but a user-managed
-                # custom catalog may intentionally omit it. The implicit Opus
-                # default may fall back to that catalog's normal ordering;
-                # explicit Fable/Opus selection remains strict.
-                require_candidate=not _implicit_default_model,
-            )
+            candidate_models = _prioritize_explicit_fable_candidate(candidate_models)
         elif model_override:
             _exact = [
                 c for c in candidate_models

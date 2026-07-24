@@ -4461,9 +4461,13 @@ def test_user_csv_removes_unwanted_model_family(mock_set_llm_cache, caplog):
                                     f"User intentionally removed gpt-5.1-codex-mini - should not see warnings: {warning}"
 
 
-def test_default_base_model_is_opus_5():
+def test_default_base_model_can_be_none():
     """
-    The CLI-facing default is Opus 5 when PDD_MODEL_DEFAULT is not set.
+    Test that DEFAULT_BASE_MODEL can be None when PDD_MODEL_DEFAULT is not set.
+
+    This verifies that the hardcoded DEFAULT_LLM_MODEL is no longer required.
+    When PDD_MODEL_DEFAULT env var is not set, DEFAULT_BASE_MODEL should be None,
+    and model selection should use the first available model from CSV.
     """
     import pdd.llm_invoke as llm_invoke_module
     import importlib
@@ -4478,11 +4482,9 @@ def test_default_base_model_is_opus_5():
         # Reload the module to pick up the environment change
         importlib.reload(llm_invoke_module)
 
-        # Provider dispatch later canonicalizes this user-facing name to
-        # Anthropic's real claude-fable-5 identifier.
         from pdd.llm_invoke import DEFAULT_BASE_MODEL
 
-        assert DEFAULT_BASE_MODEL == "claude-opus-5"
+        assert DEFAULT_BASE_MODEL is None
     finally:
         # Restore original environment
         os.environ.clear()
@@ -6322,44 +6324,6 @@ class TestLlmInvokeWithMockedLLM:
         success_response.choices = [success_choice]
         success_response._hidden_params = {}
 
-        with patch.object(
-            llm_mod.litellm,
-            "completion",
-            return_value=success_response,
-        ) as completion:
-            result = llm_mod.llm_invoke(
-                prompt="Say {greeting}",
-                input_json={"greeting": "hello"},
-                strength=1.0,
-                use_cloud=False,
-            )
-
-        assert completion.call_count == 1
-        assert completion.call_args.kwargs["model"] == "claude-fable-5"
-        assert result["model_name"] == "claude-fable-5"
-        assert result["attempted_models"] == ["claude-fable-5"]
-
-    def test_implicit_opus_5_default_invokes_canonical_fable_model(
-        self, llm_mod, tmp_path, monkeypatch
-    ):
-        """No configured model uses Opus 5 UX and dispatches real Fable 5."""
-        csv_path = tmp_path / "models.csv"
-        csv_path.write_text(
-            "provider,model,input,output,coding_arena_elo,api_key,"
-            "structured_output,reasoning_type,max_reasoning_tokens\n"
-            "Anthropic,claude-fable-5,1,2,0,KEY_A,True,adaptive,0\n"
-            "OpenAI,model-b,1,2,1500,KEY_B,True,none,0\n"
-        )
-        monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
-        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-        monkeypatch.setenv("KEY_A", "sk-aaaa1234567890123456")
-        monkeypatch.setenv("KEY_B", "sk-bbbb1234567890123456")
-        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "claude-opus-5")
-        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
-
-        success_response = create_mock_litellm_response(
-            "Fable success", model_name="claude-fable-5"
-        )
         with patch.object(
             llm_mod.litellm,
             "completion",

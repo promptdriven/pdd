@@ -534,8 +534,7 @@ class PDDCLI(click.Group):
         "Override the model for this invocation (for example, "
         "--model claude-fable-5 or --model claude-opus-5). "
         "Claude Opus 5 is accepted as a compatibility alias for Fable 5. "
-        "Takes precedence over PDD_MODEL_DEFAULT; when neither is set, "
-        "Claude Opus 5 is the default."
+        "Takes precedence over PDD_MODEL_DEFAULT."
     ),
 )
 @click.option(
