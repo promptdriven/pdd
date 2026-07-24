@@ -2,6 +2,7 @@
 # pylint: disable=missing-function-docstring,protected-access,redefined-outer-name
 
 import argparse
+import copy
 import hashlib
 import os
 import json
@@ -30,6 +31,12 @@ from pdd.sync_core import (
     build_unit_manifest,
 )
 from pdd.sync_core.identity import initialize_repository_identity
+from pdd.sync_core.global_sync_ledger import (
+    LedgerError,
+    canonical_predicate_digest,
+    load_unique_yaml,
+    validate_ledger,
+)
 
 
 def _run(root: Path, *args: str, env=None) -> subprocess.CompletedProcess[str]:
@@ -540,3 +547,141 @@ def test_built_wheel_runs_in_clean_virtual_environment(
         ),
     )
     assert probe.returncode == 0, probe.stdout + probe.stderr
+
+
+def _promoted_m0_ledger_payload() -> dict[str, object]:
+    """Return a future M0 claim bound to distinct hosted source/wheel checks."""
+    root = Path(__file__).resolve().parents[1]
+    payload = copy.deepcopy(
+        load_unique_yaml(root / "docs" / "global_sync_evidence_ledger_source.yaml")
+    )
+    milestones = payload["milestones"]
+    assert isinstance(milestones, list)
+    m0 = milestones[0]
+    assert isinstance(m0, dict)
+    generation = payload["ledger_generation"]
+    assert isinstance(generation, dict)
+    bundles = payload["promotion_bundles"]
+    assert isinstance(bundles, dict)
+    hosted = bundles["ledger_generation_hosted_merge"]
+    assert isinstance(hosted, dict)
+    bindings = hosted["artifact_bindings"]
+    assert isinstance(bindings, list)
+    source_binding, wheel_binding = copy.deepcopy(bindings[:2])
+    candidate_sha = generation["reviewed_head_sha"]
+    assert isinstance(candidate_sha, str)
+    runtime_proof = {
+        "candidate_sha": candidate_sha,
+        "wheel_artifact_sha256": "d" * 64,
+        "source_test": {
+            "run_url": "https://github.com/promptdriven/pdd/actions/runs/29680411144",
+            "binding_url": source_binding["url"],
+            "check_identity": "Run Unit Tests",
+        },
+        "wheel_test": {
+            "run_url": "https://github.com/promptdriven/pdd/actions/runs/29680411144",
+            "binding_url": wheel_binding["url"],
+            "check_identity": "Package Preprocess Smoke",
+        },
+    }
+    m0.update(
+        {
+            "status": "passed",
+            "evidence_state": {
+                "implemented": "passed",
+                "local_green": "pending",
+                "independently_reviewed": "pending",
+                "hosted_green": "passed",
+                "merged": "passed",
+                "released": "pending",
+                "deployed": "pending",
+                "certified": "pending",
+            },
+            "repository": generation["repository"],
+            "exact_repository_sha": generation["exact_repository_sha"],
+            "reviewed_head_sha": candidate_sha,
+            "merge_sha": generation["merge_sha"],
+            "required_predicate": {
+                "active_ledger_uses_m0_m5": True,
+                "archived_gate_rows_are_non_authoritative": True,
+                "supported_baseline_commands_recorded": True,
+                "hosted_runtime_proof": runtime_proof,
+            },
+            "promotion_evidence": {
+                "implemented": "m0_source_wheel_hosted",
+                "hosted_green": "m0_source_wheel_hosted",
+                "merged": "m0_source_wheel_hosted",
+                "status": "m0_source_wheel_hosted",
+            },
+        }
+    )
+    subject = {
+        "record": {"kind": "milestone", "id": "M0"},
+        "states": ["implemented", "hosted_green", "merged", "status"],
+        "required_predicate_sha256": canonical_predicate_digest(m0["required_predicate"]),
+        "record_claims": {
+            "repository": m0["repository"],
+            "exact_repository_sha": m0["exact_repository_sha"],
+            "reviewed_head_sha": m0["reviewed_head_sha"],
+            "merge_sha": m0["merge_sha"],
+        },
+    }
+    bundles["m0_source_wheel_hosted"] = {
+        "repository": m0["repository"],
+        "repository_sha": m0["exact_repository_sha"],
+        "head_sha": m0["reviewed_head_sha"],
+        "subject": subject,
+        "validation_command": hosted["validation_command"],
+        "machine_predicate": {
+            "name": "Run Unit Tests",
+            "result": "passed",
+            "binding_url": source_binding["url"],
+        },
+        "artifact_bindings": [source_binding, wheel_binding],
+        "protected_verification": {
+            "mode": "github-pr-source-wheel-checks",
+            "pull_request": 2219,
+            "base_repository": m0["repository"],
+            "base_ref": "main",
+        },
+        "runtime_evidence": runtime_proof,
+    }
+    rebaseline = payload["live_rebaseline"]
+    assert isinstance(rebaseline, dict)
+    rebaseline["milestones_passed"] = 1
+    return payload
+
+
+def test_global_ledger_promotes_m0_from_bound_hosted_source_and_wheel_evidence() -> None:
+    root = Path(__file__).resolve().parents[1]
+    validate_ledger(
+        _promoted_m0_ledger_payload(),
+        root / "docs" / "global_sync_resolution_plan.md",
+        root / "docs" / "global_sync_evidence_ledger_source.yaml",
+    )
+
+
+def test_global_ledger_rejects_milestone_promotion_gap_and_unsupported_transition() -> None:
+    root = Path(__file__).resolve().parents[1]
+    plan = root / "docs" / "global_sync_resolution_plan.md"
+    source = root / "docs" / "global_sync_evidence_ledger_source.yaml"
+    payload = _promoted_m0_ledger_payload()
+    milestones = payload["milestones"]
+    assert isinstance(milestones, list)
+    milestones[0]["status"] = "pending"
+    milestones[2]["status"] = "passed"
+    with pytest.raises(LedgerError, match="contiguous passed prefix"):
+        validate_ledger(payload, plan, source)
+
+    payload = _promoted_m0_ledger_payload()
+    milestones = payload["milestones"]
+    assert isinstance(milestones, list)
+    m0 = milestones[0]
+    assert isinstance(m0, dict)
+    m0["evidence_state"]["released"] = "passed"
+    m0["promotion_evidence"]["released"] = "m0_source_wheel_hosted"
+    bundle = payload["promotion_bundles"]["m0_source_wheel_hosted"]
+    assert isinstance(bundle, dict)
+    bundle["subject"]["states"].insert(3, "released")
+    with pytest.raises(LedgerError, match="cannot authorize states: released"):
+        validate_ledger(payload, plan, source)
