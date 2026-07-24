@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import re
 import subprocess
 import sys
@@ -136,9 +137,28 @@ def _cli_errors(command: dict[str, Any], python: str, label: str, root: Path) ->
         errors = [f"{command_id}: wrong Click parent; nested pdd commands are not canonical"]
         errors.extend(f"{command_id}: documented option {option!r} is not accepted by {label} CLI" for option in command.get("documented_options", []))
         return errors
+    launcher = [python, "-m", "pdd"]
+    cwd = root
+    environment = None
+    if label == "built-wheel":
+        wheel_error, launcher, cwd, environment = _wheel_origin_preflight(
+            python, root
+        )
+        if wheel_error:
+            return [f"{command_id}: {wheel_error}"]
+        try:
+            preflight = subprocess.run(
+                [*launcher, "-c", "import pathlib, pdd; print(pathlib.Path(pdd.__file__).resolve())"],
+                cwd=cwd, env=environment, text=True, capture_output=True, check=False,
+            )
+        except OSError as error:
+            return [f"{command_id}: built-wheel origin preflight failed: {error}"]
+        origin_error = _wheel_origin_error(preflight, root, cwd)
+        if origin_error:
+            return [f"{command_id}: {origin_error}"]
     try:
         result = subprocess.run(
-            [python, "-m", "pdd", words[0], "--help"], cwd=root, text=True,
+            [*launcher, words[0], "--help"], cwd=cwd, env=environment, text=True,
             capture_output=True, check=False,
         )
     except OSError as error:
@@ -151,6 +171,48 @@ def _cli_errors(command: dict[str, Any], python: str, label: str, root: Path) ->
         if not isinstance(option, str) or option not in help_text:
             errors.append(f"{command_id}: documented option {option!r} is not accepted by {label} CLI")
     return errors
+
+
+def _wheel_origin_preflight(
+    python: str, root: Path
+) -> tuple[str | None, list[str], Path, dict[str, str]]:
+    """Prepare a wheel-only interpreter invocation outside candidate source."""
+    interpreter = Path(python)
+    if not interpreter.is_absolute() or interpreter.is_symlink():
+        return "built-wheel interpreter must be an absolute non-symlink path", [], root, {}
+    try:
+        resolved = interpreter.resolve(strict=True)
+    except OSError:
+        return "built-wheel interpreter does not resolve", [], root, {}
+    if root == resolved or root in resolved.parents:
+        return "built-wheel interpreter resolves inside checkout", [], root, {}
+    wheel_root = resolved.parent.parent
+    if not wheel_root.is_dir():
+        return "built-wheel interpreter has no environment root", [], root, {}
+    environment = {
+        key: value for key, value in os.environ.items()
+        if key not in {"PYTHONHOME", "PYTHONPATH"}
+    }
+    environment["PYTHONNOUSERSITE"] = "1"
+    return None, [str(resolved), "-I"], wheel_root, environment
+
+
+def _wheel_origin_error(result: subprocess.CompletedProcess[str] | Any, root: Path, wheel_root: Path) -> str | None:
+    """Reject a wheel interpreter that did not import an installed wheel package."""
+    if result.returncode:
+        return "built-wheel origin preflight could not import pdd"
+    origins = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if len(origins) != 1:
+        return "built-wheel origin preflight returned an ambiguous package path"
+    try:
+        package = Path(origins[0]).resolve(strict=True)
+    except OSError:
+        return "built-wheel origin preflight returned an unresolved package path"
+    if root == package or root in package.parents:
+        return "built-wheel origin resolves to checkout source"
+    if wheel_root not in package.parents or "site-packages" not in package.parts:
+        return "built-wheel origin is outside its environment site-packages"
+    return None
 
 
 def _walk_references(value: Any, key: str | None = None) -> Iterable[str]:
