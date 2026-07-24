@@ -47,7 +47,8 @@ def _write_contract(tmp_path: Path) -> tuple[Path, Path, Path]:
     state = {
         "schema_version": 1,
         "protected_base_sha": base,
-        "integration": {"worktree": "integration", "branch": "feat/m0", "owner": "integration"},
+        "preflight": {"protected_base_ref": "origin/main", "protected_base_sha": base, "source_checkout_clean": "pending-m0-validation"},
+        "integration": {"worktree": "integration", "branch": "feat/m0", "owner": "integration", "base_sha": base},
         "tracks": [{"id": "m0-bootstrap", "owner": "integration", "worktree": "m0", "branch": "feat/m0", "write_set": ["scripts/verify_global_sync_execution_contract.py"]}],
         "command_registry": [
             {"id": "present-module", "state": "EXISTS", "argv": ["python", "-m", "yaml"], "kind": "module", "owner": "integration", "introducing_milestone": "M0", "earliest_invocable_milestone": "M0", "introducing_pr": "local", "last_source_validation_sha": base, "last_wheel_validation_sha": base},
@@ -135,7 +136,7 @@ def test_execution_contract_checks_every_test_target_not_only_the_first(tmp_path
 def test_execution_contract_requires_validation_milestone_and_lifecycle_order(tmp_path: Path) -> None:
     _, state_path, root = _verify(tmp_path)
     state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
-    state["validation_steps"][0].pop("milestone")
+    state["validation_steps"].append({"id": "missing-milestone", "executable": False})
     state["command_registry"][0]["earliest_invocable_milestone"] = "M1"
     state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
     errors = _module().verify(root / "plan.md", state_path, root=root, validate_cli=False)
@@ -166,6 +167,31 @@ def test_execution_contract_rejects_stale_expected_protected_base(tmp_path: Path
         expected_protected_base="b" * 40,
     )
     assert any("expected protected base" in error for error in errors)
+
+
+def test_execution_contract_rejects_installed_wheel_bound_to_another_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wheel_root = tmp_path / "wheel-environment"
+    wheel_python = wheel_root / "bin" / "python"
+    wheel_python.parent.mkdir(parents=True)
+    wheel_python.write_text("placeholder\n", encoding="utf-8")
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"candidate wheel")
+
+    def fake_run(_: list[str], **__: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            returncode=0,
+            stdout='{"direct_url": {"archive_info": {"hash": "sha256=old"}}}\n',
+            stderr="",
+        )
+
+    module = _module()
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    errors = module._wheel_binding_errors(  # pylint: disable=protected-access
+        str(wheel_python), wheel, "a" * 40, tmp_path / "checkout"
+    )
+    assert any("does not bind" in error for error in errors)
 
 
 def test_execution_contract_rejects_ledger_base_and_registry_disagreement(tmp_path: Path) -> None:
@@ -367,7 +393,7 @@ def test_execution_state_records_the_exact_m0_focused_suite_and_owned_m0_paths()
     )
     commands = {command["id"]: command for command in state["command_registry"]}
     assert commands["m0-focused-cli-test"]["argv"] == [
-        "python", "-m", "pytest",
+        "python", "-m", "pytest", "-q",
         "tests/test_sync_core_cli.py",
         "tests/test_sync_core_transaction.py",
         "tests/test_sync_core_reporting.py",
@@ -375,7 +401,9 @@ def test_execution_state_records_the_exact_m0_focused_suite_and_owned_m0_paths()
     ]
     tracks = {track["id"]: track for track in state["tracks"]}
     assert tracks["m0-finalizer-test"]["write_set"] == ["tests/test_sync_core_reporting.py"]
-    assert tracks["m0-scope-samples"]["write_set"] == ["docs/global_sync_m0_scope_report.md"]
+    assert tracks["m0-scope-samples"]["write_set"] == [
+        "scripts/verify_global_sync_m0_samples.py", "docs/global_sync_m0_scope_report.md"
+    ]
 
 
 def test_execution_state_and_generated_ledger_bind_the_protected_kickoff_base() -> None:
@@ -427,9 +455,7 @@ def test_execution_state_and_generated_ledger_bind_the_protected_kickoff_base() 
         "docs/global_sync_evidence_ledger.yaml",
         "tests/test_global_sync_execution_contract.py",
     ]
-    assert tracks["m0-scope-current"]["write_set"] == [
-        "docs/global_sync_m0_scope_report.md"
-    ]
+    assert tracks["m0-scope-current"]["write_set"] == []
     delivery_tracks = [
         track for track in state["tracks"] if track["id"].startswith("track-")
     ]

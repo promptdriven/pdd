@@ -132,6 +132,34 @@ jobs:
           --plan docs/global_sync_resolution_plan.md
           --state docs/global_sync_execution_state.yaml
 
+      - name: Prove global-sync M0 contract against the exact built candidate wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_sha="$(git rev-parse HEAD)"
+          wheel_dir="$RUNNER_TEMP/pdd-contract-wheel"
+          wheel_venv="$RUNNER_TEMP/pdd-contract-wheel-venv"
+          mkdir -p "$wheel_dir"
+          python -m pip install build
+          python -m build --wheel --outdir "$wheel_dir"
+          wheel="$(find "$wheel_dir" -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          python -m venv "$wheel_venv"
+          "$wheel_venv/bin/python" -m pip install "$wheel"
+          expected_base=()
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            expected_base=(--expected-protected-base "${{ github.event.pull_request.base.sha }}")
+          fi
+          "$wheel_venv/bin/python" scripts/verify_global_sync_execution_contract.py \
+            --plan docs/global_sync_resolution_plan.md \
+            --state docs/global_sync_execution_state.yaml \
+            --root "$GITHUB_WORKSPACE" \
+            --wheel-python "$wheel_venv/bin/python" \
+            --wheel-artifact "$wheel" \
+            --candidate-sha "$candidate_sha" \
+            "${expected_base[@]}" \
+            --output "$RUNNER_TEMP/global-sync-m0-wheel-proof.json"
+
       - name: Provision and verify protected Linux sandbox
         run: |
           sudo apt-get update

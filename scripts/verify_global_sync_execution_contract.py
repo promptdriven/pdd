@@ -5,7 +5,7 @@ The evidence ledger renderer protects bytes and promotion evidence.  This
 companion deliberately checks the active execution metadata: commands that
 look plausible in prose must resolve to real, correctly-parented interfaces.
 """
-# pylint: disable=too-many-boolean-expressions,too-many-branches,too-many-locals,too-many-return-statements,too-many-statements,line-too-long
+# pylint: disable=too-many-arguments,too-many-boolean-expressions,too-many-branches,too-many-locals,too-many-return-statements,too-many-statements,line-too-long
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ import importlib.util
 import json
 import os
 import re
+import shlex
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -25,6 +27,7 @@ import yaml
 STATES = frozenset({"EXISTS", "TO_BUILD", "EXTERNAL_PROTECTED", "ARCHIVED"})
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M5"]
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PLAN_TO_BUILD = {
     "pdd.sync_core.vertical_slice_verifier": (
         "vertical-slice-verifier", ["python", "-m", "pdd.sync_core.vertical_slice_verifier"]
@@ -56,7 +59,12 @@ PLAN_TO_BUILD = {
         "global-sync-vertical-slice-test", ["python", "-m", "pytest", "tests/test_global_sync_vertical_slice.py"]
     ),
     "pdd.sync_core.production_global_sync_verifier": (
-        "production-global-sync-verifier", ["python", "-m", "pdd.sync_core.production_global_sync_verifier"]
+        "production-global-sync-verifier", [
+            "python", "-m", "pdd.sync_core.production_global_sync_verifier",
+            "--pdd-repo", "{pdd_repo}", "--pdd-cloud-repo", "{pdd_cloud_repo}",
+            "--require-milestone", "M4", "--fresh-evidence", "--fault-injection",
+            "--output", "{m4_report}",
+        ]
     ),
 }
 REQUIRED_COMMAND_FIELDS = (
@@ -96,31 +104,34 @@ def _component_errors(command: dict[str, Any], root: Path) -> list[str]:
     if not _strings(argv):
         return [f"{command_id}: argv must be a non-empty exact argument vector"]
     if kind == "module":
-        try:
-            index = argv.index("-m")
-            module = argv[index + 1]
-        except (ValueError, IndexError):
+        modules = [argv[index + 1] for index, item in enumerate(argv[:-1]) if item == "-m"]
+        if not modules:
             return [f"{command_id}: module argv must contain '-m MODULE'"]
-        local_module = root.joinpath(*module.split("."))
-        if not (local_module.with_suffix(".py").is_file() or (local_module / "__init__.py").is_file()) and importlib.util.find_spec(module) is None:
-            return [f"{command_id}: module does not exist: {module}"]
-    elif kind in {"script", "test", "workflow"}:
+        errors = []
+        for module in modules:
+            local_module = root.joinpath(*module.split("."))
+            if not (local_module.with_suffix(".py").is_file() or (local_module / "__init__.py").is_file()) and importlib.util.find_spec(module) is None:
+                errors.append(f"{command_id}: module does not exist: {module}")
+        return errors
+    if kind in {"script", "test", "workflow"}:
         if kind == "workflow":
-            target = argv[-1]
-        elif kind == "test":
-            targets = [item for item in argv if item.startswith("tests/")]
-            target = targets[0] if targets else ""
+            targets = [item for item in argv if item.startswith(".github/workflows/")]
         else:
-            targets = [item for item in argv if item.endswith(".py")]
-            target = targets[-1] if targets else ""
-        if not target or not _path_exists(root, target):
-            return [f"{command_id}: {kind} does not exist: {target or '<missing path>'}"]
-    elif kind == "console":
+            targets = (
+                [item for item in argv if item.startswith("tests/")]
+                if kind == "test" else [item for item in argv if item.endswith(".py")]
+            )
+        if not targets:
+            return [f"{command_id}: {kind} argv must name at least one repository target"]
+        return [
+            f"{command_id}: {kind} does not exist: {target}"
+            for target in targets if not _path_exists(root, target)
+        ]
+    if kind == "console":
         if argv[0] != "pdd":
             return [f"{command_id}: console entry point must be pdd"]
-    else:
-        return [f"{command_id}: unsupported command kind: {kind}"]
-    return []
+        return []
+    return [f"{command_id}: unsupported command kind: {kind}"]
 
 
 def _cli_errors(command: dict[str, Any], python: str, label: str, root: Path) -> list[str]:
@@ -170,9 +181,55 @@ def _cli_errors(command: dict[str, Any], python: str, label: str, root: Path) ->
     help_text = result.stdout + result.stderr
     errors = []
     for option in command.get("documented_options", []):
-        if not isinstance(option, str) or option not in help_text:
+        if not isinstance(option, str) or not re.search(
+            rf"(?<![A-Za-z0-9_-]){re.escape(option)}(?![A-Za-z0-9_-])", help_text
+        ):
             errors.append(f"{command_id}: documented option {option!r} is not accepted by {label} CLI")
     return errors
+
+
+def _plan_commands(plan_text: str) -> list[list[str]]:
+    """Return shell-tokenized Python/PDD commands from active fenced plan blocks."""
+    commands: list[list[str]] = []
+    for match in re.finditer(r"```[^\n]*\n(.*?)```", plan_text, re.DOTALL):
+        logical = ""
+        for raw_line in match.group(1).splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            logical = f"{logical} {line}".strip() if logical else line
+            if logical.endswith("\\"):
+                logical = logical[:-1].rstrip()
+                continue
+            try:
+                argv = shlex.split(logical)
+            except ValueError:
+                logical = ""
+                continue
+            logical = ""
+            if not argv:
+                continue
+            executable = argv[0]
+            if re.fullmatch(r"python(?:[0-9]+(?:\.[0-9]+)?)?", executable):
+                commands.append(argv)
+            elif executable == "pdd" and len(argv) > 1 and not argv[1].endswith(":"):
+                commands.append(argv)
+    return commands
+
+
+def _validate_plan_commands(plan_text: str, registry: list[dict[str, Any]], errors: list[str]) -> None:
+    """Require every executable command printed by the plan to be registry-backed."""
+    registered = {
+        tuple(command["argv"]) for command in registry
+        if _strings(command.get("argv"))
+    }
+    for argv in _plan_commands(plan_text):
+        if tuple(argv) not in registered:
+            _error(errors, f"plan command is absent from registry or differs from exact argv: {' '.join(argv)}")
+
+
+def _milestone_before(left: Any, right: Any) -> bool:
+    return isinstance(left, str) and isinstance(right, str) and left in MILESTONES and right in MILESTONES and MILESTONES.index(left) < MILESTONES.index(right)
 
 
 def _wheel_origin_preflight(
@@ -220,6 +277,46 @@ def _wheel_origin_error(result: subprocess.CompletedProcess[str] | Any, root: Pa
     return None
 
 
+def _wheel_binding_errors(wheel_python: str, wheel_artifact: Path | None,
+                         candidate_sha: str | None, root: Path) -> list[str]:
+    """Bind an isolated installation to the exact candidate wheel file.
+
+    PEP 610 is written by pip for a direct local-wheel install.  Requiring its
+    archive hash prevents a convenient but stale wheel environment from being
+    offered as evidence for the candidate currently under review.
+    """
+    if wheel_artifact is None or not wheel_artifact.is_file() or wheel_artifact.is_symlink():
+        return ["built-wheel proof requires a regular --wheel-artifact"]
+    if candidate_sha is None or not SHA1.fullmatch(candidate_sha):
+        return ["built-wheel proof requires an exact lowercase --candidate-sha"]
+    digest = hashlib.sha256(wheel_artifact.read_bytes()).hexdigest()
+    preflight, launcher, cwd, environment = _wheel_origin_preflight(wheel_python, root)
+    if preflight:
+        return [preflight]
+    program = (
+        "import importlib.metadata,json,pathlib; "
+        "dist=importlib.metadata.distribution('pdd-cli'); "
+        "paths=[pathlib.Path(dist.locate_file(item)) for item in (dist.files or ()) "
+        "if str(item).endswith('direct_url.json')]; "
+        "print(json.dumps({'direct_url': json.loads(paths[0].read_text()) if len(paths)==1 else None}))"
+    )
+    try:
+        result = subprocess.run([*launcher, "-c", program], cwd=cwd, env=environment,
+                                text=True, capture_output=True, check=False)
+    except OSError as error:
+        return [f"built-wheel PEP 610 preflight failed: {error}"]
+    if result.returncode:
+        return ["built-wheel PEP 610 preflight could not inspect pdd-cli"]
+    try:
+        direct_url = json.loads(result.stdout).get("direct_url")
+        installed_hash = direct_url["archive_info"]["hash"]
+    except (AttributeError, KeyError, TypeError, json.JSONDecodeError):
+        return ["built-wheel installation lacks an unambiguous PEP 610 direct-url binding"]
+    if installed_hash != f"sha256={digest}":
+        return ["built-wheel PEP 610 digest does not bind the supplied wheel artifact"]
+    return []
+
+
 def _walk_references(value: Any, key: str | None = None) -> Iterable[str]:
     if isinstance(value, dict):
         for child_key, child in value.items():
@@ -232,7 +329,11 @@ def _walk_references(value: Any, key: str | None = None) -> Iterable[str]:
                 yield from _walk_references(child, key)
 
 
-def verify(plan: Path, state_path: Path, *, root: Path | None = None, validate_cli: bool = True, wheel_python: str | None = None) -> list[str]:
+def verify(plan: Path, state_path: Path, *, root: Path | None = None,
+           validate_cli: bool = True, wheel_python: str | None = None,
+           expected_protected_base: str | None = None,
+           candidate_sha: str | None = None,
+           wheel_artifact: Path | None = None) -> list[str]:
     """Return all semantic contract violations; an empty list is a pass."""
     root = (root or state_path.parents[1]).resolve()
     plan = plan.resolve()
@@ -248,8 +349,29 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None, validate_c
     if state.get("milestone_order") != MILESTONES:
         _error(errors, "state milestone_order must be exactly M0-M5")
     base = state.get("protected_base_sha")
-    if not isinstance(base, str) or len(base) != 40:
-        _error(errors, "state must record a 40-character protected base SHA")
+    if not isinstance(base, str) or not SHA1.fullmatch(base):
+        _error(errors, "state must record an exact lowercase 40-character protected base SHA")
+    if expected_protected_base is not None:
+        if not SHA1.fullmatch(expected_protected_base):
+            _error(errors, "expected protected base must be an exact lowercase 40-character SHA")
+        elif base != expected_protected_base:
+            _error(errors, "state protected base disagrees with expected protected base")
+    if candidate_sha is not None and not SHA1.fullmatch(candidate_sha):
+        _error(errors, "candidate SHA must be an exact lowercase 40-character SHA")
+    if wheel_python:
+        for message in _wheel_binding_errors(wheel_python, wheel_artifact, candidate_sha, root):
+            _error(errors, message)
+
+    preflight = state.get("preflight")
+    if not isinstance(preflight, dict):
+        _error(errors, "state missing protected-base preflight")
+    elif (preflight.get("protected_base_ref") != "origin/main"
+          or preflight.get("protected_base_sha") != base
+          or preflight.get("source_checkout_clean") not in {True, "pending-m0-validation"}):
+        _error(errors, "state protected-base preflight is malformed or disagrees with state base")
+    integration = state.get("integration")
+    if not isinstance(integration, dict) or integration.get("base_sha") != base:
+        _error(errors, "state integration topology must bind the protected base")
     if state.get("active_blocker") != "m0-executable-baseline":
         _error(errors, "active blocker must be m0-executable-baseline")
     for required in ("integration", "tracks"):
@@ -277,6 +399,10 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None, validate_c
         for field in ("introducing_milestone", "earliest_invocable_milestone"):
             if command.get(field) not in MILESTONES:
                 _error(errors, f"{command_id}: {field} must use M0-M5 vocabulary")
+        if _milestone_before(command.get("earliest_invocable_milestone"), command.get("introducing_milestone")):
+            _error(errors, f"{command_id}: earliest invocable milestone precedes introducing milestone")
+        if command.get("state") == "EXISTS" and command.get("introducing_pr") in {None, "", "pending"}:
+            _error(errors, f"{command_id}: active EXISTS command has pending introducer")
         if command.get("state") == "EXTERNAL_PROTECTED":
             if not command.get("artifact_digest") or not command.get("control_plane_identity"):
                 _error(errors, f"{command_id}: EXTERNAL_PROTECTED requires artifact digest and control-plane identity")
@@ -299,20 +425,27 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None, validate_c
     if not isinstance(steps, list):
         _error(errors, "validation_steps must be a list")
         steps = []
-    invoked: set[str] = set()
+    invoked: dict[str, list[str | None]] = {}
     for step in steps:
         if not isinstance(step, dict):
             _error(errors, "validation step must be a mapping")
             continue
         commands = step.get("validation_commands", [])
+        milestone = step.get("milestone")
+        if milestone not in MILESTONES:
+            _error(errors, f"{step.get('id', '<unknown>')}: validation step milestone must use M0-M5 vocabulary")
         if step.get("executable") is True and not commands:
             _error(errors, f"{step.get('id', '<unknown>')}: executable step has empty validation commands")
         if not isinstance(commands, list):
             _error(errors, f"{step.get('id', '<unknown>')}: validation_commands must be a list")
             continue
-        invoked.update(item for item in commands if isinstance(item, str))
-    invoked.update(_walk_references({key: value for key, value in state.items() if key not in {"command_registry", "validation_steps"}}))
-    for command_id in invoked:
+        if step.get("executable") is True:
+            for item in commands:
+                if isinstance(item, str):
+                    invoked.setdefault(item, []).append(milestone if isinstance(milestone, str) else None)
+    for command_id in _walk_references({key: value for key, value in state.items() if key not in {"command_registry", "validation_steps"}}):
+        invoked.setdefault(command_id, []).append(None)
+    for command_id, invocation_milestones in invoked.items():
         command = by_id.get(command_id)
         if command is None:
             _error(errors, f"invoked command is absent from registry: {command_id}")
@@ -330,6 +463,12 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None, validate_c
                 or identity == "pending"
             ):
                 _error(errors, f"{command_id}: EXTERNAL_PROTECTED command has pending binding at invocation")
+        elif command.get("state") == "EXISTS":
+            for invocation_milestone in invocation_milestones:
+                if _milestone_before(invocation_milestone, command.get("earliest_invocable_milestone")):
+                    _error(errors, f"{command_id}: EXISTS command is invoked before earliest invocable milestone")
+
+    _validate_plan_commands(plan_text, registry, errors)
 
     required_ids = set(state.get("required_to_build_components", []))
     for name, (command_id, expected_argv) in PLAN_TO_BUILD.items():
@@ -384,9 +523,27 @@ def main() -> int:
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--wheel-python", help="Python executable from the built PDD wheel environment")
+    parser.add_argument("--wheel-artifact", type=Path, help="Exact candidate PDD wheel installed into --wheel-python")
+    parser.add_argument("--candidate-sha", help="Exact lowercase Git SHA that produced --wheel-artifact")
+    parser.add_argument("--expected-protected-base", help="PR kickoff/protected-base SHA expected by this run")
+    parser.add_argument("--output", type=Path, help="Write the checked candidate/wheel binding report as JSON")
     parser.add_argument("--semantic-only", action="store_true", help="Skip source/wheel Click help probes")
     args = parser.parse_args()
-    errors = verify(args.plan, args.state, root=args.root, validate_cli=not args.semantic_only, wheel_python=args.wheel_python)
+    errors = verify(args.plan, args.state, root=args.root, validate_cli=not args.semantic_only,
+                    wheel_python=args.wheel_python, wheel_artifact=args.wheel_artifact,
+                    candidate_sha=args.candidate_sha,
+                    expected_protected_base=args.expected_protected_base)
+    if args.output:
+        report = {
+            "candidate_sha": args.candidate_sha,
+            "expected_protected_base": args.expected_protected_base,
+            "wheel_artifact": str(args.wheel_artifact) if args.wheel_artifact else None,
+            "wheel_artifact_sha256": hashlib.sha256(args.wheel_artifact.read_bytes()).hexdigest()
+            if args.wheel_artifact and args.wheel_artifact.is_file() else None,
+            "passed": not errors,
+        }
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report, sort_keys=True) + "\n", encoding="utf-8")
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1

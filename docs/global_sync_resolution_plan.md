@@ -115,6 +115,11 @@ to:
 - `docs/global_sync_execution_state.yaml`.
 - `docs/global_sync_evidence_ledger_source.yaml` and its generated ledger.
 - The protected ledger-check step in `.github/workflows/unit-tests.yml`.
+- The reviewed reporting-path normalization and compatibility correction in
+  `pdd/sync_core/reporting.py` with its focused compatibility test.
+- The reproducible sample harness `scripts/verify_global_sync_m0_samples.py`
+  and its M0 scope report; this is a bounded, disposable-sample exception and
+  cannot alter production metadata.
 - The smallest runner/finalizer/test delta needed to close
   `tests/test_sync_core_reporting.py::test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint`,
   whose observed failure is `pytest=COLLECTION_ERROR`.
@@ -181,6 +186,15 @@ The protected unit-test workflow must run both:
 2. The command-contract verifier's semantic plan/ledger concordance check.
 
 Byte equality alone is insufficient.
+
+For every executable M0 gate, protected CI builds the candidate PDD application
+wheel, records its SHA-256, installs that exact file into a fresh isolated venv,
+and runs this verifier through that venv's interpreter. The installed
+distribution's PEP 610 `direct_url.json` (or an equivalent installed-artifact
+binding) must name the same wheel digest/path; the emitted proof also records
+the candidate Git SHA. Source and wheel validation SHAs are mandatory when M0
+is promoted, not optional parity annotations. An older installed wheel is not
+valid evidence for a newer candidate.
 
 The following previously referenced components begin as `TO_BUILD` and are
 explicit deliverables, not presumed commands:
@@ -551,6 +565,19 @@ M4 exit:
   include graph, affected closure, path resolution, hashing, classification, and
   transaction semantics.
 - Post-merge and nightly scans are complete even after ledger/cursor deletion.
+
+M4 validation is normative once its command reaches `EXISTS`; it is not a
+documentation substitute for enforcement. Run exactly:
+
+```bash
+python -m pdd.sync_core.production_global_sync_verifier --pdd-repo {pdd_repo} --pdd-cloud-repo {pdd_cloud_repo} --require-milestone M4 --fresh-evidence --fault-injection --output {m4_report}
+```
+
+The structured report must contain the repository SHAs, fresh-evidence and
+fault-injection flags, expected-managed/enforced/semantic-verified/current-
+baseline totals, complete post-merge and nightly scan flags, and the
+zero-unexplained-writes predicate. Enforcement promotion cannot pass until all
+the state-recorded M4 predicates are true.
 
 M4 closes the production functionality program only at full expected-managed
 enforcement. There may be additional human-owned or explicitly decommissioned
