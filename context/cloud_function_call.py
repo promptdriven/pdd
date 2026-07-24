@@ -1,3 +1,5 @@
+import os
+
 import requests
 
 def call_cloud_function(firebase_token):
@@ -10,7 +12,7 @@ def call_cloud_function(firebase_token):
     
     return response.json()
 
-firebase_token = "YOUR_FIREBASE_TOKEN_HERE"
+firebase_token = os.environ.get('FIREBASE_TOKEN')
 
 # Call the Cloud Function
 result = call_cloud_function(firebase_token)
