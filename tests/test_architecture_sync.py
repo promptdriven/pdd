@@ -5,6 +5,7 @@ Tests bidirectional sync between architecture.json and prompt file metadata tags
 """
 
 import hashlib
+import inspect
 import json
 import tempfile
 import textwrap
@@ -33,6 +34,53 @@ from pdd.architecture_sync import (
     validate_architecture_modules,
     validate_interface_structure,
 )
+
+
+def _repository_architecture_entry(filename: str) -> dict:
+    """Return a real repository architecture entry for prompt-contract checks."""
+    repo_root = Path(__file__).resolve().parent.parent
+    entries = json.loads((repo_root / "architecture.json").read_text(encoding="utf-8"))
+    return next(entry for entry in entries if entry["filename"] == filename)
+
+
+def test_mock_contract_validation_real_prompt_interface_is_parseable():
+    """XML-safe memory sentinels must preserve the real security gate contract."""
+    repo_root = Path(__file__).resolve().parent.parent
+    prompt = repo_root / "pdd" / "prompts" / "mock_contract_validation_python.prompt"
+
+    tags = parse_prompt_tags(prompt.read_text(encoding="utf-8"))
+
+    assert "interface_parse_error" not in tags
+    assert tags["interface"] is not None
+    signatures = {
+        function["name"]: function["signature"]
+        for function in tags["interface"]["module"]["functions"]
+    }
+    assert "source_path: str = '<memory>'" in signatures["extract_query_fields"]
+    assert "source_path: str = '<memory>'" in signatures["extract_mock_fields"]
+    assert _repository_architecture_entry("mock_contract_validation_python.prompt")["interface"] == tags["interface"]
+
+
+def test_sync_orchestration_real_prompt_contract_matches_runtime():
+    """The orchestration prompt and architecture expose only runtime arguments."""
+    from pdd.sync_orchestration import sync_orchestration
+
+    repo_root = Path(__file__).resolve().parent.parent
+    prompt = repo_root / "pdd" / "prompts" / "sync_orchestration_python.prompt"
+    tags = parse_prompt_tags(prompt.read_text(encoding="utf-8"))
+    declared_signature = tags["interface"]["module"]["functions"][0]["signature"]
+    runtime_parameters = list(inspect.signature(sync_orchestration).parameters)
+
+    assert "one_session" not in declared_signature
+    assert "one_session" not in runtime_parameters
+    assert runtime_parameters[-2:] == ["compressed_context", "fresh"]
+    architecture_signature = _repository_architecture_entry(
+        "sync_orchestration_python.prompt"
+    )["interface"]["module"]["functions"][0]["signature"]
+    assert "one_session" not in architecture_signature
+    assert architecture_signature.endswith(
+        "compressed_context: bool = False, fresh: bool = False) -> Dict[str, Any]"
+    )
 
 
 # --- Test parse_prompt_tags ---
@@ -91,6 +139,39 @@ def test_include_query_extractor_prompt_metadata_tags_parse():
         'preprocess_python.prompt',
         'path_resolution_python.prompt',
     ]
+
+
+def test_user_story_tests_architecture_metadata_matches_prompt():
+    """Architecture metadata must not keep stale duplicate user_story_tests entries."""
+    repo_root = Path(__file__).resolve().parent.parent
+    prompt_path = repo_root / "pdd" / "prompts" / "user_story_tests_python.prompt"
+    architecture_path = repo_root / "architecture.json"
+
+    prompt_tags = parse_prompt_tags(prompt_path.read_text(encoding="utf-8"))
+    prompt_functions = {
+        fn["name"]: fn
+        for fn in prompt_tags["interface"]["module"]["functions"]
+        if fn["name"] in {
+            "generate_user_story",
+            "run_user_story_tests",
+            "run_user_story_fix",
+        }
+    }
+    architecture = json.loads(architecture_path.read_text(encoding="utf-8"))
+    entries = [
+        entry
+        for entry in architecture
+        if entry.get("filename") == "user_story_tests_python.prompt"
+        and entry.get("filepath") == "pdd/user_story_tests.py"
+    ]
+
+    assert len(entries) == 1
+    arch_functions = {
+        fn["name"]: fn
+        for fn in entries[0]["interface"]["module"]["functions"]
+        if fn["name"] in prompt_functions
+    }
+    assert arch_functions == prompt_functions
 
 
 def test_parse_tags_lenient_missing_fields():
@@ -284,6 +365,138 @@ def test_validate_architecture_modules_returns_route_shaped_result():
         "errors": [],
         "warnings": [],
     }
+
+
+def test_agentic_architecture_primary_workflow_dependency_chain_is_registered():
+    """Every primary Step 1-13 prompt must satisfy architecture dependencies."""
+    architecture_path = Path(__file__).resolve().parents[1] / "architecture.json"
+    modules = json.loads(architecture_path.read_text(encoding="utf-8"))
+    filenames = [
+        "agentic_arch_step1_analyze_prd_LLM.prompt",
+        "agentic_arch_step2_analyze_LLM.prompt",
+        "agentic_arch_step3_research_LLM.prompt",
+        "agentic_arch_step4_data_model_LLM.prompt",
+        "agentic_arch_step5_design_LLM.prompt",
+        "agentic_arch_step6_research_deps_LLM.prompt",
+        "agentic_arch_step7_generate_LLM.prompt",
+        "agentic_arch_step8_pddrc_LLM.prompt",
+        "agentic_arch_step9_prompts_LLM.prompt",
+        "agentic_arch_step10_completeness_LLM.prompt",
+        "agentic_arch_step11_sync_LLM.prompt",
+        "agentic_arch_step12_deps_LLM.prompt",
+        "agentic_arch_step13_fix_LLM.prompt",
+    ]
+    workflow = {
+        module["filename"]: module
+        for module in modules
+        if module.get("filename") in filenames
+    }
+
+    assert set(workflow) == set(filenames)
+    assert validate_architecture_modules(list(workflow.values())) == {
+        "valid": True,
+        "errors": [],
+        "warnings": [],
+    }
+
+
+def test_shared_python_preamble_is_registered_architecture_context():
+    """A real shared context include must not become a missing module edge."""
+    root = Path(__file__).resolve().parents[1]
+    modules = json.loads((root / "architecture.json").read_text(encoding="utf-8"))
+    preamble = next(
+        module
+        for module in modules
+        if module.get("filename") == "context/python_preamble.prompt"
+    )
+
+    assert preamble["filepath"] == "context/python_preamble.prompt"
+    assert (root / preamble["filepath"]).is_file()
+    assert preamble["interface"] == {"type": "config", "config": {"keys": []}}
+    assert not any(
+        error["type"] == "missing_dependency"
+        and "context/python_preamble.prompt" in error["modules"]
+        for error in validate_architecture_modules(modules)["errors"]
+    )
+
+
+def _registered_external_context_template() -> dict:
+    """Return the single immutable architecture row for the shared preamble."""
+    return {
+        "reason": "Provides shared Python generation conventions for prompt templates.",
+        "description": (
+            "Human-maintained context template included by Python prompt modules to "
+            "define package, typing, import, error-handling, and preservation conventions."
+        ),
+        "dependencies": [],
+        "priority": 98,
+        "filename": "context/python_preamble.prompt",
+        "filepath": "context/python_preamble.prompt",
+        "tags": ["config", "context", "python", "template"],
+        "interface": {"type": "config", "config": {"keys": []}},
+    }
+
+
+def test_sync_all_skips_registered_external_context_templates(tmp_path):
+    """The exact preamble include needs no prompts-root shadow copy."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    architecture_path = tmp_path / "architecture.json"
+    architecture_path.write_text(
+        json.dumps(
+            [_registered_external_context_template()]
+        ),
+        encoding="utf-8",
+    )
+
+    result = sync_all_prompts_to_architecture(
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=True,
+    )
+
+    assert result["success"] is True
+    assert result["errors"] == []
+    assert result["skipped_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("filename", "context/missing.prompt"),
+        ("filename", "context/../prompts/escape.prompt"),
+        ("filepath", "context/missing.prompt"),
+        ("description", "Mutated context metadata"),
+        ("tags", ["config", "context", "python"]),
+        ("interface", {"type": "config", "config": {"keys": ["mutated"]}}),
+    ),
+)
+def test_external_context_exception_rejects_noncanonical_or_mutated_rows(
+    tmp_path, field, value
+):
+    """Only the exact registered preamble row may skip generated-prompt sync."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    architecture_path = tmp_path / "architecture.json"
+    context = _registered_external_context_template()
+    context[field] = value
+    architecture_path.write_text(json.dumps([context]), encoding="utf-8")
+
+    validation = validate_architecture_modules([context])
+    result = sync_all_prompts_to_architecture(
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=True,
+    )
+
+    assert validation["valid"] is False
+    assert any(
+        error["type"] == "invalid_external_context_template"
+        for error in validation["errors"]
+    )
+    assert result["success"] is False
+    assert result["skipped_count"] == 0
+    assert result["errors"]
 
 
 def test_sync_prompts_to_architecture_updates_selected_prompts_and_validates(tmp_path):
@@ -4600,3 +4813,191 @@ def test_sync_prompts_to_architecture_named_files_propagates_warnings(
     row = result["results"][0]
     assert row["warnings"] == ["contract_summary: evidence manifest unreadable: bad json"]
     assert row["contract_summary"]["rules"] == ["R1"]
+
+
+# --- Additional coverage tests (appended) ---
+
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+def test_validate_interface_structure_frontend_requires_pages():
+    result = validate_interface_structure({"type": "frontend", "frontend": {}})
+    assert result["valid"] is False
+    assert any("pages" in e.lower() for e in result["errors"])
+
+
+def test_validate_interface_structure_frontend_valid():
+    result = validate_interface_structure({"type": "frontend", "frontend": {"pages": []}})
+    assert result["valid"] is True
+
+
+def test_validate_interface_structure_command_requires_commands():
+    result = validate_interface_structure({"type": "command", "command": {}})
+    assert result["valid"] is False
+    assert any("commands" in e.lower() for e in result["errors"])
+
+
+def test_validate_interface_structure_page_valid():
+    """Simple page type only needs the nested dict."""
+    result = validate_interface_structure({"type": "page", "page": {}})
+    assert result["valid"] is True
+
+
+def test_validate_interface_structure_nested_not_dict():
+    result = validate_interface_structure({"type": "module", "module": "not-a-dict"})
+    assert result["valid"] is False
+
+
+def test_validate_interface_structure_not_a_dict():
+    result = validate_interface_structure("not a dict")  # type: ignore[arg-type]
+    assert result["valid"] is False
+    assert result["errors"]
+
+
+def test_validate_dependencies_empty_list(tmp_path):
+    result = validate_dependencies([], prompts_dir=tmp_path)
+    assert result == {"valid": True, "missing": [], "duplicates": []}
+
+
+def test_has_pdd_tags_only_interface_or_dependency():
+    assert has_pdd_tags("<pdd-interface>{}</pdd-interface>") is True
+    assert has_pdd_tags("<pdd-dependency>x.prompt</pdd-dependency>") is True
+
+
+def test_generate_tags_only_interface():
+    tags = generate_tags_from_architecture(
+        {"interface": {"type": "module", "module": {"functions": []}}}
+    )
+    assert "<pdd-interface>" in tags
+    assert "<pdd-reason>" not in tags
+    assert "<pdd-dependency>" not in tags
+
+
+def test_get_architecture_entry_missing_file(tmp_path):
+    assert get_architecture_entry_for_prompt(
+        "x.prompt", architecture_path=tmp_path / "nope.json"
+    ) is None
+
+
+def test_get_architecture_entry_prompts_prefix_normalized(tmp_path):
+    arch = tmp_path / "architecture.json"
+    arch.write_text(
+        json.dumps([{"filename": "foo_python.prompt", "reason": "R"}]),
+        encoding="utf-8",
+    )
+    # Prefix "prompts/" should be stripped for matching
+    entry = get_architecture_entry_for_prompt(
+        "prompts/foo_python.prompt", architecture_path=arch
+    )
+    assert entry is not None
+    assert entry["reason"] == "R"
+
+
+def test_parse_tags_rejects_path_like_dependency():
+    """Dependency values that look like file paths (with slashes, non-.prompt) are rejected."""
+    content = "<pdd-dependency>some/path/file.txt</pdd-dependency>"
+    result = parse_prompt_tags(content)
+    assert result["dependencies"] == []
+
+
+def test_validate_architecture_modules_detects_circular():
+    modules = [
+        {"filename": "a.prompt", "filepath": "a.py", "description": "A",
+         "dependencies": ["b.prompt"]},
+        {"filename": "b.prompt", "filepath": "b.py", "description": "B",
+         "dependencies": ["a.prompt"]},
+    ]
+    result = validate_architecture_modules(modules)
+    assert result["valid"] is False
+    assert any(e["type"] == "circular_dependency" for e in result["errors"])
+
+
+def test_validate_architecture_modules_missing_dependency():
+    modules = [
+        {"filename": "a.prompt", "filepath": "a.py", "description": "A",
+         "dependencies": ["ghost.prompt"]},
+    ]
+    result = validate_architecture_modules(modules)
+    assert result["valid"] is False
+    assert any(e["type"] == "missing_dependency" for e in result["errors"])
+
+
+def test_validate_architecture_modules_orphan_warning():
+    modules = [
+        {"filename": "solo.prompt", "filepath": "s.py", "description": "S",
+         "dependencies": []},
+    ]
+    result = validate_architecture_modules(modules)
+    assert any(w["type"] == "orphan_module" for w in result["warnings"])
+
+
+def test_validate_architecture_modules_duplicate_dependency_warning():
+    modules = [
+        {"filename": "a.prompt", "filepath": "a.py", "description": "A",
+         "dependencies": ["b.prompt", "b.prompt"]},
+        {"filename": "b.prompt", "filepath": "b.py", "description": "B",
+         "dependencies": []},
+    ]
+    result = validate_architecture_modules(modules)
+    assert any(w["type"] == "duplicate_dependency" for w in result["warnings"])
+
+
+def test_update_architecture_from_prompt_content_override_no_disk_read(tmp_path):
+    """prompt_content_override should be used instead of reading the file."""
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "mod_python.prompt").write_text(
+        "<pdd-reason>On disk</pdd-reason>", encoding="utf-8"
+    )
+    arch = tmp_path / "architecture.json"
+    arch.write_text(
+        json.dumps([{"filename": "mod_python.prompt", "filepath": "mod.py",
+                     "reason": "Old", "description": "M", "dependencies": [],
+                     "priority": 1}]),
+        encoding="utf-8",
+    )
+    result = update_architecture_from_prompt(
+        "mod_python.prompt",
+        prompts_dir=prompts,
+        architecture_path=arch,
+        prompt_content_override="<pdd-reason>From override</pdd-reason>",
+        dry_run=False,
+    )
+    assert result["success"] is True
+    updated = json.loads(arch.read_text())
+    assert updated[0]["reason"] == "From override"
+
+
+def test_update_architecture_missing_architecture_file(tmp_path):
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "mod.prompt").write_text("<pdd-reason>R</pdd-reason>", encoding="utf-8")
+    result = update_architecture_from_prompt(
+        "mod.prompt",
+        prompts_dir=prompts,
+        architecture_path=tmp_path / "no_arch.json",
+    )
+    assert result["success"] is False
+    assert "not found" in result["error"].lower()
+
+
+def test_sync_all_missing_architecture_file(tmp_path):
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    result = sync_all_prompts_to_architecture(
+        prompts_dir=prompts, architecture_path=tmp_path / "no_arch.json"
+    )
+    assert result["success"] is False
+    assert result["errors"]
+
+
+def test_infer_module_tags_typescript_react():
+    """PascalCase language suffix doesn't add 'python' tag."""
+    assert _infer_module_tags("components/Foo_TypeScriptReact.prompt") == ["module"]

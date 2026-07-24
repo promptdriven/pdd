@@ -1,16 +1,16 @@
 {
-  "pdd_version": "0.0.302.dev0",
-  "timestamp": "2026-07-14T00:20:00.000000+00:00",
-  "command": "test",
-  "prompt_hash": "050f005127df528f1055b063505687c4580cde7612c09d3edde6b1ad99b5526e",
-  "code_hash": "afcffc527523e99cb5220b8a5ec3773e46edda2c8f2dde111887e36a2a22c7a6",
+  "pdd_version": "0.0.307.dev0",
+  "timestamp": "2026-07-22T00:07:35+00:00",
+  "command": "fix",
+  "prompt_hash": "d907f45ce7fb444dc400d396897c08b8ec0054d55f3f6b3d8de4e0da7cb0cd67",
+  "code_hash": "db9653e6417db944e2af54cf2f3fd4f8474ef459cea0b9df126e5f3f53c79370",
   "example_hash": "a81bbab38887c60541e5223917eadf1f64f6e88791ce59656ba2d1741f5a909d",
-  "test_hash": "0f2484d6796680907a14af7bddebe8d7e10a62f77739ab3848e7608327ba2305",
+  "test_hash": "ddf2cc12f13bde99f35d05000f3425ac8905bf9af3b1e24886a403a45ef64e15",
   "test_files": {
-    "test_checkup_agentic_artifact.py": "0f2484d6796680907a14af7bddebe8d7e10a62f77739ab3848e7608327ba2305"
+    "test_checkup_agentic_artifact.py": "ddf2cc12f13bde99f35d05000f3425ac8905bf9af3b1e24886a403a45ef64e15"
   },
   "include_deps": {
-    "context/checkup_review_loop_example.py": "b073c715dbc68e6865dfc8730d25251481b400a8f7e3c382e2122d1f7de07d40",
-    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/checkup_review_loop_example.py": "4a4b20597d31402c314087bc8cb32d9653bdcca7204ebfdf53bd259e34b81001"
   }
 }

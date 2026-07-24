@@ -1051,10 +1051,20 @@ def _build_agentic_v1_artifact(
             or ""
         )
     )
+    has_current_fresh_slot = hasattr(loop_state, "fresh_final_findings")
+    current_fresh_findings = (
+        _runtime_sequence(loop_state, "fresh_final_findings")
+        if has_current_fresh_slot
+        else []
+    )
     fresh_final_review = AgenticFreshFinalReview(
         provider=fresh_provider,
         status=fresh_status,
-        finding_count=sum(1 for f in all_findings if f.reviewer == "fresh-final"),
+        finding_count=(
+            len(current_fresh_findings)
+            if has_current_fresh_slot
+            else sum(1 for f in all_findings if f.reviewer == "fresh-final")
+        ),
     )
 
     # --- validation after fix --------------------------------------------

@@ -105,7 +105,10 @@ def _load_scope_manifest(path: Path) -> _StoryScopeManifest:
         raise
     except (OSError, UnicodeError):
         raise ValueError("scope:MANIFEST_UNREADABLE") from None
-    if not isinstance(payload, dict) or payload.get("schema_version") != _SCOPE_MANIFEST_SCHEMA:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != _SCOPE_MANIFEST_SCHEMA
+    ):
         raise ValueError("scope:MANIFEST_SCHEMA")
     if set(payload) - {"schema_version", "stories"}:
         raise ValueError("scope:MANIFEST_UNKNOWN_FIELD")
@@ -180,9 +183,7 @@ def _scope_manifest_metadata_matches(scope: _StoryScopeManifest) -> bool:
     for story in scope.stories:
         expected = {path.resolve() for path in scope.story_prompts[story]}
         try:
-            references = _parse_story_prompt_metadata(
-                story.read_text(encoding="utf-8")
-            )
+            references = _parse_story_prompt_metadata(story.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, ValueError):
             return False
 
@@ -221,17 +222,37 @@ def _mark_command_failed(ctx: click.Context) -> None:
 
 def _structured_failure_for_exception(exception: Exception) -> Tuple[str, str]:
     """Classify provider failures without exposing secret-bearing exception text."""
-    name = type(exception).__name__.lower()
+    raw_name = type(exception).__name__
+    separated_name = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", raw_name)
+    separated_name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", separated_name)
+    ordered_name_tokens = [
+        token for token in re.split(r"[^a-z0-9]+", separated_name.lower()) if token
+    ]
+    name_tokens = set(ordered_name_tokens)
+    normalized_name = "".join(ordered_name_tokens)
     message = str(exception).lower()
-    if "timeout" in name or "timed out" in message or "timeout" in message:
+    if "timeout" in normalized_name or "timed out" in message or "timeout" in message:
         return (
             "provider:TIMEOUT",
             "Story detection timed out before producing a complete result.",
         )
-    if any(
+    auth_class = "auth" in name_tokens or any(
+        indicator in normalized_name
+        for indicator in (
+            "authentication",
+            "authorization",
+            "unauthenticated",
+            "credential",
+            "permissiondenied",
+            "unauthorized",
+            "forbidden",
+        )
+    )
+    auth_message = any(
         token in message
         for token in ("auth", "credential", "api key", "unauthorized", "forbidden")
-    ):
+    )
+    if auth_class or auth_message:
         return (
             "auth:NON_INTERACTIVE_CREDENTIALS_MISSING",
             "Non-interactive credentials are missing or invalid.",
@@ -249,6 +270,24 @@ def _path_is_within(path: Path, root: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _emit_human_story_error(
+    *, quiet: bool, status: str, message: str, next_step: str
+) -> None:
+    """Print a safe, actionable non-semantic story-detection failure."""
+    if quiet:
+        return
+    click.echo(f"{status}: {message}")
+    click.echo(f"Next step: {next_step}")
+
+
+def _raw_story_results_are_incomplete(results: object) -> bool:
+    """Return whether the legacy evaluator explicitly reports no trustworthy verdict."""
+    return isinstance(results, (list, tuple)) and any(
+        isinstance(row, dict) and row.get("evaluation_status") == "incomplete"
+        for row in results
+    )
 
 
 @click.command("detect")
@@ -368,6 +407,8 @@ def detect_change(
 
             machine_mode = json_output_stdout or json_output is not None
             manifest_mode = scope_manifest is not None
+            obj = get_context_obj(ctx)
+            quiet_mode = bool(obj.get("quiet", False))
             if scope_manifest is not None and read_only is False:
                 raise click.UsageError(
                     "--scope-manifest MUST use --read-only; exact manifest mode cannot mutate metadata."
@@ -385,11 +426,8 @@ def detect_change(
                     "Structured story detection MUST use --read-only."
                 )
             if machine_mode:
-                obj = get_context_obj(ctx)
                 obj["_suppress_result_summary"] = True
                 obj["_suppress_core_dump"] = True
-            else:
-                obj = get_context_obj(ctx)
 
             def emit(document: Dict[str, Any]) -> None:
                 if json_output is not None:
@@ -403,7 +441,9 @@ def detect_change(
                     scope = _load_scope_manifest(scope_manifest)
                 except ValueError as exception:
                     code = str(exception).split(":", 2)[0:2]
-                    error_code = ":".join(code) if len(code) == 2 else "scope:MANIFEST_INVALID"
+                    error_code = (
+                        ":".join(code) if len(code) == 2 else "scope:MANIFEST_INVALID"
+                    )
                     emit(
                         failure_document(
                             outcome="CONFIG_ERROR",
@@ -411,6 +451,12 @@ def detect_change(
                             message="The exact story scope manifest is invalid or unsafe.",
                             retryable=False,
                         )
+                    )
+                    _emit_human_story_error(
+                        quiet=quiet_mode or machine_mode,
+                        status="Configuration error",
+                        message="The exact story scope manifest is invalid or unsafe.",
+                        next_step="repair the scope manifest, then retry.",
                     )
                     raise click.exceptions.Exit(2)
 
@@ -426,6 +472,15 @@ def detect_change(
                         retryable=False,
                     )
                 )
+                _emit_human_story_error(
+                    quiet=quiet_mode or machine_mode,
+                    status="UNKNOWN",
+                    message=(
+                        "The story was not successfully evaluated because its "
+                        "prompt metadata does not match the exact scope manifest."
+                    ),
+                    next_step="repair the pdd-story-prompts metadata or manifest, then retry.",
+                )
                 # Do not permit a mismatched story to select a prompt and
                 # spend provider budget before its authorization fails.
                 raise click.exceptions.Exit(3)
@@ -437,7 +492,8 @@ def detect_change(
                 prompt_files = list(scope.prompts)
             else:
                 stories_path = Path(
-                    stories_dir or os.environ.get("PDD_USER_STORIES_DIR", "user_stories")
+                    stories_dir
+                    or os.environ.get("PDD_USER_STORIES_DIR", "user_stories")
                 )
                 prompts_path = Path(
                     prompts_dir or os.environ.get("PDD_PROMPTS_DIR", "prompts")
@@ -451,7 +507,7 @@ def detect_change(
                     if _path_is_within(prompt_file, prompts_path)
                 ]
 
-            if machine_mode and scope is None and not stories_path.is_dir():
+            if scope is None and not stories_path.is_dir():
                 emit(
                     failure_document(
                         outcome="CONFIG_ERROR",
@@ -460,8 +516,14 @@ def detect_change(
                         retryable=False,
                     )
                 )
+                _emit_human_story_error(
+                    quiet=quiet_mode or machine_mode,
+                    status="Configuration error",
+                    message="The requested stories directory does not exist or is not a directory.",
+                    next_step="choose an existing --stories-dir containing story__*.md files.",
+                )
                 raise click.exceptions.Exit(2)
-            if machine_mode and scope is None and not prompts_path.is_dir():
+            if scope is None and not prompts_path.is_dir():
                 emit(
                     failure_document(
                         outcome="CONFIG_ERROR",
@@ -470,8 +532,14 @@ def detect_change(
                         retryable=False,
                     )
                 )
+                _emit_human_story_error(
+                    quiet=quiet_mode or machine_mode,
+                    status="Configuration error",
+                    message="The requested prompts directory does not exist or is not a directory.",
+                    next_step="choose an existing --prompts-dir containing .prompt files.",
+                )
                 raise click.exceptions.Exit(2)
-            if machine_mode and not story_files:
+            if not story_files:
                 emit(
                     failure_document(
                         outcome="CONFIG_ERROR",
@@ -480,8 +548,30 @@ def detect_change(
                         retryable=False,
                     )
                 )
+                _emit_human_story_error(
+                    quiet=quiet_mode or machine_mode,
+                    status="Configuration error",
+                    message="The requested story scope is empty.",
+                    next_step="add a story__*.md file or select a non-empty story scope.",
+                )
                 raise click.exceptions.Exit(2)
-            if machine_mode and any(
+            if not prompt_files:
+                emit(
+                    failure_document(
+                        outcome="CONFIG_ERROR",
+                        code="scope:EMPTY_PROMPTS",
+                        message="The requested prompt scope is empty.",
+                        retryable=False,
+                    )
+                )
+                _emit_human_story_error(
+                    quiet=quiet_mode or machine_mode,
+                    status="Configuration error",
+                    message="The requested prompt scope is empty.",
+                    next_step="add a .prompt file or select a non-empty prompt scope.",
+                )
+                raise click.exceptions.Exit(2)
+            if any(
                 not _path_is_within(story_file, stories_path)
                 for story_file in story_files
             ):
@@ -493,6 +583,12 @@ def detect_change(
                         retryable=False,
                     )
                 )
+                _emit_human_story_error(
+                    quiet=quiet_mode or machine_mode,
+                    status="Configuration error",
+                    message="The requested story scope contains a path outside stories_dir.",
+                    next_step="select only stories inside the requested stories directory.",
+                )
                 raise click.exceptions.Exit(2)
 
             started_at = datetime.now(timezone.utc)
@@ -503,10 +599,11 @@ def detect_change(
                 obj["force"] = True
                 os.environ["PDD_FORCE"] = "1"
                 os.environ["PDD_ALLOW_INTERACTIVE"] = "0"
-            evaluator_stdout = io.StringIO() if machine_mode else None
-            evaluator_stderr = io.StringIO() if machine_mode else None
+            capture_evaluator_output = machine_mode or quiet_mode
+            evaluator_stdout = io.StringIO() if capture_evaluator_output else None
+            evaluator_stderr = io.StringIO() if capture_evaluator_output else None
             previous_rich_consoles: list[Any] = []
-            if machine_mode:
+            if capture_evaluator_output:
                 # ``rich.print`` captures the process stream when its global
                 # console is initialized, so redirecting sys.stdout alone is
                 # insufficient for provider/evaluator diagnostics. Point the
@@ -524,6 +621,8 @@ def detect_change(
                     rich_console.file = evaluator_stdout
 
             def emit_evaluator_diagnostics() -> None:
+                if quiet_mode:
+                    return
                 if evaluator_stdout is not None and (
                     evaluator_stdout.getvalue()
                     or (evaluator_stderr is not None and evaluator_stderr.getvalue())
@@ -544,6 +643,7 @@ def detect_change(
                     )
 
             try:
+
                 def runner_call():
                     return run_user_story_tests(
                         prompts_dir=(
@@ -553,9 +653,7 @@ def detect_change(
                             str(stories_path) if scope is not None else stories_dir
                         ),
                         story_files=(
-                            story_files
-                            if (machine_mode or scope is not None)
-                            else None
+                            story_files if (machine_mode or scope is not None) else None
                         ),
                         prompt_files=(
                             prompt_files
@@ -572,6 +670,7 @@ def detect_change(
                         include_llm_prompts=include_llm,
                         cache_story_prompt_links=not effective_read_only,
                     )
+
                 if evaluator_stdout is None:
                     passed, results, total_cost, model_name = runner_call()
                 else:
@@ -581,17 +680,28 @@ def detect_change(
                     ):
                         passed, results, total_cost, model_name = runner_call()
             except Exception as exception:
-                if not machine_mode:
-                    raise
-                emit_evaluator_diagnostics()
                 code, safe_message = _structured_failure_for_exception(exception)
-                emit(
-                    failure_document(
-                        outcome="INFRASTRUCTURE_ERROR",
-                        code=code,
-                        message=safe_message,
-                        retryable=code != "auth:NON_INTERACTIVE_CREDENTIALS_MISSING",
+                if machine_mode:
+                    emit_evaluator_diagnostics()
+                    emit(
+                        failure_document(
+                            outcome="INFRASTRUCTURE_ERROR",
+                            code=code,
+                            message=safe_message,
+                            retryable=code
+                            != "auth:NON_INTERACTIVE_CREDENTIALS_MISSING",
+                        )
                     )
+                recovery = (
+                    "authenticate with a supported provider, then retry."
+                    if code == "auth:NON_INTERACTIVE_CREDENTIALS_MISSING"
+                    else "retry the command; if the problem persists, check provider availability."
+                )
+                _emit_human_story_error(
+                    quiet=quiet_mode or machine_mode,
+                    status="UNKNOWN",
+                    message=safe_message,
+                    next_step=recovery,
                 )
                 raise click.exceptions.Exit(3)
             finally:
@@ -619,6 +729,7 @@ def detect_change(
                         os.environ["PDD_ALLOW_INTERACTIVE"] = previous_allow_interactive
 
             emit_evaluator_diagnostics()
+            incomplete_evaluation = _raw_story_results_are_incomplete(results)
 
             document = None
             structured_exit_code = None
@@ -634,7 +745,9 @@ def detect_change(
                     prompts_dir=prompts_path,
                     contract_files=scope.contracts if scope is not None else None,
                     allowed_prompt_files=scope.prompts if scope is not None else None,
-                    manifest_story_prompts=scope.story_prompts if scope is not None else None,
+                    manifest_story_prompts=(
+                        scope.story_prompts if scope is not None else None
+                    ),
                     include_llm=include_llm,
                     fail_fast=fail_fast,
                     read_only=effective_read_only,
@@ -649,7 +762,9 @@ def detect_change(
                     # when the human renderer is requested instead of JSON.
                     passed = bool(document["all_pass"])
                     results = document["results"]
-                if (machine_mode or manifest_mode) and document["outcome"] == "INCOMPLETE":
+                if (machine_mode or manifest_mode) and document[
+                    "outcome"
+                ] == "INCOMPLETE":
                     structured_exit_code = 3
             if evidence:
                 write_evidence_manifest(
@@ -673,6 +788,8 @@ def detect_change(
                 )
             if structured_exit_code is not None:
                 raise click.exceptions.Exit(structured_exit_code)
+            if incomplete_evaluation:
+                raise click.exceptions.Exit(3)
             if not passed and ctx.parent is None:
                 raise click.exceptions.Exit(1)
             return {"passed": passed, "results": results}, total_cost, model_name

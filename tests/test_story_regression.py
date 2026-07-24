@@ -381,10 +381,149 @@ class TestStaticFallback:
 # --- R9: graceful degradation --------------------------------------------------
 
 class TestGracefulDegradation:
+    def test_prompt_requires_conservative_empty_directory_fast_path(self):
+        template = Path("pdd/prompts/story_regression_python.prompt").read_text(
+            encoding="utf-8"
+        )
+
+        assert "literally empty directory" in template
+        assert "without invoking nested pytest" in template
+        assert "direct test-file input" in template
+        assert "symlink or plugin candidate" in template
+
     def test_absent_tests_dir_yields_empty_map(self, tmp_path: Path):
         smap = build_story_map(tmp_path / "no_such_tests")
         assert smap.story_to_tests == {}
         assert smap.test_to_stories == {}
+
+    def test_existing_empty_tests_dir_skips_nested_pytest(
+        self, tmp_path: Path, monkeypatch
+    ):
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+
+        nested_pytest_calls = []
+
+        def _record_pytest_main(*args, **kwargs):
+            nested_pytest_calls.append((args, kwargs))
+            return 5
+
+        monkeypatch.setattr(story_regression.pytest, "main", _record_pytest_main)
+
+        smap = build_story_map(tests_dir)
+
+        assert smap.story_to_tests == {}
+        assert smap.test_to_stories == {}
+        assert nested_pytest_calls == [], "empty tests directory invoked pytest.main"
+
+    @pytest.mark.parametrize("candidate", ["README.md", "story.case"])
+    def test_nonempty_plugin_candidate_starts_collection(
+        self, tmp_path: Path, monkeypatch, candidate: str
+    ):
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / candidate).write_text("plugin candidate\n", encoding="utf-8")
+        nested_pytest_calls = []
+
+        def _record_pytest_main(*args, **kwargs):
+            nested_pytest_calls.append((args, kwargs))
+            return 0
+
+        monkeypatch.setattr(story_regression.pytest, "main", _record_pytest_main)
+
+        build_story_map(tests_dir)
+
+        assert len(nested_pytest_calls) == 1
+
+    def test_symlinked_test_directory_starts_collection(
+        self, tmp_path: Path, monkeypatch
+    ):
+        linked_tests = tmp_path / "linked-tests"
+        linked_tests.mkdir()
+        (linked_tests / "test_linked.py").write_text(
+            "def test_linked():\n    assert True\n", encoding="utf-8"
+        )
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "linked").symlink_to(linked_tests, target_is_directory=True)
+        nested_pytest_calls = []
+
+        def _record_pytest_main(*args, **kwargs):
+            nested_pytest_calls.append((args, kwargs))
+            return 0
+
+        monkeypatch.setattr(story_regression.pytest, "main", _record_pytest_main)
+
+        build_story_map(tests_dir)
+
+        assert len(nested_pytest_calls) == 1
+
+    def test_pytest_suffix_named_candidate_still_starts_collection(
+        self, tmp_path: Path, monkeypatch
+    ):
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "example_test.py").write_text(
+            "def test_example():\n    assert True\n", encoding="utf-8"
+        )
+        nested_pytest_calls = []
+
+        def _record_pytest_main(*args, **kwargs):
+            nested_pytest_calls.append((args, kwargs))
+            return 0
+
+        monkeypatch.setattr(story_regression.pytest, "main", _record_pytest_main)
+
+        build_story_map(tests_dir)
+
+        assert len(nested_pytest_calls) == 1, (
+            "pytest's default *_test.py discovery pattern must remain supported"
+        )
+
+    def test_direct_test_file_input_starts_collection(
+        self, tmp_path: Path, monkeypatch
+    ):
+        test_file = tmp_path / "test_direct.py"
+        test_file.write_text(
+            "import pytest\n"
+            "@pytest.mark.story('direct_flow')\n"
+            "def test_direct():\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        nested_pytest_calls = []
+
+        def _record_pytest_main(*args, **kwargs):
+            nested_pytest_calls.append((args, kwargs))
+            return 0
+
+        monkeypatch.setattr(story_regression.pytest, "main", _record_pytest_main)
+
+        build_story_map(test_file)
+
+        assert len(nested_pytest_calls) == 1
+
+    def test_custom_named_python_candidate_still_starts_collection(
+        self, tmp_path: Path, monkeypatch
+    ):
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "custom_spec.py").write_text(
+            "def custom_case():\n    assert True\n", encoding="utf-8"
+        )
+        nested_pytest_calls = []
+
+        def _record_pytest_main(*args, **kwargs):
+            nested_pytest_calls.append((args, kwargs))
+            return 0
+
+        monkeypatch.setattr(story_regression.pytest, "main", _record_pytest_main)
+
+        build_story_map(tests_dir)
+
+        assert len(nested_pytest_calls) == 1, (
+            "custom pytest python_files candidates must not be pre-skipped"
+        )
 
     def test_unparseable_module_is_skipped(self, tmp_path: Path):
         d = tmp_path / "tests"

@@ -7,15 +7,17 @@ animations in parallel, serving as the core engine for the `pdd sync` command.
 import threading
 import time
 import json
+import hashlib
 import datetime
 import subprocess
 import re
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, Any, Optional, List, Callable
 from dataclasses import asdict, dataclass, field
 import tempfile
 import sys
+import uuid
 
 from .sync_tui import maybe_steer_operation, DEFAULT_STEER_TIMEOUT_S
 
@@ -57,6 +59,7 @@ from .sync_determine_operation import (
     read_run_report,
     calculate_sha256,
     calculate_current_hashes,
+    trusted_hash_root_for_paths,
     _safe_basename,
     is_test_extend_disabled,
 )
@@ -72,6 +75,7 @@ from .context_generator_main import context_generator_main
 from .crash_main import crash_main
 from .fix_verification_main import fix_verification_main
 from .cmd_test_main import cmd_test_main
+from .content_selector import PDD_TEST_OUTPUT_NEEDS_REVIEW_MARKER
 from .fix_main import fix_main
 from .compressed_sync_context import build_compressed_sync_context, metadata as compressed_context_metadata
 from .update_main import update_main
@@ -481,9 +485,9 @@ class AtomicStateUpdate:
 
     def __init__(self, basename: str, language: str):
         self.basename = basename
-        self.language = language
+        self.language = language.lower()
         self.pending = PendingStateUpdate()
-        self._temp_files: List[str] = []
+        self._crash_hook: Optional[Callable[[str], None]] = None
 
     def __enter__(self):
         return self
@@ -491,8 +495,6 @@ class AtomicStateUpdate:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is None:
             self._commit()
-        else:
-            self._rollback()
         return False  # Don't suppress exceptions
 
     def set_run_report(self, report: Dict[str, Any], path: Path):
@@ -505,46 +507,79 @@ class AtomicStateUpdate:
         self.pending.fingerprint = fingerprint
         self.pending.fingerprint_path = path
 
-    def _atomic_write(self, data: Dict[str, Any], target_path: Path) -> None:
-        """Write data to file atomically using temp file + rename pattern."""
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write to temp file in same directory (required for atomic rename)
-        fd, temp_path = tempfile.mkstemp(
-            dir=target_path.parent,
-            prefix=f".{target_path.stem}_",
-            suffix=".tmp"
-        )
-        self._temp_files.append(temp_path)
-
-        try:
-            with os.fdopen(fd, 'w') as f:
-                json.dump(data, f, indent=2, default=str)
-
-            # Atomic rename - guaranteed atomic on POSIX systems
-            os.replace(temp_path, target_path)
-            self._temp_files.remove(temp_path)  # Successfully moved, stop tracking
-        except Exception:
-            # Leave temp file for rollback to clean up
-            raise
-
     def _commit(self):
-        """Commit all pending state updates atomically."""
-        # Write fingerprint first (checkpoint), then run_report
-        if self.pending.fingerprint and self.pending.fingerprint_path:
-            self._atomic_write(self.pending.fingerprint, self.pending.fingerprint_path)
-        if self.pending.run_report and self.pending.run_report_path:
-            self._atomic_write(self.pending.run_report, self.pending.run_report_path)
+        """Commit the pair through the canonical durable transaction manager.
 
-    def _rollback(self):
-        """Clean up any temp files without committing changes."""
-        for temp_path in self._temp_files:
-            try:
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-            except OSError:
-                pass  # Best effort cleanup
-        self._temp_files.clear()
+        The run report is deliberately installed before the fingerprint, which
+        is the completion checkpoint.  A durable COMMITTING journal lets the
+        next process finish both writes after SIGKILL at either rename.
+        """
+        from .sync_core.transaction import PlannedWrite, TransactionManager
+
+        pairs = (
+            (self.pending.run_report_path, self.pending.run_report),
+            (self.pending.fingerprint_path, self.pending.fingerprint),
+        )
+        destinations = [Path(path) for path, data in pairs if path and data is not None]
+        if not destinations:
+            return
+        root = _metadata_checkout_root(*destinations)
+        manager = TransactionManager(root)
+        _recover_metadata_transactions(manager, self.basename, self.language)
+        writes = []
+        for path, data in pairs:
+            if path is None or data is None:
+                continue
+            relative = Path(path).resolve(strict=False).relative_to(root)
+            payload = json.dumps(data, indent=2, default=str).encode("utf-8") + b"\n"
+            writes.append(PlannedWrite(PurePosixPath(relative.as_posix()), payload, "100644"))
+        transaction_id = _metadata_transaction_prefix(self.basename, self.language) + uuid.uuid4().hex
+        prepared = manager.prepare(transaction_id, tuple(writes))
+        if not prepared.no_op:
+            manager.commit(transaction_id, crash_hook=self._crash_hook)
+
+
+def _metadata_checkout_root(*paths: Path) -> Path:
+    """Return the single checkout root owning metadata destinations."""
+    roots = set()
+    for raw_path in paths:
+        resolved = Path(raw_path).resolve(strict=False)
+        pdd_dir = next((parent for parent in resolved.parents if parent.name == ".pdd"), None)
+        if pdd_dir is None:
+            raise ValueError(f"metadata destination is outside .pdd: {raw_path}")
+        roots.add(pdd_dir.parent)
+    if len(roots) != 1:
+        raise ValueError("metadata destinations belong to different projects")
+    return roots.pop()
+
+
+def _metadata_transaction_prefix(basename: str, language: str) -> str:
+    identity = f"{basename}\0{language.lower()}".encode("utf-8")
+    return f"legacy-metadata-{hashlib.sha256(identity).hexdigest()[:20]}-"
+
+
+def _recover_metadata_transactions(manager, basename: str, language: str) -> tuple[str, ...]:
+    """Recover only journals owned by this legacy module identity."""
+    prefix = _metadata_transaction_prefix(basename, language)
+    recovered = []
+    for transaction_id in manager.incomplete():
+        if transaction_id.startswith(prefix):
+            manager.recover(transaction_id)
+            recovered.append(transaction_id)
+    return tuple(recovered)
+
+
+def recover_incomplete_metadata_transactions(
+    basename: str,
+    language: str,
+    paths: Optional[Dict[str, Path]] = None,
+) -> tuple[str, ...]:
+    """Recover a crash-interrupted run-report/fingerprint pair before reading it."""
+    fingerprint_path = get_fingerprint_path(basename, language, paths=paths)
+    run_report_path = get_run_report_path(basename, language, paths=paths)
+    root = _metadata_checkout_root(fingerprint_path, run_report_path)
+    from .sync_core.transaction import TransactionManager
+    return _recover_metadata_transactions(TransactionManager(root), basename, language)
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
@@ -729,7 +764,11 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
         else:
             prev_fp = read_fingerprint(basename, language, paths=paths)
             stored_deps = prev_fp.include_deps if prev_fp else None
-        current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps)
+        current_hashes = calculate_current_hashes(
+            paths,
+            stored_include_deps=stored_deps,
+            dependency_root=trusted_hash_root_for_paths(paths),
+        )
         # If override provided and current extraction found nothing, use the override
         if include_deps_override and not current_hashes.get('include_deps'):
             current_hashes['include_deps'] = include_deps_override
@@ -1666,7 +1705,9 @@ def _create_synthetic_run_report_for_agentic_success(
     # Use actual hash if file exists, otherwise use sentinel value to indicate
     # agentic test generation succeeded (differentiates from crash/verify synthetic reports)
     if test_file.exists():
-        test_hash = calculate_sha256(test_file)
+        test_hash = calculate_sha256(
+            test_file, trusted_hash_root_for_paths({"test": test_file})
+        )
     else:
         # Sentinel value: indicates agentic test success even though expected file path doesn't exist
         # The agent may have created tests at a different path (e.g., .test.tsx instead of .tsx)
@@ -1723,11 +1764,15 @@ def _execute_tests_and_create_run_report(
     all_test_files = test_files if test_files else [test_file]
 
     # Calculate test file hash for staleness detection (primary file for backward compat)
-    test_hash = calculate_sha256(test_file) if test_file.exists() else None
+    test_hash = (
+        calculate_sha256(test_file, trusted_hash_root_for_paths({"test": test_file}))
+        if test_file.exists()
+        else None
+    )
 
     # Bug #156: Calculate hashes for ALL test files
     test_file_hashes = {
-        f.name: calculate_sha256(f)
+        f.name: calculate_sha256(f, trusted_hash_root_for_paths({"test": f}))
         for f in all_test_files
         if f.exists()
     } if all_test_files else None
@@ -2040,9 +2085,18 @@ def sync_orchestration(
     evidence: bool = False,
     snapshot_context: bool = False,
     compressed_context: bool = False,
+    fresh: bool = False,
 ) -> Dict[str, Any]:
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
+
+    ``fresh`` (issue #1938 Pillar A): when False (the default), the generate
+    operation regenerates mature modules surgically (edit-shaped) by driving
+    ``code_generator_main`` with ``force_incremental_flag=True`` so declared
+    public symbols are preserved instead of being dropped by a full "rebirth"
+    regeneration. Pass ``fresh=True`` (``pdd sync --fresh``) to restore full
+    regeneration. ``code_generator_main`` still falls back to full generation
+    for new/empty modules or when the original prompt cannot be determined.
     """
     # Handle None values from CLI (Issue #194) - defense in depth
     if target_coverage is None:
@@ -2131,7 +2185,26 @@ def sync_orchestration(
             "errors": [f"Path construction failed: {str(e)}"]
         }
 
+    test_output_needs_review = pdd_files.get("test_output_needs_review")
+    if test_output_needs_review:
+        # Issue #1903: the runner exists, but its effective collection path is
+        # opaque. Continue code/example work while suppressing every test/fix
+        # write and surface a machine-readable note to the issue-driven parent.
+        skip_tests = True
+        print(
+            f"{PDD_TEST_OUTPUT_NEEDS_REVIEW_MARKER}: "
+            f"{test_output_needs_review}",
+            flush=True,
+        )
+
     try:
+        # Operation selection must never observe one half of a prior metadata
+        # commit.  Recovery is scoped to this exact module/language identity.
+        recover_incomplete_metadata_transactions(
+            basename,
+            language,
+            paths=pdd_files,
+        )
         from .sync_core.finalize import preflight_legacy_mutation
         preflight_legacy_mutation(pdd_files)
     except RuntimeError as exc:
@@ -2657,7 +2730,10 @@ def sync_orchestration(
                         _save_fingerprint_atomic(basename, language, 'skip:crash', pdd_files, 0.0, 'skipped')
                         # FIX: Create a synthetic run_report to prevent infinite loop when crash is skipped
                         # Without this, sync_determine_operation keeps returning 'crash' because no run_report exists
-                        current_hashes = calculate_current_hashes(pdd_files)
+                        current_hashes = calculate_current_hashes(
+                            pdd_files,
+                            dependency_root=trusted_hash_root_for_paths(pdd_files),
+                        )
                         synthetic_report = RunReport(
                             timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
                             exit_code=0,  # Assume success since we're skipping validation
@@ -2802,7 +2878,7 @@ def sync_orchestration(
                                     for _conform_attempt in range(MAX_CONFORMANCE_ATTEMPTS):
                                         try:
                                             # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
-                                            result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False, output_from_config=True, compress=compress, snapshot_context=snapshot_context, compressed_context=_phase_compressed_context('generate', os.environ.get("PDD_REPAIR_DIRECTIVE")))
+                                            result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=not fresh, output_from_config=True, compress=compress, snapshot_context=snapshot_context, compressed_context=_phase_compressed_context('generate', os.environ.get("PDD_REPAIR_DIRECTIVE")))
                                             last_conform_exc = None
                                             break
                                         except (
@@ -3028,7 +3104,14 @@ def sync_orchestration(
                                                 test_files=pdd_files.get('test_files'),
                                             )
                                         else:
-                                            test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                            test_hash = (
+                                                calculate_sha256(
+                                                    pdd_files['test'],
+                                                    trusted_hash_root_for_paths(pdd_files),
+                                                )
+                                                if pdd_files['test'].exists()
+                                                else None
+                                            )
                                             report = RunReport(
                                                 datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                                 exit_code=0,
@@ -3072,7 +3155,14 @@ def sync_orchestration(
                                                     test_files=pdd_files.get('test_files'),
                                                 )
                                             else:
-                                                test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                                test_hash = (
+                                                    calculate_sha256(
+                                                        pdd_files['test'],
+                                                        trusted_hash_root_for_paths(pdd_files),
+                                                    )
+                                                    if pdd_files['test'].exists()
+                                                    else None
+                                                )
                                                 report = RunReport(
                                                     datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                                     exit_code=0, tests_passed=1, tests_failed=0, coverage=0.0,
@@ -3645,7 +3735,14 @@ def sync_orchestration(
                                 # Bug #364 fix: For non-Python languages, trust the agentic result.
                                 # Python needs real coverage measurement (commit 86fe07dc1 missed this).
                                 # Save a successful RunReport so sync_determine_operation advances.
-                                test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                test_hash = (
+                                    calculate_sha256(
+                                        pdd_files['test'],
+                                        trusted_hash_root_for_paths(pdd_files),
+                                    )
+                                    if pdd_files['test'].exists()
+                                    else None
+                                )
                                 report = RunReport(
                                     datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                     exit_code=0,
@@ -3677,7 +3774,14 @@ def sync_orchestration(
                                          timeout=60
                                      )
                                      # Include test_hash for staleness detection
-                                     test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                     test_hash = (
+                                         calculate_sha256(
+                                             pdd_files['test'],
+                                             trusted_hash_root_for_paths(pdd_files),
+                                         )
+                                         if pdd_files['test'].exists()
+                                         else None
+                                     )
                                      report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0, test_hash=test_hash)
                                      _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state, paths=pdd_files)
                                 except Exception as e:
@@ -3688,7 +3792,14 @@ def sync_orchestration(
                     
                         if success and operation == 'verify':
                             if _use_agentic_path(language, agentic_mode) and language.lower() != 'python':
-                                test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                test_hash = (
+                                    calculate_sha256(
+                                        pdd_files['test'],
+                                        trusted_hash_root_for_paths(pdd_files),
+                                    )
+                                    if pdd_files['test'].exists()
+                                    else None
+                                )
                                 report = RunReport(
                                     datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                     exit_code=0,
@@ -3706,7 +3817,14 @@ def sync_orchestration(
                                 # Bug #364 fix: For non-Python languages, trust the agentic result.
                                 # The agentic fix handler already verified tests pass.
                                 # Python needs real coverage measurement (commit 86fe07dc1 missed this).
-                                test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                test_hash = (
+                                    calculate_sha256(
+                                        pdd_files['test'],
+                                        trusted_hash_root_for_paths(pdd_files),
+                                    )
+                                    if pdd_files['test'].exists()
+                                    else None
+                                )
                                 report = RunReport(
                                     datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                     exit_code=0,
@@ -3782,7 +3900,12 @@ def sync_orchestration(
             'skipped_operations': skipped_operations,
             'total_cost': current_cost_ref[0],
             'total_time': time.time() - start_time,
-            'final_state': {p: {'exists': f.exists(), 'path': str(f)} for p, f in pdd_files.items() if p != 'test_files'},
+            'final_state': {
+                p: {'exists': f.exists(), 'path': str(f)}
+                for p, f in pdd_files.items()
+                if p != 'test_files' and isinstance(f, Path)
+            },
+            'needs_review': test_output_needs_review,
             'errors': errors,
             'error': "; ".join(errors) if errors else None,
             'summary': _compose_sync_summary(

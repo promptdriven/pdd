@@ -50,19 +50,61 @@ _CALL_SITE_TUPLE_HANDLING_PATTERN = re.compile(
 _RETRY_BOUND_PATTERNS = [
     re.compile(
         r"\b(?:retry|retries|attempt|attempts)\s+"
-        r"(?:up\s+to\s+|at\s+most\s+|no\s+more\s+than\s+)?\d+\b",
+        r"(?:up\s+to\s+|at\s+most\s+|no\s+more\s+than\s+)?"
+        r"(?P<count>\d+)\b",
         re.IGNORECASE,
     ),
     re.compile(
         r"\b(?:up\s+to|at\s+most|no\s+more\s+than|max(?:imum)?(?:\s+of)?)\s+"
-        r"\d+\s+(?:retry|retries|attempt|attempts|time|times)\b",
+        r"(?P<count>\d+)\s+(?:retry|retries|attempt|attempts|time|times)\b",
         re.IGNORECASE,
     ),
     re.compile(
-        r"\b\d+\s+(?:retry|retries|attempt|attempts|tries|time|times)\b",
+        r"\b(?P<count>\d+)\s+"
+        r"(?:retry|retries|attempt|attempts|tries|time|times)\b",
         re.IGNORECASE,
     ),
 ]
+
+_WORD_ATTEMPT_ORDINALS = (
+    "first",
+    "second",
+    "third",
+    "fourth",
+    "fifth",
+    "sixth",
+    "seventh",
+    "eighth",
+    "ninth",
+    "tenth",
+    "eleventh",
+    "twelfth",
+    "thirteenth",
+    "fourteenth",
+    "fifteenth",
+    "sixteenth",
+    "seventeenth",
+    "eighteenth",
+    "nineteenth",
+    "twentieth",
+)
+_WORD_ATTEMPT_ORDINAL_PATTERN = r"(?:" + "|".join(_WORD_ATTEMPT_ORDINALS) + r")"
+_ATTEMPT_ORDINAL_PATTERN = (
+    rf"(?:\d+(?:st|nd|rd|th)|{_WORD_ATTEMPT_ORDINAL_PATTERN})"
+)
+_ATTEMPT_ORDINAL_VALUE_PATTERN = re.compile(
+    rf"\b(?:(?P<numeric>\d+)(?:st|nd|rd|th)|"
+    rf"(?P<word>{_WORD_ATTEMPT_ORDINAL_PATTERN}))\b",
+    re.IGNORECASE,
+)
+_WORD_ATTEMPT_ORDINAL_VALUES = {
+    word: value
+    for value, word in enumerate(_WORD_ATTEMPT_ORDINALS, start=1)
+}
+_ORDINAL_FAILURE_CAUSE_TAIL_PATTERN = (
+    r"(?:\s+(?:with|due\s+to)\s+(?:(?:an?|the)\s+)?"
+    r"(?:[\w-]+\s+){0,4}?(?:errors?|exceptions?|failures?))?"
+)
 
 _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"\b(?:"
@@ -79,17 +121,21 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"all\s+(?:retry\s+)?attempts?\s+"
     r"(?:(?:have|has|are|were)\s+)?fail(?:s|ed)?|"
     r"all\s+\d+\s+(?:retry\s+)?attempts?\s+"
-    r"(?:(?:have|has|are|were)\s+)?fail(?:s|ed)?|"
-    r"(?:if|when)\s+[\w\s]+fail(?:s|ed)?\s+on\s+(?:the\s+)?"
-    r"\d+(?:st|nd|rd|th)\s+attempt|"
-    r"(?:if|when)\s+(?:the\s+)?\d+(?:st|nd|rd|th)\s+attempt\s+"
+    r"(?:(?:have|has|are|were)\s+)?fail(?:s|ed)?"
+    r"(?:\s+due\s+to\s+(?:(?:an?|the)\s+)?"
+    r"(?:[\w-]+\s+){0,4}?(?:errors?|exceptions?|failures?))?|"
+    r"(?:if|when)\s+(?:the\s+)?"
+    r"(?:pipeline|operation|request|call|task|job|runner|it)\s+"
+    r"fail(?:s|ed)?\s+on\s+(?:the\s+)?"
+    rf"{_ATTEMPT_ORDINAL_PATTERN}\s+(?:retry\s+)?attempt|"
+    rf"(?:if|when)\s+(?:the\s+)?{_ATTEMPT_ORDINAL_PATTERN}\s+"
+    r"(?:retry\s+)?attempt\s+"
     r"(?:(?:also|still)\s+)?fail(?:s|ed)?"
-    r"(?:\s+with\s+(?:(?:a|an|the)\s+)?(?:connection\s+)?"
-    r"(?:error|exception|failure))?|"
+    rf"{_ORDINAL_FAILURE_CAUSE_TAIL_PATTERN}|"
     r"(?:if|when)\s+(?:the\s+)?(?:connection\s+)?"
     r"(?:error|exception|failure)\s+(?:still\s+)?"
     r"(?:persist(?:s|ed)?|remain(?:s|ed)?)\s+after\s+(?:the\s+)?"
-    r"\d+(?:st|nd|rd|th)\s+(?:retry\s+)?attempt|"
+    rf"{_ATTEMPT_ORDINAL_PATTERN}\s+(?:retry\s+)?attempt|"
     r"once\s+(?:the\s+)?(?:max(?:imum)?\s+)?(?:retry\s+)?attempts?\s+"
     r"(?:is\s+|are\s+)?(?:reached|exhausted)|"
     r"(?:once|when|if)\s+(?:the\s+)?max(?:imum)?\s+number\s+of\s+attempts?\s+"
@@ -171,11 +217,19 @@ _SUCCESS_RETURN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_UNSUPPORTED_INVERSE_ORDINAL_PATTERN = re.compile(
+    rf"\b(?:once|after)\s+(?:the\s+)?{_ATTEMPT_ORDINAL_PATTERN}\s+"
+    r"(?:retry\s+)?attempt\s+(?:(?:also|still)\s+)?fails?\b",
+    re.IGNORECASE,
+)
+
 _CONNECTIVE_ONLY_PATTERN = re.compile(
     r"^\s*(?:then|(?:and|but)\s+then|otherwise|however|but|nevertheless|"
     r"as\s+(?:a|the)\s+fallback)?\s*$",
     re.IGNORECASE,
 )
+
+_NESTED_LIST_ACTION_PATTERN = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
 
 _ACTION_ADVERBS = (
     r"(?:(?:immediately|gracefully|clearly|explicitly|directly|finally)\s+)*"
@@ -188,6 +242,11 @@ _DIRECT_ACTION_PATTERNS = tuple(
     for body in (
         r"(?:re[- ]?)?rais(?:e|ed)\b.{0,96}",
         r"(?:surface|propagate|abort|skip)\b.{0,96}",
+        r"let\s+(?:(?:the|a|an|this|that)\s+)?"
+        r"(?:[\w-]+\s+){0,4}(?:errors?|exceptions?)\s+propagate"
+        r"(?:\s+upstream|\s+(?:back\s+)?to\s+"
+        r"(?:(?:the|a|an|its)\s+)?(?:caller|user|client|upstream|"
+        r"calling\s+(?:code|function)))?",
         r"return\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
         r"log\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
         r"fail\s+with\b.{0,64}\b(?:error|exception|failure)\b.{0,32}",
@@ -210,19 +269,25 @@ _MODAL_PREFIX_PATTERN = re.compile(
 )
 
 _INVERSE_EXHAUSTION_PATTERN = re.compile(
-    r"^\s*(?:when|once|after)\s+(?:"
+    rf"^\s*(?:(?:once|after)\s+(?!(?:the\s+)?{_ATTEMPT_ORDINAL_PATTERN}\s+"
+    r"(?:retry\s+)?attempt\b)|when\s+)(?:"
     r"(?:the\s+)?(?:max(?:imum)?\s+)?(?:retry\s+)?(?:attempts?|retries)\s+"
     r"(?:(?:is|are|have\s+been|has\s+been)\s+)?(?:exhausted|fail(?:s|ed)?)|"
-    r"all\s+(?:\d+\s+)?(?:retry\s+)?(?:attempts?|retries)\s+"
+    r"all\s+(?:retry\s+)?(?:attempts?|retries)\s+"
     r"(?:(?:are|have\s+been)\s+)?(?:exhausted|fail(?:s|ed)?)|"
+    r"all\s+\d+\s+(?:retry\s+)?(?:attempts?|retries)\s+"
+    r"(?:(?:(?:are|have\s+been)\s+)?exhausted|"
+    r"(?:(?:are|have\s+been)\s+)?fail(?:s|ed)?"
+    r"(?:\s+due\s+to\s+(?:(?:an?|the)\s+)?"
+    r"(?:[\w-]+\s+){0,4}?(?:errors?|exceptions?|failures?))?)|"
     r"(?:the\s+)?(?:retry\s+)?limit\s+"
     r"(?:(?:is|has\s+been)\s+)?(?:reached|exceeded|exhausted)|"
     r"(?:the\s+)?max(?:imum)?\s+number\s+of\s+attempts?\s+"
     r"(?:(?:is|has\s+been)\s+)?(?:reached|exceeded|exhausted)|"
     r"(?:the\s+)?(?:connection\s+)?(?:error|exception|failure)\s+"
     r"(?:still\s+)?(?:persists?|remains?)\s+after\s+(?:the\s+)?"
-    r"\d+(?:st|nd|rd|th)\s+(?:retry\s+)?attempt|"
-    r"(?:the\s+)?\d+(?:st|nd|rd|th)\s+(?:retry\s+)?attempt\s+"
+    rf"{_ATTEMPT_ORDINAL_PATTERN}\s+(?:retry\s+)?attempt|"
+    rf"(?:the\s+)?{_ATTEMPT_ORDINAL_PATTERN}\s+(?:retry\s+)?attempt\s+"
     r"(?:(?:also|still)\s+)?fails?"
     r")\s*$",
     re.IGNORECASE,
@@ -268,6 +333,34 @@ def _judge_retry_bound(prompt_output: str) -> JudgmentResult:
     )
 
 
+def _retry_bound_values(prompt_output: str) -> frozenset[int]:
+    """Return all explicit numeric retry or attempt bounds in *prompt_output*."""
+    return frozenset(
+        int(match.group("count"))
+        for pattern in _RETRY_BOUND_PATTERNS
+        for match in pattern.finditer(prompt_output)
+    )
+
+
+def _exhaustion_ordinal_matches_bound(
+    prompt_output: str, exhaustion: re.Match[str]
+) -> bool:
+    """Bind ordinal exhaustion to the prompt's single explicit retry bound."""
+    ordinal = _ATTEMPT_ORDINAL_VALUE_PATTERN.search(exhaustion.group())
+    if ordinal is None:
+        return True
+    numeric = ordinal.group("numeric")
+    value = (
+        int(numeric)
+        if numeric is not None
+        else _WORD_ATTEMPT_ORDINAL_VALUES[ordinal.group("word").lower()]
+    )
+    bounds = _retry_bound_values(prompt_output)
+    if not bounds:
+        return numeric is not None
+    return len(bounds) == 1 and value in bounds
+
+
 def _retry_units(prompt_output: str) -> tuple[str, ...]:
     """Split prose into ordered comma, semicolon, and sentence units."""
     return tuple(
@@ -280,6 +373,10 @@ def _retry_units(prompt_output: str) -> tuple[str, ...]:
 def _fallback_action_state(text: str) -> tuple[bool, bool]:
     """Classify one self-contained action unit as affirmative or rejected."""
     text = text.strip(" ,;:.!?\t\r\n")
+    if _NESTED_LIST_ACTION_PATTERN.match(text):
+        return False, False
+    if _UNSUPPORTED_INVERSE_ORDINAL_PATTERN.search(text):
+        return False, False
     if _RETRY_CONTINUATION_PATTERN.search(text):
         return False, True
     if _SUCCESS_RETURN_PATTERN.search(text):
@@ -379,6 +476,8 @@ def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
     for index, unit in enumerate(units):
         for exhaustion in _RETRY_EXHAUSTION_PATTERN.finditer(unit):
             prefix = unit[: exhaustion.start()]
+            if not _exhaustion_ordinal_matches_bound(prompt_output, exhaustion):
+                continue
             if not _is_affirmative_exhaustion_match(unit, exhaustion):
                 continue
             if _STOP_RETRYING_EXHAUSTION_PATTERN.fullmatch(exhaustion.group()) and not (
@@ -662,6 +761,422 @@ class TestDeterministicChangeJudges:
         missing = _judge_retry_fallback("Retry up to 3 times.")
         assert not missing.passed
         assert "exhaust" in missing.reasoning
+
+    def test_retry_fallback_judge_accepts_all_attempts_failure_cause_tail(
+        self,
+    ) -> None:
+        """A bounded failure cause may precede the explicit fallback action."""
+        judgment = _judge_retry_fallback(
+            "If all 3 attempts fail due to connection errors, run_pipeline "
+            "must propagate the final connection error to the caller."
+        )
+
+        assert judgment.passed, judgment.reasoning
+
+    def test_retry_fallback_judge_accepts_word_ordinal_final_attempt(self) -> None:
+        """A spelled final-attempt ordinal binds the fallback action."""
+        judgment = _judge_retry_fallback(
+            "The runner should attempt the pipeline a maximum of 3 times. "
+            "If the third attempt also fails with a connection error, the "
+            "runner must propagate the connection error to the caller."
+        )
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "If `fetch_data` raises a connection error during execution, "
+                "`run_pipeline(url, db)` must catch this error and retry the "
+                "entire pipeline from the beginning (starting with `fetch_data`). "
+                "The pipeline runner should allow a maximum of 3 attempts. If "
+                "the 3rd attempt also fails due to a connection error, "
+                "`run_pipeline` must propagate the final exception to the caller."
+            ),
+            (
+                "Use at most 3 attempts. If the third attempt still fails due "
+                "to a connection exception, re-raise the final exception."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_accepts_ordinal_due_to_explicit_action(
+        self, guidance: str
+    ) -> None:
+        """A bound ordinal cause may precede explicit propagation or re-raise."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    def test_retry_fallback_judge_accepts_cloud_let_propagate_output(self) -> None:
+        """The exact release-gate output states an explicit final action."""
+        guidance = """\
+Build a Python data-import pipeline with three steps:
+1. `fetch_data(url)` — downloads JSON from a URL.
+2. `parse_data(raw)` — parses the JSON into records.
+3. `load_data(records, db)` — inserts records into a database.
+
+The pipeline runner `run_pipeline(url, db)` calls these in sequence.
+
+If `fetch_data(url)` raises a connection error (such as a network-related
+exception), `run_pipeline(url, db)` must catch this exception and retry the
+entire pipeline from the beginning.
+- Implement a retry limit of up to 3 attempts in total.
+- If the 3rd attempt still fails with a connection error, `run_pipeline` must
+  let the connection exception propagate to the caller.
+"""
+
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use at most 3 attempts. If the third attempt fails, let the "
+                "connection exception propagate to the caller."
+            ),
+            (
+                "Retry up to 3 times. If the 3rd attempt still fails, the "
+                "runner must let the final error propagate."
+            ),
+            (
+                "Use a maximum of 3 attempts. If the third attempt fails, "
+                "run_pipeline should explicitly let that exception propagate."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- If the third attempt fails, `run_pipeline` must let the "
+                "connection exception propagate to the caller."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_accepts_let_error_propagate(
+        self, guidance: str
+    ) -> None:
+        """Explicitly letting an error propagate is affirmative fallback."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            "Use 3 attempts. If the third attempt fails, let it happen.",
+            (
+                "Use 3 attempts. If the third attempt fails, the runner must "
+                "not let the exception propagate."
+            ),
+            "Use 3 attempts. If the third attempt fails, let metrics propagate.",
+            "Use 3 attempts. If the third attempt fails, let success propagate.",
+            (
+                "Use 3 attempts. If the third attempt fails, let the exception "
+                "propagate and keep retrying."
+            ),
+            (
+                "Use 3 attempts. If the third attempt fails, let the connection "
+                "exception propagate no further."
+            ),
+            (
+                "Use 3 attempts. If the third attempt fails, let the connection "
+                "exception propagate and swallow it before it reaches the caller."
+            ),
+            (
+                "Use 3 attempts. If the third attempt fails, let the connection "
+                "exception propagate only when debug mode is enabled."
+            ),
+            (
+                "Use 3 attempts. If the third attempt fails, let the connection "
+                "exception propagate to telemetry, not the caller."
+            ),
+            "If a connection error occurs, let the exception propagate.",
+            "Let the connection exception propagate to the caller.",
+            (
+                "Use 3 attempts. If validation fails, let the connection "
+                "exception propagate. If the third attempt fails."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_unsafe_let_forms(
+        self, guidance: str
+    ) -> None:
+        """Vague, negated, unrelated, or unbounded ``let`` is not fallback."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use at most 3 attempts.\n"
+                "- If the third attempt fails:\n"
+                "  - do not let the connection exception propagate to the caller."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- If validation fails:\n"
+                "  - let the connection exception propagate to the caller.\n"
+                "- If the third attempt fails:\n"
+                "  - log retry metrics."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- If validation fails:\n"
+                "  - If the third attempt fails:\n"
+                "    - let the connection exception propagate to the caller."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- If authentication fails:\n"
+                "  - If the third attempt fails:\n"
+                "    - `run_pipeline` must let the final error propagate upstream."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- Unless validation succeeds:\n"
+                "  - If the third attempt fails:\n"
+                "    - let the connection exception propagate to the caller."
+            ),
+            (
+                "Use at most 3 attempts.\n"
+                "- Before validation completes:\n"
+                "  - If the third attempt fails:\n"
+                "    - `run_pipeline` must let the final error propagate upstream."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_nested_markdown_sibling_actions(
+        self, guidance: str
+    ) -> None:
+        """Unsupported nested list actions cannot weaken clause isolation."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use at most 3 attempts. If the third attempt fails due to a "
+                "connection error."
+            ),
+            (
+                "Use at most 3 attempts. If the third attempt fails due to a "
+                "connection error, handle it."
+            ),
+            (
+                "Use at most 3 attempts. If the third attempt fails due to a "
+                "connection error, the exception remains available."
+            ),
+            (
+                "Use at most 3 attempts. If the third attempt fails due to a "
+                "connection error, do not propagate the exception."
+            ),
+            (
+                "Use at most 3 attempts. Propagate the final exception when "
+                "the third attempt fails due to a connection error. Keep retrying."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_ordinal_due_to_without_fallback(
+        self, guidance: str
+    ) -> None:
+        """A bound ordinal cause alone is not an explicit fallback action."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use 3 attempts. If validation fails, log it, propagate the final "
+                "error once the third attempt fails."
+            ),
+            (
+                "Use 3 attempts. If validation fails and retries are exhausted, "
+                "propagate the final error after the third attempt fails."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_unsupported_inverse_branch_forms(
+        self, guidance: str
+    ) -> None:
+        """Unsupported inverse connectors cannot bypass conditional isolation."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Use a maximum of 1 attempt. If the first attempt also fails, "
+                "raise the final error."
+            ),
+            (
+                "Retry up to 2 times. If the second attempt still fails, "
+                "return an error result."
+            ),
+            (
+                "When the fourth retry attempt also fails, abort the operation. "
+                "Retry up to 4 times."
+            ),
+            (
+                "Use at most 20 attempts. If the failure persists after the "
+                "twentieth attempt, "
+                "propagate the exception."
+            ),
+            (
+                "Use 12 attempts. Surface the error when the twelfth attempt "
+                "also fails."
+            ),
+            (
+                "Use a maximum of 3 attempts. If the 3rd attempt fails, "
+                "raise the error."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_accepts_common_word_ordinals(
+        self, guidance: str
+    ) -> None:
+        """Common spelled ordinals work in condition-first and inverse forms."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            "If the third attempt does not fail, return success.",
+            "If the third attempt fails, do not propagate the error.",
+            "If the third attempt fails, propagate the error. Keep retrying.",
+            (
+                "If the third attempt fails, the final error remains available "
+                "for inspection."
+            ),
+            (
+                "If the third attempt fails. If validation fails, propagate "
+                "the validation error."
+            ),
+            (
+                "Retry up to 3 times. If authentication fails, contact the "
+                "third-party provider; propagate an authentication error."
+            ),
+            (
+                "Use a maximum of 3 attempts. If the first attempt fails, "
+                "raise the error."
+            ),
+            (
+                "Use a maximum of 3 attempts. If the twentieth attempt fails, "
+                "raise the error."
+            ),
+            "Raise the error when the first attempt fails. Retry up to 3 times.",
+            (
+                "Retry up to 3 times. Raise the error when the twentieth "
+                "attempt fails."
+            ),
+            "If the third attempt fails, raise the error.",
+            "Raise the error when the third attempt fails.",
+            (
+                "Use a maximum of 3 attempts. If the 2nd attempt fails, "
+                "raise the error."
+            ),
+            (
+                "Use a maximum of 2 attempts. If telemetry fails on the second "
+                "attempt, raise the telemetry error."
+            ),
+            (
+                "Raise the telemetry error when telemetry fails on the second "
+                "attempt. Use at most 2 attempts."
+            ),
+            (
+                "Use a maximum of 2 attempts. If telemetry fails on the 2nd "
+                "attempt, raise the telemetry error."
+            ),
+            (
+                "Raise the telemetry error when telemetry fails on the 2nd "
+                "attempt. Use at most 2 attempts."
+            ),
+            (
+                "Use a maximum of 3 attempts and at most 4 retries. If the "
+                "third attempt fails, raise the error."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_word_ordinal_false_positives(
+        self, guidance: str
+    ) -> None:
+        """Spelled ordinals do not weaken rejection and clause binding."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed, guidance
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            (
+                "Propagate the final connection error when all 3 attempts "
+                "fail due to connection errors."
+            ),
+            (
+                "Raise the final error after all 3 attempts fail due to a "
+                "transient connection error."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_accepts_inverse_failure_cause_tail(
+        self, guidance: str
+    ) -> None:
+        """A bounded failure cause also supports action-first word order."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert judgment.passed, judgment.reasoning
+
+    @pytest.mark.parametrize(
+        "guidance",
+        (
+            "If all 3 attempts fail due to connection errors, keep retrying.",
+            (
+                "If all 3 attempts fail due to connection errors, the final "
+                "connection error remains available for inspection."
+            ),
+            "If all 3 attempts fail due to connection errors, return success.",
+            (
+                "If all 3 attempts fail due to connection errors, run_pipeline "
+                "must not propagate the final connection error."
+            ),
+            (
+                "Do not propagate the final connection error when all 3 attempts "
+                "fail due to connection errors."
+            ),
+            (
+                "Keep retrying when all 3 attempts fail due to connection errors."
+            ),
+            (
+                "The final connection error remains available for inspection when "
+                "all 3 attempts fail due to connection errors."
+            ),
+            "Return success after all 3 attempts fail due to connection errors.",
+            (
+                "Propagate the final connection error when all 3 attempts fail due "
+                "to connection errors. Keep retrying."
+            ),
+            (
+                "Propagate the final connection error when not all 3 attempts fail "
+                "due to connection errors."
+            ),
+        ),
+    )
+    def test_retry_fallback_judge_rejects_cause_tail_without_fallback(
+        self, guidance: str
+    ) -> None:
+        """A failure cause does not weaken fallback-action requirements."""
+        judgment = _judge_retry_fallback(guidance)
+
+        assert not judgment.passed
 
     @pytest.mark.parametrize(
         "guidance",

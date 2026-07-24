@@ -24,6 +24,13 @@ from .fix_error_loop import fix_error_loop, run_pytest_on_file
 from .get_jwt_token import get_jwt_token
 from .get_language import get_language
 from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
+from .mock_contract_validation import (
+    MockContractDivergenceError,
+    enforce_mock_contracts,
+    format_mock_contract_report,
+    resolve_protected_schema_ref,
+    validate_mock_contracts,
+)
 
 # Import DEFAULT_STRENGTH from the package
 from . import DEFAULT_STRENGTH
@@ -525,6 +532,57 @@ def fix_main(
                 # No changes suggested by LLM
                 success = False
 
+        # A passing test run is necessary but not sufficient when the fix also
+        # changed a mock.  Compare prospective code/test contents with the
+        # repository's real schema before either file is persisted.  Baseline
+        # contents make the check diff-aware, so unrelated legacy queries do
+        # not become new failures merely because this command touched the file.
+        if success:
+            final_test_content = (
+                input_strings["unit_test_file"]
+                if protect_tests or _local_focused_slices or _fix_focused_slices
+                else (fixed_unit_test or input_strings["unit_test_file"])
+            )
+            final_code_content = fixed_code or input_strings["code_file"]
+            validation_inputs = dict(
+                # Use the cwd string so tests that patch this module's ``Path``
+                # for output-file assertions cannot replace the validator root.
+                project_root=os.getcwd(),
+                production_sources={
+                    output_file_paths["output_code"]: final_code_content,
+                },
+                test_sources={
+                    output_file_paths["output_test"]: final_test_content,
+                },
+                baseline_production_sources={
+                    code_file: input_strings["code_file"],
+                },
+                baseline_test_sources={
+                    unit_test_file: input_strings["unit_test_file"],
+                },
+            )
+            # Decide non-applicability from the prospective/baseline sources
+            # before touching Git. This preserves standalone/non-Git and mocked
+            # flows that introduced no query/mock contract candidate. Any
+            # applicable candidate is then re-run exclusively against a true
+            # protected baseline; the preliminary candidate-tree scan is never
+            # accepted as authority.
+            mock_contract_report = validate_mock_contracts(**validation_inputs)
+            if mock_contract_report.status != "not_applicable":
+                protected_schema_ref = resolve_protected_schema_ref(Path(os.getcwd()))
+                mock_contract_report = validate_mock_contracts(
+                    **validation_inputs,
+                    protected_schema_ref=protected_schema_ref,
+                )
+            if mock_contract_report.status == "inconclusive" and not ctx.obj.get(
+                "quiet", False
+            ):
+                rprint(
+                    "[bold yellow]Mock-contract validation inconclusive:[/bold yellow] "
+                    + format_mock_contract_report(mock_contract_report)
+                )
+            enforce_mock_contracts(mock_contract_report)
+
         # Save fixed files
         # Skip test write when focused repair was used: the LLM only saw a
         # slice of the test file, so writing fixed_unit_test would truncate
@@ -738,6 +796,28 @@ def fix_main(
         raise
     except click.UsageError:
         # Re-raise UsageError for proper CLI handling (e.g., cloud auth failures, insufficient credits)
+        raise
+    except MockContractDivergenceError as divergence_error:
+        # A green test suite backed by a schema-divergent mock is a hard fix
+        # failure.  Let the Click boundary produce a non-zero exit and prevent
+        # the operation decorator from writing a success fingerprint. Loop mode
+        # writes each candidate to the source paths while testing it, so restore
+        # the exact pre-fix contents before surfacing the contract failure.
+        if loop:
+            rollback_errors = []
+            for input_path, input_key in (
+                (code_file, "code_file"),
+                (unit_test_file, "unit_test_file"),
+            ):
+                try:
+                    with open(input_path, "w", encoding="utf-8") as stream:
+                        stream.write(input_strings[input_key])
+                except (OSError, KeyError) as rollback_error:
+                    rollback_errors.append(f"{input_path}: {rollback_error}")
+            if rollback_errors:
+                divergence_error.add_note(
+                    "Could not fully restore pre-fix files: " + "; ".join(rollback_errors)
+                )
         raise
     except Exception as e:
         if not ctx.obj.get('quiet', False):

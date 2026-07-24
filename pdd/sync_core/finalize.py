@@ -333,6 +333,10 @@ def finalize_unit(
     if len(matches) != 1:
         raise ValueError(f"finalization requires exactly one managed unit: {module}")
     profiles = load_verification_profiles(repository_root, manifest)
+    if profiles.invalid_reasons:
+        raise ValueError(
+            "canonical finalization requires valid protected verification profiles"
+        )
     profile = profiles.for_unit(matches[0].unit_id)
     if profile is None or not profile.complete:
         raise ValueError("finalization requires a complete protected profile")

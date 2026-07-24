@@ -160,9 +160,10 @@ def test_verbose_output(mock_llm_responses, mock_templates, capsys):
         assert "Extraction Results" in captured.out
         assert "Detected Changes" in captured.out
 
-def test_general_exception_handling():
-    """Test general exception handling."""
-    with patch('pdd.detect_change.load_prompt_template', side_effect=Exception("Unexpected error")):
+def test_general_exception_handling_does_not_print_raw_exception(capsys):
+    """Low-level failures propagate unchanged without leaking their contents."""
+    secret = "Unexpected error containing api-key=super-secret"
+    with patch('pdd.detect_change.load_prompt_template', side_effect=Exception(secret)):
         with pytest.raises(Exception, match="Unexpected error"):
             detect_change(
                 MOCK_PROMPT_FILES,
@@ -171,6 +172,9 @@ def test_general_exception_handling():
                 temperature=0.0,
                 time=None
             )
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
 
 
 # ---------------------------------------------------------------------------

@@ -706,6 +706,15 @@ def test_derive_success_single_tuple_is_true():
     ) is True
 
 
+def test_derive_success_failed_payload_tuple_is_false():
+    """A cost/model tuple whose payload reports passed=False is a failed command."""
+    from pdd.core.cli import _derive_success_from_normalized_results
+
+    assert _derive_success_from_normalized_results(
+        [({"passed": False}, 0.02, "gpt-5")]
+    ) is False
+
+
 def test_derive_success_mixed_tuple_and_dict_is_true():
     """A 3-tuple plus a dict-return command is still all-success. Covers the
     `elif isinstance(result_tuple, dict) and result_tuple.get("examplesUsed")`

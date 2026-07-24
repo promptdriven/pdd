@@ -1197,7 +1197,9 @@ def test_runner_identity_binds_measured_runtime_and_checker(
     monkeypatch.setattr("pdd.sync_core.runner.platform.python_version", lambda: "99.1")
     assert runner_identity_digest(profile, root=root, ref=commit) != first
     monkeypatch.undo()
-    monkeypatch.setattr("pdd.sync_core.runner._checker_artifact_digest", lambda: "0" * 64)
+    monkeypatch.setattr(
+        "pdd.sync_core.runner._checker_artifact_digest", lambda _vitest: "0" * 64
+    )
     assert runner_identity_digest(profile, root=root, ref=commit) != first
 
 
@@ -1256,6 +1258,32 @@ def test_released_runtime_digest_binds_installed_native_dependency(
     first = runner_module._released_runtime_closure_digest()
     native.write_bytes(b"native-v2")
     assert runner_module._released_runtime_closure_digest() != first
+
+
+def test_pytest_runtime_digest_projects_vitest_from_zero_argument_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = tmp_path / "runtime.py"
+    vitest_source = tmp_path / "vitest_fd_cloexec.c"
+    runtime.write_bytes(b"runtime")
+    vitest_source.write_bytes(b"vitest-v1")
+    monkeypatch.setattr(
+        runner_module,
+        "_released_runtime_closure_paths",
+        lambda: (
+            ("checker/pdd/sync_core/runner.py", runtime),
+            (
+                "checker/pdd/sync_core/native/vitest_fd_cloexec.c",
+                vitest_source,
+            ),
+        ),
+    )
+
+    pytest_digest = runner_module._released_runtime_closure_digest(False)
+    vitest_source.write_bytes(b"vitest-v2")
+
+    assert runner_module._released_runtime_closure_digest(False) == pytest_digest
+    assert runner_module._released_runtime_closure_digest(True) != pytest_digest
 
 
 def test_default_runtime_digest_cache_invalidates_changed_native_bytes(

@@ -13,7 +13,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -161,6 +161,13 @@ class ReviewLoopConfig:
     # Hosted fallback/mirror commands serialized as artifact metadata only;
     # canonical reviewer prompts consume ``reviewer_commands`` above.
     artifact_reviewer_commands: Dict[str, str] = field(default_factory=dict)
+    # Hosted callers can retain final artifact bytes in trusted parent memory.
+    agentic_artifact_sink: Optional[Callable[[bytes], None]] = field(
+        default=None, repr=False
+    )
+    # Bounded Codex-only Terra/Sol convergence. The configured positive
+    # ``max_rounds`` is authoritative; clean Sol may finish early.
+    terra_sol: bool = False
 
 
 @dataclass
@@ -244,8 +251,9 @@ class ReviewLoopState:
     final_refetch_attempted: bool = False
     gate_runs: List[Dict[str, Any]] = field(default_factory=list)
     source_of_truth: Optional[Dict[str, Any]] = None
-    # True only for explicit ``allow_same_reviewer_fixer`` runs where the
-    # resolved reviewer and fixer are the same role.
+    # True when the resolved reviewer and fixer are the same role — either an
+    # explicit ``allow_same_reviewer_fixer`` run OR a runtime auto-degrade
+    # (issue #1941) when a provider family was unavailable.
     same_role_review_fix: bool = False
     # Explicit fresh-final sessions are distinct from the primary provider's
     # review artifacts/status, even when both use the same role.
@@ -258,6 +266,16 @@ class ReviewLoopState:
     started_monotonic: Optional[float] = None
     # Set when the render-time remote-head check invalidates prior validation.
     validation_stale: bool = False
+    # ``"independent"`` for the normal cross-family loop and for a deliberate
+    # config-time same-role run; ``"degraded (<role> unavailable)"`` only when
+    # role independence was relaxed at runtime because a family was down.
+    role_independence: str = "independent"
+    # Terra/Sol audit state. Role observations are distinct so missing Sol
+    # evidence can never inherit a valid Terra model.
+    terra_sol_mode: bool = False
+    max_rounds: Optional[int] = None
+    sol_model: str = ""
+    terra_model: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -340,13 +358,36 @@ def load_final_state(
     }
 
 
-def clear_final_state(cwd: Path, issue_number: int, pr_number: int) -> None:
-    """Delete any stale ``final-state.json`` before a fresh review-loop run.
+def clear_final_state(cwd: Path, issue_number: int, pr_number: int) -> bool:
+    """Delete and verify absence of stale ``final-state.json``.
 
     Ensures a later ``load_final_state`` cannot mistake a prior run's verdict for
     the current one. A run that returns before ``_finalize`` writes no new file,
-    so the post-clear absence reads as fail-closed. ``FileNotFoundError`` and
-    other ``OSError``s are swallowed.
+    so the post-clear absence reads as fail-closed. Returns ``True`` only when
+    the filesystem slot is physically absent; deletion and verification errors
+    return ``False`` and callers stop without consulting JSON parsing.
+    """
+    return True
+
+
+def write_terra_sol_progress(
+    *,
+    artifacts_dir: Path,
+    max_rounds: int,
+    round_number: int,
+    phase: str,
+    terminal_reason: str = "",
+    max_rounds_reached: bool = False,
+) -> None:
+    """Persist the bounded Terra/Sol watchdog state for external consumers.
+
+    The helper writes ``terra-sol-progress.json`` below ``artifacts_dir`` with
+    the current round, configured maximum, phase, terminal reason, and
+    ``max_rounds_reached`` flag, then updates process-level agentic progress.
+    Persistence and progress-update exceptions propagate to the caller. An
+    outer dispatcher starting a fresh invocation must therefore clear and
+    verify removal of stale ``final-state.json`` first, and fail closed without
+    downstream execution if this initial publication raises.
     """
     return None
 
@@ -445,6 +486,9 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
     "active_reviewer": "codex",
     "same_role_review_fix": False,
     "mode": "independent-reviewer-fixer",
+    # Issue #1941: ``"independent"`` here; ``"degraded (<role> unavailable)"``
+    # when the loop auto-degraded to a same-family review/fix session.
+    "role_independence": "independent",
     # Always present in ``final-state.json``. Empty on the happy path;
     # populated for any reviewer that ended in failed/degraded/missing
     # (see ``EXAMPLE_REVIEWER_STATUS_DETAILS`` above for the shape,
@@ -456,8 +500,18 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
     "total_cost": 1.23,
     "last_model": "codex",
     "max_rounds_reached": False,
+    "rounds_completed": 1,
+    "max_rounds": 5,
     "max_cost_reached": False,
     "max_duration_reached": False,
+    # Terra/Sol-only identity fields are null in this ordinary independent run.
+    # A Terra/Sol clean verdict sets mode=true, reviewer/status to Codex/clean,
+    # and requires a delimiter-bounded, exact-case GPT-5.6 ``sol_model``.
+    "terra_sol_mode": False,
+    "sol_review_status": None,
+    "sol_model": None,
+    "terra_model": None,
+    "terra_fixer": None,
     "fix_attempts_by_key": {},
     "dispute_notes_by_key": {},
     "reviewer_feedback_by_key": {},
@@ -482,7 +536,9 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
             "changed_files": ["tests/test_foo.py", "pdd/foo.py"],
             "dispositions": {EXAMPLE_NORMALIZED_FINDING["key"]: "fixed"},
             "rationales": {
-                EXAMPLE_NORMALIZED_FINDING["key"]: "Added the missing regression coverage.",
+                EXAMPLE_NORMALIZED_FINDING[
+                    "key"
+                ]: "Added the missing regression coverage.",
             },
             "round_number": 1,
             "fixer_result": "attempted",
@@ -508,6 +564,7 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
 #   issue_aligned: true|false
 #   active-reviewer: <role>
 #   same-role-review-fix: true|false
+#   role-independence: independent|degraded (<role> unavailable)
 #   reviewer-status: <role>=<status> ... fresh-final=<status>
 #   fresh-final-review: clean|findings|failed|degraded|missing
 #   verified-head-sha: <sha>|none
@@ -563,6 +620,7 @@ EXAMPLE_FINAL_REPORT_HEADER: str = (
     "issue_aligned: true\n"
     "active-reviewer: codex\n"
     "same-role-review-fix: false\n"
+    "role-independence: independent\n"
     "reviewer-status: codex=clean claude=fixer fresh-final=clean\n"
     "fresh-final-review: clean\n"
     "verified-head-sha: 0123456789abcdef0123456789abcdef01234567\n"
@@ -577,6 +635,7 @@ def _demo() -> None:
     """Print the public contract this example documents."""
     import sys
     import os
+
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
     # Verify the runtime module exposes the documented public surface.
@@ -605,9 +664,15 @@ def _demo() -> None:
         print(f"  - {name}")
     print()
     print("Role aliases via parse_reviewers():")
-    print(f"  parse_reviewers('chatgpt,anthropic') -> {parse_reviewers('chatgpt,anthropic')}")
-    print(f"  parse_reviewers('openai,google')     -> {parse_reviewers('openai,google')}")
-    print(f"  parse_reviewers(['codex', 'claude']) -> {parse_reviewers(['codex', 'claude'])}")
+    print(
+        f"  parse_reviewers('chatgpt,anthropic') -> {parse_reviewers('chatgpt,anthropic')}"
+    )
+    print(
+        f"  parse_reviewers('openai,google')     -> {parse_reviewers('openai,google')}"
+    )
+    print(
+        f"  parse_reviewers(['codex', 'claude']) -> {parse_reviewers(['codex', 'claude'])}"
+    )
     print()
     print("Example final-report header:")
     print(EXAMPLE_FINAL_REPORT_HEADER)

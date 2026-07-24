@@ -226,6 +226,16 @@ class TestShipVerdictPredicate:
         state["findings"] = [{"status": "fixed"}]
         assert _review_loop_ship_verdict(state, has_issue=True) is True
 
+    def test_explicit_budget_cap_hit_never_ships(self) -> None:
+        for cap_flag in (
+            "max_rounds_reached",
+            "max_cost_reached",
+            "max_duration_reached",
+        ):
+            state = _clean_final_state()
+            state[cap_flag] = True
+            assert _review_loop_ship_verdict(state, has_issue=True) is False
+
 
 # ---------------------------------------------------------------------------
 # Library: two-layer dispatch, ordering, propagation, verdict
@@ -1049,8 +1059,9 @@ class TestFinalGateLibrary:
             "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
             return_value=(True, "checkup ok", 1.0, "model"),
         ), patch(
-            # Simulate a clear that fails to remove the stale artifact.
+            # Simulate a clear that cannot remove or verify the stale artifact.
             "pdd.agentic_checkup.clear_final_state",
+            return_value=False,
         ), patch(
             "pdd.agentic_checkup.run_checkup_review_loop"
         ) as loop_mock:

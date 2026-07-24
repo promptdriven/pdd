@@ -158,6 +158,8 @@ def detect_change(
             for change in changes_list
         ], total_cost, model_name
 
-    except Exception as e:
-        console.print(f"[red]Error in detect_change: {str(e)}[/red]")
+    except Exception:
+        # Classification and recovery guidance belong to the command/caller.
+        # Exception messages can contain credentials, provider payloads, or
+        # prompt text, so this low-level detector must not print or log them.
         raise
