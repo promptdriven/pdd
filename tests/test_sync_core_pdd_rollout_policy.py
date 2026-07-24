@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
 from pdd.sync_core import decommission as decommission_module
@@ -39,6 +40,7 @@ EXPECTED_PATH = ROOT / ".pdd" / "expected-managed.json"
 OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
+AUTO_HEAL_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "auto-heal.yml"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 469
 # #1989's dormant-bootstrap assertions retain their original immutable base;
@@ -2313,6 +2315,15 @@ def test_global_sync_m0_paths_are_exactly_preauthorized() -> None:
         not path.endswith("/") and not any(token in path for token in ("*", "?", "["))
         for path in GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS
     )
+
+
+def test_auto_heal_pem_consumer_is_bound_to_restricted_environment() -> None:
+    """The App PEM is available only through the main-restricted environment."""
+    workflow = yaml.safe_load(AUTO_HEAL_WORKFLOW_PATH.read_text(encoding="utf-8"))
+    heal_job = workflow["jobs"]["heal"]
+
+    assert heal_job["environment"] == "pdd-cloud-read"
+    assert "secrets.PDD_CLOUD_APP_PRIVATE_KEY" in str(heal_job["steps"])
 
 
 def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
