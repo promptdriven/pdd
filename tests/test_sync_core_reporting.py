@@ -1,6 +1,7 @@
 """Lifecycle test for trusted canonical reporting through the real WAL."""
 
 import base64
+import importlib.util
 import json
 import os
 import shutil
@@ -51,6 +52,50 @@ from pdd.continuous_sync import (
     repository_root,
 )
 from pdd.operation_log import save_fingerprint
+
+
+M0_SAMPLE_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "verify_global_sync_m0_samples.py"
+
+
+def _m0_sample_module():
+    """Load the standalone M0 sample verifier without package installation."""
+    spec = importlib.util.spec_from_file_location("m0_samples", M0_SAMPLE_SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_m0_samples_rejects_zero_requested_closure() -> None:
+    with pytest.raises(ValueError, match="closure limit"):
+        _m0_sample_module().validate_arguments(closure_limit=0, sample_paths=("p.prompt",))
+
+
+def test_m0_samples_rejects_empty_sample_set() -> None:
+    with pytest.raises(ValueError, match="at least one sample"):
+        _m0_sample_module().validate_arguments(closure_limit=1, sample_paths=())
+
+
+def test_m0_samples_deterministic_artifact_comparison_is_exact() -> None:
+    module = _m0_sample_module()
+    expected = {"schema_version": 1, "cases": [{"id": "01", "outcome": "accepted"}]}
+    assert module.compare_deterministic_artifacts(expected, dict(expected)) == ()
+    assert module.compare_deterministic_artifacts(expected, {"schema_version": 1, "cases": []})
+
+
+def test_m0_samples_requires_all_named_inputs(tmp_path: Path) -> None:
+    module = _m0_sample_module()
+    (tmp_path / "pdd/prompts").mkdir(parents=True)
+    (tmp_path / "pdd/prompts/one_python.prompt").write_text("x\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="required sample paths are absent"):
+        module.require_sample_paths(
+            tmp_path, ("pdd/prompts/one_python.prompt", "pdd/prompts/two_python.prompt")
+        )
+
+
+def test_m0_samples_rejects_an_invalid_patch_false_pass() -> None:
+    with pytest.raises(ValueError, match="bypassed profile validation"):
+        _m0_sample_module().require_profile_rejection("negative-profile", ())
 
 
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
