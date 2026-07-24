@@ -1142,6 +1142,24 @@ def test_execution_contract_rejects_unrecorded_m0_diff_path(
     assert any("topology/write sets" in error and "unrecorded.py" in error for error in errors)
 
 
+def test_execution_contract_diff_boundary_includes_deletes_and_rename_endpoints(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _execution_contract_module()
+
+    def fake_run(_: list[str], **__: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            returncode=0,
+            stdout="D\tremoved.py\nR100\told-name.py\tnew-name.py\nC100\tsource.py\tcopy.py\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    assert module._git_diff_paths(ROOT, "a" * 40, "b" * 40) == [  # pylint: disable=protected-access
+        "removed.py", "old-name.py", "new-name.py", "source.py", "copy.py",
+    ]
+
+
 def test_execution_contract_allows_m1_exists_only_after_m0_promotion(
     tmp_path: Path
 ) -> None:
@@ -1151,9 +1169,9 @@ def test_execution_contract_allows_m1_exists_only_after_m0_promotion(
         "id": "m1-component", "state": "EXISTS", "kind": "script",
         "argv": ["python", "scripts/present.py"], "owner": "track-a",
         "introducing_milestone": "M1", "earliest_invocable_milestone": "M1",
-        "introducing_pr": "merged-pr", "merged_introducer_evidence": {"sha": "b" * 40},
-        "component_binding": "m1-component", "last_source_validation_sha": "b" * 40,
-        "last_wheel_validation_sha": "b" * 40,
+        "introducing_pr": "merged-pr", "merged_introducer_evidence": {"sha": "d" * 40},
+        "component_binding": "m1-component", "last_source_validation_sha": "d" * 40,
+        "last_wheel_validation_sha": "d" * 40,
     })
     state["milestone_promotions"] = {"M0": {
         "state": "passed", "hosted_proof": "https://example.invalid/m0-proof",
@@ -1161,9 +1179,12 @@ def test_execution_contract_allows_m1_exists_only_after_m0_promotion(
     }}
     state["command_registry"][0]["last_source_validation_sha"] = "b" * 40
     state["command_registry"][0]["last_wheel_validation_sha"] = "b" * 40
+    state["scoreboard"] = {"milestone": "M1"}
+    state["active_blocker"] = "m1-vertical-slice"
     state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
     ledger = yaml.safe_load((root / "docs" / "ledger_source.yaml").read_text(encoding="utf-8"))
     ledger["execution_contract"]["command_registry"] = state["command_registry"]
+    ledger["execution_contract"]["active_blocker"] = state["active_blocker"]
     for name in ("ledger_source.yaml", "ledger.yaml"):
         (root / "docs" / name).write_text(yaml.safe_dump(ledger, sort_keys=False), encoding="utf-8")
     errors = _execution_contract_module().verify(
