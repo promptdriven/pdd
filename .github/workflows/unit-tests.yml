@@ -238,8 +238,26 @@ jobs:
             tests/test_sync_core_reporting.py tests/test_sync_core_standalone_package.py \
             "$wheel_tests/"
           cp scripts/verify_global_sync_m0_samples.py "$RUNNER_TEMP/scripts/"
+          FIXTURE_ROOT="$RUNNER_TEMP" python - <<'PY'
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          source = Path.cwd()
+          fixture = Path(os.environ["FIXTURE_ROOT"])
+          manifest_relpath = Path(".pdd/global-sync/standalone-checker-modules.json")
+          manifest = json.loads((source / manifest_relpath).read_text(encoding="utf-8"))
+          closure = [manifest_relpath, Path("pdd/data/language_format.csv")]
+          closure.extend(Path("pdd/sync_core") / module for module in manifest["modules"])
+          closure.extend(Path(item["source"]) for item in manifest["data"] if isinstance(item, dict))
+          for relative in dict.fromkeys(closure):
+              target = fixture / relative
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source / relative, target)
+          PY
           cd "$wheel_tests"
-          env -u PDD_PATH WORKSPACE="$GITHUB_WORKSPACE" "$wheel_venv/bin/python" -I -c 'import os, pathlib, pdd; source = pathlib.Path(os.environ["WORKSPACE"]).resolve(); package = pathlib.Path(pdd.__file__).resolve(); assert source not in package.parents, package'
+          env -u PDD_PATH WORKSPACE="$GITHUB_WORKSPACE" FIXTURE_ROOT="$RUNNER_TEMP" "$wheel_venv/bin/python" -I -c 'import os, pathlib, pdd; checkout = pathlib.Path(os.environ["WORKSPACE"]).resolve(); fixture = pathlib.Path(os.environ["FIXTURE_ROOT"]).resolve(); package = pathlib.Path(pdd.__file__).resolve(); fixture_paths = tuple(fixture / name for name in ("pdd", ".pdd", "scripts", "pdd-contract-wheel-tests")); assert checkout not in package.parents and all(path not in package.parents for path in fixture_paths) and "site-packages" in package.parts, package'
           env -u PDD_PATH "$wheel_venv/bin/python" -I -m pytest -q \
             test_sync_core_cli.py \
             test_sync_core_transaction.py \
@@ -261,7 +279,12 @@ jobs:
           Path(os.environ["WHEEL_PROOF"]).write_text(json.dumps({
               "candidate_sha": os.environ["CANDIDATE_SHA"], "environment": "wheel",
               "wheel_artifact_sha256": os.environ["WHEEL_DIGEST"],
-              "copied_test_closure": ["scripts/verify_global_sync_m0_samples.py"],
+              "copied_test_closure": [
+                  "scripts/verify_global_sync_m0_samples.py",
+                  ".pdd/global-sync/standalone-checker-modules.json",
+                  "pdd/sync_core/<standalone-manifest-modules>",
+                  "pdd/data/language_format.csv",
+              ],
               "focused_test_targets": targets, "finalizer_node": finalizer,
               "outcomes": {"focused_suite": {"status": "passed", "exit_code": 0},
                            "finalizer_node": {"status": "passed", "exit_code": 0}},

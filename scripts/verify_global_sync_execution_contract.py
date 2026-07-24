@@ -40,6 +40,9 @@ M0_FINALIZER_NODE = (
 )
 M0_WHEEL_COPIED_TEST_CLOSURE = (
     "scripts/verify_global_sync_m0_samples.py",
+    ".pdd/global-sync/standalone-checker-modules.json",
+    "pdd/sync_core/<standalone-manifest-modules>",
+    "pdd/data/language_format.csv",
 )
 FUTURE_COMPONENTS = {
     "pdd.sync_core.vertical_slice_verifier": (

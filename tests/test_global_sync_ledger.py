@@ -1209,8 +1209,14 @@ def test_execution_contract_records_wheel_copied_test_closure() -> None:
     ))
     binding = state["validation_steps"][2]["required_runtime_binding"]
     assert binding["wheel_copied_test_closure"] == [
-        "scripts/verify_global_sync_m0_samples.py"
+        "scripts/verify_global_sync_m0_samples.py",
+        ".pdd/global-sync/standalone-checker-modules.json",
+        "pdd/sync_core/<standalone-manifest-modules>",
+        "pdd/data/language_format.csv",
     ]
+    assert 'manifest_relpath = Path(".pdd/global-sync/standalone-checker-modules.json")' in workflow
+    assert 'closure.extend(Path("pdd/sync_core") / module for module in manifest["modules"])' in workflow
+    assert 'all(path not in package.parents for path in fixture_paths)' in workflow
 
 
 def test_execution_contract_requires_pinned_deterministic_sample_replay() -> None:
