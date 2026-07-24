@@ -1,4 +1,5 @@
 """Contract tests for the read-only global-sync M0 sample harness."""
+# pylint: disable=missing-function-docstring
 
 from __future__ import annotations
 

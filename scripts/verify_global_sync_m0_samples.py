@@ -15,10 +15,17 @@ import hashlib
 import json
 import resource
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable, TypeVar
+
+# A direct ``python scripts/...`` invocation must import this checkout's public
+# API, independently of the caller's current directory.
+SCRIPT_ROOT = Path(__file__).resolve().parents[1]
+if str(SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_ROOT))
 
 from pdd.sync_core import (
     FingerprintProvenance,
