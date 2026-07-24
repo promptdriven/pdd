@@ -1215,7 +1215,10 @@ def test_execution_contract_retains_missing_component_and_invocation_coverage(
 
 def test_execution_contract_retains_plan_and_lifecycle_coverage(tmp_path: Path) -> None:
     plan, state_path, root = _write_execution_contract(tmp_path)
-    plan.write_text("# Plan\n\nM0 M1 M2 M3 M4 M5\n```bash\npython -m missing\n```\n", encoding="utf-8")
+    plan.write_text(
+        "# Plan\n\nM0 M1 M2 M3 M4 M5\n```bash\npython -m missing\n```\n",
+        encoding="utf-8",
+    )
     state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
     state["validation_steps"].append({"id": "bad", "executable": False})
     state["command_registry"][0]["earliest_invocable_milestone"] = "M1"
