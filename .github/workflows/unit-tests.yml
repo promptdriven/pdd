@@ -169,20 +169,20 @@ jobs:
             tests/test_sync_core_reporting.py tests/test_sync_core_standalone_package.py \
             "$wheel_tests/"
           cd "$wheel_tests"
-          WORKSPACE="$GITHUB_WORKSPACE" "$wheel_venv/bin/python" -I -c 'import os, pathlib, pdd; source = pathlib.Path(os.environ["WORKSPACE"]).resolve(); package = pathlib.Path(pdd.__file__).resolve(); assert source not in package.parents, package'
-          "$wheel_venv/bin/python" -I -m pytest -q \
+          env -u PDD_PATH WORKSPACE="$GITHUB_WORKSPACE" "$wheel_venv/bin/python" -I -c 'import os, pathlib, pdd; source = pathlib.Path(os.environ["WORKSPACE"]).resolve(); package = pathlib.Path(pdd.__file__).resolve(); assert source not in package.parents, package'
+          env -u PDD_PATH "$wheel_venv/bin/python" -I -m pytest -q \
             test_sync_core_cli.py \
             test_sync_core_transaction.py \
             test_sync_core_reporting.py \
             test_sync_core_standalone_package.py
-          "$wheel_venv/bin/python" -I -m pytest -q \
+          env -u PDD_PATH "$wheel_venv/bin/python" -I -m pytest -q \
             test_sync_core_reporting.py::test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint
           cd "$proof_root"
           expected_base=()
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
             expected_base=(--expected-protected-base "${{ github.event.pull_request.base.sha }}")
           fi
-          "$wheel_venv/bin/python" -I verify_global_sync_execution_contract.py \
+          env -u PDD_PATH "$wheel_venv/bin/python" -I verify_global_sync_execution_contract.py \
             --plan global_sync_resolution_plan.md \
             --state global_sync_execution_state.yaml \
             --root "$GITHUB_WORKSPACE" \
