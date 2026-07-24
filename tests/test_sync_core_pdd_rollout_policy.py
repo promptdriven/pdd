@@ -232,6 +232,11 @@ M0_BOOTSTRAP_TRACK_WRITE_SET_UNIVERSE = {
     "tests/test_sync_core_pdd_rollout_policy.py",
     "tests/test_sync_core_reporting.py",
 }
+M0_BOOTSTRAP_POST_SAMPLE_ALLOWED_PATHS = {
+    "docs/global_sync_m0_sample_metrics.json",
+    "docs/global_sync_m0_sample_results.json",
+    "docs/global_sync_m0_scope_report.md",
+}
 GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/runtime-linux-x86_64-cp312.lock",
 }
@@ -2469,6 +2474,7 @@ def test_global_sync_m0_bootstrap_policy_is_immutable_and_exact() -> None:
         "allowed_changes",
         "frozen_sample_verifier",
         "m0_track_write_set_universe",
+        "post_sample_allowed_paths",
         "private_canary",
         "pull_request_number",
         "replay",
@@ -2490,6 +2496,7 @@ def test_global_sync_m0_bootstrap_policy_is_immutable_and_exact() -> None:
         "m0_bootstrap_allowlist": list(M0_BOOTSTRAP_ALLOWLIST),
     }
     assert set(policy["m0_track_write_set_universe"]) == M0_BOOTSTRAP_TRACK_WRITE_SET_UNIVERSE
+    assert set(policy["post_sample_allowed_paths"]) == M0_BOOTSTRAP_POST_SAMPLE_ALLOWED_PATHS
     assert policy["frozen_sample_verifier"] == {
         "path": M0_BOOTSTRAP_FROZEN_SAMPLE_PATH,
         "sha256": M0_BOOTSTRAP_FROZEN_SAMPLE_SHA256,
@@ -2595,6 +2602,123 @@ def test_global_sync_m0_bootstrap_verifier_rejects_self_authorized_state(
     assert "candidate-touched-frozen-sample-verifier" in frozen_proof["violations"]
 
 
+def test_global_sync_m0_bootstrap_replay_uses_a_protected_sample_ancestor(
+    tmp_path: Path,
+) -> None:
+    """Replay may use only an ancestor and a static evidence/control post-scope."""
+    verifier = _load_m0_bootstrap_verifier()
+    policy = json.loads(M0_BOOTSTRAP_POLICY_PATH.read_text(encoding="utf-8"))
+    root = tmp_path / "sampled-implementation"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _write_m0_bootstrap_file(root, "pdd/sample_implementation.py", b"sampled code\n")
+    sampled = _commit(root, "sampled implementation")
+    _write_m0_bootstrap_file(
+        root,
+        "docs/global_sync_m0_sample_results.json",
+        json.dumps({"base_sha": sampled}).encode("utf-8"),
+    )
+    candidate = _commit(root, "record sampled artifact")
+
+    proof = verifier.sampled_implementation_proof(
+        repository_root=root,
+        policy=policy,
+        candidate_head_sha=candidate,
+    )
+    assert proof["violations"] == []
+    assert proof["sampled_implementation_sha"] == sampled
+    assert proof["sampled_implementation_is_ancestor_of_candidate"] is True
+
+    _write_m0_bootstrap_file(root, "pdd/after_sample.py", b"must not affect replay\n")
+    unauthorized_post_sample = _commit(root, "change implementation after sampling")
+    unauthorized_proof = verifier.sampled_implementation_proof(
+        repository_root=root,
+        policy=policy,
+        candidate_head_sha=unauthorized_post_sample,
+    )
+    assert "post-sample-diff-outside-protected-allowlist" in unauthorized_proof["violations"]
+
+    _write_m0_bootstrap_file(
+        root,
+        "docs/global_sync_execution_state.yaml",
+        yaml.safe_dump(
+            {
+                "m0_post_sample_allowlist": ["pdd/after_sample.py"],
+                "sampled_implementation": sampled,
+            },
+            sort_keys=False,
+        ).encode("utf-8"),
+    )
+    self_authorized_post_sample = _commit(root, "self-authorize post-sample code")
+    self_authorized_proof = verifier.sampled_implementation_proof(
+        repository_root=root,
+        policy=policy,
+        candidate_head_sha=self_authorized_post_sample,
+    )
+    assert "post-sample-diff-outside-protected-allowlist" in (
+        self_authorized_proof["violations"]
+    )
+
+    _git(root, "checkout", "--quiet", sampled)
+    _write_m0_bootstrap_file(root, "pdd/unrelated.py", b"unrelated sampled code\n")
+    unrelated = _commit(root, "unrelated sampled implementation")
+    _git(root, "checkout", "--quiet", self_authorized_post_sample)
+    _write_m0_bootstrap_file(
+        root,
+        "docs/global_sync_m0_sample_results.json",
+        json.dumps({"base_sha": unrelated}).encode("utf-8"),
+    )
+    non_ancestor = _commit(root, "claim unrelated sampled implementation")
+    non_ancestor_proof = verifier.sampled_implementation_proof(
+        repository_root=root,
+        policy=policy,
+        candidate_head_sha=non_ancestor,
+    )
+    assert "sampled-implementation-is-not-an-ancestor-of-candidate" in (
+        non_ancestor_proof["violations"]
+    )
+
+
+def test_global_sync_m0_bootstrap_materializes_private_canary_as_inert_data(
+    tmp_path: Path,
+) -> None:
+    """A bare private canary object store becomes readable data without checkout."""
+    verifier = _load_m0_bootstrap_verifier()
+    source = tmp_path / "private-canary-source"
+    source.mkdir()
+    _git(source, "init", "-q")
+    closure_paths = (
+        "extensions/github_pdd_app/prompts/Dockerfile_webhook_Dockerfile.prompt",
+        "extensions/github_pdd_app/prompts/src/webhook_app_Python.prompt",
+        "extensions/github_pdd_app/architecture.json",
+        "extensions/github_pdd_app/Dockerfile.webhook",
+        "extensions/github_pdd_app/requirements.txt",
+        "extensions/github_pdd_app/src/webhook_app.py",
+        "extensions/github_pdd_app/.pddrc",
+        "extensions/github_pdd_app/.pdd/meta/Dockerfile_webhook_dockerfile.json",
+    )
+    for path in closure_paths:
+        _write_m0_bootstrap_file(source, path, f"private canary: {path}\n".encode())
+    canary_sha = _commit(source, "private canary")
+    bare = tmp_path / "private-canary.git"
+    subprocess.run(
+        ["git", "clone", "--bare", str(source), str(bare)],
+        check=True,
+        capture_output=True,
+    )
+    data_root = tmp_path / "private-canary-data"
+    data_root.mkdir()
+    verifier.materialize_git_data_tree(bare, canary_sha, data_root)
+    assert {
+        path for path in closure_paths if (data_root / path).is_file()
+    } == set(closure_paths)
+    assert subprocess.check_output(
+        ["git", "rev-parse", "--verify", f"{canary_sha}^{{commit}}"],
+        cwd=data_root,
+        text=True,
+    ).strip() == canary_sha
+
+
 def test_global_sync_m0_bootstrap_workflow_is_base_controlled() -> None:
     """The privileged target workflow checks only base code and inert Git data."""
     workflow = M0_BOOTSTRAP_WORKFLOW_PATH.read_text(encoding="utf-8")
@@ -2615,6 +2739,16 @@ def test_global_sync_m0_bootstrap_workflow_is_base_controlled() -> None:
     assert "PDD_CLOUD_APP_PRIVATE_KEY" in workflow
     assert "DELETE /installation/token" in workflow
     assert "unset PDD_CLOUD_TOKEN GH_TOKEN" in workflow
+    assert "https://x-access-token:" not in workflow
+    assert "remote add origin" not in workflow
+    assert "--github-token" not in workflow
+    assert "if: success()" in workflow
+    assert "$RUNNER_TEMP/m0-bootstrap-final-proof.json" in workflow
+    assert "${{ github.event.pull_request.base.sha }}-${{ github.event.pull_request.head.sha }}" in workflow
+    verifier = M0_BOOTSTRAP_VERIFIER_PATH.read_text(encoding="utf-8")
+    assert "GIT_CONFIG_COUNT" in verifier
+    assert "GIT_CONFIG_KEY_0" in verifier
+    assert "GIT_CONFIG_VALUE_0" in verifier
     assert "eval " not in workflow
     assert "$()" not in workflow
 
