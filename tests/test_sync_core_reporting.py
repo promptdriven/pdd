@@ -751,6 +751,44 @@ def test_real_manifest_path_qualified_module_selects_one_duplicate_leaf(tmp_path
     ]
 
 
+def test_real_manifest_package_prompt_layout_selects_nested_module(tmp_path) -> None:
+    """Package-local prompts use the same root-relative module identity."""
+    root, _commit = _repository(tmp_path)
+    (root / "pdd/prompts/commands").mkdir(parents=True)
+    (root / "pdd/commands").mkdir()
+    (root / "pdd/prompts/commands/foo_python.prompt").write_text(
+        "REQ-package: Build package foo\n"
+    )
+    (root / "pdd/commands/foo.py").write_text("value = 1\n")
+    architecture = json.loads((root / "architecture.json").read_text())
+    architecture.append(
+        {
+            "filename": "commands/foo_python.prompt",
+            "filepath": "pdd/commands/foo.py",
+        }
+    )
+    (root / "architecture.json").write_text(json.dumps(architecture))
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "package-local nested prompt")
+    head = _git(root, "rev-parse", "HEAD")
+    options = _options(tmp_path, head)
+
+    report = build_canonical_report(
+        root,
+        CanonicalReportOptions(
+            base_ref=options.base_ref,
+            head_ref=options.head_ref,
+            modules=("commands/foo",),
+            replay_ledger_path=options.replay_ledger_path,
+            now=options.now,
+        ),
+    )
+
+    assert [item["subject"] for item in report["units"]] == [
+        "pdd/prompts/commands/foo_python.prompt"
+    ]
+
+
 @pytest.mark.parametrize("protected_ref", ["missing-ref", "HEAD"])
 def test_explicit_protected_mode_invalid_trust_input_fails_closed(
     tmp_path, monkeypatch, protected_ref
