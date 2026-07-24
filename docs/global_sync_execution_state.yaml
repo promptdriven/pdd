@@ -31,13 +31,13 @@ tracks:
     worktree: /Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/issue-1932-m0-finalizer-test
     branch: fix/1932-m0-finalizer-test-20260724
     base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
-    write_set: [tests/test_sync_core_reporting.py, tests/test_sync_core_transaction.py]
+    write_set: [tests/test_sync_core_reporting.py]
   - id: m0-scope-samples
     owner: m0-scope-samples
     worktree: /Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/issue-1932-m0-scope-samples
     branch: feat/1932-m0-scope-samples-20260724
     base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
-    write_set: [docs/global_sync_m0_scope_samples.md]
+    write_set: [docs/global_sync_m0_scope_report.md]
   - id: track-a-repair
     owner: track-a
     worktree: pending
@@ -139,7 +139,14 @@ command_registry:
   - id: m0-focused-cli-test
     state: EXISTS
     kind: test
-    argv: [python, -m, pytest, tests/test_sync_core_cli.py]
+    argv:
+      - python
+      - -m
+      - pytest
+      - tests/test_sync_core_cli.py
+      - tests/test_sync_core_transaction.py
+      - tests/test_sync_core_reporting.py
+      - tests/test_sync_core_standalone_package.py
     owner: integration
     introducing_milestone: M0
     earliest_invocable_milestone: M0
