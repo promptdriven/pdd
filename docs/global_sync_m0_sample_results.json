@@ -1,5 +1,5 @@
 {
-  "base_sha": "a452fdcb04dced3eb94a90659b31bcce0db06088",
+  "base_sha": "f13deb7b4671c640aaf04460fe9a811b877bad42",
   "cases": [
     {
       "category": "nested-config",
@@ -8,7 +8,7 @@
       "kind": "positive-representative",
       "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
       "patch_bytes": 2036,
-      "patch_sha256": "cbc45dcb5412d703ac76dfc3de17454f7c428e9fedf6571cb64195f68b8d22e0",
+      "patch_sha256": "44f252cab10826c240897367f6ec1017d13760987b49db2aa680af24ef5566f9",
       "promotable": false,
       "promotion_reason": "temporary non-production patch has no trusted attestation",
       "sample_path": "pdd/prompts/agentic_architecture_python.prompt"
@@ -20,7 +20,7 @@
       "kind": "positive-representative",
       "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
       "patch_bytes": 3861,
-      "patch_sha256": "b3792fb330f7b36e84c9da22d52920011853ece5a7383c53575614c995db903f",
+      "patch_sha256": "a4239dc7bc7913dbb6580e8d09181bab01326cb25f06ebd33d925174a5b851f2",
       "promotable": false,
       "promotion_reason": "temporary non-production patch has no trusted attestation",
       "sample_path": "pdd/prompts/commands/checkup_python.prompt"
@@ -32,7 +32,7 @@
       "kind": "positive-representative",
       "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
       "patch_bytes": 3665,
-      "patch_sha256": "6250efcf59dea06844919a8b4d099e3e33e28d4be9c3688246556e1e8bd20871",
+      "patch_sha256": "d82e6ab78315e272f875fcfdc4559e47cbb12b02f8a1be273e76cbdf9f8ed9bc",
       "promotable": false,
       "promotion_reason": "temporary non-production patch has no trusted attestation",
       "sample_path": "pdd/prompts/core/duplicate_cli_guard_python.prompt"
@@ -44,7 +44,7 @@
       "kind": "positive-representative",
       "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
       "patch_bytes": 3401,
-      "patch_sha256": "8719f769b336582d5777b7448495241362e9c2a0b533e15a39e10004ff2d66b5",
+      "patch_sha256": "5d34180e0deb99b32a9355137a2e604419892d8143a98589e08d2ca2a9a2087e",
       "promotable": false,
       "promotion_reason": "temporary non-production patch has no trusted attestation",
       "sample_path": "pdd/prompts/bug_to_unit_test_python.prompt"
@@ -56,7 +56,7 @@
       "kind": "positive-representative",
       "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
       "patch_bytes": 2740,
-      "patch_sha256": "3c7ff868938e334ae8a64d4123bda0e38d9e161573d0f13d9ef118e94654e552",
+      "patch_sha256": "2b10fa3b2686e60087f27104c538f0a253e3cd44b3a07b85675e9b3dc437d433",
       "promotable": false,
       "promotion_reason": "temporary non-production patch has no trusted attestation",
       "sample_path": "pdd/prompts/agentic_test_generate_python.prompt"
@@ -68,7 +68,7 @@
       "kind": "positive-representative",
       "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
       "patch_bytes": 3598,
-      "patch_sha256": "222ef82ebb06c716115a86ba2b2e0766884211800cd1abbecc3ef5c2a110a127",
+      "patch_sha256": "57868fe9d839e50e4aac83bcc17d0e438fd3ee5f3d81936c8c0928b9436df361",
       "promotable": false,
       "promotion_reason": "temporary non-production patch has no trusted attestation",
       "sample_path": "pdd/prompts/pre_checkup_gate_python.prompt"
@@ -80,7 +80,7 @@
       "kind": "positive-representative",
       "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
       "patch_bytes": 2258,
-      "patch_sha256": "846c19523c38ffac8c719b9c649ce2305735da6c74c682a8e1a2d4dd48b504b3",
+      "patch_sha256": "f638eb704173c0f13d6a5aab361975350c3ddf4567c9b8d241e7c8e1122b8647",
       "promotable": false,
       "promotion_reason": "temporary non-production patch has no trusted attestation",
       "sample_path": "pdd/prompts/architecture_sync_python.prompt"
@@ -92,7 +92,7 @@
       "kind": "positive-representative",
       "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
       "patch_bytes": 2045,
-      "patch_sha256": "24600b674fb785b4c8f75df664566606b0e5811166f40f79a522cd23ba9479d5",
+      "patch_sha256": "db48f5385a8d7d06e8c06ee035385b57a33ff6af3e32ae40aee6d761037a3c2a",
       "promotable": false,
       "promotion_reason": "temporary non-production patch has no trusted attestation",
       "sample_path": "pdd/prompts/architecture_registry_python.prompt"
@@ -104,7 +104,7 @@
       "kind": "positive-representative",
       "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
       "patch_bytes": 2036,
-      "patch_sha256": "1beba1329472bab688963ee19d477e698bd03e5391d3eec7df6e189e8ebed4ee",
+      "patch_sha256": "4da15423a9beb26894cd93ce629ea508967180e903001576505a52e10ee66b2d",
       "promotable": false,
       "promotion_reason": "temporary non-production patch has no trusted attestation",
       "sample_path": "pdd/prompts/checkup_agent_python.prompt"
@@ -116,7 +116,7 @@
       "kind": "positive-representative",
       "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
       "patch_bytes": 2262,
-      "patch_sha256": "4d57f1f36868037d898d08430df4dd69aea3daf89dd406f14eab2021823f6227",
+      "patch_sha256": "0840b491654134f96b9ab16aebbf317fb5aaca9ce57e8b2cf7a5eccf97f791f2",
       "promotable": false,
       "promotion_reason": "temporary non-production patch has no trusted attestation",
       "sample_path": "pdd/prompts/frontend/constants_typescript.prompt"
@@ -302,7 +302,7 @@
       "kind": "ownership",
       "outcome": "rejected-by-public-manifest-api:ManifestError",
       "patch_bytes": 10711,
-      "patch_sha256": "e53c4dd95571c9e228d6cfebbaf965f55329a62dd1ab7fd55c89bcae02ea8ece",
+      "patch_sha256": "f3ecb5f066c86c114f000a53009b0633fe4e6978ced68b22f3b7d001faf41286",
       "sample_path": ".pdd/sync-ownership.json"
     }
   ],

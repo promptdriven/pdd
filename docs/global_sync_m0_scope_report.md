@@ -10,7 +10,7 @@ inputs:
 
 | Input | Commit |
 | --- | --- |
-| PDD sampled implementation | `a452fdcb04dced3eb94a90659b31bcce0db06088` |
+| PDD sampled implementation | `f13deb7b4671c640aaf04460fe9a811b877bad42` |
 | pdd_cloud provenance input | `09f9d3fea71c4c0ed6655f2acd5e95b14a32c3c8` |
 
 The committed verifier is
@@ -28,8 +28,8 @@ run:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `docs/global_sync_m0_sample_results.json` | `e1fc5b87f55ca0f0bfcb0b19694abaa66b407c2dae9186b848a917c488c732f3` |
-| `docs/global_sync_m0_sample_metrics.json` | `04b58196d715ef2140ab716aa2f86d50081e2ac767b7d1dc5917e306a8c47e8b` |
+| `docs/global_sync_m0_sample_results.json` | `cc5b305526229d4acb742fb17af05b7387e8f30ae500c31a9dae18cd518a8291` |
+| `docs/global_sync_m0_sample_metrics.json` | `b50d16dc819b894ad27edc4846138ed33564678386b8ddfca1ac2c07c0d13087` |
 
 The primary result is deterministic for the fixed source inputs. Metrics are
 intentionally separate because elapsed time and peak RSS are host-dependent;
@@ -56,7 +56,7 @@ the two artifacts into the documentation checkout from which it is invoked.
 
 ```bash
 set -eu
-base_sha=a452fdcb04dced3eb94a90659b31bcce0db06088
+base_sha=f13deb7b4671c640aaf04460fe9a811b877bad42
 cloud_sha=09f9d3fea71c4c0ed6655f2acd5e95b14a32c3c8
 source_root="$(mktemp -d /tmp/pdd-global-sync-m0.XXXXXX)"
 artifact_root="$(pwd)"
@@ -79,13 +79,13 @@ env -u VIRTUAL_ENV -u PYTHONHOME -u PYTHONPATH -u PDD_PATH \
   --metrics-output "$artifact_root/docs/global_sync_m0_sample_metrics.json"
 
 jq -e '
-  .base_sha == "a452fdcb04dced3eb94a90659b31bcce0db06088" and
+  .base_sha == "f13deb7b4671c640aaf04460fe9a811b877bad42" and
   .pdd_cloud_sha == "09f9d3fea71c4c0ed6655f2acd5e95b14a32c3c8" and
   (.cases | length) == 10 and
   (.closure.requested == 20 and .closure.completed == 20)
 ' "$artifact_root/docs/global_sync_m0_sample_results.json"
 jq -e '
-  .base_sha == "a452fdcb04dced3eb94a90659b31bcce0db06088" and
+  .base_sha == "f13deb7b4671c640aaf04460fe9a811b877bad42" and
   .deterministic_report_bytes == 14057
 ' "$artifact_root/docs/global_sync_m0_sample_metrics.json"
 shasum -a 256 \
@@ -162,11 +162,11 @@ that a candidate passed.
 
 | Measurement | Recorded value |
 | --- | ---: |
-| Inventory elapsed time | 22.331175 s |
-| Inventory peak RSS | 316,932,096 B |
+| Inventory elapsed time | 23.471361 s |
+| Inventory peak RSS | 320,389,120 B |
 | Inventory subprocess calls | 1,086 |
-| Closure elapsed time | 2.256716 s |
-| Closure peak RSS | 316,948,480 B |
+| Closure elapsed time | 2.345974 s |
+| Closure peak RSS | 321,929,216 B |
 | Closure subprocess calls | 120 |
 | Deterministic report size | 14,057 B |
 
@@ -185,7 +185,7 @@ disposable detached PDD checkout at
 (`fix(sync): support package-local report module identities`) cherry-picked
 locally. The resulting temporary commit was recorded as `4a4b7eb17`. The
 temporary checkout was not production state. The new verifier's
-a452fdcb inventory and closure measurements supplement these results; they do
+f13deb7b inventory and closure measurements supplement these results; they do
 not claim to reproduce the full canonical classification or module-filter
 benchmark.
 
