@@ -11,7 +11,9 @@ Historical plan: [`archive/global_sync_resolution_plan_history_2026-07-22.md`](a
 The existing evidence ledger remains an append-only status and provenance
 record. It does not override this plan's milestones, command registry, or
 current-main preflight. M0 must reconcile its stale current-state rows without
-rewriting historical evidence.
+rewriting historical evidence. Until M0 passes, its active blocker, command, and
+promotion rows are quarantined: they are historical claims, not execution
+authority or proof of a current milestone.
 
 ## 1. Decision and success levels
 
@@ -29,8 +31,10 @@ This plan separates three outcomes that were previously conflated:
    rerun with zero writes. Ambiguous conflicts block with zero unattended
    writes.
 2. **Production Global Sync (M4):** every production mutator uses the canonical
-   APIs, both repositories run the released checker in protected CI, and
-   enforcement can be enabled with a safe rollback.
+   APIs, both repositories run the released checker in protected CI, and every
+   expected-managed unit is enforced with current trusted semantic evidence.
+   Units removed through the protected ownership/denominator process are no
+   longer expected-managed; rollout exclusions do not satisfy M4.
 3. **Certified Global Sync (M5):** the optional high-assurance supply-chain,
    independent-verifier, coverage, and temporal predicates pass.
 
@@ -46,7 +50,8 @@ classify current state
 -> produce an explicit repair or conflict plan
 -> generate only into isolated staging
 -> validate staged outputs
--> atomically commit artifacts + shared metadata + evidence + report + fingerprint
+-> crash-durably commit artifacts + shared metadata + evidence + report + fingerprint
+   while canonical readers hold a transaction barrier
 -> recover after process death to a complete old or complete new state
 -> rerun with zero writes
 ```
@@ -97,9 +102,27 @@ leaf implementation PR.
 
 ## 3. M0: executable-baseline gate
 
-No implementation track starts until M0 passes. M0 prevents work on a stale
-diagnostic branch and prevents a prose command from being mistaken for a real
-interface.
+No A-E feature work starts until M0 passes. A bounded **M0-bootstrap track** is
+the explicit exception: it exists to create the verifier/state files, reconcile
+the active ledger/workflow, and close the focused current-main failure needed for
+M0 itself. M0 prevents work on a stale diagnostic branch and prevents a prose
+command from being mistaken for a real interface.
+
+The integration owner also owns the M0-bootstrap track. Its write set is limited
+to:
+
+- `scripts/verify_global_sync_execution_contract.py` and its tests.
+- `docs/global_sync_execution_state.yaml`.
+- `docs/global_sync_evidence_ledger_source.yaml` and its generated ledger.
+- The protected ledger-check step in `.github/workflows/unit-tests.yml`.
+- The smallest runner/finalizer/test delta needed to close
+  `tests/test_sync_core_reporting.py::test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint`,
+  whose observed failure is `pytest=COLLECTION_ERROR`.
+
+If closing that node requires a production-interface change rather than a
+bounded baseline correction, M0 remains red and ownership transfers to Track A
+or B through a reviewed interface proposal. After M0, those production files
+return to their section 5 owners.
 
 ### 3.1 Fresh-main and worktree preflight
 
@@ -135,8 +158,29 @@ The first implementation deliverable is
   into the integration branch.
 
 The verifier owns a small machine-readable command registry. Every entry has one
-of `EXISTS`, `TO_BUILD`, or `EXTERNAL_PROTECTED`. `TO_BUILD` entries name the
-track and milestone that makes them executable.
+of `EXISTS`, `TO_BUILD`, `EXTERNAL_PROTECTED`, or `ARCHIVED`. Each entry records
+its exact argv, owner, introducing milestone/PR, earliest invocable milestone,
+and last source/wheel SHA on which it was validated.
+
+- `TO_BUILD` may appear only as a declaration. It is invalid in an invoked
+  validation list, promotion bundle, passed predicate, or current blocker.
+- `ARCHIVED` preserves an old command string but is never executable.
+- `EXTERNAL_PROTECTED` must bind an installed artifact digest and control-plane
+  identity before invocation.
+
+During M0 bootstrap, move obsolete ledger command strings and attempt history to
+explicitly archived/non-executable fields. Replace the checker-release blocker
+with `m0-executable-baseline`, and make active ledger rows use the same
+M0-M5 milestone IDs, order, current base SHA, and executable-state vocabulary as
+this plan. A future command may remain declared as `TO_BUILD`; it may not be
+claimed as executed or passed.
+
+The protected unit-test workflow must run both:
+
+1. Generated ledger byte-drift and remote promotion verification.
+2. The command-contract verifier's semantic plan/ledger concordance check.
+
+Byte equality alone is insufficient.
 
 The following previously referenced components begin as `TO_BUILD` and are
 explicit deliverables, not presumed commands:
@@ -158,9 +202,11 @@ components remain deferred.
 
 ### 3.3 Green baseline
 
-Fix or explicitly reproduce every failure in the focused current-main suite
-before feature work. In particular, the trusted-finalizer pytest collection
-failure must be diagnosed and closed; it cannot be relabeled as release evidence.
+Fix every failure in the focused current-main suite before feature work. The
+trusted-finalizer node named in the M0-bootstrap write set must reproduce with a
+captured runner command, collection output, config/plugin closure, interpreter,
+and environment digest, then pass in source and built-PDD-wheel environments. It
+cannot be relabeled as expected failure or release evidence.
 
 M0 validation:
 
@@ -181,15 +227,17 @@ environment and the built-wheel CLI exposes the same declared command surface.
 
 ### 3.4 Early scope and scale samples
 
-Run these read-only samples during M0, in parallel with command-contract work:
+Run these non-production samples during M0 bootstrap, in parallel with
+command-contract work:
 
 - Partition the current PDD human-attestation-only units into obligations
   derivable from existing tests, genuinely missing tests, and units whose
   ownership/scope needs a product decision.
-- Fully migrate a representative sample of ten units: nested config, include
-  closure, duplicate basename, human-owned test, multi-file example/test,
-  executable artifact, architecture override, runtime dependency, and a
-  historically problematic unit.
+- In disposable clean clones, generate and validate migration patches for a
+  representative sample of ten units: nested config, include closure, duplicate
+  basename, human-owned test, multi-file example/test, executable artifact,
+  architecture override, runtime dependency, and a historically problematic
+  unit. Do not commit sample migrations to production metadata during M0.
 - Inventory one real pdd_cloud subtree and select the M1 canary before changing
   upstream production APIs.
 - Benchmark a full read-only inventory/classification and a 20-unit affected
@@ -213,7 +261,7 @@ bookkeeping.
 | 2 | Current test/CLI baseline is not reproducible | M0 source and wheel gate |
 | 3 | PDD abstractions do not fit pdd_cloud | M0 inventory plus M1 real canary |
 | 4 | Pytest evidence can miss or misreport execution | M0/M1 runner contract |
-| 5 | Source behavior differs from the released wheel | M1 built-wheel vertical slice |
+| 5 | Source behavior differs from the PDD application wheel | M1 built-wheel vertical slice |
 | 6 | Canonical APIs cannot replace every legacy mutator | M2 routing verifier |
 | 7 | Inventory/profile migration is too large or ambiguous | M0 ten-unit sample |
 | 8 | Protected CI/release infrastructure is unavailable | M0 access inventory, M3 shadow |
@@ -244,7 +292,12 @@ Delivers:
 
 - Generate-to-staging for one canonical prompt-side repair.
 - A typed repair plan with complete read/write sets and CAS preconditions.
-- Atomic artifact/shared-metadata/evidence/report/fingerprint commit.
+- Crash-durable artifact/shared-metadata/evidence/report/fingerprint commit.
+  Canonical readers acquire a shared transaction barrier and never consume a
+  unit while its journal is `COMMITTING`; they retry or return
+  `RECOVERY_REQUIRED`. Raw filesystem readers are outside this guarantee and the
+  product must not describe sequential multi-file installation as filesystem
+  atomicity.
 - Explicit prompt-wins, code-wins, and three-way-review plans; unattended
   conflicts perform zero writes.
 - Recovery and immediate no-op rerun.
@@ -293,8 +346,9 @@ Delivers:
   clean-install smoke, and exact digest output.
 - A draft release manifest.
 
-Track C may build locally from M0 onward. Publication waits for the M1
-source-and-wheel vertical slice.
+Track C may build locally after M0 and continue alongside M1. The standalone
+checker is read-only and is not an M1 repair runtime. Publication waits for M1
+and M2's release-relevant routing checks.
 
 ### Track D: production routing and compatibility
 
@@ -341,9 +395,10 @@ Only the integration owner edits:
 - `docs/global_sync_evidence_ledger.yaml`
 
 Tracks expose integration patches or requested symbols rather than editing these
-files. Integration order is A interface, B runner contract, A vertical slice, C
-wheel, D routing, E consumer/shadow. Independent tests continue while earlier
-commits integrate.
+files. Integration order is M0 bootstrap, A interface, B runner contract, A+B
+vertical slice, built PDD application wheel, D routing, C standalone checker,
+then E consumer/shadow. Independent tests continue while earlier commits
+integrate.
 
 The dependency graph is:
 
@@ -351,8 +406,9 @@ The dependency graph is:
 M0 executable baseline
 ├── A repair core ───────────────┐
 ├── B pytest authority ─────────┼── M1 working vertical slice
-├── C local checker wheel ──────┤
+├── built PDD application wheel ┤
 └── E pdd_cloud canary/sample ──┘
+├── C standalone checker build ────────────────┐
                                   ├── D production routing ── M2
                                   ├── C protected release ─── M3
                                   └── E shadow migration ──── M3
@@ -365,8 +421,10 @@ M0 executable baseline
 ### M1: Working Global Sync
 
 Implement the smallest complete repair loop before broad routing or release.
-The lifecycle fixture uses a fake/deterministic generator first, then one bounded
-real generation smoke if credentials are available.
+The lifecycle fixture uses a fake/deterministic generator for exhaustive fault
+injection, and one bounded credentialed run through the real production
+generator is mandatory. Missing credentials leave M1 red; they do not convert
+the canary to optional evidence.
 
 Required scenarios:
 
@@ -379,13 +437,18 @@ Required scenarios:
 6. Missing/corrupt artifact or fingerprint fails or repairs from an unambiguous
    source; it never becomes silently current.
 7. Validation failure leaves destination artifacts and baseline unchanged.
-8. Process death at every prepare/journal/install/finalize phase recovers to the
-   complete old or complete new state.
-9. Concurrent external content, mode, or symlink change becomes a conflict and
-   is not overwritten.
-10. Immediate rerun writes zero files.
-11. All scenarios pass from a source checkout and clean installed wheel.
-12. One real PDD unit and one real pdd_cloud unit pass the same loop.
+8. Process death and a late install failure at every
+   prepare/journal/install/finalize phase, including a multi-unit shared-resource
+   closure, recover to the complete old or complete new state.
+9. A concurrent canonical reader encountering `COMMITTING` never observes or
+   reports mixed state; it waits, retries, or returns `RECOVERY_REQUIRED`.
+10. Concurrent external content, mode, or symlink change becomes a conflict and
+    is not overwritten.
+11. Immediate rerun writes zero files.
+12. All scenarios pass from a source checkout and a clean installed **PDD
+    application wheel containing the repair/finalizer modules**. The standalone
+    read-only checker wheel is not used as the repair runtime.
+13. One real PDD unit and one real pdd_cloud unit pass the same loop.
 
 M1 deliverables:
 
@@ -397,7 +460,9 @@ M1 deliverables:
 
 M1 validation is defined by the newly added tests and verifier. The command
 contract must prove their presence before invoking them. M1 is complete when the
-fixture, PDD canary, pdd_cloud canary, source run, and wheel run all pass.
+fixture, credentialed production-generator canary, PDD canary, pdd_cloud canary,
+source run, and PDD application-wheel run all pass. `pdd resolve` is integrated
+and registered in PR B as part of M1.
 
 ### M2: Complete canonical production routing
 
@@ -418,8 +483,8 @@ M2 exit:
 
 - Production-routing verifier reports zero independent implementations and zero
   mutators outside canonical APIs.
-- `pdd resolve` and canonical `pdd sync` are usable public paths, not placeholder
-  commands.
+- Canonical `pdd sync` and the already-integrated `pdd resolve` route through the
+  same repair API and are usable public paths, not placeholders.
 - Full mutation property suite passes.
 - Full 500-unit read-only benchmark and 20-unit affected repair meet recorded
   budgets or trigger a design correction before rollout.
@@ -447,8 +512,9 @@ M3 exit:
 
 - Released digest is pinned and rollback-tested.
 - The real pdd_cloud canary passes.
-- At least three consecutive complete shadow runs, including one organic merge
-  and one injected drift/recovery run, are green with zero unexplained writes.
+- At least three consecutive complete exact-SHA shadow runs, including a
+  synthetic merge-group/post-merge lifecycle run and one injected
+  drift/recovery run, are green with zero unexplained writes.
 - Policy-tamper and forged-evidence fixtures remain red.
 
 ### M4: Production Global Sync
@@ -462,40 +528,67 @@ Present one enforcement-approval packet containing:
 - Expected merge impact and performance.
 
 After one approval, enable enforcement for migrated subtrees first, then expand.
-Rollback changes enforcement to report mode and never rewrites baselines.
+Partial enforcement is M3 rollout progress, not M4 completion. Rollback changes
+enforcement to report mode and never rewrites baselines.
 
 M4 exit:
 
-- Manual, agent, PDD, CI repair, and hotfix channels cannot land managed drift in
-  enforced subtrees.
+- Manual, agent, PDD, CI repair, and hotfix channels cannot land managed drift
+  for any expected-managed unit.
 - Every production mutator finalizes transactionally and reruns with zero writes.
-- Both repositories have complete honest inventory, and every unenforced or
-  excluded unit is explicit.
+- Both repositories have complete honest inventory; every expected-managed unit
+  is enforced, semantic `VERIFIED` from current trusted evidence, and baseline
+  `CURRENT`.
+- Human-owned subjects remain honestly inventoried but are outside the
+  expected-managed denominator. A former expected-managed unit is outside M4
+  only after the approved ownership/denominator process records its tombstone or
+  transition; rollout exclusions and waivers do not satisfy this condition.
 - pdd_cloud retains orchestration only; upstream owns identity, discovery,
   include graph, affected closure, path resolution, hashing, classification, and
   transaction semantics.
 - Post-merge and nightly scans are complete even after ledger/cursor deletion.
 
-M4 closes the production functionality program. Remaining profile coverage may
-continue as rollout work without weakening reports.
+M4 closes the production functionality program only at full expected-managed
+enforcement. There may be additional human-owned or explicitly decommissioned
+coverage work, but no expected-managed profile/evidence debt remains.
 
 ### M5: optional Certified Global Sync
 
 Start M5 only after M4 is stable and the operator explicitly requests the
-high-assurance certificate. M5 may include:
+high-assurance certificate. Once requested, the following predicates are
+normative and may not be weakened by implementation convenience:
 
 - Sealed, digest-pinned OCI runtime with SBOM/package provenance.
-- Separately implemented and released reference verifier.
+- Separately implemented and released reference verifier sharing no code with
+  `pdd.sync_core`.
 - Protected signer, replay controls, rotation/revocation, and external append-only
   anchor.
-- Complete machine-verification profiles and current trusted evidence.
-- Seven qualifying UTC nights, organic-merge requirements, seeded mutation
-  batches, and temporal continuity.
-- Independent adversarial review and a separately released certificate finalizer.
+- Complete inventory for PDD and pdd_cloud, with 100% of expected-managed units
+  machine verified by current trusted evidence; human-only, excluded, waived,
+  unaccounted, and red managed counts are zero.
+- pdd_cloud owns no sync identity, discovery, include, graph, affected-closure,
+  path, hashing, classification, or transaction semantics.
+- All 18 protected lifecycle rows pass from clean exact-SHA clones and installed
+  artifacts, including crash/race/tamper injections and zero-write reruns.
+- Seven consecutive qualifying UTC nights contain at least five organic protected
+  merges, zero check-failure nights, no more than two named/checksummed
+  infrastructure-void nights, and at least 25 seeded mutations per night with
+  every injected mutation detected.
+- Nightly rows use immutable external anchoring, complete scans after
+  ledger/cursor deletion, and verified repository/SHA temporal continuity.
+- Candidate-controlled verifier, expectation, signer, scenario, checker, PATH,
+  wheelhouse, or time inputs accepted: zero.
+- Independent exact-payload adversarial review and a separately released,
+  digest-pinned certificate finalizer.
+- Primary and reference verifiers accept the unchanged payload and detached
+  final evaluation using protected repository identities, SHAs, issuer material,
+  expectations, anchor configuration, and trusted time.
 
-The strict certificate may require 100% machine verification, no human-only
-units, no exclusions, and no waivers. Those predicates describe the certificate,
-not whether global sync works in production.
+These predicates describe the certificate, not whether global sync works in
+production. The active certificate schema, lifecycle scenario set, exact
+night/organic-merge thresholds, verifier CLIs, and trust expectations must be
+ratified in a protected M5 annex before implementation and before the first
+qualifying night. The annex may strengthen but not omit the predicates above.
 
 M5 commands and schemas must be added to the command-contract registry and pass
 source/wheel/external-input validation before the first qualifying night. No
@@ -513,7 +606,8 @@ as stacked leaf PRs, but bookkeeping-only PRs do not become critical-path gates.
 2. **PR B — working vertical slice:** Track A repair/transaction loop plus Track B
    pytest authority and all M1 scenarios.
 3. **PR C — production routing:** capability completeness, compatibility adapters,
-   public resolve path, routing verifier, scale benchmark.
+   routing verifier, scale benchmark, and canonical sync routing. Public resolve
+   was already integrated in PR B.
 4. **PR D — checker release:** standalone package, clean wheel proof, protected
    release manifest and pin.
 5. **PR E — PDD/pdd_cloud shadow rollout:** bounded profile/data migrations,
@@ -615,15 +709,21 @@ count, evidence-row count, or local implementation claims.
 1. Merge or rebase this replacement plan onto current protected main.
 2. Create the fresh integration and track worktrees; record their exact base SHA,
    owners, and write sets.
-3. Implement and run the command-contract verifier.
-4. Fix the focused trusted-finalizer collection failure and establish M0 green.
-5. In parallel:
+3. In the M0-bootstrap track, implement the command-contract verifier, reconcile
+   active ledger/workflow semantics, reproduce and fix the focused
+   trusted-finalizer collection failure, and run the disposable ten-unit and
+   pdd_cloud scope samples. Track D may inventory legacy mutators read-only in
+   parallel.
+4. Run the complete M0 gate and record its exact source/wheel SHAs.
+5. After M0 passes, in parallel:
    - Track A builds the staged repair vertical slice.
    - Track B closes the pytest authority contract.
    - Track C builds, but does not publish, the standalone checker wheel.
-   - Track E completes the ten-unit profile sample and real pdd_cloud canary
-     fixture.
-   - Track D inventories legacy mutators without changing shared behavior.
-6. Integrate A+B+E into the source vertical slice, then add C's clean wheel.
+   - Track E turns the disposable scope results into bounded migration patches
+     and the real pdd_cloud canary fixture.
+   - Track D implements routing against Track A's frozen interface.
+6. Integrate A+B+E into the source vertical slice, then build and test the PDD
+   application wheel. Continue Track C's standalone checker independently for
+   M3 release.
 7. Do not start OCI, anchor, independent reference-verifier, seven-night, or
    finalizer work until M4 is complete and M5 is explicitly authorized.
