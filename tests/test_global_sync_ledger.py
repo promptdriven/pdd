@@ -19,6 +19,7 @@ import yaml
 from pdd.sync_core.global_sync_ledger import (
     GitHubPromotionVerifier,
     LedgerError,
+    PROTECTED_HISTORY_BASE_SHA,
     canonical_predicate_digest,
     load_unique_yaml,
     run,
@@ -28,7 +29,8 @@ from pdd.sync_core.global_sync_ledger import (
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_SCRIPT = ROOT / "scripts" / "verify_global_sync_execution_contract.py"
-CURRENT_PROTECTED_BASE_SHA = "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
+CURRENT_PROTECTED_BASE_SHA = "ca2d9cd8ac9264b614b484efed5a9eb3b0730c52"
+HISTORICAL_PROTECTED_BASE_SHA = "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
 STATE_FIELDS = (
     "implemented",
     "local_green",
@@ -1426,7 +1428,7 @@ def test_execution_contract_rejects_wheel_probe_that_imports_checkout_source(
     assert any("checkout source" in error for error in errors)
 
 
-def test_execution_state_records_exact_m0_focused_suite_and_allowlist() -> None:
+def test_execution_state_records_exact_m0_focused_suite_and_live_base_rebinding() -> None:
     state = yaml.safe_load((ROOT / "docs" / "global_sync_execution_state.yaml").read_text(
         encoding="utf-8"))
     commands = {command["id"]: command for command in state["command_registry"]}
@@ -1438,3 +1440,14 @@ def test_execution_state_records_exact_m0_focused_suite_and_allowlist() -> None:
         "m0_bootstrap_allowlist"]
     assert "docs/global_sync_resolution_plan.md" in state["m0_bootstrap_allowlist"]
     assert CURRENT_PROTECTED_BASE_SHA == state["protected_base_sha"]
+    assert state["preflight"]["protected_base_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert state["integration"]["base_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert state["scoreboard"]["base_sha"] == CURRENT_PROTECTED_BASE_SHA
+
+    source = load_unique_yaml(ROOT / "docs" / "global_sync_evidence_ledger_source.yaml")
+    generated = load_unique_yaml(ROOT / "docs" / "global_sync_evidence_ledger.yaml")
+    assert source["execution_contract"]["protected_base_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert generated["execution_contract"]["protected_base_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert PROTECTED_HISTORY_BASE_SHA == HISTORICAL_PROTECTED_BASE_SHA
+    assert source["historical_archive"]["protected_base_sha"] == HISTORICAL_PROTECTED_BASE_SHA
+    assert generated["historical_archive"]["protected_base_sha"] == HISTORICAL_PROTECTED_BASE_SHA
