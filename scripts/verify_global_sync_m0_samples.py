@@ -52,6 +52,18 @@ SAMPLE_PATHS = (
     "pdd/prompts/_keyring_timeout_python.prompt",
     "pdd/prompts/frontend/components/DependencyViewer_typescriptreact.prompt",
 )
+POSITIVE_CASES = (
+    ("nested-config", "pdd/prompts/agentic_architecture_python.prompt", "pdd/agentic_architecture.py"),
+    ("include-closure", "pdd/prompts/commands/checkup_python.prompt", "pdd/commands/checkup.py"),
+    ("duplicate-basename", "pdd/prompts/core/duplicate_cli_guard_python.prompt", "pdd/core/duplicate_cli_guard.py"),
+    ("human-owned-test", "pdd/prompts/bug_to_unit_test_python.prompt", "pdd/bug_to_unit_test.py"),
+    ("multi-file-example-test", "pdd/prompts/agentic_test_generate_python.prompt", "pdd/agentic_test_generate.py"),
+    ("executable-artifact", "pdd/prompts/pre_checkup_gate_python.prompt", "pdd/pre_checkup_gate.py"),
+    ("architecture-override", "pdd/prompts/architecture_sync_python.prompt", "pdd/architecture_sync.py"),
+    ("runtime-dependency", "pdd/prompts/architecture_registry_python.prompt", "pdd/architecture_registry.py"),
+    ("historically-problematic-adjacent-control", "pdd/prompts/checkup_agent_python.prompt", "pdd/checkup_agent.py"),
+    ("cross-language", "pdd/prompts/frontend/constants_typescript.prompt", "pdd/frontend/constants.ts"),
+)
 T = TypeVar("T")
 
 
@@ -76,9 +88,25 @@ def require_profile_rejection(case_id: str, invalid_reasons: tuple[str, ...]) ->
         raise ValueError(f"{case_id}: candidate unexpectedly bypassed profile validation")
 
 
+def compare_deterministic_artifacts(
+    expected: dict[str, Any], actual: dict[str, Any],
+) -> tuple[str, ...]:
+    """Return stable, path-oriented differences for protected artifact replay."""
+    expected_bytes = json.dumps(expected, sort_keys=True, separators=(",", ":")).encode()
+    actual_bytes = json.dumps(actual, sort_keys=True, separators=(",", ":")).encode()
+    if expected_bytes == actual_bytes:
+        return ()
+    return (
+        "deterministic artifact differs: expected="
+        f"{hashlib.sha256(expected_bytes).hexdigest()} actual="
+        f"{hashlib.sha256(actual_bytes).hexdigest()}",
+    )
+
+
 def deterministic_payload(
     *, base_sha: str, partition: dict[str, int], cases: list[dict[str, Any]],
     closure: dict[str, Any], pdd_cloud_sha: str | None = None,
+    pdd_cloud_canary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the stable artifact, intentionally excluding host measurements."""
     payload = {
@@ -90,6 +118,8 @@ def deterministic_payload(
     }
     if pdd_cloud_sha:
         payload["pdd_cloud_sha"] = pdd_cloud_sha
+    if pdd_cloud_canary:
+        payload["pdd_cloud_canary"] = pdd_cloud_canary
     return payload
 
 
@@ -179,6 +209,60 @@ def _profile_case(root: Path, base_sha: str, path: str, index: int) -> dict[str,
     }
 
 
+def _positive_case(
+    root: Path, base_sha: str, category: str, prompt_path: str, target_path: str, index: int,
+) -> dict[str, Any]:
+    """Install one non-production fingerprint migration and validate its binding."""
+    case_id = f"{index:02d}-{category}"
+    target = root / target_path
+    if not target.is_file():
+        raise ValueError(f"{case_id}: representative artifact is absent: {target_path}")
+    manifest = build_unit_manifest(root, base_ref=base_sha, head_ref=base_sha)
+    profiles = load_verification_profiles(root, manifest)
+    if profiles.invalid_reasons:
+        raise ValueError(f"{case_id}: public profile API rejected candidate: {profiles.invalid_reasons[0]}")
+    unit = next(
+        (item for item in manifest.managed_units if item.unit_id.prompt_relpath.as_posix() == prompt_path),
+        None,
+    )
+    if unit is None:
+        raise ValueError(f"{case_id}: representative prompt is not managed: {prompt_path}")
+    profile = profiles.for_unit(unit.unit_id)
+    if profile is None:
+        raise ValueError(f"{case_id}: representative profile is absent")
+    snapshot = build_unit_snapshot(root, manifest, unit, profile)
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    if not any(item.relpath.as_posix() == target_path and item.digest == digest for item in snapshot.artifacts):
+        raise ValueError(f"{case_id}: changed representative artifact is absent from snapshot")
+    record = FingerprintRecord(
+        snapshot, 2, 2,
+        FingerprintProvenance("generated", "m0-sample", case_id, base_sha,
+                              "1970-01-01T00:00:00+00:00", "m0-sample"),
+        SemanticStatus.UNKNOWN, None,
+    )
+    store = FingerprintStore(root)
+    store.write(record)
+    patch = _patch_bytes(root)
+    candidate_sha = _commit(root, f"m0 representative fingerprint {case_id}")
+    candidate_manifest = build_unit_manifest(root, base_ref=base_sha, head_ref=candidate_sha)
+    candidate_profiles = load_verification_profiles(root, candidate_manifest)
+    if candidate_profiles.invalid_reasons:
+        raise ValueError(f"{case_id}: candidate fingerprint invalidated profile API")
+    candidate_unit = next(item for item in candidate_manifest.managed_units if item.unit_id == unit.unit_id)
+    candidate_snapshot = build_unit_snapshot(root, candidate_manifest, candidate_unit, candidate_profiles.for_unit(unit.unit_id))
+    if store.load(unit.unit_id) != record or candidate_snapshot.digest() != snapshot.digest():
+        raise ValueError(f"{case_id}: fingerprint migration did not preserve public snapshot binding")
+    _reset_candidate(root, base_sha)
+    return {
+        "id": case_id, "kind": "positive-representative", "category": category,
+        "sample_path": prompt_path, "changed_path": target_path,
+        "patch_sha256": hashlib.sha256(patch).hexdigest(), "patch_bytes": len(patch),
+        "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+        "promotable": False,
+        "promotion_reason": "temporary non-production patch has no trusted attestation",
+    }
+
+
 def _ownership_case(root: Path, base_sha: str) -> dict[str, Any]:
     path = root / ".pdd/sync-ownership.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -202,6 +286,24 @@ def _ownership_case(root: Path, base_sha: str) -> dict[str, Any]:
         "patch_sha256": hashlib.sha256(patch).hexdigest(), "patch_bytes": len(patch),
         "outcome": outcome,
     }
+
+
+def _product_decision_case(root: Path, base_sha: str, category: str, prompt_path: str, adjacent_control: str) -> dict[str, Any]:
+    """Record a current public-API limitation without miscalling it a migration."""
+    manifest = build_unit_manifest(root, base_ref=base_sha, head_ref=base_sha)
+    profiles = load_verification_profiles(root, manifest)
+    unit = next((item for item in manifest.managed_units if item.unit_id.prompt_relpath.as_posix() == prompt_path), None)
+    if unit is None or profiles.for_unit(unit.unit_id) is None:
+        raise ValueError(f"{category}: representative unit or profile is absent")
+    try:
+        build_unit_snapshot(root, manifest, unit, profiles.for_unit(unit.unit_id))
+    except SnapshotError as error:
+        return {
+            "category": category, "sample_path": prompt_path,
+            "outcome": "product-decision-required-no-valid-public-api-migration",
+            "reason": str(error), "adjacent_positive_control": adjacent_control,
+        }
+    raise ValueError(f"{category}: expected public API limitation no longer exists; promote a real migration case")
 
 
 def _fingerprint_case(root: Path, base_sha: str, preferred_path: str) -> dict[str, Any]:
@@ -297,6 +399,49 @@ def _optional_cloud_sha(root: Path | None, sha: str | None) -> str | None:
     return result.stdout.strip()
 
 
+def _git_blob(root: Path, sha: str, path: str) -> bytes:
+    """Read an exact consumer blob, rejecting absent paths and tree ambiguity."""
+    result = subprocess.run(
+        ["git", "show", f"{sha}:{path}"], cwd=root, capture_output=True, check=False
+    )
+    if result.returncode:
+        raise ValueError(f"pdd_cloud canary closure is absent: {path}")
+    return result.stdout
+
+
+def _cloud_canary_binding(root: Path, sha: str) -> dict[str, Any]:
+    """Bind the selected consumer canary to exact paths, mapping, and bytes."""
+    prefix = "extensions/github_pdd_app/"
+    prompt = prefix + "prompts/Dockerfile_webhook_Dockerfile.prompt"
+    dependency = prefix + "prompts/src/webhook_app_Python.prompt"
+    architecture = prefix + "architecture.json"
+    artifact = prefix + "Dockerfile.webhook"
+    required = (prompt, dependency, architecture, artifact, prefix + "requirements.txt", prefix + "src/webhook_app.py", prefix + ".pddrc", prefix + ".pdd/meta/Dockerfile_webhook_dockerfile.json")
+    blobs = {path: _git_blob(root, sha, path) for path in required}
+    prompt_text = blobs[prompt].decode("utf-8")
+    if "<pdd-dependency>src/webhook_app_Python.prompt</pdd-dependency>" not in prompt_text:
+        raise ValueError("pdd_cloud canary prompt does not bind the webhook dependency")
+    try:
+        rows = json.loads(blobs[architecture])
+    except json.JSONDecodeError as error:
+        raise ValueError("pdd_cloud canary architecture is malformed") from error
+    mapping = next((row for row in rows if row.get("filename") == "Dockerfile_webhook_Dockerfile.prompt"), None)
+    if not isinstance(mapping, dict) or mapping.get("filepath") != "Dockerfile.webhook":
+        raise ValueError("pdd_cloud canary architecture mapping is absent or mismatched")
+    if mapping.get("dependencies") != ["src/webhook_app_Python.prompt"]:
+        raise ValueError("pdd_cloud canary architecture dependency is mismatched")
+    dockerfile = blobs[artifact].decode("utf-8")
+    if "COPY requirements.txt" not in dockerfile or "COPY src/ ./src/" not in dockerfile:
+        raise ValueError("pdd_cloud canary artifact does not bind runtime closure")
+    if b"gunicorn" not in blobs[prefix + "requirements.txt"] or b"from fastapi import" not in blobs[prefix + "src/webhook_app.py"]:
+        raise ValueError("pdd_cloud canary runtime dependency closure is mismatched")
+    return {
+        "sha": sha, "canary_prompt": prompt, "architecture_path": architecture,
+        "expected_artifact": artifact, "closure_paths": list(required),
+        "content_sha256": {path: hashlib.sha256(data).hexdigest() for path, data in blobs.items()},
+    }
+
+
 def run(
     root: Path,
     base_sha: str,
@@ -314,6 +459,7 @@ def run(
     base_sha = resolved.stdout.strip()
     require_sample_paths(root, sample_paths)
     cloud_sha = _optional_cloud_sha(pdd_cloud_root, pdd_cloud_sha)
+    cloud_canary = _cloud_canary_binding(pdd_cloud_root.resolve(), cloud_sha) if cloud_sha and pdd_cloud_root else None
 
     def inventory() -> tuple[Any, Any, dict[str, int]]:
         manifest = build_unit_manifest(root, base_ref=base_sha, head_ref=base_sha)
@@ -352,21 +498,26 @@ def run(
             raise ValueError("cannot create temporary shared candidate clone")
         if _git(candidate_root, "checkout", "--quiet", "--detach", base_sha).returncode:
             raise ValueError("cannot check out base SHA in temporary candidate clone")
-        profile_paths = (
-            sample_paths[0], sample_paths[1], sample_paths[2], sample_paths[3],
-            sample_paths[4], sample_paths[6], sample_paths[7], sample_paths[9],
-        )
         cases = [
-            _profile_case(candidate_root, base_sha, path, index)
-            for index, path in enumerate(profile_paths, 1)
+            _positive_case(candidate_root, base_sha, category, prompt, target, index)
+            for index, (category, prompt, target) in enumerate(POSITIVE_CASES, 1)
         ]
-        cases.append(_ownership_case(candidate_root, base_sha))
-        cases.append(_fingerprint_case(candidate_root, base_sha, sample_paths[8]))
+        negative_controls = [
+            _profile_case(candidate_root, base_sha, sample_paths[0], 1),
+            _ownership_case(candidate_root, base_sha),
+        ]
+        product_decisions = [
+            _product_decision_case(candidate_root, base_sha, "executable-artifact", "pdd/prompts/Makefile_makefile.prompt", "06-executable-artifact"),
+            _product_decision_case(candidate_root, base_sha, "historically-problematic", "pdd/prompts/sync_main_python.prompt", "09-historically-problematic-adjacent-control"),
+            _product_decision_case(candidate_root, base_sha, "nested-config", "pdd/prompts/sync_orchestration_python.prompt", "01-nested-config"),
+        ]
     deterministic = deterministic_payload(
         base_sha=base_sha, partition=partition, cases=cases,
         closure={"requested": closure_limit, "completed": completed, "invalid": closure_invalid},
-        pdd_cloud_sha=cloud_sha,
+        pdd_cloud_sha=cloud_sha, pdd_cloud_canary=cloud_canary,
     )
+    deterministic["negative_controls"] = negative_controls
+    deterministic["product_decisions"] = product_decisions
     metrics = {
         "schema_version": 1,
         "base_sha": base_sha,

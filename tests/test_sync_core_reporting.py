@@ -81,6 +81,10 @@ def test_m0_samples_deterministic_artifact_comparison_is_exact() -> None:
     expected = {"schema_version": 1, "cases": [{"id": "01", "outcome": "accepted"}]}
     assert module.compare_deterministic_artifacts(expected, dict(expected)) == ()
     assert module.compare_deterministic_artifacts(expected, {"schema_version": 1, "cases": []})
+    payload = module.deterministic_payload(
+        base_sha="a" * 40, partition={"derivable": 1}, cases=[], closure={"completed": 1}
+    )
+    assert "metrics" not in payload
 
 
 def test_m0_samples_requires_all_named_inputs(tmp_path: Path) -> None:
@@ -96,6 +100,29 @@ def test_m0_samples_requires_all_named_inputs(tmp_path: Path) -> None:
 def test_m0_samples_rejects_an_invalid_patch_false_pass() -> None:
     with pytest.raises(ValueError, match="bypassed profile validation"):
         _m0_sample_module().require_profile_rejection("negative-profile", ())
+
+
+def _m0_sample_git(root: Path, *arguments: str) -> None:
+    subprocess.run(["git", *arguments], cwd=root, check=True, capture_output=True, text=True)
+
+
+def test_m0_samples_patch_captures_untracked_text_and_binary_in_clone(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _m0_sample_git(source, "init", "--quiet")
+    _m0_sample_git(source, "config", "user.name", "test")
+    _m0_sample_git(source, "config", "user.email", "test@example.invalid")
+    (source / "tracked.txt").write_text("base\n", encoding="utf-8")
+    _m0_sample_git(source, "add", "tracked.txt")
+    _m0_sample_git(source, "commit", "--quiet", "-m", "base")
+    candidate = tmp_path / "candidate"
+    _m0_sample_git(tmp_path, "clone", "--quiet", str(source), str(candidate))
+    (candidate / "candidate.txt").write_text("untracked text\n", encoding="utf-8")
+    (candidate / "candidate.bin").write_bytes(b"\x00\x01untracked binary\xff")
+    patch = _m0_sample_module()._patch_bytes(candidate)
+    assert b"candidate.txt" in patch and b"untracked text" in patch
+    assert b"candidate.bin" in patch and b"GIT binary patch" in patch
+    assert _git(source, "status", "--porcelain") == ""
 
 
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
