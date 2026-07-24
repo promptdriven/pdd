@@ -6,7 +6,7 @@ exist only in a temporary shared clone and are removed before this program
 returns.  The primary JSON is deliberately deterministic; timing and RSS are
 emitted only to the optional metrics JSON.
 """
-# pylint: disable=too-many-branches,too-many-locals,too-many-statements,line-too-long,subprocess-run-check,wrong-import-position
+# pylint: disable=too-many-branches,too-many-locals,too-many-statements,too-many-arguments,too-many-positional-arguments,line-too-long,subprocess-run-check,wrong-import-position
 
 from __future__ import annotations
 
@@ -78,16 +78,19 @@ def require_profile_rejection(case_id: str, invalid_reasons: tuple[str, ...]) ->
 
 def deterministic_payload(
     *, base_sha: str, partition: dict[str, int], cases: list[dict[str, Any]],
-    closure: dict[str, Any],
+    closure: dict[str, Any], pdd_cloud_sha: str | None = None,
 ) -> dict[str, Any]:
     """Build the stable artifact, intentionally excluding host measurements."""
-    return {
+    payload = {
         "schema_version": 1,
         "base_sha": base_sha,
         "partition": partition,
         "cases": cases,
         "closure": closure,
     }
+    if pdd_cloud_sha:
+        payload["pdd_cloud_sha"] = pdd_cloud_sha
+    return payload
 
 
 def _git(root: Path, *args: str, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -276,7 +279,26 @@ def _measure(action: Callable[[], T]) -> tuple[T, dict[str, Any]]:
     }
 
 
-def run(root: Path, base_sha: str, closure_limit: int, sample_paths: tuple[str, ...]) -> tuple[dict[str, Any], dict[str, Any]]:
+def _optional_cloud_sha(root: Path | None, sha: str | None) -> str | None:
+    """Resolve an optional read-only consumer input as an exact commit."""
+    if root is None and sha is None:
+        return None
+    if root is None or sha is None:
+        raise ValueError("pdd_cloud root and SHA must be supplied together")
+    result = _git(root.resolve(), "rev-parse", "--verify", f"{sha}^{{commit}}", capture=True)
+    if result.returncode:
+        raise ValueError(f"pdd_cloud SHA cannot be resolved: {sha}")
+    return result.stdout.strip()
+
+
+def run(
+    root: Path,
+    base_sha: str,
+    closure_limit: int,
+    sample_paths: tuple[str, ...],
+    pdd_cloud_root: Path | None = None,
+    pdd_cloud_sha: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run all M0 samples and return `(deterministic, volatile_metrics)`."""
     validate_arguments(closure_limit=closure_limit, sample_paths=sample_paths)
     root = root.resolve()
@@ -285,6 +307,7 @@ def run(root: Path, base_sha: str, closure_limit: int, sample_paths: tuple[str, 
         raise ValueError(f"base SHA cannot be resolved: {base_sha}")
     base_sha = resolved.stdout.strip()
     require_sample_paths(root, sample_paths)
+    cloud_sha = _optional_cloud_sha(pdd_cloud_root, pdd_cloud_sha)
 
     def inventory() -> tuple[Any, Any, dict[str, int]]:
         manifest = build_unit_manifest(root, base_ref=base_sha, head_ref=base_sha)
@@ -323,12 +346,20 @@ def run(root: Path, base_sha: str, closure_limit: int, sample_paths: tuple[str, 
             raise ValueError("cannot create temporary shared candidate clone")
         if _git(candidate_root, "checkout", "--quiet", "--detach", base_sha).returncode:
             raise ValueError("cannot check out base SHA in temporary candidate clone")
-        cases = [_profile_case(candidate_root, base_sha, path, index) for index, path in enumerate(sample_paths[:8], 1)]
+        profile_paths = (
+            sample_paths[0], sample_paths[1], sample_paths[2], sample_paths[3],
+            sample_paths[4], sample_paths[6], sample_paths[7], sample_paths[9],
+        )
+        cases = [
+            _profile_case(candidate_root, base_sha, path, index)
+            for index, path in enumerate(profile_paths, 1)
+        ]
         cases.append(_ownership_case(candidate_root, base_sha))
         cases.append(_fingerprint_case(candidate_root, base_sha, sample_paths[8]))
     deterministic = deterministic_payload(
         base_sha=base_sha, partition=partition, cases=cases,
         closure={"requested": closure_limit, "completed": completed, "invalid": closure_invalid},
+        pdd_cloud_sha=cloud_sha,
     )
     metrics = {
         "schema_version": 1,
@@ -349,9 +380,14 @@ def main() -> int:  # pylint: disable=missing-function-docstring
     parser.add_argument("--closure-limit", type=int, default=20)
     parser.add_argument("--output", type=Path, required=True, help="deterministic JSON output")
     parser.add_argument("--metrics-output", type=Path, help="optional volatile timing/RSS JSON output")
+    parser.add_argument("--pdd-cloud-root", type=Path)
+    parser.add_argument("--pdd-cloud-sha")
     arguments = parser.parse_args()
     try:
-        deterministic, metrics = run(arguments.root, arguments.base_sha, arguments.closure_limit, SAMPLE_PATHS)
+        deterministic, metrics = run(
+            arguments.root, arguments.base_sha, arguments.closure_limit, SAMPLE_PATHS,
+            arguments.pdd_cloud_root, arguments.pdd_cloud_sha,
+        )
     except (OSError, ValueError, json.JSONDecodeError, ManifestError) as error:
         print(f"global-sync M0 samples failed: {error}")
         return 1
