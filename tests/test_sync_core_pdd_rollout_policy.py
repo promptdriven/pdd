@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
 from pdd.sync_core import decommission as decommission_module
@@ -39,6 +40,7 @@ EXPECTED_PATH = ROOT / ".pdd" / "expected-managed.json"
 OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
+AUTO_HEAL_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "auto-heal.yml"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 469
 # #1989's dormant-bootstrap assertions retain their original immutable base;
@@ -2458,6 +2460,71 @@ def test_global_sync_m0_bootstrap_candidate_composes_from_protected_base(
         and item.ownership_provenance == f"protected-ownership:pdd-maintainers:{path}"
         for path, item in records.items()
     )
+
+
+def _workflow_value_references_secret(value: object, secret_names: tuple[str, ...]) -> bool:
+    """Return whether a parsed workflow value contains an App-secret reference."""
+    if isinstance(value, dict):
+        return any(
+            _workflow_value_references_secret(child, secret_names)
+            for child in value.values()
+        )
+    if isinstance(value, list):
+        return any(_workflow_value_references_secret(child, secret_names) for child in value)
+    return isinstance(value, str) and any(
+        secret_name.casefold() in value.casefold() for secret_name in secret_names
+    )
+
+
+def _assert_auto_heal_app_secret_consumers_are_restricted(
+    jobs: dict[str, dict[str, object]],
+) -> None:
+    """Require the only App-secret consumer to be the restricted heal job."""
+    app_secret_names = ("PDD_CLOUD_APP_ID", "PDD_CLOUD_APP_PRIVATE_KEY")
+    consumer_jobs = {
+        job_name
+        for job_name, job in jobs.items()
+        if _workflow_value_references_secret(job, app_secret_names)
+    }
+
+    assert consumer_jobs
+    assert consumer_jobs == {"heal"}
+    assert all(
+        jobs[job_name].get("environment") == "pdd-cloud-read"
+        for job_name in consumer_jobs
+    )
+
+
+def test_auto_heal_app_secret_consumers_use_restricted_environment() -> None:
+    """Every App-secret consumer is bound to the main-restricted environment."""
+    workflow = yaml.safe_load(AUTO_HEAL_WORKFLOW_PATH.read_text(encoding="utf-8"))
+
+    _assert_auto_heal_app_secret_consumers_are_restricted(workflow["jobs"])
+
+
+@pytest.mark.parametrize(
+    "secret_reference",
+    (
+        "${{ secrets.pdd_cloud_app_id }}",
+        "${{ secrets['PDD_CLOUD_APP_PRIVATE_KEY'] }}",
+    ),
+)
+def test_auto_heal_rejects_second_job_with_alternate_app_secret_syntax(
+    secret_reference: str,
+) -> None:
+    """Case-insensitive dot and bracket secret references cannot bypass the job gate."""
+    jobs = {
+        "heal": {
+            "environment": "pdd-cloud-read",
+            "steps": [{"with": {"app-id": "${{ secrets.PDD_CLOUD_APP_ID }}"}}],
+        },
+        "unprotected-app-consumer": {
+            "steps": [{"env": {"APP_CREDENTIAL": secret_reference}}],
+        },
+    }
+
+    with pytest.raises(AssertionError):
+        _assert_auto_heal_app_secret_consumers_are_restricted(jobs)
 
 
 def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
