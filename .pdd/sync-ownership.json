@@ -1,36 +1,191 @@
 {
   "rules": [
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/agentic_test_orchestrator_python.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/auto_deps_main_python.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/auto_deps_main_python_run.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/ci_validation_python.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/cmd_test_main_python.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/cmd_test_main_python_run.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/content_selector_python.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/content_selector_python_run.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/core_cli_python.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/evidence_manifest_python_run.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/fix_main_python.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/fix_main_python_run.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/mock_contract_validation_python.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/mock_contract_validation_python_run.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/one_session_sync_python.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/operation_log_python.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/operation_log_python_run.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/preprocess_python_run.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/sync_main_python.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/sync_main_python_run.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/update_main_python.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": ".pdd/meta/update_main_python_run.json", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "context/evidence_manifest_example.py", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "context/mock_contract_validation_example.py", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "tests/test_issue_1900_surface_contract.py", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "tests/test_issue_1903_adopt_collocated_test.py", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "tests/test_issue_1939_mock_contract_validation.py", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "tests/test_issue_1968_annotation_convergence.py", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "tests/test_issue_2004_authoritative_drift_pair.py", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "tests/test_mock_contract_fix_wiring.py", "role": "human-maintained"},
-    {"inventory": "HUMAN_OWNED", "owner": "pdd-maintainers", "pattern": "tests/test_mock_contract_validation.py", "role": "human-maintained"},
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/agentic_test_orchestrator_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/auto_deps_main_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/auto_deps_main_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/ci_validation_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/cmd_test_main_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/cmd_test_main_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/content_selector_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/content_selector_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/core_cli_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/evidence_manifest_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/fix_main_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/fix_main_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/mock_contract_validation_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/mock_contract_validation_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/one_session_sync_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/operation_log_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/operation_log_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/preprocess_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/sync_main_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/sync_main_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/update_main_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/update_main_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "context/evidence_manifest_example.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "context/mock_contract_validation_example.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_issue_1900_surface_contract.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_issue_1903_adopt_collocated_test.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_issue_1939_mock_contract_validation.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_issue_1968_annotation_convergence.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_issue_2004_authoritative_drift_pair.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_mock_contract_fix_wiring.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_mock_contract_validation.py",
+      "role": "human-maintained"
+    },
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
@@ -2882,7 +3037,7 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
-      "pattern": "docs/Software Development Costs and Maintenance_ 2022\u20132025 Trends and AI Impact.md",
+      "pattern": "docs/Software Development Costs and Maintenance_ 2022–2025 Trends and AI Impact.md",
       "role": "human-maintained"
     },
     {
@@ -4974,6 +5129,12 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "pdd/cli_theme.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "pdd/cloud_checkup_job.py",
       "role": "human-maintained"
     },
     {
@@ -11580,6 +11741,12 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_cloud_batch_secret_boundary.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_cloud_checkup_job.py",
       "role": "human-maintained"
     },
     {
