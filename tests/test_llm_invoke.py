@@ -6298,6 +6298,53 @@ class TestLlmInvokeWithMockedLLM:
         assert result["attempted_models"] == ["claude-fable-5", "model-b"]
         assert result["model_name"] == "model-b"
 
+    @pytest.mark.parametrize(
+        "configured_alias",
+        ["claude-opus-5", "anthropic/claude-opus-5"],
+    )
+    def test_explicit_opus_5_alias_invokes_canonical_fable_model(
+        self, llm_mod, tmp_path, monkeypatch, configured_alias
+    ):
+        """Opus 5 CLI vocabulary must never reach Anthropic as a fake model ID."""
+        csv_path = tmp_path / "models.csv"
+        csv_path.write_text(
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_reasoning_tokens\n"
+            "Anthropic,claude-fable-5,1,2,0,KEY_A,True,adaptive,0\n"
+            "OpenAI,model-b,1,2,1500,KEY_B,True,none,0\n"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("PDD_MODEL_DEFAULT", configured_alias)
+        monkeypatch.setenv("KEY_A", "sk-aaaa1234567890123456")
+        monkeypatch.setenv("KEY_B", "sk-bbbb1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+
+        success_message = MagicMock()
+        success_message.content = "Fable success"
+        success_choice = MagicMock()
+        success_choice.message = success_message
+        success_choice.finish_reason = "stop"
+        success_response = MagicMock()
+        success_response.choices = [success_choice]
+        success_response._hidden_params = {}
+
+        with patch.object(
+            llm_mod.litellm,
+            "completion",
+            return_value=success_response,
+        ) as completion:
+            result = llm_mod.llm_invoke(
+                prompt="Say {greeting}",
+                input_json={"greeting": "hello"},
+                strength=1.0,
+                use_cloud=False,
+            )
+
+        assert completion.call_count == 1
+        assert completion.call_args.kwargs["model"] == "claude-fable-5"
+        assert result["model_name"] == "claude-fable-5"
+        assert result["attempted_models"] == ["claude-fable-5"]
+
     def test_explicit_fable_env_refuses_catalog_surrogate(
         self, llm_mod, tmp_path, monkeypatch
     ):

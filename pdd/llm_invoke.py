@@ -3281,6 +3281,26 @@ def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     return alternatives
 
 
+_CLAUDE_FABLE_5_ALIASES = {
+    "claude-opus-5": "claude-fable-5",
+    "anthropic/claude-opus-5": "anthropic/claude-fable-5",
+}
+
+
+def _canonicalize_claude_fable_alias(model_name: Optional[str]) -> Optional[str]:
+    """Resolve PDD's Opus 5 compatibility name to Anthropic's Fable 5 ID.
+
+    Anthropic exposes the generation as ``claude-fable-5`` rather than a
+    provider-side ``claude-opus-5`` model. Accepting the latter at PDD's model
+    selection boundary keeps the requested CLI vocabulary useful without ever
+    sending a nonexistent model identifier to the provider.
+    """
+    if model_name is None:
+        return None
+    raw = str(model_name).strip()
+    return _CLAUDE_FABLE_5_ALIASES.get(raw.lower(), raw)
+
+
 def _is_explicit_claude_fable_selection(model_name: Optional[str]) -> bool:
     """Return whether a configured model name explicitly requests Fable 5.
 
@@ -3288,9 +3308,11 @@ def _is_explicit_claude_fable_selection(model_name: Optional[str]) -> bool:
     interpolation.  Claude Fable 5 is intentionally unranked, however, so a
     high-strength interpolation would otherwise replace an explicit Fable
     choice with a higher-ranked model before Fable is ever attempted.  Accept
-    both the catalog's bare name and the provider-qualified CLI form.
+    the catalog's bare name, provider-qualified form, and the corresponding
+    Opus 5 compatibility aliases.
     """
-    normalized = str(model_name or "").strip().lower()
+    canonical = _canonicalize_claude_fable_alias(model_name)
+    normalized = str(canonical or "").strip().lower()
     return normalized in {"claude-fable-5", "anthropic/claude-fable-5"}
 
 
@@ -5060,6 +5082,9 @@ def llm_invoke(
         # cascade and select the routed model directly when it exists.
         if model_override:
             _effective_default_model = model_override
+        _effective_default_model = _canonicalize_claude_fable_alias(
+            _effective_default_model
+        )
         explicit_fable_selection = _is_explicit_claude_fable_selection(
             _effective_default_model
         )

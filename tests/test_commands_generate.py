@@ -77,10 +77,12 @@ def test_cli_generate_incremental_flag_passthrough(mock_main, mock_auto_update, 
 
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
-def test_global_model_flag_sets_fable_for_generate_run(
-    mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch
+@pytest.mark.parametrize("requested_model", ["claude-fable-5", "claude-opus-5"])
+def test_global_model_flag_sets_claude_5_for_generate_run(
+    mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch,
+    requested_model,
 ):
-    """The public CLI can explicitly select Fable without leaking process env."""
+    """The public CLI accepts Fable and Opus 5 names without leaking env."""
     files = create_dummy_files("fable.prompt")
     mock_main.return_value = ('code', False, 0.0, 'claude-fable-5')
     monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
@@ -93,11 +95,11 @@ def test_global_model_flag_sets_fable_for_generate_run(
     mock_main.side_effect = capture_model
     result = runner.invoke(
         cli.cli,
-        ["--model", "claude-fable-5", "generate", str(files["fable.prompt"])],
+        ["--model", requested_model, "generate", str(files["fable.prompt"])],
     )
 
     assert result.exit_code == 0, result.output
-    assert seen["model"] == "claude-fable-5"
+    assert seen["model"] == requested_model
     assert os.environ.get("PDD_MODEL_DEFAULT") is None
 
 # --- Template Functionality Tests ---
