@@ -5,7 +5,7 @@ metadata mutation are authorized.**
 
 Date: 2026-07-24 (America/Los_Angeles)
 
-PDD protected head: `abd9726bddbdb04e9889fbf14f751cb126d7cf23`
+PDD protected head: `d8423f5fcc1b22583f8262b994cf3f154a128b8b`
 pdd_cloud protected head: `09f9d3fea71c4c0ed6655f2acd5e95b14a32c3c8`
 
 This report implements the non-production sampling requested by section 3.4
@@ -23,16 +23,23 @@ returned the pdd_cloud SHA above. The two clean-clone `git status --porcelain`
 checks were empty before sampling. The PDD sample clone finished with
 `git diff --exit-code` status 0 and zero status lines.
 
+The protected base moved from the earlier sampled
+`abd9726bddbdb04e9889fbf14f751cb126d7cf23` to `d8423f5…`. A direct
+`git diff --name-only abd9726 d8423f5` contains only
+`docs/runbooks/pr-loop-process.md`; therefore the prior pure-data sample
+evidence remains applicable. The scale measurements below are nevertheless
+bound to `d8423f5…` and the package-local reporting fix.
+
 The registry and current canonical inventory disagree with stale historical
 counts:
 
 | Current protected input | Count | Interpretation |
 | --- | ---: | --- |
-| `.pdd/verification-profiles.json` profiles | 468 | Registry entries at this SHA |
+| `.pdd/verification-profiles.json` profiles | 469 | Registry entries at this SHA |
 | Human-attestation-only profiles | 465 | Current human-only population |
-| Machine-obligation profiles | 3 | The remaining registry profiles |
-| Expected managed units from `build_unit_manifest` | 469 | Current denominator; it is one greater than the profile registry |
-| Managed units from `build_unit_manifest` | 469 | No unaccounted paths or manifest invalid reasons |
+| Machine-obligation profiles | 4 | The remaining registry profiles |
+| Expected managed units from `build_unit_manifest` | 469 | Current denominator; it matches the profile registry |
+| Managed units from `build_unit_manifest` | 469 | No unaccounted paths; canonical validation errors are reported separately below |
 
 The older `docs/global_sync_pdd_adapter_demand.json` value of 467 human-only
 profiles is not current-state evidence for this SHA. This report does not edit
@@ -158,15 +165,15 @@ build_unit_manifest(root, base_ref=BASE, head_ref=CANDIDATE)
 
 # profile-only candidate, detached exact-SHA clone
 build_unit_manifest(...); load_verification_profiles(...)
-# manifest completed; the loader terminated the local process with no result
-# before the 300-second alarm or a JSON result could be emitted.
+# historical candidate run produced no promotable pass/fail result.
 ```
 
 The ownership result is fail-closed and is the expected evidence that a
 candidate cannot self-grant a duplicate protected ownership rule. The profile
-parser accepted all ten obligation structures, but the full candidate loader
-did not produce a pass/fail result in this environment; this is recorded as
-**inconclusive and not a pass**, not as an authorization to merge the patches.
+parser accepted all ten obligation structures, but the historical candidate
+run remains **inconclusive and not a pass**; it is not an authorization to
+merge the patches. The current full canonical benchmark below completed, so
+this historical candidate result is not evidence of a profile-loader failure.
 The profile and ownership candidate clones ended clean after their local
 candidate commit. The fingerprint clone intentionally retained its untracked
 candidate until read-back validation; it was never copied into production. The
@@ -188,9 +195,10 @@ This validates metadata serialization and read-back, not trusted verification
 or a denominator reduction.
 
 M0 does **not** depend on Track A's M1 staging artifact-repair executor. The
-remaining M0 sample blockers are narrower: the profile loader's abnormal
-no-result behavior, the fail-closed ownership rejection, invalid include
-closures, and the profile/manifest denominator mismatch.
+remaining M0 sample blockers are narrower: the fail-closed ownership rejection
+and invalid closure/input data. The current canonical report completes; it
+does not exhibit a profile-loader no-result condition, and the registry and
+manifest denominators match.
 
 ## 3. Read-only scale benchmarks
 
@@ -198,52 +206,48 @@ All timings use `time.perf_counter()`, and peak RSS is
 `resource.getrusage(RUSAGE_SELF).ru_maxrss` (bytes on this macOS host).
 `subprocess.run` was monkey-patched only to count calls; the measured code
 still executed its normal subprocesses. JSON report size is the compact,
-sorted byte length of the in-memory payload described in the command.
+sorted byte length of the in-memory payload. The full and closure harnesses
+each installed a 180-second `SIGALRM` bound and completed normally.
 
 | Case | Result | Time | Peak RSS | Subprocess calls | Report size |
 | --- | --- | ---: | ---: | ---: | ---: |
 | Full read-only inventory (`build_unit_manifest`) | completed: 469 managed/expected, 3,114 candidates, zero invalid/unaccounted | 5.194 s | 316,440,576 B | 16 | 151 B summary |
-| Full canonical inventory/classification (`build_canonical_report`, then an equivalent alarm-bounded direct classifier) | **not completed**. A fresh clean-clone direct run was bounded with `signal.alarm(300)`, but the process ended with no result JSON/stdout/stderr before the alarm; the original foreground attempt likewise ended after 28–30 s | incomplete; no trustworthy completed time | not captured before abnormal exit | not captured before abnormal exit | none |
-| First alphabetical 20-unit closure | **failed** | incomplete | not captured | not captured | none |
-| Retried 20-unit affected closure | completed for 20 snapshots after recording six invalid candidates | 25.392 s | 331,677,696 B | 1,138 | 3,260 B |
+| Full canonical inventory/classification (`build_canonical_report`) | completed, exit 0: 469 units; 469 complete profiles; no profile/manifest mismatch | 22.029 s | 318,046,208 B | 1,078 | 102,980 B |
+| Representative package-local module filter (`commands/checkup`) | **failed before selection** in the isolated d842-plus-fix run: legacy `prompts`-root `ValueError`; this contradicts the separately observed integration filter completion and requires reconciliation before claiming the fix is validated at this input | 22.183 s | 313,786,368 B | 1,078 | none |
+| Alphabetical 20-successful-unit closure | completed after continuing past 40 invalid candidates | 24.326 s | 312,344,576 B | 1,194 | 7,608 B |
 
-The exact failed first-closure exception was:
+The full report is red, not because of a loader crash or a denominator gap,
+but because it reports one invalid-count condition and six errors: an
+`architecture.json` zero-match mapping for `context/python_preamble.prompt`,
+the absent external replay ledger, and four requirement-transition binding
+mismatches (`agentic_checkup`, `agentic_common`, `checkup_review_loop`, and
+`commands/checkup`). Its resulting status counts are 469 corrupt and 469
+failed, zero trusted/current evidence, and `ok=false`.
 
-```text
-SnapshotError: cannot build unit snapshot: required include is missing: path/to/file.txt
-```
+The 20 closure successes were reached only after 40 invalid candidates. The
+first was the known missing `path/to/file.txt`; others include unapproved
+managed `prompts` symlinks and missing `pdd/docs/src/render.js`,
+`pdd/prompts/src/models_example.py`, and template example paths. This is
+invalid data/closure evidence, not a performance failure. It still shows that
+the current uncached scan costs 1,194 subprocesses (59.7 per successful
+snapshot, including inventory/profile construction), so it is unsuitable as a
+per-change fast path without cached Git tree/blob reads or a declared
+high-cost full-scan lane.
 
-The successful retry selected Python units with a mechanically matching tracked
-test, continued past bad candidates, and recorded these six failures before it
-found 20 valid closures:
-
-- `agentic_architecture_orchestrator_python`: required include missing `pdd/`.`
-- `agentic_change_orchestrator_python`: required include missing `pdd/`.`
-- `agentic_split_orchestrator_python`: required include missing `pdd/`.`
-- `agentic_sync_python`: invalid wildcard `**_): return []`
-- `agentic_sync_runner_python`: invalid wildcard `**_): return []`
-- `agentic_update_python`: required include missing `pdd/prompts/docs/source.md`
-
-Thus the 20 successful snapshots demonstrate a measurable closure cost, but do
-not clear the invalid include set or make the full classification benchmark
-green. The full inventory result alone must not be represented as a full
-classification pass. A 20-unit closure requiring 1,138 subprocesses (56.9 per
-successful snapshot, including complete inventory/profile construction) is not
-a practical default budget for a per-change fast path. It needs cached Git
-tree/blob reads or an explicit high-cost full-scan lane before M1/M4 rollout.
-
-The bounded full-run command was:
+The exact benchmark input was a disposable detached clone at `d8423f5…` with
+only `2c1b5adac` (`fix(sync): support package-local report module identities`)
+cherry-picked locally; its temporary commit was `4a4b7eb17`. Thus Git inputs
+were exactly `d8423f5…` while the reporting module-selection correction was in
+effect. No production file was changed. The full-run command was:
 
 ```bash
-nohup /opt/homebrew/Caskroom/miniforge/base/envs/pdd/bin/python \
-  /tmp/m0_full_benchmark.py <clean-exact-sha-clone> <result.json> &
+PDD_NO_AUTO_UPDATE=1 /opt/homebrew/Caskroom/miniforge/base/envs/pdd/bin/python \
+  /tmp/m0_current_full_harness.py /tmp/pdd-m0-current-fixed.TFpdS3/pdd
 ```
 
-The script installed a 300-second `SIGALRM`, measured `resource` peak RSS and
-`subprocess.run`, and writes a partial JSON result in its timeout handler. Its
-child ended without producing `result.json`, stdout, or stderr. That abnormal
-termination is a benchmark failure requiring diagnosis; it is not evidence of
-either completion or acceptable performance.
+It ran in a PTY to obtain the authoritative child status: exit 0 before the
+180-second bound. The harness measured `resource` peak RSS and normal
+subprocess execution, then emitted the compact result JSON above.
 
 ## 4. pdd_cloud canary selection
 
@@ -292,16 +296,17 @@ only their dependent milestones; they do not block local M1 engineering.
 
 ## Exit criteria and integrity checks
 
-M0 early-scope/scale is not promotable. Its genuine blockers are the
-profile-loader abnormal no-result behavior, ownership policy rejection for the
-human-owned-test candidate, invalid include closures, incomplete full canonical
-classification benchmarking, and the 469-unit manifest versus 468-profile
-registry mismatch. The legacy `pdd sync` zero-unit runs are retained as failed
-interface evidence, not blockers on an M1 repair executor. The recommended M0
-action is to diagnose the canonical loader/benchmark, reconcile profile and
-manifest inventory through the protected policy process, and retain the current
-denominator; do not hide the gap through a coverage waiver or denominator
-reduction.
+M0 early-scope/scale is not promotable. The completed full report clears the
+prior profile-loader and denominator-mismatch claims: it has 469 profiles, 465
+human-only and four machine-obligation profiles, matching 469 manifest units.
+Its genuine blockers are the report's architecture/transition-binding/trust
+errors, the ownership-policy rejection for the human-owned-test candidate, and
+invalid include/symlink closure data. The isolated package-local filter result
+also needs reconciliation before the reporting-fix validation can be called
+complete. The legacy `pdd sync` zero-unit runs remain failed interface
+evidence, not blockers on an M1 repair executor. The default remains to retain
+all 469 expected-managed units; no coverage waiver or denominator reduction is
+authorized. These results do not claim M0 or M1 success.
 
 Report integrity was checked with:
 
