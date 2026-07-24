@@ -340,7 +340,7 @@ def build_canonical_report(
         unit
         for unit in manifest.managed_units
         if not wanted
-        or _module_identity(unit.unit_id.prompt_relpath) in wanted
+        or module_identity(unit.unit_id.prompt_relpath) in wanted
         or unit.unit_id.prompt_relpath.stem.rsplit("_", 1)[0] in wanted
         or unit.unit_id.prompt_relpath.as_posix() in wanted
     )
@@ -373,15 +373,20 @@ def build_canonical_report(
     }
 
 
-def _module_identity(prompt_path: PurePosixPath) -> str:
-    """Return the prompt-root-relative, language-stripped module identity."""
-    for prompts_root in (
-        PurePosixPath("prompts"),
-        PurePosixPath("pdd/prompts"),
-    ):
-        try:
-            relative = prompt_path.relative_to(prompts_root)
-        except ValueError:
-            continue
-        return relative.with_suffix("").as_posix().rsplit("_", 1)[0]
-    raise ValueError(f"prompt path is outside supported prompt roots: {prompt_path}")
+def module_identity(prompt_path: PurePosixPath) -> str:
+    """Return a language-stripped identity below an approved prompt root.
+
+    Prompt roots are matched as complete path components so package-local
+    ``pdd/prompts`` paths cannot be confused with unrelated similarly named
+    directories or traversal-shaped inputs.
+    """
+    parts = prompt_path.parts
+    if prompt_path.is_absolute() or ".." in parts:
+        raise ValueError(f"prompt path is outside supported prompt roots: {prompt_path}")
+    if parts[:1] == ("prompts",):
+        relative = PurePosixPath(*parts[1:])
+    elif parts[:2] == ("pdd", "prompts"):
+        relative = PurePosixPath(*parts[2:])
+    else:
+        raise ValueError(f"prompt path is outside supported prompt roots: {prompt_path}")
+    return relative.with_suffix("").as_posix().rsplit("_", 1)[0]
