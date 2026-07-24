@@ -1450,6 +1450,7 @@ def test_execution_state_records_exact_m0_focused_suite_and_live_base_rebinding(
         ".pdd/sync-ownership.json",
         "tests/test_sync_core_pdd_rollout_policy.py",
     ]
+    assert prerequisite["worktree"] == "/private/tmp/pdd-1932-m0-protected-ownership"
     assert prerequisite["base_sha"] == HISTORICAL_PROTECTED_BASE_SHA
     assert prerequisite["branch"] == "fix/1932-m0-protected-ownership"
     assert prerequisite["pull_request"] == 2302
