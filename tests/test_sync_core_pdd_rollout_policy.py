@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import io
+import importlib.util
 import json
 import re
 import subprocess
@@ -14,6 +16,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
 from pdd.sync_core import decommission as decommission_module
@@ -159,6 +162,76 @@ GLOBAL_SYNC_M0_UNAUTHORIZED_SIBLING_PATHS = {
     "docs/global_sync_m0_unreviewed.json",
     "scripts/verify_global_sync_m0_unreviewed.py",
 }
+GLOBAL_SYNC_M0_BOOTSTRAP_PROTECTED_PATHS = {
+    ".github/workflows/global-sync-m0-bootstrap.yml",
+    ".pdd/global-sync/m0-bootstrap-policy.json",
+    "scripts/verify_global_sync_m0_bootstrap.py",
+}
+M0_BOOTSTRAP_POLICY_PATH = ROOT / ".pdd" / "global-sync" / "m0-bootstrap-policy.json"
+M0_BOOTSTRAP_VERIFIER_PATH = ROOT / "scripts" / "verify_global_sync_m0_bootstrap.py"
+M0_BOOTSTRAP_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "global-sync-m0-bootstrap.yml"
+M0_BOOTSTRAP_FROZEN_SAMPLE_PATH = "scripts/verify_global_sync_m0_samples.py"
+M0_BOOTSTRAP_FROZEN_SAMPLE_SHA256 = (
+    "b260026e022e60128ae4d782b316e51bed5524713bf4196909c5d7f6d7079c2c"
+)
+M0_BOOTSTRAP_SOURCE_COMMIT = "00d10dd86de01996c17a2414c00c9746fae24e88"
+M0_BOOTSTRAP_ALLOWED_CHANGES = (
+    ("M", ".github/workflows/unit-tests.yml"),
+    ("A", "docs/archive/global_sync_resolution_plan_history_2026-07-22.md"),
+    ("M", "docs/global_sync_evidence_ledger.yaml"),
+    ("M", "docs/global_sync_evidence_ledger_source.yaml"),
+    ("A", "docs/global_sync_execution_state.yaml"),
+    ("A", "docs/global_sync_m0_sample_metrics.json"),
+    ("A", "docs/global_sync_m0_sample_results.json"),
+    ("A", "docs/global_sync_m0_scope_report.md"),
+    ("M", "docs/global_sync_resolution_plan.md"),
+    ("M", "pdd/continuous_sync.py"),
+    ("M", "pdd/sync_core/global_sync_ledger.py"),
+    ("M", "pdd/sync_core/reporting.py"),
+    ("A", "scripts/verify_global_sync_execution_contract.py"),
+    ("M", "tests/test_global_sync_ledger.py"),
+    ("M", "tests/test_sync_core_lifecycle_scenarios.py"),
+    ("M", "tests/test_sync_core_reporting.py"),
+)
+M0_BOOTSTRAP_ALLOWLIST = tuple(path for _status, path in M0_BOOTSTRAP_ALLOWED_CHANGES)
+M0_BOOTSTRAP_INTEGRATION_WRITE_SET = (
+    "scripts/verify_global_sync_execution_contract.py",
+    "tests/test_global_sync_ledger.py",
+    "tests/test_sync_core_lifecycle_scenarios.py",
+    "tests/test_sync_core_reporting.py",
+    "pdd/continuous_sync.py",
+    "pdd/sync_core/global_sync_ledger.py",
+    "pdd/sync_core/reporting.py",
+    "docs/global_sync_execution_state.yaml",
+    "docs/global_sync_evidence_ledger_source.yaml",
+    "docs/global_sync_evidence_ledger.yaml",
+    "docs/global_sync_m0_scope_report.md",
+    "docs/global_sync_m0_sample_results.json",
+    "docs/global_sync_m0_sample_metrics.json",
+    "docs/archive/global_sync_resolution_plan_history_2026-07-22.md",
+    "docs/global_sync_resolution_plan.md",
+    ".github/workflows/unit-tests.yml",
+)
+M0_BOOTSTRAP_TRACK_WRITE_SET_UNIVERSE = {
+    ".github/workflows/unit-tests.yml",
+    ".pdd/sync-ownership.json",
+    "docs/global_sync_evidence_ledger.yaml",
+    "docs/global_sync_evidence_ledger_source.yaml",
+    "docs/global_sync_execution_state.yaml",
+    "docs/global_sync_m0_sample_metrics.json",
+    "docs/global_sync_m0_sample_results.json",
+    "docs/global_sync_m0_scope_report.md",
+    "docs/global_sync_resolution_plan.md",
+    "pdd/continuous_sync.py",
+    "pdd/sync_core/global_sync_ledger.py",
+    "pdd/sync_core/reporting.py",
+    "scripts/verify_global_sync_execution_contract.py",
+    "scripts/verify_global_sync_m0_samples.py",
+    "tests/test_global_sync_ledger.py",
+    "tests/test_global_sync_m0_samples.py",
+    "tests/test_sync_core_pdd_rollout_policy.py",
+    "tests/test_sync_core_reporting.py",
+}
 GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/runtime-linux-x86_64-cp312.lock",
 }
@@ -215,6 +288,7 @@ PREAUTHORIZED_CHILD_PATHS = (
     | GATE1_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS
+    | GLOBAL_SYNC_M0_BOOTSTRAP_PROTECTED_PATHS
     | GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
     | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
@@ -2313,6 +2387,236 @@ def test_global_sync_m0_paths_are_exactly_preauthorized() -> None:
         not path.endswith("/") and not any(token in path for token in ("*", "?", "["))
         for path in GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS
     )
+
+
+def _load_m0_bootstrap_verifier():
+    """Load the protected standalone verifier without importing candidate code."""
+    module_name = "pdd_m0_bootstrap_verifier_test"
+    spec = importlib.util.spec_from_file_location(module_name, M0_BOOTSTRAP_VERIFIER_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _write_m0_bootstrap_file(root: Path, path: str, content: bytes) -> None:
+    destination = root / path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(content)
+
+
+def _m0_bootstrap_candidate_state(policy: dict[str, object], base: str) -> dict[str, object]:
+    projection = policy["state_projection"]
+    assert isinstance(projection, dict)
+    return {
+        "protected_base_sha": base,
+        "preflight": {"protected_base_sha": base},
+        "integration": {
+            "base_sha": base,
+            "write_set": projection["integration_write_set"],
+        },
+        "m0_bootstrap_allowlist": projection["m0_bootstrap_allowlist"],
+        "tracks": [
+            {
+                "id": "m0-historical-protected-ownership",
+                "write_set": [".pdd/sync-ownership.json"],
+            }
+        ],
+    }
+
+
+def _synthetic_m0_bootstrap_candidate(
+    root: Path, policy: dict[str, object],
+) -> tuple[str, str, str, str]:
+    """Build the reviewed name/status shape without using a candidate checkout."""
+    root.mkdir()
+    _git(root, "init", "-q")
+    _write_m0_bootstrap_file(root, ".m0-bootstrap-source-parent", b"source parent\n")
+    source_parent = _commit(root, "sample verifier source parent")
+    _write_m0_bootstrap_file(root, M0_BOOTSTRAP_FROZEN_SAMPLE_PATH, b"frozen sample\n")
+    source_commit = _commit(root, "frozen sample verifier source")
+    for status, path in M0_BOOTSTRAP_ALLOWED_CHANGES:
+        if status == "M":
+            _write_m0_bootstrap_file(root, path, b"protected base\n")
+    base = _commit(root, "protected base")
+
+    for status, path in M0_BOOTSTRAP_ALLOWED_CHANGES:
+        if status == "M":
+            _write_m0_bootstrap_file(root, path, b"candidate data\n")
+        elif path != "docs/global_sync_execution_state.yaml":
+            _write_m0_bootstrap_file(root, path, b"candidate data\n")
+    state = _m0_bootstrap_candidate_state(policy, base)
+    _write_m0_bootstrap_file(
+        root,
+        "docs/global_sync_execution_state.yaml",
+        yaml.safe_dump(state, sort_keys=False).encode("utf-8"),
+    )
+    return base, _commit(root, "reviewed M0 candidate"), source_commit, source_parent
+
+
+def test_global_sync_m0_bootstrap_policy_is_immutable_and_exact() -> None:
+    """The protected policy, frozen verifier, and ownership rows are exact."""
+    assert M0_BOOTSTRAP_POLICY_PATH.is_file()
+    assert M0_BOOTSTRAP_VERIFIER_PATH.is_file()
+    assert M0_BOOTSTRAP_WORKFLOW_PATH.is_file()
+    sample = ROOT / M0_BOOTSTRAP_FROZEN_SAMPLE_PATH
+    assert sample.is_file()
+    assert hashlib.sha256(sample.read_bytes()).hexdigest() == M0_BOOTSTRAP_FROZEN_SAMPLE_SHA256
+
+    policy = json.loads(M0_BOOTSTRAP_POLICY_PATH.read_text(encoding="utf-8"))
+    assert set(policy) == {
+        "allowed_changes",
+        "frozen_sample_verifier",
+        "m0_track_write_set_universe",
+        "private_canary",
+        "pull_request_number",
+        "replay",
+        "repository",
+        "reviewed_source_base_sha",
+        "schema_version",
+        "state_projection",
+        "workflow",
+    }
+    assert policy["schema_version"] == 1
+    assert policy["repository"] == "promptdriven/pdd"
+    assert policy["pull_request_number"] == 2301
+    assert policy["reviewed_source_base_sha"] == "ca2d9cd8ac9264b614b484efed5a9eb3b0730c52"
+    assert tuple(
+        (row["status"], row["path"]) for row in policy["allowed_changes"]
+    ) == M0_BOOTSTRAP_ALLOWED_CHANGES
+    assert policy["state_projection"] == {
+        "integration_write_set": list(M0_BOOTSTRAP_INTEGRATION_WRITE_SET),
+        "m0_bootstrap_allowlist": list(M0_BOOTSTRAP_ALLOWLIST),
+    }
+    assert set(policy["m0_track_write_set_universe"]) == M0_BOOTSTRAP_TRACK_WRITE_SET_UNIVERSE
+    assert policy["frozen_sample_verifier"] == {
+        "path": M0_BOOTSTRAP_FROZEN_SAMPLE_PATH,
+        "sha256": M0_BOOTSTRAP_FROZEN_SAMPLE_SHA256,
+        "source_commit": M0_BOOTSTRAP_SOURCE_COMMIT,
+        "source_parent": "dc4054a8af48cd2ab6b915fca497e870564ac95b",
+    }
+    assert policy["private_canary"] == {
+        "repository": "promptdriven/pdd_cloud",
+        "sha": "09f9d3fea71c4c0ed6655f2acd5e95b14a32c3c8",
+    }
+    assert policy["replay"] == {
+        "closure_limit": 20,
+        "result_path": "docs/global_sync_m0_sample_results.json",
+    }
+    assert policy["workflow"] == {
+        "event_name": "pull_request_target",
+        "path": ".github/workflows/global-sync-m0-bootstrap.yml",
+    }
+
+    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    rules = {row["pattern"]: row for row in ownership["rules"]}
+    assert {
+        path: rules.get(path) for path in GLOBAL_SYNC_M0_BOOTSTRAP_PROTECTED_PATHS
+    } == {
+        path: {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
+        for path in GLOBAL_SYNC_M0_BOOTSTRAP_PROTECTED_PATHS
+    }
+
+
+def test_global_sync_m0_bootstrap_verifier_rejects_self_authorized_state(
+    tmp_path: Path,
+) -> None:
+    """Candidate state cannot broaden the protected diff or track authority."""
+    verifier = _load_m0_bootstrap_verifier()
+    protected_policy = json.loads(M0_BOOTSTRAP_POLICY_PATH.read_text(encoding="utf-8"))
+    policy = copy.deepcopy(protected_policy)
+    root = tmp_path / "m0-bootstrap-candidate"
+    base, candidate, source_commit, source_parent = _synthetic_m0_bootstrap_candidate(root, policy)
+    frozen = root / M0_BOOTSTRAP_FROZEN_SAMPLE_PATH
+    frozen_sha256 = hashlib.sha256(frozen.read_bytes()).hexdigest()
+    policy["frozen_sample_verifier"] = {
+        **policy["frozen_sample_verifier"],
+        "sha256": frozen_sha256,
+        "source_commit": source_commit,
+        "source_parent": source_parent,
+    }
+    arguments = {
+        "repository_root": root,
+        "policy": policy,
+        "pr_number": 2301,
+        "protected_base_sha": base,
+        "candidate_head_sha": candidate,
+        "event_name": "pull_request_target",
+        "workflow_base_sha": base,
+    }
+    proof = verifier.evaluate_candidate(**arguments)
+    assert proof["violations"] == []
+    assert proof["current_protected_base_sha"] == base
+    assert proof["candidate_head_sha"] == candidate
+    assert proof["workflow_identity"] == {
+        "event_name": "pull_request_target",
+        "path": ".github/workflows/global-sync-m0-bootstrap.yml",
+    }
+    assert proof == verifier.evaluate_candidate(**arguments)
+    assert verifier.parse_name_status(
+        b"R100\x00old.py\x00new.py\x00C075\x00left.py\x00right.py\x00"
+    ) == (
+        {"status": "R", "score": 100, "old_path": "old.py", "path": "new.py"},
+        {"status": "C", "score": 75, "old_path": "left.py", "path": "right.py"},
+    )
+    assert verifier.replay_artifact_proof(b"{\"sample\":1}\n", b"{\"sample\":1}\n") == {
+        "artifact_sha256": "19af0a731481b27319b768b643ae2a3664ed2fd04507951cc74bd27b28fe2042",
+        "byte_equal": True,
+        "replay_sha256": "19af0a731481b27319b768b643ae2a3664ed2fd04507951cc74bd27b28fe2042",
+    }
+
+    state_path = root / "docs/global_sync_execution_state.yaml"
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["m0_bootstrap_allowlist"].append("pdd/never-authorized.py")
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    self_authorized = _commit(root, "attempt M0 allowlist self-authorization")
+    self_authorized_proof = verifier.evaluate_candidate(
+        **{**arguments, "candidate_head_sha": self_authorized}
+    )
+    assert "candidate-m0-bootstrap-allowlist-does-not-match-policy" in (
+        self_authorized_proof["violations"]
+    )
+
+    state["m0_bootstrap_allowlist"] = list(M0_BOOTSTRAP_ALLOWLIST)
+    state["tracks"][0]["write_set"].append("pdd/never-authorized.py")
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    track_self_authorized = _commit(root, "attempt M0 track self-authorization")
+    track_proof = verifier.evaluate_candidate(
+        **{**arguments, "candidate_head_sha": track_self_authorized}
+    )
+    assert "m0-track-write-set-outside-protected-universe" in track_proof["violations"]
+
+    frozen.write_text("candidate changed frozen verifier\n", encoding="utf-8")
+    frozen_changed = _commit(root, "attempt frozen verifier modification")
+    frozen_proof = verifier.evaluate_candidate(
+        **{**arguments, "candidate_head_sha": frozen_changed}
+    )
+    assert "candidate-touched-frozen-sample-verifier" in frozen_proof["violations"]
+
+
+def test_global_sync_m0_bootstrap_workflow_is_base_controlled() -> None:
+    """The privileged target workflow checks only base code and inert Git data."""
+    workflow = M0_BOOTSTRAP_WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert re.search(r"^  pull_request_target:$", workflow, flags=re.MULTILINE)
+    assert not re.search(r"^  pull_request:$", workflow, flags=re.MULTILINE)
+    assert "contents: read" in workflow
+    assert "pull-requests: read" in workflow
+    assert "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683" in workflow
+    assert "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065" in workflow
+    assert "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1" in workflow
+    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in workflow
+    assert "ref: ${{ github.event.pull_request.base.sha }}" in workflow
+    assert "persist-credentials: false" in workflow
+    assert "ref: ${{ github.event.pull_request.head.sha }}" not in workflow
+    assert "git checkout" not in workflow
+    assert "python -I scripts/verify_global_sync_m0_bootstrap.py" in workflow
+    assert "PDD_CLOUD_APP_ID" in workflow
+    assert "PDD_CLOUD_APP_PRIVATE_KEY" in workflow
+    assert "DELETE /installation/token" in workflow
+    assert "unset PDD_CLOUD_TOKEN GH_TOKEN" in workflow
+    assert "eval " not in workflow
+    assert "$()" not in workflow
 
 
 def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
