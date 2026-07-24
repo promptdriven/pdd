@@ -519,6 +519,40 @@ def _refresh_pr_base_ref(
         remote_target = f"https://github.com/{pr_owner}/{pr_repo}.git"
 
     base_local_ref = _pr_base_tracking_ref(pr_number)
+    shallow_repo = False
+    try:
+        shallow_probe = subprocess.run(
+            [git_cmd, "rev-parse", "--is-shallow-repository"],
+            cwd=git_root,
+            capture_output=True,
+            env=git_env,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        shallow_repo = (
+            shallow_probe.returncode == 0
+            and str(shallow_probe.stdout or "").strip().lower() == "true"
+        )
+    except (OSError, subprocess.SubprocessError):
+        # The authoritative fetch and downstream merge-base gate still fail
+        # closed if the probe is unavailable; do not turn a diagnostic probe
+        # into a second failure surface.
+        shallow_repo = False
+
+    fetch_args = [
+        git_cmd,
+        "fetch",
+        remote_target,
+        f"refs/heads/{base_ref}:{base_local_ref}",
+        "--force",
+    ]
+    if shallow_repo:
+        # Fetching the base tip alone does not remove Git's shallow boundary:
+        # merge-base still refuses to traverse HEAD even when its parent object
+        # is present. Hosted PR clones commonly have this depth-1 shape.
+        fetch_args.append("--unshallow")
+
     try:
         # Bounded timeout so a stalled transport (auth prompt, dead
         # remote, transient hang) cannot hold the review loop forever.
@@ -527,13 +561,7 @@ def _refresh_pr_base_ref(
         # discovery. 60s matches the default per-gate timeout so the
         # operator sees a single consistent upper bound.
         subprocess.run(
-            [
-                git_cmd,
-                "fetch",
-                remote_target,
-                f"refs/heads/{base_ref}:{base_local_ref}",
-                "--force",
-            ],
+            fetch_args,
             cwd=git_root,
             capture_output=True,
             env=git_env,

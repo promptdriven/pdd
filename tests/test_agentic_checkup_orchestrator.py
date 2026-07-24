@@ -3925,6 +3925,102 @@ class TestRefreshPrBaseRefTimeout:
         assert "base_ref_fetch_error" not in md
         assert not marker.exists()
 
+    def test_refresh_pr_base_ref_repairs_shallow_pr_ancestry(self, tmp_path):
+        """A depth-1 PR checkout must gain enough history for ``base...HEAD``.
+
+        Fetching only the base tip does not repair Git's shallow boundary:
+        even when the parent object is now present, ``merge-base`` refuses to
+        traverse through a commit recorded in ``.git/shallow``. Hosted checkup
+        clones use this shape, so the refreshed base ref must also deepen the
+        PR checkout before deterministic changed-file gates run.
+        """
+        from pdd.agentic_checkup_orchestrator import (
+            _pr_base_tracking_ref,
+            _refresh_pr_base_ref,
+        )
+        from pdd.checkup_review_loop import _pr_changed_files_all
+
+        remote = tmp_path / "remote.git"
+        seed = tmp_path / "seed"
+        worktree = tmp_path / "worktree"
+        subprocess.run(
+            ["git", "init", "--bare", "-q", "-b", "main", str(remote)],
+            check=True,
+        )
+        subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
+        (seed / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=seed, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "-m",
+                "base",
+                "-q",
+            ],
+            cwd=seed,
+            check=True,
+        )
+        subprocess.run(["git", "switch", "-q", "-c", "feature"], cwd=seed, check=True)
+        (seed / "feature.py").write_text("FEATURE = True\n", encoding="utf-8")
+        subprocess.run(["git", "add", "feature.py"], cwd=seed, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@x",
+                "commit",
+                "-m",
+                "feature",
+                "-q",
+            ],
+            cwd=seed,
+            check=True,
+        )
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=seed, check=True)
+        subprocess.run(
+            ["git", "push", "-q", "origin", "main", "feature"],
+            cwd=seed,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "-q",
+                "--depth=1",
+                "--branch=feature",
+                remote.as_uri(),
+                str(worktree),
+            ],
+            check=True,
+        )
+        assert (worktree / ".git" / "shallow").exists()
+
+        metadata = {"base_ref": "main"}
+        with patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value=remote.as_uri(),
+        ):
+            _refresh_pr_base_ref(worktree, "o", "r", 10, metadata, quiet=True)
+
+        base_local_ref = _pr_base_tracking_ref(10)
+        merge_base = subprocess.run(
+            ["git", "merge-base", "HEAD", base_local_ref],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert merge_base.returncode == 0, merge_base.stderr
+        assert _pr_changed_files_all(worktree, metadata) == ["feature.py"]
+
 
 # ---------------------------------------------------------------------------
 # Issue #1212 — checkup --pr hides test failures, lets fixer push unrelated
