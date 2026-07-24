@@ -180,13 +180,14 @@ jobs:
           "$wheel_venv/bin/python" -m pip install "$wheel" pytest
           proof_root="$RUNNER_TEMP/pdd-contract-proof"
           wheel_tests="$RUNNER_TEMP/pdd-contract-wheel-tests"
-          mkdir -p "$proof_root" "$wheel_tests"
+          mkdir -p "$proof_root" "$wheel_tests" "$RUNNER_TEMP/scripts"
           cp scripts/verify_global_sync_execution_contract.py "$proof_root/"
           cp docs/global_sync_resolution_plan.md docs/global_sync_execution_state.yaml "$proof_root/"
           cp tests/conftest.py "$wheel_tests/"
           cp tests/test_sync_core_cli.py tests/test_sync_core_transaction.py \
             tests/test_sync_core_reporting.py tests/test_sync_core_standalone_package.py \
             "$wheel_tests/"
+          cp scripts/verify_global_sync_m0_samples.py "$RUNNER_TEMP/scripts/"
           cd "$wheel_tests"
           env -u PDD_PATH WORKSPACE="$GITHUB_WORKSPACE" "$wheel_venv/bin/python" -I -c 'import os, pathlib, pdd; source = pathlib.Path(os.environ["WORKSPACE"]).resolve(); package = pathlib.Path(pdd.__file__).resolve(); assert source not in package.parents, package'
           env -u PDD_PATH "$wheel_venv/bin/python" -I -m pytest -q \
@@ -210,6 +211,7 @@ jobs:
           Path(os.environ["WHEEL_PROOF"]).write_text(json.dumps({
               "candidate_sha": os.environ["CANDIDATE_SHA"], "environment": "wheel",
               "wheel_artifact_sha256": os.environ["WHEEL_DIGEST"],
+              "copied_test_closure": ["scripts/verify_global_sync_m0_samples.py"],
               "focused_test_targets": targets, "finalizer_node": finalizer,
               "outcomes": {"focused_suite": {"status": "passed", "exit_code": 0},
                            "finalizer_node": {"status": "passed", "exit_code": 0}},

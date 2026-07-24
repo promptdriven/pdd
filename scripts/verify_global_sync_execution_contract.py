@@ -38,6 +38,9 @@ M0_FINALIZER_NODE = (
     "tests/test_sync_core_reporting.py::"
     "test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint"
 )
+M0_WHEEL_COPIED_TEST_CLOSURE = (
+    "scripts/verify_global_sync_m0_samples.py",
+)
 FUTURE_COMPONENTS = {
     "pdd.sync_core.vertical_slice_verifier": (
         "vertical-slice-verifier", ["python", "-m", "pdd.sync_core.vertical_slice_verifier"]
@@ -521,6 +524,8 @@ def _focused_test_proof_errors(proof_path: Path | None, environment: str,
         digest = hashlib.sha256(wheel_artifact.read_bytes()).hexdigest() if wheel_artifact and wheel_artifact.is_file() else None
         if proof.get("wheel_artifact_sha256") != digest:
             errors.append("wheel focused-test proof does not bind wheel digest")
+        if proof.get("copied_test_closure") != list(M0_WHEEL_COPIED_TEST_CLOSURE):
+            errors.append("wheel focused-test proof has wrong copied-test closure")
     return errors, proof
 
 

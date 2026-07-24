@@ -432,6 +432,7 @@ validation_steps:
       wheel_interpreter: fresh-isolated-venv
       source_focused_test_proof: candidate-bound-passed-focused-suite-and-finalizer
       wheel_focused_test_proof: candidate-and-wheel-bound-passed-focused-suite-and-finalizer
+      wheel_copied_test_closure: [scripts/verify_global_sync_m0_samples.py]
   - id: m4-production-global-sync-verification
     milestone: M4
     executable: false

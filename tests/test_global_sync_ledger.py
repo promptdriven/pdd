@@ -1184,6 +1184,7 @@ def test_execution_contract_requires_candidate_bound_focused_test_outcomes(
     wheel_proof.write_text(json.dumps({
         **payload, "environment": "wheel",
         "wheel_artifact_sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+        "copied_test_closure": list(module.M0_WHEEL_COPIED_TEST_CLOSURE),
     }), encoding="utf-8")
     assert module._focused_test_proof_errors(source, "source", candidate, None)[0] == []  # pylint: disable=protected-access
     assert module._focused_test_proof_errors(wheel_proof, "wheel", candidate, wheel)[0] == []  # pylint: disable=protected-access
@@ -1191,6 +1192,25 @@ def test_execution_contract_requires_candidate_bound_focused_test_outcomes(
     source.write_text(json.dumps({**payload, "environment": "source"}), encoding="utf-8")
     errors, _proof = module._focused_test_proof_errors(source, "source", candidate, None)  # pylint: disable=protected-access
     assert any("successful finalizer" in error for error in errors)
+
+
+def test_execution_contract_records_wheel_copied_test_closure() -> None:
+    """The copied reporting test can load its standalone M0 sample verifier."""
+    workflow = (ROOT / ".github" / "workflows" / "unit-tests.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'mkdir -p "$proof_root" "$wheel_tests" "$RUNNER_TEMP/scripts"' in workflow
+    assert (
+        'cp scripts/verify_global_sync_m0_samples.py "$RUNNER_TEMP/scripts/"'
+        in workflow
+    )
+    state = yaml.safe_load((ROOT / "docs" / "global_sync_execution_state.yaml").read_text(
+        encoding="utf-8"
+    ))
+    binding = state["validation_steps"][2]["required_runtime_binding"]
+    assert binding["wheel_copied_test_closure"] == [
+        "scripts/verify_global_sync_m0_samples.py"
+    ]
 
 
 def test_execution_contract_retains_complete_concordant_registry_coverage(tmp_path: Path) -> None:
