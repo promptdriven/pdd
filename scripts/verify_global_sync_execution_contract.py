@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -148,7 +149,7 @@ def _cli_errors(command: dict[str, Any], python: str, label: str, root: Path) ->
             return [f"{command_id}: {wheel_error}"]
         try:
             preflight = subprocess.run(
-                [*launcher, "-c", "import pathlib, pdd; print(pathlib.Path(pdd.__file__).resolve())"],
+                [*launcher, "-c", "import json, pathlib, sys, pdd; print(json.dumps({'prefix': str(pathlib.Path(sys.prefix).resolve()), 'pdd_file': str(pathlib.Path(pdd.__file__).resolve())}))"],
                 cwd=cwd, env=environment, text=True, capture_output=True, check=False,
             )
         except OSError as error:
@@ -156,6 +157,7 @@ def _cli_errors(command: dict[str, Any], python: str, label: str, root: Path) ->
         origin_error = _wheel_origin_error(preflight, root, cwd)
         if origin_error:
             return [f"{command_id}: {origin_error}"]
+        launcher = [*launcher, "-m", "pdd"]
     try:
         result = subprocess.run(
             [*launcher, words[0], "--help"], cwd=cwd, env=environment, text=True,
@@ -178,39 +180,42 @@ def _wheel_origin_preflight(
 ) -> tuple[str | None, list[str], Path, dict[str, str]]:
     """Prepare a wheel-only interpreter invocation outside candidate source."""
     interpreter = Path(python)
-    if not interpreter.is_absolute() or interpreter.is_symlink():
-        return "built-wheel interpreter must be an absolute non-symlink path", [], root, {}
-    try:
-        resolved = interpreter.resolve(strict=True)
-    except OSError:
-        return "built-wheel interpreter does not resolve", [], root, {}
-    if root == resolved or root in resolved.parents:
-        return "built-wheel interpreter resolves inside checkout", [], root, {}
-    wheel_root = resolved.parent.parent
+    if not interpreter.is_absolute() or not interpreter.is_file():
+        return "built-wheel interpreter must be an existing absolute file", [], root, {}
+    if root == interpreter or root in interpreter.parents:
+        return "built-wheel interpreter is lexically inside checkout", [], root, {}
+    wheel_root = interpreter.parent.parent
     if not wheel_root.is_dir():
         return "built-wheel interpreter has no environment root", [], root, {}
     environment = {
         key: value for key, value in os.environ.items()
-        if key not in {"PYTHONHOME", "PYTHONPATH"}
+        if key not in {"PYTHONHOME", "PYTHONPATH", "PYTHONUSERBASE"}
     }
     environment["PYTHONNOUSERSITE"] = "1"
-    return None, [str(resolved), "-I"], wheel_root, environment
+    return None, [str(interpreter), "-I"], wheel_root, environment
 
 
 def _wheel_origin_error(result: subprocess.CompletedProcess[str] | Any, root: Path, wheel_root: Path) -> str | None:
     """Reject a wheel interpreter that did not import an installed wheel package."""
     if result.returncode:
         return "built-wheel origin preflight could not import pdd"
-    origins = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    if len(origins) != 1:
-        return "built-wheel origin preflight returned an ambiguous package path"
     try:
-        package = Path(origins[0]).resolve(strict=True)
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return "built-wheel origin preflight returned ambiguous JSON"
+    if not isinstance(payload, dict) or not isinstance(payload.get("prefix"), str) or not isinstance(payload.get("pdd_file"), str):
+        return "built-wheel origin preflight returned malformed JSON"
+    try:
+        prefix = Path(payload["prefix"]).resolve(strict=True)
+        expected_prefix = wheel_root.resolve(strict=True)
+        package = Path(payload["pdd_file"]).resolve(strict=True)
     except OSError:
         return "built-wheel origin preflight returned an unresolved package path"
+    if prefix != expected_prefix:
+        return "built-wheel sys.prefix does not match the lexical venv root"
     if root == package or root in package.parents:
         return "built-wheel origin resolves to checkout source"
-    if wheel_root not in package.parents or "site-packages" not in package.parts:
+    if prefix not in package.parents or "site-packages" not in package.parts:
         return "built-wheel origin is outside its environment site-packages"
     return None
 

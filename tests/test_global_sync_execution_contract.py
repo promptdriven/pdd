@@ -155,7 +155,11 @@ def test_execution_contract_rejects_wheel_probe_that_imports_checkout_source(
 
     def fake_run(argv: list[str], **kwargs: object) -> SimpleNamespace:
         observed.append((argv, kwargs["cwd"], kwargs["env"]))  # type: ignore[index]
-        return SimpleNamespace(returncode=0, stdout=f"{source_package}\n", stderr="")
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(f'{{"prefix": "{wheel_root}", "pdd_file": "{source_package}"}}\n'),
+            stderr="",
+        )
 
     module = _module()
     monkeypatch.setattr(module.subprocess, "run", fake_run)
@@ -164,7 +168,7 @@ def test_execution_contract_rejects_wheel_probe_that_imports_checkout_source(
         str(wheel_python), "built-wheel", checkout,
     )
     assert any("checkout source" in error for error in errors)
-    assert observed[0][0][:3] == [str(wheel_python.resolve()), "-I", "-c"]
+    assert observed[0][0][:3] == [str(wheel_python), "-I", "-c"]
     assert observed[0][1] == wheel_root
     assert "PYTHONPATH" not in observed[0][2]
 
@@ -186,7 +190,8 @@ def test_execution_contract_accepts_wheel_only_after_outside_site_packages_prefl
         calls += 1
         return SimpleNamespace(
             returncode=0,
-            stdout=f"{package}\n" if calls == 1 else "--base-ref\n",
+            stdout=(f'{{"prefix": "{wheel_root}", "pdd_file": "{package}"}}\n'
+                    if calls == 1 else "--base-ref\n"),
             stderr="",
         )
 
