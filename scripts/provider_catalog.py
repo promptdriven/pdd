@@ -120,6 +120,47 @@ def _public_text(value: object, field: str, *, maximum: int = 512) -> str:
     return text
 
 
+def _github_label(value: object, field: str) -> str:
+    label = _public_text(value, field, maximum=64)
+    if (
+        not label.startswith("pdd-")
+        or label != label.lower()
+        or any(
+            ch not in "abcdefghijklmnopqrstuvwxyz0123456789-"
+            for ch in label
+        )
+    ):
+        raise CatalogError(f"{field} is invalid")
+    return label
+
+
+def _model_base_url(value: object, field: str, *, local_only: bool) -> str:
+    text = str(value or "").strip()
+    parsed = urlsplit(text)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise CatalogError(f"{field} must be a fixed HTTPS API base URL") from exc
+    is_local_http = (
+        local_only
+        and parsed.scheme == "http"
+        and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+    )
+    if (
+        not text
+        or (parsed.scheme != "https" and not is_local_http)
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or any(part in parsed.path for part in ("//", "..", "\r", "\n"))
+        or (parsed.scheme == "https" and port not in {None, 443})
+    ):
+        raise CatalogError(f"{field} must be a fixed HTTPS API base URL")
+    return text.rstrip("/")
+
+
 def _validate_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     if manifest.get("schema_version") != 1:
         raise CatalogError("Unsupported provider catalog schema_version")
@@ -128,6 +169,8 @@ def _validate_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(providers, list) or not providers:
         raise CatalogError("Provider catalog must contain providers")
     known_ids: set[str] = set()
+    known_github_labels: set[str] = set()
+    known_model_orders: set[int] = set()
     known_source_rows: set[tuple[str, str]] = set()
     normalized: list[dict[str, Any]] = []
     for raw_provider in providers:
@@ -185,9 +228,29 @@ def _validate_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         github = provider.get("github")
         if not isinstance(github, dict):
             raise CatalogError(f"Provider {provider_id} must declare GitHub metadata")
-        label = _public_text(github.get("label"), "GitHub label", maximum=64)
-        if not label.startswith("pdd-"):
-            raise CatalogError(f"Provider {provider_id} label must start with pdd-")
+        label = _github_label(github.get("label"), "GitHub label")
+        if label in known_github_labels:
+            raise CatalogError(f"Duplicate GitHub label: {label}")
+        known_github_labels.add(label)
+        github["label"] = label
+        model_labels = github.get("model_labels", {})
+        if not isinstance(model_labels, dict):
+            raise CatalogError(
+                f"Provider {provider_id} model_labels must be an object"
+            )
+        normalized_model_labels: dict[str, str] = {}
+        for raw_label, raw_model in model_labels.items():
+            model_label = _github_label(raw_label, "GitHub model label")
+            if model_label in known_github_labels:
+                raise CatalogError(f"Duplicate GitHub label: {model_label}")
+            known_github_labels.add(model_label)
+            normalized_model_labels[model_label] = _public_text(
+                raw_model, "GitHub model label target", maximum=256
+            )
+        if normalized_model_labels:
+            github["model_labels"] = normalized_model_labels
+        else:
+            github.pop("model_labels", None)
         execution_profile = str(github.get("execution_profile") or "")
         if execution_profile not in EXECUTION_PROFILES:
             raise CatalogError(f"Provider {provider_id} execution profile is invalid")
@@ -279,6 +342,7 @@ def _validate_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         models = provider.get("models")
         if not isinstance(models, list):
             raise CatalogError(f"Provider {provider_id} models are invalid")
+        provider_models: dict[str, dict[str, Any]] = {}
         for raw_model in models:
             if not isinstance(raw_model, dict):
                 raise CatalogError(f"Provider {provider_id} model must be an object")
@@ -296,6 +360,11 @@ def _validate_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                     f"Provider {provider_id} model has an undeclared CSV provider"
                 )
             model = _public_text(row.get("model"), "model id", maximum=256)
+            if model in provider_models:
+                raise CatalogError(
+                    f"Provider {provider_id} repeats model id: {model}"
+                )
+            provider_models[model] = raw_model
             source_key = (source_provider, model)
             if source_key in known_source_rows:
                 raise CatalogError(
@@ -309,9 +378,33 @@ def _validate_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                 )
             if not isinstance(raw_model.get("order"), int) or raw_model["order"] < 0:
                 raise CatalogError(f"Provider {provider_id} model order is invalid")
+            if raw_model["order"] in known_model_orders:
+                raise CatalogError(
+                    f"Duplicate catalog model order: {raw_model['order']}"
+                )
+            known_model_orders.add(raw_model["order"])
             if raw_model["byok_eligible"] and not eligible:
                 raise CatalogError(
                     f"Provider {provider_id} enables a model without an execution profile"
+                )
+            model_base_url = str(row.get("base_url") or "").strip()
+            if model_base_url:
+                row["base_url"] = _model_base_url(
+                    model_base_url,
+                    f"Provider {provider_id} model {model} base_url",
+                    local_only=execution_profile == "local_only",
+                )
+        for model_label, target in github.get("model_labels", {}).items():
+            target_model = provider_models.get(target)
+            if target_model is None:
+                raise CatalogError(
+                    f"Provider {provider_id} model label {model_label} "
+                    f"targets unknown model {target}"
+                )
+            if not target_model["byok_eligible"]:
+                raise CatalogError(
+                    f"Provider {provider_id} model label {model_label} "
+                    f"targets an ineligible model"
                 )
         normalized.append(provider)
     cloud_columns = manifest.get("cloud_csv_columns")
@@ -367,6 +460,11 @@ def _catalog_metadata(
                         "output": entry["csv"].get("output", ""),
                         "reasoning_type": entry["csv"].get("reasoning_type", ""),
                         "byok_eligible": entry["byok_eligible"],
+                        **(
+                            {"base_url": entry["csv"]["base_url"]}
+                            if entry["csv"].get("base_url")
+                            else {}
+                        ),
                     }
                     for entry in provider["models"]
                 ],

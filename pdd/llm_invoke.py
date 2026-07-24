@@ -2100,12 +2100,26 @@ def _register_csv_models_with_litellm() -> None:
             provider = _litellm_provider_for_csv_model(
                 model_name, _MODEL_PROVIDER_MAP.get(model_name)
             )
-            registrations[model_name] = {
+            registration = {
                 "input_cost_per_token": in_rate / 1_000_000.0,
                 "output_cost_per_token": out_rate / 1_000_000.0,
                 "litellm_provider": provider,
                 "mode": "chat",
             }
+            if _is_kimi_k3_model(model_name):
+                # K3's combined context and supported completion maximum are
+                # 1,048,576 tokens. Do not send max_tokens by default:
+                # Moonshot's provider default is 131,072.
+                registration.update(
+                    {
+                        "max_input_tokens": 1_048_576,
+                        "max_output_tokens": 1_048_576,
+                        "max_tokens": 1_048_576,
+                        "supports_reasoning": True,
+                        "supports_response_schema": True,
+                    }
+                )
+            registrations[model_name] = registration
         if registrations:
             litellm.register_model(registrations)
     except Exception as exc:
@@ -2656,15 +2670,57 @@ def _model_disallows_temperature(model_name: Any) -> bool:
         or "claude-opus-4.7" in model_lower
         or "claude-opus-4-8" in model_lower
         or "claude-opus-4.8" in model_lower
+        or _is_kimi_k3_model(model_name)
     )
 
 
+def _is_kimi_k3_model(model_name: Any) -> bool:
+    """Match only the direct Moonshot K3 route."""
+    return (
+        isinstance(model_name, str)
+        and model_name.strip().lower() == "moonshot/kimi-k3"
+    )
+
+
+_KIMI_K3_FIXED_SAMPLING_PARAMETERS = (
+    "temperature",
+    "top_p",
+    "n",
+    "presence_penalty",
+    "frequency_penalty",
+)
+
+
+def _apply_kimi_k3_request_contract(
+    kwargs: Dict[str, Any], model_name: Any
+) -> bool:
+    """Keep K3 requests compatible with Moonshot and pinned LiteLLM.
+
+    K3 fixes its sampling values server-side. LiteLLM 1.84.x also drops the
+    unknown model's top-level ``reasoning_effort``, while ``extra_body`` is
+    merged into the final HTTP JSON body by LiteLLM's HTTP handler.
+    """
+    if not _is_kimi_k3_model(model_name):
+        return False
+    for key in _KIMI_K3_FIXED_SAMPLING_PARAMETERS:
+        kwargs.pop(key, None)
+    top_level_effort = kwargs.pop("reasoning_effort", None)
+    if top_level_effort:
+        extra_body = kwargs.get("extra_body")
+        merged = dict(extra_body) if isinstance(extra_body, dict) else {}
+        merged["reasoning_effort"] = top_level_effort
+        kwargs["extra_body"] = merged
+    return True
+
+
 def _has_thinking_or_reasoning_payload(litellm_kwargs: Dict[str, Any]) -> bool:
-    """Return True when a LiteLLM request carries Claude thinking/reasoning."""
+    """Return True when a LiteLLM request carries thinking or reasoning."""
     if "thinking" in litellm_kwargs or "reasoning_effort" in litellm_kwargs:
         return True
     extra_body = litellm_kwargs.get("extra_body")
-    return isinstance(extra_body, dict) and "thinking" in extra_body
+    return isinstance(extra_body, dict) and bool(
+        {"thinking", "reasoning_effort"} & extra_body.keys()
+    )
 
 
 # Regex anchored to the Gemini 3 family identifier so that:
@@ -2834,6 +2890,7 @@ def _completion_with_attribution(
     # this shared boundary so none of those fallback paths can reintroduce
     # deprecated Gemini sampling fields.
     _drop_deprecated_gemini_sampling_parameters(kwargs, model)
+    _apply_kimi_k3_request_contract(kwargs, model)
     _emit_llm_attribution(
         context,
         "llm_invoke.litellm_request",
@@ -5408,7 +5465,44 @@ def llm_invoke(
                     model_lower = str(model_name_litellm).lower()
                     provider_lower = str(provider).lower()
 
-                    if provider_lower == 'openai' and model_lower.startswith('gpt-5'):
+                    if _is_kimi_k3_model(model_name_litellm):
+                        requested_effort = os.environ.get(
+                            "PDD_REASONING_EFFORT", ""
+                        ).strip().lower()
+                        if requested_effort:
+                            if requested_effort not in {"low", "high", "max"}:
+                                raise ValueError(
+                                    f"PDD_REASONING_EFFORT={requested_effort!r} is not "
+                                    "supported by moonshot/kimi-k3; supported values: "
+                                    "high, low, max"
+                                )
+                            effort = requested_effort
+                        else:
+                            # PDD's generic scale is low/medium/high; K3 accepts
+                            # only low/high/max and defaults to max.
+                            effort = {
+                                "low": "low",
+                                "medium": "high",
+                                "high": "max",
+                            }[effort]
+                        kimi_extra_body = {"reasoning_effort": effort}
+                        for kwargs in (litellm_kwargs, time_kwargs):
+                            existing_extra_body = kwargs.get("extra_body")
+                            kwargs["extra_body"] = {
+                                **(
+                                    existing_extra_body
+                                    if isinstance(existing_extra_body, dict)
+                                    else {}
+                                ),
+                                **kimi_extra_body,
+                            }
+                        if verbose:
+                            logger.info(
+                                "[INFO] Requesting Kimi K3 reasoning_effort="
+                                f"'{effort}' via extra_body"
+                            )
+
+                    elif provider_lower == 'openai' and model_lower.startswith('gpt-5'):
                         requested_effort = os.environ.get("PDD_REASONING_EFFORT", "").strip().lower()
                         if requested_effort:
                             effort = requested_effort
@@ -6080,6 +6174,9 @@ def llm_invoke(
                         litellm_kwargs, model_name_litellm, verbose
                     ):
                         current_temperature = 1
+                _apply_kimi_k3_request_contract(
+                    litellm_kwargs, model_name_litellm
+                )
 
                 call_type_for_attribution = "batch_completion" if use_batch_mode else "completion"
                 _emit_llm_attribution(

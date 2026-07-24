@@ -56,6 +56,7 @@ def _profile(
     eligible: bool = False,
     reason: str = "Execution profile has not passed GitHub App conformance tests.",
     execution_profile: str = "manual_review",
+    model_labels: dict[str, str] | None = None,
     auth: dict[str, Any] | None = None,
     base_path: str = "/v1",
     source_prefix: str = "",
@@ -102,6 +103,7 @@ def _profile(
         "failure": _failure(),
         "github": {
             "label": label,
+            **({"model_labels": model_labels} if model_labels else {}),
             "execution_profile": execution_profile,
             "eligible": eligible,
             "reason": "" if eligible else reason,
@@ -302,6 +304,9 @@ PROFILES: dict[str, dict[str, Any]] = {
         "Moonshot AI",
         origin="https://api.moonshot.ai",
         label="pdd-moonshot",
+        eligible=True,
+        execution_profile="opencode_openai_chat",
+        model_labels={"pdd-kimi": "moonshot/kimi-k3"},
         source_prefix="moonshot/",
     ),
     "Nebius": _profile(
