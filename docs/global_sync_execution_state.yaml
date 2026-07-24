@@ -14,7 +14,6 @@ integration:
   write_set:
     - scripts/verify_global_sync_execution_contract.py
     - scripts/verify_global_sync_m0_samples.py
-    - tests/test_global_sync_execution_contract.py
     - tests/test_global_sync_ledger.py
     - tests/test_global_sync_m0_samples.py
     - tests/test_sync_core_reporting.py
@@ -27,7 +26,27 @@ integration:
     - docs/global_sync_m0_scope_report.md
     - docs/global_sync_m0_sample_results.json
     - docs/global_sync_m0_sample_metrics.json
+    - docs/archive/global_sync_resolution_plan_history_2026-07-22.md
+    - docs/global_sync_resolution_plan.md
     - .github/workflows/unit-tests.yml
+m0_bootstrap_allowlist:
+  - .github/workflows/unit-tests.yml
+  - docs/archive/global_sync_resolution_plan_history_2026-07-22.md
+  - docs/global_sync_evidence_ledger.yaml
+  - docs/global_sync_evidence_ledger_source.yaml
+  - docs/global_sync_execution_state.yaml
+  - docs/global_sync_m0_sample_metrics.json
+  - docs/global_sync_m0_sample_results.json
+  - docs/global_sync_m0_scope_report.md
+  - docs/global_sync_resolution_plan.md
+  - pdd/continuous_sync.py
+  - pdd/sync_core/global_sync_ledger.py
+  - pdd/sync_core/reporting.py
+  - scripts/verify_global_sync_execution_contract.py
+  - scripts/verify_global_sync_m0_samples.py
+  - tests/test_global_sync_ledger.py
+  - tests/test_global_sync_m0_samples.py
+  - tests/test_sync_core_reporting.py
 tracks:
   - id: m0-contract
     owner: m0-contract
@@ -36,7 +55,7 @@ tracks:
     base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
     write_set:
       - scripts/verify_global_sync_execution_contract.py
-      - tests/test_global_sync_execution_contract.py
+      - tests/test_global_sync_ledger.py
       - docs/global_sync_execution_state.yaml
       - docs/global_sync_evidence_ledger_source.yaml
       - docs/global_sync_evidence_ledger.yaml
@@ -64,7 +83,7 @@ tracks:
     worktree: /Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/issue-1932-m0-rebase-state
     branch: chore/1932-m0-rebase-state-20260724
     base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
-    write_set: [docs/global_sync_execution_state.yaml, docs/global_sync_evidence_ledger_source.yaml, docs/global_sync_evidence_ledger.yaml, tests/test_global_sync_execution_contract.py]
+    write_set: [docs/global_sync_execution_state.yaml, docs/global_sync_evidence_ledger_source.yaml, docs/global_sync_evidence_ledger.yaml, tests/test_global_sync_ledger.py]
   - id: m0-scope-current
     owner: m0-scope-current
     worktree: /Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/issue-1932-m0-scope-current
@@ -76,7 +95,7 @@ tracks:
     worktree: /Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/issue-1932-m0-contract-review1
     branch: fix/1932-m0-contract-review1-20260724
     base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
-    write_set: [scripts/verify_global_sync_execution_contract.py, tests/test_global_sync_execution_contract.py, docs/global_sync_execution_state.yaml, docs/global_sync_resolution_plan.md, .github/workflows/unit-tests.yml]
+    write_set: [scripts/verify_global_sync_execution_contract.py, tests/test_global_sync_ledger.py, docs/global_sync_execution_state.yaml, docs/global_sync_resolution_plan.md, .github/workflows/unit-tests.yml]
   - id: m0-review1-ledger-remediation
     owner: m0-ledger-review1
     worktree: /Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/issue-1932-m0-ledger-review1

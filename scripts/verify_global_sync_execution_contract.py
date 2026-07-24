@@ -28,7 +28,7 @@ STATES = frozenset({"EXISTS", "TO_BUILD", "EXTERNAL_PROTECTED", "ARCHIVED"})
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M5"]
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-PLAN_TO_BUILD = {
+FUTURE_COMPONENTS = {
     "pdd.sync_core.vertical_slice_verifier": (
         "vertical-slice-verifier", ["python", "-m", "pdd.sync_core.vertical_slice_verifier"]
     ),
@@ -67,6 +67,9 @@ PLAN_TO_BUILD = {
         ]
     ),
 }
+M4_COMMAND = FUTURE_COMPONENTS[
+    "pdd.sync_core.production_global_sync_verifier"
+]
 REQUIRED_COMMAND_FIELDS = (
     "id", "state", "argv", "owner", "introducing_milestone",
     "earliest_invocable_milestone", "introducing_pr",
@@ -232,6 +235,134 @@ def _milestone_before(left: Any, right: Any) -> bool:
     return isinstance(left, str) and isinstance(right, str) and left in MILESTONES and right in MILESTONES and MILESTONES.index(left) < MILESTONES.index(right)
 
 
+def _previous_milestone(milestone: Any) -> str | None:
+    """Return the protected predecessor required before a milestone activates."""
+    if not isinstance(milestone, str) or milestone not in MILESTONES:
+        return None
+    index = MILESTONES.index(milestone)
+    return MILESTONES[index - 1] if index else None
+
+
+def _git_diff_paths(root: Path, protected_base: str, candidate: str) -> list[str]:
+    """Return the exact protected-base..candidate changed paths, fail-closed."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "diff", "--name-only", "--diff-filter=ACMR",
+             f"{protected_base}..{candidate}"],
+            text=True, capture_output=True, check=False,
+        )
+    except OSError as error:
+        raise ValueError(f"cannot inspect protected-base candidate diff: {error}") from error
+    if result.returncode:
+        raise ValueError("cannot inspect protected-base candidate diff")
+    return [path for path in result.stdout.splitlines() if path]
+
+
+def _resolved_candidate_sha(root: Path, candidate_sha: str | None) -> str | None:
+    """Use an explicit candidate when supplied, otherwise safely resolve HEAD."""
+    if candidate_sha is not None:
+        return candidate_sha
+    if not (root / ".git").exists():
+        return None
+    try:
+        result = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], text=True,
+                                capture_output=True, check=False)
+    except OSError:
+        return None
+    candidate = result.stdout.strip()
+    return candidate if not result.returncode and SHA1.fullmatch(candidate) else None
+
+
+def _m0_diff_errors(state: dict[str, Any], root: Path, base: Any,
+                    candidate_sha: str | None) -> list[str]:
+    """Bind an unpromoted M0 to the actual protected-base..candidate delta."""
+    if state.get("active_blocker") != "m0-executable-baseline" or not isinstance(base, str):
+        return []
+    if candidate_sha is None and not (root / ".git").exists():
+        return []
+    if candidate_sha is None:
+        return ["M0 bootstrap requires an explicit candidate SHA or a resolvable checkout HEAD"]
+    if not SHA1.fullmatch(candidate_sha):
+        return ["M0 bootstrap candidate SHA must be an exact lowercase 40-character SHA"]
+    allowlist = state.get("m0_bootstrap_allowlist")
+    if not _strings(allowlist) or len(allowlist) != len(set(allowlist)):
+        return ["M0 bootstrap allowlist must be a unique non-empty exact path list"]
+    integration = state.get("integration")
+    tracks = state.get("tracks")
+    if not isinstance(integration, dict) or not _strings(integration.get("write_set")):
+        return ["M0 bootstrap integration topology requires an exact integration write_set"]
+    if not isinstance(tracks, list):
+        return ["M0 bootstrap integration topology requires tracks"]
+    m0_paths = set(integration["write_set"])
+    for track in tracks:
+        if isinstance(track, dict) and str(track.get("id", "")).startswith("m0-"):
+            write_set = track.get("write_set")
+            if not _strings(write_set):
+                return ["M0 bootstrap track requires an exact write_set"]
+            m0_paths.update(write_set)
+    errors: list[str] = []
+    try:
+        changed_paths = _git_diff_paths(root, base, candidate_sha)
+    except ValueError as error:
+        return [str(error)]
+    for path in changed_paths:
+        if path not in allowlist:
+            errors.append(f"M0 bootstrap allowlist rejects changed path: {path}")
+        if path not in m0_paths:
+            errors.append(f"M0 bootstrap topology/write sets do not record changed path: {path}")
+    return errors
+
+
+def _promotion_errors(state: dict[str, Any], registry: list[dict[str, Any]]) -> list[str]:
+    """Validate milestone activation and the evidence that makes it legal."""
+    promotions = state.get("milestone_promotions", {})
+    if not isinstance(promotions, dict):
+        return ["milestone_promotions must be a mapping"]
+    errors: list[str] = []
+    for milestone, promotion in promotions.items():
+        if milestone not in MILESTONES or not isinstance(promotion, dict):
+            errors.append("milestone promotion records must be M0-M5 mappings")
+            continue
+        if promotion.get("state") != "passed":
+            errors.append(f"{milestone} promotion must declare state: passed")
+            continue
+        candidate = promotion.get("candidate_sha")
+        digest = promotion.get("wheel_artifact_sha256")
+        if (not isinstance(candidate, str) or not SHA1.fullmatch(candidate)
+                or not isinstance(digest, str) or not SHA256.fullmatch(digest)
+                or not isinstance(promotion.get("hosted_proof"), str)
+                or not promotion["hosted_proof"]):
+            errors.append(f"{milestone} promotion requires hosted proof, candidate SHA, and wheel digest")
+            continue
+        if milestone == "M0":
+            for command in registry:
+                if command.get("introducing_milestone") != "M0" or command.get("state") != "EXISTS":
+                    continue
+                if (command.get("last_source_validation_sha") != candidate
+                        or command.get("last_wheel_validation_sha") != candidate):
+                    errors.append(f"M0 promotion requires source/wheel bindings for {command.get('id')}")
+    for command in registry:
+        if command.get("state") != "EXISTS":
+            continue
+        milestone = command.get("introducing_milestone")
+        predecessor = _previous_milestone(milestone)
+        if predecessor is None:
+            continue
+        promotion = promotions.get(predecessor)
+        if not isinstance(promotion, dict) or promotion.get("state") != "passed":
+            errors.append(f"{command.get('id')}: EXISTS requires predecessor {predecessor} promotion")
+            continue
+        evidence = command.get("merged_introducer_evidence")
+        candidate = promotion.get("candidate_sha")
+        if (not isinstance(evidence, dict) or evidence.get("sha") != candidate
+                or command.get("introducing_pr") in {None, "", "pending"}
+                or command.get("component_binding") != command.get("id")
+                or command.get("last_source_validation_sha") != candidate
+                or command.get("last_wheel_validation_sha") != candidate):
+            errors.append(f"{command.get('id')}: EXISTS requires merged introducer and exact component/source/wheel bindings")
+    return errors
+
+
 def _wheel_origin_preflight(
     python: str, root: Path
 ) -> tuple[str | None, list[str], Path, dict[str, str]]:
@@ -370,6 +501,7 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None,
             _error(errors, "expected protected base must be an exact lowercase 40-character SHA")
         elif base != expected_protected_base:
             _error(errors, "state protected base disagrees with expected protected base")
+    candidate_sha = _resolved_candidate_sha(root, candidate_sha)
     if candidate_sha is not None and not SHA1.fullmatch(candidate_sha):
         _error(errors, "candidate SHA must be an exact lowercase 40-character SHA")
     if wheel_python:
@@ -393,6 +525,8 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None,
     for required in ("integration", "tracks"):
         if required not in state:
             _error(errors, f"state missing integration topology: {required}")
+    for message in _m0_diff_errors(state, root, base, candidate_sha):
+        _error(errors, message)
 
     registry = state.get("command_registry")
     if not isinstance(registry, list):
@@ -486,14 +620,26 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None,
 
     _validate_plan_commands(plan_text, registry, errors)
 
-    required_ids = set(state.get("required_to_build_components", []))
-    for name, (command_id, expected_argv) in PLAN_TO_BUILD.items():
-        if name in plan_text or command_id in required_ids:
-            command = by_id.get(command_id)
-            if command is None:
-                _error(errors, f"missing plan-named TO_BUILD component: {command_id}")
-            elif command.get("state") != "TO_BUILD" or command.get("argv") != expected_argv:
-                _error(errors, f"{command_id}: plan-named component must be TO_BUILD with exact argv")
+    current_milestone = state.get("scoreboard", {}).get("milestone", "M0")
+    if current_milestone not in MILESTONES:
+        _error(errors, "scoreboard milestone must use M0-M5 vocabulary")
+    for name, (command_id, expected_argv) in FUTURE_COMPONENTS.items():
+        if name not in plan_text and command_id not in set(state.get("required_to_build_components", [])):
+            continue
+        command = by_id.get(command_id)
+        if command is None:
+            _error(errors, f"missing plan-named future component: {command_id}")
+            continue
+        if command.get("argv") != expected_argv:
+            _error(errors, f"{command_id}: future component argv must remain exact")
+        if (_milestone_before(current_milestone, command.get("introducing_milestone"))
+                and command.get("state") != "TO_BUILD"):
+            _error(errors, f"{command_id}: future component must remain TO_BUILD before its milestone")
+    m4_command = by_id.get(M4_COMMAND[0])
+    if m4_command is not None and m4_command.get("argv") != M4_COMMAND[1]:
+        _error(errors, "production-global-sync-verifier: M4 command must remain exact")
+    for message in _promotion_errors(state, registry):
+        _error(errors, message)
 
     source_relative = state.get("ledger_source")
     generated_relative = state.get("generated_ledger")

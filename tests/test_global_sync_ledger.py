@@ -1159,6 +1159,8 @@ def test_execution_contract_allows_m1_exists_only_after_m0_promotion(
         "state": "passed", "hosted_proof": "https://example.invalid/m0-proof",
         "candidate_sha": "b" * 40, "wheel_artifact_sha256": "c" * 64,
     }}
+    state["command_registry"][0]["last_source_validation_sha"] = "b" * 40
+    state["command_registry"][0]["last_wheel_validation_sha"] = "b" * 40
     state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
     ledger = yaml.safe_load((root / "docs" / "ledger_source.yaml").read_text(encoding="utf-8"))
     ledger["execution_contract"]["command_registry"] = state["command_registry"]

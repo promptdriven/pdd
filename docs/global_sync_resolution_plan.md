@@ -111,9 +111,12 @@ command from being mistaken for a real interface.
 The integration owner also owns the M0-bootstrap track. Its write set is limited
 to:
 
-- `scripts/verify_global_sync_execution_contract.py` and its tests.
+- `scripts/verify_global_sync_execution_contract.py` and its
+  architecture-owned ledger/contract tests.
 - `docs/global_sync_execution_state.yaml`.
 - `docs/global_sync_evidence_ledger_source.yaml` and its generated ledger.
+- This active plan and its archived-history relocation when their execution
+  contract references need reconciliation.
 - The protected ledger-check step in `.github/workflows/unit-tests.yml`.
 - The reviewed reporting-path normalization and compatibility correction in
   `pdd/sync_core/reporting.py` with its focused compatibility test.
@@ -159,8 +162,12 @@ The first implementation deliverable is
 - A step marked executable has an empty validation command list.
 - Generated ledger state disagrees with this active plan or the recorded base
   SHA.
-- A command labeled `TO_BUILD` is used before the PR that implements it merges
-  into the integration branch.
+- An unpromoted M0 candidate changes a path outside its exact bootstrap
+  allowlist or its recorded M0 topology/write sets. Pending A-E track write
+  sets do not expand that allowlist.
+- A future component is relabeled from `TO_BUILD` before its milestone's
+  protected predecessor passes, or without merged-introducer and exact
+  component/source/wheel bindings.
 
 The verifier owns a small machine-readable command registry. Every entry has one
 of `EXISTS`, `TO_BUILD`, `EXTERNAL_PROTECTED`, or `ARCHIVED`. Each entry records
@@ -177,8 +184,10 @@ During M0 bootstrap, move obsolete ledger command strings and attempt history to
 explicitly archived/non-executable fields. Replace the checker-release blocker
 with `m0-executable-baseline`, and make active ledger rows use the same
 M0-M5 milestone IDs, order, current base SHA, and executable-state vocabulary as
-this plan. A future command may remain declared as `TO_BUILD`; it may not be
-claimed as executed or passed.
+this plan. A future command remains `TO_BUILD` until its milestone. It becomes
+`EXISTS` only after predecessor protected-passed evidence, a merged introducer,
+and matching component/source/wheel bindings; it may not be claimed as executed
+or passed before then.
 
 The protected unit-test workflow must run both:
 
@@ -193,7 +202,9 @@ and runs this verifier through that venv's interpreter. The installed
 distribution's PEP 610 `direct_url.json` (or an equivalent installed-artifact
 binding) must name the same wheel digest/path; the emitted proof also records
 the candidate Git SHA. Source and wheel validation SHAs are mandatory when M0
-is promoted, not optional parity annotations. An older installed wheel is not
+is promoted, not optional parity annotations. The runtime proof binds candidate
+HEAD and wheel digest; the later promotion record cites that hosted proof rather
+than predicting a self-referential merge SHA. An older installed wheel is not
 valid evidence for a newer candidate.
 
 The following previously referenced components begin as `TO_BUILD` and are
