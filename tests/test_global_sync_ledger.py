@@ -1215,8 +1215,14 @@ def test_execution_contract_records_wheel_copied_test_closure() -> None:
         "pdd/data/language_format.csv",
     ]
     assert 'manifest_relpath = Path(".pdd/global-sync/standalone-checker-modules.json")' in workflow
+    assert "from pdd.sync_core.standalone_package import load_standalone_manifest" in workflow
+    assert "manifest = load_standalone_manifest(source)" in workflow
     assert 'closure.extend(Path("pdd/sync_core") / module for module in manifest["modules"])' in workflow
     assert 'all(path not in package.parents for path in fixture_paths)' in workflow
+    assert 'relative.is_absolute() or ".." in relative.parts' in workflow
+    assert "standalone fixture source must be a regular file" in workflow
+    assert "standalone fixture source escapes checkout" in workflow
+    assert "standalone fixture target escapes runner temp" in workflow
 
 
 def test_execution_contract_requires_pinned_deterministic_sample_replay() -> None:
