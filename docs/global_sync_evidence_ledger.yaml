@@ -1,4 +1,4 @@
-schema_version: 5
+schema_version: 6
 execution_contract:
   protected_base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
   milestone_order: [M0, M1, M2, M3, M4, M5]
@@ -22,9 +22,9 @@ required_gate_state_fields:
   - deployed
   - certified
 canonical_blockers:
-  gate2_protected_checker_wheel_publication:
-    id: gate2-protected-checker-wheel-publication
-    text: "Release the protected standalone checker wheel and record its exact digest/pin; OCI is a later layer or pending prerequisite, and no certificate is claimed."
+  m0_executable_baseline:
+    id: m0-executable-baseline
+    text: "Reconcile the active ledger with the M0 executable baseline and record the exact supported command results; archived Gate evidence cannot advance or block M0."
 ledger_generation:
   status: in-progress
   current_mode: generated_from_versioned_metadata_source
@@ -187,6 +187,7 @@ promotion_bundles:
       pull_request: 2219
       base_repository: promptdriven/pdd
       base_ref: main
+historical_promotion_bundles:
   gate_1_hosted_merge:
     repository: promptdriven/pdd
     repository_sha: "63bf4dd789d65a9cf4b08f5b39886d0cdda5e0ee"
@@ -443,8 +444,8 @@ certificate_program:
     real_pdd_cloud_canary: pending
 live_rebaseline:
   captured_at: "2026-07-20"
-  gates_passed: 0
-  gates_required: 10
+  milestones_passed: 0
+  milestones_required: 6
   qualifying_nights: 0
   qualifying_nights_required: 7
   pdd_registry_state: protected_main
@@ -486,10 +487,10 @@ live_rebaseline:
   pdd_cloud_repository_sha: "78eced4ec36844950b7ff3751ca92af7d3541235"
   pdd_cloud_protected_profile_registry_present: false
   pdd_cloud_demanded_validator_ids: null
-  single_next_blocker_id: gate2-protected-checker-wheel-publication
-  single_next_blocker: "Release the protected standalone checker wheel and record its exact digest/pin; OCI is a later layer or pending prerequisite, and no certificate is claimed."
-  same_day_deliverable_id: gate2-protected-checker-wheel-publication
-  same_day_deliverable: "Release the protected standalone checker wheel and record its exact digest/pin; OCI is a later layer or pending prerequisite, and no certificate is claimed."
+  single_next_blocker_id: m0-executable-baseline
+  single_next_blocker: "Reconcile the active ledger with the M0 executable baseline and record the exact supported command results; archived Gate evidence cannot advance or block M0."
+  same_day_deliverable_id: m0-executable-baseline
+  same_day_deliverable: "Reconcile the active ledger with the M0 executable baseline and record the exact supported command results; archived Gate evidence cannot advance or block M0."
   pr_2225:
     pull_request_url: "https://github.com/promptdriven/pdd/pull/2225"
     closed_head_sha: "0bae19c2fb9575d8b8edccaeee3c5d9420e00e9f"
@@ -526,8 +527,10 @@ live_rebaseline:
       pdd_machine_obligation_profile_coverage_percent: 0.211864
 current_critical_path:
   status: in-progress
-  blocker_id: gate2-protected-checker-wheel-publication
-  next_gate: "Gate 2: release the protected standalone non-pdd checker wheel and record its exact digest/pin; OCI is a later layer or pending prerequisite"
+  blocker_id: m0-executable-baseline
+  blocker: "Reconcile the active ledger with the M0 executable baseline and record the exact supported command results; archived Gate evidence cannot advance or block M0."
+  next_milestone: M0
+  next_gate: "M0: establish the executable baseline before any M1-M5 work"
   owning_pr: null
   completed_ledger_generation_pr: "https://github.com/promptdriven/pdd/pull/2219"
   ownership_prerequisite: "https://github.com/promptdriven/pdd/pull/2220 (supporting prerequisite evidence only; not a promotion state or gate pass)"
@@ -939,7 +942,7 @@ gate_2_package_boundary_pr:
   deterministic_local_candidate_wheel_sha256: "2f6bb048ef6eb3c8486f2e2df5c62066b9907b89dcc55a76bab0993556424438"
   released_wheel_sha256: null
   scope: "Layer 1 standalone non-pdd package boundary only; local candidate digest is deterministic evidence only, not a released digest, and this does not establish release, deployment, certification, or a Gate 2 pass."
-steps:
+historical_steps:
   - order: 1
     execution_state: ARCHIVED
     name: "Reviewable implementation foundations"
@@ -1899,3 +1902,103 @@ steps:
     predicate_result: "No final exact-SHA signed global certificate or bound Sol HIGH approval exists."
     blocker: "Step 9 is incomplete."
     owning_pr: null
+milestones:
+  - id: M0
+    execution_state: EXISTS
+    name: "Executable baseline"
+    status: in-progress
+    evidence_state:
+      implemented: in-progress
+      local_green: pending
+      independently_reviewed: pending
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
+    required_predicate:
+      active_ledger_uses_m0_m5: true
+      archived_gate_rows_are_non_authoritative: true
+      supported_baseline_commands_recorded: false
+    blocker_id: m0-executable-baseline
+    blocker: "Reconcile the active ledger with the M0 executable baseline and record the exact supported command results; archived Gate evidence cannot advance or block M0."
+  - id: M1
+    execution_state: TO_BUILD
+    name: "Canonical repair and pytest authority"
+    status: pending
+    evidence_state:
+      implemented: pending
+      local_green: pending
+      independently_reviewed: pending
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
+    required_predicate:
+      m0_passed: true
+      canonical_repair_and_runner_contract_complete: true
+  - id: M2
+    execution_state: TO_BUILD
+    name: "Inventory and consumer migration"
+    status: pending
+    evidence_state:
+      implemented: pending
+      local_green: pending
+      independently_reviewed: pending
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
+    required_predicate:
+      m1_passed: true
+      current_inventory_and_consumer_evidence_complete: true
+  - id: M3
+    execution_state: EXTERNAL_PROTECTED
+    name: "Protected checker and lifecycle lane"
+    status: pending
+    evidence_state:
+      implemented: pending
+      local_green: pending
+      independently_reviewed: pending
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
+    required_predicate:
+      m2_passed: true
+      protected_checker_and_lifecycle_evidence_complete: true
+  - id: M4
+    execution_state: EXTERNAL_PROTECTED
+    name: "Temporal integrity evidence"
+    status: pending
+    evidence_state:
+      implemented: pending
+      local_green: pending
+      independently_reviewed: pending
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
+    required_predicate:
+      m3_passed: true
+      qualifying_temporal_evidence_complete: true
+  - id: M5
+    execution_state: EXTERNAL_PROTECTED
+    name: "Independent final verification"
+    status: pending
+    evidence_state:
+      implemented: pending
+      local_green: pending
+      independently_reviewed: pending
+      hosted_green: pending
+      merged: pending
+      released: pending
+      deployed: pending
+      certified: pending
+    required_predicate:
+      m4_passed: true
+      independently_verified_certificate_complete: true

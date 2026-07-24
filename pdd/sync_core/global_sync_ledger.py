@@ -25,7 +25,7 @@ from urllib.request import Request, urlopen
 import yaml
 
 
-LEDGER_SCHEMA_VERSION = 5
+LEDGER_SCHEMA_VERSION = 6
 REQUIRED_GATE_STATE_FIELDS = (
     "implemented",
     "local_green",
@@ -37,7 +37,8 @@ REQUIRED_GATE_STATE_FIELDS = (
     "certified",
 )
 SOURCE_MARKER = "<!-- global-sync-ledger-source: {source_name} -->"
-GATE_COUNT = 10
+HISTORICAL_GATE_COUNT = 10
+MILESTONE_IDS = ("M0", "M1", "M2", "M3", "M4", "M5")
 SHA1 = re.compile(r"[0-9a-f]{40}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 ACTION_RUN_URL = re.compile(r"^/([^/]+/[^/]+)/actions/runs/(\d+)$")
@@ -45,6 +46,7 @@ ACTION_JOB_URL = re.compile(r"^/([^/]+/[^/]+)/actions/runs/(\d+)/job/(\d+)$")
 CHECK_RUN_URL = re.compile(r"^/([^/]+/[^/]+)/runs/(\d+)$")
 SUBJECT_RECORD_LEDGER_GENERATION = "ledger_generation"
 SUBJECT_RECORD_GATE = "gate"
+SUBJECT_RECORD_MILESTONE = "milestone"
 PROTECTED_VERIFICATION_AUTHORIZATIONS = {
     "github-pr-checks": frozenset({"implemented", "hosted_green", "merged"}),
 }
@@ -453,7 +455,9 @@ def _validate_protected_verification(
         )
 
 
-def _validate_subject_shape(subject: dict[str, Any], name: str) -> None:
+def _validate_subject_shape(  # pylint: disable=too-many-branches
+    subject: dict[str, Any], name: str
+) -> None:
     """Validate a closed subject declaration before matching it to a record."""
     if set(subject) != {"record", "states", "required_predicate_sha256", "record_claims"}:
         raise LedgerError(f"promotion bundle {name!r} subject has unexpected fields")
@@ -467,9 +471,13 @@ def _validate_subject_shape(subject: dict[str, Any], name: str) -> None:
         if (
             set(record) != {"kind", "order"}
             or not isinstance(order, int)
-            or not 1 <= order <= GATE_COUNT
+            or not 1 <= order <= HISTORICAL_GATE_COUNT
         ):
             raise LedgerError(f"promotion bundle {name!r} gate subject record is malformed")
+    elif kind == SUBJECT_RECORD_MILESTONE:
+        milestone_id = record.get("id")
+        if set(record) != {"kind", "id"} or milestone_id not in MILESTONE_IDS:
+            raise LedgerError(f"promotion bundle {name!r} milestone subject record is malformed")
     else:
         raise LedgerError(f"promotion bundle {name!r} subject record kind is invalid")
     states = subject.get("states")
@@ -631,6 +639,153 @@ def _validate_step(
     )
 
 
+def _validate_historical_steps(
+    payload: dict[str, Any], statuses: set[str]
+) -> list[tuple[str, dict[str, object]]]:
+    """Validate immutable former gates without making them live authority."""
+    historical_steps = payload.get("historical_steps")
+    if not isinstance(historical_steps, list):
+        raise LedgerError("ledger source field 'historical_steps' must be a list")
+    promotion_references: list[tuple[str, dict[str, object]]] = []
+    for index, step in enumerate(historical_steps):
+        if not isinstance(step, dict) or step.get("order") != index + 1:
+            raise LedgerError(
+                f"historical_steps[{index}].order must be stable order {index + 1}"
+            )
+        if step.get("execution_state") != "ARCHIVED":
+            raise LedgerError(
+                f"historical_steps[{index}].execution_state must be ARCHIVED"
+            )
+        promotion_references.extend(_validate_step(step, statuses, index))
+    return promotion_references
+
+
+def _validate_milestone(
+    milestone: object, statuses: set[str], index: int, execution_states: set[str]
+) -> list[tuple[str, dict[str, object]]]:
+    """Validate one active M0--M5 record and its independently provable claims."""
+    record_name = f"milestones[{index}]"
+    if not isinstance(milestone, dict):
+        raise LedgerError(f"{record_name} must be a mapping")
+    if milestone.get("id") != MILESTONE_IDS[index]:
+        raise LedgerError(f"{record_name}.id must be {MILESTONE_IDS[index]}")
+    if "order" in milestone and milestone["order"] != index + 1:
+        raise LedgerError(f"{record_name}.order must be stable order {index + 1}")
+    if milestone.get("execution_state") not in execution_states - {"ARCHIVED"}:
+        raise LedgerError(f"{record_name}.execution_state must be active")
+    if milestone.get("status") not in statuses:
+        raise LedgerError(f"{record_name}.status is not in status_vocabulary")
+    evidence_state = milestone.get("evidence_state")
+    if not isinstance(evidence_state, dict) or set(evidence_state) != set(
+        REQUIRED_GATE_STATE_FIELDS
+    ):
+        raise LedgerError(
+            f"{record_name}.evidence_state must contain exactly the required gate states"
+        )
+    if any(value not in statuses for value in evidence_state.values()):
+        raise LedgerError(f"{record_name}.evidence_state contains an invalid state")
+    required_predicate = milestone.get("required_predicate")
+    if not isinstance(required_predicate, dict):
+        raise LedgerError(f"{record_name}.required_predicate must be a mapping")
+    if milestone["status"] == "passed" and not required_predicate:
+        raise LedgerError(f"{record_name}.required_predicate cannot be empty when passed")
+    return _promotion_references(
+        milestone,
+        record_name,
+        {"kind": SUBJECT_RECORD_MILESTONE, "id": MILESTONE_IDS[index]},
+    )
+
+
+def _validate_execution_contract(payload: dict[str, Any]) -> tuple[dict[str, str], set[str]]:
+    """Return canonical live blockers and the controlled execution vocabulary."""
+    contract = _require_mapping(payload, "execution_contract")
+    if contract.get("milestone_order") != list(MILESTONE_IDS):
+        raise LedgerError("execution_contract.milestone_order must equal M0 through M5")
+    execution_states_value = contract.get("execution_state_vocabulary")
+    if not isinstance(execution_states_value, list) or not all(
+        isinstance(state, str) for state in execution_states_value
+    ):
+        raise LedgerError("execution_contract.execution_state_vocabulary must be a list")
+    execution_states = set(execution_states_value)
+    if len(execution_states) != len(execution_states_value) or execution_states != {
+        "ARCHIVED",
+        "EXISTS",
+        "EXTERNAL_PROTECTED",
+        "TO_BUILD",
+    }:
+        raise LedgerError("execution_contract.execution_state_vocabulary is invalid")
+    blockers = _require_mapping(payload, "canonical_blockers")
+    canonical_blockers: dict[str, str] = {}
+    for blocker in blockers.values():
+        if not isinstance(blocker, dict):
+            raise LedgerError("canonical_blockers entries must be mappings")
+        blocker_id = blocker.get("id")
+        text = blocker.get("text")
+        if (
+            not isinstance(blocker_id, str)
+            or not blocker_id
+            or not isinstance(text, str)
+            or not text
+            or blocker_id in canonical_blockers
+        ):
+            raise LedgerError("canonical_blockers entries must have unique id and text")
+        canonical_blockers[blocker_id] = text
+    active_blocker = contract.get("active_blocker")
+    if active_blocker not in canonical_blockers:
+        raise LedgerError("execution_contract.active_blocker must be canonical")
+    return canonical_blockers, execution_states
+
+
+def _validate_live_authority(
+    payload: dict[str, Any], statuses: set[str], canonical_blockers: dict[str, str],
+    execution_states: set[str]
+) -> list[tuple[str, dict[str, object]]]:
+    """Validate current M0--M5 authority without consulting archived Gate rows."""
+    if "steps" in payload:
+        raise LedgerError("legacy steps must be preserved only as historical_steps")
+    milestones = payload.get("milestones")
+    if not isinstance(milestones, list) or len(milestones) != len(MILESTONE_IDS):
+        raise LedgerError("ledger source field 'milestones' must contain M0 through M5")
+    promotion_references: list[tuple[str, dict[str, object]]] = []
+    for index, milestone in enumerate(milestones):
+        promotion_references.extend(
+            _validate_milestone(milestone, statuses, index, execution_states)
+        )
+    m0 = milestones[0]
+    if not isinstance(m0, dict):  # Checked above; narrows the type for the validator.
+        raise LedgerError("milestones[0] must be a mapping")
+    active_blocker = payload["execution_contract"]["active_blocker"]
+    if (
+        m0.get("blocker_id") != active_blocker
+        or m0.get("blocker") != canonical_blockers[active_blocker]
+    ):
+        raise LedgerError("milestones[0] must carry the current canonical blocker")
+    live_rebaseline = _require_mapping(payload, "live_rebaseline")
+    if live_rebaseline.get("milestones_required") != len(MILESTONE_IDS):
+        raise LedgerError("live_rebaseline.milestones_required must equal 6")
+    passed_milestones = sum(
+        isinstance(milestone, dict) and milestone.get("status") == "passed"
+        for milestone in milestones
+    )
+    if live_rebaseline.get("milestones_passed") != passed_milestones:
+        raise LedgerError(
+            "live_rebaseline.milestones_passed does not match active milestone statuses"
+        )
+    if (
+        live_rebaseline.get("single_next_blocker_id") != active_blocker
+        or live_rebaseline.get("single_next_blocker") != canonical_blockers[active_blocker]
+    ):
+        raise LedgerError("live_rebaseline must name the current canonical blocker")
+    critical_path = _require_mapping(payload, "current_critical_path")
+    if (
+        critical_path.get("blocker_id") != active_blocker
+        or critical_path.get("blocker") != canonical_blockers[active_blocker]
+        or critical_path.get("next_milestone") != "M0"
+    ):
+        raise LedgerError("current_critical_path must name the current M0 blocker")
+    return promotion_references
+
+
 def _collect_bundle_subjects(
     promotion_references: list[tuple[str, dict[str, object]]]
 ) -> dict[str, dict[str, object]]:
@@ -696,25 +851,20 @@ def validate_ledger(  # pylint: disable=too-many-locals,too-many-branches
         raise LedgerError(
             "ledger_generation.trust_boundary must require protected verification"
         )
-    steps = payload.get("steps")
-    if not isinstance(steps, list) or len(steps) != GATE_COUNT:
-        raise LedgerError(f"ledger source field 'steps' must contain exactly {GATE_COUNT} gates")
-    promotion_references = _promotion_references(
+    canonical_blockers, execution_states = _validate_execution_contract(payload)
+    active_references = _promotion_references(
         ledger_generation,
         "ledger_generation",
         {"kind": SUBJECT_RECORD_LEDGER_GENERATION},
     )
-    for index, step in enumerate(steps):
-        if not isinstance(step, dict) or step.get("order") != index + 1:
-            raise LedgerError(f"steps[{index}].order must be stable order {index + 1}")
-        promotion_references.extend(_validate_step(step, statuses, index))
-    bundle_subjects = _collect_bundle_subjects(promotion_references)
-    live_rebaseline = _require_mapping(payload, "live_rebaseline")
-    if live_rebaseline.get("gates_required") != GATE_COUNT:
-        raise LedgerError(f"live_rebaseline.gates_required must equal {GATE_COUNT}")
-    passed_gates = sum(step["status"] == "passed" for step in steps)
-    if live_rebaseline.get("gates_passed") != passed_gates:
-        raise LedgerError("live_rebaseline.gates_passed does not match passed gate statuses")
+    active_references.extend(
+        _validate_live_authority(
+            payload, statuses, canonical_blockers, execution_states
+        )
+    )
+    historical_references = _validate_historical_steps(payload, statuses)
+    bundle_subjects = _collect_bundle_subjects(active_references)
+    historical_bundle_subjects = _collect_bundle_subjects(historical_references)
     bundles = _require_mapping(payload, "promotion_bundles")
     if set(bundles) != set(bundle_subjects):
         raise LedgerError("promotion_bundles must contain exactly the referenced promotion claims")
@@ -723,6 +873,17 @@ def validate_ledger(  # pylint: disable=too-many-locals,too-many-branches
     }
     for name, expected in bundle_subjects.items():
         _validate_subject_binding(validated_bundles[name], name, expected)
+    historical_bundles = _require_mapping(payload, "historical_promotion_bundles")
+    if set(historical_bundles) != set(historical_bundle_subjects):
+        raise LedgerError(
+            "historical_promotion_bundles must contain exactly the referenced historical claims"
+        )
+    validated_historical_bundles = {
+        name: _validate_promotion_bundle(bundle, name)
+        for name, bundle in historical_bundles.items()
+    }
+    for name, expected in historical_bundle_subjects.items():
+        _validate_subject_binding(validated_historical_bundles[name], name, expected)
     if verify_remote:
         verifier = promotion_verifier or GitHubPromotionVerifier()
         for name in sorted(bundle_subjects):
