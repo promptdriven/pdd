@@ -23,6 +23,7 @@ from pdd.sync_core import (
     FingerprintRecord,
     FingerprintStore,
     PlannedWrite,
+    RunnerExecution,
     SemanticStatus,
     TransactionManager,
     TRUSTED_RUNNER_VERSION,
@@ -33,10 +34,12 @@ from pdd.sync_core import (
     encode_fingerprint,
     evidence_relpath,
     finalize_unit,
+    load_attestation,
     load_verification_profiles,
     runner_identity_digest,
 )
 from pdd.sync_core.identity import initialize_repository_identity
+from pdd.sync_core.reporting import module_identity
 from pdd.sync_core.types import ObligationEvidence
 from pdd.ci_drift_heal import main as ci_drift_heal_main
 from pdd.commands.sync_core import baseline as baseline_command
@@ -228,6 +231,52 @@ def _options(tmp_path: Path, commit: str) -> CanonicalReportOptions:
         replay_ledger_path=tmp_path / "external-trust/replay.json",
         now=NOW,
     )
+
+
+@pytest.fixture
+def signed_passing_finalizer_profile(monkeypatch):
+    """Provide input-bound signed PASS evidence for finalizer semantics tests."""
+
+    def _run_profile(root, profile, binding, issuance, config):
+        assert issuance.signer is SIGNER
+        runner_digest = runner_identity_digest(
+            profile, root=root, ref=binding.head_sha, config=config
+        )
+        attestation_binding = AttestationBinding(
+            profile.unit_id,
+            binding.snapshot_digest,
+            profile.profile_digest,
+            runner_digest,
+            TRUSTED_RUNNER_VERSION,
+            binding.base_sha,
+            binding.head_sha,
+            adapter_identities=config.adapter_identities,
+        )
+        results = tuple(
+            ObligationEvidence(obligation.obligation_id, EvidenceOutcome.PASS)
+            for obligation in profile.obligations
+        )
+        envelope = SIGNER.issue(
+            AttestationRequest(
+                issuance.attestation_id,
+                attestation_binding,
+                results,
+                issuance.nonce,
+                issuance.issued_at,
+            )
+        )
+        executions = tuple(
+            RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.PASS,
+                runner_digest,
+                "test finalizer semantic evidence",
+            )
+            for obligation in profile.obligations
+        )
+        return envelope, executions
+
+    monkeypatch.setattr("pdd.sync_core.finalize.run_profile", _run_profile)
 
 
 def _durable_state(root: Path) -> dict[PurePosixPath, bytes]:
@@ -671,6 +720,48 @@ def test_scoped_canonical_compatibility_uses_selected_counts_and_qualified_names
     assert report["units"][0]["basename"] == "commands/foo"
 
 
+def test_package_local_compatibility_keeps_qualified_duplicate_module_names(
+    tmp_path, monkeypatch
+) -> None:
+    """Legacy projection uses the same exact prompt-root identity as filtering."""
+    canonical = {
+        "ok": True,
+        "counts": {"managed_units": 2, "trusted_in_sync": 2, "drifted": 0,
+                   "unbaselined": 0, "corrupt": 0, "unknown": 0,
+                   "conflict": 0, "failed": 0, "invalid": 0},
+        "units": [
+            {"subject": "pdd/prompts/commands/foo_python.prompt",
+             "baseline": "CURRENT", "semantic": "PASS", "in_sync": True,
+             "reason": "trusted", "changed_roles": []},
+            {"subject": "pdd/prompts/jobs/foo_python.prompt",
+             "baseline": "CURRENT", "semantic": "PASS", "in_sync": True,
+             "reason": "trusted", "changed_roles": []},
+        ],
+    }
+    monkeypatch.setattr(
+        "pdd.continuous_sync.build_canonical_report", lambda *_args, **_kwargs: canonical
+    )
+    monkeypatch.setattr("pdd.continuous_sync.canonical_sync_enabled", lambda _root: True)
+
+    report = build_compatibility_report(consumer="reconcile", root=tmp_path)
+
+    assert [item["basename"] for item in report["units"]] == [
+        "commands/foo", "jobs/foo"
+    ]
+    assert module_identity(PurePosixPath("pdd/prompts/commands/foo_python.prompt")) == (
+        "commands/foo"
+    )
+    assert module_identity(PurePosixPath("pdd/prompts/jobs/foo_python.prompt")) == (
+        "jobs/foo"
+    )
+    for unsafe_path in (
+        "pdd/prompts-archive/commands/foo_python.prompt",
+        "prompts/../pdd/prompts/commands/foo_python.prompt",
+    ):
+        with pytest.raises(ValueError, match="outside supported prompt roots"):
+            module_identity(PurePosixPath(unsafe_path))
+
+
 def test_real_manifest_path_qualified_module_selects_one_duplicate_leaf(tmp_path) -> None:
     root, _commit = _repository(tmp_path)
     for scope in ("commands", "jobs"):
@@ -701,6 +792,44 @@ def test_real_manifest_path_qualified_module_selects_one_duplicate_leaf(tmp_path
     )
     assert [item["subject"] for item in report["units"]] == [
         "prompts/commands/foo_python.prompt"
+    ]
+
+
+def test_real_manifest_package_prompt_layout_selects_nested_module(tmp_path) -> None:
+    """Package-local prompts use the same root-relative module identity."""
+    root, _commit = _repository(tmp_path)
+    (root / "pdd/prompts/commands").mkdir(parents=True)
+    (root / "pdd/commands").mkdir()
+    (root / "pdd/prompts/commands/foo_python.prompt").write_text(
+        "REQ-package: Build package foo\n"
+    )
+    (root / "pdd/commands/foo.py").write_text("value = 1\n")
+    architecture = json.loads((root / "architecture.json").read_text())
+    architecture.append(
+        {
+            "filename": "commands/foo_python.prompt",
+            "filepath": "pdd/commands/foo.py",
+        }
+    )
+    (root / "architecture.json").write_text(json.dumps(architecture))
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "package-local nested prompt")
+    head = _git(root, "rev-parse", "HEAD")
+    options = _options(tmp_path, head)
+
+    report = build_canonical_report(
+        root,
+        CanonicalReportOptions(
+            base_ref=options.base_ref,
+            head_ref=options.head_ref,
+            modules=("commands/foo",),
+            replay_ledger_path=options.replay_ledger_path,
+            now=options.now,
+        ),
+    )
+
+    assert [item["subject"] for item in report["units"]] == [
+        "pdd/prompts/commands/foo_python.prompt"
     ]
 
 
@@ -960,6 +1089,10 @@ def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(
     tmp_path,
 ) -> None:
     root, commit = _repository(tmp_path)
+    manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
+    profile = load_verification_profiles(root, manifest).profiles[0]
+    unit = manifest.managed_units[0]
+    snapshot = build_unit_snapshot(root, manifest, unit, profile)
     result = finalize_unit(
         root,
         PurePosixPath("prompts/widget_python.prompt"),
@@ -969,6 +1102,19 @@ def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(
         replay_ledger_path=tmp_path / "external-trust/finalizer.json",
     )
     assert result.transaction.phase.value == "COMMITTED"
+    envelope = load_attestation(root, result.attestation_id)
+    assert envelope.binding.subject == unit.unit_id
+    assert envelope.binding.snapshot_digest == snapshot.digest()
+    assert envelope.binding.profile_digest == profile.profile_digest
+    assert envelope.binding.base_sha == commit
+    assert envelope.binding.checked_sha == commit
+    assert envelope.binding.tool_version == TRUSTED_RUNNER_VERSION
+    assert envelope.binding.runner_digest == runner_identity_digest(
+        profile, root=root, ref=commit
+    )
+    assert envelope.results == (
+        ObligationEvidence("pytest", EvidenceOutcome.PASS),
+    )
     _git(root, "add", ".pdd/meta/v2", ".pdd/evidence/v2")
     _git(root, "commit", "-q", "-m", "commit trusted sync evidence")
     finalized_commit = _git(root, "rev-parse", "HEAD")
@@ -1412,7 +1558,10 @@ def test_excluded_project_alias_counterpart_is_invalid_before_finalization(
     prepare.assert_not_called()
 
 
-def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
+@pytest.mark.usefixtures("signed_passing_finalizer_profile")
+def test_trusted_finalizer_second_run_is_zero_write_no_op(
+    tmp_path,
+) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/idempotency.json"
     first = finalize_unit(
@@ -1459,7 +1608,10 @@ def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
         path.write_text(json.dumps(payload, sort_keys=True))
 
 
-def test_trusted_finalizer_rejects_dirty_support_before_reuse(tmp_path) -> None:
+@pytest.mark.usefixtures("signed_passing_finalizer_profile")
+def test_trusted_finalizer_rejects_dirty_support_before_reuse(
+    tmp_path,
+) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/dirty-reuse.json"
     finalize_unit(
@@ -1474,7 +1626,10 @@ def test_trusted_finalizer_rejects_dirty_support_before_reuse(tmp_path) -> None:
         )
 
 
-def test_trusted_finalizer_rejects_allowed_state_renamed_to_support(tmp_path) -> None:
+@pytest.mark.usefixtures("signed_passing_finalizer_profile")
+def test_trusted_finalizer_rejects_allowed_state_renamed_to_support(
+    tmp_path,
+) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/rename-reuse.json"
     finalize_unit(

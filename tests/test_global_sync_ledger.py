@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import subprocess
 import sys
 from pathlib import Path
@@ -54,7 +55,7 @@ def _payload() -> dict[str, object]:
         for order in range(1, 11)
     ]
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "controlling_plan": "plan.md",
         "status_vocabulary": ["pending", "in-progress", "passed"],
         "evidence_state_vocabulary": ["pending", "in-progress", "passed"],
@@ -66,8 +67,33 @@ def _payload() -> dict[str, object]:
             "evidence_state": _state(implemented="in-progress"),
             "required_predicate": {"generator": True},
         },
+        "execution_contract": {
+            "milestone_order": ["M0", "M1", "M2", "M3", "M4", "M5"],
+            "active_blocker": "m0-executable-baseline",
+            "execution_state_vocabulary": [
+                "ARCHIVED",
+                "EXISTS",
+                "EXTERNAL_PROTECTED",
+                "TO_BUILD",
+            ],
+        },
+        "canonical_blockers": {
+            "m0": {"id": "m0-executable-baseline", "text": "Establish M0."}
+        },
         "promotion_bundles": {},
-        "live_rebaseline": {"gates_required": 10, "gates_passed": 0},
+        "historical_promotion_bundles": {},
+        "historical_steps": [],
+        "live_rebaseline": {
+            "milestones_required": 6,
+            "milestones_passed": 0,
+            "single_next_blocker_id": "m0-executable-baseline",
+            "single_next_blocker": "Establish M0.",
+        },
+        "current_critical_path": {
+            "blocker_id": "m0-executable-baseline",
+            "blocker": "Establish M0.",
+            "next_milestone": "M0",
+        },
         "steps": steps,
     }
 
@@ -152,9 +178,45 @@ def _write_fixture(
         encoding="utf-8",
     )
     if source_text is None:
-        source_text = yaml.safe_dump(payload or _payload(), sort_keys=False)
+        source_text = yaml.safe_dump(_fixture_payload(payload or _payload()), sort_keys=False)
     source.write_text(source_text, encoding="utf-8")
     return plan, source, output
+
+
+def _fixture_payload(payload: dict[str, object]) -> dict[str, object]:
+    """Translate legacy-shaped unit fixtures into the active milestone schema."""
+    result = copy.deepcopy(payload)
+    steps = result.pop("steps", None)
+    if not isinstance(steps, list):
+        return result
+    milestones: list[dict[str, object]] = []
+    for index, step in enumerate(steps[:6]):
+        assert isinstance(step, dict)
+        milestone = {**step, "id": f"M{index}", "execution_state": "EXISTS"}
+        if index == 0:
+            milestone.update(
+                {"blocker_id": "m0-executable-baseline", "blocker": "Establish M0."}
+            )
+        milestones.append(milestone)
+    result["milestones"] = milestones
+    rebaseline = result["live_rebaseline"]
+    assert isinstance(rebaseline, dict)
+    rebaseline["milestones_passed"] = rebaseline.pop("gates_passed", 0)
+    rebaseline.pop("gates_required", None)
+    bundles = result["promotion_bundles"]
+    assert isinstance(bundles, dict)
+    for bundle in bundles.values():
+        assert isinstance(bundle, dict)
+        subject = bundle.get("subject")
+        if not isinstance(subject, dict):
+            continue
+        record = subject.get("record")
+        if isinstance(record, dict) and record.get("kind") == "gate":
+            order = record.get("order")
+            assert isinstance(order, int)
+            record.clear()
+            record.update({"kind": "milestone", "id": f"M{order - 1}"})
+    return result
 
 
 def _valid_github_responses() -> dict[str, dict[str, object]]:
@@ -310,9 +372,9 @@ def test_global_sync_ledger_check_detects_drift_without_writing(tmp_path: Path, 
 @pytest.mark.parametrize(
     "source_text, expected",
     [
-        ("schema_version: 5\nschema_version: 5\n", "duplicate YAML key"),
+        ("schema_version: 6\nschema_version: 6\n", "duplicate YAML key"),
         ("schema_version: [\n", "cannot parse YAML input"),
-        ("schema_version: 3\n", "ledger schema_version must be 5"),
+        ("schema_version: 3\n", "ledger schema_version must be 6"),
     ],
 )
 def test_global_sync_ledger_rejects_malformed_schema(
@@ -858,6 +920,73 @@ def test_global_sync_ledger_accepts_current_source_promotion_identities(monkeypa
     assert set(requested_paths) == set(responses)
 
 
+def test_archived_gates_are_not_live_authority_or_remotely_verified(monkeypatch) -> None:
+    """Archived Gate records remain tamper-evident but cannot drive current work."""
+    source = ROOT / "docs" / "global_sync_evidence_ledger_source.yaml"
+    plan = ROOT / "docs" / "global_sync_resolution_plan.md"
+    payload = load_unique_yaml(source)
+
+    assert payload["schema_version"] == 6
+    assert "steps" not in payload
+    historical_steps = payload["historical_steps"]
+    assert isinstance(historical_steps, list)
+    assert len(historical_steps) == 10
+    assert {step["execution_state"] for step in historical_steps} == {"ARCHIVED"}
+
+    milestones = payload["milestones"]
+    assert isinstance(milestones, list)
+    assert [milestone["id"] for milestone in milestones] == [
+        "M0",
+        "M1",
+        "M2",
+        "M3",
+        "M4",
+        "M5",
+    ]
+    assert milestones[0]["status"] == "in-progress"
+    assert milestones[0]["blocker_id"] == "m0-executable-baseline"
+    assert payload["live_rebaseline"]["milestones_passed"] == 0
+
+    responses = _current_source_promotion_responses(payload)
+    requested_paths: list[str] = []
+    verifier = GitHubPromotionVerifier()
+
+    def get_response(path: str) -> dict[str, object]:
+        requested_paths.append(path)
+        return responses[path]
+
+    monkeypatch.setattr(verifier, "_get", get_response)
+    validate_ledger(payload, plan, source, verify_remote=True, promotion_verifier=verifier)
+
+    assert "/repos/promptdriven/pdd/pulls/2214" not in requested_paths
+
+
+def test_archived_gate_and_promotion_tampering_remain_rejected() -> None:
+    """Archival removes current authority, not the historical integrity boundary."""
+    source = ROOT / "docs" / "global_sync_evidence_ledger_source.yaml"
+    plan = ROOT / "docs" / "global_sync_resolution_plan.md"
+    payload = load_unique_yaml(source)
+    historical_steps = payload["historical_steps"]
+    assert isinstance(historical_steps, list)
+    assert isinstance(historical_steps[0], dict)
+    historical_steps[0]["execution_state"] = "EXISTS"
+
+    with pytest.raises(LedgerError, match="historical_steps\\[0\\].execution_state"):
+        validate_ledger(payload, plan, source)
+
+    payload = load_unique_yaml(source)
+    historical_bundles = payload["historical_promotion_bundles"]
+    assert isinstance(historical_bundles, dict)
+    historical_bundle = historical_bundles["gate_1_hosted_merge"]
+    assert isinstance(historical_bundle, dict)
+    subject = historical_bundle["subject"]
+    assert isinstance(subject, dict)
+    subject["required_predicate_sha256"] = "0" * 64
+
+    with pytest.raises(LedgerError, match="subject does not match its record"):
+        validate_ledger(payload, plan, source)
+
+
 @pytest.mark.parametrize("failure", ["metadata-mismatch", "outage"])
 def test_global_sync_ledger_remote_failure_fails_closed_without_writing(
     tmp_path: Path, monkeypatch, failure: str
@@ -925,4 +1054,4 @@ def test_global_sync_ledger_cli_generation_and_check(tmp_path: Path) -> None:
 def test_global_sync_ledger_rejects_duplicate_yaml_keys() -> None:
     payload = load_unique_yaml(ROOT / "docs" / "global_sync_evidence_ledger.yaml")
 
-    assert payload["schema_version"] == 5
+    assert payload["schema_version"] == 6
