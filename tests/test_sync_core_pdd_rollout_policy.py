@@ -41,6 +41,21 @@ OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 AUTO_HEAL_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "auto-heal.yml"
+SECRET_MIGRATION_COPY_JOB = "copy_pdd_cloud_app_secrets_to_environment"
+SECRET_MIGRATION_RETIRE_JOB = "verify_pdd_cloud_and_retire_repository_app_secrets"
+SECRET_MIGRATION_JOB_GUARD = (
+    "github.event_name == 'workflow_dispatch' && "
+    "github.ref == 'refs/heads/main' && "
+    "github.repository == 'promptdriven/pdd'"
+)
+PDD_CLOUD_APP_TOKEN_ACTION = (
+    "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"
+)
+PDD_CLOUD_CANARY_SHA = "09f9d3fea71c4c0ed6655f2acd5e95b14a32c3c8"
+PDD_CLOUD_APP_SECRET_NAMES = (
+    "PDD_CLOUD_APP_ID",
+    "PDD_CLOUD_APP_PRIVATE_KEY",
+)
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 469
 # #1989's dormant-bootstrap assertions retain their original immutable base;
@@ -2341,7 +2356,7 @@ def _workflow_value_references_secret(value: object, secret_names: tuple[str, ..
 def _assert_auto_heal_app_secret_consumers_are_restricted(
     jobs: dict[str, dict[str, object]],
 ) -> None:
-    """Require the only App-secret consumer to be the restricted heal job."""
+    """Require every App-secret job to use the restricted environment."""
     app_secret_names = ("PDD_CLOUD_APP_ID", "PDD_CLOUD_APP_PRIVATE_KEY")
     consumer_jobs = {
         job_name
@@ -2350,7 +2365,11 @@ def _assert_auto_heal_app_secret_consumers_are_restricted(
     }
 
     assert consumer_jobs
-    assert consumer_jobs == {"heal"}
+    assert consumer_jobs == {
+        "heal",
+        SECRET_MIGRATION_COPY_JOB,
+        SECRET_MIGRATION_RETIRE_JOB,
+    }
     assert all(
         jobs[job_name].get("environment") == "pdd-cloud-read"
         for job_name in consumer_jobs
@@ -2387,6 +2406,223 @@ def test_auto_heal_rejects_second_job_with_alternate_app_secret_syntax(
 
     with pytest.raises(AssertionError):
         _assert_auto_heal_app_secret_consumers_are_restricted(jobs)
+
+
+def _load_auto_heal_workflow() -> dict[object, object]:
+    """Load the workflow safely, preserving its YAML rather than source text."""
+    workflow = yaml.safe_load(AUTO_HEAL_WORKFLOW_PATH.read_text(encoding="utf-8"))
+    assert isinstance(workflow, dict)
+    return workflow
+
+
+def _auto_heal_triggers(workflow: dict[object, object]) -> dict[object, object]:
+    """Return parsed triggers, accounting for PyYAML's YAML 1.1 ``on`` quirk."""
+    triggers = workflow.get("on", workflow.get(True))
+    assert isinstance(triggers, dict)
+    return triggers
+
+
+def _auto_heal_job(
+    workflow: dict[object, object], job_name: str
+) -> dict[object, object]:
+    """Return one parsed job with a narrow type boundary for policy assertions."""
+    jobs = workflow.get("jobs")
+    assert isinstance(jobs, dict)
+    job = jobs.get(job_name)
+    assert isinstance(job, dict)
+    return job
+
+
+def _workflow_steps(job: dict[object, object]) -> list[dict[object, object]]:
+    """Return parsed job steps, rejecting malformed workflow structure."""
+    steps = job.get("steps")
+    assert isinstance(steps, list)
+    assert all(isinstance(step, dict) for step in steps)
+    return steps
+
+
+def _workflow_step(
+    job: dict[object, object], step_id: str
+) -> dict[object, object]:
+    """Find an exactly-one step by ID to make ordering policy explicit."""
+    matches = [step for step in _workflow_steps(job) if step.get("id") == step_id]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _workflow_run(step: dict[object, object]) -> str:
+    """Return one shell body, failing when the policy target is not a run step."""
+    run = step.get("run")
+    assert isinstance(run, str)
+    return run
+
+
+def test_auto_heal_secret_migration_is_dispatch_only_and_fresh() -> None:
+    """The one-shot migration can run only from main in the canonical repository."""
+    workflow = _load_auto_heal_workflow()
+    triggers = _auto_heal_triggers(workflow)
+    assert "workflow_dispatch" in triggers
+
+    copy_job = _auto_heal_job(workflow, SECRET_MIGRATION_COPY_JOB)
+    retire_job = _auto_heal_job(workflow, SECRET_MIGRATION_RETIRE_JOB)
+    for job in (copy_job, retire_job):
+        assert job.get("if") == SECRET_MIGRATION_JOB_GUARD
+        assert job.get("environment") == "pdd-cloud-read"
+        assert job.get("runs-on") == "ubuntu-latest"
+
+    assert "needs" not in copy_job
+    assert "outputs" not in copy_job
+    assert retire_job.get("needs") == SECRET_MIGRATION_COPY_JOB
+
+    retire_env = retire_job.get("env")
+    assert isinstance(retire_env, dict)
+    assert retire_env.get("PDD_CLOUD_APP_ID") == "${{ secrets.PDD_CLOUD_APP_ID }}"
+    assert retire_env.get("PDD_CLOUD_APP_PRIVATE_KEY") == (
+        "${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}"
+    )
+    assert "GH_TOKEN" not in retire_env
+    assert "needs." not in str(retire_job)
+
+
+def test_auto_heal_secret_migration_copy_is_stdin_only_and_non_destructive() -> None:
+    """Copy phase obtains values from env, writes stdin, and never deletes sources."""
+    workflow = _load_auto_heal_workflow()
+    copy_job = _auto_heal_job(workflow, SECRET_MIGRATION_COPY_JOB)
+    copy_env = copy_job.get("env")
+    assert isinstance(copy_env, dict)
+    assert copy_env.get("PDD_CLOUD_APP_ID") == "${{ secrets.PDD_CLOUD_APP_ID }}"
+    assert copy_env.get("PDD_CLOUD_APP_PRIVATE_KEY") == (
+        "${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}"
+    )
+    assert copy_env.get("GH_TOKEN") == "${{ secrets.PRIVATE_REPO_TOKEN }}"
+
+    copy_step = _workflow_step(copy_job, "copy_environment_secrets")
+    copy_run = _workflow_run(copy_step)
+    assert "set -euo pipefail" in copy_run
+    assert "gh secret delete" not in copy_run
+    assert "gh secret list" not in copy_run
+    assert "--body" not in copy_run
+    assert "${{" not in copy_run
+    assert "PRIVATE_REPO_TOKEN" not in copy_run
+    assert copy_run.count("gh secret set") == len(PDD_CLOUD_APP_SECRET_NAMES)
+    for secret_name in PDD_CLOUD_APP_SECRET_NAMES:
+        assert f'[ -z "${secret_name}" ]' in copy_run
+        assert (
+            f"printf '%s' \"${secret_name}\" | gh secret set {secret_name} "
+            "--env pdd-cloud-read --repo promptdriven/pdd"
+        ) in copy_run
+
+    migration_runs = "\n".join(
+        _workflow_run(step)
+        for step in _workflow_steps(copy_job)
+        if isinstance(step.get("run"), str)
+    )
+    assert "|| true" not in migration_runs
+
+
+def test_auto_heal_secret_migration_proves_canary_before_source_retirement() -> None:
+    """Retirement follows a scoped App-token proof, revocation, and absence check."""
+    workflow = _load_auto_heal_workflow()
+    retire_job = _auto_heal_job(workflow, SECRET_MIGRATION_RETIRE_JOB)
+    steps = _workflow_steps(retire_job)
+    step_ids = [step.get("id") for step in steps]
+
+    require_index = step_ids.index("require_environment_app_secrets")
+    token_index = step_ids.index("pdd_cloud_contents_token")
+    proof_index = step_ids.index("verify_canary")
+    revoke_index = step_ids.index("revoke_pdd_cloud_token")
+    delete_index = step_ids.index("retire_repository_secret_copies")
+    assert require_index < token_index < proof_index < revoke_index < delete_index
+
+    require_run = _workflow_run(
+        _workflow_step(retire_job, "require_environment_app_secrets")
+    )
+    assert "set -euo pipefail" in require_run
+    for secret_name in PDD_CLOUD_APP_SECRET_NAMES:
+        assert f'[ -z "${secret_name}" ]' in require_run
+    assert "${{" not in require_run
+
+    token_step = _workflow_step(retire_job, "pdd_cloud_contents_token")
+    assert token_step.get("uses") == PDD_CLOUD_APP_TOKEN_ACTION
+    token_with = token_step.get("with")
+    assert isinstance(token_with, dict)
+    assert token_with.get("app-id") == "${{ env.PDD_CLOUD_APP_ID }}"
+    assert token_with.get("private-key") == "${{ env.PDD_CLOUD_APP_PRIVATE_KEY }}"
+    assert token_with.get("owner") == "promptdriven"
+    assert token_with.get("repositories") == "pdd_cloud"
+    assert token_with.get("permission-contents") == "read"
+    assert token_with.get("skip-token-revoke") == "true"
+    assert {
+        name: value
+        for name, value in token_with.items()
+        if isinstance(name, str) and name.startswith("permission-")
+    } == {"permission-contents": "read"}
+
+    proof_step = _workflow_step(retire_job, "verify_canary")
+    proof_env = proof_step.get("env")
+    assert isinstance(proof_env, dict)
+    assert proof_env.get("GH_TOKEN") == "${{ steps.pdd_cloud_contents_token.outputs.token }}"
+    assert proof_env.get("CANARY_REPOSITORY") == "promptdriven/pdd_cloud"
+    assert proof_env.get("CANARY_SHA") == PDD_CLOUD_CANARY_SHA
+    proof_run = _workflow_run(proof_step)
+    assert "set -euo pipefail" in proof_run
+    assert 'gh api "repos/$CANARY_REPOSITORY/git/commits/$CANARY_SHA"' in proof_run
+    assert '"$resolved_sha" != "$CANARY_SHA"' in proof_run
+    assert "${{" not in proof_run
+    assert "--header" not in proof_run
+    assert "access_token" not in proof_run
+
+    revoke_step = _workflow_step(retire_job, "revoke_pdd_cloud_token")
+    assert revoke_step.get("if") == (
+        "always() && steps.pdd_cloud_contents_token.outputs.token != ''"
+    )
+    revoke_env = revoke_step.get("env")
+    assert isinstance(revoke_env, dict)
+    assert revoke_env.get("GH_TOKEN") == "${{ steps.pdd_cloud_contents_token.outputs.token }}"
+    revoke_run = _workflow_run(revoke_step)
+    assert "set -euo pipefail" in revoke_run
+    assert "gh api -X DELETE /installation/token" in revoke_run
+    assert "${{" not in revoke_run
+
+    delete_step = _workflow_step(retire_job, "retire_repository_secret_copies")
+    assert delete_step.get("if") == (
+        "success() && steps.verify_canary.outcome == 'success' && "
+        "steps.revoke_pdd_cloud_token.outcome == 'success'"
+    )
+    delete_env = delete_step.get("env")
+    assert isinstance(delete_env, dict)
+    assert delete_env.get("GH_TOKEN") == "${{ secrets.PRIVATE_REPO_TOKEN }}"
+    assert delete_env.get("REPOSITORY") == "promptdriven/pdd"
+    delete_run = _workflow_run(delete_step)
+    assert "set -euo pipefail" in delete_run
+    assert '[ -z "$GH_TOKEN" ]' in delete_run
+    assert "${{" not in delete_run
+    assert "|| true" not in delete_run
+    assert "repository_secret_names=(PDD_CLOUD_APP_PRIVATE_KEY PDD_CLOUD_APP_ID)" in (
+        delete_run
+    )
+    assert "current_secret_names=$(gh secret list --repo \"$REPOSITORY\"" in delete_run
+    assert "gh secret delete \"$secret_name\" --repo \"$REPOSITORY\"" in delete_run
+    assert "remaining_secret_names=$(gh secret list --repo \"$REPOSITORY\"" in (
+        delete_run
+    )
+    assert delete_run.index("current_secret_names=$(gh secret list") < delete_run.index(
+        "gh secret delete"
+    ) < delete_run.index("remaining_secret_names=$(gh secret list")
+    assert "grep -Fxq -- \"$secret_name\"" in delete_run
+
+    migration_runs = "\n".join(
+        _workflow_run(step)
+        for step in steps
+        if isinstance(step.get("run"), str)
+    )
+    assert "PRIVATE_REPO_TOKEN" not in migration_runs
+    assert "actions/checkout@" not in str(steps)
+    assert not re.search(
+        r"\b(?:git\s+(?:clone|checkout|fetch)|python(?:3(?:\.\d+)?)?\s|"
+        r"pdd\s|pytest\s|make\s|pip\s)",
+        migration_runs,
+    )
 
 
 def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
