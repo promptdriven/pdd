@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -116,3 +118,54 @@ def test_execution_contract_rejects_wrong_click_parent_and_unsupported_option(tm
     errors = _module().verify(root / "plan.md", state_path, root=root, validate_cli=True)
     assert any("wrong Click parent" in error for error in errors)
     assert any("--not-real" in error for error in errors)
+
+
+def test_execution_contract_probes_source_with_current_interpreter_not_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, state_path, root = _verify(tmp_path)
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["command_registry"].append({"id": "source-certify", "state": "EXISTS", "argv": ["pdd", "certify"], "kind": "console", "owner": "integration", "introducing_milestone": "M0", "earliest_invocable_milestone": "M0", "introducing_pr": "local", "last_source_validation_sha": None, "last_wheel_validation_sha": None, "documented_options": ["--help"]})
+    state["validation_steps"][0]["validation_commands"].append("source-certify")
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    observed: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_: object) -> SimpleNamespace:
+        observed.append(argv)
+        return SimpleNamespace(returncode=0, stdout="--help", stderr="")
+
+    module = _module()
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    module.verify(root / "plan.md", state_path, root=root, validate_cli=True)
+    assert observed == [[sys.executable, "-m", "pdd", "certify", "--help"]]
+
+
+def test_execution_contract_rejects_unarchived_legacy_steps(tmp_path: Path) -> None:
+    _, state_path, root = _verify(tmp_path)
+    for ledger_path in (root / "docs" / "ledger_source.yaml", root / "docs" / "ledger.yaml"):
+        ledger = yaml.safe_load(ledger_path.read_text(encoding="utf-8"))
+        ledger["steps"] = [{"order": 1, "validation_commands": ["pdd sync certify"]}]
+        ledger_path.write_text(yaml.safe_dump(ledger, sort_keys=False), encoding="utf-8")
+    errors = _module().verify(root / "plan.md", state_path, root=root, validate_cli=False)
+    assert any("legacy step" in error and "ARCHIVED" in error for error in errors)
+
+
+def test_execution_contract_rejects_invoked_pending_external_and_invalid_validation_sha(tmp_path: Path) -> None:
+    _, state_path, root = _verify(tmp_path)
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["command_registry"].append({"id": "external", "state": "EXTERNAL_PROTECTED", "argv": ["pdd-sync-checker"], "kind": "console", "owner": "track-c", "introducing_milestone": "M3", "earliest_invocable_milestone": "M3", "introducing_pr": "pending", "artifact_digest": "pending", "control_plane_identity": "pending", "last_source_validation_sha": "not-a-sha", "last_wheel_validation_sha": None})
+    state["promotion_commands"] = ["external"]
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    errors = _module().verify(root / "plan.md", state_path, root=root, validate_cli=False)
+    assert any("EXTERNAL_PROTECTED" in error and "pending binding" in error for error in errors)
+    assert any("last_source_validation_sha" in error for error in errors)
+
+
+def test_execution_contract_requires_plan_named_to_build_components_and_real_state_is_complete() -> None:
+    errors = _module().verify(
+        ROOT / "docs" / "global_sync_resolution_plan.md",
+        ROOT / "docs" / "global_sync_execution_state.yaml",
+        root=ROOT,
+        validate_cli=False,
+    )
+    assert errors == []
