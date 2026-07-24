@@ -1444,6 +1444,20 @@ def test_execution_state_records_exact_m0_focused_suite_and_live_base_rebinding(
     assert state["integration"]["base_sha"] == CURRENT_PROTECTED_BASE_SHA
     assert state["scoreboard"]["base_sha"] == CURRENT_PROTECTED_BASE_SHA
 
+    tracks = {track["id"]: track for track in state["tracks"]}
+    prerequisite = tracks["m0-protected-base-prerequisite"]
+    prerequisite_paths = [
+        ".pdd/sync-ownership.json",
+        "tests/test_sync_core_pdd_rollout_policy.py",
+    ]
+    assert prerequisite["base_sha"] == HISTORICAL_PROTECTED_BASE_SHA
+    assert prerequisite["branch"] == "fix/1932-m0-protected-ownership"
+    assert prerequisite["pull_request"] == 2302
+    assert prerequisite["merge_sha"] == CURRENT_PROTECTED_BASE_SHA
+    assert prerequisite["write_set"] == prerequisite_paths
+    assert not set(prerequisite_paths) & set(state["m0_bootstrap_allowlist"])
+    assert not set(prerequisite_paths) & set(state["integration"]["write_set"])
+
     source = load_unique_yaml(ROOT / "docs" / "global_sync_evidence_ledger_source.yaml")
     generated = load_unique_yaml(ROOT / "docs" / "global_sync_evidence_ledger.yaml")
     assert source["execution_contract"]["protected_base_sha"] == CURRENT_PROTECTED_BASE_SHA
