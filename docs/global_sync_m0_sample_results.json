@@ -1,85 +1,125 @@
 {
-  "base_sha": "315f03def92d160024190c57d2bed525ab976e38",
+  "base_sha": "a452fdcb04dced3eb94a90659b31bcce0db06088",
   "cases": [
     {
-      "id": "01-profile",
-      "kind": "profile",
-      "outcome": "rejected-by-public-profile-api",
-      "patch_bytes": 624835,
-      "patch_sha256": "962b8e469475757d0ca3c06e897ec0e96a2216bf8c4dc8069b5efd8760f44508",
+      "category": "nested-config",
+      "changed_path": "pdd/agentic_architecture.py",
+      "id": "01-nested-config",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 2036,
+      "patch_sha256": "cbc45dcb5412d703ac76dfc3de17454f7c428e9fedf6571cb64195f68b8d22e0",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/agentic_architecture_python.prompt"
+    },
+    {
+      "category": "include-closure",
+      "changed_path": "pdd/commands/checkup.py",
+      "id": "02-include-closure",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 3861,
+      "patch_sha256": "b3792fb330f7b36e84c9da22d52920011853ece5a7383c53575614c995db903f",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
       "sample_path": "pdd/prompts/commands/checkup_python.prompt"
     },
     {
-      "id": "02-profile",
-      "kind": "profile",
-      "outcome": "rejected-by-public-profile-api",
-      "patch_bytes": 624724,
-      "patch_sha256": "06e20c8e0c0f4a90f14826779d24126e20b09cbcdc93a8be846b38f90d3736de",
-      "sample_path": "pdd/prompts/sync_main_python.prompt"
+      "category": "duplicate-basename",
+      "changed_path": "pdd/core/duplicate_cli_guard.py",
+      "id": "03-duplicate-basename",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 3665,
+      "patch_sha256": "6250efcf59dea06844919a8b4d099e3e33e28d4be9c3688246556e1e8bd20871",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/core/duplicate_cli_guard_python.prompt"
     },
     {
-      "id": "03-profile",
-      "kind": "profile",
-      "outcome": "rejected-by-public-profile-api",
-      "patch_bytes": 624874,
-      "patch_sha256": "c68f2a60963a2a1cc1c1d779d325ddf01183664b60402846147811e40cd14d99",
-      "sample_path": "pdd/prompts/core/cli_python.prompt"
+      "category": "human-owned-test",
+      "changed_path": "pdd/bug_to_unit_test.py",
+      "id": "04-human-owned-test",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 3401,
+      "patch_sha256": "8719f769b336582d5777b7448495241362e9c2a0b533e15a39e10004ff2d66b5",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/bug_to_unit_test_python.prompt"
     },
     {
-      "id": "04-profile",
-      "kind": "profile",
-      "outcome": "rejected-by-public-profile-api",
-      "patch_bytes": 624724,
-      "patch_sha256": "aeec53bfd84f23df7a76394254be6b84aebf9fbd1e6396b6f700a40518c5eeb0",
-      "sample_path": "pdd/prompts/sync_orchestration_python.prompt"
+      "category": "multi-file-example-test",
+      "changed_path": "pdd/agentic_test_generate.py",
+      "id": "05-multi-file-example-test",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 2740,
+      "patch_sha256": "3c7ff868938e334ae8a64d4123bda0e38d9e161573d0f13d9ef118e94654e552",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/agentic_test_generate_python.prompt"
     },
     {
-      "id": "05-profile",
-      "kind": "profile",
-      "outcome": "rejected-by-public-profile-api",
-      "patch_bytes": 625045,
-      "patch_sha256": "e126ce30745e6d12e04ab9248a06e6d23597f31f94d6df5c3b8bab82dba212d5",
-      "sample_path": "pdd/prompts/Makefile_makefile.prompt"
+      "category": "executable-artifact",
+      "changed_path": "pdd/pre_checkup_gate.py",
+      "id": "06-executable-artifact",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 3598,
+      "patch_sha256": "222ef82ebb06c716115a86ba2b2e0766884211800cd1abbecc3ef5c2a110a127",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/pre_checkup_gate_python.prompt"
     },
     {
-      "id": "06-profile",
-      "kind": "profile",
-      "outcome": "rejected-by-public-profile-api",
-      "patch_bytes": 624954,
-      "patch_sha256": "510cfc50eaf85411f44eaa049d09b475b3391c63078557b2f1313cf66fe06ee4",
-      "sample_path": "pdd/prompts/auto_deps_main_python.prompt"
+      "category": "architecture-override",
+      "changed_path": "pdd/architecture_sync.py",
+      "id": "07-architecture-override",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 2258,
+      "patch_sha256": "846c19523c38ffac8c719b9c649ce2305735da6c74c682a8e1a2d4dd48b504b3",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/architecture_sync_python.prompt"
     },
     {
-      "id": "07-profile",
-      "kind": "profile",
-      "outcome": "rejected-by-public-profile-api",
-      "patch_bytes": 624860,
-      "patch_sha256": "4d27ee2572bd0ae938bfd80109df089187b598b6c280b0266aabb6bda5c8a17d",
-      "sample_path": "pdd/prompts/ci_detect_changed_modules_python.prompt"
+      "category": "runtime-dependency",
+      "changed_path": "pdd/architecture_registry.py",
+      "id": "08-runtime-dependency",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 2045,
+      "patch_sha256": "24600b674fb785b4c8f75df664566606b0e5811166f40f79a522cd23ba9479d5",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/architecture_registry_python.prompt"
     },
     {
-      "id": "08-profile",
-      "kind": "profile",
-      "outcome": "rejected-by-public-profile-api",
-      "patch_bytes": 624689,
-      "patch_sha256": "2d869a3edc5bf4a713d7b93a6d11ae6f3de1facf9b9cb30afbae9162ba8e9cd5",
-      "sample_path": "pdd/prompts/frontend/components/DependencyViewer_typescriptreact.prompt"
+      "category": "historically-problematic-adjacent-control",
+      "changed_path": "pdd/checkup_agent.py",
+      "id": "09-historically-problematic-adjacent-control",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 2036,
+      "patch_sha256": "1beba1329472bab688963ee19d477e698bd03e5391d3eec7df6e189e8ebed4ee",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/checkup_agent_python.prompt"
     },
     {
-      "id": "09-ownership",
-      "kind": "ownership",
-      "outcome": "rejected-by-public-manifest-api:ManifestError",
-      "patch_bytes": 10711,
-      "patch_sha256": "e53c4dd95571c9e228d6cfebbaf965f55329a62dd1ab7fd55c89bcae02ea8ece",
-      "sample_path": ".pdd/sync-ownership.json"
-    },
-    {
-      "id": "10-fingerprint",
-      "kind": "fingerprint",
-      "outcome": "accepted-by-public-fingerprint-api-semantic-unknown",
-      "patch_bytes": 2242,
-      "patch_sha256": "1f1bed9c99d136709ade931eb13f31ed2723027d5023e32b2d08d8bfbf9d0027",
-      "sample_path": "pdd/prompts/_keyring_timeout_python.prompt"
+      "category": "cross-language",
+      "changed_path": "pdd/frontend/constants.ts",
+      "id": "10-cross-language",
+      "kind": "positive-representative",
+      "outcome": "accepted-by-public-manifest-profile-snapshot-fingerprint-apis",
+      "patch_bytes": 2262,
+      "patch_sha256": "4d57f1f36868037d898d08430df4dd69aea3daf89dd406f14eab2021823f6227",
+      "promotable": false,
+      "promotion_reason": "temporary non-production patch has no trusted attestation",
+      "sample_path": "pdd/prompts/frontend/constants_typescript.prompt"
     }
   ],
   "closure": {
@@ -248,6 +288,24 @@
     ],
     "requested": 20
   },
+  "negative_controls": [
+    {
+      "id": "01-profile",
+      "kind": "profile",
+      "outcome": "rejected-by-public-profile-api",
+      "patch_bytes": 624835,
+      "patch_sha256": "962b8e469475757d0ca3c06e897ec0e96a2216bf8c4dc8069b5efd8760f44508",
+      "sample_path": "pdd/prompts/commands/checkup_python.prompt"
+    },
+    {
+      "id": "09-ownership",
+      "kind": "ownership",
+      "outcome": "rejected-by-public-manifest-api:ManifestError",
+      "patch_bytes": 10711,
+      "patch_sha256": "e53c4dd95571c9e228d6cfebbaf965f55329a62dd1ab7fd55c89bcae02ea8ece",
+      "sample_path": ".pdd/sync-ownership.json"
+    }
+  ],
   "partition": {
     "derivable": 220,
     "human_attestation_only": 465,
@@ -256,6 +314,55 @@
     "ownership_or_scope": 219,
     "profiles": 469
   },
+  "pdd_cloud_canary": {
+    "architecture_path": "extensions/github_pdd_app/architecture.json",
+    "canary_prompt": "extensions/github_pdd_app/prompts/Dockerfile_webhook_Dockerfile.prompt",
+    "closure_paths": [
+      "extensions/github_pdd_app/prompts/Dockerfile_webhook_Dockerfile.prompt",
+      "extensions/github_pdd_app/prompts/src/webhook_app_Python.prompt",
+      "extensions/github_pdd_app/architecture.json",
+      "extensions/github_pdd_app/Dockerfile.webhook",
+      "extensions/github_pdd_app/requirements.txt",
+      "extensions/github_pdd_app/src/webhook_app.py",
+      "extensions/github_pdd_app/.pddrc",
+      "extensions/github_pdd_app/.pdd/meta/Dockerfile_webhook_dockerfile.json"
+    ],
+    "content_sha256": {
+      "extensions/github_pdd_app/.pdd/meta/Dockerfile_webhook_dockerfile.json": "009728138ad2c0a100798a61492c7d7965de6b784d28a2afd6894ea007457165",
+      "extensions/github_pdd_app/.pddrc": "093654ef3b84456a620004618f8289e3229fb3b50e2a86b9635e60857fd63ccb",
+      "extensions/github_pdd_app/Dockerfile.webhook": "085f8a47bbef683dc51a2a2da1559b497e048642302e2c0d3e8882629c6596ce",
+      "extensions/github_pdd_app/architecture.json": "d8f877697180b0bcd76f9b3a2dedaaaf5ecb0bb0a99063ed9428d8c359a26b3a",
+      "extensions/github_pdd_app/prompts/Dockerfile_webhook_Dockerfile.prompt": "7cf045e8faaa243c2491db353548e2398f376a1d072957480d0ef8452d58317a",
+      "extensions/github_pdd_app/prompts/src/webhook_app_Python.prompt": "09a9b8d835f6dc9e250f9283dae97d26120aa0cfe226683c0a079ff76016bc97",
+      "extensions/github_pdd_app/requirements.txt": "9e6f44c2d79fe7facc7df33c0c6d6f436f420a65560472624b7657a330b3f330",
+      "extensions/github_pdd_app/src/webhook_app.py": "8850c54dd306e8a2db933ce0b598d5c8c881ec8074f80731fed7a2938d08a68b"
+    },
+    "expected_artifact": "extensions/github_pdd_app/Dockerfile.webhook",
+    "sha": "09f9d3fea71c4c0ed6655f2acd5e95b14a32c3c8"
+  },
   "pdd_cloud_sha": "09f9d3fea71c4c0ed6655f2acd5e95b14a32c3c8",
+  "product_decisions": [
+    {
+      "adjacent_positive_control": "06-executable-artifact",
+      "category": "executable-artifact",
+      "outcome": "product-decision-required-no-valid-public-api-migration",
+      "reason": "cannot build unit snapshot: required include is missing: path/to/file.txt",
+      "sample_path": "pdd/prompts/Makefile_makefile.prompt"
+    },
+    {
+      "adjacent_positive_control": "09-historically-problematic-adjacent-control",
+      "category": "historically-problematic",
+      "outcome": "product-decision-required-no-valid-public-api-migration",
+      "reason": "cannot build unit snapshot: required include is missing: path/to/file.txt",
+      "sample_path": "pdd/prompts/sync_main_python.prompt"
+    },
+    {
+      "adjacent_positive_control": "01-nested-config",
+      "category": "nested-config",
+      "outcome": "product-decision-required-no-valid-public-api-migration",
+      "reason": "cannot build unit snapshot: required include is missing: path/to/file.txt",
+      "sample_path": "pdd/prompts/sync_orchestration_python.prompt"
+    }
+  ],
   "schema_version": 1
 }

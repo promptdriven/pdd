@@ -10,7 +10,7 @@ inputs:
 
 | Input | Commit |
 | --- | --- |
-| PDD base | `315f03def92d160024190c57d2bed525ab976e38` |
+| PDD sampled implementation | `a452fdcb04dced3eb94a90659b31bcce0db06088` |
 | pdd_cloud provenance input | `09f9d3fea71c4c0ed6655f2acd5e95b14a32c3c8` |
 
 The committed verifier is
@@ -28,8 +28,8 @@ run:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `docs/global_sync_m0_sample_results.json` | `6b8e06aab1cec387c418cb5566ca62d846391e2c972362e7e3fe4dd82a64f52f` |
-| `docs/global_sync_m0_sample_metrics.json` | `1c489a5bada0bf02df630a832ec3be728ee4308e55d52de6b0d93a657cbf0454` |
+| `docs/global_sync_m0_sample_results.json` | `e1fc5b87f55ca0f0bfcb0b19694abaa66b407c2dae9186b848a917c488c732f3` |
+| `docs/global_sync_m0_sample_metrics.json` | `04b58196d715ef2140ab716aa2f86d50081e2ac767b7d1dc5917e306a8c47e8b` |
 
 The primary result is deterministic for the fixed source inputs. Metrics are
 intentionally separate because elapsed time and peak RSS are host-dependent;
