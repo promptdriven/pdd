@@ -109,7 +109,7 @@ _TERRA_SOL_COMPOSED_PROFILE_BYTES = (
     "033591bdbf15b8833802a91b20eb6d5e86dd870f200a49598a9bb5a145eb6f16",
 )
 # #2168 was then merged onto the reviewed Terra/Sol state. The raw rotation
-# policy is unchanged; this exact pair permits only the three combined prompt
+# policy is unchanged; this exact pair permits only the four combined prompt
 # transitions and their resulting profile bytes.
 _PDD_2168_TERRA_CONTINUATION_SCHEMA_2_HISTORY = (
     "0b00131438c93244513b77346ae2649d1073414621f30f536e2f6ae55ee7d9ee",
@@ -117,7 +117,7 @@ _PDD_2168_TERRA_CONTINUATION_SCHEMA_2_HISTORY = (
 )
 _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES = (
     "033591bdbf15b8833802a91b20eb6d5e86dd870f200a49598a9bb5a145eb6f16",
-    "ea8502f8765d229587323bd5d5763866acd2b8e390bb5c8c58ceb035f99daf43",
+    "997ff9a505cc560855dce94f73d451839fa2e73ca22966f513a626759a215f41",
 )
 
 # Gemini 3.6 installs two future prompt transitions after the Terra/Sol
@@ -863,7 +863,15 @@ _PDD_2168_TERRA_CONTINUATION_REQUIREMENT_TRANSITIONS = (
         "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
         "python",
         "08e0c842d842974340b7ed3424f71fa20379c6922aaa6cfbca232d7d83a9a255",
-        "bd868518d46fa67b4fc449f35130553623f9faed8bfb825c5fb88b22ea555fdc",
+        "1d6a1865c80e158f1812b2b48512c434abd283d52d0b2ef28112444d533622dd",
+        _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[0],
+        _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_checkup_step7_verify_LLM.prompt",
+        "llm",
+        "8f9c67d88bc40a597a6b4cf6bbbbfb489277c50190a5a477b827cd3a6ef7246d",
+        "b8002f4753cf692ed10dd10cdf37e4780e14e05a1b33f86de8d641da2743b590",
         _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[0],
         _PDD_2168_TERRA_CONTINUATION_PROFILE_BYTES[1],
     ),

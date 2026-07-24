@@ -44,6 +44,7 @@ from pdd.agentic_checkup_orchestrator import (
     _run_step5_shell_first_evidence,
     _select_step5_python_tests,
     _step7_human_success_report_passed,
+    _step7_passed,
     _step7_repairable_failure_signal,
     _targeted_non_code_step5_result,
     run_agentic_checkup_orchestrator,
@@ -3002,6 +3003,299 @@ class TestFixVerifyLoop:
 ```"""
 
         assert _step7_repairable_failure_signal(report) == ""
+
+    def test_external_terminal_evidence_blocks_without_authorizing_fixer(self):
+        """A PR-scoped external acceptance item is blocking but not repairable."""
+        report = """```json
+{
+  "success": false,
+  "issue_aligned": true,
+  "message": "Terminal disposable verification evidence is still pending.",
+  "changed_files": ["pdd/agentic_checkup.py"],
+  "issues": [{
+    "severity": "critical",
+    "category": "artifact",
+    "scope": "pr",
+    "file": "pdd/agentic_checkup.py",
+    "fixed": false,
+    "blocking": true,
+    "repairable": false,
+    "description": "The external stg5 run has not reached terminal success."
+  }]
+}
+```"""
+
+        assert _step7_repairable_failure_signal(report) == ""
+        passed, reason = _step7_passed(
+            report,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert passed is False
+        assert "success=false" in reason
+        assert "pending" in reason.lower()
+
+    def test_inconsistent_success_cannot_bypass_nonrepairable_blocker(self):
+        """Issue fields fail closed even when the model claims success."""
+        report = """```json
+{
+  "success": true,
+  "issue_aligned": true,
+  "message": "All code and tests are green.",
+  "changed_files": ["pdd/agentic_checkup.py"],
+  "issues": [{
+    "severity": "medium",
+    "category": "artifact",
+    "scope": "pr",
+    "file": "pdd/agentic_checkup.py",
+    "fixed": false,
+    "blocking": true,
+    "repairable": false,
+    "description": "The external stg5 run has not reached terminal success."
+  }]
+}
+```"""
+
+        assert _step7_repairable_failure_signal(report) == ""
+        passed, reason = _step7_passed(
+            report,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert passed is False
+        assert "non-repairable blocking issues" in reason
+
+    def test_inconsistent_success_does_not_escalate_repair_authority(self):
+        """A success claim with only a repairable note cannot drive Step 6."""
+        report = """```json
+{
+  "success": true,
+  "issue_aligned": true,
+  "issues": [{
+    "severity": "medium",
+    "scope": "pr",
+    "file": "pdd/agentic_checkup_orchestrator.py",
+    "fixed": false,
+    "blocking": true,
+    "repairable": true
+  }]
+}
+```"""
+
+        assert _step7_repairable_failure_signal(report) == ""
+
+    def test_inconsistent_mixed_report_preserves_repairable_signal(self):
+        """An independent external blocker keeps mixed repair authority bounded."""
+        report = """```json
+{
+  "success": true,
+  "issue_aligned": true,
+  "issues": [{
+    "severity": "medium",
+    "scope": "pr",
+    "file": "pdd/agentic_checkup.py",
+    "fixed": false,
+    "blocking": true,
+    "repairable": false
+  }, {
+    "severity": "critical",
+    "scope": "pr",
+    "file": "pdd/agentic_checkup_orchestrator.py",
+    "fixed": false,
+    "blocking": true,
+    "repairable": true
+  }]
+}
+```"""
+
+        signal = _step7_repairable_failure_signal(report)
+
+        assert "status: fail" in signal
+        assert "pdd/agentic_checkup_orchestrator.py" in signal
+
+    def test_inconsistent_success_nonrepairable_blocker_stops_without_push(
+        self, tmp_path
+    ):
+        """A contradictory verdict cannot bypass or prolong the final gate."""
+        labels: List[str] = []
+        external_blocker = """```json
+{
+  "success": true,
+  "issue_aligned": true,
+  "message": "All code and tests are green.",
+  "changed_files": ["pdd/agentic_checkup.py"],
+  "issues": [{
+    "severity": "medium",
+    "category": "artifact",
+    "scope": "pr",
+    "file": "pdd/agentic_checkup.py",
+    "fixed": false,
+    "blocking": true,
+    "repairable": false,
+    "description": "The external stg5 run has not reached terminal success."
+  }]
+}
+```"""
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            del name, context
+            labels.append(kwargs.get("label", ""))
+            if step_num == 7:
+                return (True, external_blocker, 0.1, "model")
+            return (True, f"out-{step_num}", 0.1, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, message, _, _ = run_agentic_checkup_orchestrator(
+                **{
+                    **_PR_ARGS_1212,
+                    "cwd": tmp_path,
+                    "defer_step5_to_github_checks": True,
+                }
+            )
+
+        assert success is False
+        assert "not source-repairable" in message
+        assert [label for label in labels if label.startswith("step7_iter")] == [
+            "step7_iter1"
+        ]
+        assert not any(label.startswith("step6_") for label in labels)
+
+    def test_deferred_step5_external_evidence_terminates_without_fixer_retry(
+        self, tmp_path
+    ):
+        """Non-repairable acceptance evidence must fail once without mutation."""
+        labels: List[str] = []
+        external_blocker = """```json
+{
+  "success": false,
+  "issue_aligned": true,
+  "message": "Terminal disposable verification evidence is still pending.",
+  "changed_files": ["pdd/agentic_checkup.py"],
+  "issues": [{
+    "severity": "critical",
+    "category": "artifact",
+    "scope": "pr",
+    "file": "pdd/agentic_checkup.py",
+    "fixed": false,
+    "blocking": true,
+    "repairable": false,
+    "description": "The external stg5 run has not reached terminal success."
+  }]
+}
+```"""
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            del name, context
+            labels.append(kwargs.get("label", ""))
+            if step_num == 7:
+                return (True, external_blocker, 0.1, "model")
+            return (True, f"out-{step_num}", 0.1, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, message, _, _ = run_agentic_checkup_orchestrator(
+                **{
+                    **_PR_ARGS_1212,
+                    "cwd": tmp_path,
+                    "defer_step5_to_github_checks": True,
+                }
+            )
+
+        assert success is False
+        assert "not source-repairable" in message
+        assert [label for label in labels if label.startswith("step7_iter")] == [
+            "step7_iter1"
+        ]
+        assert not any(label.startswith("step6_") for label in labels)
+
+    def test_step7_prompt_marks_external_evidence_nonrepairable(self):
+        """The verifier must emit the control bit consumed by the orchestrator."""
+        root = Path(__file__).resolve().parent.parent
+        prompt = (
+            root / "pdd" / "prompts" / "agentic_checkup_step7_verify_LLM.prompt"
+        ).read_text(encoding="utf-8")
+
+        assert '"repairable": true/false' in prompt
+        assert 'Set `"repairable": false` for external terminal-run' in prompt
+        assert "does not make a finding non-blocking" in prompt
+        assert 'never permit `"success": true`' in prompt
+
+    def test_mixed_step7_blockers_fix_code_then_stop_on_external_evidence(
+        self, tmp_path
+    ):
+        """Actionable code is fixed once before a remaining external blocker."""
+        labels: List[str] = []
+        external_issue = {
+            "severity": "critical",
+            "category": "artifact",
+            "scope": "pr",
+            "file": "pdd/agentic_checkup.py",
+            "fixed": False,
+            "blocking": True,
+            "repairable": False,
+            "description": "The external stg5 run has not reached terminal success.",
+        }
+        code_issue = {
+            "severity": "critical",
+            "category": "interface_mismatch",
+            "scope": "pr",
+            "file": "pdd/agentic_checkup_orchestrator.py",
+            "fixed": False,
+            "blocking": True,
+            "repairable": True,
+            "description": "A local control-flow branch still needs repair.",
+        }
+
+        def report(*issues):
+            return "```json\n" + json.dumps(
+                {
+                    "success": False,
+                    "issue_aligned": True,
+                    "message": "Blocking findings remain.",
+                    "changed_files": [
+                        "pdd/agentic_checkup.py",
+                        "pdd/agentic_checkup_orchestrator.py",
+                    ],
+                    "issues": list(issues),
+                }
+            ) + "\n```"
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            del name, context
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if step_num == 7 and label == "step7_iter1":
+                return (True, report(external_issue, code_issue), 0.1, "model")
+            if step_num == 7:
+                return (True, report(external_issue), 0.1, "model")
+            return (True, f"out-{step_num}", 0.1, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, message, _, _ = run_agentic_checkup_orchestrator(
+                **{
+                    **_PR_ARGS_1212,
+                    "cwd": tmp_path,
+                    "defer_step5_to_github_checks": True,
+                }
+            )
+
+        assert success is False
+        assert "not source-repairable" in message
+        assert [label for label in labels if label.startswith("step7_iter")] == [
+            "step7_iter1",
+            "step7_iter2",
+        ]
+        assert "step6_1_iter2" in labels
+        assert "step6_2_iter2" in labels
+        assert "step6_3_iter2" in labels
+        assert not any(label.endswith("_iter3") for label in labels)
 
     def test_deferred_step5_runs_fixer_after_structured_step7_failure(self, tmp_path):
         """A deferred Layer 1 pass must not strand a Layer 2 PR finding."""

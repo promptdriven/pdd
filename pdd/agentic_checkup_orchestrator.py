@@ -1267,6 +1267,25 @@ def _step7_payload_has_structured_success(payload: Dict[str, Any]) -> bool:
     return False
 
 
+def _step7_unfixed_nonrepairable_blockers(
+    payload: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Return explicit blockers that cannot authorize a worktree mutation."""
+    issues = payload.get("issues")
+    if not isinstance(issues, list):
+        return []
+    return [
+        issue
+        for issue in issues
+        if (
+            isinstance(issue, dict)
+            and issue.get("fixed") is not True
+            and issue.get("blocking") is not False
+            and issue.get("repairable") is False
+        )
+    ]
+
+
 def _step7_passed(
     step7_output: str,
     pr_mode: bool,
@@ -1295,6 +1314,7 @@ def _step7_passed(
     * in PR mode WITH a source issue (``has_issue``), ``issue_aligned`` is
       ``True``; with no issue (#1292) the alignment gate is dropped and the
       verdict rests on code findings alone (review the PR on its own merits);
+    * no entry in ``issues`` is an explicit unfixed, non-repairable blocker;
     * no entry in ``issues`` has ``severity == "critical"`` and ``fixed != True``.
       In **targeted** PR mode only, an unfixed critical carrying a positive
       out-of-scope signal (non-blocking ``scope``, ``in_scope: false``, or an
@@ -1352,6 +1372,27 @@ def _step7_passed(
             f"Step 7 reported issue_aligned=false — PR does not resolve the "
             f"source issue. Message: "
             f"{payload.get('message') or '<no message>'}",
+        )
+
+    nonrepairable_blockers = _step7_unfixed_nonrepairable_blockers(payload)
+    if nonrepairable_blockers:
+        identifiers = [
+            str(
+                issue.get("file")
+                or issue.get("module")
+                or issue.get("description")
+                or "Step 7 finding"
+            )
+            for issue in nonrepairable_blockers
+        ]
+        joined = ", ".join(identifiers[:5])
+        more = "" if len(identifiers) <= 5 else (
+            f" (+{len(identifiers) - 5} more)"
+        )
+        return (
+            False,
+            "Step 7 reported unfixed non-repairable blocking issues: "
+            f"{joined}{more}",
         )
 
     raw_changed_files = payload.get("changed_files")
@@ -1419,7 +1460,17 @@ def _step7_repairable_failure_signal(step7_output: str) -> str:
     )
 
     payload = _extract_json_from_text(step7_output or "")
-    if not isinstance(payload, dict) or payload.get("success") is not False:
+    if not isinstance(payload, dict):
+        return ""
+    # Preserve the existing fail-closed authority boundary for a contradictory
+    # success report. The one safe exception is a mixed report containing an
+    # explicit non-repairable blocker: that blocker independently forces the
+    # gate closed, while a coexisting repairable finding still needs one fixer
+    # pass before the run terminates on the external requirement.
+    if (
+        payload.get("success") is not False
+        and not _step7_unfixed_nonrepairable_blockers(payload)
+    ):
         return ""
     issues = payload.get("issues")
     if not isinstance(issues, list):
@@ -1432,6 +1483,12 @@ def _step7_repairable_failure_signal(step7_output: str) -> str:
     }
     for issue in issues:
         if not isinstance(issue, dict) or issue.get("fixed") is True:
+            continue
+        # ``blocking`` answers whether the PR may ship. ``repairable`` answers
+        # whether this local fixer loop has authority and capability to mutate
+        # source for the finding. External terminal evidence can block while
+        # remaining impossible to produce from the in-progress worktree.
+        if issue.get("repairable") is False:
             continue
         if issue.get("in_scope") is False or _step7_nonblocking_reason(issue):
             continue
@@ -1459,6 +1516,35 @@ def _step7_repairable_failure_signal(step7_output: str) -> str:
             "output": step7_output,
         },
         [],
+    )
+
+
+def _step7_nonrepairable_blocking_reason(step7_output: str) -> str:
+    """Describe an explicit blocker that cannot be repaired in this worktree."""
+    from .agentic_checkup import (  # pylint: disable=import-outside-toplevel
+        _extract_json_from_text,
+    )
+
+    payload = _extract_json_from_text(step7_output or "")
+    if not isinstance(payload, dict):
+        return ""
+
+    identifiers: List[str] = []
+    for issue in _step7_unfixed_nonrepairable_blockers(payload):
+        identifiers.append(
+            str(
+                issue.get("file")
+                or issue.get("module")
+                or issue.get("description")
+                or "Step 7 finding"
+            )
+        )
+    if not identifiers:
+        return ""
+    return (
+        "Step 7 remains blocking, but its remaining finding is not "
+        "source-repairable by Steps 6a-6c: "
+        + ", ".join(identifiers[:5])
     )
 
 
@@ -5399,6 +5485,9 @@ def _run_agentic_checkup_orchestrator_inner(
                 _save_state()
 
             step7_repair_signal = _step7_repairable_failure_signal(step7_output)
+            nonrepairable_blocking_reason = (
+                _step7_nonrepairable_blocking_reason(step7_output)
+            )
 
             # Only the structured Step-7 gate may end a fix loop. A model can
             # quote the legacy marker while its JSON still reports failure.
@@ -5406,6 +5495,31 @@ def _run_agentic_checkup_orchestrator_inner(
                 if not quiet:
                     console.print("[green]All issues fixed — exiting loop.[/green]")
                 break
+
+            # A blocker may require external terminal evidence, an approval,
+            # or another action that cannot be produced by editing this
+            # worktree. It must remain a terminal failure, but must not spend
+            # additional fixer iterations. If another actionable finding is
+            # present, repair it first; terminate only when no source mutation
+            # is authorized.
+            if (
+                pr_mode
+                and nonrepairable_blocking_reason
+                and not step7_repair_signal
+            ):
+                step_outputs["pr_push"] = (
+                    f"Skipped push because: {nonrepairable_blocking_reason}"
+                )
+                context["pr_push_output"] = step_outputs["pr_push"]
+                _record_step_telemetry(8, "skipped")
+                _save_state()
+                post_suffix = _post_pr_mode_final_report(step7_output)
+                return (
+                    False,
+                    f"{nonrepairable_blocking_reason}{post_suffix}",
+                    total_cost,
+                    last_model_used,
+                )
 
             # Accumulate previous fixes for next iteration.
             step6_1_out = step_outputs.get("6_1", "")

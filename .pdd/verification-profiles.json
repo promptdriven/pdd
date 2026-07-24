@@ -1171,7 +1171,7 @@
       "prompt_path": "pdd/prompts/agentic_checkup_orchestrator_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:bd868518d46fa67b4fc449f35130553623f9faed8bfb825c5fb88b22ea555fdc"
+        "CONTRACT-SHA256:1d6a1865c80e158f1812b2b48512c434abd283d52d0b2ef28112444d533622dd"
       ],
       "obligations": [
         {
@@ -1180,7 +1180,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:bd868518d46fa67b4fc449f35130553623f9faed8bfb825c5fb88b22ea555fdc"
+            "CONTRACT-SHA256:1d6a1865c80e158f1812b2b48512c434abd283d52d0b2ef28112444d533622dd"
           ],
           "artifact_paths": [
             "pdd/prompts/agentic_checkup_orchestrator_python.prompt"
@@ -1391,7 +1391,7 @@
       "prompt_path": "pdd/prompts/agentic_checkup_step7_verify_LLM.prompt",
       "language_id": "llm",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:8f9c67d88bc40a597a6b4cf6bbbbfb489277c50190a5a477b827cd3a6ef7246d"
+        "CONTRACT-SHA256:b8002f4753cf692ed10dd10cdf37e4780e14e05a1b33f86de8d641da2743b590"
       ],
       "obligations": [
         {
@@ -1400,7 +1400,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:8f9c67d88bc40a597a6b4cf6bbbbfb489277c50190a5a477b827cd3a6ef7246d"
+            "CONTRACT-SHA256:b8002f4753cf692ed10dd10cdf37e4780e14e05a1b33f86de8d641da2743b590"
           ],
           "artifact_paths": [
             "pdd/prompts/agentic_checkup_step7_verify_LLM.prompt"

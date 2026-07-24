@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
 import subprocess
 import sys
+import tarfile
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -338,6 +340,31 @@ def _commit(root: Path, message: str) -> str:
     return subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True
     ).strip()
+
+
+def _synthetic_current_tree_repo(root: Path) -> str:
+    """Recommit current tracked bytes without requiring candidate ancestors."""
+    root.mkdir()
+    archive = subprocess.check_output(["git", "archive", "HEAD"], cwd=ROOT)
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source:
+        source.extractall(root, filter="data")
+    _git(root, "init", "-q")
+    _git(root, "add", "-f", ".")
+    _git(
+        root,
+        "-c",
+        "user.name=PDD test",
+        "-c",
+        "user.email=pdd@example.test",
+        "commit",
+        "-qm",
+        "synthetic current tree",
+    )
+    base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    _git(root, "update-ref", "refs/remotes/origin/main", base)
+    return base
 
 
 def _requirements(prompt_path: PurePosixPath) -> list[str]:
