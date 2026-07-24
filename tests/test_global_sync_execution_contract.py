@@ -1,0 +1,117 @@
+"""Tests for the fail-closed M0 global-sync execution contract."""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+import pytest
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "scripts" / "verify_global_sync_execution_contract.py"
+
+
+def _module():
+    spec = importlib.util.spec_from_file_location("execution_contract", SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _write_contract(tmp_path: Path) -> tuple[Path, Path, Path]:
+    plan = tmp_path / "plan.md"
+    plan.write_text("# Plan\n\nM0 M1 M2 M3 M4 M5\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "tests" / "test_present.py").write_text("pass\n", encoding="utf-8")
+    (tmp_path / "scripts" / "present.py").write_text("pass\n", encoding="utf-8")
+    (tmp_path / ".github" / "workflows" / "present.yml").write_text("name: present\n", encoding="utf-8")
+    base = "a" * 40
+    state = {
+        "schema_version": 1,
+        "protected_base_sha": base,
+        "integration": {"worktree": "integration", "branch": "feat/m0", "owner": "integration"},
+        "tracks": [{"id": "m0-bootstrap", "owner": "integration", "worktree": "m0", "branch": "feat/m0", "write_set": ["scripts/verify_global_sync_execution_contract.py"]}],
+        "command_registry": [
+            {"id": "present-module", "state": "EXISTS", "argv": ["python", "-m", "yaml"], "kind": "module", "owner": "integration", "introducing_milestone": "M0", "earliest_invocable_milestone": "M0", "introducing_pr": "local", "last_source_validation_sha": base, "last_wheel_validation_sha": base},
+            {"id": "present-script", "state": "EXISTS", "argv": ["python", "scripts/present.py"], "kind": "script", "owner": "integration", "introducing_milestone": "M0", "earliest_invocable_milestone": "M0", "introducing_pr": "local", "last_source_validation_sha": base, "last_wheel_validation_sha": base},
+            {"id": "present-test", "state": "EXISTS", "argv": ["python", "-m", "pytest", "tests/test_present.py"], "kind": "test", "owner": "integration", "introducing_milestone": "M0", "earliest_invocable_milestone": "M0", "introducing_pr": "local", "last_source_validation_sha": base, "last_wheel_validation_sha": base},
+            {"id": "present-workflow", "state": "EXISTS", "argv": [".github/workflows/present.yml"], "kind": "workflow", "owner": "integration", "introducing_milestone": "M0", "earliest_invocable_milestone": "M0", "introducing_pr": "local", "last_source_validation_sha": base, "last_wheel_validation_sha": base},
+        ],
+        "validation_steps": [{"id": "m0-contract", "executable": True, "validation_commands": ["present-module", "present-script", "present-test", "present-workflow"]}],
+        "active_blocker": "m0-executable-baseline",
+        "milestone_order": ["M0", "M1", "M2", "M3", "M4", "M5"],
+        "ledger_source": "docs/ledger_source.yaml",
+        "generated_ledger": "docs/ledger.yaml",
+    }
+    ledger = {"execution_contract": {"protected_base_sha": base, "milestone_order": state["milestone_order"], "active_blocker": "m0-executable-baseline", "command_registry": state["command_registry"], "validation_steps": state["validation_steps"]}}
+    state_path = tmp_path / "docs" / "state.yaml"
+    source_path = tmp_path / "docs" / "ledger_source.yaml"
+    output_path = tmp_path / "docs" / "ledger.yaml"
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    source_path.write_text(yaml.safe_dump(ledger, sort_keys=False), encoding="utf-8")
+    output_path.write_bytes(source_path.read_bytes())
+    return plan, state_path, tmp_path
+
+
+def _verify(tmp_path: Path):
+    plan, state, root = _write_contract(tmp_path)
+    return _module().verify(plan, state, root=root, validate_cli=False), state, root
+
+
+def test_execution_contract_accepts_complete_concordant_registry(tmp_path: Path) -> None:
+    assert _verify(tmp_path)[0] == []
+
+
+@pytest.mark.parametrize(
+    ("command_id", "kind", "argv", "expected"),
+    [
+        ("missing-module", "module", ["python", "-m", "missing_global_sync_module"], "module"),
+        ("missing-script", "script", ["python", "scripts/missing.py"], "script"),
+        ("missing-test", "test", ["python", "-m", "pytest", "tests/missing.py"], "test"),
+        ("missing-workflow", "workflow", [".github/workflows/missing.yml"], "workflow"),
+    ],
+)
+def test_execution_contract_rejects_missing_declared_component(tmp_path: Path, command_id: str, kind: str, argv: list[str], expected: str) -> None:
+    _, state_path, root = _verify(tmp_path)
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["command_registry"][0].update({"id": command_id, "kind": kind, "argv": argv})
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    errors = _module().verify(root / "plan.md", state_path, root=root, validate_cli=False)
+    assert any(expected in error and command_id in error for error in errors)
+
+
+def test_execution_contract_rejects_empty_executable_validation_and_to_build_invocation(tmp_path: Path) -> None:
+    _, state_path, root = _verify(tmp_path)
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["validation_steps"][0]["validation_commands"] = []
+    state["command_registry"][0]["state"] = "TO_BUILD"
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    errors = _module().verify(root / "plan.md", state_path, root=root, validate_cli=False)
+    assert any("empty validation" in error for error in errors)
+    assert any("TO_BUILD" in error for error in errors)
+
+
+def test_execution_contract_rejects_ledger_base_and_registry_disagreement(tmp_path: Path) -> None:
+    _, state_path, root = _verify(tmp_path)
+    ledger = yaml.safe_load((root / "docs" / "ledger_source.yaml").read_text(encoding="utf-8"))
+    ledger["execution_contract"]["protected_base_sha"] = "b" * 40
+    (root / "docs" / "ledger_source.yaml").write_text(yaml.safe_dump(ledger, sort_keys=False), encoding="utf-8")
+    errors = _module().verify(root / "plan.md", state_path, root=root, validate_cli=False)
+    assert any("base SHA" in error for error in errors)
+
+
+def test_execution_contract_rejects_wrong_click_parent_and_unsupported_option(tmp_path: Path) -> None:
+    _, state_path, root = _verify(tmp_path)
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["command_registry"].append({"id": "wrong-parent", "state": "EXISTS", "argv": ["pdd", "sync", "certify"], "kind": "console", "owner": "integration", "introducing_milestone": "M0", "earliest_invocable_milestone": "M0", "introducing_pr": "local", "last_source_validation_sha": "a" * 40, "last_wheel_validation_sha": "a" * 40, "documented_options": ["--not-real"]})
+    state["validation_steps"][0]["validation_commands"].append("wrong-parent")
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    errors = _module().verify(root / "plan.md", state_path, root=root, validate_cli=True)
+    assert any("wrong Click parent" in error for error in errors)
+    assert any("--not-real" in error for error in errors)
