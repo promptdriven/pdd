@@ -45,14 +45,14 @@
 % This program will do the following:
     Step 1. Load the 'change_LLM' and 'extract_prompt_change_LLM' prompt templates.
     Step 2. Preprocess the change_LLM prompt using the preprocess function from the preprocess module and set double_curly_brackets to false.
-    Step 3. Run the change prompt through the model using llm_invoke, passing the 'time' input parameter.
+    Step 3. Run the change prompt through the model using llm_invoke, passing the 'time' input parameter. Route provider calls through a task-local ContextVar override when one is set so bounded callers such as prompt repair can supervise active calls; otherwise call the imported llm_invoke directly and preserve existing behavior.
         3a. Pass the following string parameters to the prompt during invoke:
             - 'input_prompt'
             - 'input_code'
             - 'change_prompt' (preprocess with recursive and double_curly_brackets set to false)
         3b. If verbose is True, pretty print a message letting the user know it is running and the cost information.
     Step 4. If verbose is True, pretty print the markdown formatting that is present in the result via the rich Markdown function.
-    Step 5. Run the extract prompt through llm_invoke with the EXTRACTION_STRENGTH constant, passing the 'time' input parameter.
+    Step 5. Run the extract prompt through the same task-local provider routing helper with the EXTRACTION_STRENGTH constant, passing the 'time' input parameter.
         5a. Pass the following string parameters to the prompt during invoke:
             - 'llm_output': The result from Step 3
         5b. If verbose is True, pretty print a message letting the user know it is running and the cost information.

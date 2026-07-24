@@ -64,11 +64,19 @@ report after every round. It edits only the target prompt file.
 8. After writing an accepted result, rebuild the complete source-set report with
    `build_prompt_source_set_report()`. Use its findings, not lint alone, to stop early
    or drive the next repair round.
-9. Honor the wall-clock and round bounds. `strict` succeeds only when no source-set
-   findings remain. `best-effort` always succeeds unless a hard error occurs (LLM
-   failure, unreadable file): remaining findings after completed rounds are non-fatal,
-   and a zero-round configuration (`max_rounds=0`) is treated as a skip
-   (`repair_skipped=True, success=True`) rather than a hard failure.
+9. Honor the round bound and treat `max_seconds` as a hard end-to-end wall-clock
+   deadline. It includes active synchronous provider work, not only checks between
+   rounds. Bound each legacy `change()` provider invocation in an isolated process
+   group; at the deadline terminate and reap the worker and all descendants. The
+   exact authenticated Codex path remains bounded by its own subprocess timeout.
+   Restore the original prompt after any timeout, classify the result as
+   `repair timeout`, and retain cost/model evidence from completed provider calls,
+   including a completed call earlier in the same `change()` round.
+   `strict` succeeds only when no source-set findings remain. `best-effort` always
+   succeeds unless a hard error occurs (LLM failure, unreadable file): remaining
+   findings after completed rounds are non-fatal, and a zero-round configuration
+   (`max_rounds=0`) is treated as a skip (`repair_skipped=True, success=True`) rather
+   than a hard failure.
 10. Write an audit note under `.pdd/evidence/prompt_repair/` recording token metrics,
     source-set finding counts, lint issue counts, rounds, apply method, effective
     provider-observed model, provider-reported usage, cost, and billing status. Exact
@@ -76,7 +84,9 @@ report after every round. It edits only the target prompt file.
     `billing_status="known_zero_subscription"`; do not apply direct OpenAI API rates.
     Audit failures must not raise.
 11. In `off` mode, do not modify the prompt. Change failures, invalid output, and
-    timeouts must be returned as structured failures rather than raised.
+    timeouts must be returned as structured failures rather than raised. Provider
+    supervision must not alter ordinary `pdd.change.change()` callers outside the
+    prompt-repair task-local override.
 
 % Dependencies
 <pdd.change>
