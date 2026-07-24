@@ -159,8 +159,31 @@ def test_cli_generate_github_issue_url_failure(mock_agentic, mock_auto_update, r
         cli.cli,
         ["generate", "https://github.com/owner/repo/issues/99"],
     )
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert "Failed" in result.output or "gh CLI not found" in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_agentic_architecture')
+def test_cli_generate_agentic_io_failure_exits_nonzero(
+    mock_agentic, mock_auto_update, runner
+):
+    """Handled filesystem failures must remain visible to hosted executors."""
+    mock_agentic.return_value = (
+        False,
+        "[Errno 17] File exists: 'app/sizzle/layout.tsx'",
+        0.0,
+        "",
+        [],
+    )
+
+    result = runner.invoke(
+        cli.cli,
+        ["generate", "https://github.com/owner/repo/issues/2283"],
+    )
+
+    assert result.exit_code == 1
+    assert "File exists" in result.output
 
 
 @patch('pdd.core.cli.auto_update')
