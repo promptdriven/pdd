@@ -414,6 +414,8 @@ validation_steps:
       wheel_artifact_sha256: sha256-of-built-candidate-wheel
       wheel_install_binding: PEP-610-direct-url-or-equivalent
       wheel_interpreter: fresh-isolated-venv
+      source_focused_test_proof: candidate-bound-passed-focused-suite-and-finalizer
+      wheel_focused_test_proof: candidate-and-wheel-bound-passed-focused-suite-and-finalizer
   - id: m4-production-global-sync-verification
     milestone: M4
     executable: false

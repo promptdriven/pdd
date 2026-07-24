@@ -141,9 +141,28 @@ jobs:
           tests/test_sync_core_standalone_package.py
 
       - name: Run M0 trusted-finalizer source node
-        run: >
-          pytest -q
-          tests/test_sync_core_reporting.py::test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          pytest -q tests/test_sync_core_reporting.py::test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint
+          CANDIDATE_SHA="$(git rev-parse HEAD)" SOURCE_PROOF="$RUNNER_TEMP/global-sync-m0-source-focused-proof.json" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          targets = [
+              "tests/test_sync_core_cli.py",
+              "tests/test_sync_core_transaction.py",
+              "tests/test_sync_core_reporting.py",
+              "tests/test_sync_core_standalone_package.py",
+          ]
+          finalizer = "tests/test_sync_core_reporting.py::test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint"
+          Path(os.environ["SOURCE_PROOF"]).write_text(json.dumps({
+              "candidate_sha": os.environ["CANDIDATE_SHA"], "environment": "source",
+              "focused_test_targets": targets, "finalizer_node": finalizer,
+              "outcomes": {"focused_suite": {"status": "passed", "exit_code": 0},
+                           "finalizer_node": {"status": "passed", "exit_code": 0}},
+          }, sort_keys=True) + "\n", encoding="utf-8")
+          PY
 
       - name: Prove global-sync M0 contract against the exact built candidate wheel
         shell: bash
@@ -177,6 +196,25 @@ jobs:
             test_sync_core_standalone_package.py
           env -u PDD_PATH "$wheel_venv/bin/python" -I -m pytest -q \
             test_sync_core_reporting.py::test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint
+          CANDIDATE_SHA="$candidate_sha" WHEEL_DIGEST="$(shasum -a 256 "$wheel" | awk '{print $1}')" WHEEL_PROOF="$RUNNER_TEMP/global-sync-m0-wheel-focused-proof.json" "$wheel_venv/bin/python" -I - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          targets = [
+              "tests/test_sync_core_cli.py",
+              "tests/test_sync_core_transaction.py",
+              "tests/test_sync_core_reporting.py",
+              "tests/test_sync_core_standalone_package.py",
+          ]
+          finalizer = "tests/test_sync_core_reporting.py::test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint"
+          Path(os.environ["WHEEL_PROOF"]).write_text(json.dumps({
+              "candidate_sha": os.environ["CANDIDATE_SHA"], "environment": "wheel",
+              "wheel_artifact_sha256": os.environ["WHEEL_DIGEST"],
+              "focused_test_targets": targets, "finalizer_node": finalizer,
+              "outcomes": {"focused_suite": {"status": "passed", "exit_code": 0},
+                           "finalizer_node": {"status": "passed", "exit_code": 0}},
+          }, sort_keys=True) + "\n", encoding="utf-8")
+          PY
           cd "$proof_root"
           expected_base=()
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
@@ -189,6 +227,8 @@ jobs:
             --wheel-python "$wheel_venv/bin/python" \
             --wheel-artifact "$wheel" \
             --candidate-sha "$candidate_sha" \
+            --source-focused-proof "$RUNNER_TEMP/global-sync-m0-source-focused-proof.json" \
+            --wheel-focused-proof "$RUNNER_TEMP/global-sync-m0-wheel-focused-proof.json" \
             "${expected_base[@]}" \
             --output "$RUNNER_TEMP/global-sync-m0-wheel-proof.json"
 

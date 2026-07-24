@@ -28,6 +28,16 @@ STATES = frozenset({"EXISTS", "TO_BUILD", "EXTERNAL_PROTECTED", "ARCHIVED"})
 MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M5"]
 SHA1 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+M0_FOCUSED_TEST_TARGETS = (
+    "tests/test_sync_core_cli.py",
+    "tests/test_sync_core_transaction.py",
+    "tests/test_sync_core_reporting.py",
+    "tests/test_sync_core_standalone_package.py",
+)
+M0_FINALIZER_NODE = (
+    "tests/test_sync_core_reporting.py::"
+    "test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint"
+)
 FUTURE_COMPONENTS = {
     "pdd.sync_core.vertical_slice_verifier": (
         "vertical-slice-verifier", ["python", "-m", "pdd.sync_core.vertical_slice_verifier"]
@@ -478,6 +488,42 @@ def _candidate_checkout_errors(candidate_sha: str | None, root: Path) -> list[st
     return []
 
 
+def _focused_test_proof_errors(proof_path: Path | None, environment: str,
+                               candidate_sha: str | None,
+                               wheel_artifact: Path | None) -> tuple[list[str], dict[str, Any] | None]:
+    """Require a candidate-bound successful result for both focused M0 tests."""
+    if proof_path is None or not proof_path.is_file() or proof_path.is_symlink():
+        return [f"{environment} focused-test proof must be a regular file"], None
+    try:
+        proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return [f"{environment} focused-test proof is unreadable: {error}"], None
+    if not isinstance(proof, dict):
+        return [f"{environment} focused-test proof must be a JSON object"], None
+    errors: list[str] = []
+    if proof.get("candidate_sha") != candidate_sha:
+        errors.append(f"{environment} focused-test proof does not bind candidate SHA")
+    if proof.get("environment") != environment:
+        errors.append(f"{environment} focused-test proof has wrong environment")
+    if proof.get("focused_test_targets") != list(M0_FOCUSED_TEST_TARGETS):
+        errors.append(f"{environment} focused-test proof has wrong focused test identities")
+    if proof.get("finalizer_node") != M0_FINALIZER_NODE:
+        errors.append(f"{environment} focused-test proof has wrong finalizer node")
+    outcomes = proof.get("outcomes")
+    if not isinstance(outcomes, dict):
+        errors.append(f"{environment} focused-test proof lacks outcomes")
+    else:
+        for identity in ("focused_suite", "finalizer_node"):
+            outcome = outcomes.get(identity)
+            if not isinstance(outcome, dict) or outcome.get("status") != "passed" or outcome.get("exit_code") != 0:
+                errors.append(f"{environment} focused-test proof lacks successful {identity} outcome")
+    if environment == "wheel":
+        digest = hashlib.sha256(wheel_artifact.read_bytes()).hexdigest() if wheel_artifact and wheel_artifact.is_file() else None
+        if proof.get("wheel_artifact_sha256") != digest:
+            errors.append("wheel focused-test proof does not bind wheel digest")
+    return errors, proof
+
+
 def _walk_references(value: Any, key: str | None = None) -> Iterable[str]:
     if isinstance(value, dict):
         for child_key, child in value.items():
@@ -494,7 +540,9 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None,
            validate_cli: bool = True, wheel_python: str | None = None,
            expected_protected_base: str | None = None,
            candidate_sha: str | None = None,
-           wheel_artifact: Path | None = None) -> list[str]:
+           wheel_artifact: Path | None = None,
+           source_focused_proof: Path | None = None,
+           wheel_focused_proof: Path | None = None) -> list[str]:
     """Return all semantic contract violations; an empty list is a pass."""
     root = (root or state_path.parents[1]).resolve()
     plan = plan.resolve()
@@ -525,6 +573,12 @@ def verify(plan: Path, state_path: Path, *, root: Path | None = None,
             _error(errors, message)
         for message in _candidate_checkout_errors(candidate_sha, root):
             _error(errors, message)
+    if source_focused_proof is not None or wheel_focused_proof is not None:
+        for message, _proof in (
+                _focused_test_proof_errors(source_focused_proof, "source", candidate_sha, None),
+                _focused_test_proof_errors(wheel_focused_proof, "wheel", candidate_sha, wheel_artifact)):
+            for detail in message:
+                _error(errors, detail)
 
     preflight = state.get("preflight")
     if not isinstance(preflight, dict):
@@ -713,6 +767,8 @@ def main() -> int:
     parser.add_argument("--wheel-python", help="Python executable from the built PDD wheel environment")
     parser.add_argument("--wheel-artifact", type=Path, help="Exact candidate PDD wheel installed into --wheel-python")
     parser.add_argument("--candidate-sha", help="Exact lowercase Git SHA that produced --wheel-artifact")
+    parser.add_argument("--source-focused-proof", type=Path, help="Successful source focused-suite proof JSON")
+    parser.add_argument("--wheel-focused-proof", type=Path, help="Successful wheel focused-suite proof JSON")
     parser.add_argument("--expected-protected-base", help="PR kickoff/protected-base SHA expected by this run")
     parser.add_argument("--output", type=Path, help="Write the checked candidate/wheel binding report as JSON")
     parser.add_argument("--semantic-only", action="store_true", help="Skip source/wheel Click help probes")
@@ -720,7 +776,9 @@ def main() -> int:
     errors = verify(args.plan, args.state, root=args.root, validate_cli=not args.semantic_only,
                     wheel_python=args.wheel_python, wheel_artifact=args.wheel_artifact,
                     candidate_sha=args.candidate_sha,
-                    expected_protected_base=args.expected_protected_base)
+                    expected_protected_base=args.expected_protected_base,
+                    source_focused_proof=args.source_focused_proof,
+                    wheel_focused_proof=args.wheel_focused_proof)
     if args.output:
         report = {
             "candidate_sha": args.candidate_sha,
@@ -728,6 +786,10 @@ def main() -> int:
             "wheel_artifact": str(args.wheel_artifact) if args.wheel_artifact else None,
             "wheel_artifact_sha256": hashlib.sha256(args.wheel_artifact.read_bytes()).hexdigest()
             if args.wheel_artifact and args.wheel_artifact.is_file() else None,
+            "source_focused_proof": _focused_test_proof_errors(
+                args.source_focused_proof, "source", args.candidate_sha, None)[1],
+            "wheel_focused_proof": _focused_test_proof_errors(
+                args.wheel_focused_proof, "wheel", args.candidate_sha, args.wheel_artifact)[1],
             "passed": not errors,
         }
         args.output.parent.mkdir(parents=True, exist_ok=True)

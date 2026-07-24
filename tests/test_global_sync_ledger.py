@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -1158,6 +1160,115 @@ def test_execution_contract_diff_boundary_includes_deletes_and_rename_endpoints(
     assert module._git_diff_paths(ROOT, "a" * 40, "b" * 40) == [  # pylint: disable=protected-access
         "removed.py", "old-name.py", "new-name.py", "source.py", "copy.py",
     ]
+
+
+def test_execution_contract_requires_candidate_bound_focused_test_outcomes(
+    tmp_path: Path
+) -> None:
+    module = _execution_contract_module()
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"wheel")
+    candidate = "a" * 40
+    source = tmp_path / "source.json"
+    wheel_proof = tmp_path / "wheel.json"
+    payload = {
+        "candidate_sha": candidate,
+        "focused_test_targets": list(module.M0_FOCUSED_TEST_TARGETS),
+        "finalizer_node": module.M0_FINALIZER_NODE,
+        "outcomes": {
+            "focused_suite": {"status": "passed", "exit_code": 0},
+            "finalizer_node": {"status": "passed", "exit_code": 0},
+        },
+    }
+    source.write_text(json.dumps({**payload, "environment": "source"}), encoding="utf-8")
+    wheel_proof.write_text(json.dumps({
+        **payload, "environment": "wheel",
+        "wheel_artifact_sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+    }), encoding="utf-8")
+    assert module._focused_test_proof_errors(source, "source", candidate, None)[0] == []  # pylint: disable=protected-access
+    assert module._focused_test_proof_errors(wheel_proof, "wheel", candidate, wheel)[0] == []  # pylint: disable=protected-access
+    payload["outcomes"]["finalizer_node"] = {"status": "failed", "exit_code": 1}
+    source.write_text(json.dumps({**payload, "environment": "source"}), encoding="utf-8")
+    errors, _proof = module._focused_test_proof_errors(source, "source", candidate, None)  # pylint: disable=protected-access
+    assert any("successful finalizer" in error for error in errors)
+
+
+def test_execution_contract_retains_complete_concordant_registry_coverage(tmp_path: Path) -> None:
+    plan, state, root = _write_execution_contract(tmp_path)
+    assert _execution_contract_module().verify(plan, state, root=root, validate_cli=False) == []
+
+
+def test_execution_contract_retains_missing_component_and_invocation_coverage(
+    tmp_path: Path
+) -> None:
+    plan, state_path, root = _write_execution_contract(tmp_path)
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["command_registry"][0]["argv"] = ["python", "scripts/missing.py"]
+    state["command_registry"][0]["state"] = "TO_BUILD"
+    state["promotion_commands"] = ["present-script"]
+    state["validation_steps"][0]["validation_commands"] = []
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    errors = _execution_contract_module().verify(plan, state_path, root=root, validate_cli=False)
+    assert any("empty validation" in error for error in errors)
+    assert any("TO_BUILD" in error for error in errors)
+
+
+def test_execution_contract_retains_plan_and_lifecycle_coverage(tmp_path: Path) -> None:
+    plan, state_path, root = _write_execution_contract(tmp_path)
+    plan.write_text("# Plan\n\nM0 M1 M2 M3 M4 M5\n```bash\npython -m missing\n```\n", encoding="utf-8")
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["validation_steps"].append({"id": "bad", "executable": False})
+    state["command_registry"][0]["earliest_invocable_milestone"] = "M1"
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    errors = _execution_contract_module().verify(plan, state_path, root=root, validate_cli=False)
+    assert any("plan command is absent" in error for error in errors)
+    assert any("validation step milestone" in error for error in errors)
+
+
+def test_execution_contract_retains_protected_base_and_ledger_concordance_coverage(
+    tmp_path: Path
+) -> None:
+    plan, state_path, root = _write_execution_contract(tmp_path)
+    errors = _execution_contract_module().verify(
+        plan, state_path, root=root, validate_cli=False, expected_protected_base="b" * 40
+    )
+    assert any("expected protected base" in error for error in errors)
+    ledger = yaml.safe_load((root / "docs" / "ledger_source.yaml").read_text(encoding="utf-8"))
+    ledger["execution_contract"]["protected_base_sha"] = "b" * 40
+    (root / "docs" / "ledger_source.yaml").write_text(yaml.safe_dump(ledger), encoding="utf-8")
+    errors = _execution_contract_module().verify(plan, state_path, root=root, validate_cli=False)
+    assert any("base SHA" in error for error in errors)
+
+
+def test_execution_contract_retains_cli_parent_and_option_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _execution_contract_module()
+    monkeypatch.setattr(module.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0, stdout="--base-reference TEXT\n", stderr=""))
+    errors = module._cli_errors(  # pylint: disable=protected-access
+        {"id": "bad", "kind": "console", "argv": ["pdd", "sync", "certify"],
+         "documented_options": ["--base-ref"]}, sys.executable, "source", tmp_path)
+    assert any("wrong Click parent" in error for error in errors)
+    assert any("--base-ref" in error for error in errors)
+
+
+def test_execution_contract_retains_wheel_binding_and_checkout_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _execution_contract_module()
+    wheel_root = tmp_path / "venv"
+    python = wheel_root / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("placeholder", encoding="utf-8")
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"wheel")
+    monkeypatch.setattr(module.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(
+        returncode=0, stdout='{"direct_url":{"archive_info":{"hash":"sha256=stale"}}}', stderr=""))
+    assert any("does not bind" in error for error in module._wheel_binding_errors(  # pylint: disable=protected-access
+        str(python), wheel, "a" * 40, tmp_path / "checkout"))
+    assert any("does not match" in error for error in module._candidate_checkout_errors(  # pylint: disable=protected-access
+        "a" * 40, ROOT))
 
 
 def test_execution_contract_allows_m1_exists_only_after_m0_promotion(
