@@ -1,481 +1,581 @@
-# PR Bug-Fix Loop Process
+# Autonomous Parallel PR Bug-Fix Loop
 
-Reusable runbook for shipping bug fixes through an adversarial review loop in `promptdriven/pdd`. Adapted from the Generative-Video-Studio version; tuned for this repo's Python toolchain (pytest + pylint), GitHub Actions CI (`unit-tests` + `auto-heal`), and `/heal` trigger.
+Reusable runbook for shipping non-trivial bug fixes in `promptdriven/pdd` with
+maximum safe parallelism, independent adversarial review, and minimal human
+involvement.
 
-## When to use
+The normal path is autonomous from issue intake through a merge-ready PR. A
+human supplies the goal and any initial authority constraints, then is contacted
+only for an escalation listed in [Human escalation policy](#human-escalation-policy).
 
-Any non-trivial bug that needs to ship as a PR. Especially when:
-- The fix touches correctness-sensitive code (LLM invocation, sync determination, prompt processing, fingerprinting, async state).
-- You can't easily eyeball the fix yourself.
-- You want an independent second opinion before merging.
+## Operating objectives
 
-## Three actors
+Optimize for these outcomes, in order:
 
-1. **Implementer** — Claude subagent working in an isolated worktree.
-2. **Reviewer** — Codex CLI (`codex review` / `codex exec review`) for independent adversarial perspective.
-3. **Orchestrator** — you (or top-level Claude) triaging Codex findings and dispatching next rounds.
+1. Correctness and preservation of user work.
+2. A verifiable goal with explicit acceptance criteria and evidence.
+3. Maximum safe parallelism on independent work.
+4. Minimal human attention and no routine approval requests.
+5. A short review/remediation loop.
 
-## Worktree invariant
+Parallelism is bounded by dependencies and file ownership, not by habit. Run
+independent work concurrently; keep causally dependent work sequential.
 
-All implementation, test, review, rebase, and PR-branch commands happen inside the PR worktree. The main clone is only for orchestration and the final `gh pr merge`.
+## Required agent tiers
 
-Prefer external per-user worktrees for hand-created or explicitly configured
-agent worktrees:
+Use these tiers explicitly. Do not rely on a tool's default model:
+
+| Responsibility | Model | Reasoning | Mutation |
+| --- | --- | --- | --- |
+| Implementation, tests, investigation, integration, and remediation | `gpt-5.6-terra` | `high` | Allowed within assigned ownership |
+| Independent adversarial review | `gpt-5.6-sol` | `high` | Read-only |
+| Top-level orchestration | Current top-level agent | Highest available | Coordination and integration only |
+
+In Codex agent environments, set `model: "gpt-5.6-terra"` and
+`reasoning_effort: "high"` explicitly for implementation workers. A configured
+`throughput-implementer-small` profile is also suitable for a genuinely small,
+isolated lane when it guarantees Terra-high. Use `throughput-reviewer` when it
+guarantees Sol-high. Agent-type names are conveniences; the model and reasoning
+settings above are the invariant.
+
+If the environment cannot guarantee the required model and reasoning level,
+record that limitation in the PR and use the strongest available equivalent.
+Do not silently substitute a weaker reviewer.
+
+## Actors
+
+1. **Orchestrator** — owns the goal, dependency graph, task assignment,
+   integration, evidence ledger, CI monitoring, stopping decision, and PR
+   lifecycle. It continues without waiting for human prompts.
+2. **Terra-high implementers** — own disjoint files or narrowly defined
+   responsibilities in isolated worktrees. They investigate, test, implement,
+   validate, and return commits plus evidence.
+3. **Sol-high reviewers** — one fresh reviewer at a time examines the current
+   integrated diff. Reviewers do not edit code or inherit another reviewer's
+   conclusions.
+
+The orchestrator must remain available for coordination. Do not consume every
+agent slot with workers.
+
+## Autonomy contract
+
+After the human supplies a bug, issue, or verifiable goal, the orchestrator
+automatically:
+
+- inspects repository instructions and preserves existing changes;
+- resolves reasonable ambiguity from code, tests, history, and issue context;
+- creates a concrete acceptance checklist;
+- partitions work and launches all independent tasks concurrently;
+- integrates worker commits;
+- runs the sequential review/fix loop;
+- triages findings under the policy below;
+- dispatches parallel remediation;
+- runs validation and monitors CI;
+- posts PR evidence and leaves the PR merge-ready; and
+- merges automatically only when repository policy and the user's initial
+  authority permit it.
+
+Do not ask a human to choose routine implementation details, approve ordinary
+tests, relay agent output, initiate the next round, classify straightforward
+findings, rerun CI, or copy commands between actors.
+
+## Isolation and ownership invariants
+
+Use one **integration worktree** for the PR branch and one isolated worktree per
+mutating worker. Reviewers inspect the integration worktree read-only.
+
+Prefer external per-user worktrees:
 
 ```bash
 AGENT_WORKTREE_ROOT="${AGENT_WORKTREE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-worktrees}"
-PDD_AGENT_WORKTREE_DIR="$AGENT_WORKTREE_ROOT/promptdriven__pdd/<name>"
+PDD_AGENT_WORKTREE_DIR="$AGENT_WORKTREE_ROOT/promptdriven__pdd/<task-name>"
 ```
 
-Use the actual path returned by Claude Code if a built-in `isolation:
-"worktree"` dispatch creates the worktree for you.
+Rules:
 
-## The loop
+- Each mutating worker receives explicit file or module ownership.
+- No two concurrent workers may edit the same file.
+- Workers must not revert or rewrite changes made by other workers.
+- Shared contracts, central registries, generated artifacts, and files needed by
+  multiple lanes belong to one designated integration owner.
+- If newly discovered work overlaps another lane, the worker stops editing the
+  overlap and informs the orchestrator. The orchestrator serializes or reassigns
+  that portion; unrelated work continues.
+- A worker returns small conventional commits. The orchestrator integrates them
+  with `cherry-pick` in dependency order.
+- Never use `git reset --hard`, `git checkout --`, `--force`, `--no-verify`, or
+  amend as a coordination mechanism.
+- Use `--force-with-lease` only when a legitimate rebase requires it and the
+  remote state has been rechecked.
 
-### 1. Implementer round
+Existing or unrelated changes belong to the user. Preserve them.
 
-Dispatch a Claude subagent with `subagent_type: "general-purpose"` and `isolation: "worktree"`. The agent prompt should include:
+## Concurrency policy
 
-- The bug context (live evidence, reproduction signal).
-- The fix design at a high level (or the choice space if multiple approaches).
-- **Pre-fix investigation (do this BEFORE writing the failing test or the fix):**
-  - **Hunt for related bugs.** The reported bug is often one instance of a class. Grep for the same anti-pattern, function name, error message, or call shape across the repo. Examples:
-    - If the bug is "missing `await` on `foo()`" — grep all callers of `foo` for the same omission.
-    - If the bug is a missing null/empty check before a dict lookup — grep for the same key access pattern elsewhere.
-    - If the bug is a wrong exception class caught — grep for the same `except` clause shape.
-  - Record sibling occurrences in a short list. Decide which to fix in THIS PR (same root cause, low blast radius) vs. file as follow-ups (different module, would balloon scope). Default: if it's the same one-line mistake in ≤3 sibling sites, fix them all here; otherwise note them in the PR description and open issues.
-  - **Mine prior commits for the proper fix shape.** Before designing the fix, look at how the codebase has handled similar bugs before:
-    - `git log --all --oneline --grep="<keyword from bug>"` (try the function name, the error message, the symptom).
-    - `git log -S "<exact code snippet>"` to find when the buggy line was introduced and what surrounded it.
-    - `git log --all --oneline -- <file>` on the touched file(s) — scan for `fix(...)` commits with similar shape.
-    - For any matching prior fix: `git show <sha>` to see the actual approach, test pattern, and any follow-up comments.
-  - Note any established convention (e.g., "this codebase wraps these calls in `try/except RetryableError`, not bare `except`") and follow it. If you diverge from prior practice, justify it in the PR description.
-  - Post the investigation summary as a PR comment when you open the PR (sibling bugs found + decision, prior commits referenced, convention being followed).
-- TDD discipline:
-  - Write a failing test FIRST that reproduces the bug.
-  - Commit it as a SEPARATE commit with a `test(...)` conventional-commit prefix.
-  - Push the failing-test commit BEFORE pushing the fix.
-  - Implement the fix.
-  - Run targeted pytest + `pylint` on the touched modules until clean. Prefer direct `pylint pdd/<module>.py tests/test_<module>.py` over `make lint` — the `make` target re-runs `pip install -e ".[dev]"` via `ensure-dev-deps`, which fails offline or in network-restricted sandboxes.
-  - Exercise the changed behavior end-to-end through the real CLI entrypoint.
-  - Commit the fix as a SEPARATE commit with a `fix(...)` prefix.
-- Open the PR with `gh pr create` (must be non-draft, or transitioned to ready-for-review, for `unit-tests` to run). Unit tests run automatically on PR open/sync — no special comment marker required for the merge gate. (If you want the prompt-healing CI pass too, comment `/heal` on the PR after opening.)
-- Post the red-output from the failing-test commit as a PR comment for TDD evidence.
-- Output their result early (don't iterate silently — that's how subagents stall).
+At every phase, the orchestrator builds a dependency graph and immediately
+starts every ready node.
 
-### 2. Codex review
+With nine available agent slots, keep one slot for the top-level orchestrator
+and allocate the other eight by phase:
 
-Use `codex exec review` — same review engine as plain `codex review`, but inside the `exec` runner that has shell access. This lets Codex post its own PR comment via `gh` AND lets you customize the review prompt to demand exhaustive findings instead of one-at-a-time.
+- Investigation: zero workers for low uncertainty, one or two for medium
+  uncertainty, and up to four for high uncertainty.
+- Implementation: up to seven Terra-high workers, normally leaving one slot
+  free for newly discovered work or replacement.
+- Review: one Sol-high reviewer at a time; unused slots remain available for
+  independent reproduction of uncertain findings.
+- Remediation: up to seven Terra-high workers when findings have disjoint
+  ownership.
 
-From inside the agent's worktree:
+Fill all slots only when there are that many ready, independent nodes. Adapt to
+available capacity and task shape; agents that would contend for ownership or
+wait on the same prerequisite do not add useful parallelism.
+
+Good parallel lanes include:
+
+- reproduction, sibling-bug search, and relevant-history search;
+- changes in independent modules;
+- tests for independent behaviors;
+- documentation and code changes with disjoint ownership;
+- independent investigation of uncertain review findings;
+- targeted test, lint, packaging, and safe end-to-end checks;
+- remediation of findings in disjoint files.
+
+Keep these sequential:
+
+- a failing test before its corresponding fix;
+- implementation that depends on an unresolved contract or API decision;
+- integration before review of the integrated diff;
+- remediation before the next review of that remediation;
+- merge after all required checks and evidence gates.
+
+`run_in_background: true` alone is not parallelization. Multiple independent
+tasks must actually be dispatched before waiting.
+
+## Autonomous workflow
+
+### 0. Intake and verifiable goal
+
+The orchestrator reads all applicable `AGENTS.md` files, checks the worktree,
+collects the issue evidence, and records a lightweight internal task manifest.
+Include only the fields needed for this change:
+
+- observed failure or reproduction signal;
+- desired externally observable behavior;
+- explicit acceptance criteria;
+- scope and non-goals;
+- authority limits;
+- expected end-to-end boundary;
+- candidate files and likely ownership conflicts; and
+- required CI checks.
+
+Infer reasonable details from the repository. Escalate only when the missing
+answer meets the human escalation policy.
+
+### 1. Scale investigation to uncertainty
+
+Do not launch a fixed investigation fleet. The orchestrator first classifies
+uncertainty qualitatively:
+
+- **Low uncertainty:** the failure is reproducible, localized, and follows a
+  familiar pattern; acceptance criteria and the verification boundary are
+  obvious. Launch no separate investigation worker. Let the implementation lane
+  confirm the reproduction and proceed.
+- **Medium uncertainty:** one or two important facts are unresolved, such as the
+  root cause, sibling exposure, repository convention, or end-to-end boundary.
+  Launch only the one or two lanes that resolve those unknowns.
+- **High uncertainty:** the failure is intermittent, cross-cutting, newly
+  introduced without an obvious cause, security/concurrency/persistence
+  sensitive, or has unclear acceptance criteria or production boundaries.
+  Launch up to four relevant Terra-high read-only lanes concurrently.
+
+Available investigation lanes are a menu, not a checklist:
+
+- **Reproduction** — reproduce the failure and identify the smallest reliable
+  regression test.
+- **Sibling-bug search** — search for the same anti-pattern, function, error, or
+  call shape across the repository.
+- **History/convention search** — inspect `git log`, `git blame`, and relevant
+  prior fixes for the established implementation and test shape.
+- **Boundary analysis** — identify the real CLI, workflow, provider, or
+  integration path needed for end-to-end verification.
+
+Suggested history commands:
 
 ```bash
-cd <agent-worktree>
-git fetch origin <pr-branch> main
-
-# PRECONDITION: `git reset --hard` below will destroy local work. Confirm
-# the worktree has no uncommitted changes AND no unpushed commits first.
-test -z "$(git status --short)" || { echo "uncommitted changes — abort"; exit 1; }
-test -z "$(git log origin/<pr-branch>..HEAD --oneline)" || { echo "unpushed commits — abort"; exit 1; }
-
-git reset --hard origin/<pr-branch>
-
-codex exec review --base origin/main --title "PR #<N> @ <sha>" --skip-git-repo-check "$(cat <<'EOF'
-Adversarial code review of the diff vs origin/main. Find EVERY correctness issue, security issue, or significant design flaw in the diff. Be EXHAUSTIVE — list ALL findings in this single pass, not just the most important one. Do not stop at the first issue you find.
-
-Categorize each finding as:
-- P1: blocking correctness / silent corruption / security
-- P2: would-be-nice / edge case / robustness
-
-When done, POST the findings as a single PR comment using:
-
-  gh pr comment <PR_NUMBER> --body "<<<MARKDOWN>>>"
-
-Use this exact comment structure:
-
-## Codex adversarial review — PR #<N> @ <sha>
-
-**Verdict:** MERGE | DON'T MERGE
-**Findings:** <count> total (<n> P1, <n> P2)
-
-### P1 (blocking)
-- [P1] <one-line title> — `<file>:<line-range>`
-  <one-paragraph description of the bug>
-  **Suggested fix:** <one-sentence concrete suggestion>
-
-### P2 (non-blocking)
-- [P2] ... (same shape)
-
-### Notes
-- <optional context, accepted trade-offs, etc.>
-
-If you find NO issues, post a comment that just says "MERGE — no findings."
-
-You MUST end your session by successfully running the `gh pr comment` command. Don't just print the review to stdout — post it. If `gh pr comment` fails, retry once. If it still fails, print the comment body so the orchestrator can post manually.
-EOF
-)"
+git log --all --oneline --grep="<keyword>"
+git log -S "<exact buggy snippet>"
+git log --all --oneline -- <file>
+git show <relevant-sha>
 ```
 
-Replace `<PR_NUMBER>` literally in the prompt before invoking, since Codex won't know the PR number from context.
+After each investigation batch, reassess uncertainty. Expand investigation only
+when evidence conflicts or a safe implementation still depends on an unresolved
+fact. Stop investigating as soon as the reproduction, acceptance criteria,
+ownership, and verification plan are sufficient to implement safely. Never
+launch a lane merely to fill an available agent slot.
 
-**Tradeoffs of exhaustive single-pass:**
+The orchestrator consolidates any material investigation results and updates the
+acceptance criteria. Post a separate investigation summary only when the
+investigation changed scope, exposed sibling bugs, or established a non-obvious
+convention; otherwise include the reproduction evidence in the final PR summary.
+Do not ask a human to relay findings between agents.
 
-- Pros: typically converges in 1-2 rounds instead of 5-13. Orchestrator sees ALL findings at once and can dispatch one implementer round to fix everything.
-- Cons: longer wall clock per pass (~5-15 min vs 2-5 min for single-finding). Higher chance of false positives mixed with real ones — orchestrator triage is more important.
+### 2. Partition and dispatch
 
-**Heuristic: Codex often returns one issue at a time unless pushed.** This is anecdotal — the CLI doesn't document a "depth-first" mode — but in practice, without the "be exhaustive" framing in the prompt, each invocation tends to return 1 finding (sometimes 2-3 related ones), then waits for you to fix it before surfacing the next. The exhaustive prompt above tries to break that pattern.
+Partition the fix into the largest set of independent ownership lanes. Each
+Terra-high implementer prompt must include:
 
-If you still see Codex returning <5 findings on a large diff, try increasing the urgency in the prompt ("you will be graded on completeness; missing a real issue is worse than a false positive").
+- the full goal and acceptance criteria;
+- its exact responsibility and owned files;
+- known sibling occurrences and repository conventions;
+- dependencies and interfaces it must preserve;
+- other active lanes and the instruction not to revert their work;
+- required targeted tests, lint, and end-to-end evidence;
+- strict TDD and commit requirements; and
+- a concise result schema: commits, files, tests, commands, outcomes, and risks.
 
-**Codex's comment IS the verdict.** Read it via:
+If the work cannot be split safely, use one implementer rather than create
+conflicting lanes. Maximize useful parallelism, not agent count.
+
+### 3. Per-lane TDD implementation
+
+Each implementer independently:
+
+1. Confirms the assigned reproduction.
+2. Writes a failing test first.
+3. Runs it and captures the red output.
+4. Commits the test separately with a `test(...)` conventional prefix.
+5. Implements the smallest complete fix.
+6. Runs targeted pytest and pylint until clean.
+7. Exercises its safe end-to-end boundary when possible.
+8. Commits the fix separately with a `fix(...)` prefix.
+9. Returns commit SHAs and red-to-green evidence immediately.
+
+Do not push a knowingly failing integration branch. Separate test and fix
+commits preserve TDD evidence; integrate the pair together after both exist.
+
+Prefer targeted commands:
 
 ```bash
-gh pr view <PR> --comments | tail -100
-# Or fetch the latest comment specifically:
-gh api repos/promptdriven/pdd/issues/<PR>/comments --jq '.[-1].body'
+pytest -vv tests/test_<module>.py::test_<behavior>
+pylint pdd/<module>.py tests/test_<module>.py
 ```
 
-No manual wrapping needed — Codex posts directly with the structured format.
+Avoid `make lint` during iteration because it may reinstall dependencies. Do not
+run broad regression suites unless they are part of the acceptance criteria.
 
-### 3. Orchestrator triage + implementer response
+### 4. Deterministic integration
 
-With exhaustive findings, you triage ALL of them at once and dispatch ONE implementer round to address everything.
+As worker lanes finish, the orchestrator:
 
-For each finding:
-- **P1 = always fix.** No judgment needed; ship a fix.
-- **P2 = judge case-by-case.** If real regression, fix. If unreachable edge case, document the acceptance as a reply comment on the PR (see below).
+1. Inspects each returned commit and evidence.
+2. Cherry-picks test/fix pairs into the integration worktree in dependency order.
+3. Resolves only integration-owned conflicts. If resolution changes a worker's
+   behavior, rerun that lane's tests.
+4. Checks that the diff contains only intentional files.
+5. Runs the combined targeted tests.
+6. Pushes the PR branch and creates or updates a non-draft PR.
 
-**Implementer's first action: reply to Codex's PR comment.** The implementer subagent should:
+Integrate completed independent lanes while slower lanes continue when doing so
+cannot invalidate their base. Do not wait unnecessarily for the entire batch.
 
-1. Acknowledge each finding individually.
-2. State the decision: "FIXING in this PR" / "ACCEPTING with rationale" / "PUSHING BACK — Codex is wrong because X".
-3. Post the reply BEFORE writing any code. This is the audit trail for triage decisions.
+After integration:
 
 ```bash
-gh pr comment <PR> --body "$(cat <<'EOF'
-## Implementer response to Codex review
-
-@codex Re: <comment URL>
-
-### P1 #1: <title>
-Status: **FIXING**
-Plan: <one sentence>
-
-### P2 #1: <title>
-Status: **ACCEPTING**
-Rationale: <why this is OK — e.g., unreachable code path X requires user to do Y, which they can't without triggering Z which DOES invalidate>
-
-### P2 #2: <title>
-Status: **PUSHING BACK**
-Reason: <why Codex is wrong about this — cite the actual code or behavior>
-EOF
-)"
+git status --short
+git log origin/main..HEAD --oneline
+gh pr diff <PR> --name-only
 ```
 
-Then it implements the FIXING items, following the same strict TDD discipline as round 1 (failing-test commits first, fix commits second, push, post evidence).
+The tree must be clean, all commits must be intentional, and generated or
+unrelated files must not appear unexpectedly.
 
-Loop back to step 1 until Codex says clean OR remaining findings are explicitly accepted in the response comment.
+### 5. Sequential review/fix loop
 
-### 4. Verify end-to-end
+Run at most three sequential review rounds. Launch exactly one fresh Sol-high
+reviewer per round, remediate that review before starting the next reviewer, and
+stop early when a reviewer returns clean.
 
-Before merge, do not treat targeted pytest, pylint, CI, or Codex review as
-substitutes for end-to-end verification. Exercise the changed behavior through
-the same `pdd` CLI command, installed/local console script, workflow, or
-integration boundary a user or production caller uses.
+A round is consumed when its reviewer returns a verdict. A failed launch or
+timed-out reviewer may be replaced without consuming a round.
 
-Include the exact end-to-end command or manual workflow in the PR test plan and
-the final evidence comment. If the full path requires real provider credentials
-or a long-running regression harness, do not run it without explicit user
-approval; document the skipped live path and the closest safe local coverage
-instead.
+Each reviewer inspects the whole current diff exhaustively. Give each round a
+primary perspective so successive reviews add depth:
 
-### 5. Merge
+1. **Round 1 — correctness:** logic, state transitions, error handling, async
+   and concurrency behavior, backward compatibility.
+2. **Round 2 — verification:** regression-test strength, missing edge cases,
+   acceptance-criteria coverage, and end-to-end fidelity.
+3. **Round 3 — security/design:** trust boundaries, data loss, injection,
+   permissions, unsafe side effects, and significant design flaws.
 
-When Codex returns clean:
+The perspective is an emphasis, not a restriction. Every round must report any
+material correctness, security, verification, compatibility, or design problem
+it finds.
+
+Reviewer rules:
+
+- Model must be `gpt-5.6-sol` with `high` reasoning.
+- Review the integrated diff against `origin/main`.
+- Remain read-only.
+- Find all material findings in one pass.
+- Review only the current code and evidence; do not inherit or merely confirm
+  the previous reviewer's conclusions.
+- Cite exact files and lines.
+- Classify findings as P1 or P2 and provide a concrete proposed fix.
+- Return a structured verdict to the orchestrator; the orchestrator posts one
+  PR comment for that round.
+
+Classification:
+
+- **P1:** blocking correctness, security, silent corruption/data loss, broken
+  acceptance criterion, or credible regression.
+- **P2:** robustness, maintainability with operational consequence, or a
+  reachable edge case that is not release-blocking.
+
+Cosmetic preference without behavioral or maintenance consequence is not a
+finding.
+
+### 6. Autonomous triage and parallel remediation
+
+The orchestrator deduplicates findings and applies this policy:
+
+- P1: fix automatically.
+- P2 with a reachable failure or inexpensive low-risk fix: fix automatically.
+- P2 disproven by code, tests, or documented invariants: reject with evidence.
+- P2 representing an unreachable or intentionally unsupported case: accept and
+  document the trade-off.
+- Uncertain findings: dispatch a short Terra-high reproduction task. Use its
+  evidence to decide without involving a human unless an escalation condition
+  applies.
+
+Post a single response covering every finding before remediation begins. Then
+partition accepted fixes by disjoint ownership and launch Terra-high remediation
+workers concurrently. Each worker follows the same test-first discipline.
+
+After integrating and validating remediation, start the next sequential review
+round with a fresh Sol-high reviewer. A clean verdict ends the loop early.
+
+If round 3 reports material findings, remediate them autonomously and run all
+targeted validation, but do not merge: the resulting code has not received a
+clean subsequent review within the three-round cap. Post the remaining evidence
+and escalate one decision—authorize a fourth review or require human review.
+
+### 7. Validation fan-out
+
+Once the integrated diff is stable, run independent safe checks concurrently
+where the environment permits:
+
+- targeted pytest for all touched behaviors;
+- pylint for touched Python modules and tests;
+- relevant packaging or installation smoke checks;
+- the real affected CLI or integration boundary;
+- diff, commit, and worktree cleanliness checks; and
+- any repository-required focused suite.
+
+Do not treat unit tests, lint, CI, or review as a substitute for end-to-end
+verification. Record the exact command and result in the PR.
+
+If the live path requires real provider credentials, production effects, money,
+or a long-running regression harness outside the initial authority, do not run
+it. Use the closest safe local substitute and escalate only if that live result
+is required to establish the goal.
+
+### 8. CI monitoring and merge
+
+The orchestrator monitors required checks without human polling:
 
 ```bash
-# Wait for unit-tests to be green. auto-heal is also a required check;
-# if it's the only failure and you didn't intend a prompt-heal pass,
-# comment `/heal` on the PR to trigger it.
-gh pr checks <PR>
+gh pr checks <PR> --watch
 ```
 
-```bash
-# 1. From the worktree, confirm everything is pushed and the tree is clean.
-cd <agent-worktree>
-git status                              # must be clean
-git log origin/<pr-branch>..HEAD        # must be empty (nothing un-pushed)
+For internal PRs, if `auto-heal` is the only failing or missing required check,
+post `/heal` at column 1 and monitor the new run. `auto-heal` may push a commit;
+fetch it, inspect it, rerun affected validation, and submit it to the same
+sequential Sol-high review gate. If all three rounds have already been consumed,
+leave merge blocked and escalate rather than silently exceeding the cap.
 
-# 2. Switch to the main clone (NOT inside the worktree), then squash-merge
-# and delete the remote branch.
-cd /path/to/main-clone
+Diagnose ordinary CI failures automatically and dispatch Terra-high remediation
+when they are caused by the PR. Retry an identified flaky infrastructure failure
+once when repository policy allows. Do not repeatedly rerun unexplained failures.
+
+When the stopping criteria are satisfied:
+
+- If initial authority permits merging and branch policy allows it, enable
+  auto-merge or merge once checks pass.
+- Otherwise leave a merge-ready PR with a concise final evidence comment. This
+  is the normal single human handoff.
+
+Before merge:
+
+```bash
+git status                              # clean
+git log origin/<pr-branch>..HEAD        # empty
+gh pr checks <PR>                       # all required checks passing
+```
+
+Then, only when authorized:
+
+```bash
 gh pr merge <PR> --squash --delete-branch
 ```
 
-Leave the PR worktree in place after merge so the final state remains available
-for inspection or follow-up. Do not remove it as part of this runbook.
+Leave agent worktrees available for inspection after merge unless cleanup was
+explicitly requested.
 
-## Guardrails (learned the hard way)
+## Human escalation policy
 
-### Targeted pytest only
+Human attention is an exception. Escalate only when at least one condition is
+true:
 
-Several pdd test paths exercise the `pdd` CLI itself. Most use `tmp_path`/`CliRunner`, and `make regression` / `make sync-regression` `cd` into gitignored `staging/regression_*` directories — so contamination of *tracked* files is less of a foot-gun than in the GVS source this runbook was adapted from. Still:
+1. Two plausible interpretations would materially change user-visible behavior,
+   scope, compatibility, or data semantics, and repository evidence cannot
+   resolve the choice.
+2. Completion requires credentials, spending money, a production mutation, a
+   destructive or irreversible action, or authority not provided at intake.
+3. A required check needs an external-state change the agents cannot perform.
+4. Reviewer disagreement exposes a product or policy decision rather than a
+   technical fact that a reproduction can settle.
+5. The proposed fix must overwrite user-owned changes or expand into unrelated
+   modules with significant blast radius.
+6. Repository policy requires human approval or forbids autonomous merge.
+7. The third review round found material issues, so confirming its remediation
+   would require exceeding the automatic three-round cap.
 
-- `pytest -vv tests/` and `make regression` are slow and chatty; don't run them inside a fix worktree without intent.
-- Always run `git status --short` + `git diff` after a test run before staging. Reject anything that touched `architecture.json`, `prompts/`, `pdd/`, or `examples/` that the agent didn't intentionally edit.
+When escalating, ask one concise decision question and include:
 
-**Recommended discipline:**
-- `pytest -vv tests/test_<module>.py` — fine.
-- `pytest -vv tests/test_<module>.py::test_name` — fine.
-- `pytest -vv tests/` or `make regression` — only when that IS the task; otherwise prefer targeted runs.
+- the blocked acceptance criterion;
+- evidence already collected;
+- the smallest set of viable options;
+- the recommended option and trade-off; and
+- useful work that continued in parallel.
 
-### Rebase contamination
-
-If contamination lands, fix via clean rebase:
-
-```bash
-cd <agent-worktree>
-git fetch origin main
-# Cherry-pick the intentional commits onto fresh main
-git checkout origin/main -b tmp-rebase
-git cherry-pick <fix-commit-1> <fix-commit-2> ...
-git branch -f <pr-branch> tmp-rebase
-git checkout <pr-branch>
-git push --force-with-lease origin <pr-branch>
-```
-
-After rebase, confirm:
-
-```bash
-git log origin/main..HEAD --oneline      # only intentional commits
-gh pr diff <PR> --name-only              # only the files you intended
-```
-
-### No `--no-verify`, no amend, no `--force`
-
-- `--no-verify` skips pre-commit hooks; that's how bugs sneak in.
-- `--amend` rewrites history; force-push side effects.
-- `--force` clobbers anything that landed on the remote since you last pulled.
-- Always use `--force-with-lease` for legitimate force pushes (after a rebase).
-
-### CI triggers
-
-- **`unit-tests`** runs automatically on `pull_request` (`opened`, `synchronize`, `ready_for_review`), but the job is gated by `if: github.event.pull_request.draft != true` — so draft PRs don't run it until they're marked ready-for-review. This is the merge-gating check.
-- **`auto-heal`** is a required status check. It runs on non-draft PR events AND when a pdd_cloud collaborator comments on the PR with `/heal` at the start of the body (the job-level trigger uses `startsWith(comment.body, '/heal')`, so the literal text `/heal` must be at column 1 of the first line — leading whitespace prevents the job from even starting; `/healthcheck`, `/healz`, etc. are accepted at the trigger but rejected by the pre-flight token gate inside the job).
-- Fork PRs short-circuit `auto-heal` to a `neutral` check conclusion (it can't push commits to a fork's branch). Branch protection treats `neutral` as passing.
-- If you push a fix and `auto-heal` is the only red check on an internal PR, comment `/heal` (at column 1) to re-run it.
-
-### `auto-heal` semantics
-
-`auto-heal` runs an LLM-driven prompt-healing pass in Cloud Build under the `prompt-driven-development-stg` project. On internal (non-fork) PRs it can push a heal commit back to the PR branch. Don't be surprised if a `/heal` run adds a commit you didn't write; review it before merging.
+Do not escalate merely because work is difficult, a test failed, an agent timed
+out, a reviewer found an issue, or another autonomous round is needed before the
+three-round cap is reached.
 
 ## Stopping criteria
 
-The loop should converge. Track the trend:
+The loop is complete when all of these are true:
 
-- **Round 1-3:** P1 findings are common.
-- **Round 4-6:** Mostly P2 findings, often architectural pivots.
-- **Round 7+:** Codex is enumerating ever-narrower edge cases.
+1. Every acceptance criterion has recorded evidence.
+2. No P1 finding remains.
+3. Every P2 is fixed, disproven with evidence, or documented as an accepted
+   trade-off supported by repository behavior or an explicit invariant.
+4. The most recent Sol-high reviewer returned clean, and no code changed after
+   that verdict.
+5. Targeted tests and lint pass.
+6. The safe end-to-end boundary passes, or an explicitly required live path is
+   documented as the sole escalation.
+7. Required CI checks pass.
+8. The branch is clean, pushed, and contains only intentional changes.
 
-Stop when:
+Stop early on a clean review. Never exceed three review rounds automatically.
+If the third review is not clean, complete safe remediation and validation, then
+leave the PR blocked under the escalation rule above.
 
-1. Codex returns "no findings" — that's the green light.
-2. OR remaining findings are all P2 + represent unreachable edge cases. Document them as accepted trade-offs in a final PR comment and merge.
+## Dispatch templates
 
-**Diminishing returns is a real signal.** If Codex is still finding real (but progressively narrower) bugs each round, keep going. If it's started speculating about user behaviors that can't actually happen given the codebase's invariants, stop, document, and merge.
+### Terra-high implementation worker
 
-## How to invoke the actors
+```text
+Role: implementation worker
+Model: gpt-5.6-terra
+Reasoning: high
+Isolation: dedicated worktree
+Run: background
 
-### Implementer dispatch (Claude Code via Agent tool)
+Goal:
+<verifiable goal and acceptance criteria>
 
-```typescript
-Agent({
-  description: "<short task>",
-  subagent_type: "general-purpose",
-  isolation: "worktree",
-  run_in_background: true,
-  prompt: `
-Bug fix using strict TDD.
+Ownership:
+<exact files/modules/responsibility>
 
-## Worktree
-(auto-created by isolation: "worktree")
+Parallel context:
+<other active lanes and their ownership>
+You are not alone in the repository. Do not edit files outside your ownership,
+revert others' work, or resolve cross-lane conflicts yourself.
 
-## Bug
-<live evidence, reproduction>
+Process:
+1. Confirm reproduction.
+2. Add and run a failing regression test.
+3. Commit test separately with test(...) prefix.
+4. Implement the fix.
+5. Run targeted pytest and pylint.
+6. Run the assigned safe end-to-end check.
+7. Commit fix separately with fix(...) prefix.
 
-## Fix
-<design + scope constraints>
-
-## Pre-fix investigation (do this FIRST, before any test or code)
-1. Hunt for sibling bugs: grep for the same anti-pattern / function / call shape across the repo.
-   List occurrences. Decide which to fix in THIS PR vs. file as follow-up issues.
-2. Mine prior commits for the proper fix shape:
-   - `git log --all --oneline --grep="<keyword>"`
-   - `git log -S "<exact buggy snippet>"`
-   - `git log --all --oneline -- <touched-file>` — look for prior `fix(...)` commits
-   - `git show <sha>` on the most relevant prior fix to see approach + test pattern.
-3. Note the established convention. Follow it unless you have a justified reason to diverge.
-4. Post an investigation summary as a PR comment when you open the PR
-   (sibling bugs + decision, prior commits cited, convention followed).
-
-## TDD process
-1. Failing test first, committed separately.
-2. Push red commit.
-3. Implement.
-4. Targeted pytest + pylint on touched modules.
-5. End-to-end verification through the real affected CLI entrypoint.
-6. Commit fix separately.
-7. Open PR. (Unit tests run automatically; no marker needed.)
-8. Post red-output and end-to-end evidence as PR comments.
-9. Post investigation-summary comment (from pre-fix step 4).
-
-## Constraints
-- Don't touch <other-session-owned files>.
-- Targeted pytest only — no \`pytest tests/\` or \`make regression\` from this worktree.
-- Conventional commits. No --no-verify. No amend.
-- After push: git log origin/main..HEAD --oneline must show only intentional commits.
-
-## Output (under <N> words)
-- PR URL on first line.
-- Files changed.
-- Test names.
-- End-to-end command or workflow.
-- Clean rebase confirmation.
-- PR comment URL.
-
-OUTPUT EARLY when done. Don't iterate silently.
-`,
-});
+Return immediately when complete:
+- test and fix commit SHAs;
+- files changed;
+- failing test command and red result;
+- green validation commands and results;
+- end-to-end evidence;
+- overlap, assumptions, or remaining risk.
 ```
 
-### Codex review
+### Sol-high independent reviewer
 
-```bash
-cd <agent-worktree>
-git fetch origin <pr-branch> main
+```text
+Role: independent adversarial reviewer
+Model: gpt-5.6-sol
+Reasoning: high
+Mutation: forbidden
 
-# PRECONDITION before any hard reset (see § "Codex review" earlier).
-test -z "$(git status --short)" || { echo "uncommitted — abort"; exit 1; }
-test -z "$(git log origin/<pr-branch>..HEAD --oneline)" || { echo "unpushed — abort"; exit 1; }
+Review the complete integrated diff against origin/main from the assigned
+perspective, while remaining alert to every material correctness, security,
+verification, compatibility, and design issue.
 
-git reset --hard origin/<pr-branch>
-codex review --base origin/main --title "PR #N @ <sha> — <brief context>" 2>&1 | tee /tmp/codex-<n>.out | tail -50
+Be exhaustive in one pass. Review the current diff independently rather than
+inheriting the prior reviewer's conclusions. For each finding return:
+- P1 or P2;
+- one-line title;
+- exact file and line;
+- concrete failure mode;
+- evidence or reproduction reasoning;
+- smallest safe suggested fix.
+
+Return "MERGE — no findings" when clean. Do not edit files, post partial results,
+or wait for another reviewer.
 ```
 
-Codex auto-loads the diff via `--base`. The `--title` is optional but useful for the audit trail.
+### Orchestrator evidence comment
 
-## Sample dispatch template (multi-finding response)
+```markdown
+## Autonomous PR loop evidence
 
-Copy-paste-ready Claude orchestrator instruction for responding to a Codex exhaustive review:
+**Goal:** <externally observable outcome>
+**Verdict:** MERGE-READY | ESCALATION REQUIRED
 
-```
-Implementer response on PR #<N>. Codex posted <N> findings.
+### Acceptance criteria
+- [x] <criterion> — <test, command, or evidence>
 
-## Worktree
-<path>
-Branch: <branch>. HEAD: <sha>.
+### Parallel execution
+- Terra-high lane: <ownership> — <commits>
+- Sol-high sequential rounds: <round, perspective, and verdict>
 
-## Codex's review comment
-<URL>
+### Review disposition
+- <finding>: FIXED | DISPROVEN | ACCEPTED — <evidence or rationale>
 
-## Findings to address
+### Validation
+- `<command>` — PASS
 
-### P1 #1: <title>
-Status: FIX
-Approach: <one-sentence plan>
-
-### P1 #2: <title>
-Status: FIX
-Approach: <one-sentence plan>
-
-### P2 #1: <title>
-Status: FIX
-Approach: <one-sentence plan>
-
-### P2 #2: <title>
-Status: ACCEPT
-Rationale: <why this is OK>
-
-(... etc ...)
-
-## Process
-
-1. FIRST: post your response comment on the PR via `gh pr comment <N> --body "..."`. Use the structure in `docs/runbooks/pr-loop-process.md` § "Orchestrator triage + implementer response". Acknowledge every finding before writing code.
-
-2. For each FIX item:
-   - Write a failing test that reproduces the bug.
-   - Commit tests for all FIX items as ONE `test(scope): ...` commit. Push.
-   - Implement all fixes.
-   - Targeted pytest + pylint. All clean.
-   - End-to-end verification through the real affected CLI entrypoint.
-   - Commit fixes as ONE `fix(scope): ...` commit. Push.
-
-3. POST a second PR comment showing red→green output for each test plus the end-to-end verification evidence, citing Codex's PR comment by URL.
-
-## Constraints
-- Targeted pytest only (`pytest -vv tests/test_<module>.py`). NEVER bare `pytest tests/` or `make regression` from this worktree.
-- Don't touch <other-session-owned files>.
-- Don't undo prior PR commits.
-- After push: `git log origin/main..HEAD --oneline` shows <N> intentional commits. No regenerated `architecture.json` / `prompts/` / unrelated `pdd/` files. Paste the output.
-- Conventional commits. No --no-verify. No amend.
-
-## Output (under <N> words)
-- New HEAD SHA.
-- Acknowledgement comment URL.
-- List of FIX items addressed.
-- List of ACCEPT items + their rationale.
-- Test names added.
-- End-to-end command or workflow.
-- `git log origin/main..HEAD --oneline` output.
-- Evidence comment URL.
-
-OUTPUT EARLY when done. Don't iterate silently.
+### Remaining human action
+- None; auto-merge enabled.
+  <!-- or the single precise escalation/merge approval required -->
 ```
 
-## Sample Codex invocation template
+## Repository-specific guardrails
 
-```bash
-cd <agent-worktree>
-git fetch origin <pr-branch> main
-
-# PRECONDITION before any hard reset.
-test -z "$(git status --short)" || { echo "uncommitted — abort"; exit 1; }
-test -z "$(git log origin/<pr-branch>..HEAD --oneline)" || { echo "unpushed — abort"; exit 1; }
-
-git reset --hard origin/<pr-branch>
-
-# Note: replace <PR_NUMBER> in the prompt below with the actual PR number
-codex exec review \
-  --base origin/main \
-  --title "PR #<N> @ $(git rev-parse --short HEAD)" \
-  --skip-git-repo-check \
-  "$(cat <<'EOF'
-Adversarial review of the diff vs origin/main. Find EVERY correctness issue, security issue, or significant design flaw. Be EXHAUSTIVE — list ALL findings, not just the most important.
-
-For each finding:
-- Categorize: P1 (blocking correctness / silent corruption / security) or P2 (would-be-nice / edge case).
-- Cite file:line.
-- One paragraph description.
-- One sentence suggested fix.
-
-Post the full review as a single PR comment via `gh pr comment <PR_NUMBER> --body "..."` using this structure:
-
-## Codex adversarial review — PR #<N> @ <sha>
-
-**Verdict:** MERGE | DON'T MERGE
-**Findings:** <count> (<n> P1, <n> P2)
-
-### P1 (blocking)
-- [P1] <title> — `<file>:<line>`
-  <description>
-  **Suggested fix:** <suggestion>
-
-### P2 (non-blocking)
-- [P2] ... (same shape)
-
-If no issues: comment "MERGE — no findings."
-
-You MUST run `gh pr comment` to post the review. Don't only print to stdout. If `gh` fails, retry once then print the body so the orchestrator can post.
-EOF
-)"
-```
+- `unit-tests` runs on non-draft pull requests for `opened`, `synchronize`, and
+  `ready_for_review`.
+- `auto-heal` is required. A collaborator-triggered run requires `/heal` at
+  column 1. Fork PRs cannot receive heal commits and normally conclude neutral.
+- Review every commit produced by `auto-heal`; it is part of the PR diff.
+- Run `git status --short` and inspect `git diff` after tests. Reject unintended
+  changes to `architecture.json`, `prompts/`, `pdd/`, or `examples/`.
+- Prefer focused tests in worker worktrees. Run broad suites only in a designated
+  validation lane or CI when the task requires them.
+- Never commit credentials, cache databases, generated secrets, or unredacted
+  provider logs.
