@@ -164,6 +164,9 @@ GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/m0-bootstrap-policy.json",
     "scripts/verify_global_sync_m0_bootstrap.py",
 }
+GLOBAL_SYNC_M0_BOOTSTRAP_GLOBAL_SYNC_PREAUTHORIZED_PATHS = {
+    ".pdd/global-sync/m0-bootstrap-policy.json",
+}
 GLOBAL_SYNC_M0_BOOTSTRAP_CANDIDATE_PATHS = (
     GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
     | {"scripts/verify_global_sync_m0_samples.py"}
@@ -2468,10 +2471,15 @@ def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
     } == (
         GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
         | STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS
+        | GLOBAL_SYNC_M0_BOOTSTRAP_GLOBAL_SYNC_PREAUTHORIZED_PATHS
     )
     assert (
         STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS
         <= STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    )
+    assert (
+        GLOBAL_SYNC_M0_BOOTSTRAP_GLOBAL_SYNC_PREAUTHORIZED_PATHS
+        <= GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
     )
 
     # Existing independently reviewed preauthorization families stay exact.
