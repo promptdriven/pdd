@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from pdd import provider_manager
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "pdd" / "data" / "provider_catalog.v1.json"
@@ -94,6 +96,9 @@ def test_fixed_origin_openai_compatible_rows_use_the_reviewed_gateway_profile() 
 def test_kimi_k3_model_route_and_strict_label_are_canonical() -> None:
     manifest, generator = _manifest_and_generator()
     providers = generator._validate_manifest(manifest)
+    assert provider_manager.parse_api_key_vars("MOONSHOT_API_KEY") == [
+        "MOONSHOT_API_KEY"
+    ]
     metadata = generator._catalog_metadata(
         manifest,
         providers,
