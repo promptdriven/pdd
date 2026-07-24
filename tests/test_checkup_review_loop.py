@@ -71,6 +71,76 @@ def _json(status: str, findings: List[Dict[str, str]] | None = None) -> str:
     )
 
 
+def test_credential_limit_failure_is_not_sent_to_parse_repair() -> None:
+    """A provider cap is terminal diagnostics, not malformed review JSON.
+
+    This is the exact permanent-provider envelope from the aborted staging6
+    checkup.  Re-asking the already exhausted reviewer to "repair" it can only
+    consume more of the final-gate budget before the fallback reviewer runs.
+    """
+    import pdd.checkup_review_loop as mod
+
+    output = (
+        "Provider openai reported a permanent error (credential-limit); "
+        "skipping retries.\n"
+        "PDD_PROVIDER_LIMIT provider=openai status=credential_limit "
+        "reason=usage_limit reset_at=2026-07-29T00:37:00Z "
+        "reset_source=parsed_text"
+    )
+    result = mod.ReviewResult(
+        reviewer="codex",
+        status="failed",
+        issue_aligned=None,
+        findings=[],
+    )
+
+    assert mod._should_attempt_parse_repair(output, result) is False
+
+
+def test_role_task_sets_role_wide_deadline_for_credential_limit_retry_chain(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed Codex reviewer must return to fallback within its one role budget."""
+    import pdd.checkup_review_loop as mod
+
+    observed: Dict[str, Any] = {}
+    monkeypatch.setattr(mod.time, "time", lambda: 10_000.0)
+    monkeypatch.setattr(mod.time, "monotonic", lambda: 100.0)
+
+    def exhausted_codex(**kwargs: Any) -> Tuple[bool, str, float, str]:
+        observed.update(kwargs)
+        return (
+            False,
+            "Provider openai reported a permanent error (credential-limit); "
+            "skipping retries.",
+            0.0,
+            "openai",
+        )
+
+    monkeypatch.setattr(mod, "run_agentic_task", exhausted_codex)
+
+    success, output, _cost, _model = mod._run_role_task(
+        role="codex",
+        instruction="Review the PR.",
+        cwd=tmp_path,
+        verbose=False,
+        quiet=True,
+        label="credential-limit-role-deadline",
+        timeout=900.0,
+        max_retries=3,
+        reasoning_time=None,
+        # Hosted final-gate budget was 150 minutes.  The per-reviewer role
+        # still must be capped at 15 minutes, rather than inheriting all of
+        # that outer budget for provider retries.
+        deadline=9_100.0,
+    )
+
+    assert success is False
+    assert "credential-limit" in output
+    assert observed["timeout"] == 900.0
+    assert observed["deadline"] == 10_900.0
+
+
 @pytest.mark.parametrize(
     "base",
     [

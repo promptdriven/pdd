@@ -4770,6 +4770,13 @@ def _should_attempt_parse_repair(output: str, result: ReviewResult) -> bool:
     if lowered.startswith(provider_failure_prefixes):
         return False
     provider_failure_markers = (
+        # Subscription/usage caps are permanent for the active credential.
+        # The hosted executor emits both forms below for the Cloud retry
+        # waterfall; neither is malformed review JSON that a parse-repair
+        # request could recover.
+        "credential-limit",
+        "credential_limit",
+        "pdd_provider_limit",
         "rate limit",
         "quota exceeded",
         "quota exhausted",
