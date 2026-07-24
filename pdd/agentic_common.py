@@ -1029,6 +1029,35 @@ def _filter_redundant_directory_changes(
     return filtered
 
 
+def _filter_linked_git_metadata_root_mtime_changes(
+    paths: List[Path],
+    cwd: Path,
+    before: _FilesystemPolicySnapshot,
+    after: _FilesystemPolicySnapshot,
+) -> List[Path]:
+    """Ignore a linked-worktree metadata-root mtime with no file mutation.
+
+    Merely opening a linked worktree can update the mtime of its gitdir.  That
+    directory timestamp is not evidence of a provider write; all observable
+    Git metadata file creation, deletion, or content edits remain in the
+    snapshot and continue to fail the read-only policy.
+    """
+    metadata_roots = {
+        _audit_entry_path(root) for root in _linked_git_metadata_roots(cwd)
+    }
+    return [
+        path
+        for path in paths
+        if not (
+            path in metadata_roots
+            and _is_directory_change(path, before, after)
+            and not any(
+                other != path and _path_is_within(other, path) for other in paths
+            )
+        )
+    ]
+
+
 def _escaped_symlink_target_for_path(
     path: Path,
     before: _FilesystemPolicySnapshot,
@@ -1065,25 +1094,31 @@ def _audit_filesystem_policy(
         if after.files.get(path) == signature
     }
     changed_paths = sorted(
-        _filter_redundant_directory_changes(
-            [
-                path for path in comparison_paths
-                if (
-                    before.files.get(path) != after.files.get(path)
-                    or (
-                        path in pdd_owned_log_signatures
-                        and after.files.get(path) != pdd_owned_log_signatures[path]
+        _filter_linked_git_metadata_root_mtime_changes(
+            _filter_redundant_directory_changes(
+                [
+                    path for path in comparison_paths
+                    if (
+                        before.files.get(path) != after.files.get(path)
+                        or (
+                            path in pdd_owned_log_signatures
+                            and after.files.get(path)
+                            != pdd_owned_log_signatures[path]
+                        )
                     )
-                )
-                and not _is_trusted_pdd_owned_log_change(
-                    path,
-                    after.files.get(path),
-                    pdd_owned_log_signatures,
-                )
-            ],
+                    and not _is_trusted_pdd_owned_log_change(
+                        path,
+                        after.files.get(path),
+                        pdd_owned_log_signatures,
+                    )
+                ],
+                before,
+                after,
+                trusted_pdd_log_paths,
+            ),
+            cwd,
             before,
             after,
-            trusted_pdd_log_paths,
         ),
         key=str,
     )
@@ -2170,6 +2205,13 @@ CLAUDE_CODE_INTERACTIVE_MODE: str = "interactive"
 # synthetic auth row); the interval throttles those checks inside the PTY loop.
 INTERACTIVE_AUTH_FASTFAIL_GRACE_SECONDS: float = 2.0
 INTERACTIVE_AUTH_FASTFAIL_INTERVAL_SECONDS: float = 1.0
+# Claude's alternate-screen composer does not always expose stable prompt text
+# in the PTY stream. The task is a PDD-owned positional argument, so bounded
+# startup Enter retries are safe; stop retrying as soon as the job-bound wrapper
+# is recognized and submitted.
+_INTERACTIVE_STARTUP_ENTER_SECONDS: float = 1.0
+_INTERACTIVE_STARTUP_ENTER_RETRY_SECONDS: float = 3.0
+_INTERACTIVE_STARTUP_ENTER_MAX: int = 5
 # Issue #1714: no-progress (stall) watchdog. A parked interactive TUI keeps the
 # PTY busy with spinner frames even after the model has stalled, so PTY byte
 # flow is NOT a progress signal — only growth of the session transcript (new
@@ -2287,6 +2329,12 @@ _PERMANENT_ERROR_CLASSES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
             # time token, any sentence stringing both phrases together would
             # short-circuit the rate-limit retry path on benign text.
             r"hit\s+your\s+(?:session\s+|usage\s+|weekly\s+|monthly\s+)?limit[^\n]{0,40}?\bresets?\b\s*(?:[·:|\-]|in\s|at\s|on\s|\d|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
+            # Codex subscription-cap envelope.  Unlike Claude Code, Codex
+            # points at its official usage page and says ``try again at``.
+            # Require all three provider-owned anchors plus a concrete dated
+            # timestamp so issue/review prose containing any subset cannot
+            # disable retries or emit a cloud scheduling marker.
+            r"hit\s+your\s+usage\s+limit[^\n]{0,120}?https://chatgpt\.com/codex/settings/usage[^\n]{0,160}?\btry\s+again\s+at\b\s*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,)?\s+\d{4}(?:,)?\s+\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?|\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}(?::\d{2})?(?:z|[+-]\d{2}:?\d{2})?)",
         ),
     ),
     (
@@ -2413,8 +2461,20 @@ _MARKER_SOURCES: frozenset = frozenset(
 _MONTHS: Dict[str, int] = {
     name.lower(): num
     for num, name in enumerate(
-        ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+        [
+            "Jan",
+            "Feb",
+            "Mar",
+            "Apr",
+            "May",
+            "Jun",
+            "Jul",
+            "Aug",
+            "Sep",
+            "Oct",
+            "Nov",
+            "Dec",
+        ],
         start=1,
     )
 }
@@ -2422,12 +2482,14 @@ _MONTHS: Dict[str, int] = {
 # Normalized UTC reset timestamp shape used both to format and to validate.
 _RESET_AT_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
-# Reset-clause matchers. Each is anchored on the `resets` keyword and reads ONLY
-# structured groups (never the surrounding free text). A short bounded gap
-# (`[^\n]{0,12}?`) absorbs the typical "· " / "at " / "on " delimiter between
-# the anchor and the time token. Tried most-specific first.
+# Reset-clause matchers. Each is anchored on the provider-owned ``resets`` or
+# ``try again at`` clause and reads ONLY structured groups (never the surrounding
+# free text). A short bounded gap (``[^\n]{0,12}?``) absorbs the typical
+# ``· `` / ``at `` / ``on `` delimiter between the anchor and the time token.
+# Tried most-specific first.
+_RESET_CLAUSE_RE = r"(?:resets?|try\s+again\s+at)"
 _RESET_ISO_RE = re.compile(
-    r"resets?\b[^\n]{0,12}?"
+    _RESET_CLAUSE_RE + r"\b[^\n]{0,12}?"
     r"(?P<iso>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?"
     r"(?:Z|[+-]\d{2}:?\d{2})?)",
     re.IGNORECASE,
@@ -2459,19 +2521,17 @@ _TZ_TAIL = (
 # the day and the time, so "June 11, 2026, 3:30pm" is not misread as hour=20 and
 # "June 11 at 3:30pm" is not dropped as unparseable.
 _RESET_DATE_RE = re.compile(
-    r"resets?\b[^\n]{0,12}?"
+    _RESET_CLAUSE_RE + r"\b[^\n]{0,12}?"
     r"(?P<month>jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+"
-    r"(?P<day>\d{1,2})(?:,)?\s+"
+    r"(?P<day>\d{1,2})(?:st|nd|rd|th)?(?:,)?\s+"
     r"(?:(?P<year>\d{4})(?:,)?\s+)?"
     r"(?:at\s+)?"
-    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?"
-    + _TZ_TAIL,
+    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?" + _TZ_TAIL,
     re.IGNORECASE,
 )
 _RESET_TIME_RE = re.compile(
-    r"resets?\b(?P<gap>[^\n]{0,12}?)"
-    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?"
-    + _TZ_TAIL,
+    _RESET_CLAUSE_RE + r"\b(?P<gap>[^\n]{0,12}?)"
+    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?" + _TZ_TAIL,
     re.IGNORECASE,
 )
 
@@ -2480,7 +2540,9 @@ _RESET_TIME_RE = re.compile(
 # time — those must not yield a reset_at.
 _RELATIVE_RESET_GAP_RE = re.compile(r"\b(?:in|after|within|every)\b", re.IGNORECASE)
 # Explicit numeric UTC/GMT offset, e.g. "UTC+02:00", "GMT-5", "+0530".
-_TZ_OFFSET_RE = re.compile(r"^(?:UTC|GMT)?\s*([+-])(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE)
+_TZ_OFFSET_RE = re.compile(
+    r"^(?:UTC|GMT)?\s*([+-])(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE
+)
 # Some minimal tzdata installs omit IANA backward-link aliases even when the
 # canonical zone exists.
 _RESET_TZ_ALIASES: Dict[str, str] = {
@@ -2630,11 +2692,13 @@ def _parse_reset_at(
     * ``estimated`` — only a time-of-day was given, so the date was inferred,
     * ``none`` — nothing parseable.
 
-    Only recognized date/time tokens are ever read out of ``text``; the
-    surrounding free text is never echoed, so the result is safe to emit even
-    when the input carries untrusted provider output. Unzoned times are
-    interpreted as UTC (a conservative, documented default). ``now`` is
-    injectable for deterministic tests and defaults to the current UTC time.
+    Only recognized date/time tokens following a provider-owned ``resets`` or
+    ``try again at`` clause are ever read out of ``text``; the surrounding free
+    text is never echoed, so the result is safe to emit even when the input
+    carries untrusted provider output. Month-day dates may carry ordinal suffixes
+    such as ``23rd``. Unzoned times are interpreted as UTC (a conservative,
+    documented default). ``now`` is injectable for deterministic tests and
+    defaults to the current UTC time.
     """
     if not text:
         return "", "none"
@@ -2709,7 +2773,7 @@ def _provider_limit_marker(
 
 
 def _credential_limit_reason(error_message: str) -> str:
-    """Map a Claude Code subscription-cap envelope to a marker ``reason``.
+    """Map a Claude/Codex subscription-cap envelope to a marker ``reason``.
 
     ``session``/``usage`` map to their specific reasons; weekly/monthly/overall
     caps map to the overarching ``credential_limit``.
@@ -2736,7 +2800,7 @@ def _classify_provider_limit(
     Piggybacks on the existing vetted classification so it inherits the
     credential-limit false-positive guards and the generic-429 short-circuit:
 
-    * ``credential-limit`` (Claude Code subscription/session/usage/weekly cap)
+    * ``credential-limit`` (Claude or Codex subscription/session/usage cap)
       -> ``status=credential_limit`` with a session/usage/credential reason and
       a parsed reset time when the envelope carries one.
     * generic transient 429 (no permanent classification) ->
@@ -5326,6 +5390,7 @@ def run_agentic_task(
     single_provider_attempt: bool = False,
     background_safe: bool = False,
     include_log_bodies: bool = True,
+    accept_failed_output: Optional[Callable[[str], bool]] = None,
 ) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
@@ -5373,6 +5438,11 @@ def run_agentic_task(
             provider exactly once, with no retries, provider fallback, or routing
             escalation. Intended for side-effecting tasks that must not run
             more than once.
+        accept_failed_output: Optional semantic acceptance callback for a
+            provider response that carries a complete result despite its
+            transport envelope reporting failure. The callback is deliberately
+            opt-in and must validate the full response; ordinary provider
+            errors retain their normal fail-closed retry/fallback path.
 
     Returns:
         AgenticTaskResult(success, output_text, cost_usd, provider_used, usage).
@@ -5620,6 +5690,16 @@ def run_agentic_task(
                 total_cost += cost
                 actual_model = provider_result[3]
                 usage = provider_result[4] if len(provider_result) > 4 else None
+                # Claude Code can surface ``is_error: true`` after a tool-level
+                # failure even when the assistant emitted a complete, structured
+                # result. Let a workflow opt in to accepting only a response it
+                # can validate semantically. Auth, quota, empty, and malformed
+                # envelopes keep their normal fail-closed behavior.
+                if not success and accept_failed_output is not None:
+                    try:
+                        success = bool(accept_failed_output(output))
+                    except Exception:  # pragma: no cover - callback isolation
+                        success = False
                 last_output = output
                 # Keep requested/effective routing separate from provider-observed
                 # provenance. A successful result's model_id must never be filled
@@ -7694,6 +7774,44 @@ def _claude_interactive_needs_trust_confirmation(output_tail: str) -> bool:
     )
 
 
+def _claude_interactive_needs_theme_confirmation(output_tail: str) -> bool:
+    """Detect Claude Code's first-run theme picker.
+
+    The TUI renders this screen before it accepts the positional task. Match
+    the whitespace/control-sequence-insensitive labels rather than a menu
+    number so minor layout changes do not strand hosted runs.
+    """
+    cleaned = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output_tail)
+    cleaned = re.sub(r"\x1b[@-Z\\-_]", "", cleaned)
+    compact = re.sub(r"[^a-z0-9]+", "", cleaned.lower())
+    return "textstyle" in compact and "darkmode" in compact and "lightmode" in compact
+
+
+def _claude_interactive_task_waiting_for_submit(
+    output_tail: str,
+    job_id: str,
+) -> bool:
+    """Detect PDD's own positional task waiting in Claude's composer.
+
+    Newer Claude Code builds can render the final positional prompt without
+    submitting it. Restrict auto-submit to the wrapper PDD constructed for this
+    exact job; arbitrary user or model text must never trigger an Enter.
+    """
+    cleaned = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output_tail)
+    cleaned = re.sub(r"\x1b[@-Z\\-_]", "", cleaned)
+    compact = re.sub(r"[^a-z0-9]+", "", cleaned.lower())
+    full_wrapper = (
+        "readthefileat" in compact
+        and "pddreply" in compact
+        and (job_id.lower() in compact or "successtrueorfalse" in compact)
+    )
+    wrapped_tail = (
+        "callthemcptoolpddreply" in compact
+        and "donotstopuntilpddreply" in compact
+    )
+    return full_wrapper or wrapped_tail
+
+
 def _run_interactive_pty_until_reply(
     cmd: List[str],
     *,
@@ -7730,6 +7848,8 @@ def _run_interactive_pty_until_reply(
     output_chunks: List[str] = []
     proc: Optional[subprocess.Popen] = None
     trust_confirmed = False
+    theme_confirmed = False
+    task_submitted = False
     try:
         proc = subprocess.Popen(
             cmd,
@@ -7745,6 +7865,8 @@ def _run_interactive_pty_until_reply(
         slave_fd = -1
         start = time.time()
         deadline = start + timeout
+        startup_enter_count = 0
+        next_startup_enter_at = start + _INTERACTIVE_STARTUP_ENTER_SECONDS
         # Issue #1365: throttled post-launch auth-failure check. First check is
         # deferred by a grace window so a healthy session has time to start a
         # real turn before we inspect its transcript. The transcript path is
@@ -7853,6 +7975,15 @@ def _run_interactive_pty_until_reply(
                 tail = "".join(output_chunks)[-MAX_ERROR_SNIPPET_LENGTH:]
                 return False, f"Claude interactive mode timed out. Output tail: {tail}", 0.0, None
 
+            if (
+                startup_enter_count < _INTERACTIVE_STARTUP_ENTER_MAX
+                and output_chunks
+                and now >= next_startup_enter_at
+            ):
+                os.write(master_fd, b"\r")
+                startup_enter_count += 1
+                next_startup_enter_at += _INTERACTIVE_STARTUP_ENTER_RETRY_SECONDS
+
             readable, _, _ = select.select([master_fd], [], [], min(0.2, remaining))
             if master_fd in readable:
                 try:
@@ -7862,11 +7993,27 @@ def _run_interactive_pty_until_reply(
                 if chunk:
                     decoded = chunk.decode("utf-8", errors="replace")
                     output_chunks.append(decoded)
+                    output_tail = "".join(output_chunks)[-4000:]
                     if not trust_confirmed:
-                        output_tail = "".join(output_chunks)[-4000:]
                         if _claude_interactive_needs_trust_confirmation(output_tail):
                             os.write(master_fd, b"\r")
                             trust_confirmed = True
+                    if (
+                        not theme_confirmed
+                        and _claude_interactive_needs_theme_confirmation(output_tail)
+                    ):
+                        os.write(master_fd, b"\r")
+                        theme_confirmed = True
+                    if (
+                        not task_submitted
+                        and _claude_interactive_task_waiting_for_submit(
+                            output_tail,
+                            job_id,
+                        )
+                    ):
+                        os.write(master_fd, b"\r")
+                        task_submitted = True
+                        startup_enter_count = _INTERACTIVE_STARTUP_ENTER_MAX
 
         if reply_path.exists():
             return _parse_claude_interactive_reply(reply_path, job_id)

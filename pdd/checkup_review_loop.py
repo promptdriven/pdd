@@ -118,6 +118,11 @@ PR_API_CHANGED_FILES_MAX_CHARS = 20000
 PROVIDER_STRUCTURED_TEXT_MAX_CHARS = 4000
 PROVIDER_FINDINGS_MAX_ITEMS = 200
 PROVIDER_FIX_ITEMS_MAX_ITEMS = 200
+# A review provider normally records transcript progress while it reasons or
+# runs tools.  When that transcript stays quiet, waiting for the full hard
+# timeout (and its retry) turns a transient parked session into a long-running
+# job that can never produce a terminal final-gate verdict.
+REVIEW_LOOP_STALL_TIMEOUT_SECONDS = 300.0
 PROVIDER_CHANGED_FILES_MAX_ITEMS = 200
 PROVIDER_CHANGED_FILE_MAX_CHARS = 1000
 PERSISTED_FIXES_MAX_ITEMS = 100
@@ -4765,6 +4770,13 @@ def _should_attempt_parse_repair(output: str, result: ReviewResult) -> bool:
     if lowered.startswith(provider_failure_prefixes):
         return False
     provider_failure_markers = (
+        # Subscription/usage caps are permanent for the active credential.
+        # The hosted executor emits both forms below for the Cloud retry
+        # waterfall; neither is malformed review JSON that a parse-repair
+        # request could recover.
+        "credential-limit",
+        "credential_limit",
+        "pdd_provider_limit",
         "rate limit",
         "quota exceeded",
         "quota exhausted",
@@ -4794,7 +4806,14 @@ def _run_role_task(
     read_only: bool = False,
     model_override: Optional[str] = None,
 ) -> Tuple[bool, str, float, str]:
-    provider_deadline: Optional[float] = None
+    # ``run_agentic_task`` permits its own retry budget up to twice the passed
+    # timeout.  A review-loop role's timeout is a role-wide bound, not a
+    # per-retry allowance: otherwise a nominal 15-minute review can silently
+    # consume 30 minutes before the loop can report or try its fallback.
+    # Always give the shared runner an epoch deadline for this role; when the
+    # enclosing loop is tighter, preserve that earlier deadline instead.
+    role_remaining = timeout
+    provider_deadline: Optional[float] = time.time() + role_remaining
     if deadline is not None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -4804,11 +4823,12 @@ def _run_role_task(
                 0.0,
                 "",
             )
-        timeout = min(timeout, remaining)
+        role_remaining = min(role_remaining, remaining)
+        timeout = role_remaining
         # ``run_agentic_task`` owns retry/backoff and expects an epoch deadline,
         # while the review loop deliberately uses monotonic time.  Convert the
         # one remaining-duration snapshot instead of mixing clock domains.
-        provider_deadline = time.time() + remaining
+        provider_deadline = time.time() + role_remaining
     provider = ROLE_TO_PROVIDER.get(role, role)
     if model_override is not None and provider != "openai":
         return (
@@ -4835,6 +4855,7 @@ def _run_role_task(
         "GIT_CONFIG_VALUE_0",
     )
     saved_git_guard = {key: os.environ.get(key) for key in git_guard_keys}
+    saved_pytest_addopts = os.environ.get("PYTEST_ADDOPTS")
     if read_only:
         os.environ["CODEX_SANDBOX_MODE"] = "read-only"
         for key in credential_keys:
@@ -4843,15 +4864,33 @@ def _run_role_task(
         os.environ["GIT_CONFIG_COUNT"] = "1"
         os.environ["GIT_CONFIG_KEY_0"] = "credential.helper"
         os.environ["GIT_CONFIG_VALUE_0"] = ""
+        # A reviewer is allowed to inspect and, where useful, execute tests,
+        # but pytest's cache provider writes ``.pytest_cache`` into the
+        # read-only PR worktree.  Disable only that disposable cache for this
+        # scoped role so the filesystem audit keeps detecting real source or
+        # Git metadata writes rather than failing on test-run bookkeeping.
+        cache_disable = "-p no:cacheprovider"
+        current_pytest_addopts = os.environ.get("PYTEST_ADDOPTS", "").strip()
+        if cache_disable not in current_pytest_addopts:
+            os.environ["PYTEST_ADDOPTS"] = (
+                f"{current_pytest_addopts} {cache_disable}".strip()
+        )
     if model_override is not None:
         os.environ["CODEX_MODEL"] = model_override
     try:
+        # Hosted checkup worktrees expose PDD's fixture data through the
+        # repository-owned ``data -> ../pdd/data`` symlink.  That data is an
+        # immutable companion input, not a provider write target.  Declare the
+        # verified sibling-PDD roots explicitly read-only as well as adding
+        # them to Claude's read scope.  This keeps the audit and the provider
+        # invocation on the same root set.
+        companion_dirs = _read_only_companion_dirs(cwd) if read_only else []
         claude_policy = (
             {
                 "allowedTools": "Read,Grep,Glob",
-                "readOnlyRoots": [str(cwd)],
+                "readOnlyRoots": [str(cwd), *companion_dirs],
                 "writableRoots": [],
-                "addDirs": [],
+                "addDirs": companion_dirs,
             }
             if read_only and provider == "anthropic"
             else None
@@ -4868,6 +4907,11 @@ def _run_role_task(
                 reasoning_time=reasoning_time,
                 deadline=provider_deadline,
                 claude_policy=claude_policy,
+                # Keep the hard per-role timeout for substantive reviews, while
+                # ending a genuinely quiescent interactive session in time for the
+                # loop to report/fallback instead of silently parking the final
+                # gate.  A deadline-shortened call cannot outlive its budget.
+                stall_timeout=min(REVIEW_LOOP_STALL_TIMEOUT_SECONDS, timeout),
                 include_log_bodies=False,
             )
             # AgenticTaskResult retains ``provider`` as its legacy fourth
@@ -4896,6 +4940,46 @@ def _run_role_task(
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
+            if saved_pytest_addopts is None:
+                os.environ.pop("PYTEST_ADDOPTS", None)
+            else:
+                os.environ["PYTEST_ADDOPTS"] = saved_pytest_addopts
+
+
+def _read_only_companion_dirs(cwd: Path) -> List[str]:
+    """Return the narrowly recognized hosted PDD data companion, if present.
+
+    A target repository may contain the fixture link ``data -> ../pdd/data``.
+    The hosting runtime creates its sibling ``pdd`` worktree and keeps it
+    outside the target checkout.  The link is therefore safe to expose as a
+    read-only companion directory, but arbitrary repository symlinks retain
+    the fail-closed filesystem-audit behavior.
+    """
+    data_link = cwd / "data"
+    try:
+        if not data_link.is_symlink():
+            return []
+        raw_target = os.readlink(data_link)
+    except OSError:
+        return []
+    # The hosted runtime deliberately creates the sibling PDD worktree lazily.
+    # During a read-only review its ``data`` directory can therefore be absent,
+    # even though the checked-out fixture link is valid and must remain audited.
+    # Validate the exact repository-owned link lexically rather than requiring
+    # the delayed companion target to exist.
+    if raw_target != "../pdd/data":
+        return []
+    target = (data_link.parent / raw_target).resolve(strict=False)
+    expected_target = cwd.resolve(strict=True).parent / "pdd" / "data"
+    if target != expected_target.resolve(strict=False):
+        return []
+    if target.parent.exists() and target.parent.is_symlink():
+        return []
+    # The audit preserves a symlink's resolved path while some provider
+    # wrappers normalize declared roots to their worktree boundary.  The exact
+    # target is sufficient for the audit and does not expose its whole sibling
+    # worktree to a reviewer.
+    return [str(target)]
 
 
 def _review_parse_repair_prompt(raw_output: str, context: ReviewLoopContext) -> str:

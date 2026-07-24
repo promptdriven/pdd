@@ -2,7 +2,7 @@
   "artifacts": [
     {
       "git_mode": "100644",
-      "hash": "28c6799db022b82dd05212188a4730ef1e68e4464961aee3197d6108392953fb",
+      "hash": "b1e20c729d491e1a8a58d6945113194159735c2813a3876608dd334f17a3149a",
       "path": "pdd/agentic_common.py",
       "required": true,
       "role": "code"
@@ -37,28 +37,28 @@
     },
     {
       "git_mode": "100644",
-      "hash": "28c6799db022b82dd05212188a4730ef1e68e4464961aee3197d6108392953fb",
+      "hash": "b1e20c729d491e1a8a58d6945113194159735c2813a3876608dd334f17a3149a",
       "path": "pdd/agentic_common.py",
       "required": true,
       "role": "include"
     },
     {
       "git_mode": "100644",
-      "hash": "02399fb620819d0b4fea01254f54e031eecffa38e911dd0c94165f1b355b8a0b",
+      "hash": "57de3f0e3fccc88a154e0011f4da7321967438828d4535e8244fa1ddf1ac4b25",
       "path": "pdd/llm_invoke.py",
       "required": true,
       "role": "include"
     },
     {
       "git_mode": "100644",
-      "hash": "cf19479e2f90ea1bfb46c49b8dc1f9d4b8a6807b86f5803228e62f75dbee19e0",
+      "hash": "e4b8ea5e9122504817d93e4229ff4328a082cb2fd2ab94ac3b0be2a89096207c",
       "path": "pdd/prompts/agentic_common_python.prompt",
       "required": true,
       "role": "prompt"
     },
     {
       "git_mode": "100644",
-      "hash": "cf19479e2f90ea1bfb46c49b8dc1f9d4b8a6807b86f5803228e62f75dbee19e0",
+      "hash": "e4b8ea5e9122504817d93e4229ff4328a082cb2fd2ab94ac3b0be2a89096207c",
       "path": "pdd/prompts/agentic_common_python.prompt",
       "required": true,
       "role": "validation"
@@ -66,19 +66,19 @@
   ],
   "attestation_ref": null,
   "claimed_semantic_status": "UNKNOWN",
-  "dependency_snapshot_digest": "0f90fe62625cb0d4f992e25d91d6fa1b6d99cde01fc6331109367f4b1d5bbdd8",
+  "dependency_snapshot_digest": "08f0b2d11547e5cb4d2ff1833df616a922f805fa90fe6b361cb0aee18f817f8c",
   "hash_algorithm_version": 2,
-  "manifest_digest": "2bd796bfc6ae9ffaa05432717d6f2a4cee632fe1f54d1e98b62010a3c57d8e7d",
+  "manifest_digest": "a88374e3ec7ed7e634f0555ab51b49200a09853c071a91de1dbb3c630f3fae33",
   "nondeterministic_inputs": false,
   "provenance": {
     "command": "pdd baseline --module pdd/prompts/agentic_common_python.prompt",
-    "git_commit": "33ffddeb26eef824c29bebc9405904d999ffba9f",
+    "git_commit": "866b3559992c54e5e694a8bc46e35e47e739e86f",
     "kind": "baseline-reset",
     "pdd_version": "0.0.305.dev0",
-    "reason": "Record the reviewed import-source contract for the shared Codex default.",
-    "reviewed_by": "Terra",
-    "timestamp": "2026-07-15T07:41:21.185051+00:00",
-    "transaction_id": "baseline-05ce6b99-d03a-4d66-a49e-d4ef4a862c7d"
+    "reason": "Authorize the reviewed issue 2175 Codex usage-cap reset contract on PR 2168.",
+    "reviewed_by": "DianaTao",
+    "timestamp": "2026-07-17T22:51:47.541810+00:00",
+    "transaction_id": "baseline-b1009727-1fd8-43be-aac3-9276b1e440c0"
   },
   "schema_version": 2,
   "unit_id": {
@@ -86,5 +86,5 @@
     "prompt_relpath": "pdd/prompts/agentic_common_python.prompt",
     "repository_id": "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
   },
-  "verification_profile_digest": "c93f9c54ea28ad0b185e874f2e396d04f93de1a6395375e107038b99ac00a617"
+  "verification_profile_digest": "cd4cca7855826254dd6e429d7305f09e558083d5c060ddb0126d954dc5b1b8c0"
 }

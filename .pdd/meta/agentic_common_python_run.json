@@ -1,11 +1,13 @@
 {
-  "timestamp": "2026-07-14T18:21:03+00:00",
+  "timestamp": "2026-07-17T22:55:45+00:00",
   "exit_code": 0,
-  "tests_passed": 660,
+  "tests_passed": 670,
   "tests_failed": 0,
-  "coverage": 76.0,
-  "test_hash": "959bc08558f79a4b45fa96c4851181ec46081aff648d1b28622508ea9c22012e",
+  "coverage": 79.0,
+  "test_hash": "f6e7b85bd3299cd3c4d5cf0f5c8a292995b8d8a3197a71e78b673a8ccf6eda5f",
   "test_files": {
-    "test_agentic_common.py": "959bc08558f79a4b45fa96c4851181ec46081aff648d1b28622508ea9c22012e"
+    "test_agentic_common.py": "f6e7b85bd3299cd3c4d5cf0f5c8a292995b8d8a3197a71e78b673a8ccf6eda5f",
+    "test_agentic_common_issue_813_anthropic_api_key_oauth_shadow.py": "4207732c6fb0e88b5be1fe632acd087f0b992e1ac7498dff036a0b9b9ea72138",
+    "test_agentic_common_worktree.py": "16fb52387d635f1bbccbac20d08ef5b5d878021b70fc1ad79e5d36664df2b9a9"
   }
 }

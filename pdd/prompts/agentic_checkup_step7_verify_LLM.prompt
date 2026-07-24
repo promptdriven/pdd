@@ -146,6 +146,7 @@ The JSON report MUST be the LAST thing you output, on its own, wrapped in a mark
       "fixed": true/false,
       "scope": "pr|out-of-scope",
       "blocking": true/false,
+      "repairable": true/false,
       "fix_description": "what was done to fix it (or empty if not fixed)"
     }}
   ],
@@ -159,6 +160,16 @@ In **PR mode WITHOUT a source issue** (`has_issue` = `false`), omit `issue_align
 
 Set `"success": true` if (issue mode) all critical issues are fixed, or (PR mode WITH an issue) `issue_aligned` is true AND no blocking critical findings remain in the PR's diff, or (PR mode WITHOUT an issue) no blocking critical findings remain in the PR's diff. In PR mode with `PR test scope` = `full`, do not set `"success": true` if the full suite was skipped or timed out; either cite an authoritative full-suite/CI result or set `"success": false` with a partial-verification finding. In PR mode with `PR test scope` = `targeted`, the final report MUST explicitly label verification as targeted in the markdown summary and the JSON `message` (e.g., "Verification scope: targeted — full suite not run") so downstream consumers do not mistake targeted coverage for full-suite coverage. In targeted PR scope, unrelated project-wide/baseline issues outside the PR diff must not force `"success": false`; mark them `"scope": "out-of-scope"` and `"blocking": false`.
 Set `"success": false` otherwise.
+
+For every unfixed blocking finding, set `"repairable": true` only when a
+concrete source/test/configuration edit in the current PR worktree can address
+it during Steps 6a-6c. Set `"repairable": false` for external terminal-run
+evidence, deployment/pinning/approval requirements, provider availability, or
+other acceptance evidence that cannot be created by mutating this in-progress
+worktree. `repairable: false` does not make a finding non-blocking and must
+never permit `"success": true`; it tells the orchestrator to retain the failure
+without spending a futile fixer iteration. Do not attach such external
+evidence to an arbitrary changed source file as a way to authorize mutation.
 
 6. **Prepare the final summary** — route by mode:
 

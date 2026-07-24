@@ -172,6 +172,48 @@ def test_checkup_start_step_forwards_override() -> None:
     assert run_checkup.call_args.kwargs["start_step_override"] == 7
 
 
+def test_checkup_fresh_start_forwards_reset_control() -> None:
+    runner = CliRunner()
+
+    with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+        run_checkup.return_value = (True, "clean", 0.25, "codex")
+
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr",
+                "https://github.com/org/repo/pull/7",
+                "--issue",
+                "https://github.com/org/repo/issues/6",
+                "--final-gate",
+                "--fresh-start",
+            ],
+            obj={"quiet": True, "verbose": False},
+        )
+
+    assert result.exit_code == 0
+    assert run_checkup.call_args.kwargs["fresh_start"] is True
+
+
+def test_checkup_fresh_start_rejects_start_step() -> None:
+    result = CliRunner().invoke(
+        checkup,
+        [
+            "--pr",
+            "https://github.com/org/repo/pull/7",
+            "--issue",
+            "https://github.com/org/repo/issues/6",
+            "--fresh-start",
+            "--start-step",
+            "7",
+        ],
+        obj={"quiet": True, "verbose": False},
+    )
+
+    assert result.exit_code == 2
+    assert "--fresh-start cannot be combined with --start-step" in result.output
+
+
 def test_checkup_start_step_rejected_with_review_loop() -> None:
     runner = CliRunner()
 
