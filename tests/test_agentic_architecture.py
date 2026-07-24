@@ -50,6 +50,7 @@ try:
         _is_github_issue_url,
         _parse_github_url,
         _extract_target_dir,
+        _resolve_target_dir,
     )
 except ImportError:
     # Fallback for direct execution if package structure isn't set up
@@ -60,6 +61,7 @@ except ImportError:
         _is_github_issue_url,
         _parse_github_url,
         _extract_target_dir,
+        _resolve_target_dir,
     )
 
 # --- Z3 Formal Verification ---
@@ -405,6 +407,25 @@ class TestRunIncrementalArchitecture:
         assert _extract_target_dir("Build this in apps/web.v2") == "apps/web.v2"
         assert _extract_target_dir("Build this in apps/web.v2.") == "apps/web.v2"
         assert _extract_target_dir("Build this in apps/web-v2.1") == "apps/web-v2.1"
+        assert (
+            _extract_target_dir("Add Google Analytics in `app/sizzle/layout.tsx`")
+            is None
+        )
+
+    def test_explicit_target_dir_rejects_existing_file(self, tmp_path: Path) -> None:
+        target = tmp_path / "app" / "sizzle" / "layout.tsx"
+        target.parent.mkdir(parents=True)
+        target.write_text("export default function Layout() {}", encoding="utf-8")
+
+        base_dir, normalized, error = _resolve_target_dir(
+            tmp_path, "app/sizzle/layout.tsx"
+        )
+
+        assert base_dir == tmp_path.resolve()
+        assert normalized is None
+        assert error == (
+            "Target directory is an existing file: 'app/sizzle/layout.tsx'"
+        )
 
     def test_github_issue_invalid_target_dir_fails_instead_of_root_fallback(
         self,
