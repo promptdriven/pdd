@@ -2317,13 +2317,37 @@ def test_global_sync_m0_paths_are_exactly_preauthorized() -> None:
     )
 
 
-def test_auto_heal_pem_consumer_is_bound_to_restricted_environment() -> None:
-    """The App PEM is available only through the main-restricted environment."""
-    workflow = yaml.safe_load(AUTO_HEAL_WORKFLOW_PATH.read_text(encoding="utf-8"))
-    heal_job = workflow["jobs"]["heal"]
+def _workflow_value_references_secret(value: object, secret_names: tuple[str, ...]) -> bool:
+    """Return whether a parsed workflow value contains an App-secret reference."""
+    if isinstance(value, dict):
+        return any(
+            _workflow_value_references_secret(child, secret_names)
+            for child in value.values()
+        )
+    if isinstance(value, list):
+        return any(_workflow_value_references_secret(child, secret_names) for child in value)
+    return isinstance(value, str) and any(
+        f"secrets.{secret_name}" in value for secret_name in secret_names
+    )
 
-    assert heal_job["environment"] == "pdd-cloud-read"
-    assert "secrets.PDD_CLOUD_APP_PRIVATE_KEY" in str(heal_job["steps"])
+
+def test_auto_heal_app_secret_consumers_use_restricted_environment() -> None:
+    """Every App-secret consumer is bound to the main-restricted environment."""
+    workflow = yaml.safe_load(AUTO_HEAL_WORKFLOW_PATH.read_text(encoding="utf-8"))
+    jobs = workflow["jobs"]
+    app_secret_names = ("PDD_CLOUD_APP_ID", "PDD_CLOUD_APP_PRIVATE_KEY")
+    consumer_jobs = {
+        job_name
+        for job_name, job in jobs.items()
+        if _workflow_value_references_secret(job, app_secret_names)
+    }
+
+    assert consumer_jobs
+    assert consumer_jobs == {"heal"}
+    assert all(
+        jobs[job_name].get("environment") == "pdd-cloud-read"
+        for job_name in consumer_jobs
+    )
 
 
 def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
