@@ -91,6 +91,7 @@ def test_execution_contract_rejects_empty_executable_validation_and_to_build_inv
     state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
     state["validation_steps"][0]["validation_commands"] = []
     state["command_registry"][0]["state"] = "TO_BUILD"
+    state["promotion_commands"] = ["present-module"]
     state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
     errors = _module().verify(root / "plan.md", state_path, root=root, validate_cli=False)
     assert any("empty validation" in error for error in errors)

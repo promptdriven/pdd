@@ -1,4 +1,11 @@
 schema_version: 5
+execution_contract:
+  protected_base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+  milestone_order: [M0, M1, M2, M3, M4, M5]
+  active_blocker: m0-executable-baseline
+  registry_state: docs/global_sync_execution_state.yaml
+  execution_state_vocabulary: [ARCHIVED, EXISTS, EXTERNAL_PROTECTED, TO_BUILD]
+  historical_authority: "The following Gate 1/2 rows remain append-only historical evidence and are non-executable."
 updated_at: "2026-07-20"
 tracking_issue: "https://github.com/promptdriven/pdd/issues/1932"
 controlling_plan: "docs/global_sync_resolution_plan.md"

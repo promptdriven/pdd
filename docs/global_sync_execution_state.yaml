@@ -1,0 +1,270 @@
+schema_version: 1
+protected_base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+milestone_order: [M0, M1, M2, M3, M4, M5]
+active_blocker: m0-executable-baseline
+integration:
+  owner: integration
+  worktree: issue-1932-integration
+  branch: feat/1932-integration
+  base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+  write_set:
+    - scripts/verify_global_sync_execution_contract.py
+    - docs/global_sync_execution_state.yaml
+    - docs/global_sync_evidence_ledger_source.yaml
+    - docs/global_sync_evidence_ledger.yaml
+    - .github/workflows/unit-tests.yml
+tracks:
+  - id: m0-bootstrap
+    owner: integration
+    worktree: issue-1932-m0-contract
+    branch: feat/1932-m0-contract-20260724
+    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    write_set:
+      - scripts/verify_global_sync_execution_contract.py
+      - tests/test_global_sync_execution_contract.py
+      - docs/global_sync_execution_state.yaml
+      - docs/global_sync_evidence_ledger_source.yaml
+      - docs/global_sync_evidence_ledger.yaml
+      - .github/workflows/unit-tests.yml
+  - id: track-a-repair
+    owner: track-a
+    worktree: pending
+    branch: pending
+    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    write_set: [pdd/sync_core]
+  - id: track-b-runner
+    owner: track-b
+    worktree: pending
+    branch: pending
+    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    write_set: [pdd/sync_core/runner.py]
+  - id: track-c-checker
+    owner: track-c
+    worktree: pending
+    branch: pending
+    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    write_set: [pdd/sync_core/released_checker.py]
+  - id: track-d-routing
+    owner: track-d
+    worktree: pending
+    branch: pending
+    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    write_set: [pdd/sync_orchestration.py]
+  - id: track-e-consumer
+    owner: track-e
+    worktree: pending
+    branch: pending
+    base_sha: "abd9726bddbdb04e9889fbf14f751cb126d7cf23"
+    write_set: [pdd/sync_core/consumer_ownership_verifier.py]
+ledger_source: docs/global_sync_evidence_ledger_source.yaml
+generated_ledger: docs/global_sync_evidence_ledger.yaml
+command_registry:
+  - id: source-cli-certify
+    state: EXISTS
+    kind: console
+    argv: [pdd, certify]
+    documented_options: [--base-ref]
+    owner: integration
+    introducing_milestone: M0
+    earliest_invocable_milestone: M0
+    introducing_pr: existing-main
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: source-cli-validate
+    state: EXISTS
+    kind: console
+    argv: [pdd, validate]
+    documented_options: [--module]
+    owner: integration
+    introducing_milestone: M0
+    earliest_invocable_milestone: M0
+    introducing_pr: existing-main
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: source-cli-baseline
+    state: EXISTS
+    kind: console
+    argv: [pdd, baseline]
+    documented_options: [--reviewed-by]
+    owner: integration
+    introducing_milestone: M0
+    earliest_invocable_milestone: M0
+    introducing_pr: existing-main
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: source-cli-recover
+    state: EXISTS
+    kind: console
+    argv: [pdd, recover]
+    documented_options: [--transaction]
+    owner: integration
+    introducing_milestone: M0
+    earliest_invocable_milestone: M0
+    introducing_pr: existing-main
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: m0-contract-verifier
+    state: EXISTS
+    kind: script
+    argv: [python, scripts/verify_global_sync_execution_contract.py]
+    owner: integration
+    introducing_milestone: M0
+    earliest_invocable_milestone: M0
+    introducing_pr: this-change
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: global-sync-ledger-generator
+    state: EXISTS
+    kind: module
+    argv: [python, -m, pdd.sync_core.global_sync_ledger]
+    owner: integration
+    introducing_milestone: M0
+    earliest_invocable_milestone: M0
+    introducing_pr: existing-main
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: m0-focused-cli-test
+    state: EXISTS
+    kind: test
+    argv: [python, -m, pytest, tests/test_sync_core_cli.py]
+    owner: integration
+    introducing_milestone: M0
+    earliest_invocable_milestone: M0
+    introducing_pr: existing-main
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: protected-unit-test-workflow
+    state: EXISTS
+    kind: workflow
+    argv: [.github/workflows/unit-tests.yml]
+    owner: integration
+    introducing_milestone: M0
+    earliest_invocable_milestone: M0
+    introducing_pr: existing-main
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: vertical-slice-verifier
+    state: TO_BUILD
+    kind: module
+    argv: [python, -m, pdd.sync_core.vertical_slice_verifier]
+    owner: track-a
+    introducing_milestone: M1
+    earliest_invocable_milestone: M1
+    introducing_pr: pending
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: production-routing-verifier
+    state: TO_BUILD
+    kind: module
+    argv: [python, -m, pdd.sync_core.production_routing_verifier]
+    owner: track-d
+    introducing_milestone: M2
+    earliest_invocable_milestone: M2
+    introducing_pr: pending
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: scan-verifier
+    state: TO_BUILD
+    kind: module
+    argv: [python, -m, pdd.sync_core.scan_verifier]
+    owner: track-e
+    introducing_milestone: M4
+    earliest_invocable_milestone: M4
+    introducing_pr: pending
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: consumer-ownership-verifier
+    state: TO_BUILD
+    kind: module
+    argv: [python, -m, pdd.sync_core.consumer_ownership_verifier]
+    owner: track-e
+    introducing_milestone: M4
+    earliest_invocable_milestone: M4
+    introducing_pr: pending
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: nightly-ledger-verifier
+    state: TO_BUILD
+    kind: module
+    argv: [python, -m, pdd.sync_core.nightly_ledger_verifier]
+    owner: track-e
+    introducing_milestone: M3
+    earliest_invocable_milestone: M3
+    introducing_pr: pending
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: reference-verifier
+    state: TO_BUILD
+    kind: console
+    argv: [pdd-sync-reference-verifier]
+    owner: track-c
+    introducing_milestone: M5
+    earliest_invocable_milestone: M5
+    introducing_pr: pending
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: certificate-finalizer
+    state: TO_BUILD
+    kind: console
+    argv: [pdd-sync-certificate-finalizer]
+    owner: track-c
+    introducing_milestone: M5
+    earliest_invocable_milestone: M5
+    introducing_pr: pending
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: merge-group-workflow
+    state: TO_BUILD
+    kind: workflow
+    argv: [.github/workflows/global-sync-merge-group.yml]
+    owner: track-e
+    introducing_milestone: M3
+    earliest_invocable_milestone: M3
+    introducing_pr: pending
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: shadow-nightly-workflow
+    state: TO_BUILD
+    kind: workflow
+    argv: [.github/workflows/global-sync-shadow-nightly.yml]
+    owner: track-e
+    introducing_milestone: M3
+    earliest_invocable_milestone: M3
+    introducing_pr: pending
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: historical-sync-certify
+    state: ARCHIVED
+    kind: console
+    argv: [pdd, sync, certify]
+    owner: historical
+    introducing_milestone: M0
+    earliest_invocable_milestone: M0
+    introducing_pr: archived
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+  - id: protected-checker-release
+    state: EXTERNAL_PROTECTED
+    kind: console
+    argv: [pdd-sync-checker]
+    owner: track-c
+    introducing_milestone: M3
+    earliest_invocable_milestone: M3
+    introducing_pr: pending
+    artifact_digest: pending
+    control_plane_identity: pending
+    last_source_validation_sha: null
+    last_wheel_validation_sha: null
+validation_steps:
+  - id: ledger-byte-and-remote-verification
+    executable: true
+    validation_commands: [global-sync-ledger-generator, protected-unit-test-workflow]
+  - id: m0-command-contract-semantic-verification
+    executable: true
+    validation_commands: [m0-contract-verifier, source-cli-certify, source-cli-validate, source-cli-baseline, source-cli-recover]
+  - id: m0-source-wheel-baseline
+    executable: false
+    validation_commands: [m0-focused-cli-test]
+    reason: "Pending until the supported source and built-wheel environments are captured."
+historical_non_executable:
+  stale_ledger_authority: "Gate 1/2 release and checker claims are archived historical evidence; they do not authorize M0-M5 execution."

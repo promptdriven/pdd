@@ -126,6 +126,12 @@ jobs:
           --output docs/global_sync_evidence_ledger.yaml
           --check --verify-remote
 
+      - name: Verify global-sync execution-contract semantics
+        run: >
+          python scripts/verify_global_sync_execution_contract.py
+          --plan docs/global_sync_resolution_plan.md
+          --state docs/global_sync_execution_state.yaml
+
       - name: Provision and verify protected Linux sandbox
         run: |
           sudo apt-get update
