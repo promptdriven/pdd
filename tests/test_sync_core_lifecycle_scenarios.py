@@ -683,5 +683,42 @@ def test_global_ledger_rejects_milestone_promotion_gap_and_unsupported_transitio
     bundle = payload["promotion_bundles"]["m0_source_wheel_hosted"]
     assert isinstance(bundle, dict)
     bundle["subject"]["states"].insert(3, "released")
-    with pytest.raises(LedgerError, match="cannot authorize states: released"):
+    with pytest.raises(LedgerError, match="status requires exactly"):
         validate_ledger(payload, plan, source)
+
+
+def test_global_ledger_rejects_consistent_historical_archive_rewrite() -> None:
+    """A candidate cannot bless rewritten historical rows by changing their bundle too."""
+    root = Path(__file__).resolve().parents[1]
+    source = root / "docs" / "global_sync_evidence_ledger_source.yaml"
+    payload = load_unique_yaml(source)
+    steps = payload["historical_steps"]
+    bundles = payload["historical_promotion_bundles"]
+    assert isinstance(steps, list) and isinstance(bundles, dict)
+    step = steps[0]
+    bundle = bundles["gate_1_hosted_merge"]
+    assert isinstance(step, dict) and isinstance(bundle, dict)
+    step["required_predicate"]["complete_release_net_diff_reviewed"] = False
+    step["exact_repository_sha"] = "e" * 40
+    step["reviewed_head_sha"] = "f" * 40
+    step["merge_sha"] = "e" * 40
+    subject = bundle["subject"]
+    assert isinstance(subject, dict)
+    subject["required_predicate_sha256"] = canonical_predicate_digest(
+        step["required_predicate"]
+    )
+    claims = subject["record_claims"]
+    assert isinstance(claims, dict)
+    claims.update(
+        {
+            "exact_repository_sha": "e" * 40,
+            "reviewed_head_sha": "f" * 40,
+            "merge_sha": "e" * 40,
+        }
+    )
+    bundle.update({"repository_sha": "e" * 40, "head_sha": "f" * 40})
+
+    with pytest.raises(
+        LedgerError, match="historical archive differs from protected-base transformation"
+    ):
+        validate_ledger(payload, root / "docs" / "global_sync_resolution_plan.md", source)
