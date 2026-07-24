@@ -858,6 +858,47 @@ def test_global_sync_ledger_accepts_current_source_promotion_identities(monkeypa
     assert set(requested_paths) == set(responses)
 
 
+def test_archived_gates_are_not_live_authority_or_remotely_verified(monkeypatch) -> None:
+    """Archived Gate records remain tamper-evident but cannot drive current work."""
+    source = ROOT / "docs" / "global_sync_evidence_ledger_source.yaml"
+    plan = ROOT / "docs" / "global_sync_resolution_plan.md"
+    payload = load_unique_yaml(source)
+
+    assert payload["schema_version"] == 6
+    assert "steps" not in payload
+    historical_steps = payload["historical_steps"]
+    assert isinstance(historical_steps, list)
+    assert len(historical_steps) == 10
+    assert {step["execution_state"] for step in historical_steps} == {"ARCHIVED"}
+
+    milestones = payload["milestones"]
+    assert isinstance(milestones, list)
+    assert [milestone["id"] for milestone in milestones] == [
+        "M0",
+        "M1",
+        "M2",
+        "M3",
+        "M4",
+        "M5",
+    ]
+    assert milestones[0]["status"] == "in-progress"
+    assert milestones[0]["blocker_id"] == "m0-executable-baseline"
+    assert payload["live_rebaseline"]["milestones_passed"] == 0
+
+    responses = _current_source_promotion_responses(payload)
+    requested_paths: list[str] = []
+    verifier = GitHubPromotionVerifier()
+
+    def get_response(path: str) -> dict[str, object]:
+        requested_paths.append(path)
+        return responses[path]
+
+    monkeypatch.setattr(verifier, "_get", get_response)
+    validate_ledger(payload, plan, source, verify_remote=True, promotion_verifier=verifier)
+
+    assert "/repos/promptdriven/pdd/pulls/2214" not in requested_paths
+
+
 @pytest.mark.parametrize("failure", ["metadata-mismatch", "outage"])
 def test_global_sync_ledger_remote_failure_fails_closed_without_writing(
     tmp_path: Path, monkeypatch, failure: str
