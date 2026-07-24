@@ -1594,6 +1594,11 @@ def test_current_profile_reconciliation_matches_current_prompt_and_profile_rows(
         for authorization in verification._TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
         if authorization.bindings.head_policy_sha256 == profile_digest
     )
+    current_rows.extend(
+        _requirement_authorization_row(authorization)
+        for authorization in verification._GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+        if authorization.bindings.head_policy_sha256 == profile_digest
+    )
     assert current_rows
     profiles = {
         (row["prompt_path"], row["language_id"]): row
