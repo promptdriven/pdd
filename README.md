@@ -1043,7 +1043,7 @@ Arguments:
 
 Options:
 - `--max-attempts INT`: Maximum number of fix attempts in any iterative loop (default is 3)
-- `--model NAME`: Override the base model for this sync run (sets PDD_MODEL_DEFAULT for the invocation, e.g. `chatgpt/gpt-5.3-codex`). Restored after the run. Affects the local llm_invoke route; for a `chatgpt/*` subscription model on a cloud-enabled install, also pass `--local`.
+- `--model NAME`: Override the base model for this sync run (sets `PDD_MODEL_DEFAULT` for the invocation, e.g. `chatgpt/gpt-5.3-codex`, `claude-fable-5`, or the `claude-opus-5` compatibility name). `claude-opus-5` is catalog-visible but executes through Anthropic's canonical `claude-fable-5` identifier; neither selection changes PDD's ordinary default model. The override is restored after the run. It affects the local `llm_invoke` route; for a `chatgpt/*` subscription model on a cloud-enabled install, also pass `--local`.
 - `--budget FLOAT`: Maximum total cost allowed for the entire sync process (default is $20.0)
 - `--skip-verify`: Skip the functional verification step
 - `--skip-tests`: Skip unit test generation and fixing

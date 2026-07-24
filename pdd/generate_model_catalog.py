@@ -94,10 +94,11 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     # -----------------------------------------------------------------------
     # Anthropic Claude
     # -----------------------------------------------------------------------
-    # Fable 5 has no reviewed Code Arena result yet. Keep its catalog score at
-    # zero rather than inventing benchmark evidence; pdd-opus selects it
-    # explicitly in the GitHub App rather than via rank-based routing.
+    # Fable 5 and PDD's Opus 5 compatibility name have no reviewed Code Arena
+    # result yet. Keep their catalog scores at zero rather than inventing
+    # benchmark evidence; they are selected explicitly rather than by rank.
     "claude-fable-5": 0,
+    "claude-opus-5": 0,
     "claude-opus-4-8": 1575,            # [EST] provisional, until live arena lists it
     "claude-opus-4-7": 1565,            # [CODE] reviewed WebDev manifest row
     "claude-opus-4-6": 1561,            # [CODE] #1
@@ -606,6 +607,12 @@ def _is_interactive_only(model_id: str) -> bool:
     user-preserved rows. ``ollama_chat`` is litellm's chat-format variant of
     the ``ollama`` local runner and is treated the same.
     """
+    if _normalize_model_name(model_id) == "claude-opus-5":
+        # This is a PDD/Claude Code compatibility name, not an Anthropic API
+        # identifier. Keep it discoverable in the catalog while excluding it
+        # from automatic LiteLLM cascades; the invocation boundary resolves it
+        # to the real claude-fable-5 row.
+        return True
     prefix = model_id.split("/", 1)[0] if "/" in model_id else model_id
     if prefix == "ollama_chat":
         prefix = "ollama"
@@ -632,6 +639,7 @@ def _has_region(model_id: str) -> bool:
 # conversion is handled by LiteLLM relay patches in llm_invoke.py.
 _ADAPTIVE_CLAUDE_MODELS = {
     "claude-fable-5",
+    "claude-opus-5",
     "claude-opus-4-7",
     "claude-opus-4-8",
 }
@@ -672,7 +680,10 @@ def _infer_max_reasoning_tokens(model_id: str, litellm_provider: str, entry: dic
             # reviewed direct-provider contract. Fable's 128k is an output
             # limit, not a configurable thinking budget; its adaptive rows
             # therefore report no max reasoning-token value.
-            if _normalize_model_name(model_id) == "claude-fable-5":
+            if _normalize_model_name(model_id) in {
+                "claude-fable-5",
+                "claude-opus-5",
+            }:
                 return 0
             return 16000
         return 128000
@@ -1390,6 +1401,27 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         # Fable has no reviewed Arena/DeepSWE score yet. It is the explicit
         # pdd-opus target, so preserve this unscored provider-default row
         # through regeneration without fabricating benchmark evidence.
+        "coding_arena_elo": 0,
+        "model_rank_score": 0,
+        "model_rank_source": "platform-default",
+        "base_url": "",
+        "api_key": "ANTHROPIC_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "adaptive",
+        "location": "",
+        "context_limit": 1_000_000,
+    },
+    {
+        # PDD exposes Opus 5 as a compatibility selection for Claude Code.
+        # Anthropic's provider-side identifier is claude-fable-5, so this
+        # catalog row exists for discovery/config validation only and is
+        # excluded from automatic LiteLLM cascades. llm_invoke canonicalizes
+        # it before any provider call.
+        "provider": "Anthropic",
+        "model": "claude-opus-5",
+        "input": 10.0,
+        "output": 50.0,
         "coding_arena_elo": 0,
         "model_rank_score": 0,
         "model_rank_source": "platform-default",

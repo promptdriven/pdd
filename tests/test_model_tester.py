@@ -476,6 +476,25 @@ def test_zai_coding_plan_kwargs_use_coding_endpoint(tmp_path, monkeypatch):
     assert call_kwargs.get("api_base") == "https://api.z.ai/api/coding/paas/v4"
 
 
+def test_opus_5_catalog_alias_tests_canonical_fable_model(tmp_path, monkeypatch):
+    """The interactive catalog tester must not send the compatibility alias."""
+    csv_content = (
+        "provider,model,api_key,input,output\n"
+        "Anthropic,claude-opus-5,ANTHROPIC_API_KEY,10.0,50.0\n"
+    )
+    mock_comp = MagicMock(return_value=_mock_litellm_success())
+    _run_interactive_capture(
+        tmp_path,
+        csv_content,
+        ["1", "q"],
+        monkeypatch,
+        mock_completion=mock_comp,
+        env_vars={"ANTHROPIC_API_KEY": "sk-test"},
+    )
+
+    assert mock_comp.call_args.kwargs["model"] == "claude-fable-5"
+
+
 def test_zai_coding_plan_displays_quota_backed_cost(tmp_path, monkeypatch):
     """Coding Plan rows show quota-backed usage instead of fake per-token dollars."""
     mock_comp = MagicMock(return_value=_mock_litellm_success(10, 5))

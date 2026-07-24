@@ -128,6 +128,26 @@ def test_fable_catalog_seed_preserves_anthropic_adaptive_contract():
     assert row["context_limit"] == "1000000"
 
 
+def test_opus_5_catalog_seed_is_discoverable_compatibility_alias():
+    rows = _read_catalog_rows()
+    row = next(
+        candidate
+        for candidate in rows
+        if candidate["provider"] == "Anthropic"
+        and candidate["model"] == "claude-opus-5"
+    )
+
+    assert row["api_key"] == "ANTHROPIC_API_KEY"
+    assert row["input"] == "10.0"
+    assert row["output"] == "50.0"
+    assert row["coding_arena_elo"] == "0"
+    assert row["model_rank_score"] == "0"
+    assert row["model_rank_source"] == "platform-default"
+    assert row["reasoning_type"] == "adaptive"
+    assert row["interactive_only"] == "True"
+    assert row["context_limit"] == "1000000"
+
+
 def test_parse_agentic_manifest_indexes_reviewed_aliases():
     payload = _manifest([
         {
@@ -763,8 +783,27 @@ def test_fable_mandatory_row_survives_as_unscored_platform_default():
     )
 
 
-def test_committed_csv_places_unranked_fable_at_end_of_anthropic_block():
-    """The committed catalog must retain the generator's rank-descending order."""
+def test_opus_5_mandatory_row_survives_as_catalog_only_alias():
+    from collections import defaultdict
+
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=[], arena_index={}, elo_source_counts=defaultdict(int)
+    )
+    row = next(
+        candidate
+        for candidate in seeded
+        if candidate["provider"] == "Anthropic"
+        and candidate["model"] == "claude-opus-5"
+    )
+
+    assert row["coding_arena_elo"] == 0
+    assert row["model_rank_score"] == 0
+    assert row["model_rank_source"] == "platform-default"
+    assert gmc._is_interactive_only(row["model"]) is True
+
+
+def test_committed_csv_places_unranked_claude_5_rows_at_end_of_anthropic_block():
+    """The committed catalog retains stable order for the unranked Claude 5 rows."""
     lines = (_ROOT / "pdd" / "data" / "llm_model.csv").read_text(
         encoding="utf-8"
     ).splitlines()
@@ -775,7 +814,8 @@ def test_committed_csv_places_unranked_fable_at_end_of_anthropic_block():
     idx = lines.index(fable_row)
 
     assert lines[idx - 1].startswith("Anthropic,claude-haiku-4-5,")
-    assert lines[idx + 1].startswith("Azure AI,")
+    assert lines[idx + 1].startswith("Anthropic,claude-opus-5,")
+    assert lines[idx + 2].startswith("Azure AI,")
 
 
 def test_build_rows_retains_fable_unscored_platform_default():
@@ -792,6 +832,26 @@ def test_build_rows_retains_fable_unscored_platform_default():
     assert fable_rows[0]["coding_arena_elo"] == 0
     assert fable_rows[0]["model_rank_score"] == 0
     assert fable_rows[0]["model_rank_source"] == "platform-default"
+
+
+def test_build_rows_retains_opus_5_compatibility_contract():
+    """Full regeneration preserves the discoverable, non-provider Opus alias."""
+    rows = gmc.build_rows()
+    opus_rows = [
+        row
+        for row in rows
+        if row.get("provider") == "Anthropic"
+        and row.get("model") == "claude-opus-5"
+    ]
+
+    assert len(opus_rows) == 1
+    assert opus_rows[0]["coding_arena_elo"] == 0
+    assert opus_rows[0]["model_rank_score"] == 0
+    assert opus_rows[0]["model_rank_source"] == "platform-default"
+    assert opus_rows[0]["max_reasoning_tokens"] == 0
+    assert opus_rows[0]["reasoning_type"] == "adaptive"
+    assert opus_rows[0]["interactive_only"] is True
+    assert opus_rows[0]["context_limit"] == 1_000_000
 
 
 def test_build_rows_preserves_fable_contract_when_litellm_knows_it(monkeypatch):

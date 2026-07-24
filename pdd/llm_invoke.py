@@ -5251,7 +5251,14 @@ def llm_invoke(
     for model_info in candidate_models:
         if command_single_attempt and provider_attempted_this_call:
             break
-        model_name_litellm = model_info['model']
+        # Catalogs may expose PDD's Opus 5 compatibility name for discovery,
+        # but Anthropic accepts only the canonical Fable 5 identifier. Apply
+        # the same boundary conversion to every candidate (not just the
+        # configured base model) so the alias can never reach LiteLLM.
+        model_name_litellm = (
+            _canonicalize_claude_fable_alias(model_info["model"])
+            or model_info["model"]
+        )
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
 
