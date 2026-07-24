@@ -5731,7 +5731,7 @@
     }
   },
   {
-    "reason": "CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, invokes orchestrator.",
+    "reason": "CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, discovers cross-project context, invokes orchestrator.",
     "description": "Entry point module for agentic architecture generation. Detects GitHub issue URLs, fetches issue content and comments via gh API, ensures repository context, then invokes the orchestrator. Also wraps guarded incremental PRD-to-architecture propagation for issue URLs and local PRD files, including shell-safe target-directory validation, repo-relative status paths, subproject sync hints, and GitHub status comment redaction.",
     "dependencies": [
       "agentic_architecture_orchestrator_python.prompt",
@@ -5779,7 +5779,7 @@
     }
   },
   {
-    "reason": "CLI commands for the Generate Suite: generate, test, and example, with GitHub URL detection for agentic modes.",
+    "reason": "CLI commands for generate/test/example; dry-run cost estimates are supported for standard generate only.",
     "description": "Implements the pdd generate, test, and example CLI commands. Routes standard prompt-to-code generation, legacy incremental code patching, explicit experimental incremental PRD propagation, full agentic architecture generation, context examples, and agentic/manual test generation while preserving dry-run and GitHub-state guardrails.",
     "dependencies": [
       "agentic_architecture_python.prompt",
@@ -5807,7 +5807,7 @@
         "commands": [
           {
             "name": "generate",
-            "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
+            "description": "Generate code from a prompt or trigger agentic architecture from a GitHub issue / route PRD modes; support standard dry-run estimates only for the prompt-file code generation path."
           },
           {
             "name": "test",
@@ -5815,7 +5815,7 @@
           },
           {
             "name": "example",
-            "description": "Generate context examples from a prompt and code file."
+            "description": "Generate context examples from prompt and code."
           }
         ]
       }
