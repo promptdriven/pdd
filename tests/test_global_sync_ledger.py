@@ -1,5 +1,5 @@
 """Tests for deterministic, fail-closed global-sync ledger rendering."""
-# pylint: disable=duplicate-code,missing-function-docstring
+# pylint: disable=duplicate-code,missing-function-docstring,too-many-lines
 
 from __future__ import annotations
 
@@ -1166,7 +1166,10 @@ def test_execution_contract_allows_m1_exists_only_after_m0_promotion(
     ledger["execution_contract"]["command_registry"] = state["command_registry"]
     for name in ("ledger_source.yaml", "ledger.yaml"):
         (root / "docs" / name).write_text(yaml.safe_dump(ledger, sort_keys=False), encoding="utf-8")
-    assert _execution_contract_module().verify(plan, state_path, root=root, validate_cli=False) == []
+    errors = _execution_contract_module().verify(
+        plan, state_path, root=root, validate_cli=False
+    )
+    assert errors == []
 
 
 def test_execution_contract_rejects_premature_m1_relabel(tmp_path: Path) -> None:

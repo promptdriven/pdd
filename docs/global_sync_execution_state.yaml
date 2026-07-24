@@ -16,6 +16,7 @@ integration:
     - scripts/verify_global_sync_m0_samples.py
     - tests/test_global_sync_ledger.py
     - tests/test_global_sync_m0_samples.py
+    - tests/test_sync_core_lifecycle_scenarios.py
     - tests/test_sync_core_reporting.py
     - pdd/continuous_sync.py
     - pdd/sync_core/global_sync_ledger.py
@@ -46,6 +47,7 @@ m0_bootstrap_allowlist:
   - scripts/verify_global_sync_m0_samples.py
   - tests/test_global_sync_ledger.py
   - tests/test_global_sync_m0_samples.py
+  - tests/test_sync_core_lifecycle_scenarios.py
   - tests/test_sync_core_reporting.py
 tracks:
   - id: m0-contract
