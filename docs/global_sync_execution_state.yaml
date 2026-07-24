@@ -1,16 +1,16 @@
 schema_version: 1
-protected_base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
+protected_base_sha: "ca2d9cd8ac9264b614b484efed5a9eb3b0730c52"
 milestone_order: [M0, M1, M2, M3, M4, M5]
 active_blocker: m0-executable-baseline
 preflight:
   protected_base_ref: origin/main
-  protected_base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
+  protected_base_sha: "ca2d9cd8ac9264b614b484efed5a9eb3b0730c52"
   source_checkout_clean: pending-m0-validation
 integration:
   owner: integration
   worktree: /Users/gregtanaka/Developer/pdd_cloud/worktrees/pdd/issue-1932-global-sync-m0
   branch: feat/1932-global-sync-m0-20260724
-  base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
+  base_sha: "ca2d9cd8ac9264b614b484efed5a9eb3b0730c52"
   write_set:
     - scripts/verify_global_sync_execution_contract.py
     - scripts/verify_global_sync_m0_samples.py
@@ -48,6 +48,17 @@ m0_bootstrap_allowlist:
   - tests/test_sync_core_lifecycle_scenarios.py
   - tests/test_sync_core_reporting.py
 tracks:
+  - id: m0-protected-base-prerequisite
+    owner: m0-protected-ownership
+    worktree: not-retained
+    branch: fix/1932-m0-protected-ownership
+    base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
+    pull_request: 2302
+    merge_sha: "ca2d9cd8ac9264b614b484efed5a9eb3b0730c52"
+    merge_target: origin/main
+    write_set:
+      - .pdd/sync-ownership.json
+      - tests/test_sync_core_pdd_rollout_policy.py
   - id: m0-contract
     owner: m0-contract
     worktree: /Users/gregtanaka/.local/state/agent-worktrees/promptdriven__pdd/issue-1932-m0-contract
@@ -471,7 +482,7 @@ validation_steps:
         - "nightly_scan_complete is true"
         - "zero_unexplained_writes is true"
 scoreboard:
-  base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
+  base_sha: "ca2d9cd8ac9264b614b484efed5a9eb3b0730c52"
   milestone: M0
   working_vertical_slice: pending
   source_wheel_parity: pending

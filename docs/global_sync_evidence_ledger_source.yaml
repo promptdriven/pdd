@@ -1,6 +1,6 @@
 schema_version: 6
 execution_contract:
-  protected_base_sha: "d8423f5fcc1b22583f8262b994cf3f154a128b8b"
+  protected_base_sha: "ca2d9cd8ac9264b614b484efed5a9eb3b0730c52"
   milestone_order: [M0, M1, M2, M3, M4, M5]
   milestone_exit_states:
     M0: [implemented, hosted_green, merged]
