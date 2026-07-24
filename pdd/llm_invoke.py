@@ -2676,7 +2676,10 @@ def _model_disallows_temperature(model_name: Any) -> bool:
 
 def _is_kimi_k3_model(model_name: Any) -> bool:
     """Match only the direct Moonshot K3 route."""
-    return str(model_name or "").strip().lower() == "moonshot/kimi-k3"
+    return (
+        isinstance(model_name, str)
+        and model_name.strip().lower() == "moonshot/kimi-k3"
+    )
 
 
 _KIMI_K3_FIXED_SAMPLING_PARAMETERS = (
@@ -2711,11 +2714,13 @@ def _apply_kimi_k3_request_contract(
 
 
 def _has_thinking_or_reasoning_payload(litellm_kwargs: Dict[str, Any]) -> bool:
-    """Return True when a LiteLLM request carries Claude thinking/reasoning."""
+    """Return True when a LiteLLM request carries thinking or reasoning."""
     if "thinking" in litellm_kwargs or "reasoning_effort" in litellm_kwargs:
         return True
     extra_body = litellm_kwargs.get("extra_body")
-    return isinstance(extra_body, dict) and "thinking" in extra_body
+    return isinstance(extra_body, dict) and bool(
+        {"thinking", "reasoning_effort"} & extra_body.keys()
+    )
 
 
 # Regex anchored to the Gemini 3 family identifier so that:

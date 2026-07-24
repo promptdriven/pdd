@@ -1352,7 +1352,8 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         # ¥2/M cached input, ¥100/M output. PDD's catalog is USD-only and does
         # not yet model cached-input tiers, so the USD rates below conservatively
         # use uncached input and the 2026-07-17 Federal Reserve H.10 rate of
-        # 6.7760 CNY/USD: https://www.federalreserve.gov/releases/h10/current/
+        # 6.7760 CNY/USD:
+        # https://www.federalreserve.gov/releases/h10/20260720/
         # Keep this dated conversion explicit; RMB figures must never be copied
         # into these USD columns directly.
         "provider": "Moonshot AI",

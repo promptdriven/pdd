@@ -142,6 +142,20 @@ def test_k3_catalog_registration_includes_cost_and_limits():
         litellm.model_cost.pop(K3_MODEL, None)
 
 
+@pytest.mark.parametrize(
+    "model_name",
+    [None, 3, ["moonshot/kimi-k3"], {"model": "moonshot/kimi-k3"}],
+)
+def test_k3_model_match_rejects_non_strings(model_name):
+    assert llm_mod._is_kimi_k3_model(model_name) is False
+
+
+def test_k3_extra_body_effort_is_visible_to_safe_attribution():
+    kwargs = {"extra_body": {"reasoning_effort": "high"}}
+    assert llm_mod._has_thinking_or_reasoning_payload(kwargs) is True
+    assert llm_mod._summarize_litellm_kwargs(kwargs)["has_reasoning"] is True
+
+
 def test_pinned_litellm_merges_k3_effort_into_mock_http_body():
     """Exercise LiteLLM's actual Moonshot HTTP path without a paid call."""
     frame = pd.DataFrame(

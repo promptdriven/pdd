@@ -39,6 +39,7 @@ Reserve H.10 rate for 2026-07-17 (6.7760 CNY per USD):
 - output: `$14.757969` per million tokens
 
 Sources: [Moonshot K3 pricing](https://platform.kimi.com/docs/pricing/chat-k3)
-and [Federal Reserve H.10](https://www.federalreserve.gov/releases/h10/current/).
+and the dated [Federal Reserve H.10 release for July 20,
+2026](https://www.federalreserve.gov/releases/h10/20260720/).
 The cached-input discount is not represented in cost estimates until the
 catalog gains tiered input-pricing support.
