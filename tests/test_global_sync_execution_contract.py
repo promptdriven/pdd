@@ -27,7 +27,15 @@ def _module():
 
 def _write_contract(tmp_path: Path) -> tuple[Path, Path, Path]:
     plan = tmp_path / "plan.md"
-    plan.write_text("# Plan\n\nM0 M1 M2 M3 M4 M5\n", encoding="utf-8")
+    plan.write_text(
+        "# Plan\n\nM0 M1 M2 M3 M4 M5\n\n"
+        "```bash\n"
+        "python -m yaml\n"
+        "python scripts/present.py\n"
+        "python -m pytest tests/test_present.py\n"
+        "```\n",
+        encoding="utf-8",
+    )
     (tmp_path / "docs").mkdir()
     (tmp_path / ".github" / "workflows").mkdir(parents=True)
     (tmp_path / "tests").mkdir()
@@ -47,7 +55,7 @@ def _write_contract(tmp_path: Path) -> tuple[Path, Path, Path]:
             {"id": "present-test", "state": "EXISTS", "argv": ["python", "-m", "pytest", "tests/test_present.py"], "kind": "test", "owner": "integration", "introducing_milestone": "M0", "earliest_invocable_milestone": "M0", "introducing_pr": "local", "last_source_validation_sha": base, "last_wheel_validation_sha": base},
             {"id": "present-workflow", "state": "EXISTS", "argv": [".github/workflows/present.yml"], "kind": "workflow", "owner": "integration", "introducing_milestone": "M0", "earliest_invocable_milestone": "M0", "introducing_pr": "local", "last_source_validation_sha": base, "last_wheel_validation_sha": base},
         ],
-        "validation_steps": [{"id": "m0-contract", "executable": True, "validation_commands": ["present-module", "present-script", "present-test", "present-workflow"]}],
+        "validation_steps": [{"id": "m0-contract", "milestone": "M0", "executable": True, "validation_commands": ["present-module", "present-script", "present-test", "present-workflow"]}],
         "active_blocker": "m0-executable-baseline",
         "milestone_order": ["M0", "M1", "M2", "M3", "M4", "M5"],
         "ledger_source": "docs/ledger_source.yaml",
@@ -100,6 +108,64 @@ def test_execution_contract_rejects_empty_executable_validation_and_to_build_inv
     errors = _module().verify(root / "plan.md", state_path, root=root, validate_cli=False)
     assert any("empty validation" in error for error in errors)
     assert any("TO_BUILD" in error for error in errors)
+
+
+def test_execution_contract_rejects_plan_command_missing_from_registry(tmp_path: Path) -> None:
+    _, state_path, root = _verify(tmp_path)
+    plan = root / "plan.md"
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace(
+            "python -m yaml", "python -m missing_global_sync_module"
+        ),
+        encoding="utf-8",
+    )
+    errors = _module().verify(plan, state_path, root=root, validate_cli=False)
+    assert any("plan command is absent from registry" in error for error in errors)
+
+
+def test_execution_contract_checks_every_test_target_not_only_the_first(tmp_path: Path) -> None:
+    _, state_path, root = _verify(tmp_path)
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["command_registry"][2]["argv"].append("tests/missing_later.py")
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    errors = _module().verify(root / "plan.md", state_path, root=root, validate_cli=False)
+    assert any("present-test" in error and "tests/missing_later.py" in error for error in errors)
+
+
+def test_execution_contract_requires_validation_milestone_and_lifecycle_order(tmp_path: Path) -> None:
+    _, state_path, root = _verify(tmp_path)
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["validation_steps"][0].pop("milestone")
+    state["command_registry"][0]["earliest_invocable_milestone"] = "M1"
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    errors = _module().verify(root / "plan.md", state_path, root=root, validate_cli=False)
+    assert any("validation step milestone" in error for error in errors)
+    assert any("before earliest invocable milestone" in error for error in errors)
+
+
+def test_execution_contract_rejects_exact_click_option_prefix_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _module()
+
+    def fake_run(_: list[str], **__: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="--base-reference TEXT\n", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    errors = module._cli_errors(  # pylint: disable=protected-access
+        {"id": "source-certify", "kind": "console", "argv": ["pdd", "certify"], "documented_options": ["--base-ref"]},
+        sys.executable, "source", tmp_path,
+    )
+    assert any("--base-ref" in error for error in errors)
+
+
+def test_execution_contract_rejects_stale_expected_protected_base(tmp_path: Path) -> None:
+    _, state_path, root = _verify(tmp_path)
+    errors = _module().verify(
+        root / "plan.md", state_path, root=root, validate_cli=False,
+        expected_protected_base="b" * 40,
+    )
+    assert any("expected protected base" in error for error in errors)
 
 
 def test_execution_contract_rejects_ledger_base_and_registry_disagreement(tmp_path: Path) -> None:
