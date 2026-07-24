@@ -94,7 +94,7 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     # -----------------------------------------------------------------------
     # Anthropic Claude
     # -----------------------------------------------------------------------
-    # Fable 5 and PDD's Opus 5 compatibility name have no reviewed Code Arena
+    # Fable 5 and Opus 5 have no reviewed Code Arena
     # result yet. Keep their catalog scores at zero rather than inventing
     # benchmark evidence; they are selected explicitly rather than by rank.
     "claude-fable-5": 0,
@@ -607,12 +607,6 @@ def _is_interactive_only(model_id: str) -> bool:
     user-preserved rows. ``ollama_chat`` is litellm's chat-format variant of
     the ``ollama`` local runner and is treated the same.
     """
-    if _normalize_model_name(model_id) == "claude-opus-5":
-        # This is a PDD/Claude Code compatibility name, not an Anthropic API
-        # identifier. Keep it discoverable in the catalog while excluding it
-        # from automatic LiteLLM cascades; the invocation boundary resolves it
-        # to the real claude-fable-5 row.
-        return True
     prefix = model_id.split("/", 1)[0] if "/" in model_id else model_id
     if prefix == "ollama_chat":
         prefix = "ollama"
@@ -1398,9 +1392,8 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "model": "claude-fable-5",
         "input": 10.0,
         "output": 50.0,
-        # Fable has no reviewed Arena/DeepSWE score yet. It is the explicit
-        # pdd-opus target, so preserve this unscored provider-default row
-        # through regeneration without fabricating benchmark evidence.
+        # Fable has no reviewed Arena/DeepSWE score yet, so preserve this
+        # unscored provider-default row without fabricating benchmark evidence.
         "coding_arena_elo": 0,
         "model_rank_score": 0,
         "model_rank_source": "platform-default",
@@ -1413,15 +1406,13 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "context_limit": 1_000_000,
     },
     {
-        # PDD exposes Opus 5 as a compatibility selection for Claude Code.
-        # Anthropic's provider-side identifier is claude-fable-5, so this
-        # catalog row exists for discovery/config validation only and is
-        # excluded from automatic LiteLLM cascades. llm_invoke canonicalizes
-        # it before any provider call.
+        # Claude Opus 5 is a distinct direct Anthropic model. Seed its official
+        # API identifier and rates until the installed LiteLLM catalog carries
+        # it, preserving explicit local selection.
         "provider": "Anthropic",
         "model": "claude-opus-5",
-        "input": 10.0,
-        "output": 50.0,
+        "input": 5.0,
+        "output": 25.0,
         "coding_arena_elo": 0,
         "model_rank_score": 0,
         "model_rank_source": "platform-default",

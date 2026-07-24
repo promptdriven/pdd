@@ -128,7 +128,7 @@ def test_fable_catalog_seed_preserves_anthropic_adaptive_contract():
     assert row["context_limit"] == "1000000"
 
 
-def test_opus_5_catalog_seed_is_discoverable_compatibility_alias():
+def test_opus_5_catalog_seed_preserves_direct_anthropic_contract():
     rows = _read_catalog_rows()
     row = next(
         candidate
@@ -138,13 +138,13 @@ def test_opus_5_catalog_seed_is_discoverable_compatibility_alias():
     )
 
     assert row["api_key"] == "ANTHROPIC_API_KEY"
-    assert row["input"] == "10.0"
-    assert row["output"] == "50.0"
+    assert row["input"] == "5.0"
+    assert row["output"] == "25.0"
     assert row["coding_arena_elo"] == "0"
     assert row["model_rank_score"] == "0"
     assert row["model_rank_source"] == "platform-default"
     assert row["reasoning_type"] == "adaptive"
-    assert row["interactive_only"] == "True"
+    assert row["interactive_only"] == "False"
     assert row["context_limit"] == "1000000"
 
 
@@ -783,7 +783,7 @@ def test_fable_mandatory_row_survives_as_unscored_platform_default():
     )
 
 
-def test_opus_5_mandatory_row_survives_as_catalog_only_alias():
+def test_opus_5_mandatory_direct_row_survives():
     from collections import defaultdict
 
     seeded = gmc._mandatory_rows_missing_from(
@@ -799,7 +799,9 @@ def test_opus_5_mandatory_row_survives_as_catalog_only_alias():
     assert row["coding_arena_elo"] == 0
     assert row["model_rank_score"] == 0
     assert row["model_rank_source"] == "platform-default"
-    assert gmc._is_interactive_only(row["model"]) is True
+    assert row["input"] == 5.0
+    assert row["output"] == 25.0
+    assert gmc._is_interactive_only(row["model"]) is False
 
 
 def test_committed_csv_places_unranked_claude_5_rows_at_end_of_anthropic_block():
@@ -834,8 +836,8 @@ def test_build_rows_retains_fable_unscored_platform_default():
     assert fable_rows[0]["model_rank_source"] == "platform-default"
 
 
-def test_build_rows_retains_opus_5_compatibility_contract():
-    """Full regeneration preserves the discoverable, non-provider Opus alias."""
+def test_build_rows_retains_opus_5_direct_provider_contract():
+    """Full regeneration preserves the direct Anthropic Opus 5 row."""
     rows = gmc.build_rows()
     opus_rows = [
         row
@@ -850,7 +852,9 @@ def test_build_rows_retains_opus_5_compatibility_contract():
     assert opus_rows[0]["model_rank_source"] == "platform-default"
     assert opus_rows[0]["max_reasoning_tokens"] == 0
     assert opus_rows[0]["reasoning_type"] == "adaptive"
-    assert opus_rows[0]["interactive_only"] is True
+    assert opus_rows[0]["input"] == 5.0
+    assert opus_rows[0]["output"] == 25.0
+    assert opus_rows[0]["interactive_only"] is False
     assert opus_rows[0]["context_limit"] == 1_000_000
 
 

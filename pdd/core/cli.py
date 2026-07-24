@@ -533,7 +533,7 @@ class PDDCLI(click.Group):
     help=(
         "Override the model for this invocation (for example, "
         "--model claude-fable-5 or --model claude-opus-5). "
-        "Claude Opus 5 is accepted as a compatibility alias for Fable 5. "
+        "Claude Opus 5 and Fable 5 are distinct Anthropic models. "
         "Takes precedence over PDD_MODEL_DEFAULT."
     ),
 )

@@ -3168,7 +3168,8 @@ CODEX_CACHE_WRITE_MULTIPLIER = 1.25
 # Anthropic Claude: Token-based fallback pricing when total_cost_usd is unavailable
 # Cache read is 90% discount, cache write is 25% premium over input
 ANTHROPIC_PRICING_BY_FAMILY = {
-    "opus": Pricing(15.0, 75.0, 0.1),       # Claude Opus 4
+    "opus-5": Pricing(5.0, 25.0, 0.1),      # Claude Opus 5
+    "opus": Pricing(15.0, 75.0, 0.1),       # Earlier Claude Opus models
     "fable": Pricing(10.0, 50.0, 0.1),      # Claude Fable 5
     "sonnet": Pricing(3.0, 15.0, 0.1),      # Claude Sonnet 4
     "haiku": Pricing(0.80, 4.0, 0.1),       # Claude Haiku 3.5
@@ -4987,10 +4988,10 @@ def _anthropic_pricing_family_from_model_name(model_name: Optional[str]) -> Opti
     if not isinstance(model_name, str) or not model_name:
         return None
     name_lower = model_name.lower().replace("_", "-")
-    # PDD's user-facing Opus 5 compatibility alias is Anthropic Fable 5, not
-    # the separately priced Opus family. Check it before the broad opus match.
-    if "fable" in name_lower or "claude-opus-5" in name_lower:
+    if "fable" in name_lower:
         return "fable"
+    if "claude-opus-5" in name_lower:
+        return "opus-5"
     if "opus" in name_lower:
         return "opus"
     if "haiku" in name_lower:
@@ -5007,8 +5008,8 @@ def _anthropic_pricing_family_from_model_usage(
     selected = None
     for model_name in model_usage.keys():
         family = _anthropic_pricing_family_from_model_name(str(model_name))
-        if family == "opus":
-            return "opus"
+        if family in {"opus", "opus-5"}:
+            return family
         if family == "fable":
             selected = "fable"
         if family == "haiku" and selected is None:

@@ -3281,66 +3281,53 @@ def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     return alternatives
 
 
-_CLAUDE_FABLE_5_ALIASES = {
-    "claude-opus-5": "claude-fable-5",
-    "anthropic/claude-opus-5": "anthropic/claude-fable-5",
-}
+_UNRANKED_CLAUDE_5_MODELS = {"claude-fable-5", "claude-opus-5"}
 
 
-def _canonicalize_claude_fable_alias(model_name: Optional[str]) -> Optional[str]:
-    """Resolve PDD's Opus 5 compatibility name to Anthropic's Fable 5 ID.
-
-    Anthropic exposes the generation as ``claude-fable-5`` rather than a
-    provider-side ``claude-opus-5`` model. Accepting the latter at PDD's model
-    selection boundary keeps the requested CLI vocabulary useful without ever
-    sending a nonexistent model identifier to the provider.
-    """
-    if model_name is None:
-        return None
-    raw = str(model_name).strip()
-    return _CLAUDE_FABLE_5_ALIASES.get(raw.lower(), raw)
-
-
-def _is_explicit_claude_fable_selection(model_name: Optional[str]) -> bool:
-    """Return whether a configured model name explicitly requests Fable 5.
+def _explicit_unranked_claude_5_model(
+    model_name: Optional[str],
+) -> Optional[str]:
+    """Return the exact unranked Claude 5 model explicitly requested.
 
     ``PDD_MODEL_DEFAULT`` normally supplies the base point for the strength
-    interpolation.  Claude Fable 5 is intentionally unranked, however, so a
-    high-strength interpolation would otherwise replace an explicit Fable
-    choice with a higher-ranked model before Fable is ever attempted.  Accept
-    the catalog's bare name, provider-qualified form, and the corresponding
-    Opus 5 compatibility aliases.
+    interpolation. Claude Fable 5 and Claude Opus 5 are intentionally
+    unranked, however, so a high-strength interpolation would otherwise
+    replace an explicit choice before it is attempted. Provider-qualified
+    Anthropic names select the same exact direct-provider catalog row.
     """
-    canonical = _canonicalize_claude_fable_alias(model_name)
-    normalized = str(canonical or "").strip().lower()
-    return normalized in {"claude-fable-5", "anthropic/claude-fable-5"}
+    normalized = str(model_name or "").strip().lower()
+    if normalized.startswith("anthropic/"):
+        normalized = normalized.split("/", 1)[1]
+    return normalized if normalized in _UNRANKED_CLAUDE_5_MODELS else None
 
 
-def _prioritize_explicit_fable_candidate(
+def _prioritize_explicit_unranked_claude_candidate(
     candidates: List[Dict[str, Any]],
+    requested_model: str,
 ) -> List[Dict[str, Any]]:
-    """Return Fable first, preserving the original order as fallback.
+    """Return the exact requested Claude 5 model first, retaining fallbacks.
 
     The remaining candidates are deliberately retained: an explicit model
-    selection means "try Fable first", not "disable all recovery".  This
+    selection means "try the requested model first", not "disable recovery".
     allows authentication, refusal, and provider failures to continue through
-    the existing candidate fallback loop after a real Fable attempt.
+    the existing candidate fallback loop after the exact model was attempted.
     """
-    fable_candidates = [
+    exact_candidates = [
         candidate
         for candidate in candidates
-        if str(candidate.get("model", "")).strip().lower() == "claude-fable-5"
+        if str(candidate.get("model", "")).strip().lower() == requested_model
     ]
-    if not fable_candidates:
+    if not exact_candidates:
         raise ValueError(
-            "Claude Fable 5 was explicitly selected, but the active model "
-            "catalog has no 'claude-fable-5' row. Add that row or use the "
-            "packaged catalog; refusing to silently select another model."
+            f"{requested_model!r} was explicitly selected, but the active "
+            f"model catalog has no {requested_model!r} row. Add that row or "
+            "use the packaged catalog; refusing to silently select another "
+            "model."
         )
-    return fable_candidates + [
+    return exact_candidates + [
         candidate
         for candidate in candidates
-        if str(candidate.get("model", "")).strip().lower() != "claude-fable-5"
+        if str(candidate.get("model", "")).strip().lower() != requested_model
     ]
 
 
@@ -5099,10 +5086,7 @@ def llm_invoke(
         # cascade and select the routed model directly when it exists.
         if model_override:
             _effective_default_model = model_override
-        _effective_default_model = _canonicalize_claude_fable_alias(
-            _effective_default_model
-        )
-        explicit_fable_selection = _is_explicit_claude_fable_selection(
+        explicit_unranked_claude_model = _explicit_unranked_claude_5_model(
             _effective_default_model
         )
         candidate_models = _select_model_candidates(
@@ -5111,12 +5095,14 @@ def llm_invoke(
             model_df,
             manifest_by_model=manifest_by_model,
         )
-        if explicit_fable_selection:
-            # An explicit Fable selection is not merely a strength-routing base
-            # point. Fable is unranked, so strength=1.0 otherwise selects a
-            # different high-ranked model first. Keep the normal candidates
-            # after Fable so fallback begins only after Fable was attempted.
-            candidate_models = _prioritize_explicit_fable_candidate(candidate_models)
+        if explicit_unranked_claude_model:
+            # An explicit unranked Claude selection is not merely a
+            # strength-routing base point. Keep normal candidates afterward
+            # so fallback starts only after the exact model was attempted.
+            candidate_models = _prioritize_explicit_unranked_claude_candidate(
+                candidate_models,
+                explicit_unranked_claude_model,
+            )
         elif model_override:
             _exact = [
                 c for c in candidate_models
@@ -5251,14 +5237,7 @@ def llm_invoke(
     for model_info in candidate_models:
         if command_single_attempt and provider_attempted_this_call:
             break
-        # Catalogs may expose PDD's Opus 5 compatibility name for discovery,
-        # but Anthropic accepts only the canonical Fable 5 identifier. Apply
-        # the same boundary conversion to every candidate (not just the
-        # configured base model) so the alias can never reach LiteLLM.
-        model_name_litellm = (
-            _canonicalize_claude_fable_alias(model_info["model"])
-            or model_info["model"]
-        )
+        model_name_litellm = model_info["model"]
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
 
