@@ -199,6 +199,64 @@ def test_execution_contract_accepts_wheel_only_after_outside_site_packages_prefl
     assert calls == 2
 
 
+def test_execution_contract_accepts_standard_symlinked_venv_launcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wheel_root = tmp_path / "wheel-environment"
+    wheel_python = wheel_root / "bin" / "python"
+    wheel_python.parent.mkdir(parents=True)
+    wheel_python.symlink_to(Path(sys.executable))
+    package = wheel_root / "lib" / "python3.12" / "site-packages" / "pdd" / "__init__.py"
+    package.parent.mkdir(parents=True)
+    package.write_text("\n", encoding="utf-8")
+    calls: list[tuple[list[str], Path, dict[str, str]]] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> SimpleNamespace:
+        calls.append((argv, kwargs["cwd"], kwargs["env"]))  # type: ignore[index]
+        stdout = (
+            '{"prefix": "' + str(wheel_root) + '", "pdd_file": "' + str(package) + '"}\n'
+            if len(calls) == 1 else "--base-ref\n"
+        )
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    module = _module()
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    assert module._cli_errors(  # pylint: disable=protected-access
+        {"id": "wheel-certify", "kind": "console", "argv": ["pdd", "certify"], "documented_options": ["--base-ref"]},
+        str(wheel_python), "built-wheel", tmp_path / "checkout",
+    ) == []
+    assert calls[0][0][:3] == [str(wheel_python), "-I", "-c"]
+    assert calls[0][1] == wheel_root
+    assert not {"PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE"} & calls[0][2].keys()
+
+
+def test_execution_contract_rejects_venv_launcher_with_resolved_base_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wheel_root = tmp_path / "wheel-environment"
+    wheel_python = wheel_root / "bin" / "python"
+    wheel_python.parent.mkdir(parents=True)
+    wheel_python.symlink_to(Path(sys.executable))
+    base_package = tmp_path / "base" / "lib" / "python3.12" / "site-packages" / "pdd" / "__init__.py"
+    base_package.parent.mkdir(parents=True)
+    base_package.write_text("\n", encoding="utf-8")
+
+    def fake_run(_: list[str], **__: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(f'{{"prefix": "{tmp_path / "base"}", "pdd_file": "{base_package}"}}\n'),
+            stderr="",
+        )
+
+    module = _module()
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    errors = module._cli_errors(  # pylint: disable=protected-access
+        {"id": "wheel-certify", "kind": "console", "argv": ["pdd", "certify"]},
+        str(wheel_python), "built-wheel", tmp_path / "checkout",
+    )
+    assert any("sys.prefix" in error for error in errors)
+
+
 def test_execution_contract_rejects_unarchived_legacy_steps(tmp_path: Path) -> None:
     _, state_path, root = _verify(tmp_path)
     for ledger_path in (root / "docs" / "ledger_source.yaml", root / "docs" / "ledger.yaml"):
