@@ -1,0 +1,15 @@
+{
+  "base_sha": "315f03def92d160024190c57d2bed525ab976e38",
+  "closure": {
+    "peak_rss": 320733184,
+    "seconds": 2.323471,
+    "subprocess_calls": 120
+  },
+  "deterministic_report_bytes": 8586,
+  "inventory": {
+    "peak_rss": 320733184,
+    "seconds": 25.497711,
+    "subprocess_calls": 1086
+  },
+  "schema_version": 1
+}
