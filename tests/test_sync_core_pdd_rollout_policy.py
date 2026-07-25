@@ -161,6 +161,14 @@ GLOBAL_SYNC_M0_UNAUTHORIZED_SIBLING_PATHS = {
     "docs/global_sync_m0_unreviewed.json",
     "scripts/verify_global_sync_m0_unreviewed.py",
 }
+KIMI_K3_PROVIDER_CATALOG_PREAUTHORIZED_PATHS = {
+    "docs/kimi_k3.md",
+    "pdd/data/provider_catalog.v1.json",
+    "scripts/bootstrap_provider_catalog.py",
+    "scripts/provider_catalog.py",
+    "tests/test_kimi_k3_integration.py",
+    "tests/test_provider_catalog.py",
+}
 GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS = {
     ".github/workflows/global-sync-m0-bootstrap.yml",
     ".pdd/global-sync/m0-bootstrap-policy.json",
@@ -234,6 +242,7 @@ PREAUTHORIZED_CHILD_PATHS = (
     | GATE1_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS
+    | KIMI_K3_PROVIDER_CATALOG_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
     | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
