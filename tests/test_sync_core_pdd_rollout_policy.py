@@ -59,6 +59,7 @@ PDD_1875_PROTECTED_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
 PDD_1875_COMPOSED_HEAD = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 TERRA_SOL_PROTECTED_BASE = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 TERRA_SOL_COMPOSED_HEAD = "b3902318c35c279e49e6397838825c95bd568942"
+SYNC_ROLLOUT_PROTECTED_BASE = "dec539aa8d0697e357e2077c1dbc73b0621aa617"
 PR_1971_COMBINED_PROFILE_DIGEST = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
 )
@@ -235,6 +236,16 @@ PR_2017_ABSENT_METADATA_PATHS = {
     ".pdd/meta/fix_code_loop_python_run.json",
     ".pdd/meta/fix_error_loop_python_run.json",
     ".pdd/meta/get_test_command_python_run.json",
+}
+SYNC_ROLLOUT_EXISTING_METADATA_PATHS = {
+    ".pdd/meta/code_generator_python.json",
+    ".pdd/meta/code_generator_python_run.json",
+    ".pdd/meta/continue_generation_python.json",
+    ".pdd/meta/continue_generation_python_run.json",
+    ".pdd/meta/detect_change_python.json",
+    ".pdd/meta/detect_change_python_run.json",
+    ".pdd/meta/generate_test_python.json",
+    ".pdd/meta/generate_test_python_run.json",
 }
 PREAUTHORIZED_CHILD_PATHS = (
     LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS
@@ -1510,6 +1521,44 @@ def test_pr2017_phase_a_is_dormant_on_its_exact_protected_base() -> None:
     assert not manifest.invalid_reasons
     assert not manifest.unaccounted_tracked_paths
     assert len(profiles.profiles) == 468
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
+def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
+    """The rollout repair is valid only from its real protected base to HEAD."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact sync-rollout protected history",
+        SYNC_ROLLOUT_PROTECTED_BASE,
+    )
+    manifest = build_unit_manifest(
+        ROOT,
+        base_ref=SYNC_ROLLOUT_PROTECTED_BASE,
+        head_ref="HEAD",
+    )
+
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix()
+        in SYNC_ROLLOUT_EXISTING_METADATA_PATHS
+    }
+    assert not manifest.invalid_reasons
+    assert not manifest.unaccounted_tracked_paths
+    assert set(records) == SYNC_ROLLOUT_EXISTING_METADATA_PATHS
+    assert all(
+        item.in_base
+        and item.in_head
+        and item.inventory is InventoryStatus.HUMAN_OWNED
+        and item.candidate_id.role == "human-maintained"
+        and item.ownership_provenance
+        == f"protected-ownership:pdd-maintainers:{path}"
+        for path, item in records.items()
+    )
+
+    profiles = load_verification_profiles(ROOT, manifest)
+
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
 
