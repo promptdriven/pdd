@@ -5160,6 +5160,18 @@ def llm_invoke(
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
 
+        # LiteLLM's ChatGPT subscription adapter only exposes the Codex
+        # Responses endpoint.  Its chat-completions batch endpoint is
+        # unsupported, so fail before credential setup or any provider call
+        # rather than silently routing chatgpt/* through batch_completion().
+        if use_batch_mode and str(model_name_litellm).lower().startswith("chatgpt/"):
+            raise ValueError(
+                "ChatGPT subscription models do not support batch invocations. "
+                "Set use_batch_mode=False and invoke each item individually; "
+                "PDD will not send chatgpt/* requests to LiteLLM's "
+                "chat-completions batch endpoint."
+            )
+
         # Record this candidate before any pre-call validation/skip logic so
         # models skipped mid-call (context window pre-check, missing api_key,
         # github_copilot OAuth missing, auth-error skip, etc.) are still

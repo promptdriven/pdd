@@ -206,6 +206,7 @@ def test_fallback_reaches_chatgpt_when_anthropic_key_missing(monkeypatch):
     """No Anthropic key under --force reaches ChatGPT's Responses endpoint."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("PDD_LLM_INVOKE_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "claude-sonnet-4-6")
     monkeypatch.setenv("PDD_FORCE", "1")
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
 
@@ -269,6 +270,30 @@ def test_chatgpt_generation_uses_responses_api_with_list_input(monkeypatch):
     assert isinstance(kwargs["input"], list)
     assert kwargs["input"][0]["content"][0]["type"] == "input_text"
     assert "say hello to there" in kwargs["input"][0]["content"][0]["text"]
+
+
+def test_chatgpt_batch_fails_before_unsupported_litellm_endpoints(monkeypatch):
+    """The Responses-only subscription adapter must not hit batch completions."""
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.3-codex")
+    monkeypatch.setenv("PDD_FORCE", "1")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+
+    with patch("pdd.llm_invoke._load_model_data", return_value=_fake_model_df()), \
+         patch("pdd.llm_invoke.litellm.responses") as responses, \
+         patch("pdd.llm_invoke.litellm.completion") as completion, \
+         patch("pdd.llm_invoke.litellm.batch_completion") as batch_completion:
+        with pytest.raises(ValueError, match="do not support batch invocations"):
+            li.llm_invoke(
+                prompt="say hello to {name}",
+                input_json=[{"name": "Ada"}, {"name": "Grace"}],
+                strength=0.5,
+                use_batch_mode=True,
+                verbose=False,
+            )
+
+    responses.assert_not_called()
+    completion.assert_not_called()
+    batch_completion.assert_not_called()
 
 
 def test_stale_catalog_reports_missing_exact_chatgpt_model(monkeypatch, caplog):
@@ -439,6 +464,7 @@ def test_anthropic_outranks_codex_so_default_unchanged():
 def test_chatgpt_structured_never_sends_response_format(monkeypatch):
     """ChatGPT Responses input carries the schema instead of text.format."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.3-codex")
     monkeypatch.setenv("PDD_FORCE", "1")
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
     from pydantic import BaseModel
@@ -509,6 +535,22 @@ def test_chatgpt_structured_never_sends_response_format(monkeypatch):
     assert result["result"] == Cap(country="France", capital="Paris")
     assert seen == [{"response_format": False, "text": False, "schema": True}]
     completion.assert_not_called()
+
+
+def test_chatgpt_source_prompts_document_responses_contract():
+    """Mirrored source prompts preserve the subscription routing contract."""
+    root = Path(__file__).resolve().parents[1]
+    llm_prompt = (root / "prompts" / "llm_invoke_python.prompt").read_text()
+    mirrored_llm_prompt = (root / "pdd" / "prompts" / "llm_invoke_python.prompt").read_text()
+    tester_prompt = (root / "prompts" / "model_tester_python.prompt").read_text()
+    mirrored_tester_prompt = (root / "pdd" / "prompts" / "model_tester_python.prompt").read_text()
+
+    assert llm_prompt == mirrored_llm_prompt
+    assert tester_prompt == mirrored_tester_prompt
+    assert "list-form Responses input" in llm_prompt
+    assert "inject the JSON schema as an in-band system-message instruction" in llm_prompt
+    assert "Batch invocation is unsupported: fail closed" in llm_prompt
+    assert "Codex Responses smoke path" in tester_prompt
 
 
 def test_splice_collapses_gpt54_multi_message_output():
