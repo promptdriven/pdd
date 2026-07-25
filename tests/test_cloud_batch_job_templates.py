@@ -396,6 +396,14 @@ def test_cloud_batch_execution_paths_pin_current_release_default_model():
         assert model_pins == [expected_model]
         assert stale_model not in model_pins
 
+    makefile_text = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    make_recipe_pins = re.findall(
+        r"^\s*@.*?\bPDD_MODEL_DEFAULT=([^\s]+)", makefile_text, re.MULTILINE
+    )
+
+    assert make_recipe_pins == [expected_model] * 4
+    assert f"PDD_MODEL_DEFAULT={stale_model}" not in makefile_text
+
 
 def test_cloud_batch_entrypoint_clears_inherited_default_model_for_pytest_shards():
     entrypoint_text = (
