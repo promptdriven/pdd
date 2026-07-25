@@ -246,6 +246,7 @@ def mock_env_vars(monkeypatch):
     # and override local=True in tests (see _env_flag_enabled checks).
     monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
     monkeypatch.delenv("PDD_NO_LOCAL_FALLBACK", raising=False)
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
 
 # --- Helper to create files ---
 def create_file(path, content=""):
