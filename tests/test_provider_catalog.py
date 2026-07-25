@@ -133,6 +133,49 @@ def test_kimi_k3_model_route_and_strict_label_are_canonical() -> None:
     }
     assert "base_url" not in by_model["moonshot/kimi-k2.6"]
 
+    openrouter = next(
+        provider
+        for provider in metadata["providers"]
+        if provider["id"] == "openrouter"
+    )
+    assert openrouter["github"]["model_labels"] == {
+        "pdd-openrouter-kimi": "openrouter/moonshotai/kimi-k3"
+    }
+    openrouter_by_model = {
+        model["model"]: model for model in openrouter["models"]
+    }
+    assert openrouter_by_model["openrouter/moonshotai/kimi-k3"] == {
+        "model": "openrouter/moonshotai/kimi-k3",
+        "upstream_model": "moonshotai/kimi-k3",
+        "capabilities": [
+            "text_generation",
+            "streaming",
+            "tools",
+            "structured_output",
+            "reasoning_content",
+            "long_context",
+        ],
+        "context_limit": "1048576",
+        "input": "3.0",
+        "output": "15.0",
+        "reasoning_type": "effort",
+        "byok_eligible": True,
+    }
+
+
+def test_openrouter_kimi_label_cannot_reuse_direct_kimi_label() -> None:
+    manifest, generator = _manifest_and_generator()
+    openrouter = next(
+        provider
+        for provider in manifest["providers"]
+        if provider["id"] == "openrouter"
+    )
+    openrouter["github"]["model_labels"] = {
+        "pdd-kimi": "openrouter/moonshotai/kimi-k3"
+    }
+    with pytest.raises(generator.CatalogError, match="Duplicate GitHub label"):
+        generator._validate_manifest(manifest)
+
 
 @pytest.mark.parametrize(
     ("label", "target", "message"),

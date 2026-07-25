@@ -184,6 +184,7 @@ OpenRouter,openrouter/anthropic/claude-opus-4.5,5.0,25.0,1468,1468,arena-elo-fal
 OpenRouter,openrouter/z-ai/glm-4.7,0.4,1.5,1440,1440,arena-elo-fallback,,OPENROUTER_API_KEY,0,True,effort,,False,
 OpenRouter,openrouter/google/gemini-3-pro-preview,2.0,12.0,1438,1438,arena-elo-fallback,,OPENROUTER_API_KEY,0,True,effort,,False,
 OpenRouter,openrouter/moonshotai/kimi-k2.5,0.6,3.0,1408,1408,arena-elo-fallback,,OPENROUTER_API_KEY,0,True,none,,False,
+OpenRouter,openrouter/moonshotai/kimi-k3,3.0,15.0,0,0,platform-default,,OPENROUTER_API_KEY,0,True,effort,,False,1048576
 OpenRouter,openrouter/openai/gpt-5.2,1.75,14.0,1404,1404,arena-elo-fallback,,OPENROUTER_API_KEY,0,True,effort,,False,
 OpenRouter,openrouter/openai/gpt-5,1.25,10.0,1393,1393,arena-elo-fallback,,OPENROUTER_API_KEY,0,False,effort,,False,
 OpenRouter,openrouter/minimax/minimax-m2.1,0.27,1.2,1392,1392,arena-elo-fallback,,OPENROUTER_API_KEY,0,True,effort,,False,
