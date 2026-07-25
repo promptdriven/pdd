@@ -272,6 +272,48 @@ def test_chatgpt_generation_uses_responses_api_with_list_input(monkeypatch):
     assert "say hello to there" in kwargs["input"][0]["content"][0]["text"]
 
 
+def test_chatgpt_generation_preserves_code_generator_multimodal_content(monkeypatch):
+    """Code-generator text/image messages retain their image in Responses input."""
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.3-codex")
+    monkeypatch.setenv("PDD_FORCE", "1")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+
+    response = SimpleNamespace(
+        output=[SimpleNamespace(
+            type="message",
+            content=[SimpleNamespace(type="output_text", text="looks good")],
+        )],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=2),
+        status="completed",
+    )
+    image_url = "data:image/png;base64,AA=="
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe this image."},
+            {"type": "image_url", "image_url": {"url": image_url}},
+        ],
+    }]
+
+    with patch("pdd.llm_invoke._load_model_data", return_value=_fake_model_df()), \
+         patch("pdd.codex_subscription.has_codex_subscription_auth", return_value=True), \
+         patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True), \
+         patch("pdd.codex_subscription.apply_litellm_chatgpt_output_patch", return_value=True), \
+         patch("pdd.llm_invoke.litellm.responses", return_value=response) as responses, \
+         patch("pdd.llm_invoke.litellm.completion") as completion:
+        result = li.llm_invoke(messages=messages, strength=0.5, verbose=False)
+
+    assert result["result"] == "looks good"
+    assert responses.call_args.kwargs["input"] == [{
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "Describe this image."},
+            {"type": "input_image", "image_url": image_url},
+        ],
+    }]
+    completion.assert_not_called()
+
+
 def test_chatgpt_batch_fails_before_unsupported_litellm_endpoints(monkeypatch):
     """The Responses-only subscription adapter must not hit batch completions."""
     monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.3-codex")
@@ -548,6 +590,7 @@ def test_chatgpt_source_prompts_document_responses_contract():
     assert llm_prompt == mirrored_llm_prompt
     assert tester_prompt == mirrored_tester_prompt
     assert "list-form Responses input" in llm_prompt
+    assert "input_image" in llm_prompt
     assert "inject the JSON schema as an in-band system-message instruction" in llm_prompt
     assert "Batch invocation is unsupported: fail closed" in llm_prompt
     assert "Codex Responses smoke path" in tester_prompt

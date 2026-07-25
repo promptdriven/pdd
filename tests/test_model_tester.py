@@ -47,6 +47,7 @@
 """Tests for model_tester.py — behavioral tests driven through test_model_interactive()."""
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from pdd import model_tester
@@ -356,7 +357,13 @@ def test_chatgpt_subscription_uses_codex_responses_with_bridged_auth():
 
     def responses_after_bridge(**_kwargs):
         assert bridge.called, "Codex auth was not bridged before LiteLLM was called"
-        return _mock_litellm_success()
+        return SimpleNamespace(
+            output=[SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(type="output_text", text="OK")],
+            )],
+            usage=SimpleNamespace(input_tokens=2, output_tokens=1),
+        )
 
     with patch(
         "pdd.codex_subscription.bridge_codex_auth_for_litellm", bridge
@@ -381,6 +388,31 @@ def test_chatgpt_subscription_uses_codex_responses_with_bridged_auth():
         }],
         timeout=8,
     )
+    completion.assert_not_called()
+
+
+def test_chatgpt_subscription_rejects_empty_responses_output():
+    """A transport-successful Responses call is not a valid smoke-test result."""
+    empty_response = SimpleNamespace(
+        output=[],
+        usage=SimpleNamespace(input_tokens=2, output_tokens=0),
+    )
+
+    with patch(
+        "pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True
+    ), patch(
+        "pdd.codex_subscription.apply_litellm_chatgpt_output_patch"
+    ), patch(
+        "litellm.responses", return_value=empty_response
+    ) as responses, patch(
+        "litellm.completion",
+        side_effect=AssertionError("legacy chat-completions route must not be used"),
+    ) as completion:
+        result = model_tester._run_test(CHATGPT_SUBSCRIPTION_ROW)
+
+    assert result["success"] is False
+    assert "no meaningful output" in result["error"]
+    responses.assert_called_once()
     completion.assert_not_called()
 
 

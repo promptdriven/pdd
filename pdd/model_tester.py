@@ -245,6 +245,23 @@ def _run_test(row: Dict[str, Any]) -> Dict[str, Any]:
                 }],
                 timeout=8,
             )
+            output_text = None
+            for item in getattr(response, "output", []) or []:
+                if getattr(item, "type", None) != "message":
+                    continue
+                for content in getattr(item, "content", []) or []:
+                    if getattr(content, "type", None) != "output_text":
+                        continue
+                    text = getattr(content, "text", None)
+                    if isinstance(text, str) and text.strip():
+                        output_text = text
+                        break
+                if output_text is not None:
+                    break
+            if output_text is None:
+                raise RuntimeError(
+                    "ChatGPT Responses smoke test returned no meaningful output"
+                )
         else:
             response = litellm.completion(**kwargs)
         duration = time_module.time() - start

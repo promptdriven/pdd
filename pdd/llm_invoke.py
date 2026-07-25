@@ -5837,14 +5837,51 @@ def llm_invoke(
                                 if not isinstance(message, dict):
                                     message = {"role": "user", "content": str(message)}
                                 content = message.get("content", "")
-                                if not isinstance(content, str):
-                                    content = json.dumps(content, default=str)
+                                if isinstance(content, list):
+                                    response_content = []
+                                    for part in content:
+                                        if not isinstance(part, dict):
+                                            response_content.append({
+                                                "type": "input_text",
+                                                "text": str(part),
+                                            })
+                                            continue
+                                        part_type = part.get("type")
+                                        if part_type in {"text", "input_text"}:
+                                            response_content.append({
+                                                "type": "input_text",
+                                                "text": str(part.get("text", "")),
+                                            })
+                                        elif part_type in {"image_url", "input_image"}:
+                                            image_data = part.get("image_url", "")
+                                            if isinstance(image_data, dict):
+                                                image_url = image_data.get("url", "")
+                                                detail = image_data.get("detail")
+                                            else:
+                                                image_url = image_data
+                                                detail = part.get("detail")
+                                            if isinstance(image_url, str) and image_url:
+                                                image_part = {
+                                                    "type": "input_image",
+                                                    "image_url": image_url,
+                                                }
+                                                if detail:
+                                                    image_part["detail"] = detail
+                                                response_content.append(image_part)
+                                        else:
+                                            response_content.append({
+                                                "type": "input_text",
+                                                "text": json.dumps(part, default=str),
+                                            })
+                                else:
+                                    response_content = [{
+                                        "type": "input_text",
+                                        "text": content if isinstance(content, str) else json.dumps(content, default=str),
+                                    }]
                                 input_text.append(
                                     {
                                         "role": message.get("role", "user"),
-                                        "content": [
-                                            {"type": "input_text", "text": content}
-                                        ],
+                                        "content": response_content,
                                     }
                                 )
                         elif isinstance(messages_for_responses, list) and messages_for_responses and isinstance(messages_for_responses[0], dict):
