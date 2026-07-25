@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
 from pdd.sync_core import decommission as decommission_module
@@ -39,6 +40,7 @@ EXPECTED_PATH = ROOT / ".pdd" / "expected-managed.json"
 OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
+AUTO_HEAL_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "auto-heal.yml"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 469
 # #1989's dormant-bootstrap assertions retain their original immutable base;
@@ -167,6 +169,23 @@ KIMI_K3_PROVIDER_CATALOG_PREAUTHORIZED_PATHS = {
     "tests/test_kimi_k3_integration.py",
     "tests/test_provider_catalog.py",
 }
+GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS = {
+    ".github/workflows/global-sync-m0-bootstrap.yml",
+    ".pdd/global-sync/m0-bootstrap-policy.json",
+    "scripts/verify_global_sync_m0_bootstrap.py",
+}
+GLOBAL_SYNC_M0_BOOTSTRAP_GLOBAL_SYNC_PREAUTHORIZED_PATHS = {
+    ".pdd/global-sync/m0-bootstrap-policy.json",
+}
+GLOBAL_SYNC_M0_BOOTSTRAP_CANDIDATE_PATHS = (
+    GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
+    | {"scripts/verify_global_sync_m0_samples.py"}
+)
+GLOBAL_SYNC_M0_BOOTSTRAP_UNAUTHORIZED_SIBLING_PATHS = {
+    ".github/workflows/global-sync-m0-bootstrap-unreviewed.yml",
+    ".pdd/global-sync/m0-bootstrap-policy-unreviewed.json",
+    "scripts/verify_global_sync_m0_bootstrap_unreviewed.py",
+}
 GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/runtime-linux-x86_64-cp312.lock",
 }
@@ -224,10 +243,13 @@ PREAUTHORIZED_CHILD_PATHS = (
     | GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS
     | KIMI_K3_PROVIDER_CATALOG_PREAUTHORIZED_PATHS
+    | GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
     | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
     | {
+        ".pdd/meta/agentic_architecture_python.json",
+        ".pdd/meta/commands_generate_python.json",
         ".pdd/meta/user_story_tests_python.json",
         ".pdd/meta/user_story_tests_python_run.json",
         ".github/toolchains/playwright_manifest.py",
@@ -1618,6 +1640,11 @@ def test_current_profile_reconciliation_matches_current_prompt_and_profile_rows(
         for authorization in verification._TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
         if authorization.bindings.head_policy_sha256 == profile_digest
     )
+    current_rows.extend(
+        _requirement_authorization_row(authorization)
+        for authorization in verification._GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+        if authorization.bindings.head_policy_sha256 == profile_digest
+    )
     assert current_rows
     profiles = {
         (row["prompt_path"], row["language_id"]): row
@@ -2324,6 +2351,191 @@ def test_global_sync_m0_paths_are_exactly_preauthorized() -> None:
     )
 
 
+def test_global_sync_m0_bootstrap_paths_are_exactly_preauthorized() -> None:
+    """Only the reviewed protected M0 bootstrap paths receive authority."""
+    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    rules = {row["pattern"]: row for row in ownership["rules"]}
+    assert len(GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS) == 3
+    assert {
+        path: rules.get(path) for path in GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
+    } == {
+        path: {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
+        for path in GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
+    }
+    bootstrap_authority = {
+        row["pattern"]
+        for row in ownership["rules"]
+        if row.get("preauthorize_absent", False)
+        and (
+            row["pattern"].startswith(".github/workflows/global-sync-m0-")
+            or row["pattern"].startswith(".pdd/global-sync/m0-bootstrap-")
+            or row["pattern"].startswith("scripts/verify_global_sync_m0_bootstrap")
+        )
+    }
+    assert bootstrap_authority == GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
+    assert not bootstrap_authority & GLOBAL_SYNC_M0_BOOTSTRAP_UNAUTHORIZED_SIBLING_PATHS
+    assert all(
+        not path.endswith("/") and not any(token in path for token in ("*", "?", "["))
+        for path in GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
+    )
+
+
+def test_global_sync_m0_bootstrap_candidate_cannot_self_authorize(
+    tmp_path: Path,
+) -> None:
+    """Candidate-added ownership rows cannot authorize absent bootstrap paths."""
+    root = tmp_path / "global-sync-m0-bootstrap-self-authorization"
+    base = _synthetic_current_tree_repo(root)
+    ownership_path = root / ".pdd" / "sync-ownership.json"
+    ownership = json.loads(ownership_path.read_text(encoding="utf-8"))
+    base_rules = [
+        row
+        for row in ownership["rules"]
+        if row["pattern"] not in GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
+    ]
+    if ownership["rules"] != base_rules:
+        ownership["rules"] = base_rules
+        ownership_path.write_text(
+            json.dumps(ownership, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        base = _commit(root, "remove protected M0 bootstrap authority")
+    assert not {
+        row["pattern"]
+        for row in json.loads(ownership_path.read_text(encoding="utf-8"))["rules"]
+        if row.get("preauthorize_absent", False)
+    } & GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
+
+    for path in sorted(GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS):
+        candidate = root / path
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text("candidate bootstrap artifact\n", encoding="utf-8")
+        _git(root, "add", "-f", path)
+    ownership = json.loads(ownership_path.read_text(encoding="utf-8"))
+    ownership["rules"].extend(
+        {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
+        for path in sorted(GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS)
+    )
+    ownership_path.write_text(
+        json.dumps(ownership, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    self_authorized_head = _commit(root, "candidate self-authorizes M0 bootstrap")
+
+    manifest = build_unit_manifest(
+        root, base_ref=base, head_ref=self_authorized_head
+    )
+    assert {
+        PurePosixPath(path) for path in GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
+    } <= set(manifest.unaccounted_tracked_paths)
+    assert {
+        f"{path}: tracked path has no ownership rule"
+        for path in GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
+    } <= set(manifest.invalid_reasons)
+
+
+def test_global_sync_m0_bootstrap_candidate_composes_from_protected_base(
+    tmp_path: Path,
+) -> None:
+    """The reviewed M0 bootstrap candidate is valid only atop protected preauth."""
+    root = tmp_path / "global-sync-m0-bootstrap-protected-composition"
+    base = _synthetic_current_tree_repo(root)
+    candidate_contents = {
+        ".github/workflows/global-sync-m0-bootstrap.yml": b"name: M0 bootstrap\n",
+        ".pdd/global-sync/m0-bootstrap-policy.json": b"{}\n",
+        "scripts/verify_global_sync_m0_bootstrap.py": b'"""M0 bootstrap."""\n',
+        "scripts/verify_global_sync_m0_samples.py": b'"""M0 samples."""\n',
+    }
+    assert set(candidate_contents) == GLOBAL_SYNC_M0_BOOTSTRAP_CANDIDATE_PATHS
+    for path, content in candidate_contents.items():
+        candidate = root / path
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_bytes(content)
+        _git(root, "add", "-f", path)
+    candidate_head = _commit(root, "compose protected M0 bootstrap candidate")
+
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=candidate_head)
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix()
+        in GLOBAL_SYNC_M0_BOOTSTRAP_CANDIDATE_PATHS
+    }
+    assert set(records) == GLOBAL_SYNC_M0_BOOTSTRAP_CANDIDATE_PATHS
+    assert not manifest.unaccounted_tracked_paths
+    assert not manifest.invalid_reasons
+    assert all(
+        item.inventory.value == "HUMAN_OWNED"
+        and item.candidate_id.role == "human-maintained"
+        and item.ownership_provenance == f"protected-ownership:pdd-maintainers:{path}"
+        for path, item in records.items()
+    )
+
+
+def _workflow_value_references_secret(value: object, secret_names: tuple[str, ...]) -> bool:
+    """Return whether a parsed workflow value contains an App-secret reference."""
+    if isinstance(value, dict):
+        return any(
+            _workflow_value_references_secret(child, secret_names)
+            for child in value.values()
+        )
+    if isinstance(value, list):
+        return any(_workflow_value_references_secret(child, secret_names) for child in value)
+    return isinstance(value, str) and any(
+        secret_name.casefold() in value.casefold() for secret_name in secret_names
+    )
+
+
+def _assert_auto_heal_app_secret_consumers_are_restricted(
+    jobs: dict[str, dict[str, object]],
+) -> None:
+    """Require the only App-secret consumer to be the restricted heal job."""
+    app_secret_names = ("PDD_CLOUD_APP_ID", "PDD_CLOUD_APP_PRIVATE_KEY")
+    consumer_jobs = {
+        job_name
+        for job_name, job in jobs.items()
+        if _workflow_value_references_secret(job, app_secret_names)
+    }
+
+    assert consumer_jobs
+    assert consumer_jobs == {"heal"}
+    assert all(
+        jobs[job_name].get("environment") == "pdd-cloud-read"
+        for job_name in consumer_jobs
+    )
+
+
+def test_auto_heal_app_secret_consumers_use_restricted_environment() -> None:
+    """Every App-secret consumer is bound to the main-restricted environment."""
+    workflow = yaml.safe_load(AUTO_HEAL_WORKFLOW_PATH.read_text(encoding="utf-8"))
+
+    _assert_auto_heal_app_secret_consumers_are_restricted(workflow["jobs"])
+
+
+@pytest.mark.parametrize(
+    "secret_reference",
+    (
+        "${{ secrets.pdd_cloud_app_id }}",
+        "${{ secrets['PDD_CLOUD_APP_PRIVATE_KEY'] }}",
+    ),
+)
+def test_auto_heal_rejects_second_job_with_alternate_app_secret_syntax(
+    secret_reference: str,
+) -> None:
+    """Case-insensitive dot and bracket secret references cannot bypass the job gate."""
+    jobs = {
+        "heal": {
+            "environment": "pdd-cloud-read",
+            "steps": [{"with": {"app-id": "${{ secrets.PDD_CLOUD_APP_ID }}"}}],
+        },
+        "unprotected-app-consumer": {
+            "steps": [{"env": {"APP_CREDENTIAL": secret_reference}}],
+        },
+    }
+
+    with pytest.raises(AssertionError):
+        _assert_auto_heal_app_secret_consumers_are_restricted(jobs)
+
+
 def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
     """Only the reviewed Linux CPython 3.12 target lock receives authority."""
     ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
@@ -2342,10 +2554,15 @@ def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
     } == (
         GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
         | STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS
+        | GLOBAL_SYNC_M0_BOOTSTRAP_GLOBAL_SYNC_PREAUTHORIZED_PATHS
     )
     assert (
         STANDALONE_CHECKER_GLOBAL_SYNC_PREAUTHORIZED_PATHS
         <= STANDALONE_CHECKER_PREAUTHORIZED_PATHS
+    )
+    assert (
+        GLOBAL_SYNC_M0_BOOTSTRAP_GLOBAL_SYNC_PREAUTHORIZED_PATHS
+        <= GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
     )
 
     # Existing independently reviewed preauthorization families stay exact.

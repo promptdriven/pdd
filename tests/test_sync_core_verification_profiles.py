@@ -1790,23 +1790,23 @@ ESTIMATE_REQUIREMENT_ROTATIONS = (
         "prompt_path": "pdd/prompts/commands/generate_python.prompt",
         "language_id": "python",
         "from_requirement_id": (
-            "CONTRACT-SHA256:83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f"
+            "CONTRACT-SHA256:91bbf9390f5489d3dbc3c8671d490feb4a7764d89270d2211875758c44a6ac2c"
         ),
         "to_requirement_id": (
-            "CONTRACT-SHA256:503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403"
+            "CONTRACT-SHA256:9771b4f0be08d137421acf8e66dcdd262ec2795908c59b09a38e4ea5bc7acef0"
         ),
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": (
-            "71b12a08e5be55b958a737decde889c189f7ca00ceaddccd7b587f9c8b2a4b64"
+            "2885c95a2d45969754ff96f3c392be5082acfa817abba047b7e3933164217352"
         ),
         "head_policy_sha256": (
-            "1b4641d57921012a4aa7c507bb38b31c29dcc8ad23b370f0c4b979d8ff0a5d18"
+            "d0945b7c4fe316619a8ab8cc8eb38b970b95f5a5a42a408a312dae8c2bb9cd7d"
         ),
         "base_prompt_sha256": (
-            "83b45ad928a9bac3567dea786c4b48819400247e63c7210d8cb5d26e4750a52f"
+            "91bbf9390f5489d3dbc3c8671d490feb4a7764d89270d2211875758c44a6ac2c"
         ),
         "head_prompt_sha256": (
-            "503f997914734dbef8e0542efd1f3c495fa15a652782e15bf63638e35c841403"
+            "9771b4f0be08d137421acf8e66dcdd262ec2795908c59b09a38e4ea5bc7acef0"
         ),
     },
 )

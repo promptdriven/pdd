@@ -30,6 +30,35 @@ _UNQUOTED_TARGET_RE = re.compile(
     rf"\bin\s+({_TARGET_DIR_PATTERN.pattern})(?=$|[\s`\"'),.:!?])",
     re.IGNORECASE,
 )
+_KNOWN_FILE_SUFFIXES = {
+    ".c",
+    ".cc",
+    ".cpp",
+    ".css",
+    ".go",
+    ".h",
+    ".hpp",
+    ".html",
+    ".java",
+    ".js",
+    ".json",
+    ".jsx",
+    ".md",
+    ".php",
+    ".py",
+    ".rb",
+    ".rs",
+    ".scss",
+    ".sh",
+    ".sql",
+    ".swift",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".vue",
+    ".yaml",
+    ".yml",
+}
 
 console = Console()
 
@@ -382,7 +411,17 @@ def _resolve_target_dir(repo_path: Path, target_dir: Optional[str]) -> Tuple[Pat
         base_dir.relative_to(repo_root)
     except ValueError:
         return repo_root, None, f"Invalid target directory: {target_dir!r}"
+    try:
+        if base_dir.exists() and not base_dir.is_dir():
+            return repo_root, None, f"Target directory is an existing file: {target_dir!r}"
+    except OSError as exc:
+        return repo_root, None, f"Could not inspect target directory {target_dir!r}: {exc}"
     return base_dir, normalized, None
+
+
+def _looks_like_file_reference(candidate: str) -> bool:
+    """Return True when an inferred ``in ...`` path names a common file type."""
+    return Path(candidate).suffix.lower() in _KNOWN_FILE_SUFFIXES
 
 
 def _extract_target_dir(issue_body: str) -> Optional[str]:
@@ -409,6 +448,8 @@ def _extract_target_dir(issue_body: str) -> Optional[str]:
             return None
         if not _is_safe_target_dir(candidate):
             raise ValueError(f"Invalid target directory: {candidate!r}")
+        if _looks_like_file_reference(candidate):
+            return None
         return candidate
 
     match = _UNQUOTED_TARGET_RE.search(issue_body)
@@ -418,6 +459,8 @@ def _extract_target_dir(issue_body: str) -> Optional[str]:
             return None
         if not _is_safe_target_dir(candidate):
             raise ValueError(f"Invalid target directory: {candidate!r}")
+        if _looks_like_file_reference(candidate):
+            return None
         return candidate
     return None
 
