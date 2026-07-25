@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -2953,6 +2954,171 @@ def test_release_video_makefile_rejects_opt_out_tag_without_release_video_zero(
     assert result.returncode != 0
     assert "v0.0.309 is opted out" in result.stderr
     assert not (tmp_path / "videos").exists()
+
+
+def write_release_makefile_stub_commands(tmp_path: Path) -> tuple[Path, Path]:
+    """Write isolated stubs for aggregate release control-flow tests."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    git_log = tmp_path / "git.log"
+
+    write_executable(
+        bin_dir / "git",
+        f"""#!{sys.executable}
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+with Path(os.environ["RELEASE_TEST_GIT_LOG"]).open("a", encoding="utf8") as log:
+    log.write(" ".join(args) + "\\n")
+
+scenario = os.environ["RELEASE_TEST_SCENARIO"]
+tag = os.environ["RELEASE_TEST_TAG"]
+latest_tag = os.environ["RELEASE_TEST_LATEST_TAG"]
+
+if args == ["fetch", "--tags", "--prune", "origin"]:
+    raise SystemExit(0)
+if args == ["rev-parse", "HEAD"]:
+    print("test-sha")
+    raise SystemExit(0)
+if args[:1] == ["tag"]:
+    if "--points-at" in args:
+        if scenario == "existing":
+            print(tag)
+        raise SystemExit(0)
+    if "--merged" in args:
+        if scenario == "new":
+            print(latest_tag)
+        raise SystemExit(0)
+    raise SystemExit(0)
+if args[:2] == ["rev-parse", "--verify"]:
+    raise SystemExit(1)
+if args[:1] == ["ls-remote"]:
+    if "--exit-code" in args:
+        raise SystemExit(2)
+    if scenario == "existing":
+        print(f"test-sha\\trefs/tags/{{tag}}^{{{{}}}}")
+    raise SystemExit(0)
+if args[:1] == ["push"]:
+    raise SystemExit(0)
+
+sys.stderr.write(f"unexpected git invocation: {{args!r}}\\n")
+raise SystemExit(3)
+""",
+    )
+    write_executable(
+        bin_dir / "gh",
+        f"""#!{sys.executable}
+import sys
+
+args = sys.argv[1:]
+if args[:2] in (["release", "view"], ["run", "list"]):
+    raise SystemExit(0)
+sys.stderr.write(f"unexpected gh invocation: {{args!r}}\\n")
+raise SystemExit(3)
+""",
+    )
+    write_executable(
+        bin_dir / "make",
+        f"""#!{sys.executable}
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+with Path(os.environ["RELEASE_TEST_MAKE_LOG"]).open("a", encoding="utf8") as log:
+    log.write(" ".join(args) + "\\n")
+
+if "release-video" in args and "RELEASE_TAG=v0.0.309" in args:
+    sys.stderr.write("release-video: v0.0.309 is opted out\\n")
+    raise SystemExit(1)
+raise SystemExit(0)
+""",
+    )
+    return bin_dir, git_log
+
+
+@pytest.mark.parametrize(
+    ("scenario", "release_tag", "latest_tag", "expects_video"),
+    [
+        ("existing", "v0.0.309", "", False),
+        ("new", "v0.0.309", "v0.0.308", False),
+        ("existing", "v0.0.310", "", True),
+        ("new", "v0.0.310", "v0.0.309", True),
+    ],
+)
+def test_release_makefile_treats_only_opt_out_tag_as_successful_no_video_path(
+    tmp_path: Path,
+    scenario: str,
+    release_tag: str,
+    latest_tag: str,
+    expects_video: bool,
+):
+    bin_dir, git_log = write_release_makefile_stub_commands(tmp_path)
+    make_log = tmp_path / "make.log"
+    wrapper = tmp_path / "Makefile"
+    wrapper.write_text(
+        f"""include {ROOT / 'Makefile'}
+
+check-deps:
+\t@:
+check-suspicious-files:
+\t@:
+check-release-remote:
+\t@:
+check-release-branch:
+\t@:
+check-release-clean:
+\t@:
+check-release-video-config:
+\t@:
+""",
+        encoding="utf8",
+    )
+    make_executable = shutil.which("make")
+    assert make_executable is not None
+    env = release_video_env(
+        {
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "RELEASE_TEST_GIT_LOG": str(git_log),
+            "RELEASE_TEST_MAKE_LOG": str(make_log),
+            "RELEASE_TEST_SCENARIO": scenario,
+            "RELEASE_TEST_TAG": release_tag,
+            "RELEASE_TEST_LATEST_TAG": latest_tag,
+        }
+    )
+
+    result = subprocess.run(
+        [make_executable, "-f", str(wrapper), "release"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    make_calls = (
+        make_log.read_text(encoding="utf8").splitlines()
+        if make_log.exists()
+        else []
+    )
+    video_calls = [call for call in make_calls if "release-video" in call]
+
+    assert result.returncode == 0, result.stderr
+    assert bool(video_calls) is expects_video
+    if expects_video:
+        assert video_calls == [
+            f"--no-print-directory release-video RELEASE_TAG={release_tag} "
+            "RELEASE_GIT_SHA=test-sha"
+        ]
+    else:
+        assert f"Skipping release video for opted-out tag {release_tag}." in result.stdout
+
+    if scenario == "new":
+        git_calls = git_log.read_text(encoding="utf8").splitlines()
+        assert f"tag -a {release_tag} -m Release {release_tag}" in git_calls
+        assert f"push origin {release_tag}" in git_calls
 
 
 def test_release_video_makefile_empty_local_defaults_are_unset():
