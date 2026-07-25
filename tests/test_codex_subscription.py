@@ -12,6 +12,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
@@ -202,7 +203,7 @@ def test_chatgpt_row_present_in_candidates():
 
 
 def test_fallback_reaches_chatgpt_when_anthropic_key_missing(monkeypatch):
-    """The load-bearing test: no ANTHROPIC_API_KEY, --force -> chatgpt is invoked."""
+    """No Anthropic key under --force reaches ChatGPT's Responses endpoint."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("PDD_LLM_INVOKE_ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv("PDD_FORCE", "1")
@@ -210,22 +211,64 @@ def test_fallback_reaches_chatgpt_when_anthropic_key_missing(monkeypatch):
 
     captured = {}
 
-    def fake_completion(**kwargs):
+    def fake_responses(**kwargs):
         captured["model"] = kwargs.get("model")
         raise RuntimeError("STOP_AFTER_CAPTURE")
 
     with patch("pdd.llm_invoke._load_model_data", return_value=_fake_model_df()), \
          patch("pdd.codex_subscription.has_codex_subscription_auth", return_value=True), \
          patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True), \
-         patch("pdd.llm_invoke.litellm.completion", side_effect=fake_completion):
+         patch("pdd.codex_subscription.apply_litellm_chatgpt_output_patch", return_value=True), \
+         patch("pdd.llm_invoke.litellm.responses", side_effect=fake_responses), \
+         patch("pdd.llm_invoke.litellm.completion") as completion:
         try:
             li.llm_invoke(prompt="hi {x}", input_json={"x": "there"}, strength=0.5, verbose=False)
         except Exception:
             pass
 
     # Anthropic row is skipped (missing key in --force); chatgpt is the first
-    # model that actually reaches litellm.completion.
+    # model that actually reaches LiteLLM.
     assert captured.get("model") == "chatgpt/gpt-5.3-codex"
+    completion.assert_not_called()
+
+
+def test_chatgpt_generation_uses_responses_api_with_list_input(monkeypatch):
+    """Generation must use the same Codex Responses endpoint proven by setup."""
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.3-codex")
+    monkeypatch.setenv("PDD_FORCE", "1")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+
+    output = SimpleNamespace(
+        type="message",
+        content=[SimpleNamespace(type="output_text", text="hello there")],
+    )
+    response = SimpleNamespace(
+        output=[output],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=2),
+        status="completed",
+    )
+
+    with patch("pdd.llm_invoke._load_model_data", return_value=_fake_model_df()), \
+         patch("pdd.codex_subscription.has_codex_subscription_auth", return_value=True), \
+         patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True), \
+         patch("pdd.codex_subscription.apply_litellm_chatgpt_output_patch", return_value=True), \
+         patch("pdd.llm_invoke.litellm.responses", return_value=response) as responses, \
+         patch("pdd.llm_invoke.litellm.completion") as completion:
+        result = li.llm_invoke(
+            prompt="say hello to {name}",
+            input_json={"name": "there"},
+            strength=0.5,
+            verbose=False,
+        )
+
+    assert result["result"] == "hello there"
+    responses.assert_called_once()
+    completion.assert_not_called()
+    kwargs = responses.call_args.kwargs
+    assert kwargs["model"] == "chatgpt/gpt-5.3-codex"
+    assert isinstance(kwargs["input"], list)
+    assert kwargs["input"][0]["content"][0]["type"] == "input_text"
+    assert "say hello to there" in kwargs["input"][0]["content"][0]["text"]
 
 
 def test_stale_catalog_reports_missing_exact_chatgpt_model(monkeypatch, caplog):
@@ -394,11 +437,7 @@ def test_anthropic_outranks_codex_so_default_unchanged():
 
 
 def test_chatgpt_structured_never_sends_response_format(monkeypatch):
-    """P1b (#1269, Greg review): EVERY chatgpt/ structured completion attempt —
-    the initial call AND the retry/repair calls — must (a) omit response_format
-    (the subscription backend ignores it) and (b) carry the in-prompt schema
-    instruction (the ONLY structured-output enforcement). Force non-JSON so the
-    repair retry fires, then assert both invariants on every recorded call."""
+    """ChatGPT Responses input carries the schema instead of text.format."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setenv("PDD_FORCE", "1")
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
@@ -419,39 +458,57 @@ def test_chatgpt_structured_never_sends_response_format(monkeypatch):
 
     # Marker from build_chatgpt_schema_instruction().
     SCHEMA_MARKER = "valid JSON object matching this schema"
-    seen = []  # one entry per attempt: {"rf": bool, "schema": bool}
+    seen = []
 
-    def fake_completion(**kwargs):
-        msgs = kwargs.get("messages") or []
+    def fake_responses(**kwargs):
+        msgs = kwargs.get("input") or []
         has_schema = any(
-            isinstance(m, dict) and SCHEMA_MARKER in (m.get("content") or "")
+            isinstance(m, dict)
+            and any(
+                SCHEMA_MARKER in (part.get("text") or "")
+                for part in (m.get("content") or [])
+                if isinstance(part, dict)
+            )
             for m in msgs
         )
-        seen.append({"rf": "response_format" in kwargs, "schema": has_schema})
-        # Return None content to force the cache-bypass retry path (one of the
-        # three retry sites), so we verify the retry call re-injects the schema.
-        msg = type("M", (), {"content": None, "role": "assistant"})()
-        choice = type("C", (), {"message": msg, "finish_reason": "stop"})()
-        usage = type("U", (), {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10})()
-        return type("R", (), {"choices": [choice], "usage": usage})()
+        seen.append({
+            "response_format": "response_format" in kwargs,
+            "text": "text" in kwargs,
+            "schema": has_schema,
+        })
+        return SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(
+                            type="output_text",
+                            text='{"country":"France","capital":"Paris"}',
+                        )
+                    ],
+                )
+            ],
+            usage=SimpleNamespace(input_tokens=5, output_tokens=5),
+            status="completed",
+        )
 
     with patch("pdd.llm_invoke._load_model_data", return_value=df), \
          patch("pdd.codex_subscription.has_codex_subscription_auth", return_value=True), \
          patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True), \
          patch("pdd.codex_subscription.apply_litellm_chatgpt_output_patch", return_value=True), \
-         patch("pdd.llm_invoke.litellm.completion", side_effect=fake_completion):
-        try:
-            li.llm_invoke(prompt="info about {c}", input_json={"c": "France"},
-                          strength=0.5, output_pydantic=Cap, verbose=False)
-        except Exception:
-            pass
+         patch("pdd.llm_invoke.litellm.responses", side_effect=fake_responses), \
+         patch("pdd.llm_invoke.litellm.completion") as completion:
+        result = li.llm_invoke(
+            prompt="info about {c}",
+            input_json={"c": "France"},
+            strength=0.5,
+            output_pydantic=Cap,
+            verbose=False,
+        )
 
-    assert seen, "litellm.completion was never called"
-    assert len(seen) >= 2, f"expected initial + at least one retry attempt, got {seen}"
-    assert not any(s["rf"] for s in seen), f"chatgpt/ call(s) sent response_format: {seen}"
-    assert all(s["schema"] for s in seen), (
-        f"a chatgpt/ structured attempt lacked the schema instruction (retry regressed): {seen}"
-    )
+    assert result["result"] == Cap(country="France", capital="Paris")
+    assert seen == [{"response_format": False, "text": False, "schema": True}]
+    completion.assert_not_called()
 
 
 def test_splice_collapses_gpt54_multi_message_output():

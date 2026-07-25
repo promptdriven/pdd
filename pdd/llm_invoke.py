@@ -5682,9 +5682,23 @@ def llm_invoke(
                     raise EstimateOnlyResult(estimate_payload)
 
 
-                # Route OpenAI gpt-5* models through Responses API to support 'reasoning'
+                # Route OpenAI gpt-5* API models and ChatGPT subscription
+                # models through Responses.  LiteLLM's chatgpt provider is a
+                # Responses-only Codex backend; sending it through
+                # completion() targets /chat/completions and can return a
+                # browser-only Cloudflare challenge.
                 model_lower_for_call = str(model_name_litellm).lower()
                 provider_lower_for_call = str(provider).lower()
+                use_responses_api = (
+                    not use_batch_mode
+                    and (
+                        (
+                            provider_lower_for_call == "openai"
+                            and model_lower_for_call.startswith("gpt-5")
+                        )
+                        or is_chatgpt_subscription
+                    )
+                )
 
                 # Responses calls bypass the chat-completions admission block
                 # below, so perform the same context and hosted-budget checks
@@ -5692,11 +5706,7 @@ def llm_invoke(
                 # could send an uncapped request even when the story-stage
                 # adapter supplied PDD_COMMAND_MAX_* limits.
                 responses_budget_admitted = False
-                if (
-                    not use_batch_mode
-                    and provider_lower_for_call == "openai"
-                    and model_lower_for_call.startswith("gpt-5")
-                ):
+                if use_responses_api:
                     token_count_for_attribution = None
                     context_limit_for_attribution = None
                     try:
@@ -5799,20 +5809,37 @@ def llm_invoke(
                         provider_attempted_this_call = True
                     responses_budget_admitted = True
 
-                if (
-                    not use_batch_mode
-                    and provider_lower_for_call == 'openai'
-                    and model_lower_for_call.startswith('gpt-5')
-                ):
+                if use_responses_api:
                     if verbose:
                         logger.info(f"[INFO] Calling LiteLLM Responses API for {model_name_litellm}...")
                     try:
-                        # Build input text from messages
-                        if isinstance(formatted_messages, list) and formatted_messages and isinstance(formatted_messages[0], dict):
-                            input_text = "\n\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in formatted_messages)
+                        # Build input from the final messages, after any schema
+                        # instruction has been injected.  The ChatGPT/Codex
+                        # backend requires list-form Responses input.
+                        messages_for_responses = litellm_kwargs.get(
+                            "messages", formatted_messages
+                        )
+                        if is_chatgpt_subscription:
+                            input_text = []
+                            for message in messages_for_responses:
+                                if not isinstance(message, dict):
+                                    message = {"role": "user", "content": str(message)}
+                                content = message.get("content", "")
+                                if not isinstance(content, str):
+                                    content = json.dumps(content, default=str)
+                                input_text.append(
+                                    {
+                                        "role": message.get("role", "user"),
+                                        "content": [
+                                            {"type": "input_text", "text": content}
+                                        ],
+                                    }
+                                )
+                        elif isinstance(messages_for_responses, list) and messages_for_responses and isinstance(messages_for_responses[0], dict):
+                            input_text = "\n\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in messages_for_responses)
                         else:
                             # Fallback: string cast
-                            input_text = str(formatted_messages)
+                            input_text = str(messages_for_responses)
 
                         # Derive effort mapping already computed in time_kwargs
                         reasoning_param = time_kwargs.get("reasoning")
@@ -5855,8 +5882,12 @@ def llm_invoke(
                         responses_kwargs = {
                             "model": model_name_litellm,
                             "input": input_text,
-                            "text": text_block,
                         }
+                        # The subscription backend ignores/strips Responses
+                        # text.format. Its structured-output contract is the
+                        # schema instruction already included in input.
+                        if not is_chatgpt_subscription:
+                            responses_kwargs["text"] = text_block
                         if effective_output_cap is not None:
                             # Responses API names the hard completion ceiling
                             # differently from chat-completions.
@@ -5882,7 +5913,9 @@ def llm_invoke(
                                 "has_structured_text_format": text_block.get("format", {}).get("type") == "json_schema",
                             },
                         )
-                        resp = litellm.responses(**responses_kwargs)
+                        resp = litellm.responses(
+                            **responses_kwargs, timeout=LLM_CALL_TIMEOUT
+                        )
                         call_duration = time_module.time() - call_start
 
                         # Extract text result from response
@@ -6015,6 +6048,12 @@ def llm_invoke(
                         # reservation); terminate this candidate and let the
                         # outer single-attempt guard fail closed.
                         if responses_budget_admitted and command_single_attempt:
+                            break
+                        # Never retry a ChatGPT subscription request through
+                        # completion(): that is a different, unsupported
+                        # endpoint and produces the Cloudflare HTML seen by
+                        # users. Move directly to the next candidate model.
+                        if is_chatgpt_subscription:
                             break
                         # Remove 'reasoning' key to avoid OpenAI Chat API unknown param errors
                         if "reasoning" in litellm_kwargs:

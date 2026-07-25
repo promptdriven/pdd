@@ -16,31 +16,33 @@
 #   10. test_successful_test_passes_api_key_for_single_var: Single api_key var → passed as api_key= to litellm.
 #   11. test_multi_var_provider_no_api_key_kwarg: Bedrock (pipe-delimited) → api_key= NOT passed to litellm.
 #   12. test_device_flow_no_api_key_kwarg: Empty api_key → api_key= NOT passed to litellm.
+#   13. test_chatgpt_subscription_uses_codex_responses_with_bridged_auth:
+#       chatgpt/* → Codex login is bridged and the Responses API is used.
 #
 # IV. Failed Model Test (end-to-end through test_model_interactive)
-#   13. test_auth_error_shows_classified_message: LLM raises 401 → output shows "Authentication error".
-#   14. test_connection_refused_shows_local_server_hint: LLM raises connection error → output suggests local server.
+#   14. test_auth_error_shows_classified_message: LLM raises 401 → output shows "Authentication error".
+#   15. test_connection_refused_shows_local_server_hint: LLM raises connection error → output suggests local server.
 #
 # V. Diagnostics Displayed Before Test
-#   15. test_diagnostics_show_key_found: API key in env → output includes "✓ Found".
-#   16. test_diagnostics_show_key_missing: API key not in env → output includes "✗ Not found".
-#   17. test_diagnostics_show_base_url_for_lm_studio: LM Studio model → base URL shown in output.
-#   18. test_diagnostics_bedrock_checks_all_vars: Bedrock model → all three env vars checked in output.
-#   19. test_diagnostics_vertex_bad_creds_file: GOOGLE_APPLICATION_CREDENTIALS path invalid → warns in output.
-#   20. test_diagnostics_device_flow_no_key_needed: Empty api_key → output indicates no key needed.
-#   21. test_diagnostics_show_base_url_for_zai: Z.AI row → base URL shown in diagnostics output.
-#   22. test_zai_kwargs_include_base_url_and_api_base: Z.AI general API → litellm gets base_url and api_base.
-#   23. test_zai_coding_plan_kwargs_use_coding_endpoint: Z.AI Coding Plan → coding endpoint in kwargs.
+#   16. test_diagnostics_show_key_found: API key in env → output includes "✓ Found".
+#   17. test_diagnostics_show_key_missing: API key not in env → output includes "✗ Not found".
+#   18. test_diagnostics_show_base_url_for_lm_studio: LM Studio model → base URL shown in output.
+#   19. test_diagnostics_bedrock_checks_all_vars: Bedrock model → all three env vars checked in output.
+#   20. test_diagnostics_vertex_bad_creds_file: GOOGLE_APPLICATION_CREDENTIALS path invalid → warns in output.
+#   21. test_diagnostics_device_flow_no_key_needed: Empty api_key → output indicates no key needed.
+#   22. test_diagnostics_show_base_url_for_zai: Z.AI row → base URL shown in diagnostics output.
+#   23. test_zai_kwargs_include_base_url_and_api_base: Z.AI general API → litellm gets base_url and api_base.
+#   24. test_zai_coding_plan_kwargs_use_coding_endpoint: Z.AI Coding Plan → coding endpoint in kwargs.
 #
 # VI. Session Persistence
-#   24. test_results_persist_across_picks: User tests model 1 then model 2 → both results shown in table.
+#   25. test_results_persist_across_picks: User tests model 1 then model 2 → both results shown in table.
 #
 # VII. CSV Loading Normalization
-#   25. test_csv_normalizes_nan_strings_and_bad_numerics: NaN strings → "", bad numbers → 0.0.
+#   26. test_csv_normalizes_nan_strings_and_bad_numerics: NaN strings → "", bad numbers → 0.0.
 #
 # VIII. Pure Function Contracts
-#   26-31. _classify_error: auth, connection refused, not found, timeout, rate limit, generic.
-#   32-33. _calculate_cost: basic math, zero tokens.
+#   27-32. _classify_error: auth, connection refused, not found, timeout, rate limit, generic.
+#   33-34. _calculate_cost: basic math, zero tokens.
 
 """Tests for model_tester.py — behavioral tests driven through test_model_interactive()."""
 
@@ -156,6 +158,14 @@ DEVICE_FLOW_CSV = (
     "provider,model,api_key,input,output\n"
     "Github Copilot,github_copilot/gpt-5,,0.0,0.0\n"
 )
+
+CHATGPT_SUBSCRIPTION_ROW = {
+    "provider": "OpenAI ChatGPT",
+    "model": "chatgpt/gpt-5.6-sol",
+    "api_key": "",
+    "input": 0.0,
+    "output": 0.0,
+}
 
 LM_STUDIO_CSV = (
     "provider,model,api_key,input,output,base_url\n"
@@ -337,6 +347,41 @@ def test_device_flow_no_api_key_kwarg(tmp_path, monkeypatch):
     )
     call_kwargs = mock_comp.call_args[1]
     assert "api_key" not in call_kwargs
+
+
+def test_chatgpt_subscription_uses_codex_responses_with_bridged_auth():
+    """The setup/model smoke test must stage ``codex login`` credentials and
+    use the working Codex Responses route, not the legacy chat-completions route."""
+    bridge = MagicMock(return_value=True)
+
+    def responses_after_bridge(**_kwargs):
+        assert bridge.called, "Codex auth was not bridged before LiteLLM was called"
+        return _mock_litellm_success()
+
+    with patch(
+        "pdd.codex_subscription.bridge_codex_auth_for_litellm", bridge
+    ), patch(
+        "pdd.codex_subscription.apply_litellm_chatgpt_output_patch"
+    ) as output_patch, patch(
+        "litellm.responses", side_effect=responses_after_bridge
+    ) as responses, patch(
+        "litellm.completion",
+        side_effect=AssertionError("legacy chat-completions route must not be used"),
+    ) as completion:
+        result = model_tester._run_test(CHATGPT_SUBSCRIPTION_ROW)
+
+    assert result["success"] is True
+    bridge.assert_called_once_with()
+    output_patch.assert_called_once_with()
+    responses.assert_called_once_with(
+        model="chatgpt/gpt-5.6-sol",
+        input=[{
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Say OK"}],
+        }],
+        timeout=8,
+    )
+    completion.assert_not_called()
 
 
 # ===========================================================================
