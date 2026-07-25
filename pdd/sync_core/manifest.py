@@ -97,7 +97,21 @@ class OwnershipRule:
 _PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 _BOOTSTRAP_HUMAN_OWNERSHIP = (
     OwnershipRule(
+        ".pdd/meta/agentic_architecture_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
         ".pdd/meta/ci_detect_changed_modules_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        ".pdd/meta/commands_generate_python.json",
         InventoryStatus.HUMAN_OWNED,
         "human-maintained",
         "pdd-maintainers",

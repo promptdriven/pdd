@@ -12,8 +12,9 @@ name: auto-heal
 # ---- Two distinct GitHub Apps ----
 # These MUST be different Apps (separation of duty):
 #   App A — `pdd-cloud-auth-reader`: Metadata: Read on promptdriven/pdd_cloud
-#     only. Used HERE to authorize the requester. PEM stored in this repo's
-#     GHA secrets (PDD_CLOUD_APP_ID, PDD_CLOUD_APP_PRIVATE_KEY).
+#     only. Used HERE to authorize the requester. Its PEM must exist only in
+#     the `pdd-cloud-read` GitHub Environment, restricted to the `main`
+#     branch (PDD_CLOUD_APP_ID, PDD_CLOUD_APP_PRIVATE_KEY).
 #   App B — `prompt-driven-github-staging` (existing): write perms on
 #     promptdriven/pdd. Used INSIDE the Cloud Build to push the heal commit
 #     back to the PR branch. PEM stored only in GCP Secret Manager
@@ -67,6 +68,7 @@ jobs:
         && github.event.action == 'created'
         && github.event.issue.pull_request != null
         && startsWith(github.event.comment.body, '/heal'))
+    environment: pdd-cloud-read
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

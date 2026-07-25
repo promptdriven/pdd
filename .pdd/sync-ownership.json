@@ -196,6 +196,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/agentic_architecture_python.json",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/agentic_checkup_python.json",
       "role": "human-maintained"
     },
@@ -365,6 +372,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/commands_checkup_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/commands_generate_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -10035,14 +10049,14 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
-      "pattern": "scripts/verify_global_sync_m0_bootstrap.py",
+      "pattern": "scripts/verify_global_sync_m0_samples.py",
       "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
-      "pattern": "scripts/verify_global_sync_m0_samples.py",
+      "pattern": "scripts/verify_global_sync_m0_bootstrap.py",
       "preauthorize_absent": true,
       "role": "human-maintained"
     },
