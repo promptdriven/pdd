@@ -6,11 +6,12 @@ name: auto-heal
 #
 # Compute runs in pdd_cloud's GCP project (prompt-driven-development-stg)
 # via Cloud Build using a pre-staged build-context tarball. This workflow
-# only dispatches the build and surfaces its status. For the normal auto-heal
-# path, no LLM or PEM secrets ever land on a GitHub-Actions runner. The
-# one-shot migration temporarily materializes the PEM only on the protected
-# pdd-cloud-read environment runner. Its cleanup job removes the temporary
-# App-secret copies and migration-token binding after verification succeeds.
+# only dispatches the build and surfaces its status. The normal protected,
+# SHA-pinned App-token mint action receives the PEM on its runner; candidate
+# code never does. The one-shot migration protected steps receive it only
+# through explicit per-step inputs. Its cleanup retires repository App sources
+# and the environment migration-token binding while retaining the environment
+# App secrets after verification succeeds.
 #
 # ---- Two distinct GitHub Apps ----
 # These MUST be different Apps (separation of duty):
@@ -379,9 +380,6 @@ jobs:
     outputs:
       migration_state: ${{ steps.inspect_secret_provenance.outputs.migration_state }}
     env:
-      PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
-      PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
-      GH_TOKEN: ${{ secrets.PDD_SECRET_MIGRATION_TOKEN }}
       REPOSITORY: promptdriven/pdd
       ENVIRONMENT: pdd-cloud-read
       EXPECTED_PDD_CLOUD_APP_ID: "3672994"
@@ -399,6 +397,10 @@ jobs:
 
       - name: Inspect App-secret provenance
         id: inspect_secret_provenance
+        env:
+          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
+          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
+          GH_TOKEN: ${{ secrets.PDD_SECRET_MIGRATION_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then
@@ -414,6 +416,13 @@ jobs:
             local secret_name="$2"
             printf '%s\n' "$secret_names" | grep -Fxq -- "$secret_name"
           }
+
+          migration_token_secret_name=PDD_SECRET_MIGRATION_TOKEN
+          if ! has_secret_name "$environment_secret_names" "$migration_token_secret_name" ||
+             has_secret_name "$repository_secret_names" "$migration_token_secret_name"; then
+            echo "::error::The temporary migration credential must exist only in the protected environment."
+            exit 1
+          fi
 
           legacy_repository_pat_secret_name="PRIVATE_REPO""_TOKEN"
           if has_secret_name "$repository_secret_names" "$legacy_repository_pat_secret_name"; then
@@ -461,6 +470,10 @@ jobs:
       - name: Copy App secrets into the restricted environment
         id: copy_environment_secrets
         if: steps.inspect_secret_provenance.outputs.migration_state == 'copy_from_repository'
+        env:
+          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
+          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
+          GH_TOKEN: ${{ secrets.PDD_SECRET_MIGRATION_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "$PDD_CLOUD_APP_ID" ] ||
@@ -485,9 +498,6 @@ jobs:
     timeout-minutes: 10
     permissions: {}
     env:
-      PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
-      PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
-      GH_TOKEN: ${{ secrets.PDD_SECRET_MIGRATION_TOKEN }}
       REPOSITORY: promptdriven/pdd
       ENVIRONMENT: pdd-cloud-read
       EXPECTED_PDD_CLOUD_APP_ID: "3672994"
@@ -520,11 +530,13 @@ jobs:
 
       - name: Require freshly resolved environment App secrets
         id: require_environment_app_secrets
+        env:
+          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
+          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           if [ -z "$PDD_CLOUD_APP_ID" ] ||
-             [ -z "$PDD_CLOUD_APP_PRIVATE_KEY" ] ||
-             [ -z "$GH_TOKEN" ]; then
+             [ -z "$PDD_CLOUD_APP_PRIVATE_KEY" ]; then
             echo "::error::Required environment App secret is empty; refusing to continue."
             exit 1
           fi
@@ -540,13 +552,13 @@ jobs:
         # externally managed App permission has been upgraded for migration.
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
-          app-id: ${{ env.PDD_CLOUD_APP_ID }}
-          private-key: ${{ env.PDD_CLOUD_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.PDD_CLOUD_APP_ID }}
+          private-key: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
           owner: promptdriven
           repositories: pdd_cloud
           permission-contents: read
-          # A dedicated always-run cleanup below revokes the token before any
-          # repository-secret retirement step can receive the private token.
+          # A dedicated always-run cleanup below revokes this App token before
+          # the separate migration credential retires repository-secret copies.
           skip-token-revoke: "true"
 
       - name: Verify the exact pdd_cloud canary commit
@@ -575,6 +587,8 @@ jobs:
       - name: Retire repository-level App secret copies
         id: retire_repository_app_secret_copies
         if: success() && steps.verify_canary.outcome == 'success' && steps.revoke_pdd_cloud_token.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.PDD_SECRET_MIGRATION_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then
@@ -601,6 +615,8 @@ jobs:
       - name: Remove temporary environment migration credential binding
         id: delete_migration_token_secret
         if: success() && steps.retire_repository_app_secret_copies.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.PDD_SECRET_MIGRATION_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then

@@ -2791,6 +2791,7 @@ def test_auto_heal_secret_migration_scopes_secrets_to_exact_steps() -> None:
         if job_name == SECRET_MIGRATION_COPY_JOB:
             assert paths == {
                 ("steps", 1, "env", "GH_TOKEN"),
+                ("steps", 1, "run"),
                 ("steps", 2, "env", "GH_TOKEN"),
             }
         elif job_name == SECRET_MIGRATION_RETIRE_JOB:
@@ -2913,7 +2914,10 @@ def test_auto_heal_header_scopes_temporary_pem_and_token_exception() -> None:
     assert "normal protected, SHA-pinned App-token mint action receives the PEM" in documentation
     assert "candidate code never does" in documentation
     assert "one-shot migration protected steps receive it only through explicit" in documentation
-    assert "cleanup retires repository App sources and the environment migration-token" in documentation
+    assert (
+        "cleanup retires repository App sources and the environment migration-token"
+        in documentation
+    )
     assert "retaining the environment App secrets" in documentation
     assert "temporary, environment-only fine-grained credential" in documentation
     assert "Environments read/write and Secrets read/write" in documentation
