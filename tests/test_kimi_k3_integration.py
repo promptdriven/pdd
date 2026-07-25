@@ -263,6 +263,7 @@ def test_k3_rejects_medium_override_before_provider_call(tmp_path, monkeypatch):
 
 
 def test_k3_structured_output_preserves_request_contract(tmp_path, monkeypatch):
+    monkeypatch.delenv("PDD_REASONING_EFFORT", raising=False)
     schema = {
         "type": "object",
         "properties": {"answer": {"type": "string"}},
