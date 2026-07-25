@@ -8105,6 +8105,126 @@
       ]
     },
     {
+      "id": "tokenrouter",
+      "display_name": "TokenRouter",
+      "origin": "https://api.tokenrouter.com",
+      "origin_reason": "",
+      "protocol": "openai_chat_completions",
+      "auth": {
+        "kind": "api_key",
+        "fields": [
+          {
+            "id": "api_key",
+            "label": "API key",
+            "secret": true
+          }
+        ]
+      },
+      "request": {
+        "methods": [
+          "POST"
+        ],
+        "paths": [
+          "/chat/completions"
+        ],
+        "query": [],
+        "headers": [
+          "accept",
+          "content-type",
+          "user-agent"
+        ],
+        "base_path": "/v1"
+      },
+      "probe": {
+        "method": "GET",
+        "path": "/models"
+      },
+      "failure": {
+        "unauthorized": [
+          401
+        ],
+        "forbidden": [
+          403
+        ],
+        "quota": [
+          429
+        ],
+        "transient": [
+          408,
+          425,
+          500,
+          502,
+          503,
+          504
+        ]
+      },
+      "github": {
+        "label": "pdd-tokenrouter",
+        "execution_profile": "opencode_openai_chat",
+        "eligible": true,
+        "reason": ""
+      },
+      "csv_providers": [
+        "TokenRouter"
+      ],
+      "models": [
+        {
+          "order": 229,
+          "csv": {
+            "provider": "TokenRouter",
+            "model": "openai/moonshotai/kimi-k3",
+            "input": "3.0",
+            "output": "15.0",
+            "coding_arena_elo": "1400",
+            "model_rank_score": "1400",
+            "model_rank_source": "static-prefix",
+            "base_url": "https://api.tokenrouter.com/v1",
+            "api_key": "TOKENROUTER_API_KEY",
+            "max_reasoning_tokens": "0",
+            "structured_output": "True",
+            "reasoning_type": "none",
+            "location": "",
+            "interactive_only": "False",
+            "context_limit": "1048576"
+          },
+          "upstream_model": "moonshotai/kimi-k3",
+          "capabilities": [
+            "text_generation",
+            "streaming",
+            "tools"
+          ],
+          "byok_eligible": true
+        },
+        {
+          "order": 230,
+          "csv": {
+            "provider": "TokenRouter",
+            "model": "openai/z-ai/glm-5.2-free",
+            "input": "0.0",
+            "output": "0.0",
+            "coding_arena_elo": "1510",
+            "model_rank_score": "1510",
+            "model_rank_source": "static-prefix",
+            "base_url": "https://api.tokenrouter.com/v1",
+            "api_key": "TOKENROUTER_API_KEY",
+            "max_reasoning_tokens": "0",
+            "structured_output": "False",
+            "reasoning_type": "none",
+            "location": "",
+            "interactive_only": "False",
+            "context_limit": "1000000"
+          },
+          "upstream_model": "z-ai/glm-5.2-free",
+          "capabilities": [
+            "text_generation",
+            "streaming",
+            "tools"
+          ],
+          "byok_eligible": true
+        }
+      ]
+    },
+    {
       "id": "vercel_ai_gateway",
       "display_name": "Vercel AI Gateway",
       "origin": "https://ai-gateway.vercel.sh",
@@ -8169,7 +8289,7 @@
       ],
       "models": [
         {
-          "order": 229,
+          "order": 231,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-opus-4.6",
@@ -8196,7 +8316,7 @@
           "byok_eligible": true
         },
         {
-          "order": 230,
+          "order": 232,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-opus-4.5",
@@ -8223,7 +8343,7 @@
           "byok_eligible": true
         },
         {
-          "order": 231,
+          "order": 233,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-opus-4.1",
@@ -8250,7 +8370,7 @@
           "byok_eligible": true
         },
         {
-          "order": 232,
+          "order": 234,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-sonnet-4.5",
@@ -8277,7 +8397,7 @@
           "byok_eligible": true
         },
         {
-          "order": 233,
+          "order": 235,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/openai/o3",
@@ -8304,7 +8424,7 @@
           "byok_eligible": true
         },
         {
-          "order": 234,
+          "order": 236,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/zai/glm-4.6",
@@ -8331,7 +8451,7 @@
           "byok_eligible": true
         },
         {
-          "order": 235,
+          "order": 237,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/deepseek/deepseek-r1",
@@ -8358,7 +8478,7 @@
           "byok_eligible": true
         },
         {
-          "order": 236,
+          "order": 238,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-haiku-4.5",
@@ -8385,7 +8505,7 @@
           "byok_eligible": true
         },
         {
-          "order": 237,
+          "order": 239,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/openai/gpt-4.1-mini",
@@ -8412,7 +8532,7 @@
           "byok_eligible": true
         },
         {
-          "order": 238,
+          "order": 240,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/deepseek/deepseek-v3",
@@ -8505,7 +8625,7 @@
       ],
       "models": [
         {
-          "order": 239,
+          "order": 241,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/moonshotai/Kimi-K2.5",
@@ -8532,7 +8652,7 @@
           "byok_eligible": true
         },
         {
-          "order": 240,
+          "order": 242,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/MiniMaxAI/MiniMax-M2.5",
@@ -8559,7 +8679,7 @@
           "byok_eligible": true
         },
         {
-          "order": 241,
+          "order": 243,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/deepseek-ai/DeepSeek-R1-0528",
@@ -8586,7 +8706,7 @@
           "byok_eligible": true
         },
         {
-          "order": 242,
+          "order": 244,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/moonshotai/Kimi-K2-Instruct",
@@ -8613,7 +8733,7 @@
           "byok_eligible": true
         },
         {
-          "order": 243,
+          "order": 245,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507",
@@ -8707,7 +8827,7 @@
       ],
       "models": [
         {
-          "order": 244,
+          "order": 246,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-5.2",
@@ -8734,7 +8854,7 @@
           "byok_eligible": true
         },
         {
-          "order": 245,
+          "order": 247,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-5",
@@ -8761,7 +8881,7 @@
           "byok_eligible": true
         },
         {
-          "order": 246,
+          "order": 248,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-5-turbo",
@@ -8788,7 +8908,7 @@
           "byok_eligible": true
         },
         {
-          "order": 247,
+          "order": 249,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-4.7",
@@ -8815,7 +8935,7 @@
           "byok_eligible": true
         },
         {
-          "order": 248,
+          "order": 250,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-5.1",
@@ -8842,7 +8962,7 @@
           "byok_eligible": true
         },
         {
-          "order": 252,
+          "order": 254,
           "csv": {
             "provider": "Zai",
             "model": "zai/glm-5",
@@ -8869,7 +8989,7 @@
           "byok_eligible": true
         },
         {
-          "order": 253,
+          "order": 255,
           "csv": {
             "provider": "Zai",
             "model": "zai/glm-4.7",
@@ -8896,7 +9016,7 @@
           "byok_eligible": true
         },
         {
-          "order": 254,
+          "order": 256,
           "csv": {
             "provider": "Zai",
             "model": "zai/glm-4.6",
@@ -8990,7 +9110,7 @@
       ],
       "models": [
         {
-          "order": 249,
+          "order": 251,
           "csv": {
             "provider": "Z.AI Coding Plan",
             "model": "openai/glm-5.2",
@@ -9017,7 +9137,7 @@
           "byok_eligible": true
         },
         {
-          "order": 250,
+          "order": 252,
           "csv": {
             "provider": "Z.AI Coding Plan",
             "model": "openai/glm-5-turbo",
@@ -9044,7 +9164,7 @@
           "byok_eligible": true
         },
         {
-          "order": 251,
+          "order": 253,
           "csv": {
             "provider": "Z.AI Coding Plan",
             "model": "openai/glm-4.7",
@@ -9137,7 +9257,7 @@
       ],
       "models": [
         {
-          "order": 255,
+          "order": 257,
           "csv": {
             "provider": "lm_studio",
             "model": "lm_studio/qwen3-coder-next",
@@ -9230,7 +9350,7 @@
       ],
       "models": [
         {
-          "order": 256,
+          "order": 258,
           "csv": {
             "provider": "xAI",
             "model": "xai/grok-4-0709",
@@ -9257,7 +9377,7 @@
           "byok_eligible": true
         },
         {
-          "order": 257,
+          "order": 259,
           "csv": {
             "provider": "xAI",
             "model": "xai/grok-4-1-fast-reasoning",
