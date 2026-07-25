@@ -9,6 +9,8 @@ import importlib.util
 import json
 import os
 import re
+import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -186,6 +188,46 @@ M0_BOOTSTRAP_POLICY_PATH = ROOT / ".pdd" / "global-sync" / "m0-bootstrap-policy.
 M0_BOOTSTRAP_VERIFIER_PATH = ROOT / "scripts" / "verify_global_sync_m0_bootstrap.py"
 M0_BOOTSTRAP_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "global-sync-m0-bootstrap.yml"
 M0_BOOTSTRAP_FROZEN_SAMPLE_PATH = "scripts/verify_global_sync_m0_samples.py"
+M0_BOOTSTRAP_RUNTIME_LOCK_RELATIVE_PATH = (
+    ".pdd/global-sync/runtime-linux-x86_64-cp312.lock"
+)
+M0_BOOTSTRAP_RUNTIME_LOCK_PATH = ROOT / M0_BOOTSTRAP_RUNTIME_LOCK_RELATIVE_PATH
+M0_BOOTSTRAP_RUNTIME_LOCK_CONTENT = (
+    "filelock==3.29.5 \\\n"
+    "    --hash=sha256:8af830889ba3a0ffcefbd6c7d2af8a54012058103771f2e10848222f476a1693\n"
+    "PyYAML==6.0.3 \\\n"
+    "    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc\n"
+)
+M0_BOOTSTRAP_RUNTIME_LOCKED_REQUIREMENTS = {
+    "filelock": {
+        "version": "3.29.5",
+        "hash": "8af830889ba3a0ffcefbd6c7d2af8a54012058103771f2e10848222f476a1693",
+    },
+    "PyYAML": {
+        "version": "6.0.3",
+        "hash": "ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc",
+    },
+}
+M0_BOOTSTRAP_RUNTIME_INSTALL_ARGUMENTS = {
+    "--disable-pip-version-check",
+    "--no-cache-dir",
+    "--require-hashes",
+    "--only-binary=:all:",
+    "--no-deps",
+    "-r",
+    M0_BOOTSTRAP_RUNTIME_LOCK_RELATIVE_PATH,
+}
+M0_BOOTSTRAP_FACADE_EXPORTS = (
+    "FingerprintProvenance",
+    "FingerprintRecord",
+    "FingerprintStore",
+    "ManifestError",
+    "SemanticStatus",
+    "SnapshotError",
+    "build_unit_manifest",
+    "build_unit_snapshot",
+    "load_verification_profiles",
+)
 M0_BOOTSTRAP_FROZEN_SAMPLE_SHA256 = (
     "b260026e022e60128ae4d782b316e51bed5524713bf4196909c5d7f6d7079c2c"
 )
@@ -3165,6 +3207,170 @@ def test_global_sync_m0_bootstrap_workflow_is_base_controlled() -> None:
     assert "GIT_CONFIG_VALUE_0" in verifier
     assert "eval " not in workflow
     assert "$()" not in workflow
+
+
+def test_global_sync_m0_bootstrap_runtime_lock_is_exact_and_protected() -> None:
+    """The target runtime lock is immutable, complete, and preauthorized."""
+    assert M0_BOOTSTRAP_RUNTIME_LOCK_PATH.is_file()
+    assert not M0_BOOTSTRAP_RUNTIME_LOCK_PATH.is_symlink()
+    lock_text = M0_BOOTSTRAP_RUNTIME_LOCK_PATH.read_text(encoding="utf-8")
+    assert lock_text == M0_BOOTSTRAP_RUNTIME_LOCK_CONTENT
+    assert lock_text.splitlines() == [
+        "filelock==3.29.5 \\",
+        "    --hash=sha256:8af830889ba3a0ffcefbd6c7d2af8a54012058103771f2e10848222f476a1693",
+        "PyYAML==6.0.3 \\",
+        "    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc",
+    ]
+    assert M0_BOOTSTRAP_RUNTIME_LOCKED_REQUIREMENTS == {
+        "filelock": {
+            "version": "3.29.5",
+            "hash": "8af830889ba3a0ffcefbd6c7d2af8a54012058103771f2e10848222f476a1693",
+        },
+        "PyYAML": {
+            "version": "6.0.3",
+            "hash": "ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc",
+        },
+    }
+    assert all(
+        token not in lock_text
+        for token in ("[", ">", "<", "~=", "!=", "--index-url", "--extra-index-url")
+    )
+
+    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    matching_rows = [
+        row
+        for row in ownership["rules"]
+        if row["pattern"] == M0_BOOTSTRAP_RUNTIME_LOCK_RELATIVE_PATH
+    ]
+    assert matching_rows == [
+        {
+            "pattern": M0_BOOTSTRAP_RUNTIME_LOCK_RELATIVE_PATH,
+            **PREAUTHORIZED_CHILD_OWNERSHIP,
+        }
+    ]
+    assert M0_BOOTSTRAP_RUNTIME_LOCK_RELATIVE_PATH in (
+        GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
+    )
+
+
+def test_global_sync_m0_bootstrap_installs_only_the_audited_runtime_lock() -> None:
+    """The target workflow never resolves or builds the project dependency graph."""
+    workflow_text = M0_BOOTSTRAP_WORKFLOW_PATH.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(workflow_text)
+    job = workflow["jobs"]["protected-m0-bootstrap"]
+    install_steps = [
+        step
+        for step in job["steps"]
+        if step.get("name") == "Install protected-base dependencies"
+    ]
+    assert len(install_steps) == 1
+    command = shlex.split(install_steps[0]["run"])
+    assert command[:4] == ["python", "-m", "pip", "install"]
+    assert set(command[4:]) == M0_BOOTSTRAP_RUNTIME_INSTALL_ARGUMENTS
+    assert len(command[4:]) == len(M0_BOOTSTRAP_RUNTIME_INSTALL_ARGUMENTS)
+    assert not {"-e", "--editable", "."} & set(command)
+    assert "pip install -e" not in workflow_text
+    assert "pip install ." not in workflow_text
+
+
+def _run_m0_frozen_sample_launcher(
+    verifier: object,
+    sample_root: Path,
+    sample_path: Path,
+    *sample_arguments: str,
+    launcher_prefix: str = "",
+) -> subprocess.CompletedProcess[str]:
+    """Run the protected launcher with every path passed as a separate argv item."""
+    launcher = getattr(verifier, "_FROZEN_SAMPLE_LAUNCHER")
+    assert isinstance(launcher, str)
+    return subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            launcher_prefix + launcher,
+            str(sample_root),
+            str(sample_path),
+            *sample_arguments,
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+
+def test_global_sync_m0_bootstrap_frozen_sample_launcher_has_minimal_closure() -> None:
+    """The protected facade exposes exactly the frozen script's audited API."""
+    verifier = _load_m0_bootstrap_verifier()
+    assert verifier.FROZEN_SAMPLE_FACADE_EXPORTS == M0_BOOTSTRAP_FACADE_EXPORTS
+    import_guard = """
+import builtins
+import sys
+
+_allowed_import_roots = set(sys.stdlib_module_names) | {
+    "_yaml", "filelock", "pdd", "yaml",
+}
+_original_import = builtins.__import__
+
+def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if level == 0 and name.partition(".")[0] not in _allowed_import_roots:
+        raise ModuleNotFoundError("unlocked import: " + name)
+    return _original_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = _guarded_import
+"""
+    result = _run_m0_frozen_sample_launcher(
+        verifier,
+        ROOT,
+        ROOT / M0_BOOTSTRAP_FROZEN_SAMPLE_PATH,
+        "--help",
+        launcher_prefix=import_guard,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "usage:" in result.stdout
+
+
+def test_global_sync_m0_bootstrap_frozen_sample_launcher_skips_hostile_initializers(
+    tmp_path: Path,
+) -> None:
+    """Neither package initializer nor unrelated sync-core code can execute."""
+    verifier = _load_m0_bootstrap_verifier()
+    sample_root = tmp_path / "protected-sample-root"
+    sample_path = sample_root / M0_BOOTSTRAP_FROZEN_SAMPLE_PATH
+    sample_path.parent.mkdir(parents=True)
+    shutil.copy2(ROOT / M0_BOOTSTRAP_FROZEN_SAMPLE_PATH, sample_path)
+    sync_core_root = sample_root / "pdd" / "sync_core"
+    shutil.copytree(ROOT / "pdd" / "sync_core", sync_core_root)
+    marker = tmp_path / "hostile-initializer-executed"
+    sentinel = (
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n"
+        "raise RuntimeError('hostile initializer executed')\n"
+    )
+    (sample_root / "pdd" / "__init__.py").write_text(sentinel, encoding="utf-8")
+    (sync_core_root / "__init__.py").write_text(sentinel, encoding="utf-8")
+    (sync_core_root / "certificate.py").write_text(sentinel, encoding="utf-8")
+    (sync_core_root / "runner.py").write_text(sentinel, encoding="utf-8")
+
+    result = _run_m0_frozen_sample_launcher(
+        verifier, sample_root, sample_path, "--help"
+    )
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+    assert "usage:" in result.stdout
+
+
+def test_global_sync_m0_bootstrap_frozen_sample_launcher_rejects_uncontained_path(
+    tmp_path: Path,
+) -> None:
+    """The launcher cannot be redirected to an arbitrary host or candidate script."""
+    verifier = _load_m0_bootstrap_verifier()
+    outside = tmp_path / "candidate-loader.py"
+    outside.write_text("raise RuntimeError('candidate loader ran')\n", encoding="utf-8")
+    result = _run_m0_frozen_sample_launcher(verifier, ROOT, outside, "--help")
+    assert result.returncode != 0
+    assert "candidate loader ran" not in result.stderr
 
 
 def test_global_sync_m0_bootstrap_paths_are_exactly_preauthorized() -> None:
