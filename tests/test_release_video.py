@@ -1117,6 +1117,42 @@ def test_release_video_generates_script_and_invokes_pds_publish(tmp_path: Path):
     assert idempotency_key.startswith("pdd-release-video:v1.1.0:")
 
 
+def test_release_video_opt_out_tag_blocks_direct_script_before_pds_or_artifacts(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    run(["git", "tag", "-a", "v0.0.309", "-m", "Release v0.0.309"], repo)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v0.0.309",
+            "--claude-cli",
+            str(claude_stub(tmp_path)),
+            "--pds-cli",
+            str(pds_stub(tmp_path, {"ok": True})),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "v0.0.309 is opted out" in result.stderr
+    assert not capture.exists()
+    assert not output_dir.exists()
+
+
 def test_release_video_rejects_explicit_empty_claude_model_before_claude(
     tmp_path: Path,
 ):
@@ -2894,6 +2930,29 @@ def test_release_video_makefile_passes_local_claude_model_default():
     assert '--claude-model "$(RELEASE_VIDEO_CLAUDE_MODEL)"' in makefile_text
     assert '--claude-model "claude-opus-4-8"' in release_video.stdout
     assert '--claude-model "claude-opus-4-8"' in preflight.stdout
+
+
+def test_release_video_makefile_rejects_opt_out_tag_without_release_video_zero(
+    tmp_path: Path,
+):
+    result = subprocess.run(
+        [
+            "make",
+            "release-video",
+            "RELEASE_TAG=v0.0.309",
+            "CLAUDE_CLI=/bin/false",
+            f"RELEASE_VIDEO_OUTPUT_DIR={tmp_path / 'videos'}",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        env=release_video_env(),
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "v0.0.309 is opted out" in result.stderr
+    assert not (tmp_path / "videos").exists()
 
 
 def test_release_video_makefile_empty_local_defaults_are_unset():
