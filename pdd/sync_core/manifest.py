@@ -125,7 +125,21 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
         True,
     ),
     OwnershipRule(
+        ".pdd/meta/postprocess_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
         ".pdd/meta/story_detection_result_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        ".pdd/meta/unfinished_prompt_python.json",
         InventoryStatus.HUMAN_OWNED,
         "human-maintained",
         "pdd-maintainers",
