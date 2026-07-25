@@ -2977,6 +2977,9 @@ scenario = os.environ["RELEASE_TEST_SCENARIO"]
 tag = os.environ["RELEASE_TEST_TAG"]
 latest_tag = os.environ["RELEASE_TEST_LATEST_TAG"]
 
+if args == ["version"]:
+    print("git version 2.39.5")
+    raise SystemExit(0)
 if args == ["fetch", "--tags", "--prune", "origin"]:
     raise SystemExit(0)
 if args == ["rev-parse", "HEAD"]:
@@ -3165,6 +3168,7 @@ os.execv(
 raise SystemExit(0)
 """,
     )
+    output_dir = tmp_path / "release-videos"
     env = release_video_env(
         {
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
@@ -3185,6 +3189,7 @@ raise SystemExit(0)
             str(wrapper),
             "release-local",
             "RELEASE_VIDEO=0",
+            f"RELEASE_VIDEO_OUTPUT_DIR={output_dir}",
             f"SOPS={sops}",
             f"SOPS_RELEASE_ENV_FILE={ROOT / 'Makefile'}",
             f"SOPS_RELEASE_ENV_RUNNER={runner}",
@@ -3198,6 +3203,10 @@ raise SystemExit(0)
 
     assert result.returncode == 0, result.stderr
     assert "Skipping release video because RELEASE_VIDEO=0" in result.stdout
+    assert not output_dir.exists()
+    git_calls = (tmp_path / "git.log").read_text(encoding="utf8").splitlines()
+    assert "tag -a v0.0.310 -m Release v0.0.310" in git_calls
+    assert "push origin v0.0.310" in git_calls
 
 
 def test_release_video_makefile_empty_local_defaults_are_unset():
