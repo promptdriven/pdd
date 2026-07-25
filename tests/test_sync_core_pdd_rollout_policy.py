@@ -1656,14 +1656,20 @@ def test_release_video_opt_out_uses_only_actual_base_owned_paths() -> None:
     assert not manifest.invalid_reasons
     assert not manifest.unaccounted_tracked_paths
     assert set(records) == RELEASE_VIDEO_OPT_OUT_EXISTING_PATHS
+    assert all(item.in_base and item.in_head for item in records.values())
+    makefile = records["Makefile"]
+    assert (
+        makefile.inventory is InventoryStatus.MANAGED
+        and makefile.candidate_id.role == "code"
+        and makefile.ownership_provenance == "architecture"
+    )
     assert all(
-        item.in_base
-        and item.in_head
-        and item.inventory is InventoryStatus.HUMAN_OWNED
+        item.inventory is InventoryStatus.HUMAN_OWNED
         and item.candidate_id.role == "human-maintained"
         and item.ownership_provenance
         == f"protected-ownership:pdd-maintainers:{path}"
         for path, item in records.items()
+        if path != "Makefile"
     )
 
 
