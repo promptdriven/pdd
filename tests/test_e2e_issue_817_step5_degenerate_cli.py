@@ -78,7 +78,7 @@ def test_generate_issue_url_fails_fast_when_step5_returns_done(tmp_path, monkeyp
             obj={"verbose": False, "quiet": False},
         )
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 1, result.output
     assert step_calls == [
         "step1",
         "step1b",
