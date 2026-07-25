@@ -296,6 +296,7 @@ def test_k3_request_contract_maps_effort_and_endpoint(
 
 
 def test_openrouter_k3_uses_generic_openrouter_route(tmp_path, monkeypatch):
+    """OpenRouter K3 must not inherit direct Moonshot's .cn request contract."""
     assert llm_mod._is_kimi_k3_model(K3_MODEL) is True
     assert llm_mod._is_kimi_k3_model(OPENROUTER_K3_MODEL) is False
 

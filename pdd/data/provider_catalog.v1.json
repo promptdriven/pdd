@@ -6290,6 +6290,9 @@
       },
       "github": {
         "label": "pdd-openrouter",
+        "model_labels": {
+          "pdd-openrouter-kimi": "openrouter/moonshotai/kimi-k3"
+        },
         "execution_profile": "opencode_openai_chat",
         "eligible": true,
         "reason": ""
