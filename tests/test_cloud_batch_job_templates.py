@@ -379,6 +379,32 @@ def test_cloud_batch_entrypoint_forces_pytest_shards_local_by_default():
     assert "unset PDD_JWT_TOKEN" in pytest_branch.group(0)
 
 
+def test_cloud_batch_execution_paths_pin_current_release_default_model():
+    expected_model = "vertex_ai/gemini-3.6-flash"
+    stale_model = "vertex_ai/gemini-3-flash-preview"
+
+    for relative_path in (
+        "ci/cloud-batch/entrypoint.sh",
+        "tests/regression.sh",
+        "tests/sync_regression.sh",
+    ):
+        script_text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        model_pins = re.findall(
+            r'^export PDD_MODEL_DEFAULT="([^"]+)"$', script_text, re.MULTILINE
+        )
+
+        assert model_pins == [expected_model]
+        assert stale_model not in model_pins
+
+    makefile_text = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    make_recipe_pins = re.findall(
+        r"^\s*@.*?\bPDD_MODEL_DEFAULT=([^\s]+)", makefile_text, re.MULTILINE
+    )
+
+    assert make_recipe_pins == [expected_model] * 4
+    assert f"PDD_MODEL_DEFAULT={stale_model}" not in makefile_text
+
+
 def test_cloud_batch_entrypoint_clears_inherited_default_model_for_pytest_shards():
     entrypoint_text = (
         REPO_ROOT / "ci" / "cloud-batch" / "entrypoint.sh"
@@ -391,10 +417,6 @@ def test_cloud_batch_entrypoint_clears_inherited_default_model_for_pytest_shards
     )
 
     assert pytest_branch, "entrypoint.sh must keep an explicit pytest shard branch"
-    assert (
-        'export PDD_MODEL_DEFAULT="vertex_ai/gemini-3-flash-preview"'
-        in entrypoint_text
-    )
     assert "unset PDD_MODEL_DEFAULT" in pytest_branch.group(0)
 
 
