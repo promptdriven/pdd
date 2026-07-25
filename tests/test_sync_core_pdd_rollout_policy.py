@@ -1581,6 +1581,49 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
     assert profiles.coverage == 1.0
 
 
+def test_sync_rollout_repair_metadata_bridge_stays_ordinary() -> None:
+    """The exact bridge cannot turn its base-existing paths into absences."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact sync-rollout protected history",
+        SYNC_ROLLOUT_PROTECTED_BASE,
+    )
+    base_rules = manifest_module._ownership_rules(  # pylint: disable=protected-access
+        ROOT, SYNC_ROLLOUT_PROTECTED_BASE
+    )
+    head_rules = manifest_module._ownership_rules(  # pylint: disable=protected-access
+        ROOT, "HEAD"
+    )
+    effective = manifest_module._sync_rollout_repair_ownership_rules(  # pylint: disable=protected-access
+        ROOT,
+        REPOSITORY_ID,
+        SYNC_ROLLOUT_PROTECTED_BASE,
+        "HEAD",
+        base_rules,
+        head_rules,
+    )
+    expected = (
+        manifest_module._SYNC_ROLLOUT_REPAIR_HUMAN_OWNERSHIP  # pylint: disable=protected-access
+    )
+    assert set(expected) <= set(effective)
+    assert all(not rule.preauthorize_absent for rule in expected)
+
+    mutated_head_rules = tuple(
+        replace(rule, preauthorize_absent=True)
+        if rule.pattern == expected[0].pattern
+        else rule
+        for rule in head_rules
+    )
+    assert manifest_module._sync_rollout_repair_ownership_rules(  # pylint: disable=protected-access
+        ROOT,
+        REPOSITORY_ID,
+        SYNC_ROLLOUT_PROTECTED_BASE,
+        "HEAD",
+        base_rules,
+        mutated_head_rules,
+    ) == base_rules
+
+
 def _candidate_only_repo(tmp_path: Path) -> tuple[Path, str, str]:
     repo = tmp_path / "candidate-only"
     repo.mkdir()
@@ -1725,7 +1768,9 @@ def test_current_profile_reconciliation_matches_current_prompt_and_profile_rows(
                 "to_requirement_id": f"CONTRACT-SHA256:{prompt_digest}",
                 "head_prompt_sha256": prompt_digest,
             }
-            for prompt_path, language_id, prompt_digest in verification._SYNC_ROLLOUT_REPAIR_PROMPT_BYTES  # pylint: disable=protected-access
+            for prompt_path, language_id, prompt_digest in (
+                verification._SYNC_ROLLOUT_REPAIR_PROMPT_BYTES  # pylint: disable=protected-access
+            )
         )
     assert current_rows
     profiles = {

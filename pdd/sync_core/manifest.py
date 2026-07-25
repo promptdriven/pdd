@@ -1223,6 +1223,7 @@ def _sync_rollout_repair_ownership_rules(
     base_rules: tuple[OwnershipRule, ...],
     head_rules: tuple[OwnershipRule, ...],
 ) -> tuple[OwnershipRule, ...]:
+    # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     """Bridge the one reviewed base-existing metadata classification repair."""
     if repository_id != _PDD_REPOSITORY_ID:
         return base_rules

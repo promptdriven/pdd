@@ -154,6 +154,15 @@ _SYNC_ROLLOUT_REPAIR_PROMPT_BYTES = (
         "48fe08ae08004ae02034118cf067b254c22fe7de800a9ece37834738da507677",
     ),
 )
+_SYNC_ROLLOUT_REPAIR_STALE_ROTATION_IDENTITIES = frozenset(
+    {
+        (PurePosixPath("pdd/prompts/detect_change_python.prompt"), "python"),
+        (
+            PurePosixPath("pdd/prompts/sync_determine_operation_python.prompt"),
+            "python",
+        ),
+    }
+)
 
 
 class VerificationProfileError(ValueError):
@@ -2516,6 +2525,26 @@ def _load_requirement_transition_authorizations(
             ),
         }
     )
+    sync_rollout_repair_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        in {
+            (
+                _SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES,
+                _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES[1],
+                    _SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES[1],
+                ),
+                (
+                    _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[1],
+                    _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[1],
+                ),
+            ),
+        }
+    )
+    historical_composed_state = opus_fable_state or sync_rollout_repair_state
     gemini_36_terra_sol_state = is_pdd_repository and (
         (policy_digests, profile_digests)
         in {
@@ -2551,7 +2580,7 @@ def _load_requirement_transition_authorizations(
         or terra_sol_consumed_state
         or gemini_36_terra_sol_state
         or generate_reliability_state
-        or opus_fable_state
+        or historical_composed_state
     ):
         # This candidate predates a dormant policy installation.  Expose only
         # its reviewed transitions while consuming the exact profile update,
@@ -2566,7 +2595,7 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in terra_sol_identities
         ) + _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS)
-    if generate_reliability_state or opus_fable_state:
+    if generate_reliability_state or historical_composed_state:
         reliability_identities = {
             (item.prompt_path, item.language_id)
             for item in _GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS
@@ -2577,7 +2606,7 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in reliability_identities
         ) + _GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS)
-    if opus_fable_state:
+    if historical_composed_state:
         opus_fable_identities = {
             (item.prompt_path, item.language_id)
             for item in _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
@@ -2588,6 +2617,16 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in opus_fable_identities
         ) + _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS)
+    if sync_rollout_repair_state:
+        # These retained schema-2 rows describe historical prompt changes.
+        # Their identities are already at the exact repaired prompt bytes, so
+        # do not re-evaluate them as a live transition at this one state.
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id)
+            not in _SYNC_ROLLOUT_REPAIR_STALE_ROTATION_IDENTITIES
+        )
     pr1971_reconciliation = _is_exact_pr1971_pytest_reconciliation(
         manifest, (protected_policy, candidate_policy), policies, candidate
     )
@@ -2671,14 +2710,16 @@ def _load_requirement_transition_authorizations(
         if item not in protected
         and not (is_pdd_repository and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS)
     )
-    if (
-        legacy_pdd1989_reconciliation
-        or pr1971_reconciliation
-        or pdd1875_reconciliation
-        or terra_sol_reconciliation
-        or terra_sol_consumed_state
-        or opus_fable_state
-    ):
+    consumed_profile_reconciliation = any(
+        (
+            legacy_pdd1989_reconciliation,
+            pr1971_reconciliation,
+            pdd1875_reconciliation,
+            terra_sol_reconciliation,
+            terra_sol_consumed_state,
+        )
+    )
+    if consumed_profile_reconciliation or historical_composed_state:
         # The exact historical pair both installed and consumed its authority
         # before Phase-A isolation existed; validate it as consumption below.
         new_authorizations = ()
@@ -2694,6 +2735,17 @@ def _load_requirement_transition_authorizations(
         new_authorizations = tuple(
             item for item in new_authorizations if item not in terra_sol_authority
         )
+    bootstrap_transition_guard_exception = any(
+        (
+            legacy_pdd1989_reconciliation,
+            pr1971_reconciliation,
+            pdd1875_reconciliation,
+            terra_sol_reconciliation,
+            terra_sol_consumed_state,
+            gemini_36_terra_sol_state,
+            sync_rollout_repair_state,
+        )
+    )
     for item in candidate:
         if item in authority:
             if (
@@ -2704,12 +2756,7 @@ def _load_requirement_transition_authorizations(
                     and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
                 )
                 and policies[0] != policies[1]
-                and not legacy_pdd1989_reconciliation
-                and not pr1971_reconciliation
-                and not pdd1875_reconciliation
-                and not terra_sol_reconciliation
-                and not terra_sol_consumed_state
-                and not gemini_36_terra_sol_state
+                and not bootstrap_transition_guard_exception
             ):
                 raise VerificationProfileError(
                     "candidate legacy bootstrap requirement transition changes "
@@ -3110,6 +3157,7 @@ def _authorized_sync_rollout_profile_reconciliation(
     head: Mapping[UnitId, _ProfileInput],
     base_invalid: list[str],
 ) -> tuple[dict[UnitId, _ProfileInput], frozenset[str]]:
+    # pylint: disable=too-many-locals
     """Authorize the one exact stale-profile repair from the protected base."""
     if manifest.repository_id != _PDD_REPOSITORY_ID:
         return {}, frozenset()
@@ -3152,7 +3200,10 @@ def _authorized_sync_rollout_profile_reconciliation(
             unit_id not in expected_managed
             or unit_id in base
             or unit_id not in head
-            or base_prompt is None
+        ):
+            return {}, frozenset()
+        if (
+            base_prompt is None
             or head_prompt is None
             or _sha256(base_prompt) != expected_digest
             or _sha256(head_prompt) != expected_digest
