@@ -2576,7 +2576,14 @@ def test_auto_heal_secret_migration_is_dispatch_only_and_fresh() -> None:
     assert retire_env.get("GH_TOKEN") == (
         "${{ secrets.PDD_SECRET_MIGRATION_TOKEN }}"
     )
-    assert "needs." not in str(retire_job)
+    migration_state_step = _workflow_step(retire_job, "validate_migration_state")
+    assert migration_state_step.get("env") == {
+        "MIGRATION_STATE": (
+            "${{ needs.copy_pdd_cloud_app_secrets_to_environment.outputs."
+            "migration_state }}"
+        )
+    }
+    assert str(retire_job).count("needs.") == 1
     for job in (copy_job, retire_job):
         job_env = job.get("env")
         assert isinstance(job_env, dict)
@@ -2777,11 +2784,13 @@ def test_auto_heal_secret_migration_provenance_state_machine(
 def test_auto_heal_header_scopes_temporary_pem_and_token_exception() -> None:
     """Documentation distinguishes normal healing from the one-shot exception."""
     workflow_text = AUTO_HEAL_WORKFLOW_PATH.read_text(encoding="utf-8")
-    assert "For the normal auto-heal path, no LLM or PEM secrets ever land" in workflow_text
-    assert "one-shot migration temporarily materializes the PEM only" in workflow_text
-    assert "temporary, environment-only fine-grained credential" in workflow_text
-    assert "Environments read/write and Secrets read/write" in workflow_text
-    assert "must be revoked outside GitHub" in workflow_text
+    documentation = re.sub(r"(?m)^\s*# ?", "", workflow_text)
+    documentation = re.sub(r"\s+", " ", documentation)
+    assert "For the normal auto-heal path, no LLM or PEM secrets ever land" in documentation
+    assert "one-shot migration temporarily materializes the PEM only" in documentation
+    assert "temporary, environment-only fine-grained credential" in documentation
+    assert "Environments read/write and Secrets read/write" in documentation
+    assert "must be revoked outside GitHub" in documentation
 
 
 def test_auto_heal_secret_migration_mints_and_verifies_bound_canary() -> None:
@@ -2791,12 +2800,16 @@ def test_auto_heal_secret_migration_mints_and_verifies_bound_canary() -> None:
     steps = _workflow_steps(retire_job)
     step_ids = [step.get("id") for step in steps]
 
-    context_index = step_ids.index(MIGRATION_CONTEXT_PRECHECK_STEP)
-    state_index = step_ids.index("validate_migration_state")
     require_index = step_ids.index("require_environment_app_secrets")
     token_index = step_ids.index("pdd_cloud_contents_token")
     proof_index = step_ids.index("verify_canary")
-    assert context_index < state_index < require_index < token_index < proof_index
+    assert (
+        step_ids.index(MIGRATION_CONTEXT_PRECHECK_STEP)
+        < step_ids.index("validate_migration_state")
+        < require_index
+        < token_index
+        < proof_index
+    )
 
     require_run = _workflow_run(
         _workflow_step(retire_job, "require_environment_app_secrets")
@@ -2847,8 +2860,12 @@ def test_auto_heal_secret_migration_revokes_before_idempotent_retirement() -> No
     proof_index = step_ids.index("verify_canary")
     revoke_index = step_ids.index("revoke_pdd_cloud_token")
     delete_index = step_ids.index("retire_repository_app_secret_copies")
-    self_delete_index = step_ids.index("delete_migration_token_secret")
-    assert proof_index < revoke_index < delete_index < self_delete_index
+    assert (
+        proof_index
+        < revoke_index
+        < delete_index
+        < step_ids.index("delete_migration_token_secret")
+    )
 
     revoke_step = _workflow_step(retire_job, "revoke_pdd_cloud_token")
     assert revoke_step.get("if") == (

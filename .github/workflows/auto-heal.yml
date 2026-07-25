@@ -6,8 +6,11 @@ name: auto-heal
 #
 # Compute runs in pdd_cloud's GCP project (prompt-driven-development-stg)
 # via Cloud Build using a pre-staged build-context tarball. This workflow
-# only dispatches the build and surfaces its status; no LLM or PEM
-# secrets ever land on a GitHub-Actions runner.
+# only dispatches the build and surfaces its status. For the normal auto-heal
+# path, no LLM or PEM secrets ever land on a GitHub-Actions runner. The
+# one-shot migration temporarily materializes the PEM only on the protected
+# pdd-cloud-read environment runner. Its cleanup job removes the temporary
+# App-secret copies and migration-token binding after verification succeeds.
 #
 # ---- Two distinct GitHub Apps ----
 # These MUST be different Apps (separation of duty):
@@ -189,12 +192,15 @@ jobs:
         if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
         id: app_token
         # SHA-pinned to v3.2.0 (https://github.com/actions/create-github-app-token/releases/tag/v3.2.0)
+        # Pin normal healing to Metadata:Read even if the externally managed
+        # App gains broader permissions later.
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           app-id: ${{ secrets.PDD_CLOUD_APP_ID }}
           private-key: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
           owner: promptdriven
           repositories: pdd_cloud
+          permission-metadata: read
 
       - name: Authorize requester (must be pdd_cloud collaborator)
         if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
@@ -350,26 +356,111 @@ jobs:
             -f "output[title]=auto-heal $conclusion" \
             -f "output[summary]=$summary"
 
-  # This is intentionally a one-shot, manually dispatched migration. It first
-  # copies the current values into the restricted environment and does not
-  # retire repository-level sources. The second job independently resolves the
-  # environment values and only retires sources after a fresh canary proof.
+  # This is intentionally a one-shot, manually dispatched migration. The App
+  # must be pdd-cloud-auth-reader (ID 3672994); requesting Contents:Read here
+  # cannot upgrade its externally managed permissions and therefore fails closed
+  # until that App is upgraded outside this workflow.
+  #
+  # PDD_SECRET_MIGRATION_TOKEN is a temporary, environment-only fine-grained
+  # credential scoped only to promptdriven/pdd with Environments read/write and
+  # Secrets read/write. Deleting its GitHub Environment binding does not revoke
+  # the credential; it must be revoked outside GitHub after the migration has
+  # completed.
   copy_pdd_cloud_app_secrets_to_environment:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.ref == 'refs/heads/main' &&
-      github.repository == 'promptdriven/pdd'
+      github.repository == 'promptdriven/pdd' &&
+      github.ref_protected == true
     environment: pdd-cloud-read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions: {}
+    outputs:
+      migration_state: ${{ steps.inspect_secret_provenance.outputs.migration_state }}
     env:
       PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
       PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
-      GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+      GH_TOKEN: ${{ secrets.PDD_SECRET_MIGRATION_TOKEN }}
+      REPOSITORY: promptdriven/pdd
+      ENVIRONMENT: pdd-cloud-read
+      EXPECTED_PDD_CLOUD_APP_ID: "3672994"
     steps:
+      - name: Validate exact manual-dispatch context
+        id: validate_dispatch_context
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] ||
+             [ "$GITHUB_REF" != "refs/heads/main" ] ||
+             [ "$GITHUB_REPOSITORY" != "promptdriven/pdd" ]; then
+            echo "::error::Secret migration must be manually dispatched from promptdriven/pdd main."
+            exit 1
+          fi
+
+      - name: Inspect App-secret provenance
+        id: inspect_secret_provenance
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::The environment migration credential is empty; refusing to inspect secrets."
+            exit 1
+          fi
+
+          repository_secret_names=$(gh secret list --repo "$REPOSITORY" --json name --jq '.[].name')
+          environment_secret_names=$(gh secret list --env "$ENVIRONMENT" --repo "$REPOSITORY" --json name --jq '.[].name')
+
+          has_secret_name() {
+            local secret_names="$1"
+            local secret_name="$2"
+            printf '%s\n' "$secret_names" | grep -Fxq -- "$secret_name"
+          }
+
+          legacy_repository_pat_secret_name="PRIVATE_REPO""_TOKEN"
+          if has_secret_name "$repository_secret_names" "$legacy_repository_pat_secret_name"; then
+            echo "::error::The legacy repository credential must be removed before this migration can run."
+            exit 1
+          fi
+
+          repository_app_secret_count=0
+          environment_app_secret_count=0
+          for secret_name in PDD_CLOUD_APP_ID PDD_CLOUD_APP_PRIVATE_KEY; do
+            if has_secret_name "$repository_secret_names" "$secret_name"; then
+              repository_app_secret_count=$((repository_app_secret_count + 1))
+            fi
+            if has_secret_name "$environment_secret_names" "$secret_name"; then
+              environment_app_secret_count=$((environment_app_secret_count + 1))
+            fi
+          done
+
+          case "$repository_app_secret_count:$environment_app_secret_count" in
+            2:0)
+              migration_state=copy_from_repository
+              ;;
+            0:2)
+              migration_state=already_migrated
+              ;;
+            *)
+              echo "::error::App-secret provenance is partial or ambiguous; refusing to continue."
+              exit 1
+              ;;
+          esac
+
+          if [ -z "$PDD_CLOUD_APP_ID" ] ||
+             [ "$PDD_CLOUD_APP_ID" != "$EXPECTED_PDD_CLOUD_APP_ID" ]; then
+            echo "::error::Resolved App ID is not the expected pdd-cloud-auth-reader App."
+            exit 1
+          fi
+          if [ -z "$PDD_CLOUD_APP_PRIVATE_KEY" ]; then
+            echo "::error::Resolved App private key is empty; refusing to continue."
+            exit 1
+          fi
+
+          printf 'migration_state=%s\n' "$migration_state" >> "$GITHUB_OUTPUT"
+          echo "Migration provenance validated: $migration_state"
+
       - name: Copy App secrets into the restricted environment
         id: copy_environment_secrets
+        if: steps.inspect_secret_provenance.outputs.migration_state == 'copy_from_repository'
         run: |
           set -euo pipefail
           if [ -z "$PDD_CLOUD_APP_ID" ] ||
@@ -387,7 +478,8 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.ref == 'refs/heads/main' &&
-      github.repository == 'promptdriven/pdd'
+      github.repository == 'promptdriven/pdd' &&
+      github.ref_protected == true
     environment: pdd-cloud-read
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -395,20 +487,57 @@ jobs:
     env:
       PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
       PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
+      GH_TOKEN: ${{ secrets.PDD_SECRET_MIGRATION_TOKEN }}
+      REPOSITORY: promptdriven/pdd
+      ENVIRONMENT: pdd-cloud-read
+      EXPECTED_PDD_CLOUD_APP_ID: "3672994"
     steps:
+      - name: Validate exact manual-dispatch context
+        id: validate_dispatch_context
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] ||
+             [ "$GITHUB_REF" != "refs/heads/main" ] ||
+             [ "$GITHUB_REPOSITORY" != "promptdriven/pdd" ]; then
+            echo "::error::Secret migration must be manually dispatched from promptdriven/pdd main."
+            exit 1
+          fi
+
+      - name: Validate migration state handoff
+        id: validate_migration_state
+        env:
+          MIGRATION_STATE: ${{ needs.copy_pdd_cloud_app_secrets_to_environment.outputs.migration_state }}
+        run: |
+          set -euo pipefail
+          case "$MIGRATION_STATE" in
+            copy_from_repository|already_migrated)
+              ;;
+            *)
+              echo "::error::Migration provenance state is missing or invalid."
+              exit 1
+              ;;
+          esac
+
       - name: Require freshly resolved environment App secrets
         id: require_environment_app_secrets
         run: |
           set -euo pipefail
           if [ -z "$PDD_CLOUD_APP_ID" ] ||
-             [ -z "$PDD_CLOUD_APP_PRIVATE_KEY" ]; then
+             [ -z "$PDD_CLOUD_APP_PRIVATE_KEY" ] ||
+             [ -z "$GH_TOKEN" ]; then
             echo "::error::Required environment App secret is empty; refusing to continue."
+            exit 1
+          fi
+          if [ "$PDD_CLOUD_APP_ID" != "$EXPECTED_PDD_CLOUD_APP_ID" ]; then
+            echo "::error::Resolved App ID is not the expected pdd-cloud-auth-reader App."
             exit 1
           fi
 
       - name: Mint pdd_cloud contents-read App token
         id: pdd_cloud_contents_token
         # SHA-pinned to v3.2.0 (https://github.com/actions/create-github-app-token/releases/tag/v3.2.0)
+        # This request cannot grant Contents:Read; it fails closed until the
+        # externally managed App permission has been upgraded for migration.
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           app-id: ${{ env.PDD_CLOUD_APP_ID }}
@@ -444,11 +573,8 @@ jobs:
           gh api -X DELETE /installation/token
 
       - name: Retire repository-level App secret copies
-        id: retire_repository_secret_copies
+        id: retire_repository_app_secret_copies
         if: success() && steps.verify_canary.outcome == 'success' && steps.revoke_pdd_cloud_token.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          REPOSITORY: promptdriven/pdd
         run: |
           set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then
@@ -471,3 +597,22 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Remove temporary environment migration credential binding
+        id: delete_migration_token_secret
+        if: success() && steps.retire_repository_app_secret_copies.outcome == 'success'
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Environment migration credential is empty; refusing cleanup."
+            exit 1
+          fi
+
+          migration_token_secret_name=PDD_SECRET_MIGRATION_TOKEN
+          gh secret delete PDD_SECRET_MIGRATION_TOKEN --env "$ENVIRONMENT" --repo "$REPOSITORY"
+
+          remaining_environment_secret_names=$(gh secret list --env "$ENVIRONMENT" --repo "$REPOSITORY" --json name --jq '.[].name')
+          if printf '%s\n' "$remaining_environment_secret_names" | grep -Fxq -- "$migration_token_secret_name"; then
+            echo "::error::Temporary environment migration credential remains bound after cleanup."
+            exit 1
+          fi
