@@ -1328,6 +1328,34 @@ def test_cloud_payload_uses_processed_prompt(
     payload = kwargs.get('json') or {}
     assert payload.get('promptContent') == "Cloud says Bob"
 
+
+def test_cloud_payload_forwards_invocation_model(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_requests_post_fixture, mock_env_vars
+):
+    """The authenticated cloud route preserves the global CLI model choice."""
+    mock_ctx.obj["model"] = "claude-opus-5"
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "cloud_model.prompt"
+    create_file(prompt_file_path, "Cloud model routing")
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Cloud model routing"},
+        {"output": str(temp_dir_setup["output_dir"] / "model.py")},
+        "python",
+    )
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(temp_dir_setup["output_dir"] / "model.py"),
+        None,
+        False,
+    )
+
+    payload = mock_requests_post_fixture.call_args.kwargs["json"]
+    assert payload["model"] == "claude-opus-5"
+
+
 def test_incremental_gen_force_incremental_flag_but_no_output_file(
     mock_ctx, temp_dir_setup, mock_construct_paths_fixture, 
     mock_local_generator_fixture, mock_rich_console_fixture, mock_env_vars 

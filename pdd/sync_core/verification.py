@@ -102,6 +102,19 @@ _GENERATE_RELIABILITY_PROFILE_BYTES = (
     "2885c95a2d45969754ff96f3c392be5082acfa817abba047b7e3933164217352",
 )
 
+# PR #2263 updates the Claude Opus/Fable routing contracts after the generate
+# reliability profile was consumed. Bind the unchanged protected transition
+# policy, complete profile replacement, and all eight prompt byte pairs so the
+# reconciliation cannot authorize any other candidate.
+_OPUS_FABLE_COMPOSED_SCHEMA_2_HISTORY = (
+    "3b5117e0ef31b19b68d7190f0753e7aacaef3f75133cabfe4c2470afe87c0a95",
+    "3b5117e0ef31b19b68d7190f0753e7aacaef3f75133cabfe4c2470afe87c0a95",
+)
+_OPUS_FABLE_COMPOSED_PROFILE_BYTES = (
+    "2885c95a2d45969754ff96f3c392be5082acfa817abba047b7e3933164217352",
+    "a7dd6a8f4145e2a4712ca925abde0edc58c47be271a1a06e1750aa39347a76c7",
+)
+
 
 class VerificationProfileError(ValueError):
     """Raised when protected verification-profile data cannot be parsed."""
@@ -476,6 +489,73 @@ _GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS = (
         "91bbf9390f5489d3dbc3c8671d490feb4a7764d89270d2211875758c44a6ac2c",
         _GENERATE_RELIABILITY_PROFILE_BYTES[0],
         _GENERATE_RELIABILITY_PROFILE_BYTES[1],
+    ),
+)
+
+_OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_common_python.prompt",
+        "python",
+        "11aa8636691deb2c6e1dd1051ba46cb06947bb1a65335914868647e8240cede9",
+        "23b9d4b69d1ae9a46fcd40281a552eeb110a69ae3d6210c21e0e5ad3901b8e40",
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[0],
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/code_generator_main_python.prompt",
+        "python",
+        "51ec006a5b7faeb397be9c1b8e61205e97459fdc08cd9e90e7f0692ccf55a1d5",
+        "9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[0],
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/core/cli_python.prompt",
+        "python",
+        "e0f5f0173e29379d84dd34934b3221b5ae0f5c9c7b745ea35cb73699cb6162b1",
+        "192c0d3da46ae30bb9b62d29691680bc8de4151fe4c77b10f0c91730228d2806",
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[0],
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/generate_model_catalog_python.prompt",
+        "python",
+        "a086fdc50c2cb54bcd0543e467106dbc2fb87c3b2f196bfcc0f51b7ecf3bed97",
+        "386cab677b111050377b93405e60c84aa1b21043affbda98ab0e397aaa15dbaa",
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[0],
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/llm_invoke_python.prompt",
+        "python",
+        "15c51e9dbc3bb536ab6d6dfa1a7927a30f33b1423398e326e5a06f9524896735",
+        "09e5140c01bbf8136f4c487c873c816f8e75db75412c11794a8b7ea47259cf3c",
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[0],
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/llm_model_csv.prompt",
+        "csv",
+        "41a01d33fe3bd072fea0fd616b0d0c3d003f1e2121e24ae723c19809dfd07abf",
+        "a7830c1b4f63d041693c7db289f6a7a7838bc2a06a62f21e43a6325c31507fc3",
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[0],
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/model_tester_python.prompt",
+        "python",
+        "86a943e00bd962213378d2e61fb130b5fb7a0dada1a5d865b505737e5f85b229",
+        "7c020d1e55839dfa7a962df32a3991952466bd3710afa3006122424f3d21c89b",
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[0],
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/routing_policy_python.prompt",
+        "python",
+        "3971482288276694f054c7fed70a09e43595b151d514200110b5f1937ee932ab",
+        "2e6ea7ead7695f61c359af7053e3d29a9a6cf8ab45a4896492cd813eb0ba0aac",
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[0],
+        _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     ),
 )
 
@@ -2377,6 +2457,25 @@ def _load_requirement_transition_authorizations(
             ),
         }
     )
+    opus_fable_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        in {
+            (
+                _OPUS_FABLE_COMPOSED_SCHEMA_2_HISTORY,
+                _OPUS_FABLE_COMPOSED_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _OPUS_FABLE_COMPOSED_SCHEMA_2_HISTORY[1],
+                    _OPUS_FABLE_COMPOSED_SCHEMA_2_HISTORY[1],
+                ),
+                (
+                    _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
+                    _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
+                ),
+            ),
+        }
+    )
     gemini_36_terra_sol_state = is_pdd_repository and (
         (policy_digests, profile_digests)
         in {
@@ -2412,6 +2511,7 @@ def _load_requirement_transition_authorizations(
         or terra_sol_consumed_state
         or gemini_36_terra_sol_state
         or generate_reliability_state
+        or opus_fable_state
     ):
         # This candidate predates a dormant policy installation.  Expose only
         # its reviewed transitions while consuming the exact profile update,
@@ -2426,7 +2526,7 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in terra_sol_identities
         ) + _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS)
-    if generate_reliability_state:
+    if generate_reliability_state or opus_fable_state:
         reliability_identities = {
             (item.prompt_path, item.language_id)
             for item in _GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS
@@ -2437,6 +2537,17 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in reliability_identities
         ) + _GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS)
+    if opus_fable_state:
+        opus_fable_identities = {
+            (item.prompt_path, item.language_id)
+            for item in _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
+        }
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id) not in opus_fable_identities
+        ) + _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
+        authority.update(_OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS)
     pr1971_reconciliation = _is_exact_pr1971_pytest_reconciliation(
         manifest, (protected_policy, candidate_policy), policies, candidate
     )
@@ -2526,6 +2637,7 @@ def _load_requirement_transition_authorizations(
         or pdd1875_reconciliation
         or terra_sol_reconciliation
         or terra_sol_consumed_state
+        or opus_fable_state
     ):
         # The exact historical pair both installed and consumed its authority
         # before Phase-A isolation existed; validate it as consumption below.

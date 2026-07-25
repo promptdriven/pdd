@@ -5169,6 +5169,14 @@ def code_generator_main(
                         "verbose": verbose,
                         "compress": compress,
                     }
+                    requested_model = None
+                    if isinstance(ctx.obj, dict):
+                        requested_model = ctx.obj.get("model")
+                    requested_model = requested_model or os.environ.get(
+                        "PDD_MODEL_DEFAULT"
+                    )
+                    if requested_model and str(requested_model).strip():
+                        payload["model"] = str(requested_model).strip()
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     cloud_url = CloudConfig.get_endpoint_url("generateCode")
                     try:

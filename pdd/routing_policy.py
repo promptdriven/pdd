@@ -19,6 +19,21 @@ from pdd.reasoning import EffortLevel
 
 log = logging.getLogger(__name__)
 CODEX_MODEL_DEFAULT = "gpt-5.6-sol"
+CLAUDE_MODEL_DEFAULT = "claude-opus-5"
+CLAUDE_CLI_MODEL_DEFAULT = CLAUDE_MODEL_DEFAULT
+
+
+def canonicalize_claude_cli_model(model: Optional[str] = None) -> str:
+    """Return the verified Claude Code model ID for a requested model.
+
+    Strip Anthropic's provider prefix because Claude Code accepts bare Claude
+    model IDs. Keep Opus 5 and Fable 5 distinct at the command boundary.
+    """
+    requested = (model or "").strip() or CLAUDE_MODEL_DEFAULT
+    normalized = requested.lower()
+    if normalized.startswith("anthropic/"):
+        return requested.split("/", 1)[1]
+    return requested
 
 
 @dataclass
