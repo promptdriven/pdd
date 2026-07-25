@@ -2950,6 +2950,27 @@ def test_release_video_workflow_defaults_and_preflights_recovery_capable_pds_cli
     assert "make check-release-video-config" in workflow_text
 
 
+def test_release_video_workflow_explicitly_opts_out_v0_0_309():
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf8")
+    )
+    publish_job = workflow["jobs"]["publish-pypi"]
+    steps = {step["name"]: step for step in publish_job["steps"] if "name" in step}
+    opt_out_condition = "github.ref_name != env.RELEASE_VIDEO_OPT_OUT_TAG"
+
+    assert publish_job["env"]["RELEASE_VIDEO_OPT_OUT_TAG"] == "v0.0.309"
+    for step_name in (
+        "Create release video and prepend link to notes (best-effort)",
+        "Upload release video recovery artifacts",
+        "Post release notes to Discord",
+    ):
+        assert opt_out_condition in steps[step_name]["if"]
+
+    assert "always()" in steps["Upload release video recovery artifacts"]["if"]
+    assert "if" not in steps["Publish to PyPI"]
+    assert "if" not in steps["Create GitHub Release with auto-notes (idempotent)"]
+
+
 def test_release_video_metadata_conflict_recovery_is_documented():
     doc_text = (
         ROOT / "docs" / "contributors" / "pdd-cli-release-process.md"
