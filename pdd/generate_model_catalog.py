@@ -1361,6 +1361,34 @@ _DEFAULT_LOCAL_RUNNER_ROWS: List[Dict[str, Any]] = [
 # shims for PDD's own model routing, not a second model catalog.
 _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
     {
+        # Kimi K3 is available on Moonshot's China API and is not yet present
+        # in the pinned LiteLLM registry. Keep the endpoint on this row: older
+        # Moonshot routes use a different origin and must not be redirected.
+        #
+        # Moonshot publishes RMB prices (2026-07-24): ¥20/M uncached input,
+        # ¥2/M cached input, ¥100/M output. PDD's catalog is USD-only and does
+        # not yet model cached-input tiers, so the USD rates below conservatively
+        # use uncached input and the 2026-07-17 Federal Reserve H.10 rate of
+        # 6.7760 CNY/USD:
+        # https://www.federalreserve.gov/releases/h10/20260720/
+        # Keep this dated conversion explicit; RMB figures must never be copied
+        # into these USD columns directly.
+        "provider": "Moonshot AI",
+        "model": "moonshot/kimi-k3",
+        "input": round(20.0 / 6.7760, 6),
+        "output": round(100.0 / 6.7760, 6),
+        "coding_arena_elo": 0,
+        "model_rank_score": 0,
+        "model_rank_source": "platform-default",
+        "base_url": "https://api.moonshot.cn/v1",
+        "api_key": "MOONSHOT_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
+        "context_limit": 1_048_576,
+    },
+    {
         # GPT-5.6 direct OpenAI API twin of the chatgpt/gpt-5.6-sol subscription
         # default (Issue #1986 sec. 4). Ships so the direct OPENAI_API_KEY /
         # llm_invoke selection path can resolve 5.6 from the catalog. No

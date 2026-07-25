@@ -139,6 +139,7 @@ MiniMax,minimax/MiniMax-M2,0.3,1.2,1313,1313,static-prefix,,MINIMAX_API_KEY,0,Tr
 Moonshot AI,moonshot/kimi-k2.6,0.95,4.0,1529,12400,deepswe-solve-rate,,MOONSHOT_API_KEY,0,True,effort,,False,
 Moonshot AI,moonshot/kimi-k2.5,0.6,3.0,1408,1408,arena-elo-fallback,,MOONSHOT_API_KEY,0,True,effort,,False,
 Moonshot AI,moonshot/kimi-k2-thinking,0.6,2.5,1333,1333,static-prefix,,MOONSHOT_API_KEY,0,True,effort,,False,
+Moonshot AI,moonshot/kimi-k3,2.951594,14.757969,0,0,platform-default,https://api.moonshot.cn/v1,MOONSHOT_API_KEY,0,True,effort,,False,1048576
 Nebius,nebius/deepseek-ai/DeepSeek-R1-0528,0.8,2.4,1370,1370,static-prefix,,NEBIUS_API_KEY,0,True,effort,,False,
 Nebius,nebius/deepseek-ai/DeepSeek-V3,0.5,1.5,1300,1300,static-prefix,,NEBIUS_API_KEY,0,True,none,,False,
 Nebius,nebius/deepseek-ai/DeepSeek-V3-0324,0.5,1.5,1300,1300,static-prefix,,NEBIUS_API_KEY,0,True,none,,False,
