@@ -3146,6 +3146,8 @@ check-release-branch:
 \t@:
 check-release-clean:
 \t@:
+Makefile:
+\t@:
 """,
         encoding="utf8",
     )
