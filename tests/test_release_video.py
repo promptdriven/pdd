@@ -3146,8 +3146,6 @@ check-release-branch:
 \t@:
 check-release-clean:
 \t@:
-Makefile:
-\t@:
 """,
         encoding="utf8",
     )
@@ -3181,6 +3179,7 @@ raise SystemExit(0)
             "RELEASE_TEST_SCENARIO": "new",
             "RELEASE_TEST_TAG": "v0.0.310",
             "RELEASE_TEST_LATEST_TAG": "v0.0.309",
+            "SKIP_MAKEFILE_REGEN": "1",
         }
     )
 
