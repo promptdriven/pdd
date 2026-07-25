@@ -59,6 +59,19 @@ MIGRATION_TOKEN_SECRET_NAME = "PDD_SECRET_MIGRATION_TOKEN"
 LEGACY_REPOSITORY_TOKEN_NAME = "PRIVATE_REPO_TOKEN"
 MIGRATION_CONTEXT_PRECHECK_STEP = "validate_dispatch_context"
 MIGRATION_PROVENANCE_STEP = "inspect_secret_provenance"
+PDD_CLOUD_APP_SECRET_REFERENCES = {
+    "PDD_CLOUD_APP_ID": "${{ secrets.PDD_CLOUD_APP_ID }}",
+    "PDD_CLOUD_APP_PRIVATE_KEY": "${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}",
+}
+MIGRATION_TOKEN_REFERENCE = "${{ secrets.PDD_SECRET_MIGRATION_TOKEN }}"
+MIGRATION_JOB_NON_SECRET_ENV = {
+    "REPOSITORY": "promptdriven/pdd",
+    "ENVIRONMENT": "pdd-cloud-read",
+    "EXPECTED_PDD_CLOUD_APP_ID": PDD_CLOUD_MIGRATION_APP_ID,
+}
+WORKFLOW_SECRET_EXPRESSION = re.compile(
+    r"\$\{\{\s*secrets(?:\s*\.|\s*\[)", re.IGNORECASE
+)
 PDD_CLOUD_APP_SECRET_NAMES = (
     "PDD_CLOUD_APP_ID",
     "PDD_CLOUD_APP_PRIVATE_KEY",
@@ -2491,6 +2504,28 @@ def _workflow_reference_paths(
     return set()
 
 
+def _workflow_secret_expression_paths(
+    value: object,
+    path: tuple[object, ...] = (),
+) -> set[tuple[object, ...]]:
+    """Return every recursively discovered GitHub Actions secret expression."""
+    if isinstance(value, dict):
+        return {
+            nested_path
+            for key, child in value.items()
+            for nested_path in _workflow_secret_expression_paths(child, (*path, key))
+        }
+    if isinstance(value, list):
+        return {
+            nested_path
+            for index, child in enumerate(value)
+            for nested_path in _workflow_secret_expression_paths(child, (*path, index))
+        }
+    if isinstance(value, str) and WORKFLOW_SECRET_EXPRESSION.search(value):
+        return {path}
+    return set()
+
+
 def _run_secret_migration_provenance_preflight(
     tmp_path: Path,
     repository_secret_names: tuple[str, ...],
@@ -2567,15 +2602,6 @@ def test_auto_heal_secret_migration_is_dispatch_only_and_fresh() -> None:
     }
     assert retire_job.get("needs") == SECRET_MIGRATION_COPY_JOB
 
-    retire_env = retire_job.get("env")
-    assert isinstance(retire_env, dict)
-    assert retire_env.get("PDD_CLOUD_APP_ID") == "${{ secrets.PDD_CLOUD_APP_ID }}"
-    assert retire_env.get("PDD_CLOUD_APP_PRIVATE_KEY") == (
-        "${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}"
-    )
-    assert retire_env.get("GH_TOKEN") == (
-        "${{ secrets.PDD_SECRET_MIGRATION_TOKEN }}"
-    )
     migration_state_step = _workflow_step(retire_job, "validate_migration_state")
     assert migration_state_step.get("env") == {
         "MIGRATION_STATE": (
@@ -2585,26 +2611,14 @@ def test_auto_heal_secret_migration_is_dispatch_only_and_fresh() -> None:
     }
     assert str(retire_job).count("needs.") == 1
     for job in (copy_job, retire_job):
-        job_env = job.get("env")
-        assert isinstance(job_env, dict)
-        assert job_env.get("EXPECTED_PDD_CLOUD_APP_ID") == PDD_CLOUD_MIGRATION_APP_ID
-        assert job_env.get("GH_TOKEN") == (
-            "${{ secrets.PDD_SECRET_MIGRATION_TOKEN }}"
-        )
+        assert job.get("env") == MIGRATION_JOB_NON_SECRET_ENV
+        assert not _workflow_secret_expression_paths(job.get("env"))
 
 
 def test_auto_heal_secret_migration_copy_is_stdin_only_and_non_destructive() -> None:
     """Copy phase obtains values from env, writes stdin, and never deletes sources."""
     workflow = _load_auto_heal_workflow()
     copy_job = _auto_heal_job(workflow, SECRET_MIGRATION_COPY_JOB)
-    copy_env = copy_job.get("env")
-    assert isinstance(copy_env, dict)
-    assert copy_env.get("PDD_CLOUD_APP_ID") == "${{ secrets.PDD_CLOUD_APP_ID }}"
-    assert copy_env.get("PDD_CLOUD_APP_PRIVATE_KEY") == (
-        "${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}"
-    )
-    assert copy_env.get("GH_TOKEN") == "${{ secrets.PDD_SECRET_MIGRATION_TOKEN }}"
-
     copy_step = _workflow_step(copy_job, "copy_environment_secrets")
     copy_run = _workflow_run(copy_step)
     assert "set -euo pipefail" in copy_run
@@ -2695,19 +2709,90 @@ def test_auto_heal_secret_migration_preflights_exact_dispatch_context() -> None:
     } == {"pdd_cloud_contents_token": PDD_CLOUD_APP_TOKEN_ACTION}
 
 
-def test_auto_heal_secret_migration_uses_only_environment_migration_token() -> None:
-    """The temporary token is scoped to the two guarded environment jobs only."""
+def test_auto_heal_secret_migration_scopes_secrets_to_exact_steps() -> None:
+    """Migration secrets are exposed only to the smallest required step set."""
     workflow_text = AUTO_HEAL_WORKFLOW_PATH.read_text(encoding="utf-8")
     assert LEGACY_REPOSITORY_TOKEN_NAME.casefold() not in workflow_text.casefold()
 
     workflow = _load_auto_heal_workflow()
+    copy_job = _auto_heal_job(workflow, SECRET_MIGRATION_COPY_JOB)
+    retire_job = _auto_heal_job(workflow, SECRET_MIGRATION_RETIRE_JOB)
+    app_and_migration_token_env = {
+        **PDD_CLOUD_APP_SECRET_REFERENCES,
+        "GH_TOKEN": MIGRATION_TOKEN_REFERENCE,
+    }
+
+    assert _workflow_step(copy_job, MIGRATION_CONTEXT_PRECHECK_STEP).get("env") is None
+    assert _workflow_step(copy_job, MIGRATION_PROVENANCE_STEP).get("env") == (
+        app_and_migration_token_env
+    )
+    assert _workflow_step(copy_job, "copy_environment_secrets").get("env") == (
+        app_and_migration_token_env
+    )
+
+    assert _workflow_step(retire_job, MIGRATION_CONTEXT_PRECHECK_STEP).get("env") is None
+    assert _workflow_step(retire_job, "validate_migration_state").get("env") == {
+        "MIGRATION_STATE": (
+            "${{ needs.copy_pdd_cloud_app_secrets_to_environment.outputs."
+            "migration_state }}"
+        )
+    }
+    assert _workflow_step(retire_job, "require_environment_app_secrets").get(
+        "env"
+    ) == PDD_CLOUD_APP_SECRET_REFERENCES
+    token_step = _workflow_step(retire_job, "pdd_cloud_contents_token")
+    assert token_step.get("env") is None
+    assert token_step.get("with") == {
+        "app-id": "${{ secrets.PDD_CLOUD_APP_ID }}",
+        "private-key": "${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}",
+        "owner": "promptdriven",
+        "repositories": "pdd_cloud",
+        "permission-contents": "read",
+        "skip-token-revoke": "true",
+    }
+    assert _workflow_step(retire_job, "verify_canary").get("env") == {
+        "GH_TOKEN": "${{ steps.pdd_cloud_contents_token.outputs.token }}",
+        "CANARY_REPOSITORY": "promptdriven/pdd_cloud",
+        "CANARY_SHA": PDD_CLOUD_CANARY_SHA,
+    }
+    assert _workflow_step(retire_job, "revoke_pdd_cloud_token").get("env") == {
+        "GH_TOKEN": "${{ steps.pdd_cloud_contents_token.outputs.token }}"
+    }
+    for step_id in (
+        "retire_repository_app_secret_copies",
+        "delete_migration_token_secret",
+    ):
+        assert _workflow_step(retire_job, step_id).get("env") == {
+            "GH_TOKEN": MIGRATION_TOKEN_REFERENCE
+        }
+
+    assert _workflow_secret_expression_paths(copy_job) == {
+        ("steps", 1, "env", "PDD_CLOUD_APP_ID"),
+        ("steps", 1, "env", "PDD_CLOUD_APP_PRIVATE_KEY"),
+        ("steps", 1, "env", "GH_TOKEN"),
+        ("steps", 2, "env", "PDD_CLOUD_APP_ID"),
+        ("steps", 2, "env", "PDD_CLOUD_APP_PRIVATE_KEY"),
+        ("steps", 2, "env", "GH_TOKEN"),
+    }
+    assert _workflow_secret_expression_paths(retire_job) == {
+        ("steps", 2, "env", "PDD_CLOUD_APP_ID"),
+        ("steps", 2, "env", "PDD_CLOUD_APP_PRIVATE_KEY"),
+        ("steps", 3, "with", "app-id"),
+        ("steps", 3, "with", "private-key"),
+        ("steps", 6, "env", "GH_TOKEN"),
+        ("steps", 7, "env", "GH_TOKEN"),
+    }
+
     all_jobs = workflow.get("jobs")
     assert isinstance(all_jobs, dict)
     for job_name, job in all_jobs.items():
         assert isinstance(job, dict)
         paths = _workflow_reference_paths(job, MIGRATION_TOKEN_SECRET_NAME)
         if job_name == SECRET_MIGRATION_COPY_JOB:
-            assert paths == {("env", "GH_TOKEN")}
+            assert paths == {
+                ("steps", 1, "env", "GH_TOKEN"),
+                ("steps", 2, "env", "GH_TOKEN"),
+            }
         elif job_name == SECRET_MIGRATION_RETIRE_JOB:
             steps = _workflow_steps(job)
             self_delete_index = next(
@@ -2716,7 +2801,8 @@ def test_auto_heal_secret_migration_uses_only_environment_migration_token() -> N
                 if step.get("id") == "delete_migration_token_secret"
             )
             assert paths == {
-                ("env", "GH_TOKEN"),
+                ("steps", 6, "env", "GH_TOKEN"),
+                ("steps", self_delete_index, "env", "GH_TOKEN"),
                 ("steps", self_delete_index, "run"),
             }
         else:
@@ -2731,29 +2817,67 @@ def test_auto_heal_secret_migration_uses_only_environment_migration_token() -> N
 @pytest.mark.parametrize(
     ("repository_secret_names", "environment_secret_names", "app_id", "state"),
     (
-        (PDD_CLOUD_APP_SECRET_NAMES, (), PDD_CLOUD_MIGRATION_APP_ID, "copy_from_repository"),
-        ((), PDD_CLOUD_APP_SECRET_NAMES, PDD_CLOUD_MIGRATION_APP_ID, "already_migrated"),
         (
             PDD_CLOUD_APP_SECRET_NAMES,
-            PDD_CLOUD_APP_SECRET_NAMES,
+            (MIGRATION_TOKEN_SECRET_NAME,),
+            PDD_CLOUD_MIGRATION_APP_ID,
+            "copy_from_repository",
+        ),
+        (
+            (),
+            (*PDD_CLOUD_APP_SECRET_NAMES, MIGRATION_TOKEN_SECRET_NAME),
+            PDD_CLOUD_MIGRATION_APP_ID,
+            "already_migrated",
+        ),
+        (PDD_CLOUD_APP_SECRET_NAMES, (), PDD_CLOUD_MIGRATION_APP_ID, None),
+        (
+            (*PDD_CLOUD_APP_SECRET_NAMES, MIGRATION_TOKEN_SECRET_NAME),
+            (),
             PDD_CLOUD_MIGRATION_APP_ID,
             None,
         ),
-        (("PDD_CLOUD_APP_ID",), (), PDD_CLOUD_MIGRATION_APP_ID, None),
-        ((), ("PDD_CLOUD_APP_PRIVATE_KEY",), PDD_CLOUD_MIGRATION_APP_ID, None),
+        (
+            (*PDD_CLOUD_APP_SECRET_NAMES, MIGRATION_TOKEN_SECRET_NAME),
+            (MIGRATION_TOKEN_SECRET_NAME,),
+            PDD_CLOUD_MIGRATION_APP_ID,
+            None,
+        ),
+        (
+            PDD_CLOUD_APP_SECRET_NAMES,
+            (*PDD_CLOUD_APP_SECRET_NAMES, MIGRATION_TOKEN_SECRET_NAME),
+            PDD_CLOUD_MIGRATION_APP_ID,
+            None,
+        ),
         (
             ("PDD_CLOUD_APP_ID",),
-            PDD_CLOUD_APP_SECRET_NAMES,
+            (MIGRATION_TOKEN_SECRET_NAME,),
+            PDD_CLOUD_MIGRATION_APP_ID,
+            None,
+        ),
+        (
+            (),
+            ("PDD_CLOUD_APP_PRIVATE_KEY", MIGRATION_TOKEN_SECRET_NAME),
+            PDD_CLOUD_MIGRATION_APP_ID,
+            None,
+        ),
+        (
+            ("PDD_CLOUD_APP_ID",),
+            (*PDD_CLOUD_APP_SECRET_NAMES, MIGRATION_TOKEN_SECRET_NAME),
             PDD_CLOUD_MIGRATION_APP_ID,
             None,
         ),
         (
             (LEGACY_REPOSITORY_TOKEN_NAME, *PDD_CLOUD_APP_SECRET_NAMES),
-            (),
+            (MIGRATION_TOKEN_SECRET_NAME,),
             PDD_CLOUD_MIGRATION_APP_ID,
             None,
         ),
-        (PDD_CLOUD_APP_SECRET_NAMES, (), "9999999", None),
+        (
+            PDD_CLOUD_APP_SECRET_NAMES,
+            (MIGRATION_TOKEN_SECRET_NAME,),
+            "9999999",
+            None,
+        ),
     ),
 )
 def test_auto_heal_secret_migration_provenance_state_machine(
@@ -2786,8 +2910,11 @@ def test_auto_heal_header_scopes_temporary_pem_and_token_exception() -> None:
     workflow_text = AUTO_HEAL_WORKFLOW_PATH.read_text(encoding="utf-8")
     documentation = re.sub(r"(?m)^\s*# ?", "", workflow_text)
     documentation = re.sub(r"\s+", " ", documentation)
-    assert "For the normal auto-heal path, no LLM or PEM secrets ever land" in documentation
-    assert "one-shot migration temporarily materializes the PEM only" in documentation
+    assert "normal protected, SHA-pinned App-token mint action receives the PEM" in documentation
+    assert "candidate code never does" in documentation
+    assert "one-shot migration protected steps receive it only through explicit" in documentation
+    assert "cleanup retires repository App sources and the environment migration-token" in documentation
+    assert "retaining the environment App secrets" in documentation
     assert "temporary, environment-only fine-grained credential" in documentation
     assert "Environments read/write and Secrets read/write" in documentation
     assert "must be revoked outside GitHub" in documentation
@@ -2824,8 +2951,9 @@ def test_auto_heal_secret_migration_mints_and_verifies_bound_canary() -> None:
     assert token_step.get("uses") == PDD_CLOUD_APP_TOKEN_ACTION
     token_with = token_step.get("with")
     assert isinstance(token_with, dict)
-    assert token_with.get("app-id") == "${{ env.PDD_CLOUD_APP_ID }}"
-    assert token_with.get("private-key") == "${{ env.PDD_CLOUD_APP_PRIVATE_KEY }}"
+    assert token_step.get("env") is None
+    assert token_with.get("app-id") == "${{ secrets.PDD_CLOUD_APP_ID }}"
+    assert token_with.get("private-key") == "${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}"
     assert token_with.get("owner") == "promptdriven"
     assert token_with.get("repositories") == "pdd_cloud"
     assert token_with.get("permission-contents") == "read"
@@ -2884,7 +3012,7 @@ def test_auto_heal_secret_migration_revokes_before_idempotent_retirement() -> No
         "success() && steps.verify_canary.outcome == 'success' && "
         "steps.revoke_pdd_cloud_token.outcome == 'success'"
     )
-    assert delete_step.get("env") is None
+    assert delete_step.get("env") == {"GH_TOKEN": MIGRATION_TOKEN_REFERENCE}
     delete_run = _workflow_run(delete_step)
     assert "set -euo pipefail" in delete_run
     assert '[ -z "$GH_TOKEN" ]' in delete_run
@@ -2909,6 +3037,7 @@ def test_auto_heal_secret_migration_revokes_before_idempotent_retirement() -> No
         "success() && steps.retire_repository_app_secret_copies.outcome == 'success'"
     )
     self_delete_run = _workflow_run(self_delete_step)
+    assert self_delete_step.get("env") == {"GH_TOKEN": MIGRATION_TOKEN_REFERENCE}
     assert "set -euo pipefail" in self_delete_run
     assert (
         "gh secret delete PDD_SECRET_MIGRATION_TOKEN --env \"$ENVIRONMENT\" "
