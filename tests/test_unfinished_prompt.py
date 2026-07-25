@@ -135,7 +135,7 @@ def test_unfinished_prompt_temperature_below_range(
             temperature=-0.2,  # Invalid temperature
             verbose=False
         )
-    assert "Temperature must be between 0 and 1" in str(exc_info.value)
+    assert "Temperature must be between 0 and 2" in str(exc_info.value)
 
 
 def test_unfinished_prompt_temperature_above_range(

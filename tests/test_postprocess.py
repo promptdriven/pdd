@@ -94,7 +94,7 @@ def test_postprocess_invalid_strength_high():
         postprocess(llm_output="some code", language="python", strength=1.1)
 
 def test_postprocess_invalid_temperature_low():
-    with pytest.raises(ValueError, match="temperature must be between 0 and 1"):
+    with pytest.raises(ValueError, match="temperature must be between 0 and 2"):
         postprocess(llm_output="some code", language="python", temperature=-0.1)
 
 def test_postprocess_invalid_temperature_high():
