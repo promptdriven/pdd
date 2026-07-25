@@ -10112,6 +10112,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "scripts/release_video_policy.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "scripts/sops_release_env.py",
       "role": "human-maintained"
     },
