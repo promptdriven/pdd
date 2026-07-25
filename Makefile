@@ -107,6 +107,7 @@ RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID ?=
 RELEASE_VIDEO_STATUS_QUERY ?= 0
 RELEASE_VIDEO_YOUTUBE_URL ?=
 RELEASE_VIDEO_SKIP_REASON ?=
+RELEASE_VIDEO_OPT_OUT_TAG ?= v0.0.309
 RELEASE_VIDEO_PDS_CREATE_TIMEOUT ?= 1800
 RELEASE_VIDEO_CLAUDE_MODEL ?= claude-opus-4-8
 RELEASE_VIDEO_PDS_CLAUDE_MODEL ?= glm-5.2
@@ -871,6 +872,10 @@ release-infisical:
 	@$(MAKE) --no-print-directory release-sops
 
 release-video:
+	@if [ "$(RELEASE_TAG)" = "$(RELEASE_VIDEO_OPT_OUT_TAG)" ]; then \
+		echo "release-video: $(RELEASE_TAG) is opted out and must not create, upload, or distribute a video." >&2; \
+		exit 1; \
+	fi
 	@if [ "$(RELEASE_VIDEO)" = "0" ]; then \
 		echo "Skipping release video because RELEASE_VIDEO=0"; \
 		exit 0; \
@@ -926,12 +931,20 @@ release-video-status:
 		$$STATUS_QUERY_ARGS
 
 release-video-discord-backfill:
+	@if [ "$(RELEASE_TAG)" = "$(RELEASE_VIDEO_OPT_OUT_TAG)" ]; then \
+		echo "release-video-discord-backfill: $(RELEASE_TAG) is opted out and must not mutate a release or Discord." >&2; \
+		exit 1; \
+	fi
 	@python scripts/backfill_release_video_discord.py \
 		--tag "$(RELEASE_TAG)" \
 		--youtube-url "$(RELEASE_VIDEO_YOUTUBE_URL)" \
 		--repo "$${GITHUB_REPOSITORY:-promptdriven/pdd}"
 
 release-video-skip:
+	@if [ "$(RELEASE_TAG)" = "$(RELEASE_VIDEO_OPT_OUT_TAG)" ]; then \
+		echo "release-video-skip: $(RELEASE_TAG) is opted out and must not mutate a release or Discord." >&2; \
+		exit 1; \
+	fi
 	@python scripts/backfill_release_video_discord.py \
 		--tag "$(RELEASE_TAG)" \
 		--skip-reason "$(RELEASE_VIDEO_SKIP_REASON)" \
@@ -983,7 +996,11 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 			echo "Error: tag $$EXISTING_TAG on origin points at $$REMOTE_TAG_COMMIT, not HEAD ($$HEAD_SHA)."; \
 			exit 1; \
 		fi; \
-		make --no-print-directory release-video RELEASE_TAG="$$EXISTING_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
+		if [ "$$EXISTING_TAG" = "$(RELEASE_VIDEO_OPT_OUT_TAG)" ]; then \
+			echo "Skipping release video for opted-out tag $$EXISTING_TAG."; \
+		else \
+			make --no-print-directory release-video RELEASE_TAG="$$EXISTING_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
+		fi; \
 		exit 0; \
 	fi; \
 	LATEST_TAG=$$(git tag --list --merged HEAD --sort=-v:refname 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
@@ -1008,7 +1025,11 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 	git tag -a "$$NEW_TAG" -m "Release $$NEW_TAG"; \
 	git push origin "$$NEW_TAG"; \
 	echo "Tag $$NEW_TAG is on origin. GHA will request gltanaka approval, then publish."; \
-	make --no-print-directory release-video RELEASE_TAG="$$NEW_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"
+	if [ "$$NEW_TAG" = "$(RELEASE_VIDEO_OPT_OUT_TAG)" ]; then \
+		echo "Skipping release video for opted-out tag $$NEW_TAG."; \
+	else \
+		make --no-print-directory release-video RELEASE_TAG="$$NEW_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
+	fi
 	@# Post-release cleanup check (Issue #186)
 	@make check-suspicious-files
 

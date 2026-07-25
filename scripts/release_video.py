@@ -18,6 +18,7 @@ from typing import Any
 
 SEMVER_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 YOUTUBE_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s\"'<>]+")
+RELEASE_VIDEO_OPT_OUT_TAG = "v0.0.309"
 IDEMPOTENCY_PROVENANCE_RE = re.compile(r"[^a-z0-9._-]+")
 PDS_RUN_HANDLE_LINE_RE = re.compile(
     r"^\[pds\]\s+release-video run handle:\s+(?P<fields>.+)$",
@@ -462,6 +463,22 @@ class ReleaseVideoError(RuntimeError):
     """Raised for actionable release-video failures."""
 
 
+def release_video_opt_out_reason(tag: str) -> str | None:
+    """Return the release-video denial reason for the exact excluded tag."""
+    if tag == RELEASE_VIDEO_OPT_OUT_TAG:
+        return (
+            f"{tag} is opted out and release video operations must not create, "
+            "upload, or distribute a video."
+        )
+    return None
+
+
+def ensure_release_video_tag_is_allowed(tag: str) -> None:
+    """Fail closed before any release-video artifact or provider operation."""
+    if reason := release_video_opt_out_reason(tag):
+        raise ReleaseVideoError(reason)
+
+
 class ReleaseVideoProcessTimeout(ReleaseVideoError):
     """Raised when a release-video subprocess times out with captured output."""
 
@@ -488,6 +505,7 @@ def main(argv: list[str] | None = None) -> int:
             return preflight_release_video(args)
 
         tag = resolve_release_tag(repo, args.tag or os.environ.get("RELEASE_TAG"))
+        ensure_release_video_tag_is_allowed(tag)
         git_sha = args.git_sha or os.environ.get("RELEASE_GIT_SHA") or git(
             repo,
             "rev-list",

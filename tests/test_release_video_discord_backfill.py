@@ -47,6 +47,78 @@ def load_backfill_module():
     return module
 
 
+def test_manual_backfill_workflow_rejects_release_video_opt_out_tag():
+    workflow = (
+        ROOT / ".github" / "workflows" / "backfill-release-video-discord.yml"
+    ).read_text(encoding="utf8")
+
+    assert "if: inputs.tag != 'v0.0.309'" in workflow
+
+
+@pytest.mark.parametrize(
+    ("operation_name", "kwargs"),
+    [
+        (
+            "backfill_release_video_discord",
+            {
+                "youtube_url": "https://youtu.be/RIkxCaylRAQ",
+                "webhook_url": "https://discord.example/webhook",
+                "post_discord": lambda *_args: None,
+            },
+        ),
+        (
+            "record_release_video_skip",
+            {"reason": "No release video is permitted for this tag."},
+        ),
+    ],
+)
+def test_release_video_opt_out_tag_blocks_backfill_before_github_mutation(
+    operation_name,
+    kwargs,
+):
+    module = load_backfill_module()
+    github = FakeGitHubReleaseClient("Existing release notes\n")
+
+    with pytest.raises(module.BackfillError, match="v0.0.309 is opted out"):
+        getattr(module, operation_name)(
+            tag="v0.0.309",
+            repo="promptdriven/pdd",
+            github=github,
+            **kwargs,
+        )
+
+    assert github.viewed_tags == []
+    assert github.edits == []
+
+
+@pytest.mark.parametrize(
+    "mode_args",
+    [
+        ["--youtube-url", "https://youtu.be/RIkxCaylRAQ"],
+        ["--skip-reason", "No release video is permitted for this tag."],
+    ],
+)
+def test_release_video_opt_out_tag_blocks_backfill_main_before_github_client(
+    monkeypatch,
+    capsys,
+    mode_args,
+):
+    module = load_backfill_module()
+    constructed = []
+
+    def fail_if_constructed(**kwargs):
+        constructed.append(kwargs)
+        raise AssertionError("GitHub client must not be constructed")
+
+    monkeypatch.setattr(module, "GitHubReleaseClient", fail_if_constructed)
+
+    result = module.main(["--tag", "v0.0.309", *mode_args])
+
+    assert result == 1
+    assert constructed == []
+    assert "v0.0.309 is opted out" in capsys.readouterr().err
+
+
 def expected_discord_embed_payload(tag: str, youtube_url: str, repo: str) -> dict:
     release_url = f"https://github.com/{repo}/releases/tag/{tag}"
     return {

@@ -60,6 +60,7 @@ PDD_1875_COMPOSED_HEAD = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 TERRA_SOL_PROTECTED_BASE = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 TERRA_SOL_COMPOSED_HEAD = "b3902318c35c279e49e6397838825c95bd568942"
 SYNC_ROLLOUT_PROTECTED_BASE = "dec539aa8d0697e357e2077c1dbc73b0621aa617"
+RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE = "c93332e9bc5956677280a3a015c32d16c99b54cb"
 PR_1971_COMBINED_PROFILE_DIGEST = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
 )
@@ -246,6 +247,15 @@ SYNC_ROLLOUT_EXISTING_METADATA_PATHS = {
     ".pdd/meta/detect_change_python_run.json",
     ".pdd/meta/generate_test_python.json",
     ".pdd/meta/generate_test_python_run.json",
+}
+RELEASE_VIDEO_OPT_OUT_EXISTING_PATHS = {
+    ".github/workflows/backfill-release-video-discord.yml",
+    ".github/workflows/release.yml",
+    "Makefile",
+    "scripts/backfill_release_video_discord.py",
+    "scripts/release_video.py",
+    "tests/test_release_video.py",
+    "tests/test_release_video_discord_backfill.py",
 }
 PREAUTHORIZED_CHILD_PATHS = (
     LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS
@@ -1630,6 +1640,45 @@ def test_sync_rollout_repair_metadata_bridge_stays_ordinary() -> None:
         base_rules,
         mutated_head_rules,
     ) == base_rules
+
+
+def test_release_video_opt_out_uses_only_actual_base_owned_paths() -> None:
+    """The v0.0.309 guard must not introduce a new tracked policy artifact."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "release-video opt-out protected history",
+        RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE,
+    )
+    manifest = build_unit_manifest(
+        ROOT,
+        base_ref=RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE,
+        head_ref="HEAD",
+    )
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix()
+        in RELEASE_VIDEO_OPT_OUT_EXISTING_PATHS
+    }
+
+    assert not manifest.invalid_reasons
+    assert not manifest.unaccounted_tracked_paths
+    assert set(records) == RELEASE_VIDEO_OPT_OUT_EXISTING_PATHS
+    assert all(item.in_base and item.in_head for item in records.values())
+    makefile = records["Makefile"]
+    assert (
+        makefile.inventory is InventoryStatus.MANAGED
+        and makefile.candidate_id.role == "code"
+        and makefile.ownership_provenance == "architecture"
+    )
+    assert all(
+        item.inventory is InventoryStatus.HUMAN_OWNED
+        and item.candidate_id.role == "human-maintained"
+        and item.ownership_provenance
+        == f"protected-ownership:pdd-maintainers:{path}"
+        for path, item in records.items()
+        if path != "Makefile"
+    )
 
 
 def _candidate_only_repo(tmp_path: Path) -> tuple[Path, str, str]:
