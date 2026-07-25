@@ -1,10 +1,10 @@
 {
-  "pdd_version": "0.0.309.dev0",
-  "timestamp": "2026-07-25T13:49:39.384811+00:00",
-  "command": "fix",
+  "pdd_version": "0.0.307",
+  "timestamp": "2026-07-25T16:31:08.807859+00:00",
+  "command": "crash",
   "prompt_hash": "7de5ce455afded8ce1f27f36beaac3d009502ab0431e29168d1748a78379df65",
   "code_hash": "6004b2824e65f4e4e28f60f95a361434279144aadf0aeaa7d39c25f5c9d74065",
-  "example_hash": "5d4d74064e5b845391f035fb8631903ec2f39a54a90713f9c13dc24d2eb73c4f",
+  "example_hash": "a2b26f3ef47a48bd00b5bf3d7aa8a8fc4547e5805a7df8484aadd0d20e374145",
   "test_hash": "7bb89e76b247575bc9ab6eb3fed79d5c27207e0ccd94bbd00e1dbb80c462968b",
   "test_files": {
     "test_unfinished_prompt.py": "7bb89e76b247575bc9ab6eb3fed79d5c27207e0ccd94bbd00e1dbb80c462968b"
