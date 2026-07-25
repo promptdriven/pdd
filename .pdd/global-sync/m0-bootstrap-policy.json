@@ -140,7 +140,7 @@
     "result_path": "docs/global_sync_m0_sample_results.json"
   },
   "repository": "promptdriven/pdd",
-  "reviewed_source_base_sha": "ca2d9cd8ac9264b614b484efed5a9eb3b0730c52",
+  "reviewed_source_base_sha": "349859fbd558f2cc8dfa76cfec2c186b635bbd85",
   "schema_version": 1,
   "state_projection": {
     "integration_write_set": [
