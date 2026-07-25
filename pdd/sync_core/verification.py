@@ -2681,7 +2681,7 @@ def _load_requirement_transition_authorizations(
             not in temperature_regression_identities
         ) + _TEMPERATURE_REGRESSION_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_TEMPERATURE_REGRESSION_COMPOSED_REQUIREMENT_TRANSITIONS)
-    if sync_rollout_repair_state:
+    if sync_rollout_repair_state or temperature_regression_state:
         # These retained schema-2 rows describe historical prompt changes.
         # Their identities are already at the exact repaired prompt bytes, so
         # do not re-evaluate them as a live transition at this one state.

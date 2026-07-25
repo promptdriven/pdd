@@ -606,6 +606,7 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/postprocess_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -771,6 +772,7 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/unfinished_prompt_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
