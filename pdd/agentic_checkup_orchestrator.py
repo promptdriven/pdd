@@ -1084,11 +1084,27 @@ def _scrub_secrets(text: str) -> str:
 
 
 def _normalise_step7_path(value: Any) -> str:
-    """Return a comparable path-ish string from a Step 7 JSON field."""
-    path = str(value or "").strip().strip("`").replace("\\", "/")
+    """Return a canonical repo-relative path, or ``""`` when unsafe."""
+    if not isinstance(value, (str, Path)):
+        return ""
+    path = str(value).strip().strip("`").replace("\\", "/")
+    if (
+        not path
+        or "\x00" in path
+        or path.startswith("/")
+        or re.match(r"^[A-Za-z]:/", path)
+    ):
+        return ""
     while path.startswith("./"):
         path = path[2:]
-    return path.strip("/")
+    parts: List[str] = []
+    for part in path.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            return ""
+        parts.append(part)
+    return "/".join(parts)
 
 
 def _step7_nonblocking_reason(issue: Dict[str, Any]) -> str:
@@ -1113,16 +1129,23 @@ def _step7_nonblocking_reason(issue: Dict[str, Any]) -> str:
 
 
 def _step7_finding_in_pr_diff(
-    issue: Dict[str, Any], changed_files: List[str]
+    issue: Dict[str, Any],
+    changed_files: List[str],
+    *,
+    allow_containing_directory: bool = True,
+    allow_module_match: bool = True,
 ) -> bool:
     """Return True when the finding's file overlaps the PR diff.
 
-    Ground-truth signal: the verifier's own ``changed_files`` list. A critical
-    whose ``file`` equals, contains, or sits under a changed file is PR-scoped
-    and must block regardless of any ``blocking: false`` flag — a self-reported
-    non-blocking flag cannot be trusted to wave through a PR-introduced critical
-    (issue #1574 review). The ``file`` comparison counts exact matches and
-    directory-prefix containment in either direction.
+    Runtime callers supply the orchestrator's deterministic PR changed-file
+    list; direct legacy callers may still supply verifier report paths. A
+    critical whose ``file`` equals a changed file or names a directory
+    containing a changed file is PR-scoped and must block regardless of any
+    ``blocking: false`` flag — a self-reported non-blocking flag cannot be
+    trusted to wave through a PR-introduced critical (issue #1574 review).
+    A candidate below a changed path is deliberately rejected: PR changed-file
+    lists contain files, so accepting ``pdd/x.py/fabricated`` for changed file
+    ``pdd/x.py`` would let a path look-alike borrow mutation authority.
 
     The ``module`` label is matched only on an EXACT changed-path hit, never by
     directory-prefix containment. A module is a coarse package/area name, not a
@@ -1145,12 +1168,13 @@ def _step7_finding_in_pr_diff(
         if file_cand:
             if file_cand == changed_file:
                 return True
-            if changed_file.startswith(file_cand + "/") or file_cand.startswith(
-                changed_file + "/"
+            if (
+                allow_containing_directory
+                and changed_file.startswith(file_cand + "/")
             ):
                 return True
         # Coarse module label: exact path match only, no prefix containment.
-        if module_cand and module_cand == changed_file:
+        if allow_module_match and module_cand and module_cand == changed_file:
             return True
     return False
 
@@ -1291,6 +1315,7 @@ def _step7_passed(
     pr_mode: bool,
     has_issue: bool = True,
     pr_test_scope: str = "full",
+    authoritative_changed_files: Optional[Sequence[str]] = None,
 ) -> Tuple[bool, str]:
     """Parse Step 7's JSON report and decide whether the checkup may proceed.
 
@@ -1395,12 +1420,21 @@ def _step7_passed(
             f"{joined}{more}",
         )
 
-    raw_changed_files = payload.get("changed_files")
     changed_files: List[str] = []
-    if isinstance(raw_changed_files, list):
+    raw_changed_files = payload.get("changed_files")
+    changed_file_source: Sequence[Any]
+    if authoritative_changed_files is not None:
+        changed_file_source = authoritative_changed_files
+    elif isinstance(raw_changed_files, list):
+        # Compatibility for direct callers. Orchestrator call sites always
+        # provide the deterministic PR scope instead of trusting this report.
+        changed_file_source = raw_changed_files
+    else:
+        changed_file_source = []
+    if changed_file_source:
         changed_files = [
             _normalise_step7_path(path)
-            for path in raw_changed_files
+            for path in changed_file_source
             if _normalise_step7_path(path)
         ]
     payload_message = str(payload.get("message") or "").lower()
@@ -1443,7 +1477,11 @@ def _step7_passed(
     return True, ""
 
 
-def _step7_repairable_failure_signal(step7_output: str) -> str:
+def _step7_repairable_failure_signal(
+    step7_output: str,
+    *,
+    authoritative_changed_files: Optional[Sequence[str]] = None,
+) -> str:
     """Return a Step-6 signal for a structured, repairable Step-7 failure.
 
     A GitHub-checks final gate deliberately defers its Step-5 full-suite
@@ -1452,8 +1490,11 @@ def _step7_repairable_failure_signal(step7_output: str) -> str:
     verifier evidence for the next iteration so the fixer has an actionable,
     bounded input rather than repeating the clean probe forever.
 
-    Parser failures and out-of-scope findings return an empty string: neither
-    authorizes a speculative mutation.
+    Parser failures, contradictory verdicts, malformed/non-blocking findings,
+    and findings without affirmative PR-scope evidence return an empty string:
+    none authorizes a speculative mutation. Path evidence comes only from the
+    orchestrator's deterministic PR scope, never the model-authored
+    ``changed_files`` payload.
     """
     from .agentic_checkup import (  # pylint: disable=import-outside-toplevel
         _extract_json_from_text,
@@ -1462,41 +1503,77 @@ def _step7_repairable_failure_signal(step7_output: str) -> str:
     payload = _extract_json_from_text(step7_output or "")
     if not isinstance(payload, dict):
         return ""
-    # Preserve the existing fail-closed authority boundary for a contradictory
-    # success report. The one safe exception is a mixed report containing an
-    # explicit non-repairable blocker: that blocker independently forces the
-    # gate closed, while a coexisting repairable finding still needs one fixer
-    # pass before the run terminates on the external requirement.
-    if (
-        payload.get("success") is not False
-        and not _step7_unfixed_nonrepairable_blockers(payload)
-    ):
+    # A contradictory success report is not mutation authority. A coexisting
+    # non-repairable blocker keeps the gate closed, but does not make the
+    # report's unrelated repairable rows more trustworthy.
+    if payload.get("success") is not False:
         return ""
     issues = payload.get("issues")
     if not isinstance(issues, list):
         return ""
 
+    changed_files = [
+        normalized
+        for path in (authoritative_changed_files or [])
+        if (normalized := _normalise_step7_path(path))
+    ]
     actionable: List[Dict[str, Any]] = []
+    pr_in_scope_scopes = {
+        "pr",
+        "pr-diff",
+        "pr-scope",
+        "changed-file",
+        "changed-files",
+        "in-scope",
+    }
     nonblocking_scopes = {
-        "out-of-scope", "outside-pr", "outside-pr-scope", "non-blocking",
-        "baseline", "project", "project-wide", "repo", "repository", "global",
+        "out-of-scope",
+        "outside-pr",
+        "outside-pr-scope",
+        "non-blocking",
+        "baseline",
+        "project",
+        "project-wide",
+        "repo",
+        "repository",
+        "global",
     }
     for issue in issues:
-        if not isinstance(issue, dict) or issue.get("fixed") is True:
+        if not isinstance(issue, dict) or issue.get("fixed") is not False:
             continue
         # ``blocking`` answers whether the PR may ship. ``repairable`` answers
         # whether this local fixer loop has authority and capability to mutate
         # source for the finding. External terminal evidence can block while
         # remaining impossible to produce from the in-progress worktree.
-        if issue.get("repairable") is False:
+        if issue.get("repairable") is not True:
+            continue
+        if issue.get("blocking") is not True:
             continue
         if issue.get("in_scope") is False or _step7_nonblocking_reason(issue):
             continue
-        scope = str(
-            issue.get("scope") or issue.get("verification_scope")
-            or issue.get("pr_scope") or ""
-        ).strip().lower().replace("_", "-")
-        if scope not in nonblocking_scopes:
+        scopes = {
+            str(issue.get(key)).strip().lower().replace("_", "-")
+            for key in ("scope", "verification_scope", "pr_scope")
+            if issue.get(key) not in (None, "")
+        }
+        # Any out-of-scope, unknown, or alias-like declaration contradicts
+        # mutation authority even when another field says ``pr``.
+        if scopes and (
+            scopes & nonblocking_scopes
+            or any(scope not in pr_in_scope_scopes for scope in scopes)
+        ):
+            continue
+        has_pr_scope = (
+            issue.get("in_scope") is True
+            or bool(scopes & pr_in_scope_scopes)
+            or _step7_finding_in_pr_diff(
+                issue,
+                changed_files,
+                allow_containing_directory=False,
+                allow_module_match=False,
+            )
+        )
+        if has_pr_scope:
             actionable.append(issue)
 
     if not actionable:
@@ -1644,6 +1721,7 @@ def _ensure_step7_success_artifacts(
     has_issue: bool,
     pr_test_scope: str,
     pr_head_sha: Optional[str] = None,
+    authoritative_changed_files: Optional[Sequence[str]] = None,
 ) -> str:
     """Append legacy-compatible success evidence when Step 7 passed cleanly."""
     passed, _reason = _step7_passed(
@@ -1651,6 +1729,7 @@ def _ensure_step7_success_artifacts(
         pr_mode=pr_mode,
         has_issue=has_issue,
         pr_test_scope=pr_test_scope,
+        authoritative_changed_files=authoritative_changed_files,
     )
     if not passed:
         return step7_output
@@ -3100,10 +3179,30 @@ def _pr_changed_paths_for_targeted_checks(changed_files_text: str) -> List[str]:
             candidate = candidate.strip().strip("`")
             if not candidate or candidate.startswith("NOTE:"):
                 continue
-            normalized = Path(candidate).as_posix().lstrip("./")
+            normalized = _normalise_step7_path(candidate)
             if normalized and normalized not in seen:
                 paths.append(normalized)
                 seen.add(normalized)
+    return paths
+
+
+def _authoritative_step7_changed_files(
+    context: Dict[str, str],
+    pr_metadata: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    """Return the deterministic PR paths allowed to corroborate Step 7 scope."""
+    sources = [
+        str(context.get("pr_scope_changed_files") or ""),
+        str((pr_metadata or {}).get("api_changed_files_full") or ""),
+        str((pr_metadata or {}).get("api_changed_files") or ""),
+    ]
+    paths: List[str] = []
+    seen: Set[str] = set()
+    for source in sources:
+        for path in _pr_changed_paths_for_targeted_checks(source):
+            if path not in seen:
+                paths.append(path)
+                seen.add(path)
     return paths
 
 
@@ -3972,7 +4071,11 @@ def _run_agentic_checkup_orchestrator_inner(
         if cached_outputs:
             actual_last_success: Union[int, float] = 0
             cached_step7_repair_signal = _step7_repairable_failure_signal(
-                cached_outputs.get("7", "")
+                cached_outputs.get("7", ""),
+                authoritative_changed_files=_authoritative_step7_changed_files(
+                    context,
+                    metadata_for_guard,
+                ),
             )
             for sn in STEP_ORDER:
                 # Fractional steps use "_" in state keys: 6.1 -> "6_1"
@@ -4499,6 +4602,10 @@ def _run_agentic_checkup_orchestrator_inner(
             pr_mode=pr_mode,
             has_issue=has_issue,
             pr_test_scope=pr_test_scope,
+            authoritative_changed_files=_authoritative_step7_changed_files(
+                context,
+                metadata_for_guard,
+            ),
         )
         structured_targeted_pass = pr_mode and pr_test_scope == "targeted" and passed
         if not success or (
@@ -4926,6 +5033,10 @@ def _run_agentic_checkup_orchestrator_inner(
             pr_mode=pr_mode,
             has_issue=has_issue,
             pr_test_scope=pr_test_scope,
+            authoritative_changed_files=_authoritative_step7_changed_files(
+                context,
+                metadata_for_guard,
+            ),
         )
 
         # Skip step 8.
@@ -5101,7 +5212,13 @@ def _run_agentic_checkup_orchestrator_inner(
             k in step_outputs for k in ("6_1", "6_2", "6_3")
         )
         step7_repair_signal = (
-            _step7_repairable_failure_signal(step_outputs.get("7", ""))
+            _step7_repairable_failure_signal(
+                step_outputs.get("7", ""),
+                authoritative_changed_files=_authoritative_step7_changed_files(
+                    context,
+                    metadata_for_guard,
+                ),
+            )
             if between_iterations_resume
             else ""
         )
@@ -5471,6 +5588,10 @@ def _run_agentic_checkup_orchestrator_inner(
                 pr_mode=pr_mode,
                 has_issue=has_issue,
                 pr_test_scope=pr_test_scope,
+                authoritative_changed_files=_authoritative_step7_changed_files(
+                    context,
+                    metadata_for_guard,
+                ),
             )
             if step7_gate_passed:
                 step7_output = _ensure_step7_success_artifacts(
@@ -5479,12 +5600,24 @@ def _run_agentic_checkup_orchestrator_inner(
                     has_issue=has_issue,
                     pr_test_scope=pr_test_scope,
                     pr_head_sha=current_pr_head_sha if pr_mode else None,
+                    authoritative_changed_files=(
+                        _authoritative_step7_changed_files(
+                            context,
+                            metadata_for_guard,
+                        )
+                    ),
                 )
                 step_outputs["7"] = step7_output
                 context["step7_output"] = step7_output
                 _save_state()
 
-            step7_repair_signal = _step7_repairable_failure_signal(step7_output)
+            step7_repair_signal = _step7_repairable_failure_signal(
+                step7_output,
+                authoritative_changed_files=_authoritative_step7_changed_files(
+                    context,
+                    metadata_for_guard,
+                ),
+            )
             nonrepairable_blocking_reason = (
                 _step7_nonrepairable_blocking_reason(step7_output)
             )
@@ -5532,6 +5665,10 @@ def _run_agentic_checkup_orchestrator_inner(
             pr_mode=pr_mode,
             has_issue=has_issue,
             pr_test_scope=pr_test_scope,
+            authoritative_changed_files=_authoritative_step7_changed_files(
+                context,
+                metadata_for_guard,
+            ),
         )
         if final_step7_gate_passed:
             step7_output = _ensure_step7_success_artifacts(
@@ -5540,6 +5677,10 @@ def _run_agentic_checkup_orchestrator_inner(
                 has_issue=has_issue,
                 pr_test_scope=pr_test_scope,
                 pr_head_sha=current_pr_head_sha if pr_mode else None,
+                authoritative_changed_files=_authoritative_step7_changed_files(
+                    context,
+                    metadata_for_guard,
+                ),
             )
             step_outputs["7"] = step7_output
             context["step7_output"] = step7_output
@@ -5594,6 +5735,10 @@ def _run_agentic_checkup_orchestrator_inner(
             pr_mode=pr_mode,
             has_issue=has_issue,
             pr_test_scope=pr_test_scope,
+            authoritative_changed_files=_authoritative_step7_changed_files(
+                context,
+                metadata_for_guard,
+            ),
         )
         if not gate_passed:
             if not quiet:

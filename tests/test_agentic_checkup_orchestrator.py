@@ -38,6 +38,7 @@ from pdd.agentic_checkup_orchestrator import (
     _parse_changed_files,
     _parse_expansion_items,
     _parse_failure_signal_block,
+    _pr_changed_paths_for_targeted_checks,
     _prune_rewound_checkup_state,
     _pr_base_tracking_ref,
     _run_single_step,
@@ -2977,7 +2978,9 @@ class TestFixVerifyLoop:
     "severity": "medium",
     "scope": "pr",
     "file": "verification/namespace.py",
-    "fixed": false
+    "fixed": false,
+    "blocking": true,
+    "repairable": true
   }]
 }
 ```"""
@@ -3003,6 +3006,253 @@ class TestFixVerifyLoop:
 ```"""
 
         assert _step7_repairable_failure_signal(report) == ""
+
+    @pytest.mark.parametrize(
+        ("finding_overrides", "expected_actionable"),
+        [
+            pytest.param({"scope": "pr"}, True, id="explicit-pr-scope"),
+            pytest.param({"in_scope": True}, True, id="explicit-in-scope"),
+            pytest.param({}, False, id="absent-scope"),
+            pytest.param({"scope": "pr-preview"}, False, id="pr-prefix-alias"),
+            pytest.param({"scope": "preview-pr"}, False, id="pr-suffix-alias"),
+            pytest.param({"scope": "pull-request"}, False, id="scope-synonym"),
+            pytest.param({"scope": "blocking"}, False, id="blocking-is-not-scope"),
+            pytest.param(
+                {"scope": "pr", "blocking": None},
+                False,
+                id="missing-blocking",
+            ),
+            pytest.param(
+                {"scope": "pr", "repairable": None},
+                False,
+                id="missing-repairable",
+            ),
+            pytest.param(
+                {"scope": "pr", "blocking": "false"},
+                False,
+                id="malformed-blocking",
+            ),
+            pytest.param(
+                {"scope": "pr", "repairable": "false"},
+                False,
+                id="malformed-repairable",
+            ),
+            pytest.param(
+                {"scope": "pr", "blocking": False},
+                False,
+                id="explicitly-nonblocking",
+            ),
+            pytest.param(
+                {"scope": "pr", "repairable": False},
+                False,
+                id="explicitly-nonrepairable",
+            ),
+            pytest.param(
+                {
+                    "scope": "pr",
+                    "out_of_scope_reason": "pre-existing baseline",
+                },
+                False,
+                id="explicit-out-of-scope-reason",
+            ),
+            pytest.param(
+                {"scope": "out-of-scope", "in_scope": True},
+                False,
+                id="contradictory-in-scope",
+            ),
+            pytest.param(
+                {"scope": "pr", "verification_scope": "out-of-scope"},
+                False,
+                id="contradictory-scope-fields",
+            ),
+        ],
+    )
+    def test_step7_fixer_requires_affirmative_pr_scope(
+        self, finding_overrides, expected_actionable
+    ):
+        """PR-like or non-actionable metadata cannot borrow fixer authority."""
+        finding = {
+            "severity": "critical",
+            "file": "unrelated/project.py",
+            "fixed": False,
+            "blocking": True,
+            "repairable": True,
+            **finding_overrides,
+        }
+        report = f"""```json
+{json.dumps({"success": False, "issues": [finding], "changed_files": []})}
+```"""
+
+        signal = _step7_repairable_failure_signal(report)
+
+        assert bool(signal) is expected_actionable
+        if expected_actionable:
+            assert "unrelated/project.py" in signal
+
+    @pytest.mark.parametrize(
+        ("finding_file", "expected_actionable"),
+        [
+            pytest.param(
+                "pdd/agentic_checkup_orchestrator.py",
+                True,
+                id="exact-file",
+            ),
+            pytest.param("pdd", False, id="containing-directory"),
+            pytest.param(
+                "pdd/agentic_checkup_orchestrator.py/generated",
+                False,
+                id="fabricated-descendant",
+            ),
+            pytest.param(
+                "pdd/agentic_checkup_orchestrator.py.preview",
+                False,
+                id="suffix-lookalike",
+            ),
+            pytest.param(
+                "pdd/agentic_checkup_orchestrator",
+                False,
+                id="partial-filename",
+            ),
+            pytest.param(
+                "tests/fixtures/pdd/agentic_checkup_orchestrator.py",
+                False,
+                id="fixture-path-collision",
+            ),
+            pytest.param(
+                "/pdd/agentic_checkup_orchestrator.py",
+                False,
+                id="absolute-path-alias",
+            ),
+            pytest.param(
+                "pdd/other/../agentic_checkup_orchestrator.py",
+                False,
+                id="parent-traversal-alias",
+            ),
+        ],
+    )
+    def test_step7_changed_path_authorization_is_conservative(
+        self, finding_file, expected_actionable
+    ):
+        """Only an exact, safe file path can provide path-based authority."""
+        finding = {
+            "severity": "critical",
+            "file": finding_file,
+            "fixed": False,
+            "blocking": True,
+            "repairable": True,
+        }
+        report = f"""```json
+{json.dumps({
+    "success": False,
+    "issues": [finding],
+    "changed_files": ["pdd/agentic_checkup_orchestrator.py"],
+})}
+```"""
+
+        signal = _step7_repairable_failure_signal(
+            report,
+            authoritative_changed_files=[
+                "pdd/agentic_checkup_orchestrator.py"
+            ],
+        )
+
+        assert bool(signal) is expected_actionable
+        if expected_actionable:
+            assert finding_file in signal
+
+    def test_step7_module_label_cannot_mask_fixture_path_collision(self):
+        """A coarse module label is not file-level mutation authority."""
+        finding = {
+            "severity": "critical",
+            "module": "pdd/agentic_checkup_orchestrator.py",
+            "file": "tests/fixtures/pdd/agentic_checkup_orchestrator.py",
+            "fixed": False,
+            "blocking": True,
+            "repairable": True,
+        }
+        report = f"""```json
+{json.dumps({"success": False, "issues": [finding]})}
+```"""
+
+        signal = _step7_repairable_failure_signal(
+            report,
+            authoritative_changed_files=[
+                "pdd/agentic_checkup_orchestrator.py"
+            ],
+        )
+
+        assert signal == ""
+
+    def test_step7_payload_changed_files_cannot_authorize_fixer(self):
+        """The verifier cannot fabricate the deterministic PR scope list."""
+        report = """```json
+{
+  "success": false,
+  "issues": [{
+    "severity": "critical",
+    "file": "unrelated/project.py",
+    "fixed": false,
+    "blocking": true,
+    "repairable": true
+  }],
+  "changed_files": ["unrelated/project.py"]
+}
+```"""
+
+        assert _step7_repairable_failure_signal(report) == ""
+
+    @pytest.mark.parametrize(
+        ("payload_changed_files", "authoritative_changed_files", "expected_pass"),
+        [
+            pytest.param([], ["pdd/main.py"], False, id="payload-omission"),
+            pytest.param(
+                ["pdd/main.py"],
+                ["pdd/other.py"],
+                True,
+                id="payload-fabrication",
+            ),
+        ],
+    )
+    def test_step7_gate_uses_authoritative_pr_paths(
+        self,
+        payload_changed_files,
+        authoritative_changed_files,
+        expected_pass,
+    ):
+        """Report paths can neither hide nor invent PR-diff containment."""
+        report = f"""```json
+{json.dumps({
+    "success": True,
+    "issue_aligned": True,
+    "issues": [{
+        "severity": "critical",
+        "scope": "out-of-scope",
+        "file": "pdd/main.py",
+        "fixed": False,
+        "blocking": False,
+        "repairable": False,
+    }],
+    "changed_files": payload_changed_files,
+})}
+```"""
+
+        passed, _reason = _step7_passed(
+            report,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+            authoritative_changed_files=authoritative_changed_files,
+        )
+
+        assert passed is expected_pass
+
+    def test_authoritative_pr_path_parser_preserves_dotfile_components(self):
+        """Leading-dot paths must not be rewritten by character stripping."""
+        changed = "Base: refs/pdd/pr-base/main\n- M: .github/workflows/ci.yml"
+
+        assert _pr_changed_paths_for_targeted_checks(changed) == [
+            ".github/workflows/ci.yml"
+        ]
 
     def test_external_terminal_evidence_blocks_without_authorizing_fixer(self):
         """A PR-scoped external acceptance item is blocking but not repairable."""
@@ -3086,8 +3336,8 @@ class TestFixVerifyLoop:
 
         assert _step7_repairable_failure_signal(report) == ""
 
-    def test_inconsistent_mixed_report_preserves_repairable_signal(self):
-        """An independent external blocker keeps mixed repair authority bounded."""
+    def test_inconsistent_mixed_report_does_not_grant_repair_authority(self):
+        """An independent blocker cannot legitimize a contradictory success."""
         report = """```json
 {
   "success": true,
@@ -3110,10 +3360,7 @@ class TestFixVerifyLoop:
 }
 ```"""
 
-        signal = _step7_repairable_failure_signal(report)
-
-        assert "status: fail" in signal
-        assert "pdd/agentic_checkup_orchestrator.py" in signal
+        assert _step7_repairable_failure_signal(report) == ""
 
     def test_inconsistent_success_nonrepairable_blocker_stops_without_push(
         self, tmp_path
@@ -3310,7 +3557,9 @@ class TestFixVerifyLoop:
     "severity": "medium",
     "scope": "pr",
     "file": "verification/namespace.py",
-    "fixed": false
+    "fixed": false,
+    "blocking": true,
+    "repairable": true
   }]
 }
 ```"""
@@ -3339,6 +3588,118 @@ class TestFixVerifyLoop:
         assert "step6_1_iter1" not in labels
         assert "step6_1_iter2" in labels
         assert "step7_iter2" in labels
+
+    def test_targeted_step7_exact_changed_file_flows_into_step6(self, tmp_path):
+        """An exact PR finding must reach every fixer stage before success."""
+        labels: List[str] = []
+        fixer_contexts: Dict[str, Dict[str, str]] = {}
+        blocked_step7 = """All Issues Fixed
+```json
+{
+  "success": false,
+  "issue_aligned": true,
+  "message": "The changed parser still accepts an empty contract.",
+  "changed_files": ["pdd/main.py"],
+  "issues": [{
+    "severity": "critical",
+    "category": "interface_mismatch",
+    "file": "pdd/main.py",
+    "fixed": false,
+    "blocking": true,
+    "repairable": true,
+    "description": "ValueError is still missing for empty input."
+  }]
+}
+```"""
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            del name
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if step_num in (6.1, 6.2, 6.3):
+                fixer_contexts[label] = dict(context)
+            if step_num == 7 and label == "step7_iter1":
+                return (True, blocked_step7, 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.1, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, message, _, _ = run_agentic_checkup_orchestrator(
+                **{
+                    **_PR_ARGS_1212,
+                    "cwd": tmp_path,
+                    "defer_step5_to_github_checks": True,
+                }
+            )
+
+        assert success is True, message
+        assert not any(label.startswith("step6_") and label.endswith("iter1")
+                       for label in labels)
+        assert {
+            "step6_1_iter2",
+            "step6_2_iter2",
+            "step6_3_iter2",
+        }.issubset(fixer_contexts)
+        repair_signal = fixer_contexts["step6_1_iter2"]["step5_failure_signal"]
+        assert "status: fail" in repair_signal
+        assert "pdd/main.py" in repair_signal
+        assert "ValueError is still missing" in repair_signal
+        assert "step7_iter2" in labels
+
+    def test_targeted_step7_scope_and_path_near_miss_never_reaches_step6(
+        self, tmp_path
+    ):
+        """PR-like aliases and changed-path suffixes cannot borrow authority."""
+        labels: List[str] = []
+        adversarial_step7 = """All Issues Fixed
+```json
+{
+  "success": false,
+  "issue_aligned": true,
+  "message": "A preview-only fixture reports a look-alike finding.",
+  "changed_files": ["pdd/main.py"],
+  "issues": [{
+    "severity": "critical",
+    "scope": "pr-preview",
+    "file": "pdd/main.py.preview",
+    "fixed": false,
+    "blocking": true,
+    "repairable": true,
+    "description": "This is not the changed production module."
+  }]
+}
+```"""
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            del name, context
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if step_num == 7:
+                return (True, adversarial_step7, 0.1, "model")
+            return (True, f"out-{step_num}", 0.1, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, message, _, _ = run_agentic_checkup_orchestrator(
+                **{
+                    **_PR_ARGS_1212,
+                    "cwd": tmp_path,
+                    "defer_step5_to_github_checks": True,
+                }
+            )
+
+        assert success is False
+        assert "success=false" in message
+        assert [label for label in labels if label.startswith("step7_iter")] == [
+            "step7_iter1",
+            "step7_iter2",
+            "step7_iter3",
+        ]
+        assert not any(label.startswith("step6_") for label in labels)
 
     def test_single_pass_clean(self, mock_dependencies, default_args):
         """Step 7 returns 'All Issues Fixed' on iter 1 -> loop runs once."""
@@ -3936,7 +4297,9 @@ class TestBetweenIterationsResume:
   "issues": [{
     "scope": "pr",
     "file": "verification/namespace.py",
-    "fixed": false
+    "fixed": false,
+    "blocking": true,
+    "repairable": true
   }]
 }
 ```"""
