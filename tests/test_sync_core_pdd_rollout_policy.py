@@ -59,6 +59,7 @@ PDD_1875_PROTECTED_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
 PDD_1875_COMPOSED_HEAD = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 TERRA_SOL_PROTECTED_BASE = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 TERRA_SOL_COMPOSED_HEAD = "b3902318c35c279e49e6397838825c95bd568942"
+SYNC_ROLLOUT_PROTECTED_BASE = "dec539aa8d0697e357e2077c1dbc73b0621aa617"
 PR_1971_COMBINED_PROFILE_DIGEST = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
 )
@@ -235,6 +236,16 @@ PR_2017_ABSENT_METADATA_PATHS = {
     ".pdd/meta/fix_code_loop_python_run.json",
     ".pdd/meta/fix_error_loop_python_run.json",
     ".pdd/meta/get_test_command_python_run.json",
+}
+SYNC_ROLLOUT_EXISTING_METADATA_PATHS = {
+    ".pdd/meta/code_generator_python.json",
+    ".pdd/meta/code_generator_python_run.json",
+    ".pdd/meta/continue_generation_python.json",
+    ".pdd/meta/continue_generation_python_run.json",
+    ".pdd/meta/detect_change_python.json",
+    ".pdd/meta/detect_change_python_run.json",
+    ".pdd/meta/generate_test_python.json",
+    ".pdd/meta/generate_test_python_run.json",
 }
 PREAUTHORIZED_CHILD_PATHS = (
     LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS
@@ -1514,6 +1525,105 @@ def test_pr2017_phase_a_is_dormant_on_its_exact_protected_base() -> None:
     assert profiles.coverage == 1.0
 
 
+def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
+    """The rollout repair is valid only from its real protected base to HEAD."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact sync-rollout protected history",
+        SYNC_ROLLOUT_PROTECTED_BASE,
+    )
+    manifest = build_unit_manifest(
+        ROOT,
+        base_ref=SYNC_ROLLOUT_PROTECTED_BASE,
+        head_ref="HEAD",
+    )
+
+    assert (
+        hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, PROFILE_FILE)).hexdigest(),
+        hashlib.sha256(_git_blob("HEAD", PROFILE_FILE)).hexdigest(),
+    ) == verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES  # pylint: disable=protected-access
+    assert (
+        hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROTATION_FILE)).hexdigest(),
+        hashlib.sha256(_git_blob("HEAD", ROTATION_FILE)).hexdigest(),
+    ) == verification._SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES  # pylint: disable=protected-access
+    for prompt_path, _language_id, expected_digest in (
+        verification._SYNC_ROLLOUT_REPAIR_PROMPT_BYTES  # pylint: disable=protected-access
+    ):
+        assert (
+            hashlib.sha256(
+                _git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROOT / prompt_path)
+            ).hexdigest(),
+            hashlib.sha256(_git_blob("HEAD", ROOT / prompt_path)).hexdigest(),
+        ) == (expected_digest, expected_digest)
+
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix()
+        in SYNC_ROLLOUT_EXISTING_METADATA_PATHS
+    }
+    assert not manifest.invalid_reasons
+    assert not manifest.unaccounted_tracked_paths
+    assert set(records) == SYNC_ROLLOUT_EXISTING_METADATA_PATHS
+    assert all(
+        item.in_base
+        and item.in_head
+        and item.inventory is InventoryStatus.HUMAN_OWNED
+        and item.candidate_id.role == "human-maintained"
+        and item.ownership_provenance
+        == f"protected-ownership:pdd-maintainers:{path}"
+        for path, item in records.items()
+    )
+
+    profiles = load_verification_profiles(ROOT, manifest)
+
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
+def test_sync_rollout_repair_metadata_bridge_stays_ordinary() -> None:
+    """The exact bridge cannot turn its base-existing paths into absences."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact sync-rollout protected history",
+        SYNC_ROLLOUT_PROTECTED_BASE,
+    )
+    base_rules = manifest_module._ownership_rules(  # pylint: disable=protected-access
+        ROOT, SYNC_ROLLOUT_PROTECTED_BASE
+    )
+    head_rules = manifest_module._ownership_rules(  # pylint: disable=protected-access
+        ROOT, "HEAD"
+    )
+    effective = manifest_module._sync_rollout_repair_ownership_rules(  # pylint: disable=protected-access
+        ROOT,
+        REPOSITORY_ID,
+        SYNC_ROLLOUT_PROTECTED_BASE,
+        "HEAD",
+        base_rules,
+        head_rules,
+    )
+    expected = (
+        manifest_module._SYNC_ROLLOUT_REPAIR_HUMAN_OWNERSHIP  # pylint: disable=protected-access
+    )
+    assert set(expected) <= set(effective)
+    assert all(not rule.preauthorize_absent for rule in expected)
+
+    mutated_head_rules = tuple(
+        replace(rule, preauthorize_absent=True)
+        if rule.pattern == expected[0].pattern
+        else rule
+        for rule in head_rules
+    )
+    assert manifest_module._sync_rollout_repair_ownership_rules(  # pylint: disable=protected-access
+        ROOT,
+        REPOSITORY_ID,
+        SYNC_ROLLOUT_PROTECTED_BASE,
+        "HEAD",
+        base_rules,
+        mutated_head_rules,
+    ) == base_rules
+
+
 def _candidate_only_repo(tmp_path: Path) -> tuple[Path, str, str]:
     repo = tmp_path / "candidate-only"
     repo.mkdir()
@@ -1650,6 +1760,18 @@ def test_current_profile_reconciliation_matches_current_prompt_and_profile_rows(
         for authorization in verification._OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
         if authorization.bindings.head_policy_sha256 == profile_digest
     )
+    if profile_digest == verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[1]:  # pylint: disable=protected-access
+        current_rows.extend(
+            {
+                "prompt_path": prompt_path.as_posix(),
+                "language_id": language_id,
+                "to_requirement_id": f"CONTRACT-SHA256:{prompt_digest}",
+                "head_prompt_sha256": prompt_digest,
+            }
+            for prompt_path, language_id, prompt_digest in (
+                verification._SYNC_ROLLOUT_REPAIR_PROMPT_BYTES  # pylint: disable=protected-access
+            )
+        )
     assert current_rows
     profiles = {
         (row["prompt_path"], row["language_id"]): row
