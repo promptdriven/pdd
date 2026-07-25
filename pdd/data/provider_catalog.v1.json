@@ -755,6 +755,60 @@
             "tools"
           ],
           "byok_eligible": true
+        },
+        {
+          "order": 23,
+          "csv": {
+            "provider": "Anthropic",
+            "model": "claude-fable-5",
+            "input": "10.0",
+            "output": "50.0",
+            "coding_arena_elo": "0",
+            "model_rank_score": "0",
+            "model_rank_source": "platform-default",
+            "base_url": "",
+            "api_key": "ANTHROPIC_API_KEY",
+            "max_reasoning_tokens": "0",
+            "structured_output": "True",
+            "reasoning_type": "adaptive",
+            "location": "",
+            "interactive_only": "False",
+            "context_limit": "1000000"
+          },
+          "upstream_model": "claude-fable-5",
+          "capabilities": [
+            "text_generation",
+            "streaming",
+            "tools"
+          ],
+          "byok_eligible": true
+        },
+        {
+          "order": 24,
+          "csv": {
+            "provider": "Anthropic",
+            "model": "claude-opus-5",
+            "input": "5.0",
+            "output": "25.0",
+            "coding_arena_elo": "0",
+            "model_rank_score": "0",
+            "model_rank_source": "platform-default",
+            "base_url": "",
+            "api_key": "ANTHROPIC_API_KEY",
+            "max_reasoning_tokens": "0",
+            "structured_output": "True",
+            "reasoning_type": "adaptive",
+            "location": "",
+            "interactive_only": "False",
+            "context_limit": "1000000"
+          },
+          "upstream_model": "claude-opus-5",
+          "capabilities": [
+            "text_generation",
+            "streaming",
+            "tools"
+          ],
+          "byok_eligible": true
         }
       ]
     },
@@ -833,7 +887,7 @@
       ],
       "models": [
         {
-          "order": 23,
+          "order": 25,
           "csv": {
             "provider": "Azure AI",
             "model": "azure_ai/gpt-5.4",
@@ -860,7 +914,7 @@
           "byok_eligible": false
         },
         {
-          "order": 24,
+          "order": 26,
           "csv": {
             "provider": "Azure AI",
             "model": "azure_ai/claude-opus-4-7",
@@ -887,7 +941,7 @@
           "byok_eligible": false
         },
         {
-          "order": 25,
+          "order": 27,
           "csv": {
             "provider": "Azure AI",
             "model": "azure_ai/claude-sonnet-4-6",
@@ -914,7 +968,7 @@
           "byok_eligible": false
         },
         {
-          "order": 26,
+          "order": 28,
           "csv": {
             "provider": "Azure AI",
             "model": "azure_ai/gpt-5.4-mini",
@@ -941,7 +995,7 @@
           "byok_eligible": false
         },
         {
-          "order": 27,
+          "order": 29,
           "csv": {
             "provider": "Azure AI",
             "model": "azure_ai/claude-opus-4-8",
@@ -968,7 +1022,7 @@
           "byok_eligible": false
         },
         {
-          "order": 28,
+          "order": 30,
           "csv": {
             "provider": "Azure AI",
             "model": "azure_ai/claude-opus-4-6",
@@ -995,7 +1049,7 @@
           "byok_eligible": false
         },
         {
-          "order": 29,
+          "order": 31,
           "csv": {
             "provider": "Azure AI",
             "model": "azure_ai/claude-opus-4-5",
@@ -1022,7 +1076,7 @@
           "byok_eligible": false
         },
         {
-          "order": 30,
+          "order": 32,
           "csv": {
             "provider": "Azure AI",
             "model": "azure_ai/kimi-k2.5",
@@ -1049,7 +1103,7 @@
           "byok_eligible": false
         },
         {
-          "order": 31,
+          "order": 33,
           "csv": {
             "provider": "Azure AI",
             "model": "azure_ai/grok-4-1-fast-reasoning",
@@ -1076,7 +1130,7 @@
           "byok_eligible": false
         },
         {
-          "order": 32,
+          "order": 34,
           "csv": {
             "provider": "Azure AI",
             "model": "azure_ai/claude-sonnet-4-5",
@@ -1103,7 +1157,7 @@
           "byok_eligible": false
         },
         {
-          "order": 33,
+          "order": 35,
           "csv": {
             "provider": "Azure AI",
             "model": "azure_ai/deepseek-v3.2",
@@ -1130,7 +1184,7 @@
           "byok_eligible": false
         },
         {
-          "order": 34,
+          "order": 36,
           "csv": {
             "provider": "Azure AI",
             "model": "azure_ai/claude-haiku-4-5",
@@ -1234,7 +1288,7 @@
       ],
       "models": [
         {
-          "order": 35,
+          "order": 37,
           "csv": {
             "provider": "Azure OpenAI",
             "model": "azure/gpt-5.5",
@@ -1261,7 +1315,7 @@
           "byok_eligible": false
         },
         {
-          "order": 36,
+          "order": 38,
           "csv": {
             "provider": "Azure OpenAI",
             "model": "azure/gpt-5.4",
@@ -1288,7 +1342,7 @@
           "byok_eligible": false
         },
         {
-          "order": 37,
+          "order": 39,
           "csv": {
             "provider": "Azure OpenAI",
             "model": "azure/gpt-5.4-mini",
@@ -1315,7 +1369,7 @@
           "byok_eligible": false
         },
         {
-          "order": 38,
+          "order": 40,
           "csv": {
             "provider": "Azure OpenAI",
             "model": "azure/gpt-5.3-codex",
@@ -1342,7 +1396,7 @@
           "byok_eligible": false
         },
         {
-          "order": 39,
+          "order": 41,
           "csv": {
             "provider": "Azure OpenAI",
             "model": "azure/gpt-5.2",
@@ -1369,7 +1423,7 @@
           "byok_eligible": false
         },
         {
-          "order": 40,
+          "order": 42,
           "csv": {
             "provider": "Azure OpenAI",
             "model": "azure/gpt-5",
@@ -1396,7 +1450,7 @@
           "byok_eligible": false
         },
         {
-          "order": 41,
+          "order": 43,
           "csv": {
             "provider": "Azure OpenAI",
             "model": "azure/gpt-5.1-codex-max",
@@ -1423,7 +1477,7 @@
           "byok_eligible": false
         },
         {
-          "order": 42,
+          "order": 44,
           "csv": {
             "provider": "Azure OpenAI",
             "model": "azure/o3",
@@ -1450,7 +1504,7 @@
           "byok_eligible": false
         },
         {
-          "order": 43,
+          "order": 45,
           "csv": {
             "provider": "Azure OpenAI",
             "model": "azure/gpt-5.1",
@@ -1477,7 +1531,7 @@
           "byok_eligible": false
         },
         {
-          "order": 44,
+          "order": 46,
           "csv": {
             "provider": "Azure OpenAI",
             "model": "azure/gpt-5.2-codex",
@@ -1504,7 +1558,7 @@
           "byok_eligible": false
         },
         {
-          "order": 45,
+          "order": 47,
           "csv": {
             "provider": "Azure OpenAI",
             "model": "azure/o4-mini",
@@ -1531,7 +1585,7 @@
           "byok_eligible": false
         },
         {
-          "order": 46,
+          "order": 48,
           "csv": {
             "provider": "Azure OpenAI",
             "model": "azure/gpt-4.1-mini",
@@ -1558,7 +1612,7 @@
           "byok_eligible": false
         },
         {
-          "order": 47,
+          "order": 49,
           "csv": {
             "provider": "Azure OpenAI",
             "model": "azure/gpt-5-nano",
@@ -1651,7 +1705,7 @@
       ],
       "models": [
         {
-          "order": 48,
+          "order": 50,
           "csv": {
             "provider": "Baseten",
             "model": "baseten/zai-org/GLM-5",
@@ -1678,7 +1732,7 @@
           "byok_eligible": true
         },
         {
-          "order": 49,
+          "order": 51,
           "csv": {
             "provider": "Baseten",
             "model": "baseten/zai-org/GLM-4.7",
@@ -1705,7 +1759,7 @@
           "byok_eligible": true
         },
         {
-          "order": 50,
+          "order": 52,
           "csv": {
             "provider": "Baseten",
             "model": "baseten/moonshotai/Kimi-K2.5",
@@ -1732,7 +1786,7 @@
           "byok_eligible": true
         },
         {
-          "order": 51,
+          "order": 53,
           "csv": {
             "provider": "Baseten",
             "model": "baseten/MiniMaxAI/MiniMax-M2.5",
@@ -1759,7 +1813,7 @@
           "byok_eligible": true
         },
         {
-          "order": 52,
+          "order": 54,
           "csv": {
             "provider": "Baseten",
             "model": "baseten/zai-org/GLM-4.6",
@@ -1786,7 +1840,7 @@
           "byok_eligible": true
         },
         {
-          "order": 53,
+          "order": 55,
           "csv": {
             "provider": "Baseten",
             "model": "baseten/moonshotai/Kimi-K2-Thinking",
@@ -1813,7 +1867,7 @@
           "byok_eligible": true
         },
         {
-          "order": 54,
+          "order": 56,
           "csv": {
             "provider": "Baseten",
             "model": "baseten/deepseek-ai/DeepSeek-V3-0324",
@@ -1906,7 +1960,7 @@
       ],
       "models": [
         {
-          "order": 55,
+          "order": 57,
           "csv": {
             "provider": "Dashscope",
             "model": "dashscope/qwen3-max",
@@ -1999,7 +2053,7 @@
       ],
       "models": [
         {
-          "order": 56,
+          "order": 58,
           "csv": {
             "provider": "DeepInfra",
             "model": "deepinfra/deepseek-ai/DeepSeek-R1-0528",
@@ -2026,7 +2080,7 @@
           "byok_eligible": true
         },
         {
-          "order": 57,
+          "order": 59,
           "csv": {
             "provider": "DeepInfra",
             "model": "deepinfra/moonshotai/Kimi-K2-Instruct",
@@ -2053,7 +2107,7 @@
           "byok_eligible": true
         },
         {
-          "order": 58,
+          "order": 60,
           "csv": {
             "provider": "DeepInfra",
             "model": "deepinfra/deepseek-ai/DeepSeek-V3-0324",
@@ -2146,7 +2200,7 @@
       ],
       "models": [
         {
-          "order": 59,
+          "order": 61,
           "csv": {
             "provider": "DeepSeek",
             "model": "deepseek-reasoner",
@@ -2173,7 +2227,7 @@
           "byok_eligible": true
         },
         {
-          "order": 60,
+          "order": 62,
           "csv": {
             "provider": "DeepSeek",
             "model": "deepseek/deepseek-v3.2",
@@ -2266,7 +2320,7 @@
       ],
       "models": [
         {
-          "order": 61,
+          "order": 63,
           "csv": {
             "provider": "Fireworks AI",
             "model": "fireworks_ai/glm-5p1",
@@ -2293,7 +2347,7 @@
           "byok_eligible": true
         },
         {
-          "order": 62,
+          "order": 64,
           "csv": {
             "provider": "Fireworks AI",
             "model": "fireworks_ai/glm-4p7",
@@ -2320,7 +2374,7 @@
           "byok_eligible": true
         },
         {
-          "order": 63,
+          "order": 65,
           "csv": {
             "provider": "Fireworks AI",
             "model": "fireworks_ai/kimi-k2p5",
@@ -2347,7 +2401,7 @@
           "byok_eligible": true
         },
         {
-          "order": 64,
+          "order": 66,
           "csv": {
             "provider": "Fireworks AI",
             "model": "fireworks_ai/minimax-m2p1",
@@ -2374,7 +2428,7 @@
           "byok_eligible": true
         },
         {
-          "order": 65,
+          "order": 67,
           "csv": {
             "provider": "Fireworks AI",
             "model": "fireworks_ai/accounts/fireworks/models/deepseek-r1-0528",
@@ -2401,7 +2455,7 @@
           "byok_eligible": true
         },
         {
-          "order": 66,
+          "order": 68,
           "csv": {
             "provider": "Fireworks AI",
             "model": "fireworks_ai/accounts/fireworks/models/glm-4p6",
@@ -2428,7 +2482,7 @@
           "byok_eligible": true
         },
         {
-          "order": 67,
+          "order": 69,
           "csv": {
             "provider": "Fireworks AI",
             "model": "fireworks_ai/accounts/fireworks/models/kimi-k2-thinking",
@@ -2455,7 +2509,7 @@
           "byok_eligible": true
         },
         {
-          "order": 68,
+          "order": 70,
           "csv": {
             "provider": "Fireworks AI",
             "model": "fireworks_ai/accounts/fireworks/models/deepseek-v3p2",
@@ -2482,7 +2536,7 @@
           "byok_eligible": true
         },
         {
-          "order": 69,
+          "order": 71,
           "csv": {
             "provider": "Fireworks AI",
             "model": "fireworks_ai/accounts/fireworks/models/minimax-m2",
@@ -2509,7 +2563,7 @@
           "byok_eligible": true
         },
         {
-          "order": 70,
+          "order": 72,
           "csv": {
             "provider": "Fireworks AI",
             "model": "fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b-thinking-2507",
@@ -2602,7 +2656,7 @@
       ],
       "models": [
         {
-          "order": 71,
+          "order": 73,
           "csv": {
             "provider": "GMI Cloud",
             "model": "gmi/google/gemini-3-flash-preview",
@@ -2629,7 +2683,7 @@
           "byok_eligible": true
         },
         {
-          "order": 72,
+          "order": 74,
           "csv": {
             "provider": "GMI Cloud",
             "model": "gmi/anthropic/claude-opus-4.5",
@@ -2656,7 +2710,7 @@
           "byok_eligible": true
         },
         {
-          "order": 73,
+          "order": 75,
           "csv": {
             "provider": "GMI Cloud",
             "model": "gmi/google/gemini-3-pro-preview",
@@ -2683,7 +2737,7 @@
           "byok_eligible": true
         },
         {
-          "order": 74,
+          "order": 76,
           "csv": {
             "provider": "GMI Cloud",
             "model": "gmi/openai/gpt-5.2",
@@ -2710,7 +2764,7 @@
           "byok_eligible": true
         },
         {
-          "order": 75,
+          "order": 77,
           "csv": {
             "provider": "GMI Cloud",
             "model": "gmi/openai/gpt-5",
@@ -2737,7 +2791,7 @@
           "byok_eligible": true
         },
         {
-          "order": 76,
+          "order": 78,
           "csv": {
             "provider": "GMI Cloud",
             "model": "gmi/MiniMaxAI/MiniMax-M2.1",
@@ -2764,7 +2818,7 @@
           "byok_eligible": true
         },
         {
-          "order": 77,
+          "order": 79,
           "csv": {
             "provider": "GMI Cloud",
             "model": "gmi/anthropic/claude-sonnet-4.5",
@@ -2791,7 +2845,7 @@
           "byok_eligible": true
         },
         {
-          "order": 78,
+          "order": 80,
           "csv": {
             "provider": "GMI Cloud",
             "model": "gmi/anthropic/claude-opus-4",
@@ -2818,7 +2872,7 @@
           "byok_eligible": true
         },
         {
-          "order": 79,
+          "order": 81,
           "csv": {
             "provider": "GMI Cloud",
             "model": "gmi/anthropic/claude-sonnet-4",
@@ -2845,7 +2899,7 @@
           "byok_eligible": true
         },
         {
-          "order": 80,
+          "order": 82,
           "csv": {
             "provider": "GMI Cloud",
             "model": "gmi/openai/gpt-5.1",
@@ -2872,7 +2926,7 @@
           "byok_eligible": true
         },
         {
-          "order": 81,
+          "order": 83,
           "csv": {
             "provider": "GMI Cloud",
             "model": "gmi/moonshotai/Kimi-K2-Thinking",
@@ -2899,7 +2953,7 @@
           "byok_eligible": true
         },
         {
-          "order": 82,
+          "order": 84,
           "csv": {
             "provider": "GMI Cloud",
             "model": "gmi/deepseek-ai/DeepSeek-V3.2",
@@ -2926,7 +2980,7 @@
           "byok_eligible": true
         },
         {
-          "order": 83,
+          "order": 85,
           "csv": {
             "provider": "GMI Cloud",
             "model": "gmi/deepseek-ai/DeepSeek-V3-0324",
@@ -3011,7 +3065,7 @@
       ],
       "models": [
         {
-          "order": 84,
+          "order": 86,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/claude-opus-4.6-fast",
@@ -3038,7 +3092,7 @@
           "byok_eligible": false
         },
         {
-          "order": 85,
+          "order": 87,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/claude-opus-4.5",
@@ -3065,7 +3119,7 @@
           "byok_eligible": false
         },
         {
-          "order": 86,
+          "order": 88,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/gemini-3-pro-preview",
@@ -3092,7 +3146,7 @@
           "byok_eligible": false
         },
         {
-          "order": 87,
+          "order": 89,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/gpt-5.3-codex",
@@ -3119,7 +3173,7 @@
           "byok_eligible": false
         },
         {
-          "order": 88,
+          "order": 90,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/gpt-5.2",
@@ -3146,7 +3200,7 @@
           "byok_eligible": false
         },
         {
-          "order": 89,
+          "order": 91,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/gpt-5",
@@ -3173,7 +3227,7 @@
           "byok_eligible": false
         },
         {
-          "order": 90,
+          "order": 92,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/claude-opus-41",
@@ -3200,7 +3254,7 @@
           "byok_eligible": false
         },
         {
-          "order": 91,
+          "order": 93,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/gpt-5.1-codex-max",
@@ -3227,7 +3281,7 @@
           "byok_eligible": false
         },
         {
-          "order": 92,
+          "order": 94,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/claude-sonnet-4.5",
@@ -3254,7 +3308,7 @@
           "byok_eligible": false
         },
         {
-          "order": 93,
+          "order": 95,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/gpt-4.1",
@@ -3281,7 +3335,7 @@
           "byok_eligible": false
         },
         {
-          "order": 94,
+          "order": 96,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/claude-sonnet-4",
@@ -3308,7 +3362,7 @@
           "byok_eligible": false
         },
         {
-          "order": 95,
+          "order": 97,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/gpt-5.1",
@@ -3335,7 +3389,7 @@
           "byok_eligible": false
         },
         {
-          "order": 96,
+          "order": 98,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/claude-haiku-4.5",
@@ -3362,7 +3416,7 @@
           "byok_eligible": false
         },
         {
-          "order": 97,
+          "order": 99,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/gpt-5-mini",
@@ -3389,7 +3443,7 @@
           "byok_eligible": false
         },
         {
-          "order": 98,
+          "order": 100,
           "csv": {
             "provider": "Github Copilot",
             "model": "github_copilot/gpt-4o",
@@ -3484,7 +3538,7 @@
       ],
       "models": [
         {
-          "order": 99,
+          "order": 101,
           "csv": {
             "provider": "Google Gemini",
             "model": "gemini/gemini-3.5-flash",
@@ -3511,7 +3565,7 @@
           "byok_eligible": true
         },
         {
-          "order": 100,
+          "order": 102,
           "csv": {
             "provider": "Google Gemini",
             "model": "gemini/gemini-3.1-pro-preview",
@@ -3538,7 +3592,7 @@
           "byok_eligible": true
         },
         {
-          "order": 101,
+          "order": 103,
           "csv": {
             "provider": "Google Gemini",
             "model": "gemini/gemini-3.1-pro-preview-customtools",
@@ -3565,7 +3619,7 @@
           "byok_eligible": true
         },
         {
-          "order": 102,
+          "order": 104,
           "csv": {
             "provider": "Google Gemini",
             "model": "gemini/gemini-3-flash-preview",
@@ -3592,7 +3646,7 @@
           "byok_eligible": true
         },
         {
-          "order": 103,
+          "order": 105,
           "csv": {
             "provider": "Google Gemini",
             "model": "gemini/gemini-2.5-flash",
@@ -3619,7 +3673,7 @@
           "byok_eligible": true
         },
         {
-          "order": 104,
+          "order": 106,
           "csv": {
             "provider": "Google Gemini",
             "model": "gemini/gemini-3.5-flash-lite",
@@ -3646,7 +3700,7 @@
           "byok_eligible": true
         },
         {
-          "order": 105,
+          "order": 107,
           "csv": {
             "provider": "Google Gemini",
             "model": "gemini/gemini-3.6-flash",
@@ -3741,7 +3795,7 @@
       ],
       "models": [
         {
-          "order": 106,
+          "order": 108,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/claude-opus-4-7",
@@ -3768,7 +3822,7 @@
           "byok_eligible": false
         },
         {
-          "order": 107,
+          "order": 109,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/claude-sonnet-4-6",
@@ -3795,7 +3849,7 @@
           "byok_eligible": false
         },
         {
-          "order": 108,
+          "order": 110,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "gemini-3.5-flash",
@@ -3822,7 +3876,7 @@
           "byok_eligible": false
         },
         {
-          "order": 109,
+          "order": 111,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/gemini-3.5-flash",
@@ -3849,7 +3903,7 @@
           "byok_eligible": false
         },
         {
-          "order": 110,
+          "order": 112,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/zai-org/glm-5-maas",
@@ -3876,7 +3930,7 @@
           "byok_eligible": false
         },
         {
-          "order": 111,
+          "order": 113,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "gemini-3.1-pro-preview",
@@ -3903,7 +3957,7 @@
           "byok_eligible": false
         },
         {
-          "order": 112,
+          "order": 114,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "gemini-3.1-pro-preview-customtools",
@@ -3930,7 +3984,7 @@
           "byok_eligible": false
         },
         {
-          "order": 113,
+          "order": 115,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "gemini-3-flash-preview",
@@ -3957,7 +4011,7 @@
           "byok_eligible": false
         },
         {
-          "order": 114,
+          "order": 116,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/gemini-3-flash-preview",
@@ -3984,7 +4038,7 @@
           "byok_eligible": false
         },
         {
-          "order": 115,
+          "order": 117,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/claude-opus-4-8",
@@ -4011,7 +4065,7 @@
           "byok_eligible": false
         },
         {
-          "order": 116,
+          "order": 118,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/claude-opus-4-6",
@@ -4038,7 +4092,7 @@
           "byok_eligible": false
         },
         {
-          "order": 117,
+          "order": 119,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/claude-opus-4-5",
@@ -4065,7 +4119,7 @@
           "byok_eligible": false
         },
         {
-          "order": 118,
+          "order": 120,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/zai-org/glm-4.7-maas",
@@ -4092,7 +4146,7 @@
           "byok_eligible": false
         },
         {
-          "order": 119,
+          "order": 121,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/gemini-3-pro-preview",
@@ -4119,7 +4173,7 @@
           "byok_eligible": false
         },
         {
-          "order": 120,
+          "order": 122,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/claude-sonnet-4-5",
@@ -4146,7 +4200,7 @@
           "byok_eligible": false
         },
         {
-          "order": 121,
+          "order": 123,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/deepseek-ai/deepseek-r1-0528-maas",
@@ -4173,7 +4227,7 @@
           "byok_eligible": false
         },
         {
-          "order": 122,
+          "order": 124,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/moonshotai/kimi-k2-thinking-maas",
@@ -4200,7 +4254,7 @@
           "byok_eligible": false
         },
         {
-          "order": 123,
+          "order": 125,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/claude-haiku-4-5",
@@ -4227,7 +4281,7 @@
           "byok_eligible": false
         },
         {
-          "order": 124,
+          "order": 126,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/minimaxai/minimax-m2-maas",
@@ -4254,7 +4308,7 @@
           "byok_eligible": false
         },
         {
-          "order": 125,
+          "order": 127,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/gemini-3.5-flash-lite",
@@ -4281,7 +4335,7 @@
           "byok_eligible": false
         },
         {
-          "order": 126,
+          "order": 128,
           "csv": {
             "provider": "Google Vertex AI",
             "model": "vertex_ai/gemini-3.6-flash",
@@ -4374,7 +4428,7 @@
       ],
       "models": [
         {
-          "order": 127,
+          "order": 129,
           "csv": {
             "provider": "Heroku",
             "model": "heroku/claude-4-sonnet",
@@ -4467,7 +4521,7 @@
       ],
       "models": [
         {
-          "order": 128,
+          "order": 130,
           "csv": {
             "provider": "Hyperbolic",
             "model": "hyperbolic/deepseek-ai/DeepSeek-R1-0528",
@@ -4494,7 +4548,7 @@
           "byok_eligible": true
         },
         {
-          "order": 129,
+          "order": 131,
           "csv": {
             "provider": "Hyperbolic",
             "model": "hyperbolic/deepseek-ai/DeepSeek-R1",
@@ -4521,7 +4575,7 @@
           "byok_eligible": true
         },
         {
-          "order": 130,
+          "order": 132,
           "csv": {
             "provider": "Hyperbolic",
             "model": "hyperbolic/deepseek-ai/DeepSeek-V3",
@@ -4614,7 +4668,7 @@
       ],
       "models": [
         {
-          "order": 131,
+          "order": 133,
           "csv": {
             "provider": "Lambda AI",
             "model": "lambda_ai/deepseek-r1-0528",
@@ -4707,7 +4761,7 @@
       ],
       "models": [
         {
-          "order": 132,
+          "order": 134,
           "csv": {
             "provider": "MiniMax",
             "model": "minimax/MiniMax-M2.1",
@@ -4734,7 +4788,7 @@
           "byok_eligible": true
         },
         {
-          "order": 133,
+          "order": 135,
           "csv": {
             "provider": "MiniMax",
             "model": "minimax/MiniMax-M2.5",
@@ -4761,7 +4815,7 @@
           "byok_eligible": true
         },
         {
-          "order": 134,
+          "order": 136,
           "csv": {
             "provider": "MiniMax",
             "model": "minimax/MiniMax-M2",
@@ -4857,7 +4911,7 @@
       ],
       "models": [
         {
-          "order": 135,
+          "order": 137,
           "csv": {
             "provider": "Moonshot AI",
             "model": "moonshot/kimi-k2.6",
@@ -4884,7 +4938,7 @@
           "byok_eligible": true
         },
         {
-          "order": 136,
+          "order": 138,
           "csv": {
             "provider": "Moonshot AI",
             "model": "moonshot/kimi-k2.5",
@@ -4911,7 +4965,7 @@
           "byok_eligible": true
         },
         {
-          "order": 137,
+          "order": 139,
           "csv": {
             "provider": "Moonshot AI",
             "model": "moonshot/kimi-k2-thinking",
@@ -4938,7 +4992,7 @@
           "byok_eligible": true
         },
         {
-          "order": 138,
+          "order": 140,
           "csv": {
             "provider": "Moonshot AI",
             "model": "moonshot/kimi-k3",
@@ -5034,7 +5088,7 @@
       ],
       "models": [
         {
-          "order": 139,
+          "order": 141,
           "csv": {
             "provider": "Nebius",
             "model": "nebius/deepseek-ai/DeepSeek-R1-0528",
@@ -5061,7 +5115,7 @@
           "byok_eligible": true
         },
         {
-          "order": 140,
+          "order": 142,
           "csv": {
             "provider": "Nebius",
             "model": "nebius/deepseek-ai/DeepSeek-V3",
@@ -5088,7 +5142,7 @@
           "byok_eligible": true
         },
         {
-          "order": 141,
+          "order": 143,
           "csv": {
             "provider": "Nebius",
             "model": "nebius/deepseek-ai/DeepSeek-V3-0324",
@@ -5181,7 +5235,7 @@
       ],
       "models": [
         {
-          "order": 142,
+          "order": 144,
           "csv": {
             "provider": "Novita AI",
             "model": "novita/zai-org/glm-4.7",
@@ -5208,7 +5262,7 @@
           "byok_eligible": true
         },
         {
-          "order": 143,
+          "order": 145,
           "csv": {
             "provider": "Novita AI",
             "model": "novita/minimax/minimax-m2.1",
@@ -5235,7 +5289,7 @@
           "byok_eligible": true
         },
         {
-          "order": 144,
+          "order": 146,
           "csv": {
             "provider": "Novita AI",
             "model": "novita/deepseek/deepseek-r1-0528",
@@ -5262,7 +5316,7 @@
           "byok_eligible": true
         },
         {
-          "order": 145,
+          "order": 147,
           "csv": {
             "provider": "Novita AI",
             "model": "novita/zai-org/glm-4.6",
@@ -5289,7 +5343,7 @@
           "byok_eligible": true
         },
         {
-          "order": 146,
+          "order": 148,
           "csv": {
             "provider": "Novita AI",
             "model": "novita/moonshotai/kimi-k2-thinking",
@@ -5316,7 +5370,7 @@
           "byok_eligible": true
         },
         {
-          "order": 147,
+          "order": 149,
           "csv": {
             "provider": "Novita AI",
             "model": "novita/deepseek/deepseek-v3.2",
@@ -5343,7 +5397,7 @@
           "byok_eligible": true
         },
         {
-          "order": 148,
+          "order": 150,
           "csv": {
             "provider": "Novita AI",
             "model": "novita/minimax/minimax-m2",
@@ -5370,7 +5424,7 @@
           "byok_eligible": true
         },
         {
-          "order": 149,
+          "order": 151,
           "csv": {
             "provider": "Novita AI",
             "model": "novita/deepseek/deepseek-v3.1",
@@ -5460,7 +5514,7 @@
       ],
       "models": [
         {
-          "order": 150,
+          "order": 152,
           "csv": {
             "provider": "Oci",
             "model": "oci/openai.gpt-5",
@@ -5487,7 +5541,7 @@
           "byok_eligible": false
         },
         {
-          "order": 151,
+          "order": 153,
           "csv": {
             "provider": "Oci",
             "model": "oci/xai.grok-4",
@@ -5514,7 +5568,7 @@
           "byok_eligible": false
         },
         {
-          "order": 152,
+          "order": 154,
           "csv": {
             "provider": "Oci",
             "model": "oci/openai.gpt-5-mini",
@@ -5541,7 +5595,7 @@
           "byok_eligible": false
         },
         {
-          "order": 153,
+          "order": 155,
           "csv": {
             "provider": "Oci",
             "model": "oci/openai.gpt-5-nano",
@@ -5635,7 +5689,7 @@
       ],
       "models": [
         {
-          "order": 154,
+          "order": 156,
           "csv": {
             "provider": "OpenAI",
             "model": "gpt-5.6",
@@ -5662,7 +5716,7 @@
           "byok_eligible": true
         },
         {
-          "order": 155,
+          "order": 157,
           "csv": {
             "provider": "OpenAI",
             "model": "gpt-5.5",
@@ -5689,7 +5743,7 @@
           "byok_eligible": true
         },
         {
-          "order": 156,
+          "order": 158,
           "csv": {
             "provider": "OpenAI",
             "model": "gpt-5.4",
@@ -5716,7 +5770,7 @@
           "byok_eligible": true
         },
         {
-          "order": 157,
+          "order": 159,
           "csv": {
             "provider": "OpenAI",
             "model": "gpt-5.4-mini",
@@ -5743,7 +5797,7 @@
           "byok_eligible": true
         },
         {
-          "order": 158,
+          "order": 160,
           "csv": {
             "provider": "OpenAI",
             "model": "gpt-5.3-codex",
@@ -5770,7 +5824,7 @@
           "byok_eligible": true
         },
         {
-          "order": 159,
+          "order": 161,
           "csv": {
             "provider": "OpenAI",
             "model": "gpt-5.2",
@@ -5797,7 +5851,7 @@
           "byok_eligible": true
         },
         {
-          "order": 160,
+          "order": 162,
           "csv": {
             "provider": "OpenAI",
             "model": "gpt-5",
@@ -5824,7 +5878,7 @@
           "byok_eligible": true
         },
         {
-          "order": 161,
+          "order": 163,
           "csv": {
             "provider": "OpenAI",
             "model": "gpt-5.1-codex-max",
@@ -5851,7 +5905,7 @@
           "byok_eligible": true
         },
         {
-          "order": 162,
+          "order": 164,
           "csv": {
             "provider": "OpenAI",
             "model": "o3",
@@ -5878,7 +5932,7 @@
           "byok_eligible": true
         },
         {
-          "order": 163,
+          "order": 165,
           "csv": {
             "provider": "OpenAI",
             "model": "gpt-5.1",
@@ -5905,7 +5959,7 @@
           "byok_eligible": true
         },
         {
-          "order": 164,
+          "order": 166,
           "csv": {
             "provider": "OpenAI",
             "model": "gpt-5.2-codex",
@@ -5932,7 +5986,7 @@
           "byok_eligible": true
         },
         {
-          "order": 165,
+          "order": 167,
           "csv": {
             "provider": "OpenAI",
             "model": "o4-mini",
@@ -5959,7 +6013,7 @@
           "byok_eligible": true
         },
         {
-          "order": 166,
+          "order": 168,
           "csv": {
             "provider": "OpenAI",
             "model": "gpt-4.1-mini",
@@ -5986,7 +6040,7 @@
           "byok_eligible": true
         },
         {
-          "order": 167,
+          "order": 169,
           "csv": {
             "provider": "OpenAI",
             "model": "gpt-5-nano",
@@ -6071,7 +6125,7 @@
       ],
       "models": [
         {
-          "order": 168,
+          "order": 170,
           "csv": {
             "provider": "OpenAI ChatGPT",
             "model": "chatgpt/gpt-5.6-sol",
@@ -6098,7 +6152,7 @@
           "byok_eligible": false
         },
         {
-          "order": 169,
+          "order": 171,
           "csv": {
             "provider": "OpenAI ChatGPT",
             "model": "chatgpt/gpt-5.5",
@@ -6125,7 +6179,7 @@
           "byok_eligible": false
         },
         {
-          "order": 170,
+          "order": 172,
           "csv": {
             "provider": "OpenAI ChatGPT",
             "model": "chatgpt/gpt-5.4",
@@ -6152,7 +6206,7 @@
           "byok_eligible": false
         },
         {
-          "order": 171,
+          "order": 173,
           "csv": {
             "provider": "OpenAI ChatGPT",
             "model": "chatgpt/gpt-5.3-codex",
@@ -6179,7 +6233,7 @@
           "byok_eligible": false
         },
         {
-          "order": 172,
+          "order": 174,
           "csv": {
             "provider": "OpenAI ChatGPT",
             "model": "chatgpt/gpt-5.2",
@@ -6206,7 +6260,7 @@
           "byok_eligible": false
         },
         {
-          "order": 173,
+          "order": 175,
           "csv": {
             "provider": "OpenAI ChatGPT",
             "model": "chatgpt/gpt-5.3-codex-spark",
@@ -6299,7 +6353,7 @@
       ],
       "models": [
         {
-          "order": 174,
+          "order": 176,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/anthropic/claude-opus-4.7",
@@ -6326,7 +6380,7 @@
           "byok_eligible": true
         },
         {
-          "order": 175,
+          "order": 177,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/anthropic/claude-sonnet-4.6",
@@ -6353,7 +6407,7 @@
           "byok_eligible": true
         },
         {
-          "order": 176,
+          "order": 178,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/xiaomi/mimo-v2.5-pro",
@@ -6380,7 +6434,7 @@
           "byok_eligible": true
         },
         {
-          "order": 177,
+          "order": 179,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/z-ai/glm-5",
@@ -6407,7 +6461,7 @@
           "byok_eligible": true
         },
         {
-          "order": 178,
+          "order": 180,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/google/gemini-3.1-pro-preview",
@@ -6434,7 +6488,7 @@
           "byok_eligible": true
         },
         {
-          "order": 179,
+          "order": 181,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/google/gemini-3-flash-preview",
@@ -6461,7 +6515,7 @@
           "byok_eligible": true
         },
         {
-          "order": 180,
+          "order": 182,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/anthropic/claude-opus-4.6",
@@ -6488,7 +6542,7 @@
           "byok_eligible": true
         },
         {
-          "order": 181,
+          "order": 183,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/anthropic/claude-opus-4.5",
@@ -6515,7 +6569,7 @@
           "byok_eligible": true
         },
         {
-          "order": 182,
+          "order": 184,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/z-ai/glm-4.7",
@@ -6542,7 +6596,7 @@
           "byok_eligible": true
         },
         {
-          "order": 183,
+          "order": 185,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/google/gemini-3-pro-preview",
@@ -6569,7 +6623,7 @@
           "byok_eligible": true
         },
         {
-          "order": 184,
+          "order": 186,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/moonshotai/kimi-k2.5",
@@ -6596,7 +6650,7 @@
           "byok_eligible": true
         },
         {
-          "order": 185,
+          "order": 187,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/openai/gpt-5.2",
@@ -6623,7 +6677,7 @@
           "byok_eligible": true
         },
         {
-          "order": 186,
+          "order": 188,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/openai/gpt-5",
@@ -6650,7 +6704,7 @@
           "byok_eligible": true
         },
         {
-          "order": 187,
+          "order": 189,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/minimax/minimax-m2.1",
@@ -6677,7 +6731,7 @@
           "byok_eligible": true
         },
         {
-          "order": 188,
+          "order": 190,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/openai/gpt-5.1-codex-max",
@@ -6704,7 +6758,7 @@
           "byok_eligible": true
         },
         {
-          "order": 189,
+          "order": 191,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/anthropic/claude-sonnet-4.5",
@@ -6731,7 +6785,7 @@
           "byok_eligible": true
         },
         {
-          "order": 190,
+          "order": 192,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/minimax/minimax-m2.5",
@@ -6758,7 +6812,7 @@
           "byok_eligible": true
         },
         {
-          "order": 191,
+          "order": 193,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/deepseek/deepseek-r1-0528",
@@ -6785,7 +6839,7 @@
           "byok_eligible": true
         },
         {
-          "order": 192,
+          "order": 194,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/z-ai/glm-4.6",
@@ -6812,7 +6866,7 @@
           "byok_eligible": true
         },
         {
-          "order": 193,
+          "order": 195,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/openai/gpt-5.2-codex",
@@ -6839,7 +6893,7 @@
           "byok_eligible": true
         },
         {
-          "order": 194,
+          "order": 196,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/deepseek/deepseek-v3.2",
@@ -6866,7 +6920,7 @@
           "byok_eligible": true
         },
         {
-          "order": 195,
+          "order": 197,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/anthropic/claude-haiku-4.5",
@@ -6893,7 +6947,7 @@
           "byok_eligible": true
         },
         {
-          "order": 196,
+          "order": 198,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/minimax/minimax-m2",
@@ -6920,7 +6974,7 @@
           "byok_eligible": true
         },
         {
-          "order": 197,
+          "order": 199,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/deepseek/deepseek-chat",
@@ -7013,7 +7067,7 @@
       ],
       "models": [
         {
-          "order": 198,
+          "order": 200,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/anthropic/claude-opus-4-7",
@@ -7040,7 +7094,7 @@
           "byok_eligible": true
         },
         {
-          "order": 199,
+          "order": 201,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/google/gemini-3-flash-preview",
@@ -7067,7 +7121,7 @@
           "byok_eligible": true
         },
         {
-          "order": 200,
+          "order": 202,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/anthropic/claude-opus-4-6",
@@ -7094,7 +7148,7 @@
           "byok_eligible": true
         },
         {
-          "order": 201,
+          "order": 203,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/anthropic/claude-opus-4-5",
@@ -7121,7 +7175,7 @@
           "byok_eligible": true
         },
         {
-          "order": 202,
+          "order": 204,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/google/gemini-3-pro-preview",
@@ -7148,7 +7202,7 @@
           "byok_eligible": true
         },
         {
-          "order": 203,
+          "order": 205,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/openai/gpt-5.2",
@@ -7175,7 +7229,7 @@
           "byok_eligible": true
         },
         {
-          "order": 204,
+          "order": 206,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/anthropic/claude-sonnet-4-5",
@@ -7202,7 +7256,7 @@
           "byok_eligible": true
         },
         {
-          "order": 205,
+          "order": 207,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/xai/grok-4-1-fast-non-reasoning",
@@ -7229,7 +7283,7 @@
           "byok_eligible": true
         },
         {
-          "order": 206,
+          "order": 208,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/openai/gpt-5.1",
@@ -7256,7 +7310,7 @@
           "byok_eligible": true
         },
         {
-          "order": 207,
+          "order": 209,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/anthropic/claude-haiku-4-5",
@@ -7283,7 +7337,7 @@
           "byok_eligible": true
         },
         {
-          "order": 208,
+          "order": 210,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/openai/gpt-5-mini",
@@ -7310,7 +7364,7 @@
           "byok_eligible": true
         },
         {
-          "order": 209,
+          "order": 211,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/google/gemini-2.5-flash",
@@ -7395,7 +7449,7 @@
       ],
       "models": [
         {
-          "order": 210,
+          "order": 212,
           "csv": {
             "provider": "Replicate",
             "model": "replicate/google/gemini-3-pro",
@@ -7422,7 +7476,7 @@
           "byok_eligible": false
         },
         {
-          "order": 211,
+          "order": 213,
           "csv": {
             "provider": "Replicate",
             "model": "replicate/openai/gpt-5",
@@ -7449,7 +7503,7 @@
           "byok_eligible": false
         },
         {
-          "order": 212,
+          "order": 214,
           "csv": {
             "provider": "Replicate",
             "model": "replicate/openai/gpt-4.1",
@@ -7476,7 +7530,7 @@
           "byok_eligible": false
         },
         {
-          "order": 213,
+          "order": 215,
           "csv": {
             "provider": "Replicate",
             "model": "replicate/openai/o4-mini",
@@ -7503,7 +7557,7 @@
           "byok_eligible": false
         },
         {
-          "order": 214,
+          "order": 216,
           "csv": {
             "provider": "Replicate",
             "model": "replicate/openai/gpt-4.1-mini",
@@ -7530,7 +7584,7 @@
           "byok_eligible": false
         },
         {
-          "order": 215,
+          "order": 217,
           "csv": {
             "provider": "Replicate",
             "model": "replicate/openai/gpt-5-nano",
@@ -7623,7 +7677,7 @@
       ],
       "models": [
         {
-          "order": 216,
+          "order": 218,
           "csv": {
             "provider": "SambaNova",
             "model": "sambanova/DeepSeek-R1",
@@ -7650,7 +7704,7 @@
           "byok_eligible": true
         },
         {
-          "order": 217,
+          "order": 219,
           "csv": {
             "provider": "SambaNova",
             "model": "sambanova/DeepSeek-V3-0324",
@@ -7677,7 +7731,7 @@
           "byok_eligible": true
         },
         {
-          "order": 218,
+          "order": 220,
           "csv": {
             "provider": "SambaNova",
             "model": "sambanova/DeepSeek-V3.1",
@@ -7767,7 +7821,7 @@
       ],
       "models": [
         {
-          "order": 219,
+          "order": 221,
           "csv": {
             "provider": "Snowflake",
             "model": "snowflake/deepseek-r1",
@@ -7794,7 +7848,7 @@
           "byok_eligible": false
         },
         {
-          "order": 220,
+          "order": 222,
           "csv": {
             "provider": "Snowflake",
             "model": "snowflake/claude-3-5-sonnet",
@@ -7887,7 +7941,7 @@
       ],
       "models": [
         {
-          "order": 221,
+          "order": 223,
           "csv": {
             "provider": "Together AI",
             "model": "together_ai/zai-org/GLM-4.7",
@@ -7914,7 +7968,7 @@
           "byok_eligible": true
         },
         {
-          "order": 222,
+          "order": 224,
           "csv": {
             "provider": "Together AI",
             "model": "together_ai/moonshotai/Kimi-K2.5",
@@ -7941,7 +7995,7 @@
           "byok_eligible": true
         },
         {
-          "order": 223,
+          "order": 225,
           "csv": {
             "provider": "Together AI",
             "model": "together_ai/zai-org/GLM-4.6",
@@ -7968,7 +8022,7 @@
           "byok_eligible": true
         },
         {
-          "order": 224,
+          "order": 226,
           "csv": {
             "provider": "Together AI",
             "model": "together_ai/deepseek-ai/DeepSeek-R1",
@@ -7995,7 +8049,7 @@
           "byok_eligible": true
         },
         {
-          "order": 225,
+          "order": 227,
           "csv": {
             "provider": "Together AI",
             "model": "together_ai/moonshotai/Kimi-K2-Instruct",
@@ -8022,7 +8076,7 @@
           "byok_eligible": true
         },
         {
-          "order": 226,
+          "order": 228,
           "csv": {
             "provider": "Together AI",
             "model": "together_ai/deepseek-ai/DeepSeek-V3.1",
@@ -8115,7 +8169,7 @@
       ],
       "models": [
         {
-          "order": 227,
+          "order": 229,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-opus-4.6",
@@ -8142,7 +8196,7 @@
           "byok_eligible": true
         },
         {
-          "order": 228,
+          "order": 230,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-opus-4.5",
@@ -8169,7 +8223,7 @@
           "byok_eligible": true
         },
         {
-          "order": 229,
+          "order": 231,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-opus-4.1",
@@ -8196,7 +8250,7 @@
           "byok_eligible": true
         },
         {
-          "order": 230,
+          "order": 232,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-sonnet-4.5",
@@ -8223,7 +8277,7 @@
           "byok_eligible": true
         },
         {
-          "order": 231,
+          "order": 233,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/openai/o3",
@@ -8250,7 +8304,7 @@
           "byok_eligible": true
         },
         {
-          "order": 232,
+          "order": 234,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/zai/glm-4.6",
@@ -8277,7 +8331,7 @@
           "byok_eligible": true
         },
         {
-          "order": 233,
+          "order": 235,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/deepseek/deepseek-r1",
@@ -8304,7 +8358,7 @@
           "byok_eligible": true
         },
         {
-          "order": 234,
+          "order": 236,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-haiku-4.5",
@@ -8331,7 +8385,7 @@
           "byok_eligible": true
         },
         {
-          "order": 235,
+          "order": 237,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/openai/gpt-4.1-mini",
@@ -8358,7 +8412,7 @@
           "byok_eligible": true
         },
         {
-          "order": 236,
+          "order": 238,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/deepseek/deepseek-v3",
@@ -8451,7 +8505,7 @@
       ],
       "models": [
         {
-          "order": 237,
+          "order": 239,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/moonshotai/Kimi-K2.5",
@@ -8478,7 +8532,7 @@
           "byok_eligible": true
         },
         {
-          "order": 238,
+          "order": 240,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/MiniMaxAI/MiniMax-M2.5",
@@ -8505,7 +8559,7 @@
           "byok_eligible": true
         },
         {
-          "order": 239,
+          "order": 241,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/deepseek-ai/DeepSeek-R1-0528",
@@ -8532,7 +8586,7 @@
           "byok_eligible": true
         },
         {
-          "order": 240,
+          "order": 242,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/moonshotai/Kimi-K2-Instruct",
@@ -8559,7 +8613,7 @@
           "byok_eligible": true
         },
         {
-          "order": 241,
+          "order": 243,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507",
@@ -8653,7 +8707,7 @@
       ],
       "models": [
         {
-          "order": 242,
+          "order": 244,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-5.2",
@@ -8680,7 +8734,7 @@
           "byok_eligible": true
         },
         {
-          "order": 243,
+          "order": 245,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-5",
@@ -8707,7 +8761,7 @@
           "byok_eligible": true
         },
         {
-          "order": 244,
+          "order": 246,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-5-turbo",
@@ -8734,7 +8788,7 @@
           "byok_eligible": true
         },
         {
-          "order": 245,
+          "order": 247,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-4.7",
@@ -8761,7 +8815,7 @@
           "byok_eligible": true
         },
         {
-          "order": 246,
+          "order": 248,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-5.1",
@@ -8788,7 +8842,7 @@
           "byok_eligible": true
         },
         {
-          "order": 250,
+          "order": 252,
           "csv": {
             "provider": "Zai",
             "model": "zai/glm-5",
@@ -8815,7 +8869,7 @@
           "byok_eligible": true
         },
         {
-          "order": 251,
+          "order": 253,
           "csv": {
             "provider": "Zai",
             "model": "zai/glm-4.7",
@@ -8842,7 +8896,7 @@
           "byok_eligible": true
         },
         {
-          "order": 252,
+          "order": 254,
           "csv": {
             "provider": "Zai",
             "model": "zai/glm-4.6",
@@ -8936,7 +8990,7 @@
       ],
       "models": [
         {
-          "order": 247,
+          "order": 249,
           "csv": {
             "provider": "Z.AI Coding Plan",
             "model": "openai/glm-5.2",
@@ -8963,7 +9017,7 @@
           "byok_eligible": true
         },
         {
-          "order": 248,
+          "order": 250,
           "csv": {
             "provider": "Z.AI Coding Plan",
             "model": "openai/glm-5-turbo",
@@ -8990,7 +9044,7 @@
           "byok_eligible": true
         },
         {
-          "order": 249,
+          "order": 251,
           "csv": {
             "provider": "Z.AI Coding Plan",
             "model": "openai/glm-4.7",
@@ -9083,7 +9137,7 @@
       ],
       "models": [
         {
-          "order": 253,
+          "order": 255,
           "csv": {
             "provider": "lm_studio",
             "model": "lm_studio/qwen3-coder-next",
@@ -9176,7 +9230,7 @@
       ],
       "models": [
         {
-          "order": 254,
+          "order": 256,
           "csv": {
             "provider": "xAI",
             "model": "xai/grok-4-0709",
@@ -9203,7 +9257,7 @@
           "byok_eligible": true
         },
         {
-          "order": 255,
+          "order": 257,
           "csv": {
             "provider": "xAI",
             "model": "xai/grok-4-1-fast-reasoning",
