@@ -1541,7 +1541,13 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
     assert (
         hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, PROFILE_FILE)).hexdigest(),
         hashlib.sha256(_git_blob("HEAD", PROFILE_FILE)).hexdigest(),
-    ) == verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES  # pylint: disable=protected-access
+    ) in {
+        verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES,  # pylint: disable=protected-access
+        (
+            verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
+            verification._TEMPERATURE_REGRESSION_PROFILE_BYTES[1],  # pylint: disable=protected-access
+        ),
+    }
     assert (
         hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROTATION_FILE)).hexdigest(),
         hashlib.sha256(_git_blob("HEAD", ROTATION_FILE)).hexdigest(),
@@ -1758,6 +1764,11 @@ def test_current_profile_reconciliation_matches_current_prompt_and_profile_rows(
     current_rows.extend(
         _requirement_authorization_row(authorization)
         for authorization in verification._OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+        if authorization.bindings.head_policy_sha256 == profile_digest
+    )
+    current_rows.extend(
+        _requirement_authorization_row(authorization)
+        for authorization in verification._TEMPERATURE_REGRESSION_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
         if authorization.bindings.head_policy_sha256 == profile_digest
     )
     if profile_digest == verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[1]:  # pylint: disable=protected-access

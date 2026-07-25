@@ -605,6 +605,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/postprocess_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/prompt_lint_python.json",
       "role": "human-maintained"
     },
@@ -759,6 +765,12 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/track_cost_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/unfinished_prompt_python.json",
       "role": "human-maintained"
     },
     {
