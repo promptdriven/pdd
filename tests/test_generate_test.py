@@ -106,6 +106,20 @@ def test_generate_test_successful(valid_inputs):
     assert total_cost >= 0
     assert len(model_name) > 0
 
+
+def test_generate_test_propagates_temperature_to_postprocess(valid_inputs, monkeypatch):
+    captured = {}
+
+    def capture_postprocess(**kwargs):
+        captured.update(kwargs)
+        return (_SAMPLE_GENERATED_TEST, 0.0, "test-model")
+
+    monkeypatch.setattr("pdd.generate_test.postprocess", capture_postprocess)
+    generate_test(**valid_inputs)
+
+    assert captured["temperature"] == valid_inputs["temperature"]
+
+
 # Test verbose output
 
 @pytest.mark.timeout(180)

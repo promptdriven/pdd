@@ -82,7 +82,7 @@ def continue_generation(
             prompt=processed_prompts['trim_start'],
             input_json={"LLM_OUTPUT": llm_output},
             strength=EXTRACTION_STRENGTH,
-            temperature=0,
+            temperature=temperature,
             time=time,
             output_pydantic=TrimResultsStartOutput,
             verbose=verbose,
@@ -150,7 +150,7 @@ def continue_generation(
             reasoning, is_finished, check_cost, check_model = unfinished_prompt(
                 prompt_text=last_chunk,
                 strength=0.5,
-                temperature=0,
+                temperature=temperature,
                 time=time,
                 language=language,
                 verbose=verbose
@@ -181,7 +181,7 @@ def continue_generation(
                         "GENERATED_RESULTS": code_block[-200:]
                     },
                     strength=EXTRACTION_STRENGTH,
-                    temperature=0,
+                    temperature=temperature,
                     time=time,
                     output_pydantic=TrimResultsOutput,
                     verbose=verbose,

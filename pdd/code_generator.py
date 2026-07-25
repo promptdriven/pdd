@@ -122,7 +122,7 @@ def code_generator(
             _reasoning, is_finished, check_cost, _ = unfinished_prompt(
                 prompt_text=last_chunk,
                 strength=0.5,
-                temperature=0.0,
+                temperature=temperature,
                 time=time,
                 language=language,
                 verbose=verbose
@@ -164,7 +164,7 @@ def code_generator(
                 llm_output=final_output,
                 language=language,
                 strength=EXTRACTION_STRENGTH,
-                temperature=0.0,
+                temperature=temperature,
                 time=time,
                 verbose=verbose
             )

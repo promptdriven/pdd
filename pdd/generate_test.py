@@ -283,6 +283,7 @@ def generate_test(
             llm_output=current_text,
             language=language,
             strength=EXTRACTION_STRENGTH,
+            temperature=temperature,
             verbose=verbose
         )
         total_cost += pp_cost
