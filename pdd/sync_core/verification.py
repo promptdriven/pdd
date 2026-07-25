@@ -115,6 +115,46 @@ _OPUS_FABLE_COMPOSED_PROFILE_BYTES = (
     "a7dd6a8f4145e2a4712ca925abde0edc58c47be271a1a06e1750aa39347a76c7",
 )
 
+# The release-2026-07-25 protected base contains five stale profile rows even
+# though the corresponding prompt bytes already hold their intended values.
+# Reconcile only the reviewed base/head policy bytes and unchanged prompt
+# bytes; this is not a reusable prompt-transition authorization.
+_SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES = (
+    "3b5117e0ef31b19b68d7190f0753e7aacaef3f75133cabfe4c2470afe87c0a95",
+    "3b5117e0ef31b19b68d7190f0753e7aacaef3f75133cabfe4c2470afe87c0a95",
+)
+_SYNC_ROLLOUT_REPAIR_PROFILE_BYTES = (
+    "a7dd6a8f4145e2a4712ca925abde0edc58c47be271a1a06e1750aa39347a76c7",
+    "30cc5d9cb8d47eda3bd8fb02aab35ab965a256d6729c7ba1dfd836fb7fa1e1d3",
+)
+_SYNC_ROLLOUT_REPAIR_PROMPT_BYTES = (
+    (
+        PurePosixPath("pdd/prompts/code_generator_python.prompt"),
+        "python",
+        "72b374c6501e5264a482c0c3ad73be501d4993629783f842d7abd27779f01c8d",
+    ),
+    (
+        PurePosixPath("pdd/prompts/continue_generation_python.prompt"),
+        "python",
+        "4f57a0c4d3596a328c920f96126fc8b2242f66c415f7d8d27d8d7a17a33291b7",
+    ),
+    (
+        PurePosixPath("pdd/prompts/detect_change_python.prompt"),
+        "python",
+        "344cb9470c8bb555599d87a0ae4885fcbca80dbafc58f6720170225e738335c9",
+    ),
+    (
+        PurePosixPath("pdd/prompts/generate_test_python.prompt"),
+        "python",
+        "42354b865666983f2bae2b959dc64629d9df2de59c3e08ff0542a8e6687ff58c",
+    ),
+    (
+        PurePosixPath("pdd/prompts/sync_determine_operation_python.prompt"),
+        "python",
+        "48fe08ae08004ae02034118cf067b254c22fe7de800a9ece37834738da507677",
+    ),
+)
+
 
 class VerificationProfileError(ValueError):
     """Raised when protected verification-profile data cannot be parsed."""
@@ -3063,6 +3103,65 @@ def _authorized_profile_additions(
     return additions
 
 
+def _authorized_sync_rollout_profile_reconciliation(
+    root: Path,
+    manifest: UnitManifest,
+    base: Mapping[UnitId, _ProfileInput],
+    head: Mapping[UnitId, _ProfileInput],
+    base_invalid: list[str],
+) -> tuple[dict[UnitId, _ProfileInput], frozenset[str]]:
+    """Authorize the one exact stale-profile repair from the protected base."""
+    if manifest.repository_id != _PDD_REPOSITORY_ID:
+        return {}, frozenset()
+    base_profile = read_git_blob(root, manifest.base_ref, PROFILE_PATH)
+    head_profile = read_git_blob(root, manifest.head_ref, PROFILE_PATH)
+    base_rotations = read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH)
+    head_rotations = read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH)
+    if (
+        None in (base_profile, head_profile, base_rotations, head_rotations)
+        or (
+            _sha256(base_profile),
+            _sha256(head_profile),
+        )
+        != _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES
+        or (
+            _sha256(base_rotations),
+            _sha256(head_rotations),
+        )
+        != _SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES
+    ):
+        return {}, frozenset()
+    assert base_profile is not None and head_profile is not None
+    assert base_rotations is not None and head_rotations is not None
+
+    stale_reasons = frozenset(
+        f"{manifest.base_ref}: {prompt_path.as_posix()}: profile requirements "
+        "do not match immutable prompt requirements"
+        for prompt_path, _language_id, _digest in _SYNC_ROLLOUT_REPAIR_PROMPT_BYTES
+    )
+    if not stale_reasons <= set(base_invalid):
+        return {}, frozenset()
+
+    expected_managed = set(manifest.expected_managed)
+    additions: dict[UnitId, _ProfileInput] = {}
+    for prompt_path, language_id, expected_digest in _SYNC_ROLLOUT_REPAIR_PROMPT_BYTES:
+        unit_id = UnitId(manifest.repository_id, prompt_path, language_id)
+        base_prompt = read_git_blob(root, manifest.base_ref, prompt_path)
+        head_prompt = read_git_blob(root, manifest.head_ref, prompt_path)
+        if (
+            unit_id not in expected_managed
+            or unit_id in base
+            or unit_id not in head
+            or base_prompt is None
+            or head_prompt is None
+            or _sha256(base_prompt) != expected_digest
+            or _sha256(head_prompt) != expected_digest
+        ):
+            return {}, frozenset()
+        additions[unit_id] = head[unit_id]
+    return additions, stale_reasons
+
+
 def _effective_profile(
     unit_id: UnitId,
     base: _ProfileInput | None,
@@ -3156,14 +3255,21 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
     except ValueError as exc:
         approved_aliases = {}
         invalid.append(str(exc))
-    base, loaded_invalid = _load_inputs(
+    base, base_invalid = _load_inputs(
         root, manifest.base_ref, manifest.repository_id, approved_aliases
     )
-    invalid.extend(loaded_invalid)
-    head, loaded_invalid = _load_inputs(
+    head, head_invalid = _load_inputs(
         root, manifest.head_ref, manifest.repository_id, approved_aliases
     )
-    invalid.extend(loaded_invalid)
+    rollout_profile_additions, reconciled_base_invalid = (
+        _authorized_sync_rollout_profile_reconciliation(
+            root, manifest, base, head, base_invalid
+        )
+    )
+    invalid.extend(
+        reason for reason in base_invalid if reason not in reconciled_base_invalid
+    )
+    invalid.extend(head_invalid)
     (
         requirement_authorizations,
         requirement_prompts,
@@ -3172,6 +3278,7 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
         root, manifest, base, head, approved_aliases
     )
     profile_additions = _authorized_profile_additions(root, manifest, base, head)
+    profile_additions.update(rollout_profile_additions)
     if new_requirement_authorizations:
         _validate_new_authorization_managed_prompt_bytes(
             root,

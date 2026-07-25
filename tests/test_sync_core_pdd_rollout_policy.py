@@ -1538,6 +1538,24 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
         head_ref="HEAD",
     )
 
+    assert (
+        hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, PROFILE_FILE)).hexdigest(),
+        hashlib.sha256(_git_blob("HEAD", PROFILE_FILE)).hexdigest(),
+    ) == verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES  # pylint: disable=protected-access
+    assert (
+        hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROTATION_FILE)).hexdigest(),
+        hashlib.sha256(_git_blob("HEAD", ROTATION_FILE)).hexdigest(),
+    ) == verification._SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES  # pylint: disable=protected-access
+    for prompt_path, _language_id, expected_digest in (
+        verification._SYNC_ROLLOUT_REPAIR_PROMPT_BYTES  # pylint: disable=protected-access
+    ):
+        assert (
+            hashlib.sha256(
+                _git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROOT / prompt_path)
+            ).hexdigest(),
+            hashlib.sha256(_git_blob("HEAD", ROOT / prompt_path)).hexdigest(),
+        ) == (expected_digest, expected_digest)
+
     records = {
         item.candidate_id.artifact_relpath.as_posix(): item
         for item in manifest.candidates
@@ -1699,6 +1717,16 @@ def test_current_profile_reconciliation_matches_current_prompt_and_profile_rows(
         for authorization in verification._OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
         if authorization.bindings.head_policy_sha256 == profile_digest
     )
+    if profile_digest == verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[1]:  # pylint: disable=protected-access
+        current_rows.extend(
+            {
+                "prompt_path": prompt_path.as_posix(),
+                "language_id": language_id,
+                "to_requirement_id": f"CONTRACT-SHA256:{prompt_digest}",
+                "head_prompt_sha256": prompt_digest,
+            }
+            for prompt_path, language_id, prompt_digest in verification._SYNC_ROLLOUT_REPAIR_PROMPT_BYTES  # pylint: disable=protected-access
+        )
     assert current_rows
     profiles = {
         (row["prompt_path"], row["language_id"]): row
