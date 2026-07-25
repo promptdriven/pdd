@@ -190,6 +190,9 @@ GLOBAL_SYNC_M0_BOOTSTRAP_UNAUTHORIZED_SIBLING_PATHS = {
 GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/runtime-linux-x86_64-cp312.lock",
 }
+RELEASE_VIDEO_POLICY_PREAUTHORIZED_PATHS = {
+    "scripts/release_video_policy.py",
+}
 STANDALONE_CHECKER_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/standalone-checker-modules.json",
     "pdd/sync_core/standalone_package.py",
@@ -256,6 +259,7 @@ PREAUTHORIZED_CHILD_PATHS = (
     | KIMI_K3_PROVIDER_CATALOG_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
+    | RELEASE_VIDEO_POLICY_PREAUTHORIZED_PATHS
     | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
     | {
@@ -2704,6 +2708,24 @@ def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
         "pdd/sync_core/global_sync_ledger.py",
         "tests/test_global_sync_ledger.py",
     }
+
+
+def test_release_video_policy_path_is_exactly_preauthorized() -> None:
+    """Only the reviewed release-video policy helper receives authority."""
+    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
+    rules = {row["pattern"]: row for row in ownership["rules"]}
+    assert {
+        path: rules.get(path) for path in RELEASE_VIDEO_POLICY_PREAUTHORIZED_PATHS
+    } == {
+        path: {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
+        for path in RELEASE_VIDEO_POLICY_PREAUTHORIZED_PATHS
+    }
+    assert {
+        row["pattern"]
+        for row in ownership["rules"]
+        if row.get("preauthorize_absent", False)
+        and row["pattern"].startswith("scripts/release_video")
+    } == RELEASE_VIDEO_POLICY_PREAUTHORIZED_PATHS
 
 
 def test_global_sync_runtime_lock_composes_without_sibling_authority(
