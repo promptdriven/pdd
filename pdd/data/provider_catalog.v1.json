@@ -6599,6 +6599,36 @@
           "order": 185,
           "csv": {
             "provider": "OpenRouter",
+            "model": "openrouter/moonshotai/kimi-k3",
+            "input": "3.0",
+            "output": "15.0",
+            "coding_arena_elo": "0",
+            "model_rank_score": "0",
+            "model_rank_source": "platform-default",
+            "base_url": "",
+            "api_key": "OPENROUTER_API_KEY",
+            "max_reasoning_tokens": "0",
+            "structured_output": "True",
+            "reasoning_type": "effort",
+            "location": "",
+            "interactive_only": "False",
+            "context_limit": "1048576"
+          },
+          "upstream_model": "moonshotai/kimi-k3",
+          "capabilities": [
+            "text_generation",
+            "streaming",
+            "tools",
+            "structured_output",
+            "reasoning_content",
+            "long_context"
+          ],
+          "byok_eligible": true
+        },
+        {
+          "order": 186,
+          "csv": {
+            "provider": "OpenRouter",
             "model": "openrouter/openai/gpt-5.2",
             "input": "1.75",
             "output": "14.0",
@@ -6623,7 +6653,7 @@
           "byok_eligible": true
         },
         {
-          "order": 186,
+          "order": 187,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/openai/gpt-5",
@@ -6650,7 +6680,7 @@
           "byok_eligible": true
         },
         {
-          "order": 187,
+          "order": 188,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/minimax/minimax-m2.1",
@@ -6677,7 +6707,7 @@
           "byok_eligible": true
         },
         {
-          "order": 188,
+          "order": 189,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/openai/gpt-5.1-codex-max",
@@ -6704,7 +6734,7 @@
           "byok_eligible": true
         },
         {
-          "order": 189,
+          "order": 190,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/anthropic/claude-sonnet-4.5",
@@ -6731,7 +6761,7 @@
           "byok_eligible": true
         },
         {
-          "order": 190,
+          "order": 191,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/minimax/minimax-m2.5",
@@ -6758,7 +6788,7 @@
           "byok_eligible": true
         },
         {
-          "order": 191,
+          "order": 192,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/deepseek/deepseek-r1-0528",
@@ -6785,7 +6815,7 @@
           "byok_eligible": true
         },
         {
-          "order": 192,
+          "order": 193,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/z-ai/glm-4.6",
@@ -6812,7 +6842,7 @@
           "byok_eligible": true
         },
         {
-          "order": 193,
+          "order": 194,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/openai/gpt-5.2-codex",
@@ -6839,7 +6869,7 @@
           "byok_eligible": true
         },
         {
-          "order": 194,
+          "order": 195,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/deepseek/deepseek-v3.2",
@@ -6866,7 +6896,7 @@
           "byok_eligible": true
         },
         {
-          "order": 195,
+          "order": 196,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/anthropic/claude-haiku-4.5",
@@ -6893,7 +6923,7 @@
           "byok_eligible": true
         },
         {
-          "order": 196,
+          "order": 197,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/minimax/minimax-m2",
@@ -6920,7 +6950,7 @@
           "byok_eligible": true
         },
         {
-          "order": 197,
+          "order": 198,
           "csv": {
             "provider": "OpenRouter",
             "model": "openrouter/deepseek/deepseek-chat",
@@ -7013,7 +7043,7 @@
       ],
       "models": [
         {
-          "order": 198,
+          "order": 199,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/anthropic/claude-opus-4-7",
@@ -7040,7 +7070,7 @@
           "byok_eligible": true
         },
         {
-          "order": 199,
+          "order": 200,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/google/gemini-3-flash-preview",
@@ -7067,7 +7097,7 @@
           "byok_eligible": true
         },
         {
-          "order": 200,
+          "order": 201,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/anthropic/claude-opus-4-6",
@@ -7094,7 +7124,7 @@
           "byok_eligible": true
         },
         {
-          "order": 201,
+          "order": 202,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/anthropic/claude-opus-4-5",
@@ -7121,7 +7151,7 @@
           "byok_eligible": true
         },
         {
-          "order": 202,
+          "order": 203,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/google/gemini-3-pro-preview",
@@ -7148,7 +7178,7 @@
           "byok_eligible": true
         },
         {
-          "order": 203,
+          "order": 204,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/openai/gpt-5.2",
@@ -7175,7 +7205,7 @@
           "byok_eligible": true
         },
         {
-          "order": 204,
+          "order": 205,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/anthropic/claude-sonnet-4-5",
@@ -7202,7 +7232,7 @@
           "byok_eligible": true
         },
         {
-          "order": 205,
+          "order": 206,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/xai/grok-4-1-fast-non-reasoning",
@@ -7229,7 +7259,7 @@
           "byok_eligible": true
         },
         {
-          "order": 206,
+          "order": 207,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/openai/gpt-5.1",
@@ -7256,7 +7286,7 @@
           "byok_eligible": true
         },
         {
-          "order": 207,
+          "order": 208,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/anthropic/claude-haiku-4-5",
@@ -7283,7 +7313,7 @@
           "byok_eligible": true
         },
         {
-          "order": 208,
+          "order": 209,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/openai/gpt-5-mini",
@@ -7310,7 +7340,7 @@
           "byok_eligible": true
         },
         {
-          "order": 209,
+          "order": 210,
           "csv": {
             "provider": "Perplexity",
             "model": "perplexity/google/gemini-2.5-flash",
@@ -7395,7 +7425,7 @@
       ],
       "models": [
         {
-          "order": 210,
+          "order": 211,
           "csv": {
             "provider": "Replicate",
             "model": "replicate/google/gemini-3-pro",
@@ -7422,7 +7452,7 @@
           "byok_eligible": false
         },
         {
-          "order": 211,
+          "order": 212,
           "csv": {
             "provider": "Replicate",
             "model": "replicate/openai/gpt-5",
@@ -7449,7 +7479,7 @@
           "byok_eligible": false
         },
         {
-          "order": 212,
+          "order": 213,
           "csv": {
             "provider": "Replicate",
             "model": "replicate/openai/gpt-4.1",
@@ -7476,7 +7506,7 @@
           "byok_eligible": false
         },
         {
-          "order": 213,
+          "order": 214,
           "csv": {
             "provider": "Replicate",
             "model": "replicate/openai/o4-mini",
@@ -7503,7 +7533,7 @@
           "byok_eligible": false
         },
         {
-          "order": 214,
+          "order": 215,
           "csv": {
             "provider": "Replicate",
             "model": "replicate/openai/gpt-4.1-mini",
@@ -7530,7 +7560,7 @@
           "byok_eligible": false
         },
         {
-          "order": 215,
+          "order": 216,
           "csv": {
             "provider": "Replicate",
             "model": "replicate/openai/gpt-5-nano",
@@ -7623,7 +7653,7 @@
       ],
       "models": [
         {
-          "order": 216,
+          "order": 217,
           "csv": {
             "provider": "SambaNova",
             "model": "sambanova/DeepSeek-R1",
@@ -7650,7 +7680,7 @@
           "byok_eligible": true
         },
         {
-          "order": 217,
+          "order": 218,
           "csv": {
             "provider": "SambaNova",
             "model": "sambanova/DeepSeek-V3-0324",
@@ -7677,7 +7707,7 @@
           "byok_eligible": true
         },
         {
-          "order": 218,
+          "order": 219,
           "csv": {
             "provider": "SambaNova",
             "model": "sambanova/DeepSeek-V3.1",
@@ -7767,7 +7797,7 @@
       ],
       "models": [
         {
-          "order": 219,
+          "order": 220,
           "csv": {
             "provider": "Snowflake",
             "model": "snowflake/deepseek-r1",
@@ -7794,7 +7824,7 @@
           "byok_eligible": false
         },
         {
-          "order": 220,
+          "order": 221,
           "csv": {
             "provider": "Snowflake",
             "model": "snowflake/claude-3-5-sonnet",
@@ -7887,7 +7917,7 @@
       ],
       "models": [
         {
-          "order": 221,
+          "order": 222,
           "csv": {
             "provider": "Together AI",
             "model": "together_ai/zai-org/GLM-4.7",
@@ -7914,7 +7944,7 @@
           "byok_eligible": true
         },
         {
-          "order": 222,
+          "order": 223,
           "csv": {
             "provider": "Together AI",
             "model": "together_ai/moonshotai/Kimi-K2.5",
@@ -7941,7 +7971,7 @@
           "byok_eligible": true
         },
         {
-          "order": 223,
+          "order": 224,
           "csv": {
             "provider": "Together AI",
             "model": "together_ai/zai-org/GLM-4.6",
@@ -7968,7 +7998,7 @@
           "byok_eligible": true
         },
         {
-          "order": 224,
+          "order": 225,
           "csv": {
             "provider": "Together AI",
             "model": "together_ai/deepseek-ai/DeepSeek-R1",
@@ -7995,7 +8025,7 @@
           "byok_eligible": true
         },
         {
-          "order": 225,
+          "order": 226,
           "csv": {
             "provider": "Together AI",
             "model": "together_ai/moonshotai/Kimi-K2-Instruct",
@@ -8022,7 +8052,7 @@
           "byok_eligible": true
         },
         {
-          "order": 226,
+          "order": 227,
           "csv": {
             "provider": "Together AI",
             "model": "together_ai/deepseek-ai/DeepSeek-V3.1",
@@ -8115,7 +8145,7 @@
       ],
       "models": [
         {
-          "order": 227,
+          "order": 228,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-opus-4.6",
@@ -8142,7 +8172,7 @@
           "byok_eligible": true
         },
         {
-          "order": 228,
+          "order": 229,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-opus-4.5",
@@ -8169,7 +8199,7 @@
           "byok_eligible": true
         },
         {
-          "order": 229,
+          "order": 230,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-opus-4.1",
@@ -8196,7 +8226,7 @@
           "byok_eligible": true
         },
         {
-          "order": 230,
+          "order": 231,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-sonnet-4.5",
@@ -8223,7 +8253,7 @@
           "byok_eligible": true
         },
         {
-          "order": 231,
+          "order": 232,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/openai/o3",
@@ -8250,7 +8280,7 @@
           "byok_eligible": true
         },
         {
-          "order": 232,
+          "order": 233,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/zai/glm-4.6",
@@ -8277,7 +8307,7 @@
           "byok_eligible": true
         },
         {
-          "order": 233,
+          "order": 234,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/deepseek/deepseek-r1",
@@ -8304,7 +8334,7 @@
           "byok_eligible": true
         },
         {
-          "order": 234,
+          "order": 235,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/anthropic/claude-haiku-4.5",
@@ -8331,7 +8361,7 @@
           "byok_eligible": true
         },
         {
-          "order": 235,
+          "order": 236,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/openai/gpt-4.1-mini",
@@ -8358,7 +8388,7 @@
           "byok_eligible": true
         },
         {
-          "order": 236,
+          "order": 237,
           "csv": {
             "provider": "Vercel AI Gateway",
             "model": "vercel_ai_gateway/deepseek/deepseek-v3",
@@ -8451,7 +8481,7 @@
       ],
       "models": [
         {
-          "order": 237,
+          "order": 238,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/moonshotai/Kimi-K2.5",
@@ -8478,7 +8508,7 @@
           "byok_eligible": true
         },
         {
-          "order": 238,
+          "order": 239,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/MiniMaxAI/MiniMax-M2.5",
@@ -8505,7 +8535,7 @@
           "byok_eligible": true
         },
         {
-          "order": 239,
+          "order": 240,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/deepseek-ai/DeepSeek-R1-0528",
@@ -8532,7 +8562,7 @@
           "byok_eligible": true
         },
         {
-          "order": 240,
+          "order": 241,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/moonshotai/Kimi-K2-Instruct",
@@ -8559,7 +8589,7 @@
           "byok_eligible": true
         },
         {
-          "order": 241,
+          "order": 242,
           "csv": {
             "provider": "W&B Inference",
             "model": "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507",
@@ -8653,7 +8683,7 @@
       ],
       "models": [
         {
-          "order": 242,
+          "order": 243,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-5.2",
@@ -8680,7 +8710,7 @@
           "byok_eligible": true
         },
         {
-          "order": 243,
+          "order": 244,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-5",
@@ -8707,7 +8737,7 @@
           "byok_eligible": true
         },
         {
-          "order": 244,
+          "order": 245,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-5-turbo",
@@ -8734,7 +8764,7 @@
           "byok_eligible": true
         },
         {
-          "order": 245,
+          "order": 246,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-4.7",
@@ -8761,7 +8791,7 @@
           "byok_eligible": true
         },
         {
-          "order": 246,
+          "order": 247,
           "csv": {
             "provider": "Z.AI",
             "model": "openai/glm-5.1",
@@ -8788,7 +8818,7 @@
           "byok_eligible": true
         },
         {
-          "order": 250,
+          "order": 251,
           "csv": {
             "provider": "Zai",
             "model": "zai/glm-5",
@@ -8815,7 +8845,7 @@
           "byok_eligible": true
         },
         {
-          "order": 251,
+          "order": 252,
           "csv": {
             "provider": "Zai",
             "model": "zai/glm-4.7",
@@ -8842,7 +8872,7 @@
           "byok_eligible": true
         },
         {
-          "order": 252,
+          "order": 253,
           "csv": {
             "provider": "Zai",
             "model": "zai/glm-4.6",
@@ -8936,7 +8966,7 @@
       ],
       "models": [
         {
-          "order": 247,
+          "order": 248,
           "csv": {
             "provider": "Z.AI Coding Plan",
             "model": "openai/glm-5.2",
@@ -8963,7 +8993,7 @@
           "byok_eligible": true
         },
         {
-          "order": 248,
+          "order": 249,
           "csv": {
             "provider": "Z.AI Coding Plan",
             "model": "openai/glm-5-turbo",
@@ -8990,7 +9020,7 @@
           "byok_eligible": true
         },
         {
-          "order": 249,
+          "order": 250,
           "csv": {
             "provider": "Z.AI Coding Plan",
             "model": "openai/glm-4.7",
@@ -9083,7 +9113,7 @@
       ],
       "models": [
         {
-          "order": 253,
+          "order": 254,
           "csv": {
             "provider": "lm_studio",
             "model": "lm_studio/qwen3-coder-next",
@@ -9176,7 +9206,7 @@
       ],
       "models": [
         {
-          "order": 254,
+          "order": 255,
           "csv": {
             "provider": "xAI",
             "model": "xai/grok-4-0709",
@@ -9203,7 +9233,7 @@
           "byok_eligible": true
         },
         {
-          "order": 255,
+          "order": 256,
           "csv": {
             "provider": "xAI",
             "model": "xai/grok-4-1-fast-reasoning",

@@ -20,6 +20,7 @@ from pdd import provider_manager
 
 K3_MODEL = "moonshot/kimi-k3"
 K3_BASE_URL = "https://api.moonshot.cn/v1"
+OPENROUTER_K3_MODEL = "openrouter/moonshotai/kimi-k3"
 
 
 def _response(content: str = "ok"):
@@ -48,6 +49,19 @@ def _write_k3_csv(path) -> None:
         "context_limit\n"
         "Moonshot AI,moonshot/kimi-k3,2.951594,14.757969,0,0,"
         "platform-default,https://api.moonshot.cn/v1,MOONSHOT_API_KEY,0,"
+        "True,effort,,False,1048576\n",
+        encoding="utf-8",
+    )
+
+
+def _write_openrouter_k3_csv(path) -> None:
+    path.write_text(
+        "provider,model,input,output,coding_arena_elo,model_rank_score,"
+        "model_rank_source,base_url,api_key,max_reasoning_tokens,"
+        "structured_output,reasoning_type,location,interactive_only,"
+        "context_limit\n"
+        "OpenRouter,openrouter/moonshotai/kimi-k3,3.0,15.0,0,0,"
+        "platform-default,,OPENROUTER_API_KEY,0,"
         "True,effort,,False,1048576\n",
         encoding="utf-8",
     )
@@ -82,6 +96,38 @@ def _invoke_k3(tmp_path, monkeypatch, *, time=0.5, output_schema=None):
             use_cloud=False,
         )
     return captured, result
+
+
+def _invoke_openrouter_k3(tmp_path, monkeypatch):
+    csv_path = tmp_path / "llm_model.csv"
+    _write_openrouter_k3_csv(csv_path)
+    monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+    monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", OPENROUTER_K3_MODEL)
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", OPENROUTER_K3_MODEL)
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test-key")
+    monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
+    monkeypatch.delenv("PDD_REASONING_EFFORT", raising=False)
+    captured = {}
+
+    def capture(**kwargs):
+        captured.update(kwargs)
+        return _response()
+
+    with (
+        patch("litellm.caching.caching.Cache"),
+        patch("pdd.core.cloud.CloudConfig.is_cloud_enabled", return_value=False),
+        patch.object(llm_mod, "count_tokens_for_messages", return_value=10),
+        patch.object(llm_mod.litellm, "completion", side_effect=capture),
+    ):
+        llm_mod.llm_invoke(
+            prompt="Say {word}",
+            input_json={"word": "OK"},
+            strength=0.5,
+            time=0.5,
+            use_cloud=False,
+        )
+    return captured
 
 
 def test_k3_mandatory_row_and_packaged_catalog_are_durable():
@@ -247,6 +293,21 @@ def test_k3_request_contract_maps_effort_and_endpoint(
     assert "reasoning_effort" not in captured
     for parameter in llm_mod._KIMI_K3_FIXED_SAMPLING_PARAMETERS:
         assert parameter not in captured
+
+
+def test_openrouter_k3_uses_generic_openrouter_route(tmp_path, monkeypatch):
+    assert llm_mod._is_kimi_k3_model(K3_MODEL) is True
+    assert llm_mod._is_kimi_k3_model(OPENROUTER_K3_MODEL) is False
+
+    captured = _invoke_openrouter_k3(tmp_path, monkeypatch)
+
+    assert captured["model"] == OPENROUTER_K3_MODEL
+    assert captured["api_key"] == "openrouter-test-key"
+    assert captured["reasoning_effort"] == "medium"
+    assert "extra_body" not in captured
+    assert "base_url" not in captured
+    assert "api_base" not in captured
+    assert captured["temperature"] == 0.1
 
 
 @pytest.mark.parametrize("effort", ["low", "high", "max"])
