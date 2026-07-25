@@ -3121,6 +3121,85 @@ check-release-video-config:
         assert f"push origin {release_tag}" in git_calls
 
 
+def test_release_local_with_video_zero_completes_without_creating_video(
+    tmp_path: Path,
+):
+    """The local aggregate release preserves the emergency no-video path."""
+    bin_dir, _git_log = write_release_makefile_stub_commands(tmp_path)
+    (bin_dir / "make").unlink()
+    make_executable = shutil.which("make")
+    assert make_executable is not None
+    wrapper = tmp_path / "Makefile"
+    wrapper.write_text(
+        f"""include {ROOT / 'Makefile'}
+
+check-deps:
+\t@:
+check-suspicious-files:
+\t@:
+check-release-remote:
+\t@:
+check-release-branch:
+\t@:
+check-release-clean:
+\t@:
+""",
+        encoding="utf8",
+    )
+    runner = write_executable(
+        tmp_path / "release-sops-runner.py",
+        f"""#!{sys.executable}
+import os
+import sys
+
+command = sys.argv[sys.argv.index("--") + 1:]
+os.execv(
+    command[0],
+    [command[0], "-f", os.environ["RELEASE_TEST_MAKEFILE"], *command[1:]],
+)
+""",
+    )
+    sops = write_executable(
+        tmp_path / "sops-stub.py",
+        f"""#!{sys.executable}
+raise SystemExit(0)
+""",
+    )
+    env = release_video_env(
+        {
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "MAKE": make_executable,
+            "RELEASE_TEST_GIT_LOG": str(tmp_path / "git.log"),
+            "RELEASE_TEST_MAKE_LOG": str(tmp_path / "make.log"),
+            "RELEASE_TEST_MAKEFILE": str(wrapper),
+            "RELEASE_TEST_SCENARIO": "new",
+            "RELEASE_TEST_TAG": "v0.0.310",
+            "RELEASE_TEST_LATEST_TAG": "v0.0.309",
+        }
+    )
+
+    result = subprocess.run(
+        [
+            make_executable,
+            "-f",
+            str(wrapper),
+            "release-local",
+            "RELEASE_VIDEO=0",
+            f"SOPS={sops}",
+            f"SOPS_RELEASE_ENV_FILE={ROOT / 'Makefile'}",
+            f"SOPS_RELEASE_ENV_RUNNER={runner}",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Skipping release video because RELEASE_VIDEO=0" in result.stdout
+
+
 def test_release_video_makefile_empty_local_defaults_are_unset():
     release_video = subprocess.run(
         [
