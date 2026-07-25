@@ -82,7 +82,7 @@ def test_code_generator_valid_input_complete(
     mock_unfinished_prompt.assert_called_once_with(
         prompt_text=MOCK_INITIAL_RESPONSE['result'][-600:],
         strength=0.5,
-        temperature=0.0,
+        temperature=0.5,
         time=None,
         language="python",
         verbose=True
@@ -92,7 +92,7 @@ def test_code_generator_valid_input_complete(
         llm_output=MOCK_INITIAL_RESPONSE['result'],
         language="python",
         strength=EXTRACTION_STRENGTH,
-        temperature=0.0,
+        temperature=0.5,
         time=None,
         verbose=True
     )
@@ -136,7 +136,7 @@ def test_code_generator_valid_input_incomplete(
     mock_unfinished_prompt.assert_called_once_with(
         prompt_text=MOCK_INITIAL_RESPONSE['result'][-600:],
         strength=0.5,
-        temperature=0.0,
+        temperature=0.7,
         time=None,
         language="python",
         verbose=False
@@ -154,7 +154,7 @@ def test_code_generator_valid_input_incomplete(
         llm_output=MOCK_FINAL_OUTPUT,
         language="python",
         strength=EXTRACTION_STRENGTH,
-        temperature=0.0,
+        temperature=0.7,
         time=None,
         verbose=False
     )
@@ -299,7 +299,7 @@ def test_code_generator_edge_case_exact_600_chars(
     mock_unfinished_prompt.assert_called_once_with(
         prompt_text='a' * 600,
         strength=0.5,
-        temperature=0.0,
+        temperature=0.5,
         time=None,
         language="python",
         verbose=False
@@ -309,7 +309,7 @@ def test_code_generator_edge_case_exact_600_chars(
         llm_output='a' * 600,
         language="python",
         strength=EXTRACTION_STRENGTH,
-        temperature=0.0,
+        temperature=0.5,
         time=None,
         verbose=False
     )

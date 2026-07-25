@@ -94,7 +94,7 @@
         - Use the provided 'strength' and also pass 'temperature', 'time', and 'language' as needed.
         - If the last 600 characters are empty after stripping whitespace, consider the generation complete without calling unfinished_prompt.
         - a. If incomplete, call the continue_generation function to complete the generation; update the result, aggregate the cost, and update the model name.
-    Step 6. Postprocess the final result (initial or continued) using the postprocess function with a strength of EXTRACTION_STRENGTH. Aggregate the postprocessing cost.
+    Step 6. Postprocess the final result (initial or continued) using the postprocess function with a strength of EXTRACTION_STRENGTH and the caller-provided temperature. Aggregate the postprocessing cost.
         - If postprocess fails, fall back to extracting a fenced code block from the result (prefer substantial blocks that contain 'def test_' or 'import'); if none found, use the raw result.
     Step 7. If verbose is True, print out the total_cost accumulated across the steps (include per-function costs and token counts if available).
     Step 8. Return the unit_test, total_cost and model_name.
