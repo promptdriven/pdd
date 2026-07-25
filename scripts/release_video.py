@@ -15,6 +15,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+try:
+    from release_video_policy import release_video_opt_out_reason
+except ModuleNotFoundError:
+    from scripts.release_video_policy import release_video_opt_out_reason
+
 
 SEMVER_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 YOUTUBE_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s\"'<>]+")
@@ -462,6 +467,12 @@ class ReleaseVideoError(RuntimeError):
     """Raised for actionable release-video failures."""
 
 
+def ensure_release_video_tag_is_allowed(tag: str) -> None:
+    """Fail closed before any release-video artifact or provider operation."""
+    if reason := release_video_opt_out_reason(tag):
+        raise ReleaseVideoError(reason)
+
+
 class ReleaseVideoProcessTimeout(ReleaseVideoError):
     """Raised when a release-video subprocess times out with captured output."""
 
@@ -488,6 +499,7 @@ def main(argv: list[str] | None = None) -> int:
             return preflight_release_video(args)
 
         tag = resolve_release_tag(repo, args.tag or os.environ.get("RELEASE_TAG"))
+        ensure_release_video_tag_is_allowed(tag)
         git_sha = args.git_sha or os.environ.get("RELEASE_GIT_SHA") or git(
             repo,
             "rev-list",
