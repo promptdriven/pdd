@@ -18,7 +18,7 @@ Tests a single configured model by making one `litellm.completion()` call with a
 
 % Requirements
 1. Function: `test_model_interactive()` — show models from `~/.pdd/llm_model.csv`, let user pick one, test it, loop until user exits (empty input or "q")
-2. Test call: `litellm.completion(model=..., messages=[...], timeout=8)`. Only pass `api_key=` for single-var providers.
+2. Test call: `litellm.completion(model=..., messages=[...], timeout=8)`. Only pass `api_key=` for single-var providers. Preserve the exact `claude-opus-5` or `claude-fable-5` catalog model; they are distinct Anthropic API identifiers. Strip only an optional `anthropic/` provider prefix when required by the direct call.
 3. The CSV `api_key` column may be pipe-delimited (e.g. "VAR1|VAR2|VAR3"). Use `parse_api_key_vars()` from provider_manager and `resolve_api_key_from_env()` for single-var lookup so `GOOGLE_API_KEY` satisfies Gemini rows that still name `GEMINI_API_KEY`.
    - Single var: resolve from env including aliases, pass as api_key= to litellm.
    - Multi var: do NOT pass api_key= — litellm reads from os.environ (Bedrock, Azure, Vertex).

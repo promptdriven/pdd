@@ -74,6 +74,34 @@ def test_cli_generate_incremental_flag_passthrough(mock_main, mock_auto_update, 
     # CLI uses --incremental but main receives force_incremental_flag
     assert call_kwargs["force_incremental_flag"] is True
 
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+@pytest.mark.parametrize("requested_model", ["claude-fable-5", "claude-opus-5"])
+def test_global_model_flag_sets_claude_5_for_generate_run(
+    mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch,
+    requested_model,
+):
+    """The public CLI accepts Fable and Opus 5 names without leaking env."""
+    files = create_dummy_files("fable.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'claude-fable-5')
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    seen = {}
+
+    def capture_model(**kwargs):
+        seen["model"] = os.environ.get("PDD_MODEL_DEFAULT")
+        return ('code', False, 0.0, 'claude-fable-5')
+
+    mock_main.side_effect = capture_model
+    result = runner.invoke(
+        cli.cli,
+        ["--model", requested_model, "generate", str(files["fable.prompt"])],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen["model"] == requested_model
+    assert os.environ.get("PDD_MODEL_DEFAULT") is None
+
 # --- Template Functionality Tests ---
 
 @patch('pdd.core.cli.auto_update')
@@ -159,8 +187,31 @@ def test_cli_generate_github_issue_url_failure(mock_agentic, mock_auto_update, r
         cli.cli,
         ["generate", "https://github.com/owner/repo/issues/99"],
     )
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert "Failed" in result.output or "gh CLI not found" in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_agentic_architecture')
+def test_cli_generate_agentic_io_failure_exits_nonzero(
+    mock_agentic, mock_auto_update, runner
+):
+    """Handled filesystem failures must remain visible to hosted executors."""
+    mock_agentic.return_value = (
+        False,
+        "[Errno 17] File exists: 'app/sizzle/layout.tsx'",
+        0.0,
+        "",
+        [],
+    )
+
+    result = runner.invoke(
+        cli.cli,
+        ["generate", "https://github.com/owner/repo/issues/2283"],
+    )
+
+    assert result.exit_code == 1
+    assert "File exists" in result.output
 
 
 @patch('pdd.core.cli.auto_update')

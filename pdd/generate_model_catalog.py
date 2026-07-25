@@ -94,6 +94,11 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     # -----------------------------------------------------------------------
     # Anthropic Claude
     # -----------------------------------------------------------------------
+    # Fable 5 and Opus 5 have no reviewed Code Arena
+    # result yet. Keep their catalog scores at zero rather than inventing
+    # benchmark evidence; they are selected explicitly rather than by rank.
+    "claude-fable-5": 0,
+    "claude-opus-5": 0,
     "claude-opus-4-8": 1575,            # [EST] provisional, until live arena lists it
     "claude-opus-4-7": 1565,            # [CODE] reviewed WebDev manifest row
     "claude-opus-4-6": 1561,            # [CODE] #1
@@ -626,12 +631,17 @@ def _has_region(model_id: str) -> bool:
 # legacy budget shape. Direct Anthropic and Azure AI Foundry routes enforce
 # this; Bedrock / Vertex relays stay on effort because their adaptive
 # conversion is handled by LiteLLM relay patches in llm_invoke.py.
-_ADAPTIVE_CLAUDE_MODELS = {"claude-opus-4-7", "claude-opus-4-8"}
+_ADAPTIVE_CLAUDE_MODELS = {
+    "claude-fable-5",
+    "claude-opus-5",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+}
 _ADAPTIVE_CLAUDE_PROVIDERS = {"anthropic", "azure_ai"}
 
 
 def _is_adaptive_claude_model(model_id: str, litellm_provider: str) -> bool:
-    """Return True for direct Anthropic/Azure AI Opus 4.7+ rows."""
+    """Return True for direct Anthropic/Azure AI adaptive-thinking rows."""
     root = _get_provider_root(litellm_provider)
     if root not in _ADAPTIVE_CLAUDE_PROVIDERS:
         return False
@@ -661,7 +671,14 @@ def _infer_max_reasoning_tokens(model_id: str, litellm_provider: str, entry: dic
     if root in _ANTHROPIC_PROVIDERS:
         if _is_adaptive_claude_model(model_id, litellm_provider):
             # adaptive serialization doesn't read this value, but match the
-            # validated pdd_cloud backend CSV (backend/functions/.pdd/llm_model.csv)
+            # reviewed direct-provider contract. Fable's 128k is an output
+            # limit, not a configurable thinking budget; its adaptive rows
+            # therefore report no max reasoning-token value.
+            if _normalize_model_name(model_id) in {
+                "claude-fable-5",
+                "claude-opus-5",
+            }:
+                return 0
             return 16000
         return 128000
     return 0
@@ -1344,6 +1361,34 @@ _DEFAULT_LOCAL_RUNNER_ROWS: List[Dict[str, Any]] = [
 # shims for PDD's own model routing, not a second model catalog.
 _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
     {
+        # Kimi K3 is available on Moonshot's China API and is not yet present
+        # in the pinned LiteLLM registry. Keep the endpoint on this row: older
+        # Moonshot routes use a different origin and must not be redirected.
+        #
+        # Moonshot publishes RMB prices (2026-07-24): ¥20/M uncached input,
+        # ¥2/M cached input, ¥100/M output. PDD's catalog is USD-only and does
+        # not yet model cached-input tiers, so the USD rates below conservatively
+        # use uncached input and the 2026-07-17 Federal Reserve H.10 rate of
+        # 6.7760 CNY/USD:
+        # https://www.federalreserve.gov/releases/h10/20260720/
+        # Keep this dated conversion explicit; RMB figures must never be copied
+        # into these USD columns directly.
+        "provider": "Moonshot AI",
+        "model": "moonshot/kimi-k3",
+        "input": round(20.0 / 6.7760, 6),
+        "output": round(100.0 / 6.7760, 6),
+        "coding_arena_elo": 0,
+        "model_rank_score": 0,
+        "model_rank_source": "platform-default",
+        "base_url": "https://api.moonshot.cn/v1",
+        "api_key": "MOONSHOT_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
+        "context_limit": 1_048_576,
+    },
+    {
         # GPT-5.6 direct OpenAI API twin of the chatgpt/gpt-5.6-sol subscription
         # default (Issue #1986 sec. 4). Ships so the direct OPENAI_API_KEY /
         # llm_invoke selection path can resolve 5.6 from the catalog. No
@@ -1364,6 +1409,48 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "structured_output": True,
         "reasoning_type": "effort",
         "location": "",
+    },
+    {
+        # Claude Fable 5 is Anthropic's generally available flagship model.
+        # It uses adaptive thinking exclusively, has a 1M-token context
+        # window, and is priced at $10 / $50 per million input/output tokens.
+        # Seed the direct row until the installed LiteLLM catalog carries the
+        # model so explicit ANTHROPIC_API_KEY selection remains stable.
+        "provider": "Anthropic",
+        "model": "claude-fable-5",
+        "input": 10.0,
+        "output": 50.0,
+        # Fable has no reviewed Arena/DeepSWE score yet, so preserve this
+        # unscored provider-default row without fabricating benchmark evidence.
+        "coding_arena_elo": 0,
+        "model_rank_score": 0,
+        "model_rank_source": "platform-default",
+        "base_url": "",
+        "api_key": "ANTHROPIC_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "adaptive",
+        "location": "",
+        "context_limit": 1_000_000,
+    },
+    {
+        # Claude Opus 5 is a distinct direct Anthropic model. Seed its official
+        # API identifier and rates until the installed LiteLLM catalog carries
+        # it, preserving explicit local selection.
+        "provider": "Anthropic",
+        "model": "claude-opus-5",
+        "input": 5.0,
+        "output": 25.0,
+        "coding_arena_elo": 0,
+        "model_rank_score": 0,
+        "model_rank_source": "platform-default",
+        "base_url": "",
+        "api_key": "ANTHROPIC_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "adaptive",
+        "location": "",
+        "context_limit": 1_000_000,
     },
     {
         # Claude Opus 4.8 (released 2026-05-28) is PDD's default Opus
@@ -1776,6 +1863,26 @@ def _mandatory_rows_missing_from(
     return missing
 
 
+def _overlay_mandatory_contract_fields(row: dict) -> dict:
+    """Preserve mandatory capability contracts on LiteLLM-derived rows.
+
+    A reviewed score lets a LiteLLM row survive the catalog cutoff, so the
+    duplicate-prevention logic intentionally does not append its mandatory
+    fallback.  Keep capability fields from that fallback on the surviving row
+    rather than allowing a catalog refresh to weaken a reviewed PDD contract.
+    """
+    row_id = (row.get("provider", ""), row.get("model", ""))
+    for default_row in _MANDATORY_MODEL_ROWS:
+        default_id = (default_row.get("provider", ""), default_row.get("model", ""))
+        if row_id != default_id:
+            continue
+        for field in ("max_reasoning_tokens", "context_limit"):
+            if field in default_row:
+                row[field] = default_row[field]
+        break
+    return row
+
+
 # Issue #1269: the ChatGPT/Codex SUBSCRIPTION family is hand-managed. It is
 # billed by a flat-rate ChatGPT plan (not per-token API keys) and is not present
 # in ``litellm.model_cost`` in a curatable form, so it is intentionally skipped
@@ -1956,7 +2063,7 @@ def build_rows(
         # Location (Vertex AI models default to global)
         location = "global" if litellm_provider.startswith("vertex_ai") else ""
 
-        rows.append({
+        generated_row = {
             "provider": display_name,
             "model": model_id,
             "input": input_cost,
@@ -1970,7 +2077,8 @@ def build_rows(
             "structured_output": structured,
             "reasoning_type": reasoning_type,
             "location": location,
-        })
+        }
+        rows.append(_overlay_mandatory_contract_fields(generated_row))
 
     if skipped_previews:
         print(

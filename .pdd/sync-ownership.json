@@ -95,6 +95,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".github/workflows/global-sync-m0-bootstrap.yml",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".github/workflows/pdd-secrets-dispatch.yml",
       "role": "human-maintained"
     },
@@ -114,6 +121,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".gitignore",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/global-sync/m0-bootstrap-policy.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -176,6 +190,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/agentic_checkup_orchestrator_python_run.json",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/agentic_architecture_python.json",
       "preauthorize_absent": true,
       "role": "human-maintained"
     },
@@ -351,6 +372,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/commands_checkup_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/commands_generate_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -2967,6 +2995,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "docs/kimi_k3.md",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "docs/comparison.md",
       "role": "human-maintained"
     },
@@ -5195,6 +5230,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "pdd/data/harness_registry.csv",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "pdd/data/provider_catalog.v1.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -9940,6 +9982,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "scripts/bootstrap_provider_catalog.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "scripts/build_vitest_fd_cloexec_addon.py",
       "preauthorize_absent": true,
       "role": "human-maintained"
@@ -10002,6 +10051,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "scripts/provider_catalog.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "scripts/release_video.py",
       "role": "human-maintained"
     },
@@ -10022,6 +10078,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "scripts/verify_global_sync_m0_samples.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "scripts/verify_global_sync_m0_bootstrap.py",
       "preauthorize_absent": true,
       "role": "human-maintained"
     },
@@ -13264,6 +13327,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "tests/test_kimi_k3_integration.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "tests/test_provider_env_isolation.py",
       "role": "human-maintained"
     },
@@ -13271,6 +13341,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_provider_manager.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_provider_catalog.py",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {

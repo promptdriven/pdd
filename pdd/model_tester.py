@@ -197,12 +197,14 @@ def _run_test(row: Dict[str, Any]) -> Dict[str, Any]:
     """
     import litellm
     from pdd.provider_manager import parse_api_key_vars, resolve_api_key_from_env
+    from pdd.routing_policy import canonicalize_claude_cli_model
 
     model_name: str = str(row.get("model", ""))
+    effective_model_name = canonicalize_claude_cli_model(model_name)
     base_url = _resolve_base_url(row)
 
     kwargs: Dict[str, Any] = {
-        "model": model_name,
+        "model": effective_model_name,
         "messages": [{"role": "user", "content": "Say OK"}],
         "timeout": 8,
     }

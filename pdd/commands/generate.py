@@ -484,6 +484,8 @@ def generate(
                     interactive=interactive,
                     apply=apply,
                 )
+            else:
+                _mark_command_failed(ctx)
             return (message, cost, model) if success else None
 
         if dry_run:
@@ -535,6 +537,8 @@ def generate(
                     interactive=interactive,
                     apply=apply,
                 )
+            else:
+                _mark_command_failed(ctx)
             return (message, cost, model) if success else None
 
         if project_root:

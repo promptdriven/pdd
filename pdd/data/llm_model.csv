@@ -22,6 +22,8 @@ Anthropic,claude-opus-4-5,5.0,25.0,1468,1468,arena-elo-fallback,,ANTHROPIC_API_K
 Anthropic,claude-sonnet-4-5,3.0,15.0,1386,1386,arena-elo-fallback,,ANTHROPIC_API_KEY,128000,True,budget,,False,
 Anthropic,claude-4-sonnet-20250514,3.0,15.0,1350,1350,static-prefix,,ANTHROPIC_API_KEY,128000,True,budget,,False,
 Anthropic,claude-haiku-4-5,1.0,5.0,1316,1316,arena-elo-fallback,,ANTHROPIC_API_KEY,128000,True,budget,,False,
+Anthropic,claude-fable-5,10.0,50.0,0,0,platform-default,,ANTHROPIC_API_KEY,0,True,adaptive,,False,1000000
+Anthropic,claude-opus-5,5.0,25.0,0,0,platform-default,,ANTHROPIC_API_KEY,0,True,adaptive,,False,1000000
 Azure AI,azure_ai/gpt-5.4,2.5,15.0,1437,15600,deepswe-solve-rate,,AZURE_AI_API_KEY,128000,True,budget,,False,
 Azure AI,azure_ai/claude-opus-4-7,5.0,25.0,1565,15400,deepswe-solve-rate,,AZURE_AI_API_KEY,16000,True,adaptive,,False,
 Azure AI,azure_ai/claude-sonnet-4-6,3.0,15.0,1525,13200,deepswe-solve-rate,,AZURE_AI_API_KEY,128000,True,budget,,False,
@@ -137,6 +139,7 @@ MiniMax,minimax/MiniMax-M2,0.3,1.2,1313,1313,static-prefix,,MINIMAX_API_KEY,0,Tr
 Moonshot AI,moonshot/kimi-k2.6,0.95,4.0,1529,12400,deepswe-solve-rate,,MOONSHOT_API_KEY,0,True,effort,,False,
 Moonshot AI,moonshot/kimi-k2.5,0.6,3.0,1408,1408,arena-elo-fallback,,MOONSHOT_API_KEY,0,True,effort,,False,
 Moonshot AI,moonshot/kimi-k2-thinking,0.6,2.5,1333,1333,static-prefix,,MOONSHOT_API_KEY,0,True,effort,,False,
+Moonshot AI,moonshot/kimi-k3,2.951594,14.757969,0,0,platform-default,https://api.moonshot.cn/v1,MOONSHOT_API_KEY,0,True,effort,,False,1048576
 Nebius,nebius/deepseek-ai/DeepSeek-R1-0528,0.8,2.4,1370,1370,static-prefix,,NEBIUS_API_KEY,0,True,effort,,False,
 Nebius,nebius/deepseek-ai/DeepSeek-V3,0.5,1.5,1300,1300,static-prefix,,NEBIUS_API_KEY,0,True,none,,False,
 Nebius,nebius/deepseek-ai/DeepSeek-V3-0324,0.5,1.5,1300,1300,static-prefix,,NEBIUS_API_KEY,0,True,none,,False,
@@ -225,6 +228,8 @@ Together AI,together_ai/zai-org/GLM-4.6,0.6,2.2,1354,1354,arena-elo-fallback,,TO
 Together AI,together_ai/deepseek-ai/DeepSeek-R1,3.0,7.0,1340,1340,static-prefix,,TOGETHERAI_API_KEY,0,True,none,,False,
 Together AI,together_ai/moonshotai/Kimi-K2-Instruct,1.0,3.0,1310,1310,static-prefix,,TOGETHERAI_API_KEY,0,True,none,,False,
 Together AI,together_ai/deepseek-ai/DeepSeek-V3.1,0.6,1.7,1300,1300,static-prefix,,TOGETHERAI_API_KEY,0,True,effort,,False,
+TokenRouter,openai/moonshotai/kimi-k3,3.0,15.0,1400,1400,static-prefix,https://api.tokenrouter.com/v1,TOKENROUTER_API_KEY,0,True,none,,False,1048576
+TokenRouter,openai/z-ai/glm-5.2-free,0.0,0.0,1510,1510,static-prefix,https://api.tokenrouter.com/v1,TOKENROUTER_API_KEY,0,False,none,,False,1000000
 Vercel AI Gateway,vercel_ai_gateway/anthropic/claude-opus-4.6,5.0,25.0,1548,1548,arena-elo-fallback,,VERCEL_AI_GATEWAY_API_KEY,0,True,effort,,False,
 Vercel AI Gateway,vercel_ai_gateway/anthropic/claude-opus-4.5,5.0,25.0,1468,1468,arena-elo-fallback,,VERCEL_AI_GATEWAY_API_KEY,0,True,effort,,False,
 Vercel AI Gateway,vercel_ai_gateway/anthropic/claude-opus-4.1,15.0,75.0,1389,1389,static-prefix,,VERCEL_AI_GATEWAY_API_KEY,0,True,effort,,False,
