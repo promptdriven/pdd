@@ -996,7 +996,11 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 			echo "Error: tag $$EXISTING_TAG on origin points at $$REMOTE_TAG_COMMIT, not HEAD ($$HEAD_SHA)."; \
 			exit 1; \
 		fi; \
-		make --no-print-directory release-video RELEASE_TAG="$$EXISTING_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
+		if [ "$$EXISTING_TAG" = "$(RELEASE_VIDEO_OPT_OUT_TAG)" ]; then \
+			echo "Skipping release video for opted-out tag $$EXISTING_TAG."; \
+		else \
+			make --no-print-directory release-video RELEASE_TAG="$$EXISTING_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
+		fi; \
 		exit 0; \
 	fi; \
 	LATEST_TAG=$$(git tag --list --merged HEAD --sort=-v:refname 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
@@ -1021,7 +1025,11 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 	git tag -a "$$NEW_TAG" -m "Release $$NEW_TAG"; \
 	git push origin "$$NEW_TAG"; \
 	echo "Tag $$NEW_TAG is on origin. GHA will request gltanaka approval, then publish."; \
-	make --no-print-directory release-video RELEASE_TAG="$$NEW_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"
+	if [ "$$NEW_TAG" = "$(RELEASE_VIDEO_OPT_OUT_TAG)" ]; then \
+		echo "Skipping release video for opted-out tag $$NEW_TAG."; \
+	else \
+		make --no-print-directory release-video RELEASE_TAG="$$NEW_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
+	fi
 	@# Post-release cleanup check (Issue #186)
 	@make check-suspicious-files
 
