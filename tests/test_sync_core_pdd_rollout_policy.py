@@ -3275,12 +3275,13 @@ def test_global_sync_m0_bootstrap_installs_only_the_audited_runtime_lock() -> No
 
 def _run_m0_frozen_sample_launcher(
     verifier: object,
-    sample_root: Path,
+    protected_root: Path,
     sample_path: Path,
+    candidate_root: Path,
     *sample_arguments: str,
     launcher_prefix: str = "",
 ) -> subprocess.CompletedProcess[str]:
-    """Run the protected launcher with every path passed as a separate argv item."""
+    """Run the protected launcher with distinct protected and candidate roots."""
     launcher = getattr(verifier, "_FROZEN_SAMPLE_LAUNCHER")
     assert isinstance(launcher, str)
     return subprocess.run(
@@ -3289,8 +3290,9 @@ def _run_m0_frozen_sample_launcher(
             "-I",
             "-c",
             launcher_prefix + launcher,
-            str(sample_root),
+            str(protected_root),
             str(sample_path),
+            str(candidate_root),
             *sample_arguments,
         ],
         cwd=ROOT,
@@ -3324,6 +3326,7 @@ builtins.__import__ = _guarded_import
         verifier,
         ROOT,
         ROOT / M0_BOOTSTRAP_FROZEN_SAMPLE_PATH,
+        ROOT,
         "--help",
         launcher_prefix=import_guard,
     )
@@ -3334,30 +3337,70 @@ builtins.__import__ = _guarded_import
 def test_global_sync_m0_bootstrap_frozen_sample_launcher_skips_hostile_initializers(
     tmp_path: Path,
 ) -> None:
-    """Neither package initializer nor unrelated sync-core code can execute."""
+    """The facade loads only candidate modules and skips candidate initializers."""
     verifier = _load_m0_bootstrap_verifier()
-    sample_root = tmp_path / "protected-sample-root"
-    sample_path = sample_root / M0_BOOTSTRAP_FROZEN_SAMPLE_PATH
-    sample_path.parent.mkdir(parents=True)
-    shutil.copy2(ROOT / M0_BOOTSTRAP_FROZEN_SAMPLE_PATH, sample_path)
-    sync_core_root = sample_root / "pdd" / "sync_core"
-    shutil.copytree(ROOT / "pdd" / "sync_core", sync_core_root)
+    candidate_root = tmp_path / "materialized-candidate-root"
+    shutil.copytree(ROOT / "pdd", candidate_root / "pdd")
+    candidate_pdd_root = candidate_root / "pdd"
+    sync_core_root = candidate_pdd_root / "sync_core"
     marker = tmp_path / "hostile-initializer-executed"
+    module_paths = tmp_path / "candidate-module-paths.json"
     sentinel = (
         "from pathlib import Path\n"
         f"Path({str(marker)!r}).write_text('executed', encoding='utf-8')\n"
         "raise RuntimeError('hostile initializer executed')\n"
     )
-    (sample_root / "pdd" / "__init__.py").write_text(sentinel, encoding="utf-8")
+    candidate_pdd_root.joinpath("__init__.py").write_text(sentinel, encoding="utf-8")
     (sync_core_root / "__init__.py").write_text(sentinel, encoding="utf-8")
-    (sync_core_root / "certificate.py").write_text(sentinel, encoding="utf-8")
-    (sync_core_root / "runner.py").write_text(sentinel, encoding="utf-8")
+    import_observer = f'''
+import importlib
+import json
+from pathlib import Path
+
+_tracked_modules = {{
+    "pdd.sync_core.types",
+    "pdd.sync_core.fingerprint_store",
+    "pdd.sync_core.manifest",
+    "pdd.sync_core.snapshot",
+    "pdd.sync_core.verification",
+}}
+_loaded_module_paths = {{}}
+_original_import_module = importlib.import_module
+
+def _recording_import_module(name, package=None):
+    module = _original_import_module(name, package)
+    if name in _tracked_modules:
+        _loaded_module_paths[name] = module.__file__
+        Path({str(module_paths)!r}).write_text(
+            json.dumps(_loaded_module_paths, sort_keys=True), encoding="utf-8"
+        )
+    return module
+
+importlib.import_module = _recording_import_module
+'''
 
     result = _run_m0_frozen_sample_launcher(
-        verifier, sample_root, sample_path, "--help"
+        verifier,
+        ROOT,
+        ROOT / M0_BOOTSTRAP_FROZEN_SAMPLE_PATH,
+        candidate_root,
+        "--help",
+        launcher_prefix=import_observer,
     )
     assert result.returncode == 0, result.stderr
     assert not marker.exists()
+    loaded_module_paths = json.loads(module_paths.read_text(encoding="utf-8"))
+    assert set(loaded_module_paths) == {
+        "pdd.sync_core.types",
+        "pdd.sync_core.fingerprint_store",
+        "pdd.sync_core.manifest",
+        "pdd.sync_core.snapshot",
+        "pdd.sync_core.verification",
+    }
+    for module_path in loaded_module_paths.values():
+        resolved_module_path = Path(module_path).resolve()
+        assert resolved_module_path.is_relative_to(candidate_root.resolve())
+        assert not resolved_module_path.is_relative_to(ROOT.resolve())
     assert "usage:" in result.stdout
 
 
@@ -3368,7 +3411,7 @@ def test_global_sync_m0_bootstrap_frozen_sample_launcher_rejects_uncontained_pat
     verifier = _load_m0_bootstrap_verifier()
     outside = tmp_path / "candidate-loader.py"
     outside.write_text("raise RuntimeError('candidate loader ran')\n", encoding="utf-8")
-    result = _run_m0_frozen_sample_launcher(verifier, ROOT, outside, "--help")
+    result = _run_m0_frozen_sample_launcher(verifier, ROOT, outside, ROOT, "--help")
     assert result.returncode != 0
     assert "candidate loader ran" not in result.stderr
 

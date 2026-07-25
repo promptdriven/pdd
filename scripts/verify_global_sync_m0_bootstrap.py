@@ -47,6 +47,115 @@ REQUIRED_COPY_RECORD = {
     "score": 96,
     "status": "C",
 }
+FROZEN_SAMPLE_FACADE_EXPORTS = (
+    "FingerprintProvenance",
+    "FingerprintRecord",
+    "FingerprintStore",
+    "ManifestError",
+    "SemanticStatus",
+    "SnapshotError",
+    "build_unit_manifest",
+    "build_unit_snapshot",
+    "load_verification_profiles",
+)
+
+# This child process runs only protected-base code.  It deliberately installs
+# namespace packages from the materialized candidate before the frozen script
+# is evaluated, so neither broad package initializer can import the project's
+# unrelated dependency graph.  The argv contract is (protected sample root,
+# frozen sample path, candidate module root, sample args).
+_FROZEN_SAMPLE_LAUNCHER = r'''
+import importlib
+import importlib.machinery
+import importlib.util
+from pathlib import Path
+import runpy
+import sys
+
+
+FACADE_EXPORTS = (
+    "FingerprintProvenance",
+    "FingerprintRecord",
+    "FingerprintStore",
+    "ManifestError",
+    "SemanticStatus",
+    "SnapshotError",
+    "build_unit_manifest",
+    "build_unit_snapshot",
+    "load_verification_profiles",
+)
+
+
+def _contained_path(value, root, label):
+    path = Path(value).resolve(strict=True)
+    try:
+        path.relative_to(root)
+    except ValueError as error:
+        raise SystemExit(label + " escapes the protected sample root") from error
+    return path
+
+
+def _namespace_package(name, root):
+    spec = importlib.machinery.ModuleSpec(name, loader=None, is_package=True)
+    spec.submodule_search_locations = [str(root)]
+    package = importlib.util.module_from_spec(spec)
+    package.__path__ = [str(root)]
+    sys.modules[name] = package
+    return package
+
+
+if len(sys.argv) < 4:
+    raise SystemExit(
+        "protected frozen sample launcher requires protected root, script, and candidate root"
+    )
+
+protected_root = Path(sys.argv[1]).resolve(strict=True)
+sample_path = _contained_path(sys.argv[2], protected_root, "frozen sample path")
+candidate_root = Path(sys.argv[3]).resolve(strict=True)
+if not protected_root.is_dir() or not candidate_root.is_dir():
+    raise SystemExit("protected and candidate roots must be directories")
+pdd_root = _contained_path(
+    candidate_root / "pdd", candidate_root, "candidate pdd package root"
+)
+sync_core_root = _contained_path(
+    pdd_root / "sync_core", candidate_root, "candidate sync-core package root"
+)
+if not sample_path.is_file() or not pdd_root.is_dir() or not sync_core_root.is_dir():
+    raise SystemExit("protected frozen sample runtime is incomplete")
+
+for loaded_name in tuple(sys.modules):
+    if loaded_name == "pdd" or loaded_name.startswith("pdd."):
+        del sys.modules[loaded_name]
+
+pdd = _namespace_package("pdd", pdd_root)
+sync_core = _namespace_package("pdd.sync_core", sync_core_root)
+setattr(pdd, "sync_core", sync_core)
+
+types = importlib.import_module("pdd.sync_core.types")
+fingerprint_store = importlib.import_module("pdd.sync_core.fingerprint_store")
+manifest = importlib.import_module("pdd.sync_core.manifest")
+snapshot = importlib.import_module("pdd.sync_core.snapshot")
+verification = importlib.import_module("pdd.sync_core.verification")
+facade = {
+    "FingerprintProvenance": types.FingerprintProvenance,
+    "FingerprintRecord": types.FingerprintRecord,
+    "FingerprintStore": fingerprint_store.FingerprintStore,
+    "ManifestError": manifest.ManifestError,
+    "SemanticStatus": types.SemanticStatus,
+    "SnapshotError": snapshot.SnapshotError,
+    "build_unit_manifest": manifest.build_unit_manifest,
+    "build_unit_snapshot": snapshot.build_unit_snapshot,
+    "load_verification_profiles": verification.load_verification_profiles,
+}
+if tuple(facade) != FACADE_EXPORTS:
+    raise SystemExit("protected frozen sample facade is not exact")
+for export_name, export_value in facade.items():
+    setattr(sync_core, export_name, export_value)
+sync_core.__all__ = FACADE_EXPORTS
+
+sys.argv = [str(sample_path), *sys.argv[4:]]
+runpy.run_path(str(sample_path), run_name="__main__")
+'''
 
 
 class BootstrapVerificationError(ValueError):
@@ -1066,7 +1175,14 @@ def _run_frozen_replay(
     assert isinstance(sample, dict)
     assert isinstance(replay, dict)
     assert isinstance(canary, dict)
-    sample_path = repository_root / str(sample["path"])
+    protected_root = repository_root.resolve()
+    sample_path = (protected_root / str(sample["path"])).resolve()
+    try:
+        sample_path.relative_to(protected_root)
+    except ValueError as error:
+        raise BootstrapVerificationError(
+            "protected frozen sample path escapes the protected checkout"
+        ) from error
     if hashlib.sha256(sample_path.read_bytes()).hexdigest() != sample["sha256"]:
         raise BootstrapVerificationError("protected sample script does not match policy")
     with tempfile.TemporaryDirectory(prefix="pdd-m0-bootstrap-") as temporary:
@@ -1098,7 +1214,11 @@ def _run_frozen_replay(
         command = [
             sys.executable,
             "-I",
+            "-c",
+            _FROZEN_SAMPLE_LAUNCHER,
+            str(protected_root),
             str(sample_path),
+            str(candidate_root),
             "--root",
             str(candidate_root),
             "--base-sha",

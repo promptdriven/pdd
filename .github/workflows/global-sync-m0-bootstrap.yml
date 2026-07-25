@@ -46,7 +46,8 @@ jobs:
           python-version: '3.12'
 
       - name: Install protected-base dependencies
-        run: python -m pip install -e .
+        run: >-
+          python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes --only-binary=:all: --no-deps -r .pdd/global-sync/runtime-linux-x86_64-cp312.lock
 
       - name: Verify candidate Git objects against protected policy
         env:
