@@ -15,14 +15,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-try:
-    from release_video_policy import release_video_opt_out_reason
-except ModuleNotFoundError:
-    from scripts.release_video_policy import release_video_opt_out_reason
-
 
 SEMVER_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 YOUTUBE_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s\"'<>]+")
+RELEASE_VIDEO_OPT_OUT_TAG = "v0.0.309"
 IDEMPOTENCY_PROVENANCE_RE = re.compile(r"[^a-z0-9._-]+")
 PDS_RUN_HANDLE_LINE_RE = re.compile(
     r"^\[pds\]\s+release-video run handle:\s+(?P<fields>.+)$",
@@ -465,6 +461,16 @@ CLAUDE_FAILURE_CLASSES: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 class ReleaseVideoError(RuntimeError):
     """Raised for actionable release-video failures."""
+
+
+def release_video_opt_out_reason(tag: str) -> str | None:
+    """Return the release-video denial reason for the exact excluded tag."""
+    if tag == RELEASE_VIDEO_OPT_OUT_TAG:
+        return (
+            f"{tag} is opted out and release video operations must not create, "
+            "upload, or distribute a video."
+        )
+    return None
 
 
 def ensure_release_video_tag_is_allowed(tag: str) -> None:

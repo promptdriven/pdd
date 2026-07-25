@@ -60,6 +60,7 @@ PDD_1875_COMPOSED_HEAD = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 TERRA_SOL_PROTECTED_BASE = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 TERRA_SOL_COMPOSED_HEAD = "b3902318c35c279e49e6397838825c95bd568942"
 SYNC_ROLLOUT_PROTECTED_BASE = "dec539aa8d0697e357e2077c1dbc73b0621aa617"
+RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE = "c93332e9bc5956677280a3a015c32d16c99b54cb"
 PR_1971_COMBINED_PROFILE_DIGEST = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
 )
@@ -190,9 +191,6 @@ GLOBAL_SYNC_M0_BOOTSTRAP_UNAUTHORIZED_SIBLING_PATHS = {
 GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/runtime-linux-x86_64-cp312.lock",
 }
-RELEASE_VIDEO_POLICY_PREAUTHORIZED_PATHS = {
-    "scripts/release_video_policy.py",
-}
 STANDALONE_CHECKER_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/standalone-checker-modules.json",
     "pdd/sync_core/standalone_package.py",
@@ -250,6 +248,15 @@ SYNC_ROLLOUT_EXISTING_METADATA_PATHS = {
     ".pdd/meta/generate_test_python.json",
     ".pdd/meta/generate_test_python_run.json",
 }
+RELEASE_VIDEO_OPT_OUT_EXISTING_PATHS = {
+    ".github/workflows/backfill-release-video-discord.yml",
+    ".github/workflows/release.yml",
+    "Makefile",
+    "scripts/backfill_release_video_discord.py",
+    "scripts/release_video.py",
+    "tests/test_release_video.py",
+    "tests/test_release_video_discord_backfill.py",
+}
 PREAUTHORIZED_CHILD_PATHS = (
     LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS
     | ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
@@ -259,7 +266,6 @@ PREAUTHORIZED_CHILD_PATHS = (
     | KIMI_K3_PROVIDER_CATALOG_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_M0_BOOTSTRAP_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
-    | RELEASE_VIDEO_POLICY_PREAUTHORIZED_PATHS
     | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
     | {
@@ -1628,6 +1634,39 @@ def test_sync_rollout_repair_metadata_bridge_stays_ordinary() -> None:
     ) == base_rules
 
 
+def test_release_video_opt_out_uses_only_actual_base_owned_paths() -> None:
+    """The v0.0.309 guard must not introduce a new tracked policy artifact."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "release-video opt-out protected history",
+        RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE,
+    )
+    manifest = build_unit_manifest(
+        ROOT,
+        base_ref=RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE,
+        head_ref="HEAD",
+    )
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix()
+        in RELEASE_VIDEO_OPT_OUT_EXISTING_PATHS
+    }
+
+    assert not manifest.invalid_reasons
+    assert not manifest.unaccounted_tracked_paths
+    assert set(records) == RELEASE_VIDEO_OPT_OUT_EXISTING_PATHS
+    assert all(
+        item.in_base
+        and item.in_head
+        and item.inventory is InventoryStatus.HUMAN_OWNED
+        and item.candidate_id.role == "human-maintained"
+        and item.ownership_provenance
+        == f"protected-ownership:pdd-maintainers:{path}"
+        for path, item in records.items()
+    )
+
+
 def _candidate_only_repo(tmp_path: Path) -> tuple[Path, str, str]:
     repo = tmp_path / "candidate-only"
     repo.mkdir()
@@ -2708,24 +2747,6 @@ def test_global_sync_runtime_lock_path_is_exactly_preauthorized() -> None:
         "pdd/sync_core/global_sync_ledger.py",
         "tests/test_global_sync_ledger.py",
     }
-
-
-def test_release_video_policy_path_is_exactly_preauthorized() -> None:
-    """Only the reviewed release-video policy helper receives authority."""
-    ownership = json.loads(OWNERSHIP_PATH.read_text(encoding="utf-8"))
-    rules = {row["pattern"]: row for row in ownership["rules"]}
-    assert {
-        path: rules.get(path) for path in RELEASE_VIDEO_POLICY_PREAUTHORIZED_PATHS
-    } == {
-        path: {"pattern": path, **PREAUTHORIZED_CHILD_OWNERSHIP}
-        for path in RELEASE_VIDEO_POLICY_PREAUTHORIZED_PATHS
-    }
-    assert {
-        row["pattern"]
-        for row in ownership["rules"]
-        if row.get("preauthorize_absent", False)
-        and row["pattern"].startswith("scripts/release_video")
-    } == RELEASE_VIDEO_POLICY_PREAUTHORIZED_PATHS
 
 
 def test_global_sync_runtime_lock_composes_without_sibling_authority(

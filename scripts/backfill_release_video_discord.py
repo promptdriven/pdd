@@ -18,9 +18,9 @@ from collections.abc import Callable
 from typing import Any
 
 try:
-    from release_video_policy import release_video_opt_out_reason
+    from release_video import release_video_opt_out_reason
 except ModuleNotFoundError:
-    from scripts.release_video_policy import release_video_opt_out_reason
+    from scripts.release_video import release_video_opt_out_reason
 
 
 SEMVER_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
