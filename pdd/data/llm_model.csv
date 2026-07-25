@@ -227,6 +227,7 @@ Together AI,together_ai/deepseek-ai/DeepSeek-R1,3.0,7.0,1340,1340,static-prefix,
 Together AI,together_ai/moonshotai/Kimi-K2-Instruct,1.0,3.0,1310,1310,static-prefix,,TOGETHERAI_API_KEY,0,True,none,,False,
 Together AI,together_ai/deepseek-ai/DeepSeek-V3.1,0.6,1.7,1300,1300,static-prefix,,TOGETHERAI_API_KEY,0,True,effort,,False,
 TokenRouter,openai/moonshotai/kimi-k3,3.0,15.0,1400,1400,static-prefix,https://api.tokenrouter.com/v1,TOKENROUTER_API_KEY,0,True,none,,False,1048576
+TokenRouter,openai/z-ai/glm-5.2-free,0.0,0.0,1510,1510,static-prefix,https://api.tokenrouter.com/v1,TOKENROUTER_API_KEY,0,False,none,,False,1000000
 Vercel AI Gateway,vercel_ai_gateway/anthropic/claude-opus-4.6,5.0,25.0,1548,1548,arena-elo-fallback,,VERCEL_AI_GATEWAY_API_KEY,0,True,effort,,False,
 Vercel AI Gateway,vercel_ai_gateway/anthropic/claude-opus-4.5,5.0,25.0,1468,1468,arena-elo-fallback,,VERCEL_AI_GATEWAY_API_KEY,0,True,effort,,False,
 Vercel AI Gateway,vercel_ai_gateway/anthropic/claude-opus-4.1,15.0,75.0,1389,1389,static-prefix,,VERCEL_AI_GATEWAY_API_KEY,0,True,effort,,False,
