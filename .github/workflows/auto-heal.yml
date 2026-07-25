@@ -40,6 +40,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   issue_comment:
     types: [created]
+  # One-shot secret migration. Its jobs are additionally fail-closed to the
+  # canonical repository and refs/heads/main below.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -346,3 +349,125 @@ jobs:
             -f conclusion="$conclusion" \
             -f "output[title]=auto-heal $conclusion" \
             -f "output[summary]=$summary"
+
+  # This is intentionally a one-shot, manually dispatched migration. It first
+  # copies the current values into the restricted environment and does not
+  # retire repository-level sources. The second job independently resolves the
+  # environment values and only retires sources after a fresh canary proof.
+  copy_pdd_cloud_app_secrets_to_environment:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'promptdriven/pdd'
+    environment: pdd-cloud-read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    env:
+      PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
+      PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
+      GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+    steps:
+      - name: Copy App secrets into the restricted environment
+        id: copy_environment_secrets
+        run: |
+          set -euo pipefail
+          if [ -z "$PDD_CLOUD_APP_ID" ] ||
+             [ -z "$PDD_CLOUD_APP_PRIVATE_KEY" ] ||
+             [ -z "$GH_TOKEN" ]; then
+            echo "::error::A required migration credential is empty; refusing to change secrets."
+            exit 1
+          fi
+
+          printf '%s' "$PDD_CLOUD_APP_ID" | gh secret set PDD_CLOUD_APP_ID --env pdd-cloud-read --repo promptdriven/pdd
+          printf '%s' "$PDD_CLOUD_APP_PRIVATE_KEY" | gh secret set PDD_CLOUD_APP_PRIVATE_KEY --env pdd-cloud-read --repo promptdriven/pdd
+
+  verify_pdd_cloud_and_retire_repository_app_secrets:
+    needs: copy_pdd_cloud_app_secrets_to_environment
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'promptdriven/pdd'
+    environment: pdd-cloud-read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    env:
+      PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
+      PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
+    steps:
+      - name: Require freshly resolved environment App secrets
+        id: require_environment_app_secrets
+        run: |
+          set -euo pipefail
+          if [ -z "$PDD_CLOUD_APP_ID" ] ||
+             [ -z "$PDD_CLOUD_APP_PRIVATE_KEY" ]; then
+            echo "::error::Required environment App secret is empty; refusing to continue."
+            exit 1
+          fi
+
+      - name: Mint pdd_cloud contents-read App token
+        id: pdd_cloud_contents_token
+        # SHA-pinned to v3.2.0 (https://github.com/actions/create-github-app-token/releases/tag/v3.2.0)
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ env.PDD_CLOUD_APP_ID }}
+          private-key: ${{ env.PDD_CLOUD_APP_PRIVATE_KEY }}
+          owner: promptdriven
+          repositories: pdd_cloud
+          permission-contents: read
+          # A dedicated always-run cleanup below revokes the token before any
+          # repository-secret retirement step can receive the private token.
+          skip-token-revoke: "true"
+
+      - name: Verify the exact pdd_cloud canary commit
+        id: verify_canary
+        env:
+          GH_TOKEN: ${{ steps.pdd_cloud_contents_token.outputs.token }}
+          CANARY_REPOSITORY: promptdriven/pdd_cloud
+          CANARY_SHA: 09f9d3fea71c4c0ed6655f2acd5e95b14a32c3c8
+        run: |
+          set -euo pipefail
+          resolved_sha=$(gh api "repos/$CANARY_REPOSITORY/git/commits/$CANARY_SHA" --jq '.sha')
+          if [ "$resolved_sha" != "$CANARY_SHA" ]; then
+            echo "::error::The pdd_cloud canary did not resolve to the expected commit."
+            exit 1
+          fi
+
+      - name: Revoke pdd_cloud App token
+        id: revoke_pdd_cloud_token
+        if: always() && steps.pdd_cloud_contents_token.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.pdd_cloud_contents_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh api -X DELETE /installation/token
+
+      - name: Retire repository-level App secret copies
+        id: retire_repository_secret_copies
+        if: success() && steps.verify_canary.outcome == 'success' && steps.revoke_pdd_cloud_token.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          REPOSITORY: promptdriven/pdd
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Repository-management token is empty; refusing to retire secrets."
+            exit 1
+          fi
+
+          repository_secret_names=(PDD_CLOUD_APP_PRIVATE_KEY PDD_CLOUD_APP_ID)
+          current_secret_names=$(gh secret list --repo "$REPOSITORY" --json name --jq '.[].name')
+          for secret_name in "${repository_secret_names[@]}"; do
+            if printf '%s\n' "$current_secret_names" | grep -Fxq -- "$secret_name"; then
+              gh secret delete "$secret_name" --repo "$REPOSITORY"
+            fi
+          done
+
+          remaining_secret_names=$(gh secret list --repo "$REPOSITORY" --json name --jq '.[].name')
+          for secret_name in "${repository_secret_names[@]}"; do
+            if printf '%s\n' "$remaining_secret_names" | grep -Fxq -- "$secret_name"; then
+              echo "::error::Repository secret $secret_name remains after retirement."
+              exit 1
+            fi
+          done

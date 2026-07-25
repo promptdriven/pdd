@@ -2469,6 +2469,7 @@ def test_auto_heal_secret_migration_is_dispatch_only_and_fresh() -> None:
         assert job.get("if") == SECRET_MIGRATION_JOB_GUARD
         assert job.get("environment") == "pdd-cloud-read"
         assert job.get("runs-on") == "ubuntu-latest"
+        assert job.get("permissions") == {}
 
     assert "needs" not in copy_job
     assert "outputs" not in copy_job
@@ -2482,6 +2483,7 @@ def test_auto_heal_secret_migration_is_dispatch_only_and_fresh() -> None:
     )
     assert "GH_TOKEN" not in retire_env
     assert "needs." not in str(retire_job)
+    assert str(retire_job).count("PRIVATE_REPO_TOKEN") == 1
 
 
 def test_auto_heal_secret_migration_copy_is_stdin_only_and_non_destructive() -> None:
@@ -2495,6 +2497,7 @@ def test_auto_heal_secret_migration_copy_is_stdin_only_and_non_destructive() -> 
         "${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}"
     )
     assert copy_env.get("GH_TOKEN") == "${{ secrets.PRIVATE_REPO_TOKEN }}"
+    assert str(copy_job).count("PRIVATE_REPO_TOKEN") == 1
 
     copy_step = _workflow_step(copy_job, "copy_environment_secrets")
     copy_run = _workflow_run(copy_step)
@@ -2518,10 +2521,18 @@ def test_auto_heal_secret_migration_copy_is_stdin_only_and_non_destructive() -> 
         if isinstance(step.get("run"), str)
     )
     assert "|| true" not in migration_runs
+    assert "${{ secrets." not in migration_runs
+    assert "actions/checkout@" not in str(_workflow_steps(copy_job))
+    assert not re.search(
+        r"(?:^|[;&|]\s*)(?:git\s+(?:clone|checkout|fetch)|"
+        r"python(?:3(?:\.\d+)?)?\s|pdd\s|pytest\s|make\s|pip\s)",
+        migration_runs,
+        re.MULTILINE,
+    )
 
 
-def test_auto_heal_secret_migration_proves_canary_before_source_retirement() -> None:
-    """Retirement follows a scoped App-token proof, revocation, and absence check."""
+def test_auto_heal_secret_migration_mints_and_verifies_bound_canary() -> None:
+    """A fresh environment secret resolves to one scoped, exact canary proof."""
     workflow = _load_auto_heal_workflow()
     retire_job = _auto_heal_job(workflow, SECRET_MIGRATION_RETIRE_JOB)
     steps = _workflow_steps(retire_job)
@@ -2530,9 +2541,7 @@ def test_auto_heal_secret_migration_proves_canary_before_source_retirement() -> 
     require_index = step_ids.index("require_environment_app_secrets")
     token_index = step_ids.index("pdd_cloud_contents_token")
     proof_index = step_ids.index("verify_canary")
-    revoke_index = step_ids.index("revoke_pdd_cloud_token")
-    delete_index = step_ids.index("retire_repository_secret_copies")
-    assert require_index < token_index < proof_index < revoke_index < delete_index
+    assert require_index < token_index < proof_index
 
     require_run = _workflow_run(
         _workflow_step(retire_job, "require_environment_app_secrets")
@@ -2571,6 +2580,18 @@ def test_auto_heal_secret_migration_proves_canary_before_source_retirement() -> 
     assert "${{" not in proof_run
     assert "--header" not in proof_run
     assert "access_token" not in proof_run
+
+
+def test_auto_heal_secret_migration_revokes_before_idempotent_retirement() -> None:
+    """Source copies retire only after proof, explicit revocation, and a re-list."""
+    workflow = _load_auto_heal_workflow()
+    retire_job = _auto_heal_job(workflow, SECRET_MIGRATION_RETIRE_JOB)
+    steps = _workflow_steps(retire_job)
+    step_ids = [step.get("id") for step in steps]
+    proof_index = step_ids.index("verify_canary")
+    revoke_index = step_ids.index("revoke_pdd_cloud_token")
+    delete_index = step_ids.index("retire_repository_secret_copies")
+    assert proof_index < revoke_index < delete_index
 
     revoke_step = _workflow_step(retire_job, "revoke_pdd_cloud_token")
     assert revoke_step.get("if") == (
@@ -2619,9 +2640,10 @@ def test_auto_heal_secret_migration_proves_canary_before_source_retirement() -> 
     assert "PRIVATE_REPO_TOKEN" not in migration_runs
     assert "actions/checkout@" not in str(steps)
     assert not re.search(
-        r"\b(?:git\s+(?:clone|checkout|fetch)|python(?:3(?:\.\d+)?)?\s|"
-        r"pdd\s|pytest\s|make\s|pip\s)",
+        r"(?:^|[;&|]\s*)(?:git\s+(?:clone|checkout|fetch)|"
+        r"python(?:3(?:\.\d+)?)?\s|pdd\s|pytest\s|make\s|pip\s)",
         migration_runs,
+        re.MULTILINE,
     )
 
 
