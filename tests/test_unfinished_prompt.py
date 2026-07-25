@@ -135,7 +135,7 @@ def test_unfinished_prompt_temperature_below_range(
             temperature=-0.2,  # Invalid temperature
             verbose=False
         )
-    assert "Temperature must be between 0 and 1" in str(exc_info.value)
+    assert "Temperature must be between 0 and 2" in str(exc_info.value)
 
 
 def test_unfinished_prompt_temperature_above_range(
@@ -146,10 +146,25 @@ def test_unfinished_prompt_temperature_above_range(
         unfinished_prompt(
             prompt_text="Write a function that",
             strength=0.5,
-            temperature=1.5,  # Invalid temperature
+            temperature=2.1,  # Invalid temperature
             verbose=False
         )
-    assert "Temperature must be between 0 and 1" in str(exc_info.value)
+    assert "Temperature must be between 0 and 2" in str(exc_info.value)
+
+
+def test_unfinished_prompt_accepts_generate_temperature_above_one(
+    mock_load_prompt_template_success,
+    mock_llm_invoke_success,
+):
+    """The generate CLI's documented 0-2 range reaches the completion judge."""
+    unfinished_prompt(
+        prompt_text="Write a function that",
+        strength=0.5,
+        temperature=1.5,
+        verbose=False,
+    )
+
+    assert mock_llm_invoke_success.call_args.kwargs["temperature"] == 1.5
 
 
 def test_unfinished_prompt_load_template_failure(

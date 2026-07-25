@@ -125,7 +125,21 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
         True,
     ),
     OwnershipRule(
+        ".pdd/meta/postprocess_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
         ".pdd/meta/story_detection_result_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        ".pdd/meta/unfinished_prompt_python.json",
         InventoryStatus.HUMAN_OWNED,
         "human-maintained",
         "pdd-maintainers",
@@ -270,7 +284,7 @@ _REPLAY_HUMAN_OWNERSHIP = tuple(
 # row to ``preauthorize_absent``.
 _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES = (
     "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
-    "cd33e99f580fd0103339211b42976e6eff593a7a40c81c48129f280c1b766eb5",
+    "0d3e869bb290cb075b288d75ebf1ff84aabcf44c762e6835826049262fe85763",
 )
 _SYNC_ROLLOUT_REPAIR_METADATA_BYTES = (
     (

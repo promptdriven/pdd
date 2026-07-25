@@ -127,6 +127,22 @@ _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES = (
     "a7dd6a8f4145e2a4712ca925abde0edc58c47be271a1a06e1750aa39347a76c7",
     "30cc5d9cb8d47eda3bd8fb02aab35ab965a256d6729c7ba1dfd836fb7fa1e1d3",
 )
+
+# The nested-temperature repair advances exactly two protected prompt
+# contracts. Preserve the unchanged policy bytes and both profile versions so
+# this reconciliation cannot authorize any other prompt or profile update.
+_TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY = (
+    "3b5117e0ef31b19b68d7190f0753e7aacaef3f75133cabfe4c2470afe87c0a95",
+    "3b5117e0ef31b19b68d7190f0753e7aacaef3f75133cabfe4c2470afe87c0a95",
+)
+_TEMPERATURE_REGRESSION_PROFILE_BYTES = (
+    "30cc5d9cb8d47eda3bd8fb02aab35ab965a256d6729c7ba1dfd836fb7fa1e1d3",
+    "ffd7a11fb15a7aebb20c8199d506cf2deb8bb405b952dcda8444563c24e7a912",
+)
+_TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES = (
+    _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],
+    _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+)
 _SYNC_ROLLOUT_REPAIR_PROMPT_BYTES = (
     (
         PurePosixPath("pdd/prompts/code_generator_python.prompt"),
@@ -605,6 +621,44 @@ _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS = (
         "2e6ea7ead7695f61c359af7053e3d29a9a6cf8ab45a4896492cd813eb0ba0aac",
         _OPUS_FABLE_COMPOSED_PROFILE_BYTES[0],
         _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
+    ),
+)
+
+_TEMPERATURE_REGRESSION_COMPOSED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/postprocess_python.prompt",
+        "python",
+        "14901b09067362350ebe72062c59177aa49b113f91dbaf1cbb610797f67dfec8",
+        "87a8667cf20a6db8a827a5267df1cd787275b31aec9fc3004a268eabe6bf4dd0",
+        _TEMPERATURE_REGRESSION_PROFILE_BYTES[0],
+        _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/unfinished_prompt_python.prompt",
+        "python",
+        "1902ceff4daac647ce82c6f16acd262a0ab2e19cd13912f6ca2404d6856c5034",
+        "def7bb2cc4ff45f9679e11f7ab10803bf3e8c127a67ba79717299f538c79edef",
+        _TEMPERATURE_REGRESSION_PROFILE_BYTES[0],
+        _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+    ),
+)
+
+_TEMPERATURE_REGRESSION_SYNC_COMPOSED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/postprocess_python.prompt",
+        "python",
+        "14901b09067362350ebe72062c59177aa49b113f91dbaf1cbb610797f67dfec8",
+        "87a8667cf20a6db8a827a5267df1cd787275b31aec9fc3004a268eabe6bf4dd0",
+        _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES[0],
+        _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/unfinished_prompt_python.prompt",
+        "python",
+        "1902ceff4daac647ce82c6f16acd262a0ab2e19cd13912f6ca2404d6856c5034",
+        "def7bb2cc4ff45f9679e11f7ab10803bf3e8c127a67ba79717299f538c79edef",
+        _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES[0],
+        _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES[1],
     ),
 )
 
@@ -2544,7 +2598,32 @@ def _load_requirement_transition_authorizations(
             ),
         }
     )
-    historical_composed_state = opus_fable_state or sync_rollout_repair_state
+    temperature_regression_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        in {
+            (
+                _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY,
+                _TEMPERATURE_REGRESSION_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY[1],
+                    _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY[1],
+                ),
+                (
+                    _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+                    _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+                ),
+            ),
+            (
+                _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY,
+                _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES,
+            ),
+        }
+    )
+    historical_composed_state = (
+        opus_fable_state or sync_rollout_repair_state or temperature_regression_state
+    )
     gemini_36_terra_sol_state = is_pdd_repository and (
         (policy_digests, profile_digests)
         in {
@@ -2617,7 +2696,24 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in opus_fable_identities
         ) + _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS)
-    if sync_rollout_repair_state:
+    if temperature_regression_state:
+        temperature_regression_transitions = (
+            _TEMPERATURE_REGRESSION_SYNC_COMPOSED_REQUIREMENT_TRANSITIONS
+            if profile_digests == _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES
+            else _TEMPERATURE_REGRESSION_COMPOSED_REQUIREMENT_TRANSITIONS
+        )
+        temperature_regression_identities = {
+            (item.prompt_path, item.language_id)
+            for item in temperature_regression_transitions
+        }
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id)
+            not in temperature_regression_identities
+        ) + temperature_regression_transitions
+        authority.update(temperature_regression_transitions)
+    if sync_rollout_repair_state or temperature_regression_state:
         # These retained schema-2 rows describe historical prompt changes.
         # Their identities are already at the exact repaired prompt bytes, so
         # do not re-evaluate them as a live transition at this one state.
@@ -3171,7 +3267,10 @@ def _authorized_sync_rollout_profile_reconciliation(
             _sha256(base_profile),
             _sha256(head_profile),
         )
-        != _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES
+        not in {
+            _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES,
+            _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES,
+        }
         or (
             _sha256(base_rotations),
             _sha256(head_rotations),

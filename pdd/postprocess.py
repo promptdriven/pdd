@@ -71,7 +71,7 @@ def postprocess(
         llm_output: A string containing a mix of text and code sections.
         language: A string specifying the programming language of the code to be extracted.
         strength: A float between 0 and 1 that represents the strength of the LLM model to use.
-        temperature: A float between 0 and 1 that represents the temperature parameter for the LLM model.
+        temperature: A float between 0 and 2 that represents the temperature parameter for the LLM model.
         time: A float between 0 and 1 that controls the thinking effort for the LLM model.
         verbose: A boolean that indicates whether to print detailed processing information.
 
@@ -88,8 +88,8 @@ def postprocess(
         raise ValueError("strength must be between 0 and 1")
     if not isinstance(temperature, (int, float)):
         raise TypeError("temperature must be a number")
-    if not 0 <= temperature <= 1:
-        raise ValueError("temperature must be between 0 and 1")
+    if not 0 <= temperature <= 2:
+        raise ValueError("temperature must be between 0 and 2")
 
     if language == "prompt":
         extracted_code = postprocess_0(llm_output, language)
