@@ -2574,6 +2574,10 @@ def test_auto_heal_normal_app_token_is_explicitly_metadata_only() -> None:
     workflow = _load_auto_heal_workflow()
     heal_job = _auto_heal_job(workflow, "heal")
     token_step = _workflow_step(heal_job, "app_token")
+    assert token_step.get("uses") == (
+        "actions/create-github-app-token@"
+        "bcd2ba49218906704ab6c1aa796996da409d3eb1"
+    )
     token_with = token_step.get("with")
     assert isinstance(token_with, dict)
     assert token_with.get("permission-metadata") == "read"
