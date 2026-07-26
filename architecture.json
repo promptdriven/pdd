@@ -8684,7 +8684,9 @@
     "dependencies": [
       "commands/replay_python.prompt",
       "commands/context_python.prompt",
-      "commands/contracts_python.prompt"
+      "commands/contracts_python.prompt",
+      "commands/story_python.prompt",
+      "commands/intent_cli_python.prompt"
     ],
     "priority": 70,
     "filename": "commands/__init___python.prompt",
@@ -12123,5 +12125,74 @@
       "x": 11600,
       "y": 2200
     }
+  },
+  {
+    "reason": "Plans ordinary-language product intent against local repository evidence without requiring GitHub or exposing PDD file mechanics to the human.",
+    "description": "Deterministic, read-only intent planning core that preserves the request, distinguishes standalone and monorepo subproject adoption scenarios, classifies greenfield/brownfield/existing-PDD scope, proposes prompt-owned targets conservatively, recommends selective story coverage, and renders human and structured review output.",
+    "dependencies": [
+      "architecture_registry_python.prompt"
+    ],
+    "priority": 243,
+    "filename": "intent_python.prompt",
+    "filepath": "pdd/intent.py",
+    "tags": [
+      "intent",
+      "pdd-intent",
+      "planning",
+      "local",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "build_intent_plan",
+            "signature": "(request: str, project_root: Path, *, title: Optional[str] = None, source_kind: str = 'inline', source_ref: Optional[str] = None) -> IntentPlan",
+            "returns": "IntentPlan"
+          },
+          {
+            "name": "intent_plan_to_dict",
+            "signature": "(plan: IntentPlan) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "render_review_card",
+            "signature": "(plan: IntentPlan) -> str",
+            "returns": "str"
+          }
+        ]
+      }
+    },
+    "position": null
+  },
+  {
+    "reason": "Provides the beginner- and agent-facing local `pdd intent plan` CLI without requiring GitHub, prompt paths, or dev-unit names.",
+    "description": "Thin Click command group that accepts ordinary-language product intent from inline text, a local file, or stdin and emits either a human review card or stable JSON while guaranteeing no project writes, model calls, or application side effects.",
+    "dependencies": [
+      "intent_python.prompt"
+    ],
+    "priority": 244,
+    "filename": "commands/intent_cli_python.prompt",
+    "filepath": "pdd/commands/intent.py",
+    "tags": [
+      "intent",
+      "pdd-intent",
+      "commands",
+      "cli",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "intent plan",
+            "description": "Plan an ordinary-language request against local project evidence without changing files or requiring GitHub"
+          }
+        ]
+      }
+    },
+    "position": null
   }
 ]

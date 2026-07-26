@@ -64,6 +64,10 @@ Also see the Prompt‑Driven Development Doctrine for core principles and practi
 
 For a step-by-step methodology on turning a GitHub issue into a durable, human-verified user story, see [docs/generating_user_stories.md](docs/generating_user_stories.md).
 
+For the ordinary-language human surface, the four standalone/monorepo adoption
+scenarios, and a precise explanation of versioned prompts, tests, and
+agent-drafted stories, see [docs/intent.md](docs/intent.md).
+
 For pre-merge prompt and user-story quality (vague terms, vocabulary, optional LLM review), see [docs/prompt_lint.md](docs/prompt_lint.md).
 
 For deterministic contract-section lint (`<contract_rules>`, `<coverage>`, waivers, story `## Covers`), see [docs/contract_check.md](docs/contract_check.md).
@@ -193,7 +197,20 @@ This opens a browser-based interface where you can:
 - **Browse Files**: View and edit prompts, code, and tests in your project
 - **Remote Access**: Access your session from any browser via PDD Cloud (use `--local-only` to disable)
 
-### Option 2: Issue-Driven CLI
+### Option 2: Local intent planning
+
+Plan an ordinary-language request against local repository evidence without a
+GitHub issue, model call, or project-file changes:
+
+```bash
+pdd intent plan --text "Add offline report export. Never upload the report."
+```
+
+Use `--json` when an AI harness will consume the plan. This first release is
+planning-only; see [docs/intent.md](docs/intent.md) for its exact capabilities
+and the agent-assisted workflow it is designed to support.
+
+### Option 3: Issue-Driven CLI
 
 For CLI enthusiasts, implement GitHub issues directly:
 
@@ -220,7 +237,7 @@ pdd bug https://github.com/owner/repo/issues/456
 pdd fix https://github.com/owner/repo/issues/456
 ```
 
-### Option 3: Manual Prompt Workflow
+### Option 4: Manual Prompt Workflow
 
 For learning PDD fundamentals or working with existing prompt files:
 
