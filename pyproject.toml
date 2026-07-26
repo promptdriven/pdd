@@ -158,6 +158,7 @@ markers = [
     "timeout: mark a test with a custom timeout in seconds",
     "private_prompt: mark a test as exercising a private prompt fixture not shipped in the public repo",
     "uses_real_cli_detector: mark a test that exercises the real CLI detector instead of a stub",
+    "prose_judge: mark a test that judges free-form LLM prose with a heuristic (regex) oracle. Rephrasing by the model flips the verdict without any product regression, so these are advisory: the cloud gate deselects them and reports their outcome separately instead of blocking on it.",
     "story(story_id, story_hash): mark a story-backed regression test (deterministic/offline executable oracle for a user story)",
 ]
 filterwarnings = [
