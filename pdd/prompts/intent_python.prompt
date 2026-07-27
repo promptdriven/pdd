@@ -59,6 +59,11 @@
         "name": "render_review_card",
         "signature": "(plan: IntentPlan) -> str",
         "returns": "str"
+      },
+      {
+        "name": "detected_technology_terms",
+        "signature": "(request: str) -> Tuple[str, ...]",
+        "returns": "Tuple[str, ...]"
       }
     ]
   }
@@ -135,6 +140,16 @@ the five-candidate limit. Never fabricate a target and never claim a candidate
 is authoritative; when no qualifying match exists, return no candidate and add
 an open decision that an agent must inspect the architecture or propose a new
 product part.
+
+R4a - Technology detection for greenfield work
+`detected_technology_terms` MUST deterministically return the language,
+runtime, framework, and tooling names stated in the request, in stable sorted
+order. It MUST exclude ordinary English words that merely coincide with
+technology names, such as `go`, `c`, and `r`, because a false positive lets
+greenfield generation begin against an undecided stack while a false negative
+only costs one explicit assertion. When a greenfield plan names no technology,
+planning MUST add both an open decision to decide it and a warning that apply
+will refuse until it is stated or asserted.
 
 R5 - Human intent extraction
 Extract explicit preservation constraints from sentences containing language
