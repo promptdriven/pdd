@@ -258,3 +258,55 @@ def test_existing_file_cannot_be_project_root(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="not a directory"):
         build_intent_plan("Do something.", path)
+
+
+def test_function_words_do_not_manufacture_candidates(tmp_path: Path) -> None:
+    """Filler words must not link a request to an unrelated product area."""
+    prompts = tmp_path / "prompts"
+    prompts.mkdir(parents=True)
+    (prompts / "billing_totals_python.prompt").write_text("x", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text("version: '1.0'\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps(
+            [
+                {
+                    "reason": "Step 11 of the workflow runs for each queued item.",
+                    "description": "Handles every other retry while the queue drains.",
+                    "filename": "billing_totals_python.prompt",
+                    "filepath": "src/billing_totals.py",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    plan = build_intent_plan(
+        "Show a chart for each visitor so that every one of them has what they "
+        "want, while the same layout is what it was before.",
+        tmp_path,
+    )
+
+    assert plan.candidate_targets == ()
+
+
+def test_docs_only_directory_warns_before_greenfield_generation(
+    tmp_path: Path,
+) -> None:
+    """An existing directory holding only prose is not a blank project root."""
+    (tmp_path / "notes.md").write_text("# Design notes\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("# Overview\n", encoding="utf-8")
+
+    plan = build_intent_plan("Add offline PDF export.", tmp_path)
+
+    assert plan.project_kind == "greenfield"
+    assert any("no recognized source" in item for item in plan.open_decisions)
+    assert any("non-source files" in item for item in plan.warnings)
+
+
+def test_empty_greenfield_root_stays_unwarned(tmp_path: Path) -> None:
+    """The guard must not fire for a genuinely empty project root."""
+    plan = build_intent_plan("Add offline PDF export.", tmp_path)
+
+    assert plan.project_kind == "greenfield"
+    assert not any("no recognized source" in item for item in plan.open_decisions)
+    assert not any("non-source files" in item for item in plan.warnings)
