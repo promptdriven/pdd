@@ -84,6 +84,7 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any, Type, Union, Tuple
 from pydantic import BaseModel, ValidationError
 import openai  # Import openai for exception handling as LiteLLM maps to its types
+from langchain_core.prompts import PromptTemplate
 import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
 # Import the default model constant
@@ -917,6 +918,7 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
 def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[str, Any]]], use_batch_mode: bool) -> Union[List[Dict[str, str]], List[List[Dict[str, str]]]]:
     """Formats prompt and input into LiteLLM message format."""
     try:
+        prompt_template = PromptTemplate.from_template(prompt)
         if use_batch_mode:
             if not isinstance(input_data, list):
                 raise ValueError("input_json must be a list of dictionaries when use_batch_mode is True.")
@@ -924,16 +926,16 @@ def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[st
             for item in input_data:
                 if not isinstance(item, dict):
                      raise ValueError("Each item in input_json list must be a dictionary for batch mode.")
-                formatted_prompt = prompt.format(**item)
+                formatted_prompt = prompt_template.format(**item)
                 all_messages.append([{"role": "user", "content": formatted_prompt}])
             return all_messages
         else:
             if not isinstance(input_data, dict):
                 raise ValueError("input_json must be a dictionary when use_batch_mode is False.")
-            formatted_prompt = prompt.format(**input_data)
+            formatted_prompt = prompt_template.format(**input_data)
             return [{"role": "user", "content": formatted_prompt}]
     except KeyError as e:
-        raise ValueError(f"Prompt formatting error: Missing key {e} in input_json for prompt string.") from e
+        raise ValueError(f"Prompt formatting error: Missing key {e} in input_json for prompt template.") from e
     except Exception as e:
         raise ValueError(f"Error formatting prompt: {e}") from e
 
@@ -992,30 +994,6 @@ def _looks_like_python_code(s: str) -> bool:
     # Check for common Python patterns
     code_indicators = ('def ', 'class ', 'import ', 'from ', 'if __name__', 'return ', 'print(')
     return any(indicator in s for indicator in code_indicators)
-
-
-# Field names known to contain prose text, not Python code
-# These are skipped during syntax validation to avoid false positives
-_PROSE_FIELD_NAMES = frozenset({
-    'reasoning',           # PromptAnalysis - completeness reasoning
-    'explanation',         # TrimResultsOutput, FixerOutput - prose explanations
-    'analysis',            # DiffAnalysis, CodePatchResult - analysis text
-    'change_instructions', # ChangeInstruction, ConflictChange - instructions
-    'change_description',  # DiffAnalysis - description of changes
-    'planned_modifications', # CodePatchResult - modification plans
-    'details',             # VerificationOutput - issue details
-    'description',         # General prose descriptions
-    'focus',               # Focus descriptions
-})
-
-
-def _is_prose_field_name(field_name: str) -> bool:
-    """Check if a field name indicates it contains prose, not code.
-
-    Used to skip syntax validation on prose fields that may contain
-    Python keywords (like 'return' or 'import') but are not actual code.
-    """
-    return field_name.lower() in _PROSE_FIELD_NAMES
 
 
 def _repair_python_syntax(code: str) -> str:
@@ -1284,19 +1262,15 @@ def _unescape_code_newlines(obj: Any) -> Any:
     return obj
 
 
-def _has_invalid_python_code(obj: Any, field_name: str = "") -> bool:
+def _has_invalid_python_code(obj: Any) -> bool:
     """
     Check if any code-like string fields have invalid Python syntax.
 
     This is used after _unescape_code_newlines to detect if repair failed
     and we should retry with cache disabled.
 
-    Skips fields in _PROSE_FIELD_NAMES to avoid false positives on prose
-    text that mentions code patterns (e.g., "ends on a return statement").
-
     Args:
         obj: A Pydantic model, dict, list, or primitive value
-        field_name: The name of the field being validated (used to skip prose)
 
     Returns:
         True if there are invalid code fields that couldn't be repaired
@@ -1307,9 +1281,6 @@ def _has_invalid_python_code(obj: Any, field_name: str = "") -> bool:
         return False
 
     if isinstance(obj, str):
-        # Skip validation for known prose fields
-        if _is_prose_field_name(field_name):
-            return False
         if _looks_like_python_code(obj):
             try:
                 ast.parse(obj)
@@ -1319,22 +1290,21 @@ def _has_invalid_python_code(obj: Any, field_name: str = "") -> bool:
         return False
 
     if isinstance(obj, BaseModel):
-        for name in obj.model_fields:
-            value = getattr(obj, name)
-            if _has_invalid_python_code(value, field_name=name):
+        for field_name in obj.model_fields:
+            value = getattr(obj, field_name)
+            if _has_invalid_python_code(value):
                 return True
         return False
 
     if isinstance(obj, dict):
-        for key, value in obj.items():
-            fname = key if isinstance(key, str) else ""
-            if _has_invalid_python_code(value, field_name=fname):
+        for value in obj.values():
+            if _has_invalid_python_code(value):
                 return True
         return False
 
     if isinstance(obj, list):
         for item in obj:
-            if _has_invalid_python_code(item, field_name=field_name):
+            if _has_invalid_python_code(item):
                 return True
         return False
 

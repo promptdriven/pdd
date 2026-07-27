@@ -418,8 +418,7 @@ def _parse_anthropic_result(data: Mapping[str, Any]) -> Tuple[bool, str, float]:
     Parse Claude Code (Anthropic) JSON result.
 
     Expected:
-      - data["result"]: main content (Claude Code output format)
-      - data["response"]: fallback for backwards compatibility
+      - data["response"]: main content
       - data["error"]: optional error block
       - data["total_cost_usd"]: total cost in USD (if available)
     """
@@ -433,7 +432,7 @@ def _parse_anthropic_result(data: Mapping[str, Any]) -> Tuple[bool, str, float]:
     else:
         error_msg = ""
 
-    response_text = str(data.get("result") or data.get("response") or "")
+    response_text = str(data.get("response") or "")
     if not response_text and error_msg:
         response_text = error_msg
 
