@@ -1,5 +1,0 @@
-<pdd-reason>Test-plan prompt: checkup snapshot should fail until a snapshot exists.</pdd-reason>
-
-<shell>printf pdd-checkup-shell-only</shell>
-
-Describe expected shell output for documentation only.
