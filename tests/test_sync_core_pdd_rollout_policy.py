@@ -3282,3 +3282,27 @@ def test_story_bootstrap_is_repository_bound(monkeypatch) -> None:
     )
 
     assert result == ()
+
+
+def test_sync_rollout_repair_ownership_pin_tracks_the_actual_policy_file() -> None:
+    """The bridge's head digest must equal the checked-in ownership bytes.
+
+    ``_sync_rollout_repair_rules`` compares sha256 of ``.pdd/sync-ownership.json``
+    against ``_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES`` and, on any mismatch, falls
+    through to ``base_rules``. The eight repaired metadata paths then silently
+    lose their ownership and resurface as unowned tracked paths.
+
+    That makes every edit to the ownership policy — including a one-line
+    preauthorization — a change that must re-pin this digest. Without this
+    guard the failure surfaces as several unrelated-looking assertions about
+    ``.pdd/meta/*`` paths rather than as the one-line cause.
+    """
+    actual = hashlib.sha256(
+        (ROOT / ".pdd" / "sync-ownership.json").read_bytes()
+    ).hexdigest()
+
+    assert actual == manifest_module._SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES[1], (  # pylint: disable=protected-access
+        "`.pdd/sync-ownership.json` changed without re-pinning "
+        "_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES[1] in pdd/sync_core/manifest.py. "
+        f"Set it to {actual!r}."
+    )
