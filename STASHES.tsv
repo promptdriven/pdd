@@ -1,0 +1,23 @@
+stash_ref	original_local_object	sanitized_commit	date	message
+stash@{0}	511af1c46c5878ed45e4ac5d4b9c2d14c243aaa4	b50e2fa32ec6a9f99229a45696055f8390a63565	2026-07-21 11:45:50 -0700	On loop-pdd-pr2017: archive-pr2017-worktree-before-local-cleanup-20260721
+stash@{1}	42d4c5f4d30bc4fa0cadda6bc34a2244b2a896ee	031e130bb981feba24218a2fabb7db72a42745d9	2026-07-21 11:45:50 -0700	On herdr/pr2099-pair-current-20260717060510: archive-pr2099-worktree-before-local-cleanup-20260721
+stash@{2}	586d24a781ddbd8aa3dd887e7cf0abcde4a1d0ce	42178afb1a317ae6cba49ee1a233a502f6d665d9	2026-07-17 00:16:45 -0700	On (no branch): pdd-fixer-pr1971-alternative-root-walk-do-not-push
+stash@{3}	1cd8a5dba4863fccd3344953fcb3f78f749f287c	f5513a15f458e17bc03ae704046999417a6c1955	2026-06-19 09:45:05 -0700	On fix/checkup-resume-step7-cache: pre-rebase-cleanup-2026-06-19
+stash@{4}	8130156d3482aa73b014b40199ee6f1f3ac06923	205d1d45fd044cd2c2fa8cb0a30fcaf47f858789	2026-06-04 10:34:00 -0700	On pr-1108-review: pre-origin-main-rebase-20260604
+stash@{5}	f017bc06dd18529178b2a8dd56eab9820f8049b3	b18655b0f908d4180ac5db880faa918718f111d8	2026-05-27 19:20:39 -0700	WIP on fix/issue-1211: e9d0b721a fix(construct_paths): use descendant-check heuristic for .pddrc selection
+stash@{6}	9f798087345a6668a41b89436c54511b5a777a7c	561a301e79611db5e97ce793c9f70bb168a1ef22	2026-05-23 10:21:13 -0700	On iter15-rebase-test: stash before cloud rerun 20260523-1021
+stash@{7}	22929afbc215db9697f0ec5ccc90aa501b332b35	186d8ba38afd4b15262e65889d21a15cfff20dda	2026-05-23 09:55:48 -0700	On pr-1015-rebased-review: pr-1015-rebased-review pre-rebase 20260523-0955
+stash@{8}	4119a9cc56707296d14f02b3d28a3e643e8f5be2	a708afd1dc1109ff63d260aa53e015f60f897a50	2026-05-22 15:44:58 -0700	On iter15-rebase-test: tmp-test-durations
+stash@{9}	f66d4551765605c7976b98afb3b2355b1e29da35	051f4594206f4dbb53390bb2469e9f220c92a93b	2026-05-22 09:33:39 -0700	On fix/issue-1104-pr-checkup: WIP before main sync 2026-05-22
+stash@{10}	9e65bbab57c665952972672b93ee05f37b848f30	bad5e148c6bcec4b9fa5bb8e80d506b313febe97	2026-05-21 16:37:56 -0700	WIP on fix/issue-1125: c762da538 fix(arch): minimize architecture.json churn + add module_targets (#1125)
+stash@{11}	f5095eb953783eb1ec0effdfdf5e65edf3bad795	371f45ac75fd2c42722d799c82aba9d572e03c1d	2026-05-21 15:53:41 -0700	WIP on fix/issue-1125: c762da538 fix(arch): minimize architecture.json churn + add module_targets (#1125)
+stash@{12}	f56c2fb562d764351e83a0c8d2e8428e8ecae6fb	80e543cfc3eacbd830fbf1ba766a51251732fe5a	2026-05-20 16:28:46 -0700	On worktree-round-4-findings: round-5-wip
+stash@{13}	26b3c710d56e29fd5399f3c7b094bd1bdcdbadb3	747ea3f4210af5a630ed96ebfcbc2408669b5419	2026-05-20 13:36:43 -0700	On fix/issue-1104-pr-checkup: unrelated llm_invoke changes
+stash@{14}	e8852d1729a9ea5c9f8edbe4677e85dc27ea1980	ea0a435cedb97bfb10fb11a55a840afc1338d433	2026-05-20 13:12:13 -0700	On fix/issue-1104-pr-checkup: unrelated llm_invoke changes
+stash@{15}	be20f47285823db34f77403039a8e12ab339d60d	52080770da56c2b99644fdf5ce30ae62b6510fdb	2026-05-19 14:31:28 -0700	On change/issue-1081: stash before issue 1080 loop
+stash@{16}	31510bc99def9e91527a1af511a9b32ab3dd27f2	1272ba827cbfd8093dee4e3e79a375601ead3d63	2026-05-19 14:03:35 -0700	On change/issue-1057: wip-issue-1096-fix
+stash@{17}	fc50f2ad36b52272f1b448d55b7c00dd949f5163	4890e765b102a7170ea4af0c45b3ce80999e3979	2026-05-18 12:52:48 -0700	On pr-1002: review-1077-stash
+stash@{18}	8f17ab4a4fc2b53938e834fa628455cc106341fb	42a6aaffe7f08f38fbb15091be4652fee35b8aea	2026-05-14 16:57:56 -0700	On fix/issue-922-review-loop-fallback: codex-issue-1013-local-changes
+stash@{19}	d281f2eb7f77c4faf1a13483494a22dc25a36f68	a926e5e246598c2de4d22d7c4d7b5cdb5810e14c	2026-05-12 15:46:23 -0700	On fix/issue-964-orchestrator-step-comments: WIP issue-964 1778625983
+stash@{20}	8fff46a7f12eb4419b243e06dd46be507152a5d0	eafa6d5129f5d8cd885e95d6569dfbfd2e44ff39	2026-05-12 15:28:16 -0700	On fix/issue-964-orchestrator-step-comments: unrelated WIP captured during #964 implementer session (2nd)
+stash@{21}	060d79124f134060f994a6b77d927b21e4d45a1c	a769a18cd74ad1b4efd2e3995ac2ec3bee34072b	2026-05-12 14:18:35 -0700	On fix/issue-964-orchestrator-step-comments: unrelated WIP captured during #964 implementer session
