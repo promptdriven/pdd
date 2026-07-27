@@ -753,6 +753,24 @@ def _jest_config_from_package_json(package_json: Path) -> Optional[Mapping[str, 
     return None
 
 
+def _package_json_runner_is_delegated(package_json: Path) -> bool:
+    """True when package.json declares a jest/vitest value that is NOT an inline
+    mapping (round 11) — e.g. jest supports ``"jest": "./jest.config.json"``, a
+    DELEGATED config-file path. We do not resolve/execute it, so its (possibly
+    custom) discovery is unknown and the caller must refuse rather than assume
+    defaults. Total."""
+    try:
+        data = json.loads(package_json.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, Mapping):
+        return False
+    return any(
+        data.get(key) is not None and not isinstance(data.get(key), Mapping)
+        for key in ("jest", "vitest")
+    )
+
+
 # Test-discovery keys whose presence in an unparseable JS/TS config means we
 # cannot assume default discovery (issue #1903 §A). Covers BOTH the jest dialect
 # (testMatch/testRegex/testPathIgnorePatterns/roots/rootDir) and the vitest
@@ -774,6 +792,20 @@ _JS_RUNNER_DISCOVERY_KEYS = (
 _JS_RUNNER_DISCOVERY_RE = re.compile(
     r"\b(?:" + "|".join(_JS_RUNNER_DISCOVERY_KEYS) + r")\b"
 )
+# A JS string escape that can encode arbitrary letters (``\uXXXX``, ``\u{...}``,
+# ``\xXX``, octal ``\NNN``) — the only way to spell a discovery key that the raw
+# literal scan above cannot see (issue #1903 review round 11). We do not decode
+# JS escapes in Python, so any such escape makes "trivial default" unprovable.
+_JS_ESCAPE_RE = re.compile(r"\\(?:u|x|[0-7])")
+# jest ``testRegex``/``testPathIgnorePatterns`` are ECMAScript regexes, but we
+# match them with Python's engine (issue #1903 review round 11). Constructs whose
+# Python and ECMAScript semantics DIFFER make a Python match unsound — e.g. ``\A``
+# is a start ANCHOR in Python but an identity escape (literal ``A``) in JS, so
+# ``\A.*\.test\.ts$`` matches in Python yet not in Node. Presence of any of these
+# forces a fail-closed refusal rather than a possibly-wrong verdict: Python-only
+# anchors ``\A``/``\Z``/``\z``, Python named groups/back-refs ``(?P<``/``(?P=``,
+# inline comments ``(?#``, and atomic groups ``(?>``.
+_JS_REGEX_DIVERGENT_RE = re.compile(r"\\[AZz]|\(\?P[<=]|\(\?#|\(\?>")
 # Composition/delegation a static text scan cannot resolve: a config that
 # imports/requires/spreads/extends a base, applies a preset, is a function, or
 # whose export is a CALL expression (``module.exports = buildConfig()``,
@@ -898,6 +930,13 @@ def _js_config_text_has_custom_discovery(config_file: Path) -> bool:
     # inside a string VALUE only over-refuses, which is safe).
     if _JS_RUNNER_DISCOVERY_RE.search(text):
         return True
+    # Refuse any string ESCAPE sequence (round 11): a key can be spelled with JS
+    # escapes — ``"testMatch"`` decodes to ``testMatch`` at runtime — which
+    # the literal discovery scan above cannot see and string-stripping erases. We
+    # do not decode arbitrary JS escapes in Python, so a config bearing ``\u``/
+    # ``\x``/octal/other backslash escapes cannot be PROVEN a trivial default.
+    if _JS_ESCAPE_RE.search(text):
+        return True
     return not _js_config_is_trivial_default_literal(text)
 
 
@@ -943,7 +982,16 @@ def _collect_js_runner_config(
                 except (OSError, ValueError):
                     pass
         pkg = current / "package.json"
-        pkg_block = _jest_config_from_package_json(pkg) if pkg.is_file() else None
+        pkg_is_file = pkg.is_file()
+        pkg_block = _jest_config_from_package_json(pkg) if pkg_is_file else None
+        # A package.json ``"jest"``/``"vitest"`` pointing at a DELEGATED config
+        # path (a string, not an inline block) is an opaque config source we do
+        # not resolve (round 11) — count it and fail closed.
+        pkg_delegated = (
+            _package_json_runner_is_delegated(pkg)
+            if (pkg_is_file and pkg_block is None)
+            else False
+        )
         # Collect EVERY JS/TS config file at this level (round 8) — e.g. both a
         # ``jest.config.js`` AND a ``vitest.config.ts`` — so two distinct runner
         # config files count as two sources rather than the loop silently keeping
@@ -958,6 +1006,7 @@ def _collect_js_runner_config(
         source_count = (
             (1 if json_config is not None else 0)
             + (1 if pkg_block is not None else 0)
+            + (1 if pkg_delegated else 0)
             + len(js_config_files)
         )
         if source_count > 1:
@@ -966,6 +1015,8 @@ def _collect_js_runner_config(
             return json_config, current, False
         if pkg_block is not None:
             return pkg_block, current, False
+        if pkg_delegated:
+            return {}, current, True  # delegated config path we don't resolve -> refuse
         if js_config_files:
             return {}, current, _js_config_text_has_custom_discovery(js_config_files[0])
 
@@ -1346,9 +1397,14 @@ def _candidate_is_collected(
 
     # testPathIgnorePatterns exclusion (repo-controlled regex over the path,
     # ReDoS-bounded). A match excludes; an UNEVALUABLE ignore pattern could also
-    # exclude, so fail closed to "not collected" either way.
+    # exclude, so fail closed to "not collected" either way. A pattern whose
+    # Python/ECMAScript semantics diverge (round 11) is likewise fail-closed —
+    # Python might miss an exclusion JS would apply (a false-green).
     for pat in _as_str_list(config.get("testPathIgnorePatterns")):
-        if _safe_regex_search(_sub_root_dir(pat, root_dir), posix) is not False:
+        subbed = _sub_root_dir(pat, root_dir)
+        if _JS_REGEX_DIVERGENT_RE.search(subbed):
+            return False
+        if _safe_regex_search(subbed, posix) is not False:
             return False
 
     # testMatch / testRegex collection patterns.
@@ -1393,7 +1449,13 @@ def _candidate_is_collected(
     for rgx in test_regexes:
         if deadline is not None and time.monotonic() > deadline:
             return False
-        res = _safe_regex_search(_sub_root_dir(rgx, root_dir), posix)
+        subbed = _sub_root_dir(rgx, root_dir)
+        # A testRegex whose Python/ECMAScript semantics diverge (round 11) cannot
+        # be soundly evaluated in Python — refuse rather than certify a path the
+        # JS engine would not collect (the ``\A`` false-green).
+        if _JS_REGEX_DIVERGENT_RE.search(subbed):
+            return False
+        res = _safe_regex_search(subbed, posix)
         if res is None:
             return False  # unevaluable / timed-out regex -> fail closed
         if res:

@@ -5,7 +5,14 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "ContentSelector.select", "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\", expand_dependencies: bool = False)", "returns": "str"}
+      {"name": "ContentSelector.select", "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\", expand_dependencies: bool = False)", "returns": "str"},
+      {"name": "find_collocated_test", "signature": "(code_file: str | Path)", "returns": "Optional[Path]"},
+      {"name": "find_runner_collected_test_path", "signature": "(code_file: str | Path)", "returns": "Optional[Path]"},
+      {"name": "resolve_test_output_path", "signature": "(code_file: str | Path, derived_test_path: str | Path, *, user_pinned: bool)", "returns": "Path"},
+      {"name": "was_test_adopted", "signature": "(code_file: str | Path, resolved_test_path: str | Path, derived_test_path: str | Path, *, user_pinned: bool)", "returns": "bool"},
+      {"name": "record_pdd_created_test", "signature": "(test_path: str | Path)", "returns": "None"},
+      {"name": "is_pdd_created_test", "signature": "(test_path: str | Path)", "returns": "bool"},
+      {"name": "configured_test_output_pinned", "signature": "(target_file: str | Path, context_override: Optional[str] = None, search_from: Optional[str | Path] = None)", "returns": "bool"}
     ]
   }
 }

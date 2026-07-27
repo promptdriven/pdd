@@ -7405,38 +7405,36 @@ class TestSyncCompatibilityGates:
         assert "Test churn threshold exceeded for update_main_test_Python.prompt:" in str(excinfo.value)
 
     def test_churn_block_stamps_parent_nonce_from_fd(self, monkeypatch):
-        """Issue #1903 §B.4 (round 8): when the parent hands the child a nonce over
-        the private pipe FD, the child stamps it into the churn block so the parent
-        can authenticate the block. No FD -> no nonce line (standalone)."""
+        """Issue #1903 §B.4 (round 8; hardened round 11): the child consumes the
+        parent's nonce EAGERLY — reads it, CLOSES the FD, and SCRUBS the env var —
+        then stamps it into the churn block. No FD -> no nonce line (standalone)."""
         import os
         import pdd.code_generator_main as cg
 
-        # Reset the once-only module cache between simulated child processes.
-        def _fresh():
-            cg._CHURN_NONCE_CACHE = None
-            cg._CHURN_NONCE_READ = False
-
-        nonce = "0123456789abcdef0123456789abcdef"
-        r, w = os.pipe()
-        os.write(w, nonce.encode("ascii"))
-        os.close(w)
-        monkeypatch.setenv(cg._CHURN_NONCE_ENV, str(r))
-        _fresh()
+        original_cache = cg._CHURN_NONCE_CACHE
         try:
+            nonce = "0123456789abcdef0123456789abcdef"
+            r, w = os.pipe()
+            os.write(w, nonce.encode("ascii"))
+            os.close(w)
+            monkeypatch.setenv(cg._CHURN_NONCE_ENV, str(r))
+            cg._CHURN_NONCE_CACHE = ""
+            cg._consume_churn_nonce()  # eager consume, as at child import
+            # Round 11: the env var is scrubbed and the FD closed immediately.
+            assert cg._CHURN_NONCE_ENV not in os.environ
+            with pytest.raises(OSError):
+                os.fstat(r)  # FD was closed by the consumer
             err = cg.TestChurnError("m.prompt", "src/__test__/x.test.tsx", 0.9, 0.4, 100, 5)
-        finally:
-            try:
-                os.close(r)
-            except OSError:
-                pass
-        assert f"nonce: {nonce}" in str(err)
+            assert f"nonce: {nonce}" in str(err)
 
-        # Standalone (no FD env): no nonce line is emitted.
-        monkeypatch.delenv(cg._CHURN_NONCE_ENV, raising=False)
-        _fresh()
-        err2 = cg.TestChurnError("m.prompt", "tests/test_x.py", 0.9, 0.4, 100, 5)
-        assert "nonce:" not in str(err2)
-        _fresh()
+            # Standalone (no FD env): no nonce line is emitted.
+            monkeypatch.delenv(cg._CHURN_NONCE_ENV, raising=False)
+            cg._CHURN_NONCE_CACHE = ""
+            cg._consume_churn_nonce()
+            err2 = cg.TestChurnError("m.prompt", "tests/test_x.py", 0.9, 0.4, 100, 5)
+            assert "nonce:" not in str(err2)
+        finally:
+            cg._CHURN_NONCE_CACHE = original_cache
 
     def test_test_churn_allows_pure_additive_growth(self, monkeypatch):
         from pdd.code_generator_main import _verify_test_churn

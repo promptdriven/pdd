@@ -290,33 +290,36 @@ class PublicSurfaceRegressionError(click.UsageError):
 
 
 _CHURN_NONCE_ENV = "PDD_CHURN_NONCE_FD"
-_CHURN_NONCE_CACHE: Optional[str] = None
-_CHURN_NONCE_READ = False
+_CHURN_NONCE_CACHE: str = ""
 
 
-def _read_churn_nonce() -> str:
-    """Read the one-time provenance nonce the PARENT sync runner handed this child
-    over a NON-inherited pipe FD (issue #1903 §B.4 review round 8).
+def _consume_churn_nonce() -> str:
+    """EAGERLY read the provenance nonce the PARENT sync runner handed this child
+    over an inherited pipe FD, then CLOSE the FD and SCRUB the env var — BEFORE any
+    project-controlled test process can spawn (issue #1903 §B.4 review round 8;
+    hardened round 11).
 
-    The parent passes the read-end FD number via ``PDD_CHURN_NONCE_FD`` and keeps
-    the FD out of any grandchild test subprocess (``close_fds`` default), so only
-    THIS trusted child process can read the nonce. Stamping it into the churn
-    block lets the parent distinguish a genuine PDD-emitted block from one a
-    hostile project test merely printed to stdout (which cannot know the nonce).
-    Read once (the pipe yields EOF afterwards) and cached. Returns ``""`` when no
-    channel is present (standalone ``pdd test``/``sync`` — which never
-    never-blocks — or an older parent). Total: any error yields ``""``.
+    The nonce lets the parent distinguish a genuine PDD-emitted churn block from
+    one a hostile project test merely printed to stdout. Round 11: a lazy read
+    left the FD OPEN and the env var SET for the whole test run, so a same-UID
+    descendant on a permissive host could read the nonce via
+    ``/proc/<child-pid>/fd/<fd>`` or the env var and forge an authenticated block.
+    Consuming eagerly at import (the child imports this module before it runs any
+    project test) closes that window: the env entry is popped immediately and the
+    FD is closed right after the read, so by the time tests run there is nothing
+    for a descendant to steal. Cached for later ``TestChurnError`` construction.
+    Returns ``""`` when no channel is present (standalone ``pdd test``/``sync``, or
+    an older parent). Total: any error yields ``""``.
     """
-    global _CHURN_NONCE_CACHE, _CHURN_NONCE_READ  # pylint: disable=global-statement
-    if _CHURN_NONCE_READ:
-        return _CHURN_NONCE_CACHE or ""
-    _CHURN_NONCE_READ = True
-    fd_s = os.environ.get(_CHURN_NONCE_ENV)
+    global _CHURN_NONCE_CACHE  # pylint: disable=global-statement
+    fd_s = os.environ.pop(_CHURN_NONCE_ENV, None)  # scrub env BEFORE any test spawns
     if not fd_s:
-        _CHURN_NONCE_CACHE = ""
-        return ""
+        return _CHURN_NONCE_CACHE
     try:
         fd = int(fd_s)
+    except (TypeError, ValueError):
+        return _CHURN_NONCE_CACHE
+    try:
         chunks = []
         while len(b"".join(chunks)) < 256:
             data = os.read(fd, 256)
@@ -326,10 +329,26 @@ def _read_churn_nonce() -> str:
         token = b"".join(chunks).decode("ascii", "ignore").strip()
         # Accept only a plausible hex nonce so a coincidental FD-number collision
         # in some process cannot inject arbitrary bytes as a "valid" nonce.
-        _CHURN_NONCE_CACHE = token if re.fullmatch(r"[0-9a-f]{8,128}", token) else ""
+        if re.fullmatch(r"[0-9a-f]{8,128}", token):
+            _CHURN_NONCE_CACHE = token
     except (OSError, ValueError):
-        _CHURN_NONCE_CACHE = ""
-    return _CHURN_NONCE_CACHE or ""
+        pass
+    finally:
+        try:
+            os.close(fd)  # close the FD so /proc/<pid>/fd/<fd> cannot leak it
+        except OSError:
+            pass
+    return _CHURN_NONCE_CACHE
+
+
+def _read_churn_nonce() -> str:
+    """The cached nonce consumed at import by :func:`_consume_churn_nonce`."""
+    return _CHURN_NONCE_CACHE
+
+
+# Consume EAGERLY at import: the child imports this module during startup, well
+# before it spawns any project-controlled test process (round 11).
+_consume_churn_nonce()
 
 
 class TestChurnError(click.UsageError):

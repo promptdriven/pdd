@@ -720,6 +720,38 @@ class TestGreenfieldRunnerDiscovery:
         code = _write(tmp_path / "node_modules/pkg/src/thing.tsx")
         assert find_runner_collected_test_path(code) is None
 
+    def test_unicode_escaped_discovery_key_config_refuses(self, tmp_path, monkeypatch):
+        # Round 11: a discovery key spelled with a JS unicode escape
+        # (`"testMatch"` -> testMatch) must refuse — the raw scan cannot see
+        # it and we do not decode JS escapes.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", '{"devDependencies": {"jest": "^30"}}\n')
+        _write(tmp_path / "jest.config.js",
+               'module.exports = { "test\\u004datch": ["<rootDir>/qa/**/*.test.ts"] }\n')
+        assert find_runner_collected_test_path(_write(tmp_path / "src/p.tsx")) is None
+
+    def test_delegated_package_json_config_path_refuses(self, tmp_path, monkeypatch):
+        # Round 11: `"jest": "./jest.config.json"` delegates to a config file we
+        # do not resolve -> must refuse, not assume jest defaults.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json",
+               json.dumps({"jest": "./jest.config.json",
+                           "devDependencies": {"jest": "^30"}}))
+        _write(tmp_path / "jest.config.json",
+               json.dumps({"testMatch": ["<rootDir>/qa/**/*.spec.ts"]}))
+        assert find_runner_collected_test_path(_write(tmp_path / "src/q.tsx")) is None
+
+    def test_testregex_python_vs_ecmascript_divergence_fails_closed(self):
+        # Round 11: a testRegex whose Python/JS semantics differ (`\A` anchor vs
+        # identity escape) must NOT be certified with Python's engine.
+        from pdd.content_selector import _candidate_is_collected
+        cand = Path("/r/src/__test__/x.test.tsx")
+        diverge = {"testRegex": r"\A.*__test__/.*\.test\.tsx?$"}
+        assert _candidate_is_collected(cand, diverge, Path("/r")) is False
+        # A safe testRegex (identical semantics) is still evaluated normally.
+        safe = {"testRegex": r"__test__/.*\.test\.tsx?$"}
+        assert _candidate_is_collected(cand, safe, Path("/r")) is True
+
     def test_globstar_only_crosses_separators_at_segment_boundary(self):
         # Round 9: `**` is a globstar (crosses `/`) ONLY as a whole segment.
         # Embedded `**` (`qa**/`, `**bar`) is a single-segment `*` in micromatch;
