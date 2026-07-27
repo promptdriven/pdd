@@ -169,7 +169,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-sops release-infisical release-video release-video-status release-video-discord-backfill release-video-skip check-release-remote check-release-branch check-release-clean check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-sops release-infisical release-video release-video-status release-video-discord-backfill release-video-skip check-release-remote check-release-branch check-release-clean check-release-cloud-green check-release-cloud-green-gate check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -768,23 +768,38 @@ check-release-remote:
 	done; \
 	echo "Release remote verified: $$PUSH_URL"
 
+# HEAD must be *contained in* origin/main, not necessarily equal to it.
+#
+# Requiring equality deadlocks the cloud gate: the gate takes ~2h to bless a
+# SHA while main takes a commit every ~7 minutes, so the blessed commit is
+# almost never still the tip. Releasing the newest proven ancestor lets an
+# unproven tip stop blocking work that is already proven; the commits after it
+# ship in the next release.
+#
+# The safety property is unchanged. HEAD is what gets tagged and what the cloud
+# gate validated, and an ancestor of origin/main is by definition reviewed,
+# merged history — never an arbitrary or local commit.
 check-release-branch:
 	@set -e; \
-	BRANCH=$$(git symbolic-ref --quiet --short HEAD || echo ""); \
-	if [ "$$BRANCH" != "main" ]; then \
-		echo "Error: release must run from branch main, not '$$BRANCH'."; \
-		exit 1; \
-	fi; \
 	git fetch origin main; \
 	LOCAL=$$(git rev-parse HEAD); \
 	REMOTE=$$(git rev-parse origin/main); \
-	if [ "$$LOCAL" != "$$REMOTE" ]; then \
-		echo "Error: local main must be aligned with origin/main before release."; \
+	if ! git merge-base --is-ancestor "$$LOCAL" "$$REMOTE"; then \
+		echo "Error: release must run from a commit contained in origin/main."; \
 		echo "  local HEAD:  $$LOCAL"; \
 		echo "  origin/main: $$REMOTE"; \
+		echo "  HEAD is not in origin/main's history; it may be unmerged,"; \
+		echo "  rebased, or from another branch."; \
 		exit 1; \
 	fi; \
-	echo "Release branch verified: main is aligned with origin/main"
+	BEHIND=$$(git rev-list --count "$$LOCAL..$$REMOTE"); \
+	if [ "$$BEHIND" -eq 0 ]; then \
+		echo "Release branch verified: HEAD is origin/main"; \
+	else \
+		echo "Release branch verified: HEAD is in origin/main, $$BEHIND commit(s) behind the tip."; \
+		echo "  Releasing $$LOCAL; the $$BEHIND newer commit(s) ship in the next release."; \
+		git log --oneline "$$LOCAL..$$REMOTE" | sed 's/^/    /'; \
+	fi
 
 check-release-clean:
 	@if [ -n "$$(git status --porcelain)" ]; then \
@@ -792,6 +807,75 @@ check-release-clean:
 		git status --short; \
 		exit 1; \
 	fi
+
+# The release consumes a commit the cloud gate has already proven green; it
+# does not run the gate itself. Running `make cloud-test` for the first time on
+# release day turned every latent failure into a release blocker discovered at
+# the worst possible moment: for v0.0.309 the gate went red twice mid-release
+# and each red restarted the whole run behind a full fix/review/merge cycle.
+#
+# cloud-test-main.yml runs the same gate on every push to main and on a
+# schedule, so by release time the answer already exists. This target asserts
+# it says yes for the exact candidate SHA.
+#
+# The candidate is always HEAD, deliberately with no override. `release` tags
+# HEAD, so any knob that let this check target a different SHA would allow the
+# gate to bless one commit while another shipped — the exact fail-open hole
+# this check exists to close.
+#
+# `:=` not `?=` on purpose. With `?=` an exported CLOUD_GREEN_MAX_AGE_HOURS
+# wins, so a stray line in a `.envrc` (this repo uses direnv) could set `inf`
+# and silently retire the freshness check. `:=` means only an explicit
+# `make check-release-cloud-green CLOUD_GREEN_MAX_AGE_HOURS=N` overrides it,
+# and check_cloud_green.py rejects inf/nan/non-positive values regardless.
+CLOUD_GREEN_MAX_AGE_HOURS := 24
+CLOUD_TEST_MAIN_WORKFLOW := cloud-test-main.yml
+CLOUD_TEST_REPO := promptdriven/pdd
+
+# ── Arming switch ─────────────────────────────────────────────────────────
+# The gate is inert until cloud-test-main.yml can actually run, which needs a
+# GCP service account that does not exist yet (see "Cloud gate setup" in
+# docs/contributors/pdd-cli-release-process.md). Making it a hard prerequisite
+# before then would block every release, since no green run could exist.
+#
+# So it ships disarmed and `make release` warns loudly on every run instead.
+# To arm: provision the service account, confirm one green run exists, then
+# set this to 1. That is the whole change.
+CLOUD_GREEN_GATE_ARMED := 0
+
+# Prerequisite used by `release`. Delegates to the real check once armed;
+# until then it warns and continues, so the release still works but nobody can
+# forget the gate is off.
+check-release-cloud-green-gate:
+	@if [ "$(CLOUD_GREEN_GATE_ARMED)" = "1" ]; then \
+		$(MAKE) --no-print-directory check-release-cloud-green; \
+	else \
+		echo "*******************************************************************"; \
+		echo "WARNING: the cloud-test release gate is NOT ARMED."; \
+		echo "  This release is NOT verified against a cloud-test run."; \
+		echo "  Arm it by provisioning the service account described in"; \
+		echo "  docs/contributors/pdd-cli-release-process.md (Cloud gate setup),"; \
+		echo "  confirming one green run, then setting CLOUD_GREEN_GATE_ARMED := 1."; \
+		echo "*******************************************************************"; \
+	fi
+
+check-release-cloud-green:
+	@set -e; \
+	command -v gh >/dev/null 2>&1 || { \
+		echo "Error: gh is required to verify the cloud-test gate."; \
+		exit 1; \
+	}; \
+	CANDIDATE_SHA="$$(git rev-parse HEAD)"; \
+	echo "Verifying cloud-test gate for $$CANDIDATE_SHA"; \
+	git fetch origin main --quiet; \
+	gh run list --repo "$(CLOUD_TEST_REPO)" \
+		--workflow "$(CLOUD_TEST_MAIN_WORKFLOW)" \
+		--branch main --status success --limit 40 \
+		--json headSha,updatedAt,url \
+	| python3 scripts/check_cloud_green.py \
+		--candidate-sha "$$CANDIDATE_SHA" \
+		--max-age-hours "$(CLOUD_GREEN_MAX_AGE_HOURS)" \
+		--suggest-ancestor-of origin/main
 
 check-release-video-config:
 	@RELEASE_PDS_TOKEN="$${PDS_TOKEN:-}"; \
@@ -950,7 +1034,7 @@ release-video-skip:
 		--skip-reason "$(RELEASE_VIDEO_SKIP_REASON)" \
 		--repo "$${GITHUB_REPOSITORY:-promptdriven/pdd}"
 
-release: check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean check-release-video-config
+release: check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean check-release-cloud-green-gate check-release-video-config
 	@echo "Preparing release"
 	@set -e; \
 	echo "Fetching tags from origin"; \

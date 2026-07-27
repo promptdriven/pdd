@@ -32,11 +32,24 @@ record.
 ## 1. Derive the candidate
 
 Work from a clean dedicated release worktree while fixes remain on their own PR
-branches. Fetch tags and derive the candidate; never copy a version number from
-an issue or hard-code the next version in this runbook:
+branches.
+
+First settle *which commit* you are releasing. It is the newest commit the
+cloud gate has proven, which is usually not main's tip — see
+[section 2](#2-cloud-test). Check that commit out before deriving anything
+here, because `RELEASE_GIT_SHA` binds the tag, the package workflow run, and
+every downstream evidence check:
 
 ```bash
 git fetch origin main --tags --prune
+make check-release-cloud-green   # names the proven commit if HEAD is not one
+# git checkout --detach <proven sha>   # if it named one
+```
+
+Then derive the candidate; never copy a version number from an issue or
+hard-code the next version in this runbook:
+
+```bash
 LATEST_TAG=$(git tag --list --merged origin/main --sort=-v:refname 'v*' \
   | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
 BUMP=${BUMP:-patch}
@@ -52,7 +65,9 @@ print(".".join(map(str, version)))
 PY
 )
 RELEASE_TAG="v${NEXT_VERSION}"
-RELEASE_GIT_SHA=$(git rev-parse origin/main)
+# HEAD, not origin/main: the candidate is the cloud-proven commit you checked
+# out above, which is normally an ancestor of the tip.
+RELEASE_GIT_SHA=$(git rev-parse HEAD)
 PYPI_PROJECT="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["name"])')"
 printf 'candidate=%s sha=%s previous=%s distribution=%s\n' \
   "$RELEASE_TAG" "$RELEASE_GIT_SHA" "$LATEST_TAG" "$PYPI_PROJECT"
@@ -81,19 +96,121 @@ variable is a production-affecting mutation and needs its own safety record.
 
 ## 2. Cloud test
 
-Record the staging Cloud Batch target, how to cancel the job or restore the
-prior image, and the compute/image risk. Then run the candidate source through
-the real cloud boundary:
+**The release consumes a commit the cloud gate has already proven green. It
+does not run the gate.**
+
+`.github/workflows/cloud-test-main.yml` runs `make cloud-test` on every push to
+main and every four hours, so by release time the answer already exists. Read
+it rather than recreating it:
 
 ```bash
-make cloud-test
+make check-release-cloud-green
 ```
 
-Use `make cloud-test-quick` only when the dependency-image hash proves a rebuild
-is unnecessary. Save the Batch job/build identifiers, source SHA, image digest,
-test counts, result artifact URI, and final status. A failed or incomplete job
-is a release blocker. Fix failures via the PR loop; do not patch only the
-release worktree or silently exclude a test.
+This is a dependency of `make release`, so it also runs automatically. It
+passes only when `HEAD` has a successful `cloud-test-main` run no older than
+`CLOUD_GREEN_MAX_AGE_HOURS` (default 24). The candidate is always `HEAD` and
+there is deliberately no override: `make release` tags `HEAD`, so a knob that
+pointed this check at a different SHA would let the gate bless one commit while
+another shipped.
+
+**The candidate is usually not main's tip, and that is normal.** The gate takes
+about two hours to bless a commit while main takes a new commit every seven
+minutes or so, so the tip is almost never the blessed SHA. Releasing the newest
+proven ancestor is the expected path, not a fallback: an unproven tip must not
+block work that is already proven. Commits after the released SHA ship next
+time.
+
+When the gate refuses, it names that commit and the exact command:
+
+```
+Newest proven ancestor: <sha>  (age 3.2h)
+  git checkout --detach <sha>
+  make release
+```
+
+`check-release-branch` accepts any commit **contained in** `origin/main`, and
+reports how many commits behind the tip you are releasing along with their
+subjects. It still refuses anything not in main's history — unmerged, rebased,
+or from another branch.
+
+The safety property is unchanged: `make release` tags `HEAD`, and the gate
+validates `HEAD`, so the commit that ships is always exactly the commit that
+was proven.
+
+If no ancestor is proven either, the correct responses are:
+
+1. **Wait** for the next gate run, or dispatch one.
+2. **Fix main through the normal PR loop**, on its own schedule.
+
+Do not patch only the release worktree, and do not silently exclude a test.
+
+Record the green run URL, its SHA, and its age as the cloud-test evidence for
+this release.
+
+### Why the gate moved out of the release
+
+Until v0.0.309 this section ran `make cloud-test` directly, which made release
+day the first time the gate ever saw the commit. Every latent failure then
+became a release blocker discovered at the worst possible moment, and each one
+restarted the release behind a full fix/review/merge cycle. The v0.0.309 run
+went red twice this way. Waiting on those two results, fixing them, and
+re-running the gate after each fix cost about 5.2 of that run's 11.5 hours:
+
+| window | hours | what |
+| --- | --- | --- |
+| 06:21–12:12 | 5.9 | derive candidate, first gate run, merge four already-open blocker PRs |
+| 12:12–14:25 | 2.2 | gate red (Gemini 3.6 Flash) → fix → PR #2324 → merge |
+| 14:26–16:25 | 2.0 | forced re-validation, then gate red again (runtime digest cache) |
+| 16:25–17:25 | 1.0 | fix → PR #2326 → merge |
+| 17:26–17:53 | 0.5 | final gate run, tag, publish |
+
+Only the 5.2 hours in the middle are what this section changes. The 5.9-hour
+opening block is per-PR review ceremony and is a separate problem. Release
+cadence over the two weeks that pattern held roughly halved, from about one
+day per release to about two.
+
+### Cloud gate setup
+
+**The gate ships disarmed.** `CLOUD_GREEN_GATE_ARMED := 0` in the Makefile, so
+`make release` prints a loud unverified-release warning and continues. Arming
+it before the service account below exists would refuse every candidate,
+because no green run could exist yet.
+
+To arm, in order:
+
+1. Provision the service account described next.
+2. Run `gh workflow run cloud-test-main.yml --ref main` and confirm it goes
+   green.
+3. Set `CLOUD_GREEN_GATE_ARMED := 1`.
+
+Until step 3, the gate is advisory and releases are not verified against it.
+
+`cloud-test-main.yml` authenticates to GCP by Workload Identity Federation as
+`pdd-cloud-test-runner@prompt-driven-development-stg.iam.gserviceaccount.com`.
+The existing WIF provider pins `attribute.workflow_ref`, so this workflow
+cannot reuse the auto-heal dispatcher's service account. Until that service
+account exists and is bound to this workflow ref, the workflow fails at the
+authentication step and `make check-release-cloud-green` refuses every
+candidate — deliberately, because a gate that fails open is worse than none.
+
+The service account needs the same Cloud Batch, Cloud Build, Artifact Registry,
+Secret Manager accessor, and GCS permissions that a local `make cloud-test`
+uses.
+
+### Running the gate by hand
+
+Local `make cloud-test` still works and is the right tool when iterating on the
+Cloud Batch harness itself. It does not satisfy the release gate: only a
+recorded `cloud-test-main` run does, because the release needs an auditable
+result bound to a SHA rather than an operator's assertion. To force a run:
+
+```bash
+gh workflow run cloud-test-main.yml --ref main
+```
+
+Use `make cloud-test-quick` only when the dependency-image hash proves a
+rebuild is unnecessary.
 
 ## 3. PR, review, and merge
 

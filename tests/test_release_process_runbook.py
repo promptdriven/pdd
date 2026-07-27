@@ -56,6 +56,32 @@ def test_release_runbook_is_current_and_covers_the_ordered_lifecycle():
     assert positions == sorted(positions)
 
 
+def test_cloud_gate_is_consumed_not_run_during_the_release():
+    """The release reads a pre-existing green; it must not run the gate itself.
+
+    Running `make cloud-test` inline made release day the first time the gate
+    saw the commit, so every latent failure became a mid-release blocker. Pin
+    the inversion so the runbook cannot drift back.
+    """
+    cloud_section = runbook_section("## 2. Cloud test", "## 3. PR, review, and merge")
+    makefile = MAKEFILE.read_text(encoding="utf8")
+
+    assert "make check-release-cloud-green" in cloud_section
+    assert "cloud-test-main.yml" in cloud_section
+    # The gate is a release precondition, not a release step.
+    release_line = next(
+        line for line in makefile.splitlines() if line.startswith("release:")
+    )
+    assert "check-release-cloud-green-gate" in release_line
+    # The disarmed state is real and must be documented where operators look,
+    # or an unverified release looks like a verified one.
+    assert "ships disarmed" in runbook_text()
+    assert "CLOUD_GREEN_GATE_ARMED" in runbook_text()
+    # `make cloud-test` may still be mentioned as a manual/harness tool, but
+    # never as an unqualified release instruction.
+    assert not re.search(r"(?m)^make cloud-test$", cloud_section)
+
+
 def test_release_runbook_uses_the_distribution_declared_by_pyproject():
     text = runbook_text()
     with PYPROJECT.open("rb") as pyproject_file:

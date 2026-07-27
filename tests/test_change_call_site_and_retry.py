@@ -1,11 +1,19 @@
 """
 Real-LLM regression tests for issue #939: call-site enumeration and retry safety.
 
-Two tests, each making one change() call + deterministic output checks:
+Two tests, each making one change() call + heuristic output checks:
 1. Call-site enumeration — verifies the LLM lists all 4 call sites by name
 2. Retry safety — verifies the LLM specifies a max retry count AND fallback
 
 Requires: PDD_RUN_REAL_LLM_TESTS=1 or --run-all
+
+Both real tests are marked `prose_judge`: their oracle is a regex over free-form
+model prose, so a rephrasing ("fails with a connection error" -> "fail due to
+connection errors") flips the verdict with no product regression behind it.
+Four release-blocking PRs (#2278, #2281, #2283, #2286) did nothing but widen
+these patterns, so they are advisory and the cloud gate deselects them. The
+`TestDeterministicChangeJudges` cases below exercise the judges against fixed
+strings and stay blocking — they are deterministic and cheap.
 """
 
 import os
@@ -1483,6 +1491,7 @@ entire pipeline from the beginning.
 
 
 @pytest.mark.real
+@pytest.mark.prose_judge
 class TestCallSiteEnumeration:
     """Verify the LLM enumerates each call site when changing a function's return type."""
 
@@ -1507,6 +1516,7 @@ class TestCallSiteEnumeration:
 
 
 @pytest.mark.real
+@pytest.mark.prose_judge
 class TestRetrySafety:
     """Verify the LLM includes retry bounds and fallback when adding retry logic."""
 
