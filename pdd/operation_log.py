@@ -391,6 +391,51 @@ def _prompts_root_for_fingerprint(prompt_file: Union[str, Path]) -> Path:
     return prompt_path.parent
 
 
+def resolve_fingerprint_paths(
+    basename: str,
+    language: str,
+    prompt_file: Union[str, Path],
+    *,
+    paths: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Resolve the complete unit while preserving caller-selected paths."""
+    explicit: Dict[str, Any] = dict(paths or {})
+    explicit_prompt = Path(prompt_file)
+    explicit["prompt"] = explicit_prompt
+    try:
+        from .sync_determine_operation import get_pdd_file_paths
+
+        discovered: Dict[str, Any] = get_pdd_file_paths(
+            basename,
+            language,
+            prompts_dir=str(_prompts_root_for_fingerprint(prompt_file)),
+        )
+    except (ImportError, OSError, ValueError) as exc:
+        logger.warning(
+            "Could not resolve complete fingerprint paths for %s/%s: %s",
+            basename,
+            language,
+            exc,
+        )
+        return explicit
+
+    resolved_prompt = discovered.get("prompt")
+    if not isinstance(resolved_prompt, Path) or not resolved_prompt.exists():
+        logger.warning(
+            "Resolved fingerprint prompt is missing for %s/%s: %s",
+            basename,
+            language,
+            resolved_prompt,
+        )
+        return explicit
+
+    overlay = dict(explicit)
+    if not explicit_prompt.exists():
+        overlay.pop("prompt", None)
+    discovered.update(overlay)
+    return discovered
+
+
 def load_operation_log(
     basename: str,
     language: str,
@@ -578,61 +623,23 @@ def save_fingerprint(
     cost: float = 0.0,
     model: str = "unknown"
 ) -> None:
-    """
-    Save the current fingerprint/state to the state file.
-
-    Writes the full Fingerprint dataclass format compatible with read_fingerprint()
-    in sync_determine_operation.py. This ensures manual commands (generate, example)
-    don't break sync's fingerprint tracking.
-    """
-    from dataclasses import asdict
-    from datetime import timezone
-    from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
-    from . import __version__
-
-    # Issue #983: when the caller provides `paths`, use them directly — do
-    # NOT call get_pdd_file_paths. Issue #1211: at the same time, use those
-    # caller-supplied paths to detect the subproject root so the meta dir
-    # anchors at the .pddrc rather than the run CWD.
-    if not paths:
-        from .sync_determine_operation import get_pdd_file_paths
-        try:
-            paths = get_pdd_file_paths(basename, language)
-        except (ImportError, OSError, ValueError) as e:
-            logger.warning("Could not resolve paths for %s/%s: %s", basename, language, e)
-            paths = {}
+    """Finalize the current fingerprint through the shared transaction."""
+    from .fingerprint_transaction import FingerprintTransaction
 
     from .sync_core.finalize import finalize_legacy_paths
 
     if finalize_legacy_paths(paths):
         return
 
-    path = get_fingerprint_path(basename, language, paths=paths)
-
-    # Issue #522: Pass stored include deps for prompt hash calculation
-    prev_fp = read_fingerprint(basename, language, paths=paths)
-    stored_deps = prev_fp.include_deps if prev_fp else None
-    current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps) if paths else {}
-
-    # Create Fingerprint with same format as _save_fingerprint_atomic
-    fingerprint = Fingerprint(
-        pdd_version=__version__,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        command=operation,
-        prompt_hash=current_hashes.get('prompt_hash'),
-        code_hash=current_hashes.get('code_hash'),
-        example_hash=current_hashes.get('example_hash'),
-        test_hash=current_hashes.get('test_hash'),
-        test_files=current_hashes.get('test_files'),
-        include_deps=current_hashes.get('include_deps'),  # Issue #522
-    )
-
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(asdict(fingerprint), f, indent=2)
-    except Exception as e:
-        console = Console()
-        console.print(f"[yellow]Warning: Failed to save fingerprint to {path}: {e}[/yellow]")
+    with FingerprintTransaction(
+        basename=basename,
+        language=language,
+        operation=operation,
+        paths=paths,
+        cost=cost,
+        model=model,
+    ):
+        pass
 
 
 def save_run_report(
@@ -786,81 +793,91 @@ def log_operation(
                         cost = _extract_cost_from_result(operation, result)
                         model = _extract_model_from_result(operation, result)
 
-                update_log_entry(entry, success=success, cost=cost, model=model, duration=duration, error=error_msg)
                 if _estimate_mode_active():
                     pass
                 elif basename and language:
-                    append_log_entry(basename, language, entry, paths=log_paths)
-                    if success:
-                        fingerprint_allowed = True
-                        # Clear the stale run report only after the command
-                        # succeeds, so a failed run cannot erase existing
-                        # runtime verification state that still describes the
-                        # current code. The clear must happen before
-                        # save_fingerprint so a fresh fingerprint never
-                        # coexists with a stale per-module run report
-                        # (issue #1057).
-                        if clears_run_report:
-                            fingerprint_allowed = _clear_run_report_before_fingerprint(
-                                basename, language, paths=log_paths
-                            )
-                        if updates_fingerprint and fingerprint_allowed:
-                            # Issue #1305 + #1211: save_fingerprint hashes only
-                            # Path values, so a bare {"prompt": <str>} hint
-                            # yields all-null hashes (the prompt string is
-                            # skipped and code/example/test keys are absent) and
-                            # the fingerprint never converges (CI auto-heal
-                            # loops). Resolve the authoritative, complete Path
-                            # set here. get_pdd_file_paths re-resolves the
-                            # prompts root from the run CWD, so anchor it at the
-                            # prompt file's subproject via an absolute
-                            # prompts_dir — otherwise a command run from a PARENT
-                            # CWD for a nested subproject resolves to the parent
-                            # (null hashes again) and writes the fingerprint
-                            # outside the subproject, splitting it from the log /
-                            # run report that log_paths anchors. Fall back to a
-                            # Path-coerced prompt hint (never a raw string) if
-                            # resolution fails, so anchoring still works. The
-                            # #983 contract is preserved: the caller resolves the
-                            # paths, so save_fingerprint does not.
-                            from .sync_determine_operation import get_pdd_file_paths
-                            try:
-                                prompts_root = _prompts_root_for_fingerprint(
-                                    prompt_file
-                                )
-                                fingerprint_paths: Dict[str, Any] = get_pdd_file_paths(
-                                    basename, language, prompts_dir=str(prompts_root)
-                                )
-                                # Existence-gate the resolution: if it silently
-                                # resolved the prompt to a path that is not on
-                                # disk (a mis-resolution that did not raise), the
-                                # other paths are wrong too, so the fingerprint
-                                # would be null and mis-anchored. Fall back to the
-                                # real prompt path so prompt_hash is real and the
-                                # write still anchors at the subproject.
-                                resolved_prompt = fingerprint_paths.get("prompt")
-                                if not (
-                                    isinstance(resolved_prompt, Path)
-                                    and resolved_prompt.exists()
-                                ):
-                                    fingerprint_paths = {"prompt": Path(prompt_file)}
-                            except (ImportError, OSError, ValueError) as e:
-                                logger.warning(
-                                    "Could not resolve paths for %s/%s: %s",
-                                    basename,
-                                    language,
-                                    e,
-                                )
-                                fingerprint_paths = {"prompt": Path(prompt_file)}
-                            save_fingerprint(
+                    try:
+                        no_op_fix = (
+                            operation == "fix"
+                            and cost == 0.0
+                            and str(model).strip().lower()
+                            in {"", "none", "unknown", "n/a"}
+                        )
+                        if success and no_op_fix:
+                            logger.info(
+                                "Skipping fix metadata finalization for %s/%s: "
+                                "no LLM invocation",
                                 basename,
                                 language,
-                                operation=operation,
-                                paths=fingerprint_paths,
-                                cost=cost,
-                                model=model,
                             )
-                        if updates_run_report and isinstance(result, dict):
-                            save_run_report(basename, language, result, paths=log_paths)
+                        elif success:
+                            fingerprint_allowed = True
+                            if clears_run_report:
+                                fingerprint_allowed = _clear_run_report_before_fingerprint(
+                                    basename, language, paths=log_paths
+                                )
+                            if updates_fingerprint and not fingerprint_allowed:
+                                from .fingerprint_transaction import (
+                                    FingerprintFinalizeError,
+                                )
+
+                                raise FingerprintFinalizeError(
+                                    operation,
+                                    get_fingerprint_path(
+                                        basename,
+                                        language,
+                                        paths=log_paths,
+                                    ),
+                                    "run report not cleared",
+                                )
+                            if updates_fingerprint and fingerprint_allowed:
+                                fingerprint_paths = resolve_fingerprint_paths(
+                                    basename,
+                                    language,
+                                    prompt_file,
+                                )
+                                save_fingerprint(
+                                    basename,
+                                    language,
+                                    operation=operation,
+                                    paths=fingerprint_paths,
+                                    cost=cost,
+                                    model=model,
+                                )
+                            if updates_run_report and isinstance(result, dict):
+                                save_run_report(
+                                    basename,
+                                    language,
+                                    result,
+                                    paths=log_paths,
+                                )
+                    except Exception as finalization_error:
+                        success = False
+                        error_msg = str(finalization_error)
+                        update_log_entry(
+                            entry,
+                            success=False,
+                            cost=cost,
+                            model=model,
+                            duration=duration,
+                            error=error_msg,
+                        )
+                        append_log_entry(
+                            basename,
+                            language,
+                            entry,
+                            paths=log_paths,
+                        )
+                        raise
+
+                    update_log_entry(
+                        entry,
+                        success=success,
+                        cost=cost,
+                        model=model,
+                        duration=duration,
+                        error=error_msg,
+                    )
+                    append_log_entry(basename, language, entry, paths=log_paths)
         return wrapper
     return decorator

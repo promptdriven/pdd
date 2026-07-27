@@ -52,7 +52,13 @@ def _isolate_metadata_finalization(request):
         yield
         return
     with patch("pdd.auto_deps_main.save_fingerprint"), \
-         patch("pdd.auto_deps_main.clear_run_report"):
+         patch(
+             "pdd.auto_deps_main._clear_run_report_before_fingerprint",
+             return_value=True,
+         ), patch(
+             "pdd.auto_deps_main.infer_module_identity",
+             return_value=("test", "python"),
+         ):
         yield
 
 
@@ -758,7 +764,7 @@ def test_auto_deps_main_updates_architecture_json_after_write(
 #      ``(basename, language)`` so canonical metadata stays untouched.
 # ---------------------------------------------------------------------------
 @patch("pdd.auto_deps_main.save_fingerprint")
-@patch("pdd.auto_deps_main.clear_run_report")
+@patch("pdd.auto_deps_main._clear_run_report_before_fingerprint")
 @patch("pdd.auto_deps_main.infer_module_identity")
 @patch("pdd.auto_deps_main.construct_paths")
 @patch("pdd.auto_deps_main.insert_includes")
@@ -802,7 +808,10 @@ def test_auto_deps_metadata_finalizes_with_output_identity_in_default_mode(
     assert fp_kwargs["basename"] == "child_python_with"
     assert fp_kwargs["language"] == "deps"
     assert fp_kwargs["operation"] == "auto-deps"
-    assert fp_kwargs["paths"] == {"prompt": Path(output_path)}
+    assert fp_kwargs["paths"]["prompt"] == Path(output_path)
+    assert {"prompt", "code", "example", "test"}.issubset(
+        fp_kwargs["paths"]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -814,7 +823,7 @@ def test_auto_deps_metadata_finalizes_with_output_identity_in_default_mode(
 #      identity.
 # ---------------------------------------------------------------------------
 @patch("pdd.auto_deps_main.save_fingerprint")
-@patch("pdd.auto_deps_main.clear_run_report")
+@patch("pdd.auto_deps_main._clear_run_report_before_fingerprint")
 @patch("pdd.auto_deps_main.infer_module_identity")
 @patch("pdd.auto_deps_main.construct_paths")
 @patch("pdd.auto_deps_main.insert_includes")
@@ -862,7 +871,10 @@ def test_auto_deps_metadata_finalizes_with_canonical_identity_inplace(
     assert fp_kwargs["basename"] == "child"
     assert fp_kwargs["language"] == "python"
     assert fp_kwargs["operation"] == "auto-deps"
-    assert fp_kwargs["paths"] == {"prompt": Path(output_path)}
+    assert fp_kwargs["paths"]["prompt"] == Path(output_path)
+    assert {"prompt", "code", "example", "test"}.issubset(
+        fp_kwargs["paths"]
+    )
     assert fp_kwargs["model"] == "test-model"
     assert fp_kwargs["cost"] == pytest.approx(0.123456)
 
@@ -872,7 +884,7 @@ def test_auto_deps_metadata_finalizes_with_canonical_identity_inplace(
 #     i.e. ``infer_module_identity`` returns ``(None, None)``.
 # ---------------------------------------------------------------------------
 @patch("pdd.auto_deps_main.save_fingerprint")
-@patch("pdd.auto_deps_main.clear_run_report")
+@patch("pdd.auto_deps_main._clear_run_report_before_fingerprint")
 @patch("pdd.auto_deps_main.infer_module_identity")
 @patch("pdd.auto_deps_main.construct_paths")
 @patch("pdd.auto_deps_main.insert_includes")
@@ -886,11 +898,8 @@ def test_auto_deps_metadata_skipped_on_unknown_identity(
     tmp_path: Path,
 ):
     """
-    ``infer_module_identity`` returns ``(None, None)`` (a tuple, not None)
-    for unrecognized prompt names. The finalization block must handle that
-    explicitly and skip both ``clear_run_report`` and ``save_fingerprint``
-    rather than crash. Use an in-place overwrite so finalization is actually
-    attempted (otherwise the differing-output guard would short-circuit it).
+    An output without PDD's basename/language naming is an unmanaged redirect,
+    so it intentionally skips module metadata.
     """
     prompt_file = str(tmp_path / "weird_name_no_language.prompt")
     Path(prompt_file).write_text("orig", encoding="utf-8")
@@ -903,7 +912,7 @@ def test_auto_deps_metadata_skipped_on_unknown_identity(
     mock_insert_includes.return_value = _make_insert_includes_return()
     mock_infer_identity.return_value = (None, None)
 
-    modified_prompt, total_cost, model_name = auto_deps_main(
+    result = auto_deps_main(
         ctx=mock_ctx,
         prompt_file=prompt_file,
         directory_path="context/",
@@ -912,24 +921,21 @@ def test_auto_deps_metadata_skipped_on_unknown_identity(
         force_scan=False,
     )
 
+    assert result == _make_insert_includes_return()[:1] + (0.123456, "test-model")
     mock_clear_run_report.assert_not_called()
     mock_save_fingerprint.assert_not_called()
-    # Auto-deps still returns its successful result.
-    assert modified_prompt == "Modified prompt with includes"
-    assert total_cost == pytest.approx(0.123456)
-    assert model_name == "test-model"
 
 
 # ---------------------------------------------------------------------------
-# 20. Metadata finalization: clear_run_report failure must not abort the
-#     subsequent fingerprint save.
+# 20. Metadata finalization: a stale run report that cannot be cleared is a
+#     hard failure and must block the fingerprint write.
 # ---------------------------------------------------------------------------
 @patch("pdd.auto_deps_main.save_fingerprint")
-@patch("pdd.auto_deps_main.clear_run_report")
+@patch("pdd.auto_deps_main._clear_run_report_before_fingerprint")
 @patch("pdd.auto_deps_main.infer_module_identity")
 @patch("pdd.auto_deps_main.construct_paths")
 @patch("pdd.auto_deps_main.insert_includes")
-def test_auto_deps_clear_run_report_error_does_not_block_fingerprint(
+def test_auto_deps_clear_run_report_error_blocks_fingerprint(
     mock_insert_includes,
     mock_construct_paths,
     mock_infer_identity,
@@ -938,7 +944,7 @@ def test_auto_deps_clear_run_report_error_does_not_block_fingerprint(
     mock_ctx,
     tmp_path: Path,
 ):
-    """If clearing the stale run report fails, the fingerprint must still be saved.
+    """A fresh fingerprint must not coexist with stale runtime state.
 
     Uses an in-place overwrite (``output == prompt_file``) so finalization
     is actually attempted — the differing-output guard would otherwise skip
@@ -953,22 +959,20 @@ def test_auto_deps_clear_run_report_error_does_not_block_fingerprint(
     )
     mock_insert_includes.return_value = _make_insert_includes_return()
     mock_infer_identity.return_value = ("child", "python")
-    mock_clear_run_report.side_effect = OSError("permission denied")
+    mock_clear_run_report.return_value = False
 
-    auto_deps_main(
-        ctx=mock_ctx,
-        prompt_file=prompt_file,
-        directory_path="context/",
-        auto_deps_csv_path=None,
-        output=None,
-        force_scan=False,
-    )
+    with pytest.raises(Exception, match="run report not cleared"):
+        auto_deps_main(
+            ctx=mock_ctx,
+            prompt_file=prompt_file,
+            directory_path="context/",
+            auto_deps_csv_path=None,
+            output=None,
+            force_scan=False,
+        )
 
     mock_clear_run_report.assert_called_once_with("child", "python", paths=ANY)
-    mock_save_fingerprint.assert_called_once()
-    fp_kwargs = mock_save_fingerprint.call_args.kwargs
-    assert fp_kwargs["basename"] == "child"
-    assert fp_kwargs["language"] == "python"
+    mock_save_fingerprint.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

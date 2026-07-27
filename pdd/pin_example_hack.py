@@ -105,7 +105,13 @@ class AtomicStateUpdate:
         self.pending.run_report = report
         self.pending.run_report_path = path
 
-    def set_fingerprint(self, fingerprint: Dict[str, Any], path: Path):
+    def set_fingerprint(
+        self,
+        fingerprint: Dict[str, Any],
+        path: Path,
+        *,
+        operation: Optional[str] = None,
+    ):
         """Buffer a fingerprint for atomic write."""
         self.pending.fingerprint = fingerprint
         self.pending.fingerprint_path = path
@@ -254,31 +260,18 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
 
     if finalize_legacy_paths(paths):
         return
-    from datetime import datetime, timezone
-    from .sync_determine_operation import calculate_current_hashes, Fingerprint
-    from . import __version__
+    from .fingerprint_transaction import FingerprintTransaction
 
-    current_hashes = calculate_current_hashes(paths)
-    fingerprint = Fingerprint(
-        pdd_version=__version__,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        command=operation,
-        prompt_hash=current_hashes.get('prompt_hash'),
-        code_hash=current_hashes.get('code_hash'),
-        example_hash=current_hashes.get('example_hash'),
-        test_hash=current_hashes.get('test_hash'),
-        test_files=current_hashes.get('test_files'),  # Bug #156
-    )
-
-    fingerprint_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}.json"
-    if atomic_state:
-        # Buffer for atomic write
-        atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
-    else:
-        # Legacy direct write
-        META_DIR.mkdir(parents=True, exist_ok=True)
-        with open(fingerprint_file, 'w') as f:
-            json.dump(asdict(fingerprint), f, indent=2, default=str)
+    with FingerprintTransaction(
+        basename,
+        language,
+        operation,
+        paths,
+        cost,
+        model,
+        atomic_state=atomic_state,
+    ):
+        pass
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
     """Return a `pytest-cov` `--cov` target for a Python code file.

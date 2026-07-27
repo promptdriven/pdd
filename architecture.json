@@ -11699,5 +11699,65 @@
       "x": 11600,
       "y": 2200
     }
+  },
+  {
+    "reason": "Single enforced code path for complete, atomic PDD fingerprint finalization with commit-or-fail semantics.",
+    "description": "Builds and validates complete fingerprint payloads and durably commits fingerprints with paired run reports.",
+    "dependencies": [
+      "sync_determine_operation_python.prompt"
+    ],
+    "priority": 5,
+    "filename": "fingerprint_transaction_python.prompt",
+    "filepath": "pdd/fingerprint_transaction.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {"name": "FingerprintTransaction.__init__", "signature": "(basename: str, language: str, operation: str, paths: Optional[Dict[str, Path]] = None, cost: float = 0.0, model: str = '', *, atomic_state: Optional[Any] = None) -> None", "returns": "None"},
+          {"name": "FingerprintTransaction.__enter__", "signature": "() -> FingerprintTransaction", "returns": "FingerprintTransaction"},
+          {"name": "FingerprintTransaction.__exit__", "signature": "(exc_type, exc_val, exc_tb) -> bool", "returns": "bool"},
+          {"name": "FingerprintTransaction.skip", "signature": "(reason: str) -> None", "returns": "None"},
+          {"name": "FingerprintTransaction.set_include_deps_override", "signature": "(deps: Dict[str, str]) -> None", "returns": "None"},
+          {"name": "AtomicStateUpdate.__init__", "signature": "(basename: str, language: str, *, paths: Optional[Dict[str, Path]] = None) -> None", "returns": "None"},
+          {"name": "AtomicStateUpdate.set_run_report", "signature": "(report: Dict[str, Any], path: Path) -> None", "returns": "None"},
+          {"name": "AtomicStateUpdate.set_fingerprint", "signature": "(fingerprint: Dict[str, Any], path: Path, *, operation: Optional[str] = None) -> None", "returns": "None"},
+          {"name": "recover_incomplete_metadata_transactions", "signature": "(basename: str, language: str, paths: Optional[Dict[str, Path]] = None) -> tuple[str, ...]", "returns": "tuple[str, ...]"}
+        ]
+      }
+    },
+    "position": {"x": 11800, "y": 2200}
+  },
+  {
+    "reason": "Runs example generation, repair, verification, and tests in one agentic sync session.",
+    "description": "Builds and runs the one-session sync prompt while reporting progress and preserving public/test surfaces.",
+    "dependencies": [
+      "code_generator_main_python.prompt",
+      "fix_code_loop_python.prompt",
+      "fix_verification_errors_loop_python.prompt",
+      "generate_test_python.prompt",
+      "fix_error_loop_python.prompt"
+    ],
+    "priority": 220,
+    "filename": "one_session_sync_python.prompt",
+    "filepath": "pdd/one_session_sync.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {"name": "build_one_session_prompt", "signature": "(basename: str, language: str, pdd_files: Dict[str, Path], project_root: Path, *, target_coverage: float = 90.0) -> str", "returns": "str"},
+          {"name": "run_one_session_sync", "signature": "(basename: str, language: str, pdd_files: Dict[str, Path], project_root: Path, *, target_coverage: float = 90.0, budget: Optional[float] = None, verbose: bool = False, quiet: bool = False, timeout: Optional[float] = None) -> Dict[str, Any]", "returns": "Dict[str, Any]"}
+        ]
+      }
+    },
+    "position": {"x": 12000, "y": 2200}
   }
 ]

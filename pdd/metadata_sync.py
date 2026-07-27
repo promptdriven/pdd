@@ -17,7 +17,12 @@ from .architecture_sync import (
     update_architecture_from_prompt,
 )
 from .architecture_registry import find_architecture_for_project
-from .operation_log import clear_run_report, infer_module_identity, save_fingerprint
+from .operation_log import (
+    clear_run_report,
+    infer_module_identity,
+    resolve_fingerprint_paths,
+    save_fingerprint,
+)
 
 
 _THEME = Theme(
@@ -482,12 +487,18 @@ def run_metadata_sync(
         basename, language = infer_module_identity(prompt_path)
         if not basename or not language:
             reason = "could not infer (basename, language) for fingerprint"
-            result.stages["fingerprint"] = StageStatus(status="skipped", reason=reason)
-            _stage_log_exit("fingerprint", "skipped", reason)
+            result.stages["fingerprint"] = StageStatus(status="failed", reason=reason)
+            _stage_log_exit("fingerprint", "failed", reason)
         else:
             paths: Dict[str, Path] = {"prompt": prompt_path}
             if code_path is not None:
                 paths["code"] = code_path
+            paths = resolve_fingerprint_paths(
+                basename,
+                language,
+                prompt_path,
+                paths=paths,
+            )
             detail = f"basename={basename} language={language}"
             if dry_run:
                 result.stages["fingerprint"] = StageStatus(

@@ -7,17 +7,15 @@ animations in parallel, serving as the core engine for the `pdd sync` command.
 import threading
 import time
 import json
-import hashlib
 import datetime
 import subprocess
 import re
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 from dataclasses import asdict, dataclass, field
 import tempfile
 import sys
-import uuid
 
 from .sync_tui import maybe_steer_operation, DEFAULT_STEER_TIMEOUT_S
 
@@ -40,12 +38,15 @@ from .operation_log import (
     update_log_entry,
     append_log_entry,
     log_event,
-    save_fingerprint,
     save_run_report,
     clear_run_report,
     get_log_path,
     get_run_report_path,
     get_fingerprint_path,
+)
+from .fingerprint_transaction import (
+    AtomicStateUpdate,
+    recover_incomplete_metadata_transactions,
 )
 from .sync_determine_operation import (
     sync_determine_operation,
@@ -450,134 +451,11 @@ def _use_agentic_path(language: str, agentic_mode: bool) -> bool:
 # --- Atomic State Update (Issue #159 Fix) ---
 
 @dataclass
-class PendingStateUpdate:
-    """Holds pending state updates for atomic commit."""
-    run_report: Optional[Dict[str, Any]] = None
-    fingerprint: Optional[Dict[str, Any]] = None
-    run_report_path: Optional[Path] = None
-    fingerprint_path: Optional[Path] = None
-
-
-@dataclass
 class FileRollbackSnapshot:
     """Snapshot of a single file before an operation mutates it."""
     path: Path
     existed: bool
     content: Optional[bytes] = None
-
-
-class AtomicStateUpdate:
-    """
-    Context manager for atomic state updates.
-
-    Ensures run_report and fingerprint are both written or neither is written.
-    This fixes Issue #159 where non-atomic writes caused state desynchronization.
-
-    Usage:
-        with AtomicStateUpdate(basename, language) as state:
-            state.set_run_report(report_dict, report_path)
-            state.set_fingerprint(fingerprint_dict, fp_path)
-        # On successful exit, both files are written atomically
-        # On exception, neither file is written (rollback)
-    """
-
-    def __init__(self, basename: str, language: str):
-        self.basename = basename
-        self.language = language.lower()
-        self.pending = PendingStateUpdate()
-        self._crash_hook: Optional[Callable[[str], None]] = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is None:
-            self._commit()
-        return False  # Don't suppress exceptions
-
-    def set_run_report(self, report: Dict[str, Any], path: Path):
-        """Buffer a run report for atomic write."""
-        self.pending.run_report = report
-        self.pending.run_report_path = path
-
-    def set_fingerprint(self, fingerprint: Dict[str, Any], path: Path):
-        """Buffer a fingerprint for atomic write."""
-        self.pending.fingerprint = fingerprint
-        self.pending.fingerprint_path = path
-
-    def _commit(self):
-        """Commit the pair through the canonical durable transaction manager.
-
-        The run report is deliberately installed before the fingerprint, which
-        is the completion checkpoint.  A durable COMMITTING journal lets the
-        next process finish both writes after SIGKILL at either rename.
-        """
-        from .sync_core.transaction import PlannedWrite, TransactionManager
-
-        pairs = (
-            (self.pending.run_report_path, self.pending.run_report),
-            (self.pending.fingerprint_path, self.pending.fingerprint),
-        )
-        destinations = [Path(path) for path, data in pairs if path and data is not None]
-        if not destinations:
-            return
-        root = _metadata_checkout_root(*destinations)
-        manager = TransactionManager(root)
-        _recover_metadata_transactions(manager, self.basename, self.language)
-        writes = []
-        for path, data in pairs:
-            if path is None or data is None:
-                continue
-            relative = Path(path).resolve(strict=False).relative_to(root)
-            payload = json.dumps(data, indent=2, default=str).encode("utf-8") + b"\n"
-            writes.append(PlannedWrite(PurePosixPath(relative.as_posix()), payload, "100644"))
-        transaction_id = _metadata_transaction_prefix(self.basename, self.language) + uuid.uuid4().hex
-        prepared = manager.prepare(transaction_id, tuple(writes))
-        if not prepared.no_op:
-            manager.commit(transaction_id, crash_hook=self._crash_hook)
-
-
-def _metadata_checkout_root(*paths: Path) -> Path:
-    """Return the single checkout root owning metadata destinations."""
-    roots = set()
-    for raw_path in paths:
-        resolved = Path(raw_path).resolve(strict=False)
-        pdd_dir = next((parent for parent in resolved.parents if parent.name == ".pdd"), None)
-        if pdd_dir is None:
-            raise ValueError(f"metadata destination is outside .pdd: {raw_path}")
-        roots.add(pdd_dir.parent)
-    if len(roots) != 1:
-        raise ValueError("metadata destinations belong to different projects")
-    return roots.pop()
-
-
-def _metadata_transaction_prefix(basename: str, language: str) -> str:
-    identity = f"{basename}\0{language.lower()}".encode("utf-8")
-    return f"legacy-metadata-{hashlib.sha256(identity).hexdigest()[:20]}-"
-
-
-def _recover_metadata_transactions(manager, basename: str, language: str) -> tuple[str, ...]:
-    """Recover only journals owned by this legacy module identity."""
-    prefix = _metadata_transaction_prefix(basename, language)
-    recovered = []
-    for transaction_id in manager.incomplete():
-        if transaction_id.startswith(prefix):
-            manager.recover(transaction_id)
-            recovered.append(transaction_id)
-    return tuple(recovered)
-
-
-def recover_incomplete_metadata_transactions(
-    basename: str,
-    language: str,
-    paths: Optional[Dict[str, Path]] = None,
-) -> tuple[str, ...]:
-    """Recover a crash-interrupted run-report/fingerprint pair before reading it."""
-    fingerprint_path = get_fingerprint_path(basename, language, paths=paths)
-    run_report_path = get_run_report_path(basename, language, paths=paths)
-    root = _metadata_checkout_root(fingerprint_path, run_report_path)
-    from .sync_core.transaction import TransactionManager
-    return _recover_metadata_transactions(TransactionManager(root), basename, language)
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
@@ -749,43 +627,22 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
             signer=attestation_signer_from_environment(),
         )
         return
-    if atomic_state:
-        # Buffer for atomic write
-        from datetime import datetime, timezone
-        from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
-        from . import __version__
 
-        # Issue #522: Use override deps if provided (captured before auto-deps),
-        # otherwise fall back to stored deps from previous fingerprint
-        if include_deps_override is not None:
-            stored_deps = include_deps_override
-        else:
-            prev_fp = read_fingerprint(basename, language, paths=paths)
-            stored_deps = prev_fp.include_deps if prev_fp else None
-        current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps)
-        # If override provided and current extraction found nothing, use the override
-        if include_deps_override and not current_hashes.get('include_deps'):
-            current_hashes['include_deps'] = include_deps_override
-        fingerprint = Fingerprint(
-            pdd_version=__version__,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            command=operation,
-            prompt_hash=current_hashes.get('prompt_hash'),
-            code_hash=current_hashes.get('code_hash'),
-            example_hash=current_hashes.get('example_hash'),
-            test_hash=current_hashes.get('test_hash'),
-            test_files=current_hashes.get('test_files'),  # Bug #156
-            include_deps=current_hashes.get('include_deps'),  # Issue #522
-        )
+    from .fingerprint_transaction import FingerprintTransaction
 
-        # Issue #1211: route the atomic fingerprint file through the
-        # paths-aware helper so subprojects whose .pddrc is below run CWD
-        # get the file under <subproject>/.pdd/meta, not parent CWD.
-        fingerprint_file = get_fingerprint_path(basename, language, paths=paths)
-        atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
-    else:
-        # Direct write using operation_log
-        save_fingerprint(basename, language, operation, paths, cost, model)
+    transaction = FingerprintTransaction(
+        basename=basename,
+        language=language,
+        operation=operation,
+        paths=paths,
+        cost=cost,
+        model=model,
+        atomic_state=atomic_state,
+    )
+    if include_deps_override is not None:
+        transaction.set_include_deps_override(include_deps_override)
+    with transaction:
+        pass
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
     """Return a `pytest-cov` `--cov` target for a Python code file.
@@ -2754,7 +2611,11 @@ def sync_orchestration(
                     # Drop any stale LLM trace for this operation key so failure paths only
                     # attach pairs from the current attempt (success paths do not pop).
                     pop_last_pair(operation)
-                    with AtomicStateUpdate(basename, language) as atomic_state:
+                    with AtomicStateUpdate(
+                        basename,
+                        language,
+                        paths=pdd_files,
+                    ) as atomic_state:
 
                         # --- Execute Operation ---
                         try:
