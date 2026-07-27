@@ -135,6 +135,7 @@ Arguments:
 
 Options:
 - `--output LOCATION`: Specify where to save the generated example code. The default file name is `<basename>_example.<language_file_extension>`. If an environment variable `PDD_EXAMPLE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--format FORMAT`: Output format for the generated example (default: `code`). Valid values are `code` and `md`. When `--output` is supplied with a non-empty file extension (e.g. `foo.yml` or `foo.md`), that exact path is honored verbatim and `--format` does not rewrite the extension.
 
 Example:
 ```

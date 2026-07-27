@@ -7981,3 +7981,209 @@ class TestComposeSyncSummaryTerminalReason:
         assert summary == (
             "No sync operations required; selected target is already synchronized."
         )
+
+
+_ISSUE1200_NOOP_FIX = (True, None, None, 1, 0.0, "")
+_ISSUE1200_REAL_FIX = (
+    True,
+    "def add(a, b):\n    return a + b\n",
+    "",
+    1,
+    0.05,
+    "claude-sonnet-4-6",
+)
+
+
+def _issue1200_setup(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    prompt = tmp_path / "prompts" / "calc_python.prompt"
+    code = tmp_path / "src" / "calc.py"
+    test_file = tmp_path / "tests" / "test_calc.py"
+    prompt.write_text("Create a calculator.")
+    code.write_text("def add(a, b):\n    return a + b\n")
+    test_file.write_text("def test_add(): assert add(1, 2) == 3\n")
+    return {
+        "prompt": prompt,
+        "code": code,
+        "example": tmp_path / "calc_example.py",
+        "test": test_file,
+        "test_files": [test_file],
+    }
+
+
+def _issue1200_common_patches(fake_paths, decisions, fix_side_effect):
+    from contextlib import ExitStack
+    import datetime
+    from pdd.sync_determine_operation import RunReport
+
+    mock_report = RunReport(
+        timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        exit_code=0,
+        tests_passed=5,
+        tests_failed=0,
+        coverage=95.0,
+        test_hash=None,
+    )
+    stack = ExitStack()
+    mocks = {
+        "paths": stack.enter_context(
+            patch("pdd.sync_orchestration.get_pdd_file_paths", return_value=fake_paths)
+        ),
+        "lock": stack.enter_context(patch("pdd.sync_orchestration.SyncLock")),
+        "determine": stack.enter_context(
+            patch(
+                "pdd.sync_orchestration.sync_determine_operation",
+                side_effect=decisions,
+            )
+        ),
+        "fix": stack.enter_context(
+            patch("pdd.sync_orchestration.fix_main", side_effect=fix_side_effect)
+        ),
+        "fingerprint": stack.enter_context(
+            patch("pdd.sync_orchestration._save_fingerprint_atomic")
+        ),
+        "log_event": stack.enter_context(patch("pdd.sync_orchestration.log_event")),
+        "run_tests": stack.enter_context(
+            patch(
+                "pdd.sync_orchestration._execute_tests_and_create_run_report",
+                return_value=mock_report,
+            )
+        ),
+        "test_command": stack.enter_context(
+            patch("pdd.get_test_command.get_test_command_for_file", return_value=None)
+        ),
+        "failing_files": stack.enter_context(
+            patch(
+                "pdd.sync_orchestration.extract_failing_files_from_output",
+                return_value=[],
+            )
+        ),
+    }
+    mocks["lock"].return_value.__enter__.return_value = mocks["lock"]
+    mocks["lock"].return_value.__exit__.return_value = None
+    return stack, mocks
+
+
+def test_issue1200_noop_fix_aborts_before_consecutive_fix_breaker(
+    tmp_path, monkeypatch
+):
+    fake_paths = _issue1200_setup(tmp_path, monkeypatch)
+    decisions = [SyncDecision(operation="fix", reason="tests failing")] * 10
+    stack, mocks = _issue1200_common_patches(
+        fake_paths,
+        decisions,
+        [_ISSUE1200_NOOP_FIX] * 10,
+    )
+
+    with stack:
+        result = sync_orchestration(
+            basename="calc",
+            language="python",
+            quiet=True,
+            prompts_dir="prompts",
+        )
+
+    assert result["success"] is False
+    assert result["total_cost"] == pytest.approx(0.0)
+    assert mocks["fix"].call_count <= 2
+    assert any("no LLM request" in error for error in result["errors"])
+    assert not any("consecutive fix" in error for error in result["errors"])
+
+
+def test_issue1200_single_noop_then_real_fix_resets_noop_counter(
+    tmp_path, monkeypatch
+):
+    fake_paths = _issue1200_setup(tmp_path, monkeypatch)
+    decisions = [
+        SyncDecision(operation="fix", reason="tests failing"),
+        SyncDecision(operation="fix", reason="still failing"),
+        SyncDecision(operation="all_synced", reason="all done"),
+    ]
+    stack, mocks = _issue1200_common_patches(
+        fake_paths,
+        decisions,
+        [_ISSUE1200_NOOP_FIX, _ISSUE1200_REAL_FIX],
+    )
+
+    with stack:
+        result = sync_orchestration(
+            basename="calc",
+            language="python",
+            quiet=True,
+            prompts_dir="prompts",
+        )
+
+    assert result["success"] is True
+    assert "fix" in result["operations_completed"]
+    assert result["total_cost"] == pytest.approx(0.05)
+    assert mocks["fix"].call_count == 2
+
+
+def test_issue1200_stale_state_skip_flags_get_noop_fix_diagnostic(
+    tmp_path, monkeypatch
+):
+    fake_paths = _issue1200_setup(tmp_path, monkeypatch)
+    decisions = [SyncDecision(operation="fix", reason="cached tests failed")] * 10
+    stack, _mocks = _issue1200_common_patches(
+        fake_paths,
+        decisions,
+        [_ISSUE1200_NOOP_FIX] * 10,
+    )
+
+    with stack:
+        result = sync_orchestration(
+            basename="calc",
+            language="python",
+            quiet=True,
+            prompts_dir="prompts",
+            skip_tests=True,
+            skip_verify=True,
+        )
+
+    assert result["success"] is False
+    assert result["total_cost"] == pytest.approx(0.0)
+    assert any("no LLM request" in error for error in result["errors"])
+    assert not any("consecutive fix" in error for error in result["errors"])
+
+
+def test_issue1200_noop_fix_logs_cost_model_and_cycle_event(tmp_path, monkeypatch):
+    fake_paths = _issue1200_setup(tmp_path, monkeypatch)
+    decisions = [SyncDecision(operation="fix", reason="tests failing")] * 10
+    captured_entries = []
+
+    def capture_append(_basename, _language, entry):
+        captured_entries.append(dict(entry))
+
+    stack, mocks = _issue1200_common_patches(
+        fake_paths,
+        decisions,
+        [_ISSUE1200_NOOP_FIX] * 10,
+    )
+    with stack:
+        with patch("pdd.sync_orchestration.append_log_entry", side_effect=capture_append):
+            result = sync_orchestration(
+                basename="calc",
+                language="python",
+                quiet=True,
+                prompts_dir="prompts",
+            )
+
+    assert result["success"] is False
+    noop_fix_entries = [
+        entry
+        for entry in captured_entries
+        if entry.get("operation") == "fix" and entry.get("actual_cost") == 0.0
+    ]
+    assert 1 <= len(noop_fix_entries) <= 2
+    assert all(entry.get("model") in ("", None, "unknown") for entry in noop_fix_entries)
+    mocks["log_event"].assert_any_call(
+        "calc",
+        "python",
+        "cycle_detected",
+        {"cycle_type": "noop-fix", "count": 2},
+        invocation_mode="sync",
+    )

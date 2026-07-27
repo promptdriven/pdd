@@ -32,6 +32,7 @@ _AUTO_HEAL_SUCCESS_TRAILER = "PDD-Auto-Heal-Checkpoint: success"
 
 _PROTECTED_PATHS = [".pdd/meta", "project_dependencies.csv"]
 _INVARIANT_KEYS = {"include", "pdd_tags", "percent_markers", "fenced_blocks"}
+_PR_SCOPE_UNSAFE_SYNC_OPS = {"verify", "generate", "test", "crash", "test_extend"}
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +436,9 @@ def detect_drift(
                     reason = "Prompt changed without code changes; only example refresh remains"
                 elif not code_in_changes and not prompt_in_changes:
                     continue
+
+            if original_op == "test_extend" and op != "update":
+                continue
 
         drift = DriftInfo(
             basename=basename,
@@ -1384,10 +1388,24 @@ def _heal_auto_deps(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
     return ok if ok else False
 
 
+def _is_pr_scope_heal(drift: DriftInfo, env: Dict[str, str]) -> bool:
+    return (
+        bool(getattr(drift, "diff_base", None))
+        and env.get("PDD_HEAL_PR_SCOPE") == "1"
+    )
+
+
 def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
     """Heal a single module. Returns True/False/None (skipped)."""
     skip_set = _heal_skip_modules()
     op = getattr(drift, "operation", "")
+
+    if _is_pr_scope_heal(drift, env) and op in _PR_SCOPE_UNSAFE_SYNC_OPS:
+        console.print(
+            f"[dim]skipping PR-scope {op} drift for {drift.basename}; "
+            "auto-heal will not run module-wide pdd sync[/dim]"
+        )
+        return None
 
     # Modules explicitly skipped take precedence for non-update operations.
     if op != "update" and drift.basename in skip_set:
@@ -1399,7 +1417,7 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
         return _heal_example(drift, env)
     if op == "auto-deps":
         return _heal_auto_deps(drift, env)
-    if op in ("verify", "generate", "test", "crash"):
+    if op in _PR_SCOPE_UNSAFE_SYNC_OPS:
         ok = _run_pdd_command(
             ["pdd", "--force", "--strength", "0.5", "sync", drift.basename],
             env=env,
@@ -1610,6 +1628,8 @@ def main(
     Path(cost_path).write_text("operation,cost\n", encoding="utf-8")
 
     env = _build_ci_env(cost_path)
+    if diff_base and not skip_ci:
+        env["PDD_HEAL_PR_SCOPE"] = "1"
 
     healed: List[DriftInfo] = []
     failed: List[str] = []

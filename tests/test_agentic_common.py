@@ -17,6 +17,7 @@ from pdd.agentic_common import (
     _calculate_codex_cost,
     _extract_json_from_output,
     _find_cli_binary,
+    _has_codex_auth_file,
     _is_permanent_error,
     _run_with_provider,
     _log_agentic_interaction,
@@ -260,6 +261,25 @@ def test_get_available_agents_includes_openai_with_codex_auth_file(
     # No OPENAI_API_KEY, no PDD_CODEX_AUTH_AVAILABLE.
     with patch("pdd.agentic_common._has_codex_auth_file", return_value=True):
         agents = get_available_agents()
+    assert "openai" in agents
+
+
+def test_get_available_agents_includes_openai_with_codex_home_auth_file(
+    mock_env, mock_load_model_data, mock_shutil_which, tmp_path
+):
+    """Cloud jobs stage Codex auth under CODEX_HOME, not the real HOME."""
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "auth.json").write_text(
+        json.dumps({"tokens": {"refresh_token": "redacted"}}),
+        encoding="utf-8",
+    )
+    mock_env["CODEX_HOME"] = str(codex_home)
+    mock_shutil_which.side_effect = lambda cmd: "/bin/codex" if cmd == "codex" else None
+
+    with patch("pdd.agentic_common._has_codex_auth_file", _has_codex_auth_file):
+        agents = get_available_agents()
+
     assert "openai" in agents
 
 
@@ -1082,7 +1102,7 @@ def test_get_available_agents_preference_order(mock_shutil_which, mock_env, mock
     # OpenCode (Issue #798) joins as a fourth provider when its CLI is found
     # and any backing-provider credential signal (e.g., ANTHROPIC_API_KEY) is
     # present.
-    assert agents == ["anthropic", "google", "openai", "opencode"]
+    assert agents == ["openai", "google", "anthropic", "opencode"]
 
 # --- Tests for Cost Calculation ---
 
@@ -3354,7 +3374,7 @@ def test_get_agent_provider_preference_default(mock_env):
     """Default preference when PDD_AGENTIC_PROVIDER is not set."""
     mock_env.pop("PDD_AGENTIC_PROVIDER", None)
     # OpenCode (Issue #798) is the new fourth default-preference provider.
-    assert get_agent_provider_preference() == ["anthropic", "google", "openai", "opencode"]
+    assert get_agent_provider_preference() == ["openai", "google", "anthropic", "opencode"]
 
 
 def test_get_agent_provider_preference_single(mock_env):
@@ -3378,7 +3398,7 @@ def test_get_agent_provider_preference_with_spaces(mock_env):
 def test_get_agent_provider_preference_empty_string(mock_env):
     """Empty string falls back to default."""
     mock_env["PDD_AGENTIC_PROVIDER"] = ""
-    assert get_agent_provider_preference() == ["anthropic", "google", "openai", "opencode"]
+    assert get_agent_provider_preference() == ["openai", "google", "anthropic", "opencode"]
 
 
 # ---------------------------------------------------------------------------
@@ -5155,7 +5175,7 @@ class TestIssue1072FailureLogging:
 #      failures and refusals came back as success-with-text and downstream
 #      treated them as empty successes.
 #   2. False-positive empty-result success ran `break` to next provider.
-#      In single-provider configs (cloud anthropic-only) that meant zero
+#      In single-provider configs (cloud can pin one provider) that meant zero
 #      retries — one transient response failed the whole sync.
 #   3. Multi-provider configs MUST keep the old fall-through behaviour —
 #      retrying a known-broken provider before falling through wastes time
@@ -5192,7 +5212,7 @@ def test_is_error_true_returns_failure(mock_cwd, mock_env, mock_load_model_data,
 
 
 def test_false_positive_retries_in_single_provider_config(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
-    """Single-provider config (anthropic-only, the cloud one-session case):
+    """Single-provider config:
     transient empty-result success must retry on the same provider with
     backoff rather than `break` to a non-existent next provider.
     """

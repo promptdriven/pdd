@@ -70,8 +70,11 @@
     - Output file handling:
         * If `output` is `None`, write to `output_file_paths["output"]`.
         * If `output` ends with "/" or refers to an existing directory, also write to `output_file_paths["output"]`.
-        * Otherwise, write to the explicit `output` path provided by the user.
+        * Otherwise the user supplied an explicit output file path:
+            - If `Path(output).suffix` is non-empty (for example `.yml`, `.md`, `.py`, `.txt`), write to that exact path verbatim. Do NOT rewrite the extension based on `format` or `language`, even when `format == "code"` and the language's canonical extension differs (for example `.yml` vs `.yaml`).
+            - If `Path(output).suffix` is empty, apply a format/language-driven extension: `.md` when `format == "md"`, otherwise the language extension from `BUILTIN_EXT_MAP` (falling back to `.<language>` or `.py`).
         * Only write the file if example generation returned non-empty content; otherwise, raise a `click.UsageError` with message "Example generation failed, no code produced."
+    - MUST NOT silently rewrite a user-supplied `--output` extension. When `output` is an explicit file path with a non-empty suffix, the on-disk artifact path MUST equal `output` exactly. This prevents `--output foo.yml` from landing at `foo.yaml`, `--output foo.md` from landing at `foo.markdown`, and downstream tooling from re-planning against a missing requested path.
     - Python syntax validation (for Python language only):
         * Before saving, validate that the generated code is valid Python syntax using `ast.parse`.
         * If syntax is invalid, attempt to fix a common LLM failure pattern: JSON metadata garbage appended at the end of the file (e.g., lines containing `"explanation":`, `"focus":`, `"description":`, `"code":`, `"filename":`).

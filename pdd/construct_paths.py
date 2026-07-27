@@ -87,7 +87,8 @@ BUILTIN_EXT_MAP = {
     'typescriptreact': '.tsx', 'javascriptreact': '.jsx',
     'svelte': '.svelte', 'vue': '.vue',
     # Common data/config formats
-    'json': '.json', 'jsonl': '.jsonl', 'yaml': '.yaml', 'yml': '.yml', 'toml': '.toml', 'ini': '.ini',
+    'json': '.json', 'jsonl': '.jsonl', 'yaml': '.yaml', 'yml': '.yml',
+    'markdown': '.md', 'md': '.md', 'toml': '.toml', 'ini': '.ini',
 }
 
 # Configuration loading functions

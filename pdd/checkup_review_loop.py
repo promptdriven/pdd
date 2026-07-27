@@ -54,6 +54,8 @@ ROLE_TO_PROVIDER: Dict[str, str] = {
     "claude": "anthropic",
     "anthropic": "anthropic",
     "codex": "openai",
+    "codex-reviewer": "openai",
+    "codex-fixer": "openai",
     "openai": "openai",
     "chatgpt": "openai",
     "gemini": "google",
@@ -78,6 +80,7 @@ _IMPORTABLE_SUFFIXES: Tuple[str, ...] = (".py", ".pyw", ".pyc", ".pyo", ".so", "
 ALL_SEVERITIES = {"blocker", "critical", "medium", "low", "nit", "info"}
 DEFAULT_REVIEWER = "codex"
 DEFAULT_FIXER = "claude"
+DEFAULT_FIXER_FALLBACK = "codex-fixer"
 DEFAULT_REVIEWERS = ("codex", "claude")
 EXTERNAL_STATUS_FINDING_MARKERS: Tuple[str, ...] = (
     "action required",
@@ -1032,6 +1035,9 @@ def run_checkup_review_loop(
             quiet=quiet,
             artifacts_dir=artifacts_dir,
         )
+        soft_reset_ok, soft_reset_message = _soft_reset_fixer_commits_to_changes(
+            worktree, pre_fix_sha
+        )
         # Verification trust boundary (issue #1088). Stamp the round
         # and the bare fixer-subprocess outcome onto the result so the
         # final report can render evidence without conflating "fixer
@@ -1045,6 +1051,11 @@ def run_checkup_review_loop(
         # the canonical post-push rewrite.
         _rewrite_fix_artifact_from_state(artifacts_dir, fix, reviewer)
         _record_fix_attempts(state, fix_findings, fix)
+
+        if not soft_reset_ok:
+            state.verification_status_by_round[round_number] = "skipped"
+            state.stop_reason = soft_reset_message
+            break
 
         if not fix.success:
             # Reset the worktree before invoking the fallback fixer. The
@@ -1170,6 +1181,13 @@ def run_checkup_review_loop(
         # (line ~1068) follows the same contract and is exercised by
         # ``test_failed_push_aborts_loop_without_running_verifier``.
         guard_changed_files = _git_changed_files(worktree)
+        if guard_changed_files:
+            merged_changed_files = list(
+                dict.fromkeys([*fix.changed_files, *guard_changed_files])
+            )
+            if merged_changed_files != fix.changed_files:
+                fix.changed_files = merged_changed_files
+                _rewrite_fix_artifact_from_state(artifacts_dir, fix, reviewer)
         # Issue #1081: architecture-registry edit guard runs BEFORE the
         # 10a prompt-source guard. 10a is per-entry against the
         # pre-fixer HEAD registry, which a coordinated rename + prompt
@@ -1506,7 +1524,12 @@ def _normalize_reviewers(reviewers: Sequence[str]) -> List[str]:
         item = str(reviewer or "").strip().lower()
         if not item:
             continue
-        if item == "chatgpt":
+        item = item.replace("_", "-")
+        if item in {"chatgpt-fixer", "openai-fixer"}:
+            item = "codex-fixer"
+        elif item in {"chatgpt-reviewer", "openai-reviewer"}:
+            item = "codex-reviewer"
+        elif item == "chatgpt":
             item = "codex"
         if item not in ROLE_TO_PROVIDER:
             continue
@@ -2862,6 +2885,17 @@ Use this manual PR-review standard:
   files, import changed modules, inspect CLI help, or execute minimal workflows
   in a temporary directory. If you cannot run a repro, use code evidence but
   still check the concrete call path that a user would hit.
+- For PRs that add or change deterministic validators, policy checks, static
+  analyzers, gates, parsers, CLIs, sync/checkup/review loops, or safety/security
+  controls, run adversarial probe families before declaring the PR clean. Derive
+  minimal examples from the issue contract and test ordinary equivalent forms:
+  aliases and import variants, assignment vs annotated assignment, stdlib
+  alternatives, wrapper/indirection calls, missing or ambiguous config, stale
+  prompts/docs/examples/architecture, and user-facing diagnostic wording. Execute
+  the changed checker or workflow on those probes in a temporary directory when
+  practical. Treat any false PASS, false FAIL, misleading diagnostic, or stale
+  contract as a finding. If execution is not practical, enumerate the variants
+  and trace each one through the actual code path.
 - Run the most relevant local tests for the changed workflow when the
   repository makes that practical. If Python reports an unusable default temp
   directory, retry with a repository-local writable TMPDIR before giving up.
@@ -2957,7 +2991,9 @@ in-scope finding when practical, prioritizing the blocking severities
 "focused" as permission to leave real issues unfixed: it means avoid unrelated
 refactors and broad churn. If you leave any valid finding unfixed, explain why
 with a `partially_fixed` or `blocked` disposition. Preserve unrelated work and
-existing style.
+existing style. Do not run `git commit` or `git push`; leave edits in the
+worktree. The review loop owns the guarded commit, push, and verification
+boundary.
 
 The reviewer is the final authority. If you believe a finding is invalid or
 blocked, do not quietly drop it: return not_valid or blocked with a specific
@@ -3949,6 +3985,40 @@ def _git_rev_parse_head(worktree: Path) -> str:
     return result.stdout.strip()
 
 
+def _soft_reset_fixer_commits_to_changes(
+    worktree: Path, pre_fix_sha: str
+) -> Tuple[bool, str]:
+    """Turn fixer-created local commits back into staged worktree changes.
+
+    The review loop owns the commit and push trust boundary. Some agent CLIs
+    create a local git commit before returning, which leaves ``git status``
+    clean and used to make the loop report "No changes to push." Soft-reset
+    those commits to the pre-fix SHA so the existing guards inspect the diff
+    against the real pre-fixer HEAD and `_commit_and_push_if_changed` creates
+    the bot-owned commit that will be verified.
+    """
+    if not pre_fix_sha:
+        return True, ""
+    current_sha = _git_rev_parse_head(worktree)
+    if not current_sha or current_sha == pre_fix_sha:
+        return True, ""
+
+    result = subprocess.run(
+        ["git", "-C", str(worktree), "reset", "--soft", pre_fix_sha],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return True, ""
+    detail = result.stderr.strip() or result.stdout.strip() or "unknown git error"
+    return (
+        False,
+        "Fixer created local commit(s), but the review loop could not convert "
+        f"them to staged changes before the guarded bot commit: {detail}",
+    )
+
+
 def _commit_and_push_if_changed(
     worktree: Path,
     pr_metadata: Dict[str, str],
@@ -3966,19 +4036,25 @@ def _commit_and_push_if_changed(
     if not changed:
         return True, "No changes to push."
 
-    stage_cmds: List[List[str]] = [["git", "add", "-u"]]
-    untracked = [
-        path
-        for path in _git_untracked_files(worktree)
-        if not _is_untracked_pdd_meta_artifact(path)
-    ]
-    if untracked:
-        stage_cmds.append(["git", "add", "--", *untracked])
+    from .pr_metadata_finalizer import (
+        finalize_pr_metadata,
+        is_pdd_meta_artifact,
+        stage_paths_scoped,
+    )
 
-    for cmd in stage_cmds:
-        result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True)
-        if result.returncode != 0:
-            return False, f"{' '.join(cmd)} failed: {result.stderr.strip()}"
+    finalization = finalize_pr_metadata(worktree, changed_paths=changed, stage=True)
+    if not finalization.ok:
+        return False, finalization.message
+
+    changed_after_finalization = _git_changed_files(worktree)
+    stageable = [
+        path
+        for path in changed_after_finalization
+        if not is_pdd_meta_artifact(path)
+    ]
+    stage_ok, stage_message = stage_paths_scoped(worktree, stageable)
+    if not stage_ok:
+        return False, stage_message
 
     if not _git_has_staged_changes(worktree):
         return True, "No eligible changes to push."

@@ -282,10 +282,9 @@ def run_one_session_sync(
             quiet=quiet,
             label=f"one_session_sync:{basename}",
             timeout=session_timeout,
-            # One-session runs deploy with anthropic-only in cloud (no fallback
-            # provider). Pass max_retries=2 so the false-positive single-provider
-            # retry path actually fires — without this, the default of 1 means
-            # one transient empty response from Claude Code fails the whole sync.
+            # Pass max_retries=2 so the false-positive single-provider retry path
+            # actually fires when cloud pins one agentic provider. Without this,
+            # one transient empty response fails the whole sync.
             max_retries=2,
         )
     finally:

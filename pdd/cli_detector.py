@@ -135,6 +135,9 @@ def _which(cmd: str) -> str | None:
 
 def _has_api_key(provider: str) -> bool:
     """Check whether the API key environment variable is set for a provider."""
+    if provider == "openai":
+        val = os.environ.get("CODEX_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        return bool(val and val.strip())
     env_var = _API_KEY_ENV_VARS.get(provider, "")
     if not env_var:
         # Also check fallback keys
@@ -371,6 +374,10 @@ def _get_display_key_name(provider: str) -> str:
         # CLI-level auth flow instead so users with `opencode auth login`
         # configured see a meaningful label.
         return "opencode auth login"
+    if provider == "openai":
+        if os.environ.get("CODEX_API_KEY", "").strip():
+            return "CODEX_API_KEY"
+        return "OPENAI_API_KEY"
     return _API_KEY_ENV_VARS.get(provider, "")
 
 def _npm_available() -> bool:

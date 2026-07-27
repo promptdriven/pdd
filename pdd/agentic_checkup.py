@@ -321,7 +321,7 @@ def run_agentic_checkup(
     reviewer: Optional[str] = None,
     fixer: Optional[str] = None,
     reviewer_fallback: Optional[str] = None,
-    fixer_fallback: Optional[str] = None,
+    fixer_fallback: Optional[str] = "codex-fixer",
     max_review_rounds: int = 5,
     max_review_cost: float = 50.0,
     max_review_minutes: float = 90.0,

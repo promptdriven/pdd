@@ -104,6 +104,7 @@
 6. Language Determination (priority): explicit command_options > code file extension > prompt filename suffix > command defaults.
    - 'detect' defaults to 'prompt'; 'bug'/'change' default to 'python' if unresolved.
    - Use get_extension with fallback to built-in extension map (BUILTIN_EXT_MAP) if PDD_PATH unavailable.
+   - `BUILTIN_EXT_MAP` MUST include `'markdown': '.md'` and `'md': '.md'` so Markdown defaults use the common `.md` extension instead of synthesizing `.markdown`.
    - When get_language raises ValueError (PDD_PATH unset), fall back to reading language_format.csv
      directly from the script's data/ directory.
    - `_is_known_language(name)` validates against a comprehensive set of known languages including:

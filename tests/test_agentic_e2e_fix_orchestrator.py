@@ -5501,6 +5501,7 @@ class TestStep11CodeCleanup:
             "https://github.com/owner/repo/pull/77"
         )
         assert checkup_mock.call_args.kwargs["no_fix"] is False
+        assert checkup_mock.call_args.kwargs["review_loop"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -10317,6 +10318,7 @@ class TestFinalCheckupForwardsCwd:
             )
 
         assert checkup_mock.call_args.kwargs["cwd"] == tmp_path
+        assert checkup_mock.call_args.kwargs["review_loop"] is True
 
     def test_no_pr_found_skips_checkup_without_invoking(self, tmp_path):
         from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr

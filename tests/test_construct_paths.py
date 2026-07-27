@@ -3277,6 +3277,12 @@ def test_builtin_ext_map_has_svelte_and_vue():
     assert BUILTIN_EXT_MAP.get('vue') == '.vue'
 
 
+def test_builtin_ext_map_uses_md_for_markdown():
+    """BUILTIN_EXT_MAP must not synthesize '.markdown' for Markdown prompts."""
+    assert BUILTIN_EXT_MAP.get('markdown') == '.md'
+    assert BUILTIN_EXT_MAP.get('md') == '.md'
+
+
 # ---------------------------------------------------------------------------
 # Fix: construct_paths should use prompt suffix language before defaulting
 # to Python when _determine_language returns None

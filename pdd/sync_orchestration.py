@@ -1850,6 +1850,7 @@ def sync_orchestration(
         start_time = time.time()
         last_model_name: str = "unknown"
         operation_history: List[str] = []
+        consecutive_noop_fix_count: int = 0
         operation_rollback: Optional[OperationFileRollback] = None
         terminal_reason: Optional[str] = None
         MAX_CYCLE_REPEATS = 2
@@ -2803,6 +2804,30 @@ def sync_orchestration(
                             if pair:
                                 log_entry.setdefault("details", {})["llm_trace"] = pair
                         append_log_entry(basename, language, log_entry)
+
+                        if operation == 'fix':
+                            if actual_cost == 0.0 and str(model_name) == "":
+                                consecutive_noop_fix_count += 1
+                                if consecutive_noop_fix_count >= 2:
+                                    msg = (
+                                        "Fix loop produced no LLM request on "
+                                        f"{consecutive_noop_fix_count} consecutive iterations; "
+                                        "aborting to prevent no-op spinning."
+                                    )
+                                    errors.append(msg)
+                                    log_event(
+                                        basename,
+                                        language,
+                                        "cycle_detected",
+                                        {
+                                            "cycle_type": "noop-fix",
+                                            "count": consecutive_noop_fix_count,
+                                        },
+                                        invocation_mode="sync",
+                                    )
+                                    break
+                            else:
+                                consecutive_noop_fix_count = 0
 
                         # Post-operation checks (simplified)
                         if success and operation == 'crash':

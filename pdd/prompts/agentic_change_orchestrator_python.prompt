@@ -14,6 +14,7 @@
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
+<pdd-dependency>pr_metadata_finalizer_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the `pdd/agentic_change_orchestrator.py` module.
 
@@ -48,6 +49,7 @@ Orchestrator for the 13-step agentic change workflow. Runs each step as a separa
 12. **Existing PR Guard**: Before starting the workflow, use `_check_existing_pr()` to check if an open PR already exists for `change/issue-{issue_number}`. If so, return early: `(True, "PR already exists: {url}", 0.0, "unknown", [])`.
 13. **Stale State Detection**: If `issue_updated_at` differs from stored `state["issue_updated_at"]`, clear state and start fresh (issue was modified since last run).
 14. **Impacted Tests**: Before Step 13, identify test files for changed modules by matching changed file basenames (stripping language suffixes like `_python`) against `test_{basename}*` in `test_dir`. Add to context as `impacted_tests`.
+15. **PR-boundary PDD metadata finalization**: Immediately before Step 13, refresh the authoritative worktree changed-file list, call `finalize_pr_metadata(current_work_dir, changed_paths=changed_files or None, stage=True)`, and fail loudly if it returns `ok=False`. Append returned `.pdd/meta/<module>_<language>.json` paths to `changed_files` / `files_to_stage`, then call `stage_paths_scoped(current_work_dir, changed_files)` so Step 13 receives an already-scoped index. Never rely on `git add -A`, `git add .`, or blanket `.pdd` staging in the PR creation prompt; only expected fingerprint paths may be force-added.
 
 % Per-Step Timeouts
 Define locally (workflow-specific configuration stays with the workflow):
@@ -183,7 +185,7 @@ Before the step loop begins, load `.pddrc` configuration to provide context keys
 - Step 10 receives: issue_content, step9_output, worktree_path, files_created, files_modified, direct_edits, **associated_documents** (list of doc paths discovered from the include graph + architecture BFS — LLM must emit `ASSOCIATED_DOCS_{MODIFIED,CONFLICTS,UNCHANGED}` markers, one bucket per doc)
 - Step 11 receives: issue_content, step9_output, **step10_output** (so DOC_SYNC_SILENT_DROPS / DOC_SYNC_BUCKET_OVERLAPS markers emitted by Step 10.5 reach the review loop), worktree_path, files_to_stage, review_iteration, previous_fixes
 - Step 12 receives: issue_content, step11_output, worktree_path, review_iteration
-- Step 13 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list, impacted_tests
+- Step 13 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list, impacted_tests. Before Step 13 runs, the orchestrator must have already scoped-staged changed files and finalizer-returned fingerprint files.
 
 % Dependency Context (Before Step 6)
 Before Step 6 runs, build a formatted dependency graph to help identify transitively affected modules:
@@ -203,7 +205,7 @@ After Step 9 parses FILES_CREATED/FILES_MODIFIED/DIRECT_EDITS, pass the extracte
 - Step 10 associated-document discovery must consume the fallback-detected prompt files via `changed_files` / `files_to_stage`, not only the explicit `FILES_CREATED` / `FILES_MODIFIED` marker context
 - Step 10 updates prompts and may add files via ARCHITECTURE_FILES_MODIFIED - append these to files_to_stage
 - Step 11 uses files_to_stage to know which files to review
-- Step 13 uses files_to_stage to know which files to commit
+- Step 13 uses files_to_stage to verify the already-scoped staged index and create the commit/PR; it must not blanket-stage the worktree.
 
 % Direct Edit Candidates (from Step 6)
 After Step 6 completes, parse the "Direct Edit Candidates" table from the output:

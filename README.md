@@ -180,7 +180,7 @@ For CLI enthusiasts, implement GitHub issues directly:
 2. **One Agentic CLI** - Required to run the workflows (install at least one):
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your stored Claude Max/Pro OAuth login if you've run `claude auth login`, otherwise falls back to `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
    - **Gemini CLI**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth credentials if present, otherwise `GOOGLE_API_KEY` or `GEMINI_API_KEY`)
-   - **Codex CLI**: `npm install -g @openai/codex` (uses `~/.codex/auth.json` ChatGPT login if present, otherwise `OPENAI_API_KEY`)
+   - **Codex CLI**: `npm install -g @openai/codex` (uses `~/.codex/auth.json` ChatGPT login if present; for `codex exec` API-key auth use `CODEX_API_KEY`, and pdd bridges `OPENAI_API_KEY` only when no cached Codex login is present)
    - **OpenCode CLI**: `npm install -g opencode-ai` (uses OpenCode provider auth from `opencode auth login`, `~/.config/opencode/opencode.json`, project `opencode.json`, or provider env vars; set `OPENCODE_MODEL=provider/model`)
 
 **Usage:**
@@ -1708,7 +1708,7 @@ Options:
 - `--format FORMAT`: Output format for the generated example (default: `code`). Valid values:
   - `code`: Uses the language-specific file extension (e.g., `.py` for Python, `.js` for JavaScript)
   - `md`: Generates markdown format with `.md` extension
-  When `--format` is specified with an explicit `--output` path, the format option constrains the output file extension accordingly.
+  When `--output` is supplied with a non-empty file extension (e.g. `--output foo.yml` or `--output foo.md`), that exact path is honored verbatim and `--format` does not rewrite the extension. The format-driven extension only applies when `--output` is omitted, points to a directory, ends with `/`, or has no suffix.
 
 Where used:
 - Dependency references: Examples serve as lightweight (token efficient) interface references for other prompts and can be included as dependencies of a generate target.
@@ -2107,7 +2107,7 @@ For the agentic fallback to function, you need to have at least one of the suppo
     *   Authenticates with `~/.gemini` OAuth credentials (run `gemini` interactively once to populate), `GOOGLE_API_KEY`/`GEMINI_API_KEY`, or Vertex AI service-account credentials.
 3.  **OpenAI Codex/GPT:**
     *   Requires the `codex` CLI to be installed and in your `PATH`.
-    *   Authenticates with `~/.codex/auth.json` ChatGPT login (run `codex login` once) or `OPENAI_API_KEY` from your environment.
+    *   Authenticates with `~/.codex/auth.json` ChatGPT login (run `codex login` once), `CODEX_API_KEY` for `codex exec` automation, or `OPENAI_API_KEY` bridged by pdd only when no cached Codex login is present.
 4.  **OpenCode (provider-agnostic):**
     *   Requires the `opencode` CLI to be installed and in your `PATH` (`npm install -g opencode-ai`).
     *   Authenticates with OpenCode provider credentials from `opencode auth login` (stored in `~/.local/share/opencode/auth.json`), OpenCode JSON config (`~/.config/opencode/opencode.json` or project `opencode.json`), or underlying provider env vars such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GITHUB_TOKEN`, etc.
@@ -2764,7 +2764,7 @@ Options:
 - `--fixer ROLE`: Fixer role for `--review-loop` (for example, `claude`). The fixer must be different from the reviewer unless `--review-only` is used.
 - `--reviewers ROLES`: Legacy comma-separated review-loop role order, interpreted as `reviewer,fixer` (default: `codex,claude`).
 - `--reviewer-fallback ROLE`: Optional secondary reviewer role to invoke once if the primary reviewer cannot complete (for example, because of auth, network, sandbox, or CLI failures). The fallback must resolve to a role different from the reviewer and fixer; if it succeeds, it becomes the active reviewer for the remaining loop and the superseded primary's row in the final report is annotated `(optional, superseded by <fallback>)` so downstream verdict adapters drop the failed primary from the required-reviewer set and resolve to `ship_degraded` instead of `unknown`.
-- `--fixer-fallback ROLE`: Optional secondary fixer role to invoke once if the primary fixer cannot complete (for example, Claude Code subscription-tier `credential-limit` failures). Role aliases are normalized so `claude` and `anthropic` resolve to the same identity; the fallback must resolve to a role different from the active fixer, the active reviewer, AND the originally configured reviewer (so `--reviewer codex --reviewer-fallback gemini --fixer-fallback codex` is skipped even after gemini takes over reviewing). Before the fallback runs the worktree is reset so the primary fixer's partial edits do not leak; on success the fallback takes over as the active fixer for the remaining rounds.
+- `--fixer-fallback ROLE`: Optional secondary fixer role to invoke once if the primary fixer cannot complete (default: `codex-fixer`; for example, after Claude Code subscription-tier `credential-limit` failures). Role aliases are normalized so `claude` and `anthropic` resolve to the same identity; the fallback must resolve to a role different from the active fixer, the active reviewer, AND the originally configured reviewer (so `--reviewer codex --reviewer-fallback gemini --fixer-fallback codex` is skipped even after gemini takes over reviewing). Before the fallback runs the worktree is reset so the primary fixer's partial edits do not leak; on success the fallback takes over as the active fixer for the remaining rounds.
 - `--max-review-rounds INT`: Maximum primary-reviewer/fixer rounds (default: 5).
 - `--max-review-cost FLOAT`: Maximum review-loop LLM cost in USD (default: 50.0).
 - `--max-review-minutes FLOAT`: Maximum review-loop wall-clock minutes (default: 90.0).

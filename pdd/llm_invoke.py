@@ -872,6 +872,43 @@ else:
 # No hardcoded default - will use first available model from CSV if None
 DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", None)
 
+
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when an env flag is set to a truthy value."""
+    return os.getenv(name, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _strict_default_model_enabled() -> bool:
+    """Return True when model selection must use only PDD_MODEL_DEFAULT."""
+    return _env_flag_enabled("PDD_MODEL_DEFAULT_STRICT")
+
+
+def _default_model_first_enabled() -> bool:
+    """Return True when PDD_MODEL_DEFAULT must be tried before fallbacks."""
+    return _env_flag_enabled("PDD_MODEL_DEFAULT_FIRST")
+
+
+def _llm_invoke_key_alias(env_var: str) -> str:
+    """Return the llm_invoke-only alias for a provider API key env var."""
+    return f"PDD_LLM_INVOKE_{env_var}"
+
+
+def _get_api_key_value(env_var: str) -> tuple[str | None, str]:
+    """Read a provider API key from its normal env var or llm_invoke alias."""
+    direct = os.getenv(env_var)
+    if direct:
+        return direct, env_var
+    alias = _llm_invoke_key_alias(env_var)
+    aliased = os.getenv(alias)
+    if aliased:
+        return aliased, alias
+    return None, env_var
+
 # --- LiteLLM Cache Configuration (S3 compatible for GCS, with SQLite fallback) ---
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
 GCS_ENDPOINT_URL = "https://storage.googleapis.com" # GCS S3 compatibility endpoint
@@ -1990,7 +2027,7 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
 
         # Ensure api_key is treated as string, fill NaN with empty string ''
         # This handles cases where read_csv might interpret empty fields as NaN
-        df['api_key'] = df['api_key'].fillna('').astype(str)
+        df['api_key'] = df['api_key'].fillna('').astype(str).astype(object)
 
         return df
     except Exception as e:
@@ -2085,6 +2122,8 @@ def _select_model_candidates(
         raise ValueError("No models available after initial filtering (all had NaN 'api_key'?).")
 
     # 2. Find Base Model
+    strict_default = _strict_default_model_enabled()
+    default_first = _default_model_first_enabled()
     base_model_row = available_df[available_df['model'] == base_model_name]
     if base_model_row.empty:
         # The bundled llm_model.csv has inconsistent provider-prefix conventions
@@ -2123,6 +2162,11 @@ def _select_model_candidates(
                 raise ValueError(
                     f"Base model '{base_model_name}' found in CSV but requires API key '{original_base.iloc[0]['api_key']}' which might be missing or invalid configuration."
                 )
+            if strict_default or default_first:
+                raise ValueError(
+                    "PDD_MODEL_DEFAULT strict/default-first mode is enabled, but base model "
+                    f"'{base_model_name}' was not found in the LLM model CSV."
+                )
             # Option A': Soft fallback – choose a reasonable surrogate base and continue
             # Strategy (simplified and deterministic): pick the first available model
             # from the CSV as the surrogate base. This mirrors typical CSV ordering
@@ -2139,6 +2183,9 @@ def _select_model_candidates(
                 )
     else:
         base_model = base_model_row.iloc[0]
+
+    if strict_default:
+        return [base_model.to_dict()]
 
     # 3. Determine Target and Sort
     candidates = []
@@ -2191,6 +2238,10 @@ def _select_model_candidates(
     if not candidates:
          # This should ideally not happen if available_df was not empty
          raise RuntimeError("Model selection resulted in an empty candidate list.")
+
+    if default_first:
+        effective_base_name = str(base_model['model']) if isinstance(base_model, pd.Series) else base_model_name
+        candidates.sort(key=lambda x: 0 if x['model'] == effective_base_name else 1)
 
     # --- DEBUGGING PRINT ---
     if os.getenv("PDD_DEBUG_SELECTOR"): # Add env var check for debug prints
@@ -2334,7 +2385,7 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
 
     # --- Multi-credential provider (pipe-delimited) ---
     if len(env_vars) > 1:
-        missing = [v for v in env_vars if not os.getenv(v)]
+        missing = [v for v in env_vars if not _get_api_key_value(v)[0]]
         if not missing:
             if verbose:
                 logger.info(f"All {len(env_vars)} env vars set for model {model_info.get('model')}.")
@@ -2370,13 +2421,13 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
     # --- Single-credential provider (original behaviour) ---
     key_name = env_vars[0]
 
-    key_value = os.getenv(key_name)
+    key_value, key_source = _get_api_key_value(key_name)
     if key_value:
         key_value = _sanitize_api_key(key_value)
 
     if key_value:
         if verbose:
-            logger.info(f"API key '{key_name}' found in environment.")
+            logger.info(f"API key '{key_source}' found in environment.")
         newly_acquired_keys[key_name] = False  # Mark as existing
         return True
 
@@ -3317,12 +3368,12 @@ def llm_invoke(
 
             if len(env_vars) == 1:
                 # Simple provider: pass env var value as api_key=
-                key_value = os.getenv(env_vars[0])
+                key_value, key_source = _get_api_key_value(env_vars[0])
                 if key_value:
                     key_value = _sanitize_api_key(key_value)
                     litellm_kwargs["api_key"] = key_value
                     if verbose:
-                        logger.info(f"[INFO] Passing API key from '{env_vars[0]}' to LiteLLM.")
+                        logger.info(f"[INFO] Passing API key from '{key_source}' to LiteLLM.")
                 elif verbose:
                     logger.warning(f"[WARN] Env var '{env_vars[0]}' not set. LiteLLM will use default auth.")
             elif len(env_vars) > 1:

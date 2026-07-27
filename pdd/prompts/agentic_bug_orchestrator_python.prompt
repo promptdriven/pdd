@@ -20,6 +20,8 @@
 }
 </pdd-interface>
 
+<pdd-dependency>pr_metadata_finalizer_python.prompt</pdd-dependency>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal
@@ -56,6 +58,7 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
 6. For Step 9: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files (used for hard stop check and final summary)
 7. For Step 11: Parse agent output for `E2E_FILES_CREATED: path1, path2` lines to extract E2E test files, extend changed_files list
 8. Pass extracted files to Step 11 (E2E) and Step 12 (PR) via `files_to_stage` context variable for explicit git staging
+8a. Before Step 12, stage only the extracted changed files via `stage_paths_scoped(...)`, then call `finalize_pr_metadata(current_work_dir, changed_paths=changed_files or None, stage=True)`. If metadata finalization fails, return failure before PR creation. Append returned `.pdd/meta/<module>_<language>.json` paths to `changed_files` / `files_to_stage`; these are the only `.pdd/meta` files Step 12 may force-add.
 9. Persist workflow state between steps via `save_workflow_state` / `load_workflow_state` so a crash can resume; honor `use_github_state` to mirror state into a hidden GitHub state comment
 10. After every successfully completed step (including hard-stop reports, which are treated as successful posts before early return), post a visible step comment to the issue via `post_step_comment(..., body=...)` using the model's `<step_report>` block (issue #964 — orchestrator-owned posting). For soft failures (`step_success=False` without a hard-stop trigger), post the legacy FAILED fallback comment through the orchestrator and continue, but do not set the normal `posted: True` flag so a later successful retry can still post its report. Persist `state["step_comments"][str(step_num)] = {"posted": True}` only for successful reports so resumes never duplicate comments, and backfill any completed step that has a `<step_report>` block but no posted flag on resume entry. If Step 12 fails, return failure instead of reporting a completed investigation. Redact secrets before storing any raw step output in workflow state because state may sync to GitHub.
 
@@ -98,6 +101,7 @@ After Step 9 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list t
 - After Step 11 parses E2E_FILES_CREATED, extend changed_files and update files_to_stage
 - This ensures Step 11 (E2E) and Step 12 (PR) know exactly which files to include
 - Step 12 prompt uses `{files_to_stage}` to display the explicit list of files to stage
+- PR-boundary finalization may append exact `.pdd/meta/<module>_<language>.json` fingerprint files to `files_to_stage`; no other `.pdd` files may be staged.
 
 % Early Exit Conditions (Hard Stops)
 

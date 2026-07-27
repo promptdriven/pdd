@@ -357,6 +357,7 @@ Detect and break infinite loops with these limits:
 - Crash-verify alternation: Break after 2 cycles (4 operations pattern)
 - Test-fix alternation: Break after 2 cycles (4 operations pattern)
 - Consecutive fix operations: Break after 5
+- Consecutive no-op fix operations: Track `consecutive_noop_fix_count` inside one `sync_orchestration()` invocation. After each executed `fix`, if the extracted `actual_cost` is `0.0` and the extracted `model` is the empty string, increment the counter. Abort after 2 consecutive no-op fixes with a distinct "no LLM request" error and a `cycle_detected` log event whose details include `cycle_type: "noop-fix"` and the count. Reset the counter to 0 on any fix iteration with non-zero cost or a non-empty model. This counter must not persist across sync invocations and must fire before the generic 5-consecutive-fix breaker can misreport zero-cost spinning.
 - Consecutive test operations: Break after `MAX_CONSECUTIVE_TESTS` (3)
 - Consecutive crash operations: Break after `MAX_CONSECUTIVE_CRASHES` (3)
 - Test_extend attempts: Accept current coverage after `MAX_TEST_EXTEND_ATTEMPTS` (2)

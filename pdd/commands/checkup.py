@@ -147,7 +147,7 @@ from ..core.utils import echo_model_line
 @click.option(
     "--fixer-fallback",
     type=str,
-    default=None,
+    default="codex-fixer",
     show_default=False,
     help=(
         "Optional secondary fixer role to invoke once if the primary fixer "

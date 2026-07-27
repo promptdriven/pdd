@@ -702,6 +702,63 @@ class TestDetectDriftWithDiffBase:
         assert len(prompt_drifts) == 0
         assert len(example_drifts) == 0
 
+    def test_pr_scope_test_extend_is_skipped(self):
+        """PR auto-heal must not append unrelated coverage-growth tests."""
+        decision = MagicMock(
+            operation="test_extend",
+            reason="Tests pass but coverage below target",
+        )
+        files, infer, sync = self._setup_mocks({"agentic_common": decision})
+        changed_files = {
+            "pdd/agentic_common.py",
+            "pdd/prompts/agentic_common_python.prompt",
+        }
+        mock_paths = {
+            "code": Path("pdd/agentic_common.py"),
+            "prompt": Path("prompts/agentic_common_python.prompt"),
+            "test": Path("tests/test_agentic_common.py"),
+        }
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+            prompt_drifts, example_drifts = detect_drift(
+                modules=["agentic_common"],
+                diff_base="origin/main...HEAD",
+            )
+
+        assert prompt_drifts == []
+        assert example_drifts == []
+
+    def test_pr_scope_test_extend_can_still_be_reclassified_as_update(self):
+        """Code-only PR edits still request prompt update instead of test growth."""
+        decision = MagicMock(
+            operation="test_extend",
+            reason="Tests pass but coverage below target",
+        )
+        files, infer, sync = self._setup_mocks({"agentic_common": decision})
+        changed_files = {"pdd/agentic_common.py"}
+        mock_paths = {
+            "code": Path("pdd/agentic_common.py"),
+            "prompt": Path("prompts/agentic_common_python.prompt"),
+        }
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+            prompt_drifts, example_drifts = detect_drift(
+                modules=["agentic_common"],
+                diff_base="origin/main...HEAD",
+            )
+
+        assert len(prompt_drifts) == 1
+        assert prompt_drifts[0].operation == "update"
+        assert example_drifts == []
+
     def test_only_prompt_changed_stays_as_example(self):
         """Prompt-only clean-CI auto-deps drift should not rewrite the prompt."""
         decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
@@ -1216,6 +1273,46 @@ class TestHealModule:
         """
         drift = DriftInfo(
             "api", "python", "generate", "prompt changed",
+            code_path="/repo/api.py",
+            prompt_path="/repo/prompts/api_python.prompt",
+        )
+        mock_result = MagicMock(returncode=0, stderr="")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+            result = heal_module(drift, self._make_env())
+
+        assert result is True
+        pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
+        assert pdd_cmds == [["pdd", "--force", "--strength", "0.5", "sync", "api"]]
+
+    def test_pr_scope_unsafe_sync_ops_are_skipped(self):
+        """PR auto-heal refuses module-wide sync paths that can escalate to test_extend."""
+        env = {**self._make_env(), "PDD_HEAL_PR_SCOPE": "1"}
+
+        for op in ("verify", "generate", "test", "crash", "test_extend"):
+            drift = DriftInfo(
+                "api",
+                "python",
+                op,
+                "requires full sync",
+                code_path="/repo/api.py",
+                prompt_path="/repo/prompts/api_python.prompt",
+                diff_base="origin/main...HEAD",
+            )
+
+            with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+                result = heal_module(drift, env)
+
+            assert result is None
+            mock_run.assert_not_called()
+
+    def test_non_pr_test_extend_still_uses_pdd_sync(self):
+        """Full auto-heal/sync may still perform coverage expansion outside PR scope."""
+        drift = DriftInfo(
+            "api",
+            "python",
+            "test_extend",
+            "coverage below target",
             code_path="/repo/api.py",
             prompt_path="/repo/prompts/api_python.prompt",
         )
@@ -1845,6 +1942,34 @@ class TestMain:
         with patch("pdd.ci_drift_heal.detect_drift", return_value=([], [])) as mock_detect:
             main(modules=["auth"])
         mock_detect.assert_called_once_with(["auth"], diff_base=None)
+
+    def test_diff_base_pr_mode_sets_pr_scope_env_for_heal_module(self):
+        """PR auto-heal marks execution so heal_module can block full sync."""
+        drift = DriftInfo(
+            "api",
+            "python",
+            "test",
+            "coverage below target",
+            diff_base="origin/main...HEAD",
+        )
+        seen = []
+
+        def fake_heal(_drift, env):
+            seen.append(env.get("PDD_HEAL_PR_SCOPE"))
+            return None
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=([], [drift])), \
+             patch("pdd.ci_drift_heal.heal_module", side_effect=fake_heal), \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(diff_base="origin/main...HEAD", skip_ci=False)
+
+        assert result == 0
+        assert seen == ["1"]
+        mock_commit.assert_not_called()
 
     def test_detection_failure_returns_one(self):
         """If detect_drift raises, returns 1."""

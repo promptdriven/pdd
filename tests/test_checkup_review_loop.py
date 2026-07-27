@@ -3540,6 +3540,107 @@ class TestShaBackedVerificationTrustBoundary:
         assert fixes[0]["pushed_head_sha"] is None
         assert fixes[0]["fixer_result"] == "skipped"
 
+    def test_fixer_created_local_commit_is_soft_reset_committed_and_verified(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """If the fixer commits locally, the loop must not treat the clean
+        worktree as "No changes to push"; it should re-own the diff, push, and
+        verify the bot commit."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        def git(*args: str) -> str:
+            result = subprocess.run(
+                ["git", *args],
+                cwd=tmp_path,
+                capture_output=True,
+                check=True,
+                text=True,
+            )
+            return result.stdout.strip()
+
+        git("init", "--initial-branch=feature")
+        git("config", "user.name", "Fixer Bot")
+        git("config", "user.email", "fixer@example.com")
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / ".gitignore").write_text(".pdd/\n", encoding="utf-8")
+        (tmp_path / "pdd" / "foo.py").write_text("value = 1\n", encoding="utf-8")
+        git("add", ".gitignore", "pdd/foo.py")
+        git("commit", "-m", "base")
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+
+        def fake_metadata(*_a: Any, **_kw: Any):
+            return {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "feature",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": git("rev-parse", "HEAD"),
+            }
+
+        monkeypatch.setattr(mod, "_fetch_pr_metadata", fake_metadata)
+        monkeypatch.setattr(mod, "push_with_retry", lambda *a, **k: (True, ""))
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+
+        calls: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append(label)
+            if "verify-" in label:
+                return True, _json("clean"), 0.1, role
+            if "fix-" in label:
+                (cwd / "pdd" / "foo.py").write_text("value = 2\n", encoding="utf-8")
+                subprocess.run(
+                    ["git", "add", "pdd/foo.py"],
+                    cwd=cwd,
+                    capture_output=True,
+                    check=True,
+                    text=True,
+                )
+                subprocess.run(
+                    ["git", "commit", "-m", "fixer local commit"],
+                    cwd=cwd,
+                    capture_output=True,
+                    check=True,
+                    text=True,
+                )
+                return True, '{"summary":"x","changed_files":[]}', 0.1, role
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert any("verify-" in lbl for lbl in calls), calls
+        assert "fresh-final-review: clean" in report
+        assert "No changes to push" not in report
+        assert git("log", "-1", "--pretty=%s") == "fix: address codex review-loop findings"
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["verification_status_by_round"]["1"] == "verified"
+        fixes = final_state["fixes"]
+        assert fixes[0]["push_status"] == "pushed"
+        assert fixes[0]["changed_files"] == ["pdd/foo.py"]
+
     def test_pushed_but_no_rev_parse_sha_skips_verifier(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
@@ -4208,6 +4309,12 @@ class TestPromptInjection:
         assert "Check state and side-effect ordering" in prompt
         assert "caller-compatibility sweep" in prompt
         assert "targeted read-only-safe repros" in prompt
+        assert "adversarial probe families" in prompt
+        assert "aliases and import variants" in prompt
+        assert "assignment vs annotated assignment" in prompt
+        assert "stdlib\n  alternatives" in prompt
+        assert "false PASS, false FAIL" in prompt
+        assert "trace each one through the actual code path" in prompt
         assert "repository-local writable TMPDIR" in prompt
         assert "git diff --check" in prompt
         assert "Do not bury actionable failed checks" in prompt
@@ -4272,9 +4379,41 @@ class TestPromptInjection:
         assert "prioritizing the blocking severities\n(blocker)" in prompt
         assert "every valid" in prompt
         assert "Do not use\n\"focused\"" in prompt
+        assert "Do not run `git commit` or `git push`" in prompt
 
 
 class TestParseHelpers:
+    def test_codex_reviewer_and_fixer_aliases_can_share_openai_provider(self) -> None:
+        from pdd.checkup_review_loop import (
+            ROLE_TO_PROVIDER,
+            ReviewLoopConfig,
+            _resolve_roles,
+            parse_reviewers,
+        )
+
+        reviewers = parse_reviewers("codex,codex-fixer")
+
+        assert reviewers == ("codex", "codex-fixer")
+        assert _resolve_roles(ReviewLoopConfig(reviewers=reviewers)) == (
+            "codex",
+            "codex-fixer",
+            "",
+        )
+        assert ROLE_TO_PROVIDER["codex"] == "openai"
+        assert ROLE_TO_PROVIDER["codex-fixer"] == "openai"
+
+    def test_default_roles_prefer_claude_fixer_with_codex_fallback(self) -> None:
+        from pdd.checkup_review_loop import (
+            DEFAULT_FIXER_FALLBACK,
+            ReviewLoopConfig,
+            _resolve_roles,
+        )
+
+        config = ReviewLoopConfig()
+
+        assert _resolve_roles(config) == ("codex", "claude", "")
+        assert DEFAULT_FIXER_FALLBACK == "codex-fixer"
+
     def test_parse_severity_list_drops_unknowns_and_dedupes(self) -> None:
         from pdd.checkup_review_loop import parse_severity_list
 
