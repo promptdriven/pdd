@@ -3971,6 +3971,73 @@ def test_incremental_code_generator_returns_true_when_patch_differs(
     assert code == patched_code
 
 
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template", return_value="mock_template")
+def test_incremental_code_generator_falls_back_when_diff_result_is_raw_string(
+    mock_load_template, mock_llm_invoke
+):
+    """Malformed structured diff output should trigger full generation, not AttributeError."""
+    from pdd.incremental_code_generator import incremental_code_generator
+
+    mock_llm_invoke.return_value = {
+        "result": "not a DiffAnalysis object",
+        "cost": 0.123,
+        "model_name": "mock_diff_model",
+    }
+
+    code, is_incremental, cost, model = incremental_code_generator(
+        original_prompt="Original prompt",
+        new_prompt="Modified prompt",
+        existing_code="def hello():\n    pass\n",
+        language="python",
+        preprocess_prompt=False,
+    )
+
+    assert code is None
+    assert not is_incremental
+    assert cost == pytest.approx(0.123)
+    assert model == "mock_diff_model"
+
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template", return_value="mock_template")
+def test_incremental_code_generator_falls_back_when_patch_result_is_raw_string(
+    mock_load_template, mock_llm_invoke
+):
+    """Malformed structured patch output should trigger full generation, not AttributeError."""
+    from pdd.incremental_code_generator import DiffAnalysis, incremental_code_generator
+
+    mock_llm_invoke.side_effect = [
+        {
+            "result": DiffAnalysis(
+                is_big_change=False,
+                change_description="Minor change",
+                analysis="Incremental patching is appropriate",
+            ),
+            "cost": 0.1,
+            "model_name": "mock_diff_model",
+        },
+        {
+            "result": "not a CodePatchResult object",
+            "cost": 0.2,
+            "model_name": "mock_patch_model",
+        },
+    ]
+
+    code, is_incremental, cost, model = incremental_code_generator(
+        original_prompt="Original prompt",
+        new_prompt="Modified prompt",
+        existing_code="def hello():\n    pass\n",
+        language="python",
+        preprocess_prompt=False,
+    )
+
+    assert code is None
+    assert not is_incremental
+    assert cost == pytest.approx(0.3)
+    assert model == "mock_patch_model"
+
+
 # =============================================================================
 # Issue #1048: _find_default_test_files glob must escape brackets in code_stem
 # =============================================================================
@@ -7605,6 +7672,30 @@ class TestPddInterfaceSignatureConformance:
         )
         # Must surface the missing parameter name in the message.
         assert "sync_metadata" in str(exc)
+
+    def test_invalid_python_raises_architecture_conformance_error(self, tmp_path):
+        """Syntax-broken Python should be a repairable conformance failure."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        generated_code = "def update_main(:\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                output_path="src/update_main.py",
+                prompt_content="",
+            )
+
+        exc = excinfo.value
+        assert "generated Python could not be parsed" in str(exc)
+        assert exc.missing_symbols == ["update_main"]
+        assert "Do not output markdown fences" in exc.repair_directive
 
     def test_cli_command_missing_kwarg_raises(self, tmp_path):
         """CLI commands declared in <pdd-interface> with missing kwarg raise."""

@@ -12,7 +12,7 @@ Test plan for pdd.agentic_architecture_orchestrator
 
 The orchestrator runs a multi-step workflow:
 - Step 1: Analyze PRD
-- Step 1b: Complexity Assessment (may exit with sub-issues)
+- Step 1b: Complexity Assessment (records advisory split candidates)
 - Steps 2-5: Analysis and design
 - Step 5b: Completeness Gate (hard stop if incomplete after 3 retries)
 - Steps 6-8: Research dependencies, generate architecture.json, generate .pddrc
@@ -22,7 +22,7 @@ The orchestrator runs a multi-step workflow:
 1. **Unit Tests**:
     - **Happy Path**: Verify the full workflow runs correctly, accumulates context, tracks cost, saves files, and clears state.
     - **Hard Stop Conditions**: Verify that specific outputs trigger early exit.
-    - **Step 1b**: Complexity check - manageable continues, complex exits (unless force_single).
+    - **Step 1b**: Complexity check - manageable and split candidates continue.
     - **Step 5b**: Completeness gate - passes, fails then fixes, hard stop on exhausted retries.
     - **Validation Logic** (Steps 10-12):
         - Case A: Validation succeeds immediately on each step.
@@ -2031,65 +2031,85 @@ def test_step1b_manageable_continues(mock_dependencies, base_args):
     assert any("step2" in l for l in labels), "Step 2 should run after manageable 1b"
 
 
-def test_step1b_complex_without_force_exits(mock_dependencies, base_args):
-    """Test that a complex PRD exits with sub-issues when force_single is False."""
+def test_step1b_split_candidate_continues(mock_dependencies, base_args):
+    """Test that a split candidate is recorded but continues as one issue."""
     mocks = mock_dependencies
+    cwd = base_args["cwd"]
 
     def side_effect(*args, **kwargs):
         label = kwargs.get("label", "")
         if "step1b" in label:
-            return (True, "COMPLEXITY_RESULT: COMPLEX\nScore: 8/14.\nSub-issues created.", 0.1, "gpt-4")
+            return (
+                True,
+                "COMPLEXITY_RESULT: SPLIT_CANDIDATE\nScore: 8/14.\nDeferred split candidate.",
+                0.1,
+                "gpt-4",
+            )
+        if "step5b" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step10" in label or "step11" in label or "step12" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7" in label:
+            (cwd / "architecture.json").write_text('[{"priority": 1}]')
+            return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+        if "step8" in label:
+            (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+            return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
         return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
     success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
 
-    assert success is False
-    assert "complex" in msg.lower() or "sub-issues" in msg.lower()
+    assert success is True
 
-    # Should stop after step 1 + 1b (2 calls)
-    assert mocks["run"].call_count == 2
-
-    # Should NOT run step 2+
     labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
-    assert not any("step2" in l for l in labels), "Step 2 should not run after complex exit"
+    assert any("step2" in l for l in labels), "Step 2 should run after split candidate"
 
 
-def test_step1b_complex_emits_stop_condition_to_stdout_issue_671(
+def test_step1b_legacy_complex_continues_without_stop_condition(
     mock_dependencies, base_args, capsys
 ):
-    """Issue #671: complexity split must emit STOP_CONDITION tag to stdout.
-
-    The PDD Cloud executor's extract_stop_condition() searches for the
-    STOP_CONDITION: tag pattern. The Rich console.print lines don't contain
-    this tag, so without an explicit print() the executor can't detect
-    the split and creates a junk PR instead of posting guidance.
-    """
+    """Legacy COMPLEX output is advisory and must not emit STOP_CONDITION."""
     mocks = mock_dependencies
+    cwd = base_args["cwd"]
 
     def side_effect(*args, **kwargs):
         label = kwargs.get("label", "")
         if "step1b" in label:
-            return (True, "COMPLEXITY_RESULT: COMPLEX\nScore: 8/14.\nSub-issues created.", 0.1, "gpt-4")
+            return (
+                True,
+                "COMPLEXITY_RESULT: COMPLEX\nScore: 8/14.\nLegacy split recommendation.",
+                0.1,
+                "gpt-4",
+            )
+        if "step5b" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step10" in label or "step11" in label or "step12" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7" in label:
+            (cwd / "architecture.json").write_text('[{"priority": 1}]')
+            return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+        if "step8" in label:
+            (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+            return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
         return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
     success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
 
-    assert success is False
+    assert success is True
 
-    # The critical assertion: STOP_CONDITION must appear in stdout
     captured = capsys.readouterr()
-    assert "STOP_CONDITION:" in captured.out, (
-        "Issue #671: complexity split must emit 'STOP_CONDITION:' tag to stdout "
-        "so the PDD Cloud executor's extract_stop_condition() can detect it. "
-        f"stdout was: {captured.out!r}"
-    )
-    assert "sub-issue" in captured.out.lower(), (
-        "STOP_CONDITION message should mention sub-issues for executor guidance"
-    )
+    assert "STOP_CONDITION:" not in captured.out
+
+    labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
+    assert any("step2" in l for l in labels), "Step 2 should run after legacy complex output"
 
 
 def test_step1b_complex_with_force_continues(mock_dependencies, base_args):
@@ -2136,11 +2156,11 @@ def test_step1b_complex_with_force_continues(mock_dependencies, base_args):
 def test_z3_termination_proof_with_gates():
     """
     Formal verification using Z3 to prove that the orchestration logic terminates,
-    including the new step 1b (complexity) and step 5b (completeness) gates.
+    including the step 1b advisory complexity check and step 5b completeness gate.
 
     Workflow:
     - Step 1: Linear (hard stop possible)
-    - Step 1b: Complexity gate (may exit)
+    - Step 1b: Advisory complexity check (always continues)
     - Steps 2-5: Linear (hard stops at 2, 5)
     - Step 5b: Completeness gate (up to 3 retries, hard stop on failure)
     - Steps 6-9: Linear
@@ -2159,8 +2179,6 @@ def test_z3_termination_proof_with_gates():
         """Model state transitions including 1b and 5b gates."""
         hard_stop = z3.Bool(f"hard_stop_{step}")
         is_valid = z3.Bool(f"is_valid_{step}_{retry_count}")
-        is_complex = z3.Bool(f"is_complex_{step}")
-
         # Step 1: Linear with hard stop
         step1_logic = z3.If(step == 1,
             z3.If(hard_stop,
@@ -2171,12 +2189,9 @@ def test_z3_termination_proof_with_gates():
             z3.BoolVal(False)
         )
 
-        # Step 1b (15): Complexity gate
+        # Step 1b (15): advisory complexity check
         step1b_logic = z3.If(step == 15,
-            z3.If(is_complex,
-                z3.And(next_status == 2, next_step == 15, next_retry == 0),  # Complex -> fail
-                z3.And(next_status == 0, next_step == 2, next_retry == 0)   # Manageable -> step 2
-            ),
+            z3.And(next_status == 0, next_step == 2, next_retry == 0),
             z3.BoolVal(False)
         )
 

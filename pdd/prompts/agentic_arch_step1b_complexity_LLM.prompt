@@ -1,4 +1,4 @@
-<pdd-reason>Assesses PRD complexity and auto-creates sub-issues if too complex for single-project generation.</pdd-reason>
+<pdd-reason>Assesses PRD complexity and records a deferred split candidate without creating sub-issues.</pdd-reason>
 <pdd-interface>
 {{
   "type": "module",
@@ -10,13 +10,13 @@
 }}
 </pdd-interface>
 <pdd-dependency>agentic_arch_step1_analyze_prd_LLM.prompt</pdd-dependency>
-% You are an expert software architect. Your task is to assess PRD complexity and determine if the project should be split into smaller sub-issues.
+% You are an expert software architect. Your task is to assess PRD complexity and determine whether a split might be useful later. This step is advisory only.
 
 % Context
 
-You are working on step 1b of the agentic architecture workflow. Step 1 just analyzed the PRD. Before proceeding to deep analysis (Step 2), assess whether this PRD is too complex for a single architecture generation pass.
+You are working on step 1b of the agentic architecture workflow. Step 1 just analyzed the PRD. Before proceeding to deep analysis (Step 2), assess whether this PRD has enough independent scope that the outer autonomous issue loop may eventually need to split it.
 
-Very large PRDs with many subsystems overwhelm the LLM and result in incomplete module coverage. It's better to split them early.
+Very large PRDs with many subsystems can overwhelm a single pass, but splitting too early usually creates bad child issues. The correct default is to keep solving one ticket until the outer loop has real evidence that the parent cannot be completed as one coherent issue.
 
 % Inputs
 
@@ -49,7 +49,7 @@ Count the following from the PRD and Step 1 analysis:
 | PRD word count (approx) | ? | > 5000 | +1 |
 
 **Total Score:** [sum]
-**Threshold:** Score >= 5 = COMPLEX
+**Threshold:** Score >= 5 = SPLIT_CANDIDATE
 
 % Output
 
@@ -66,20 +66,20 @@ Complexity score: [N]/14. Project is manageable as a single architecture.
 Dimensions: [features], [endpoints], [subsystems], [entities], [roles], [integrations], [words]
 ```
 
-**If Score >= 5 (COMPLEX):**
+**If Score >= 5 (SPLIT_CANDIDATE):**
 
 Output exactly:
 ```
-COMPLEXITY_RESULT: COMPLEX
+COMPLEXITY_RESULT: SPLIT_CANDIDATE
 ```
 
-Followed by a complexity report and then auto-create sub-issues.
+Followed by a complexity report and a deferred split proposal. Do not create sub-issues.
 
 **Step 1: Output complexity report:**
 ```markdown
 ## Complexity Assessment
 
-**Score:** [N]/14 (COMPLEX)
+**Score:** [N]/14 (SPLIT_CANDIDATE)
 
 ### Dimensions
 | Dimension | Count | Threshold | Points |
@@ -92,7 +92,7 @@ Followed by a complexity report and then auto-create sub-issues.
 | External integrations | [N] | > 5 | [0 or 2] |
 | PRD word count | [N] | > 5000 | [0 or 1] |
 
-### Recommended Split
+### Deferred Split Candidate
 ```
 
 **Step 2: Suggest 2-3 splitting strategies:**
@@ -103,88 +103,60 @@ Followed by a complexity report and then auto-create sub-issues.
 
 For each strategy, list which features/modules go into each sub-issue.
 
-**Step 3: Auto-create sub-issues on GitHub:**
+**Step 3: Emit a deferred split proposal for the outer issue loop:**
 
-For the FIRST (recommended) splitting strategy, create sub-issues:
+```markdown
+## Deferred Split Candidate
 
-```bash
-# Create sub-issue 1
-gh issue create --repo {repo_owner}/{repo_name} \
-  --title "[Split from #{issue_number}] [Sub-project name 1]" \
-  --body "## Sub-project: [Name]
+Split should remain a last resort. The outer autonomous issue loop should create these child issues only after it has tried to solve the parent as one ticket and has evidence that the blocking reason is issue scope rather than missing information, tool failure, flaky tests, auth/provider limits, or a normal implementation bug.
 
-Split from #{issue_number} due to complexity (score: [N]/14).
+### Last-resort trigger evidence required
+- At least one full one-ticket implementation attempt reached verification and failed because the scope could not be completed coherently.
+- Cheap investigation and one useful follow-up plan were already attempted.
+- The remaining work separates into independently shippable behavior areas.
+- Each child below can be implemented and verified without requiring simultaneous edits from another child.
 
-### Features included:
-- [feature 1]
-- [feature 2]
-...
+### Recommended split strategy
+[By subsystem / By phase / By layer]
 
-### API endpoints:
-- [endpoint 1]
-- [endpoint 2]
-...
+### Child issue drafts
 
-### Data entities:
-- [entity 1]
-- [entity 2]
-...
+#### Child 1: [Sub-project name]
+Parent: #{issue_number}
+Goal:
+- [independently shippable behavior]
 
-### Dependencies on other sub-projects:
-- [dependency description]
+Included:
+- [feature/module/API/entity]
 
-### Related sub-issues:
-- #[Y] [Sub-project name 2]
-- #[Z] [Sub-project name 3] (if applicable)
+Out of scope:
+- [explicit exclusions]
 
-### Run order: [1] of [total]
-This sub-issue should be run BEFORE: #[Y]
+Dependencies:
+- [none or dependency on another child]
 
-### Target directory: \`[suggested_dir]/\`
+Verification:
+- [specific acceptance check/test/command]
 
----
-*Auto-generated by PDD complexity assessment*"
-```
+#### Child 2: [Sub-project name]
+Parent: #{issue_number}
+Goal:
+- [independently shippable behavior]
 
-Repeat for each sub-issue in the recommended split (typically 2-3 sub-issues).
+Included:
+- [feature/module/API/entity]
 
-**IMPORTANT:** After creating ALL sub-issues, go back and UPDATE each sub-issue body to include the correct related issue numbers and run order. Use `gh issue edit` to update the body with the actual issue numbers returned from creation:
+Out of scope:
+- [explicit exclusions]
 
-```bash
-# After all sub-issues are created, update each one with cross-references
-gh issue edit [X] --repo {repo_owner}/{repo_name} --body "[updated body with actual issue numbers]"
-```
+Dependencies:
+- [none or dependency on another child]
 
-The LLM decides the run order based on dependency direction (e.g., backend before frontend, core before advanced).
+Verification:
+- [specific acceptance check/test/command]
 
-**Step 4: Post summary comment on parent issue:**
-
-```bash
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "## Step 1b: PRD Complexity Assessment
-
-**Result:** COMPLEX (score: [N]/14)
-
-This PRD has been automatically split into sub-issues for better architecture generation quality:
-
-### Sub-issues created:
-- #[X]: [Sub-project name 1]
-- #[Y]: [Sub-project name 2]
-- #[Z]: [Sub-project name 3] (if applicable)
-
-### Splitting strategy used: [By subsystem / By phase / By layer]
-
-### Execution order:
-1. \`pdd generate https://github.com/{repo_owner}/{repo_name}/issues/[X]\` — [Sub-project 1] (no dependencies)
-2. \`pdd generate https://github.com/{repo_owner}/{repo_name}/issues/[Y]\` — [Sub-project 2] (depends on #[X])
-3. \`pdd generate https://github.com/{repo_owner}/{repo_name}/issues/[Z]\` — [Sub-project 3] (depends on #[X], #[Y])
-
-**Important:** Run in order. Each sub-issue's generation will read and extend the existing architecture files from previous sub-issues.
-
-To override and generate as a single project, use:
-\`pdd generate {issue_url} --force-single\`
-
----
-*Auto-generated by PDD complexity assessment*"
+### Parent integration check
+- [one end-to-end acceptance check proving the combined parent issue is resolved]
 ```
 
 % Important
@@ -193,8 +165,9 @@ To override and generate as a single project, use:
 - A 10-feature app with straightforward CRUD is NOT complex (score ~2-3)
 - A multi-subsystem platform with 25+ endpoints, admin panels, and external integrations IS complex
 - When in doubt, lean toward MANAGEABLE — let Step 5b catch any coverage gaps
-- Always output `COMPLEXITY_RESULT: MANAGEABLE` or `COMPLEXITY_RESULT: COMPLEX`
-- If COMPLEX: MUST create sub-issues and post summary comment before outputting
+- Always output `COMPLEXITY_RESULT: MANAGEABLE` or `COMPLEXITY_RESULT: SPLIT_CANDIDATE`
+- Never create GitHub issues, never run `gh issue create`, and never post parent comments from this step. Child issue creation belongs to the outer autonomous issue loop only after one-ticket attempts have failed for scope reasons.
+- Splitting is a true last resort. Keep one issue when the work is a tightly coupled workflow, primarily changes one established module, can be made incremental behind a flag, or only needs better planning.
 - Splitting is a last resort. Keep one issue when the work is a tightly coupled workflow or primarily changes one established module.
 - A split is valid only when every child sub-issue is independently implementable and independently verifiable.
 - Create 2 sub-issues by default; create 3 only when there are genuinely separate product or workflow ownership areas. Never create more than 3.

@@ -10,6 +10,7 @@ from __future__ import annotations
 # Pre-parse --quiet flag from sys.argv BEFORE importing modules that configure
 # logging at module level (e.g. llm_invoke.py). This ensures module-level
 # logger.info() calls are suppressed when the user passes --quiet.
+import logging as _logging
 import os as _os
 import sys
 
@@ -18,6 +19,8 @@ def _is_structured_json_invocation(arguments: list[str]) -> bool:
     """Return whether this process is running a JSON-reporting checkup command."""
     pairs = set(zip(arguments, arguments[1:]))
     return "--json" in arguments and (
+        "context" in arguments
+        or
         ("checkup", "lint") in pairs
         or ("checkup", "contract") in pairs
         or ("checkup", "contracts") in pairs
@@ -29,6 +32,9 @@ def _is_structured_json_invocation(arguments: list[str]) -> bool:
 
 if '--quiet' in sys.argv or _is_structured_json_invocation(sys.argv):
     _os.environ.setdefault('PDD_QUIET', '1')
+    for _logger_name in ("LiteLLM", "litellm"):
+        _logging.getLogger(_logger_name).setLevel(_logging.ERROR)
+        _logging.getLogger(_logger_name).disabled = True
 
 _DEFAULTS = {
     "__version__": "unknown",

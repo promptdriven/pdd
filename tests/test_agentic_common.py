@@ -9172,6 +9172,38 @@ class TestPostStepCommentOnce:
             body_index = args[0].index("--body")
             assert "## Step 5/8: Test" in args[0][body_index + 1]
 
+    def test_uses_refreshed_token_file_for_gh(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        token_file = tmp_path / "gh-token"
+        token_file.write_text("fresh-token\n", encoding="utf-8")
+        posted = set()
+
+        with patch.dict(
+            os.environ,
+            {
+                "PDD_GH_TOKEN_FILE": str(token_file),
+                "GH_TOKEN": "stale-token",
+                "GITHUB_TOKEN": "stale-token",
+            },
+        ), patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
+             patch("pdd.agentic_common.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                step_num=5,
+                body="body",
+                posted_steps=posted,
+                cwd=tmp_path,
+            )
+
+        assert result is True
+        env = mock_run.call_args.kwargs["env"]
+        assert env["GH_TOKEN"] == "fresh-token"
+        assert env["GITHUB_TOKEN"] == "fresh-token"
+
     def test_returns_false_and_does_not_mutate_on_gh_failure(self, tmp_path):
         from pdd.agentic_common import post_step_comment_once
 

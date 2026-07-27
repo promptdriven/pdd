@@ -12,7 +12,7 @@
 <include>context/python_preamble.prompt</include>
 
 % Role & Scope
-Orchestrator for the agentic architecture workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes gate steps (1b complexity, 2b codebase scan, 5b completeness, 7b self-review, 9b consistency) and per-step validation with in-place fixing (steps 10-12). Post-processes successful output via render_mermaid.py.
+Orchestrator for the agentic architecture workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes gate steps (1b advisory complexity, 2b codebase scan, 5b completeness, 7b self-review, 9b consistency) and per-step validation with in-place fixing (steps 10-12). Post-processes successful output via render_mermaid.py.
 
 % Requirements
 1. Function: `run_agentic_architecture_orchestrator(...) -> Tuple[bool, str, float, str, List[str]]`
@@ -40,7 +40,7 @@ ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
 | Step | Template Name | Purpose |
 |------|---------------|---------|
 | 1 | agentic_arch_step1_analyze_prd_LLM | Extract features, tech stack, requirements from PRD |
-| 1b | agentic_arch_step1b_complexity_LLM | Assess PRD complexity; exit if COMPLEX (unless force_single) |
+| 1b | agentic_arch_step1b_complexity_LLM | Assess PRD complexity; record advisory split candidates but continue as one issue |
 | 2 | agentic_arch_step2_analyze_LLM | Deep analysis: module boundaries, shared concerns |
 | 2b | agentic_arch_step2b_codebase_scan_LLM | Scan existing codebase for context |
 | 3 | agentic_arch_step3_research_LLM | Web research for tech stack docs and conventions |
@@ -63,7 +63,7 @@ ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
 1. **Execution Groups**: Run steps 1-5 and 6-8 in loops. Skip if step < start_step.
 2. **Template Processing**: Load via `load_prompt_template`, `preprocess` (recursive=True, double_curly_brackets=True), un-double curly braces, then substitute context keys.
 3. **Hard Stops**: `_check_hard_stop` exits early on step 1 ("PRD Content Insufficient"), step 2 ("Tech Stack Ambiguous"), step 5 ("Clarification Needed").
-4. **Step 1b (Complexity)**: If output contains `COMPLEXITY_RESULT: COMPLEX`, return failure.
+4. **Step 1b (Complexity)**: If output contains `COMPLEXITY_RESULT: SPLIT_CANDIDATE` or the legacy `COMPLEXITY_RESULT: COMPLEX`, persist the output and continue. Do NOT return failure, do NOT emit `STOP_CONDITION`, and do NOT assume child issues were created. Splitting belongs to the outer autonomous issue loop as a last resort after one-ticket attempts fail for scope reasons.
 5. **Step 2b (Codebase Scan)**: Run after step 2 to provide codebase context.
 6. **Step 4 (Validation)**: Call `_check_step4_output` to ensure data model content (not module design).
 6.5. **Step 5 (Structural Validation)**: After step 5 completes successfully, call `_validate_step5_output_structure(step_output)`. If it returns `(False, reason)`, do NOT persist the degenerate output to `state["step_outputs"]["5"]` as a success. Instead, mark the step as failed (set `step_success = False`), record the failure reason in `state["step_outputs"]["5"]` as `f"FAILED: {reason}"`, and hard-stop with a diagnostic error message that names step 5 as the upstream cause (e.g., `f"Step 5 (module design) produced invalid output: {reason}"`). This mirrors the `_check_step4_output` pattern at instruction #6 and prevents the step 5b gate from looping on degenerate input.

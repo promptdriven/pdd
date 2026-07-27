@@ -103,6 +103,8 @@ def _is_prompt_lint_json_invocation(arguments: List[str]) -> bool:
     """Return whether this invocation needs prompt-lint machine output."""
     pairs = set(zip(arguments, arguments[1:]))
     return "--json" in arguments and (
+        "context" in arguments
+        or
         ("checkup", "lint") in pairs
         or ("checkup", "contract") in pairs
         or ("checkup", "contracts") in pairs
@@ -135,6 +137,14 @@ class PDDCLI(click.Group):
     def invoke(self, ctx):
         exception_to_handle = None
         user_abort = False  # Flag for user cancellation (fix for issue #186)
+        # Capture the real invocation tokens before Click consumes them while
+        # resolving the subcommand. The group callback uses these for
+        # machine-output detection under Click's test runner, where sys.argv is
+        # pytest's argv rather than the CLI invocation.
+        try:
+            ctx.meta["pdd_cli_tokens"] = list(ctx.protected_args) + list(ctx.args)
+        except Exception:
+            ctx.meta["pdd_cli_tokens"] = list(getattr(ctx, "args", []) or [])
         try:
             result = super().invoke(ctx)
         except click.Abort:
@@ -403,8 +413,11 @@ def cli(
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
     """
-    # Prompt-lint JSON output is intended for downstream machine consumers.
-    json_mode = _is_prompt_lint_json_invocation(sys.argv)
+    # Machine JSON output is intended for downstream consumers, so stdout must
+    # stay payload-only. sys.argv covers the real CLI; ctx.meta covers Click's
+    # test runner.
+    cli_tokens = ctx.meta.get("pdd_cli_tokens", []) if hasattr(ctx, "meta") else []
+    json_mode = _is_prompt_lint_json_invocation(sys.argv) or _is_prompt_lint_json_invocation(cli_tokens)
     quiet = quiet or json_mode
     core_dump = core_dump and not json_mode
 
@@ -512,7 +525,7 @@ def cli(
             pass
 
     # Warn users who have not completed interactive setup unless they are running it now
-    if _should_show_onboarding_reminder(ctx):
+    if not quiet and _should_show_onboarding_reminder(ctx):
         console.print(
             "[warning]Complete onboarding with `pdd setup` to install tab completion and configure API keys.[/warning]"
         )
@@ -629,8 +642,11 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 
     num_commands = len(invoked_subcommands)
     num_results = len(normalized_results)  # Number of results actually received
+    suppress_result_summary = bool(
+        isinstance(ctx.obj, dict) and ctx.obj.get("_suppress_result_summary")
+    )
 
-    if not ctx.obj.get("quiet"):
+    if not ctx.obj.get("quiet") and not suppress_result_summary:
         console.print("\n[info]--- Command Execution Summary ---[/info]")
 
     for i, result_tuple in enumerate(normalized_results):
@@ -639,7 +655,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 
         # Check if the command failed (returned None)
         if result_tuple is None:
-            if not ctx.obj.get("quiet"):
+            if not ctx.obj.get("quiet") and not suppress_result_summary:
                 # Check if it was install_completion (which normally returns None)
                 if command_name == "install_completion":
                     console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed.")
@@ -656,7 +672,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         elif isinstance(result_tuple, tuple) and len(result_tuple) == 3:
             result_data, cost, model_name = result_tuple
             total_cost += cost
-            if not ctx.obj.get("quiet"):
+            if not ctx.obj.get("quiet") and not suppress_result_summary:
                 # Special handling for preprocess success message (check actual command name)
                 actual_command_name = invoked_subcommands[i] if i < num_commands else None # Get actual name if possible
                 if actual_command_name == "preprocess" and cost == 0.0 and model_name == "local":
@@ -683,7 +699,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 
         # Handle dicts with examplesUsed (e.g. from commands not using track_cost but returning metadata)
         elif isinstance(result_tuple, dict) and result_tuple.get("examplesUsed"):
-            if not ctx.obj.get("quiet"):
+            if not ctx.obj.get("quiet") and not suppress_result_summary:
                 console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed.")
                 console.print("    Examples used:")
                 for ex in result_tuple["examplesUsed"]:
@@ -693,12 +709,12 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 
         else:
             # Handle unexpected return types if necessary
-            if not ctx.obj.get("quiet"):
+            if not ctx.obj.get("quiet") and not suppress_result_summary:
                 # Provide more detail on the unexpected type
                 console.print(f"  [warning]Step {i+1} ({command_name}):[/warning] Unexpected result format: {type(result_tuple).__name__} - {str(result_tuple)[:50]}...")
 
 
-    if not ctx.obj.get("quiet"):
+    if not ctx.obj.get("quiet") and not suppress_result_summary:
         from ..compression_reporting import format_compression_summary_lines
 
         for line in format_compression_summary_lines():
@@ -745,7 +761,8 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                 sys.stderr = stderr_capture.original_stream
 
     # Finally, write a core dump if requested
-    _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost, terminal_output)
+    if not (isinstance(ctx.obj, dict) and ctx.obj.get("_suppress_core_dump")):
+        _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost, terminal_output)
     fatal = ctx.obj.get("_fatal_exception") if isinstance(ctx.obj, dict) else None
     if fatal:
         ctx.exit(1)

@@ -2656,12 +2656,60 @@ def _extract_pdd_interface_signatures(
     return declarations, False
 
 
+def _raise_python_syntax_conformance_error(
+    *,
+    prompt_name: str,
+    output_path: Optional[str],
+    expected_symbols: List[str],
+    syntax_error: SyntaxError,
+    architecture_entry: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Raise a retryable conformance error for unparsable generated Python."""
+    output_display = output_path or "<unknown>"
+    location = ""
+    if syntax_error.lineno is not None:
+        location = f" at line {syntax_error.lineno}"
+        if syntax_error.offset is not None:
+            location += f", column {syntax_error.offset}"
+    expected_display = ", ".join(expected_symbols) if expected_symbols else "<none>"
+    message = (
+        f"Architecture conformance error for {prompt_name}: "
+        f"generated Python could not be parsed{location}: {syntax_error.msg}. "
+        f"Output: {output_display}. Expected exports: [{expected_display}]."
+    )
+    directive_lines = [
+        f"Architecture conformance error for {prompt_name}: "
+        "the generated Python is syntactically invalid.",
+        f"- Fix the syntax error{location}: {syntax_error.msg}.",
+        "- Regenerate a complete, importable Python module.",
+    ]
+    if expected_symbols:
+        directive_lines.append(
+            "- Preserve and implement these declared public export(s): "
+            f"`{expected_display}`."
+        )
+    directive_lines.append(
+        "Do not output markdown fences, prose, partial snippets, or truncated code."
+    )
+    raise ArchitectureConformanceError(
+        prompt_name=prompt_name,
+        output_path=output_path or "",
+        architecture_entry=architecture_entry or {},
+        expected_symbols=list(expected_symbols),
+        found_symbols=[],
+        missing_symbols=list(expected_symbols),
+        message=message,
+        repair_directive="\n".join(directive_lines),
+    )
+
+
 def _verify_pdd_interface_signatures(
     generated_code: str,
     prompt_content: Optional[str],
     prompt_name: str,
     output_path: Optional[str],
     architecture_entry: Dict[str, Any],
+    language: Optional[str] = None,
 ) -> None:
     """Check that param names declared in ``<pdd-interface>`` exist in the code.
 
@@ -2686,8 +2734,16 @@ def _verify_pdd_interface_signatures(
 
     try:
         tree = ast.parse(generated_code)
-    except SyntaxError:
-        return  # Can't parse — defer to existing checks/recovery paths.
+    except SyntaxError as parse_err:
+        if _is_python_generation(language, output_path):
+            _raise_python_syntax_conformance_error(
+                prompt_name=prompt_name,
+                output_path=output_path,
+                expected_symbols=[name for name, _ in declarations],
+                syntax_error=parse_err,
+                architecture_entry=architecture_entry,
+            )
+        return  # Non-Python snippets are outside this AST-based check.
 
     missing_params: List[str] = []
     missing_funcs: List[str] = []
@@ -2899,6 +2955,7 @@ def _verify_architecture_conformance(
         prompt_name=prompt_name,
         output_path=output_path,
         architecture_entry=entry or {},
+        language=language,
     )
 
 
@@ -2979,8 +3036,14 @@ def _verify_architecture_json_conformance(
         try:
             tree = ast.parse(generated_code)
             actual_symbols.extend(_collect_python_symbols(tree.body, prefix=""))
-        except SyntaxError:
-            return entry  # Can't parse — skip conformance
+        except SyntaxError as parse_err:
+            _raise_python_syntax_conformance_error(
+                prompt_name=prompt_name,
+                output_path=output_path,
+                expected_symbols=declared_symbols,
+                syntax_error=parse_err,
+                architecture_entry=entry,
+            )
     elif detected_lang in ("typescript", "javascript", "ts", "js") or any(
         prompt_name.endswith(sfx) for sfx in ("_TypeScript.prompt", "_TypeScriptReact.prompt", "_JavaScript.prompt", "_JavaScriptReact.prompt")
     ):

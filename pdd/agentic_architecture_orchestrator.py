@@ -4,7 +4,7 @@ Runs each step as a separate agentic task, accumulates context between steps,
 tracks overall progress and cost, and supports resuming from saved state.
 
 Step 1:   Analyze PRD
-Step 1b:  Complexity Assessment (may exit with sub-issues if PRD too complex)
+Step 1b:  Complexity Assessment (records advisory split candidates only)
 Steps 2-5: Analysis and design
 Step 5b:  Completeness Gate (hard stop if incomplete after 3 retries)
 Steps 6-7: Research dependencies and generate architecture.json
@@ -475,7 +475,7 @@ def run_agentic_architecture_orchestrator(
     Orchestrates the agentic architecture workflow.
 
     Step 1:   Analyze PRD
-    Step 1b:  Complexity Assessment (may exit with sub-issues)
+    Step 1b:  Complexity Assessment (records advisory split candidates only)
     Steps 2-5: Analysis and design
     Step 5b:  Completeness Gate (hard stop if incomplete after 3 retries)
     Steps 6-7: Research dependencies and generate architecture.json
@@ -491,7 +491,7 @@ def run_agentic_architecture_orchestrator(
 
     Args:
         skip_prompts: If True, skip Step 9 and validation steps 10-12.
-        force_single: If True, skip complexity check and force single-project generation.
+        force_single: If True, skip the advisory complexity check.
 
     Returns:
         (success, final_message, total_cost, model_used, output_files)
@@ -855,24 +855,21 @@ def run_agentic_architecture_orchestrator(
                     context["step1b_output"] = c_output
                     state["step_outputs"]["1b"] = c_output
 
-                    if "COMPLEXITY_RESULT: COMPLEX" in c_output:
+                    if (
+                        "COMPLEXITY_RESULT: SPLIT_CANDIDATE" in c_output
+                        or "COMPLEXITY_RESULT: COMPLEX" in c_output
+                    ):
                         if not quiet:
-                            console.print("[yellow]⏹️  PRD is too complex for single-project generation.[/yellow]")
-                            console.print("   Sub-issues have been created. Run pdd generate on each sub-issue.")
-                            console.print("   Use --force-single to override this check.")
-                        # Emit the STOP_CONDITION: tag so the executor's extract_stop_condition() can
-                        # detect the split (issue #671).  The console.print lines above are human-
-                        # readable Rich messages; they don't contain the tag pattern the executor expects.
-                        print("STOP_CONDITION: Issue was split into sub-issues due to complexity", flush=True)
-                        state["last_completed_step"] = 1.5
-                        save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
-                        return False, "PRD too complex - sub-issues created, run pdd generate on each", total_cost, model_used, []
+                            console.print(
+                                "[yellow]PRD may be a split candidate, but splitting is deferred; "
+                                "continuing as one issue.[/yellow]"
+                            )
 
                     state["last_completed_step"] = 1.5
                     save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
 
                     if not quiet:
-                        console.print("   → PRD complexity: manageable, continuing...")
+                        console.print("   → PRD complexity check recorded, continuing...")
 
         # --- Step 2b: Codebase Scan (after Step 2) ---
         if step_num == 2 and step_success and start_step <= 2.5:

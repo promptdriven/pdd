@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple, Type
 from pydantic import BaseModel, Field
 from rich.console import Console
 from rich.markdown import Markdown
@@ -20,6 +20,35 @@ class CodePatchResult(BaseModel):
     patched_code: Optional[str] = Field(default=None, description="The updated code with incremental patches applied, or None/omitted when no code changes are needed (treated as a no-op, falls back to full regeneration)")
     analysis: str = Field(description="Analysis of the patching process")
     planned_modifications: str = Field(description="Description of the modifications planned and applied")
+
+def _coerce_pydantic_result(raw_result: Any, model_cls: Type[BaseModel]) -> Optional[BaseModel]:
+    """Return a validated pydantic result or None for malformed LLM output."""
+    if isinstance(raw_result, model_cls):
+        return raw_result
+    if isinstance(raw_result, dict):
+        try:
+            if hasattr(model_cls, "model_validate"):
+                return model_cls.model_validate(raw_result)
+            return model_cls(**raw_result)
+        except Exception:
+            return None
+    return None
+
+
+def _response_cost(response: Any) -> float:
+    if not isinstance(response, dict):
+        return 0.0
+    try:
+        return float(response.get("cost") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _response_model(response: Any) -> str:
+    if not isinstance(response, dict):
+        return ""
+    return str(response.get("model_name") or "")
+
 
 def incremental_code_generator(
     original_prompt: str,
@@ -94,9 +123,19 @@ def incremental_code_generator(
             verbose=verbose,
             output_pydantic=DiffAnalysis
         )
-        diff_result: DiffAnalysis = diff_response['result']
-        total_cost += diff_response['cost']
-        model_name = diff_response['model_name'] # Initial model name
+        total_cost += _response_cost(diff_response)
+        model_name = _response_model(diff_response) # Initial model name
+        diff_result = _coerce_pydantic_result(
+            diff_response.get("result") if isinstance(diff_response, dict) else None,
+            DiffAnalysis,
+        )
+        if not isinstance(diff_result, DiffAnalysis):
+            if verbose:
+                console.print(
+                    "[yellow]Diff analyzer returned malformed structured output. "
+                    "Falling back to full generation.[/yellow]"
+                )
+            return None, False, total_cost, model_name
 
         if verbose:
             console.print("[bold green]Diff Analyzer Results:[/bold green]")
@@ -145,9 +184,21 @@ def incremental_code_generator(
                 verbose=verbose,
                 output_pydantic=CodePatchResult
             )
-            patch_result: CodePatchResult = patch_response['result']
-            total_cost += patch_response['cost']
-            model_name = patch_response['model_name'] # Update model_name to patcher's model
+            total_cost += _response_cost(patch_response)
+            patch_model_name = _response_model(patch_response)
+            if patch_model_name:
+                model_name = patch_model_name # Update model_name to patcher's model
+            patch_result = _coerce_pydantic_result(
+                patch_response.get("result") if isinstance(patch_response, dict) else None,
+                CodePatchResult,
+            )
+            if not isinstance(patch_result, CodePatchResult):
+                if verbose:
+                    console.print(
+                        "[yellow]Code patcher returned malformed structured output. "
+                        "Falling back to full generation.[/yellow]"
+                    )
+                return None, False, total_cost, model_name
 
             if verbose:
                 console.print("[bold green]Code Patcher Results:[/bold green]")
