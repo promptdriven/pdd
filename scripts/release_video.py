@@ -18,7 +18,14 @@ from typing import Any
 
 SEMVER_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 YOUTUBE_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s\"'<>]+")
-RELEASE_VIDEO_OPT_OUT_TAG = "v0.0.309"
+# Exact release tags that must never create, upload, or distribute a video.
+#
+# A set rather than a single tag: opting a new release out by overwriting one
+# constant silently re-enables video for the previous one, and the guarantee is
+# per-release and permanent. v0.0.309 in particular carries no
+# `pdd-release-video-skipped` marker on its GitHub Release, so this set is the
+# only thing preventing a later backfill from attaching a video to it.
+RELEASE_VIDEO_OPT_OUT_TAGS = frozenset({"v0.0.309", "v0.0.310"})
 IDEMPOTENCY_PROVENANCE_RE = re.compile(r"[^a-z0-9._-]+")
 PDS_RUN_HANDLE_LINE_RE = re.compile(
     r"^\[pds\]\s+release-video run handle:\s+(?P<fields>.+)$",
@@ -464,8 +471,8 @@ class ReleaseVideoError(RuntimeError):
 
 
 def release_video_opt_out_reason(tag: str) -> str | None:
-    """Return the release-video denial reason for the exact excluded tag."""
-    if tag == RELEASE_VIDEO_OPT_OUT_TAG:
+    """Return the release-video denial reason for an exact excluded tag."""
+    if tag in RELEASE_VIDEO_OPT_OUT_TAGS:
         return (
             f"{tag} is opted out and release video operations must not create, "
             "upload, or distribute a video."

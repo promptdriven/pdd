@@ -107,7 +107,12 @@ RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID ?=
 RELEASE_VIDEO_STATUS_QUERY ?= 0
 RELEASE_VIDEO_YOUTUBE_URL ?=
 RELEASE_VIDEO_SKIP_REASON ?=
-RELEASE_VIDEO_OPT_OUT_TAG ?= v0.0.309
+# Exact release tags that must never create, upload, or distribute a video.
+# A set, not one tag: overwriting a single value to opt out a new release
+# silently re-enables video for the previous one, and the guarantee is
+# per-release and permanent. v0.0.309 carries no `pdd-release-video-skipped`
+# marker, so this list is the only thing keeping a backfill off it.
+RELEASE_VIDEO_OPT_OUT_TAGS ?= v0.0.309 v0.0.310
 RELEASE_VIDEO_PDS_CREATE_TIMEOUT ?= 1800
 RELEASE_VIDEO_CLAUDE_MODEL ?= claude-opus-4-8
 RELEASE_VIDEO_PDS_CLAUDE_MODEL ?= glm-5.2
@@ -956,7 +961,7 @@ release-infisical:
 	@$(MAKE) --no-print-directory release-sops
 
 release-video:
-	@if [ "$(RELEASE_TAG)" = "$(RELEASE_VIDEO_OPT_OUT_TAG)" ]; then \
+	@if printf '%s\n' $(RELEASE_VIDEO_OPT_OUT_TAGS) | grep -qxF "$(RELEASE_TAG)"; then \
 		echo "release-video: $(RELEASE_TAG) is opted out and must not create, upload, or distribute a video." >&2; \
 		exit 1; \
 	fi
@@ -1015,7 +1020,7 @@ release-video-status:
 		$$STATUS_QUERY_ARGS
 
 release-video-discord-backfill:
-	@if [ "$(RELEASE_TAG)" = "$(RELEASE_VIDEO_OPT_OUT_TAG)" ]; then \
+	@if printf '%s\n' $(RELEASE_VIDEO_OPT_OUT_TAGS) | grep -qxF "$(RELEASE_TAG)"; then \
 		echo "release-video-discord-backfill: $(RELEASE_TAG) is opted out and must not mutate a release or Discord." >&2; \
 		exit 1; \
 	fi
@@ -1025,7 +1030,7 @@ release-video-discord-backfill:
 		--repo "$${GITHUB_REPOSITORY:-promptdriven/pdd}"
 
 release-video-skip:
-	@if [ "$(RELEASE_TAG)" = "$(RELEASE_VIDEO_OPT_OUT_TAG)" ]; then \
+	@if printf '%s\n' $(RELEASE_VIDEO_OPT_OUT_TAGS) | grep -qxF "$(RELEASE_TAG)"; then \
 		echo "release-video-skip: $(RELEASE_TAG) is opted out and must not mutate a release or Discord." >&2; \
 		exit 1; \
 	fi
@@ -1080,7 +1085,7 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 			echo "Error: tag $$EXISTING_TAG on origin points at $$REMOTE_TAG_COMMIT, not HEAD ($$HEAD_SHA)."; \
 			exit 1; \
 		fi; \
-		if [ "$$EXISTING_TAG" = "$(RELEASE_VIDEO_OPT_OUT_TAG)" ]; then \
+		if printf '%s\n' $(RELEASE_VIDEO_OPT_OUT_TAGS) | grep -qxF "$$EXISTING_TAG"; then \
 			echo "Skipping release video for opted-out tag $$EXISTING_TAG."; \
 		else \
 			make --no-print-directory release-video RELEASE_TAG="$$EXISTING_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
@@ -1109,7 +1114,7 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 	git tag -a "$$NEW_TAG" -m "Release $$NEW_TAG"; \
 	git push origin "$$NEW_TAG"; \
 	echo "Tag $$NEW_TAG is on origin. GHA will request gltanaka approval, then publish."; \
-	if [ "$$NEW_TAG" = "$(RELEASE_VIDEO_OPT_OUT_TAG)" ]; then \
+	if printf '%s\n' $(RELEASE_VIDEO_OPT_OUT_TAGS) | grep -qxF "$$NEW_TAG"; then \
 		echo "Skipping release video for opted-out tag $$NEW_TAG."; \
 	else \
 		make --no-print-directory release-video RELEASE_TAG="$$NEW_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \

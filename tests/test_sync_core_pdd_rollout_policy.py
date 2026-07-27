@@ -3370,6 +3370,14 @@ def test_post_base_addition_filter_ignores_only_paths_added_after_the_base() -> 
     those out keeps the pinned-base guards meaningful without making the
     repository unable to accept new files.
     """
+    # Cloud Batch shards run from an extracted source tarball with no git
+    # history, so `git diff <pinned base>` exits 128 there. Skip exactly as the
+    # sibling pinned-base regressions do rather than failing the release gate.
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact sync-rollout protected history",
+        SYNC_ROLLOUT_PROTECTED_BASE,
+    )
     base = SYNC_ROLLOUT_PROTECTED_BASE
     added = _paths_added_since(base)
     assert added, "expected at least one path added since the pinned base"
