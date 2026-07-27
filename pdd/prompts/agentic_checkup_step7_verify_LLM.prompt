@@ -124,11 +124,14 @@ Set `"success": false` otherwise.
      ```
 
    - **PR mode** (`pr_mode` = `true`): do NOT post GitHub comments from
-     Step 7. In full PR mode, this verification pass runs before generated
+     Step 7. In full PR mode this verification pass runs before generated
      fixes are pushed to the PR branch, so a pre-push comment can be falsely
      clean if the later push fails. Output the markdown summary and final JSON
-     only; the orchestrator posts the final PR/issue report after the pushed
-     PR head has been verified.
+     only. The orchestrator owns posting the final PR/issue report and posts
+     it on every PR-mode terminal path — gate pass (with or without push),
+     gate fail, push failure, refusal, and `--no-fix` verification pass/fail —
+     so consumers (pdd-issue / pdd_cloud) always see exactly one canonical
+     final report per run.
 
 Your markdown summary should follow this format:
 
@@ -163,7 +166,7 @@ Your markdown summary should follow this format:
 
 % Important
 
-- The JSON report MUST be the last output — this is parsed programmatically
+- The JSON report MUST be the last `{...}` object in your output — this is parsed programmatically by walking the text from start to end and taking the LAST successfully-parsed JSON object. Intermediate reasoning blocks (fenced or unfenced) that contain `{...}` MUST NOT appear after the final verdict, or the parser will mistake them for the verdict.
 - Always re-run tests even in --no-fix mode to confirm the baseline
 - Report ALL issues found across all steps, whether fixed or not
 - In issue mode, post your findings as a GitHub comment before outputting the JSON
