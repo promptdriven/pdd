@@ -306,16 +306,16 @@ _BOOTSTRAP_REQUIREMENT_TRANSITIONS = (
         "llm",
         "59f757132da8cb6037b74e009b6ce8e539e1c45eb28887d0ffbc55483052f8fd",
         "b1b9392cc990120a8825626332bfc4017df78bb1a346ec4b7faeafb3b2cf2b4b",
-        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
-        "3311857e9f9f7eba364c4e8ed33c4dffdce4761a556426b7eec7b34e988bc8f4",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+        "ceaf031494477c9137b0b21b5acbf366140688b3f6f054bbb394599f8020ea16",
     ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/sync_determine_operation_python.prompt",
         "python",
         "1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
-        "089d1c7fb520227ef19b64ba72864aca870fdce8e60d2e2ba004d672d2b6fbfe",
-        "8e3ba247e42d1a4e1df3e1ba968b390595aa1173184f93419eea16af32fa89fc",
-        "3311857e9f9f7eba364c4e8ed33c4dffdce4761a556426b7eec7b34e988bc8f4",
+        "97d0c830ee9c07fd00b7521f097a3e6fbd263cc16bd85337cb7967a9c8cb2e6a",
+        "f0f1d36e337541ba4425f081e236c42847f8132cb61f9f8fe06334a805fc5c7b",
+        "ceaf031494477c9137b0b21b5acbf366140688b3f6f054bbb394599f8020ea16",
     ),
 )
 

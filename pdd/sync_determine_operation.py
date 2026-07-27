@@ -645,90 +645,76 @@ def _contained_lexical_access_path(path: Any, root: Any) -> Optional[Path]:
     return None
 
 
-def _directory_entry_for_path(path: Any) -> Optional[Path]:
-    """Return a caller-selected leaf through read-only directory enumeration.
+def _trusted_directory_entry_path(path: Any, trusted_roots: Any) -> Optional[Path]:
+    """Select an exact leaf by walking entries obtained from a trusted root.
 
-    Callers that use the result for a privileged operation enforce their governing-root
-    policy before this probe.  The low-level helper itself deliberately also supports
-    read-only hashing/existence checks for explicit caller paths.
+    Candidate text is used only to choose names from directory indexes.  Filesystem
+    enumeration starts at an explicit governing root and every later directory comes
+    from an already-enumerated entry.  An out-of-root candidate is rejected by the
+    lexical ``relative_to`` gate before any directory is opened.
     """
+    if isinstance(trusted_roots, (str, Path)):
+        trusted_roots = (trusted_roots,)
     try:
-        candidate = Path(path)
-        parent, name = candidate.parent, candidate.name
-    except (TypeError, ValueError):
+        candidate = Path(os.path.normpath(os.path.abspath(os.fspath(path))))
+    except (OSError, TypeError, ValueError):
         return None
-    if not name:
-        return None
-    try:
-        # lgtm[py/path-injection] Intentional read-only leaf selection; privileged callers
-        # containment-check the path before using the returned entry.
-        with os.scandir(parent) as entries:
-            for entry in entries:
-                if entry.name == name:
-                    return Path(entry.path)
-    except (OSError, ValueError):
-        return None
+    for root in trusted_roots:
+        try:
+            root_path = Path(os.path.normpath(os.path.abspath(os.fspath(root))))
+            relative_parts = candidate.relative_to(root_path).parts
+        except (OSError, TypeError, ValueError):
+            continue
+        if not relative_parts:
+            continue
+        current = root_path
+        for index, part in enumerate(relative_parts):
+            child = _indexed_directory_entry(current, part)
+            if child is None:
+                break
+            if index == len(relative_parts) - 1:
+                return child
+            contained_child = _contained_access_path_any(child, trusted_roots)
+            if contained_child is None:
+                break
+            current = contained_child
     return None
 
 
-def _existing_regular_path(path: Any) -> Optional[Path]:
-    """Return a caller-selected regular file through read-only directory enumeration.
+def _directory_entry_for_path(path: Any, trusted_roots: Any) -> Optional[Path]:
+    """Return an exact existing leaf selected beneath explicit trusted roots."""
+    return _trusted_directory_entry_path(path, trusted_roots)
 
-    This helper never creates, writes, or executes the selected path.  Privileged callers
-    containment-check first; hashing callers intentionally accept the explicit file path
-    whose digest they were asked to calculate.
-    """
-    try:
-        candidate = Path(path)
-        parent, name = candidate.parent, candidate.name
-    except (TypeError, ValueError):
-        return None
-    if not name:
+
+def _existing_regular_path(path: Any, trusted_roots: Any) -> Optional[Path]:
+    """Return an exact regular-file leaf selected beneath explicit trusted roots."""
+    candidate = _trusted_directory_entry_path(path, trusted_roots)
+    if candidate is None:
         return None
     try:
-        # lgtm[py/path-injection] Intentional read-only leaf selection; privileged callers
-        # containment-check first and hashing callers explicitly select the input file.
-        with os.scandir(parent) as entries:
-            for entry in entries:
-                if entry.name == name and entry.is_file(follow_symlinks=True):
-                    return Path(entry.path)
-    except (OSError, ValueError):
+        return candidate if candidate.is_file() else None
+    except OSError:
         return None
-    return None
 
 
-def _symlink_target_from_directory_entry(path: Any) -> Tuple[bool, Optional[str]]:
-    """Read a caller-selected leaf for the every-hop symlink policy.
-
-    The manual chain validator passes only nodes already shown to be within its trusted
-    roots.  The lexical-leaf precheck feeds the same final every-hop policy before a path
-    can be accepted for privileged use.
-    """
-    try:
-        candidate = Path(path)
-        parent, name = candidate.parent, candidate.name
-    except (TypeError, ValueError):
-        return False, None
-    if not name:
+def _symlink_target_from_directory_entry(
+    path: Any, trusted_roots: Any
+) -> Tuple[bool, Optional[str]]:
+    """Read a symlink leaf selected by walking only explicit trusted roots."""
+    candidate = _trusted_directory_entry_path(path, trusted_roots)
+    if candidate is None:
         return False, None
     try:
-        # lgtm[py/path-injection] Required read-only probe for the every-hop validator;
-        # accepted paths remain subject to its trusted-root policy.
-        with os.scandir(parent) as entries:
-            for entry in entries:
-                if entry.name != name:
-                    continue
-                if not entry.is_symlink():
-                    return False, None
-                return True, os.readlink(entry.path)
+        if not candidate.is_symlink():
+            return False, None
+        return True, os.readlink(candidate)
     except (OSError, ValueError):
         return False, None
-    return False, None
 
 
-def _path_leaf_is_symlink(path: Any) -> bool:
-    """Check a leaf selected from an already-existing parent directory."""
-    is_link, _ = _symlink_target_from_directory_entry(path)
+def _path_leaf_is_symlink(path: Any, trusted_roots: Any) -> bool:
+    """Check a leaf selected beneath explicit trusted roots."""
+    is_link, _ = _symlink_target_from_directory_entry(path, trusted_roots)
     return is_link
 
 
@@ -845,7 +831,7 @@ def _symlink_chain_within_root(path: Any, roots: Any) -> bool:
         if safe_node is None:
             resolved = node
             continue
-        is_link, target = _symlink_target_from_directory_entry(safe_node)
+        is_link, target = _symlink_target_from_directory_entry(safe_node, root_norms)
         if is_link:
             if target is None:
                 return False
@@ -992,14 +978,20 @@ def _safe_prompt_language(value: Any) -> Optional[str]:
 def _directory_entry_index(
     directory: str,
     modified_ns: int,
-) -> Tuple[Dict[str, Tuple[Path, ...]], Dict[str, Tuple[Path, ...]]]:
+) -> Tuple[
+    Dict[str, Tuple[Path, ...]],
+    Dict[str, Tuple[Path, ...]],
+    Dict[str, Tuple[Path, ...]],
+]:
     """Index one directory; ``modified_ns`` invalidates add/remove/rename."""
     del modified_ns  # Cache-key only.
     directories: Dict[str, List[Path]] = {}
     files: Dict[str, List[Path]] = {}
+    all_entries: Dict[str, List[Path]] = {}
     with os.scandir(directory) as entries:
         for entry in entries:
             path = Path(entry.path)
+            all_entries.setdefault(entry.name, []).append(path)
             try:
                 if entry.is_dir():
                     directories.setdefault(entry.name.lower(), []).append(path)
@@ -1015,7 +1007,19 @@ def _directory_entry_index(
     return (
         {key: _stable(value) for key, value in directories.items()},
         {key: _stable(value) for key, value in files.items()},
+        {key: _stable(value) for key, value in all_entries.items()},
     )
+
+
+def _indexed_directory_entry(parent: Path, name: str) -> Optional[Path]:
+    """Return an exact child whose path came from indexing ``parent``."""
+    try:
+        stat = parent.stat()
+        _, _, all_entries = _directory_entry_index(str(parent), stat.st_mtime_ns)
+    except (OSError, RuntimeError):
+        return None
+    matches = all_entries.get(name, ())
+    return matches[0] if matches else None
 
 
 def _indexed_directory_child(
@@ -1027,7 +1031,7 @@ def _indexed_directory_child(
     """Return an exact/case-insensitive child from a bounded cached index."""
     try:
         stat = parent.stat()
-        directories, files = _directory_entry_index(
+        directories, files, _ = _directory_entry_index(
             str(parent),
             stat.st_mtime_ns,
         )
@@ -3723,7 +3727,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             if _prompt_abs != _prompt_root_abs and not _prompt_abs.startswith(_prompt_root_prefix):
                 return False
             _prompt_lexical = Path(_prompt_abs)
-            if not _path_leaf_is_symlink(_prompt_lexical):
+            if not _path_leaf_is_symlink(
+                _prompt_lexical, (prompts_root_anchor, _governing_root)
+            ):
                 return False
             # lgtm[py/path-injection] Lexical path is used only for alias containment validation.
             try:
@@ -3911,8 +3917,15 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # would choke on. A discovered approved alias is a symlink to a regular
                 # file (is_file() follows the link) and stays allowed.
                 if _prompt_access is not None:
-                    _prompt_file = _existing_regular_path(_prompt_resolved)
-                    if _directory_entry_for_path(_prompt_resolved) is not None and _prompt_file is None:
+                    _prompt_roots = (_governing_root, prompts_root_anchor)
+                    _prompt_file = _existing_regular_path(
+                        _prompt_resolved, _prompt_roots
+                    )
+                    if (
+                        _directory_entry_for_path(_prompt_resolved, _prompt_roots)
+                        is not None
+                        and _prompt_file is None
+                    ):
                         raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 # A nearer descendant .pddrc (governing the resolved prompt's own
                 # subtree) may carry output values the up-front gate at config_anchor
@@ -4602,7 +4615,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 code_path_obj = None
             derivation_inputs = {"prompt_file": prompt_path}
             if code_path_obj is not None:
-                code_file = _existing_regular_path(code_path_obj)
+                code_file = _existing_regular_path(code_path_obj, _governing_root)
                 if code_file is not None:
                     derivation_inputs["code_file"] = code_file
 
@@ -4752,8 +4765,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
 def calculate_sha256(file_path: Path) -> Optional[str]:
     """Calculates the SHA256 hash of a file if it exists."""
-    safe_file_path = _existing_regular_path(file_path)
-    if safe_file_path is None:
+    try:
+        safe_file_path = Path(file_path)
+        if not safe_file_path.is_file():
+            return None
+    except (OSError, TypeError, ValueError):
         return None
     try:
         hasher = hashlib.sha256()
@@ -5060,7 +5076,7 @@ def read_fingerprint(
     meta_prefix = meta_real if meta_real.endswith(os.sep) else meta_real + os.sep
     if fingerprint_real != meta_real and not fingerprint_real.startswith(meta_prefix):
         return None
-    fingerprint_file = _existing_regular_path(Path(fingerprint_real))
+    fingerprint_file = _existing_regular_path(Path(fingerprint_real), meta_dir)
     if fingerprint_file is None:
         return None
     try:

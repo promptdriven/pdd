@@ -10944,3 +10944,75 @@ def test_get_pdd_file_paths_discovered_alias_control_still_resolves(tmp_path, mo
     assert paths["prompt"].resolve(strict=False) == (
         root / "shared-prompts" / "widget_python.prompt"
     ).resolve()
+
+
+# ---------------------------------------------------------------------------
+# Round-19 review hardening: filesystem leaf probes are rooted structurally.
+# Caller path text may select names only after lexical containment; it can never
+# select the directory passed to os.scandir.
+# ---------------------------------------------------------------------------
+
+
+def test_trusted_leaf_helpers_reject_out_of_root_before_scandir(tmp_path, monkeypatch):
+    """An untrusted candidate cannot cause any directory enumeration."""
+    import sync_determine_operation as sync_determine_module
+
+    trusted = tmp_path / "trusted"
+    outside = tmp_path / "outside"
+    trusted.mkdir()
+    outside.mkdir()
+    candidate = outside / "attacker-selected"
+    candidate.write_text("x\n", encoding="utf-8")
+    calls = []
+    real_scandir = sync_determine_module.os.scandir
+
+    def recording_scandir(directory):
+        calls.append(Path(directory))
+        return real_scandir(directory)
+
+    sync_determine_module._directory_entry_index.cache_clear()
+    monkeypatch.setattr(sync_determine_module.os, "scandir", recording_scandir)
+
+    assert sync_determine_module._directory_entry_for_path(candidate, trusted) is None
+    assert sync_determine_module._existing_regular_path(candidate, trusted) is None
+    assert sync_determine_module._symlink_target_from_directory_entry(
+        candidate, trusted
+    ) == (False, None)
+    assert calls == []
+
+
+def test_trusted_leaf_helpers_enumerate_from_trusted_root(tmp_path, monkeypatch):
+    """Contained leaves are reached only through directories emitted by rooted indexes."""
+    import sync_determine_operation as sync_determine_module
+
+    trusted = tmp_path / "trusted"
+    nested = trusted / "nested"
+    nested.mkdir(parents=True)
+    regular = nested / "file.txt"
+    regular.write_text("x\n", encoding="utf-8")
+    link = nested / "alias.txt"
+    try:
+        link.symlink_to(regular)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    calls = []
+    real_scandir = sync_determine_module.os.scandir
+
+    def recording_scandir(directory):
+        calls.append(Path(directory).resolve())
+        return real_scandir(directory)
+
+    sync_determine_module._directory_entry_index.cache_clear()
+    monkeypatch.setattr(sync_determine_module.os, "scandir", recording_scandir)
+
+    assert sync_determine_module._existing_regular_path(regular, trusted) == regular
+    assert sync_determine_module._directory_entry_for_path(link, trusted) == link
+    assert sync_determine_module._symlink_target_from_directory_entry(
+        link, trusted
+    ) == (True, str(regular))
+    trusted_real = trusted.resolve()
+    assert calls
+    assert all(
+        directory == trusted_real or trusted_real in directory.parents
+        for directory in calls
+    )

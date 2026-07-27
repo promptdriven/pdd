@@ -2987,7 +2987,7 @@
   },
   {
     "reason": "Determines the next sync operation, including isolated replay/repair decisions.",
-    "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed.",
+    "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed. Path resolution structurally roots existence, regular-file, and symlink-leaf probes at the governing project, prompts, or metadata root, rejecting out-of-root candidates before directory enumeration.",
     "dependencies": [
       "agentic_langtest_python.prompt"
     ],

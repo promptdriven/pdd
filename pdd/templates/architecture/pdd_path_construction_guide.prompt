@@ -420,6 +420,7 @@ Before finishing architecture.json and .pddrc generation:
 □ Every filename ends with valid PascalCase language suffix
 □ Every filepath matches framework/project conventions
 □ Verified paths using Python script or dry-run
+□ Every configured output remains under its governing project root; do not rely on suppression comments for path safety, and never probe an out-of-root candidate before containment
 
 **Style 1 checks (per-module exact paths — Next.js/Nuxt/SvelteKit):**
 □ Every module has a dedicated context in .pddrc
