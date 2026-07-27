@@ -66,49 +66,80 @@ _STOP_WORDS = {
     "also",
     "and",
     "are",
+    "been",
     "before",
+    "being",
+    "both",
     "but",
     "can",
     "change",
     "code",
+    "could",
     "does",
     "during",
+    "each",
+    "every",
     "file",
     "files",
     "for",
     "from",
     "github",
+    "had",
+    "has",
     "have",
     "into",
     "issue",
+    "its",
     "just",
     "language",
     "let",
     "local",
     "make",
     "module",
+    "more",
+    "most",
     "need",
     "never",
+    "only",
     "ordinary",
+    "other",
+    "over",
     "pdd",
     "plan",
     "planning",
-    "prompt",
-    "project",
     "product",
+    "project",
+    "prompt",
+    "same",
     "should",
+    "some",
+    "such",
+    "than",
     "that",
     "the",
     "their",
+    "them",
     "then",
+    "there",
+    "these",
     "this",
+    "those",
     "use",
     "user",
+    "very",
     "want",
+    "was",
+    "were",
+    "what",
     "when",
     "where",
+    "which",
+    "while",
+    "who",
+    "will",
     "with",
     "without",
+    "would",
 }
 _NEGATIVE_OR_INVARIANT_MARKERS = (
     "must ",
@@ -182,11 +213,17 @@ def _relative_display(path: Path, root: Path) -> str:
         return str(path)
 
 
-def _walk_project(root: Path) -> Tuple[List[Path], bool, List[Path], bool]:
-    """Return prompt files, source presence, pddrc files, and truncation state."""
+def _walk_project(root: Path) -> Tuple[List[Path], bool, List[Path], bool, bool]:
+    """Return prompts, source presence, pddrc files, truncation, other content.
+
+    "Other content" means visible files that are neither recognized source nor
+    prompts. A directory full of documentation is not an empty greenfield
+    project root, and treating it as one invites scaffolding into it.
+    """
     prompts: List[Path] = []
     pddrc_files: List[Path] = []
     source_found = False
+    other_content_found = False
     scanned = 0
     truncated = False
 
@@ -208,7 +245,13 @@ def _walk_project(root: Path) -> Tuple[List[Path], bool, List[Path], bool]:
             scanned += 1
             if scanned > _MAX_SCANNED_FILES:
                 truncated = True
-                return prompts, source_found, pddrc_files, truncated
+                return (
+                    prompts,
+                    source_found,
+                    pddrc_files,
+                    truncated,
+                    other_content_found,
+                )
             path = current / filename
             if filename == ".pddrc":
                 pddrc_files.append(path)
@@ -216,8 +259,10 @@ def _walk_project(root: Path) -> Tuple[List[Path], bool, List[Path], bool]:
                 prompts.append(path)
             if path.suffix.lower() in _SOURCE_SUFFIXES:
                 source_found = True
+            elif path.suffix != ".prompt" and not filename.startswith("."):
+                other_content_found = True
 
-    return prompts, source_found, pddrc_files, truncated
+    return prompts, source_found, pddrc_files, truncated, other_content_found
 
 
 def _containing_repository_root(project_root: Path) -> Optional[Path]:
@@ -536,9 +581,16 @@ def build_intent_plan(
     )
     architecture_paths = find_architecture_for_project(root) if project_exists else []
     if project_exists:
-        prompt_paths, source_found, pddrc_paths, scan_truncated = _walk_project(root)
+        (
+            prompt_paths,
+            source_found,
+            pddrc_paths,
+            scan_truncated,
+            other_content_found,
+        ) = _walk_project(root)
     else:
-        prompt_paths, source_found, pddrc_paths, scan_truncated = [], False, [], False
+        prompt_paths, source_found, pddrc_paths = [], False, []
+        scan_truncated, other_content_found = False, False
     architecture_targets, warnings, represented = _load_architecture_targets(
         root, architecture_paths
     )
@@ -588,6 +640,15 @@ def build_intent_plan(
         open_decisions.append(
             "Review the proposed technology choices and architecture before prompt generation."
         )
+        if project_exists and other_content_found:
+            open_decisions.append(
+                "This existing directory holds files but no recognized source; confirm "
+                "it is the intended project root before anything is generated into it."
+            )
+            warnings.append(
+                "Project root already contains non-source files such as documentation. "
+                "It is classified greenfield only because no recognized source was found."
+            )
     if scope_kind == "subproject":
         open_decisions.append(
             "Confirm the subproject boundary and the integration checks required "
