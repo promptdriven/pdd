@@ -6,7 +6,7 @@ A Practical, Scalable & Future-Proof Paradigm for Software Engineering\*\*
 
 ## **Abstract (Executive Summary)**
 
-Software costs are dominated by change. Studies across finance, retail and SaaS show **60-80 % of lifetime spend** occurs *after* release—bug-fixing, feature tweaks, compliance updates.¹ Traditional code-centric workflows, even when augmented with chat-based AI assistants, still ask developers to patch tangled code bases line-by-line. **Prompt-Driven Development (PDD)** flips that formula. It elevates *structured, version-controlled prompts*—written in natural language plus minimal metadata—to the status of *source of truth*. Code, tests and docs are regenerated in repeatable batches whenever the prompt changes, keeping all artefacts perfectly aligned.
+Software costs are dominated by change. Studies across finance, retail and SaaS show **60-80 % of lifetime spend** occurs _after_ release—bug-fixing, feature tweaks, compliance updates.¹ Traditional code-centric workflows, even when augmented with chat-based AI assistants, still ask developers to patch tangled code bases line-by-line. **Prompt-Driven Development (PDD)** flips that formula. It elevates _structured, version-controlled prompts_—written in natural language plus minimal metadata—to the status of _source of truth_. Code, tests and docs are regenerated in repeatable batches whenever the prompt changes, keeping all artefacts perfectly aligned.
 
 Field pilots at three mid-size product teams (≈ 90 KLOC each) cut **mean change lead-time by 42 %** and **escaped-defect rate by 36 %** while halving LLM token costs by using discount batch APIs.² This white-paper distils the approach, presents the toolchain, addresses real-world constraints (hot-fixes, audits, determinism) and maps an adoption route you can start next sprint.
 
@@ -32,16 +32,16 @@ Field pilots at three mid-size product teams (≈ 90 KLOC each) cut **mean chang
 
 ---
 
-## 1  Introduction — Software’s Maintenance Iceberg
+## 1 Introduction — Software’s Maintenance Iceberg
 
-> “More than half my engineering budget goes to understanding the *old* code I just asked to change.”
+> “More than half my engineering budget goes to understanding the _old_ code I just asked to change.”
 > — CTO, global logistics platform
 
-Modern products iterate weekly. Regulatory patches arrive without warning. Each manual tweak deepens the ‘legacy’ nest. Interactive AI tools accelerate patches—but they still patch. **PDD proposes regeneration over incremental surgery**: change the *intent* once, re-synthesize clean artefacts, keep prompts, code, tests and docs in lock-step.
+Modern products iterate weekly. Regulatory patches arrive without warning. Each manual tweak deepens the ‘legacy’ nest. Interactive AI tools accelerate patches—but they still patch. **PDD proposes regeneration over incremental surgery**: change the _intent_ once, re-synthesize clean artefacts, keep prompts, code, tests and docs in lock-step.
 
 ---
 
-## 2  The Historical Ladder of Abstraction
+## 2 The Historical Ladder of Abstraction
 
 | Era           | Primary Artefact           | Developer Focus        | Long-Term Bottleneck   |
 | ------------- | -------------------------- | ---------------------- | ---------------------- |
@@ -50,37 +50,37 @@ Modern products iterate weekly. Regulatory patches arrive without warning. Each 
 | 1990s – 2000s | OO (Java/C#)               | Design patterns        | Boiler-plate explosion |
 | 2010s         | Cloud + IDEs               | Service wiring         | Env. sprawl            |
 | 2020s         | **Chat-assisted patching** | Local fixes            | Sync & technical debt  |
-| **Next**      | **Prompts (PDD)**          | *Intent* & constraints | Prompt quality         |
+| **Next**      | **Prompts (PDD)**          | _Intent_ & constraints | Prompt quality         |
 
-*Similar leaps occurred in chip design: hand-routed → netlists → HDLs → HLS. Today nobody edits silicon gates directly; the HDL is the contract.*
+_Similar leaps occurred in chip design: hand-routed → netlists → HDLs → HLS. Today nobody edits silicon gates directly; the HDL is the contract._
 
 ---
 
-## 3  Limits of Code-Centric & Chat-Patch Workflows
+## 3 Limits of Code-Centric & Chat-Patch Workflows
 
 1. **Cognitive overhead**: Engineers reason about syntax instead of behaviour.
 2. **Sync drift**: Docs and specs lag behind hot-fixes; audits suffer.
 3. **Token waste**: Chat loops retry/clarify many times; batch calls are cheaper.
 4. **Tech-debt spiral**: Small patches accrete hidden coupling; rewrites become tempting but risky.
 
-Interactive tools help, yet still treat *code* as master. PDD treats *prompt* as master.
+Interactive tools help, yet still treat _code_ as master. PDD treats _prompt_ as master.
 
 ---
 
-## 4  What Is Prompt-Driven Development?
+## 4 What Is Prompt-Driven Development?
 
-**Definition** A methodology where a *structured prompt file*—natural language + mini-DSL—captures functional intent, constraints (perf, compliance), and context links. The PDD toolchain uses that prompt to batch-generate:
+**Definition** A methodology where a _structured prompt file_—natural language + mini-DSL—captures functional intent, constraints (perf, compliance), and context links. The PDD toolchain uses that prompt to batch-generate:
 
-* Implementation code
-* Usage example(s)
-* Unit & security tests
-* Inline docs / comments
+- Implementation code
+- Usage example(s)
+- Unit & security tests
+- Inline docs / comments
 
 **Prompts are version-controlled** alongside code; a regenerate is as cheap as a re-compile.
 
 ---
 
-## 5  Core Principles & Terminology
+## 5 Core Principles & Terminology
 
 | Principle                      | Description                                                        |
 | ------------------------------ | ------------------------------------------------------------------ |
@@ -93,7 +93,7 @@ Interactive tools help, yet still treat *code* as master. PDD treats *prompt* as
 
 ---
 
-## 6  Technical Architecture & Governance Controls
+## 6 Technical Architecture & Governance Controls
 
 ```
 ┌──────────────────────────┐
@@ -120,13 +120,13 @@ Interactive tools help, yet still treat *code* as master. PDD treats *prompt* as
 └──────────────────────────┘
 ```
 
-* **Determinism** Pin `model-id` and seed in CI; if upstream model changes, pipeline fails, forcing explicit upgrade PR.
-* **Security & IP** Prompts can embed licence annotations; output scanned.
-* **Compliance** `pdd trace --export sarif` feeds auditors a requirement→code map.
+- **Determinism** Pin `model-id` and seed in CI; if upstream model changes, pipeline fails, forcing explicit upgrade PR.
+- **Security & IP** Prompts can embed licence annotations; output scanned.
+- **Compliance** `pdd trace --export sarif` feeds auditors a requirement→code map.
 
 ---
 
-## 7  The PDD Workflow (One-Module Example)
+## 7 The PDD Workflow (One-Module Example)
 
 ```mermaid
 flowchart LR
@@ -151,7 +151,7 @@ classDef sync fill:#ccffcc,stroke:#0a0;
 
 ---
 
-## 8  Comparative Analysis
+## 8 Comparative Analysis
 
 | Dimension                | Manual Coding | Chat Patch            | **PDD**                                    |
 | ------------------------ | ------------- | --------------------- | ------------------------------------------ |
@@ -160,12 +160,12 @@ classDef sync fill:#ccffcc,stroke:#0a0;
 | Consistency & style      | Varies        | Better                | **Deterministic**                          |
 | Batch token cost         | N/A           | High                  | **Low (-40 % avg)**                        |
 | Audit traceability       | Manual        | Weak                  | **Built-in (`trace`)**                     |
-| Hot-fix latency          | Fast          | Fast                  | *Fast via `update`, slower for full regen* |
+| Hot-fix latency          | Fast          | Fast                  | _Fast via `update`, slower for full regen_ |
 | Learning curve           | Known         | Low                   | Medium (prompting)                         |
 
 ---
 
-## 9  Proven Benefits & Early Evidence
+## 9 Proven Benefits & Early Evidence
 
 | Metric (3-team pilot)             | Baseline (Chat-patch) | With PDD  | Delta |
 | --------------------------------- | --------------------- | --------- | ----- |
@@ -173,11 +173,11 @@ classDef sync fill:#ccffcc,stroke:#0a0;
 | Escaped production defects / KLOC | 0.38                  | **0.24**  | -36 % |
 | LLM token spend / month           | 100 %                 | **57 %**  | -43 % |
 
-*Teams: fintech ledger, IoT platform, B2B SaaS. Full case-study in Appendix.*
+_Teams: fintech ledger, IoT platform, B2B SaaS. Full case-study in Appendix._
 
 ---
 
-## 10  Challenges & Mitigation
+## 10 Challenges & Mitigation
 
 | Concern                   | Mitigation                                                           |
 | ------------------------- | -------------------------------------------------------------------- |
@@ -189,7 +189,7 @@ classDef sync fill:#ccffcc,stroke:#0a0;
 
 ---
 
-## 11  Adoption Roadmap
+## 11 Adoption Roadmap
 
 1. **Pick a pilot slice** (≤ 2 KLOC utility service).
 2. **Write first prompt** using provided template; compare regenerated code vs original.
@@ -199,16 +199,16 @@ classDef sync fill:#ccffcc,stroke:#0a0;
 
 ---
 
-## 12  Future Outlook
+## 12 Future Outlook
 
-* **Model improvements** will make full-service regeneration (tens of KLOC) routine.
-* **Prompt marketplaces** will trade domain templates (e.g., PCI compliant payment flows).
-* **IDE integration** already underway (VS Code plugin with inline trace).
-* Developer role shifts toward *architect & reviewer*, not typist.
+- **Model improvements** will make full-service regeneration (tens of KLOC) routine.
+- **Prompt marketplaces** will trade domain templates (e.g., PCI compliant payment flows).
+- **IDE integration** already underway (VS Code plugin with inline trace).
+- Developer role shifts toward _architect & reviewer_, not typist.
 
 ---
 
-## 13  Conclusion
+## 13 Conclusion
 
 Prompt-Driven Development is **not a silver bullet**—but for teams wrestling with rapid change it offers the clearest path yet to closing the intent-to-implementation gap. By storing knowledge in prompts, automating regeneration, and embedding traceability, PDD slashes maintenance overhead while improving quality and audit confidence. Early adopters report double-digit speed and defect wins with modest training investment. The abstraction ladder is climbing again; PDD is the next rung.
 
@@ -229,19 +229,19 @@ Context: uses shared jwt_utils lib
 
 `pdd generate auth_api.prompt` → produces
 
-* `auth_api.py` (132 LOC)
-* `auth_example.py` (usage demo)
-* `test_auth_api.py` (11 tests, coverage 94 %)
+- `auth_api.py` (132 LOC)
+- `auth_example.py` (usage demo)
+- `test_auth_api.py` (11 tests, coverage 94 %)
 
 ### Appendix B — Full Command Reference
 
-*(verbatim from tool help; omitted here for brevity in PDF but supplied in repo)*
+_(verbatim from tool help; omitted here for brevity in PDF but supplied in repo)_
 
 ---
 
 **Footnotes**
 
-1. *IEEE Software Economics survey 2024.*
-2. *Internal PDD pilot report, Feb 2025; details available under NDA.*
+1. _IEEE Software Economics survey 2024._
+2. _Internal PDD pilot report, Feb 2025; details available under NDA._
 
 ---
