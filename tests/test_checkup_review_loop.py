@@ -1781,6 +1781,23 @@ Local tests passed.
         assert result.findings[0].location == "pdd/generate_model_catalog.py:873"
         assert "does not fetch scores" in result.findings[0].finding
 
+    def test_codex_finding_prefix_priority_is_parsed(self) -> None:
+        """Codex exec can emit `Finding: [P2] ...` instead of JSON."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        output = """Finding: [P2] The prompt/architecture contract was not updated for the new step-comment API. `post_step_comment` now accepts `body`, but [agentic_common_python.prompt](/tmp/w/pdd/prompts/agentic_common_python.prompt:18) and [architecture.json](/tmp/w/architecture.json:73) still publish the old signature.
+
+Checks: targeted tests passed.
+"""
+        result = _parse_review_output(output, "codex", 1)
+
+        assert result.status == "findings"
+        assert len(result.findings) == 1
+        assert result.findings[0].severity == "medium"
+        assert result.findings[0].location == "agentic_common_python.prompt:18"
+        assert "step-comment API" in result.findings[0].finding
+        assert "targeted tests" not in result.findings[0].evidence
+
     def test_priority_finding_stops_before_verification_section(self) -> None:
         """Verification summaries are not part of the preceding finding body."""
         from pdd.checkup_review_loop import _parse_review_output

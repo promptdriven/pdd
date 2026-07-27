@@ -1373,6 +1373,12 @@ does not open more holes; fully address it until nothing actionable remains or
 the review loop reaches its round limit."
 
 Use this manual PR-review standard:
+- Complete these independent sweeps before returning: issue-contract and
+  user-workflow behavior; state/resume/idempotency and side-effect ordering;
+  security, redaction, auth, logging, and fallback paths; prompt/example/
+  architecture/generated-metadata source-of-truth drift; and caller/test/CLI
+  compatibility. Report separately actionable findings from different sweeps.
+  Do not stop after finding only prompt/source-of-truth drift.
 - Review the PR as a user-workflow reviewer first. Trace how a real CLI/API
   user would experience the changed behavior, including edge cases, stale
   flags, failure paths, retries, caching, auth, billing/cost, and generated
@@ -1814,8 +1820,10 @@ def _extract_bracket_findings(
     findings: List[ReviewFinding] = []
     priority_pattern = re.compile(
         r"^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?(?:\*\*)?"
+        r"(?:(?:Finding|Findings)\s*:\s*)?"
         r"\[?(P[0-3])\]?\s*:?\s*(?P<title>[^\n]+?)(?:\*\*)?\s*$\n?"
         r"(?P<body>.*?)(?=^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?(?:\*\*)?"
+        r"(?:(?:Finding|Findings)\s*:\s*)?"
         r"(?:\[?P[0-3]\]?|blocking|blocker|critical|high|medium|low|nit|info)"
         r"\s*:|^\s*\d+[.)]\s+|\n\s*\*\*(?:Checks|Checks Run|Verification|Regression Checks)\*\*|\Z)",
         re.IGNORECASE | re.MULTILINE | re.DOTALL,
@@ -1978,7 +1986,7 @@ def _finding_evidence(title: str, body: str) -> str:
 
 def _strip_review_trailing_sections(text: str) -> str:
     return re.split(
-        r"(?:^|\n)\s*\*\*(?:Checks|Checks Run|Verification|Regression Checks)\*\*",
+        r"(?:^|\n)\s*(?:\*\*)?(?:Checks|Checks Run|Verification|Regression Checks)(?:\*\*)?\s*:?",
         text or "",
         maxsplit=1,
         flags=re.IGNORECASE,
