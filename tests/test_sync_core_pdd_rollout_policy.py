@@ -140,6 +140,31 @@ GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS = {
     "pdd/sync_core/global_sync_ledger.py",
     "tests/test_global_sync_ledger.py",
 }
+<<<<<<< HEAD
+=======
+GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS = {
+    "docs/archive/global_sync_resolution_plan_history_2026-07-22.md",
+    "docs/global_sync_execution_state.yaml",
+    "docs/global_sync_m0_sample_metrics.json",
+    "docs/global_sync_m0_sample_results.json",
+    "docs/global_sync_m0_scope_report.md",
+    "scripts/verify_global_sync_execution_contract.py",
+    "scripts/verify_global_sync_m0_samples.py",
+}
+GLOBAL_SYNC_M0_UNAUTHORIZED_SIBLING_PATHS = {
+    "docs/archive/global_sync_resolution_plan_history_2026-07-23.md",
+    "docs/global_sync_m0_unreviewed.json",
+    "scripts/verify_global_sync_m0_unreviewed.py",
+}
+KIMI_K3_PROVIDER_CATALOG_PREAUTHORIZED_PATHS = {
+    "docs/kimi_k3.md",
+    "pdd/data/provider_catalog.v1.json",
+    "scripts/bootstrap_provider_catalog.py",
+    "scripts/provider_catalog.py",
+    "tests/test_kimi_k3_integration.py",
+    "tests/test_provider_catalog.py",
+}
+>>>>>>> ac0c5b08d (chore(sync): authorize Kimi catalog paths)
 GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS = {
     ".pdd/global-sync/runtime-linux-x86_64-cp312.lock",
 }
@@ -195,6 +220,11 @@ PREAUTHORIZED_CHILD_PATHS = (
     | ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
     | GATE1_PREAUTHORIZED_PATHS
     | GLOBAL_SYNC_LEDGER_PREAUTHORIZED_PATHS
+<<<<<<< HEAD
+=======
+    | GLOBAL_SYNC_M0_PREAUTHORIZED_PATHS
+    | KIMI_K3_PROVIDER_CATALOG_PREAUTHORIZED_PATHS
+>>>>>>> ac0c5b08d (chore(sync): authorize Kimi catalog paths)
     | GLOBAL_SYNC_RUNTIME_LOCK_PREAUTHORIZED_PATHS
     | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
