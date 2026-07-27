@@ -40,8 +40,26 @@ OTHER = "b" * 40
 
 
 def run_payload(sha: str, hours_ago: float, url: str = "https://example/run") -> dict:
-    """Build one `gh run list --json headSha,updatedAt,url` entry."""
+    """Build one `gh run list --json headSha,updatedAt,url` entry, relative to NOW.
+
+    For in-process tests only, which pass ``NOW`` to the function under test.
+    Subprocess tests must use :func:`live_run_payload` instead — the script
+    reads the real clock, so a payload anchored to a frozen ``NOW`` silently
+    ages past the freshness bound and the test starts failing a day later.
+    """
     stamp = NOW - datetime.timedelta(hours=hours_ago)
+    return {
+        "headSha": sha,
+        "updatedAt": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "url": url,
+    }
+
+
+def live_run_payload(sha: str, hours_ago: float, url: str = "https://example/run") -> dict:
+    """Build an entry relative to the real clock, for subprocess invocations."""
+    stamp = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        hours=hours_ago
+    )
     return {
         "headSha": sha,
         "updatedAt": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -203,7 +221,7 @@ class TestAncestorSuggestion:
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--candidate-sha", tip,
              "--max-age-hours", "24", "--suggest-ancestor-of", "main"],
-            input=json.dumps([run_payload(proven, 2.0)]),
+            input=json.dumps([live_run_payload(proven, 2.0)]),
             cwd=tmp_path,
             capture_output=True,
             text=True,
@@ -252,7 +270,7 @@ class TestFreshnessBoundCannotBeDisabled:
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--candidate-sha", CANDIDATE,
              "--max-age-hours", bad],
-            input=json.dumps([run_payload(CANDIDATE, 8760.0)]),
+            input=json.dumps([live_run_payload(CANDIDATE, 8760.0)]),
             capture_output=True,
             text=True,
             check=False,
@@ -293,13 +311,13 @@ class TestScriptInvocation:
         )
 
     def test_exits_zero_and_reports_the_green(self):
-        result = self._run(json.dumps([run_payload(CANDIDATE, 1.0)]))
+        result = self._run(json.dumps([live_run_payload(CANDIDATE, 1.0)]))
         assert result.returncode == 0, result.stderr
         assert "Cloud gate green" in result.stdout
         assert CANDIDATE in result.stdout
 
     def test_exits_nonzero_on_refusal(self):
-        result = self._run(json.dumps([run_payload(OTHER, 1.0)]))
+        result = self._run(json.dumps([live_run_payload(OTHER, 1.0)]))
         assert result.returncode == 1
         assert "Error:" in result.stderr
 

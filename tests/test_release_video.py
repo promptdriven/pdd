@@ -3033,8 +3033,10 @@ args = sys.argv[1:]
 with Path(os.environ["RELEASE_TEST_MAKE_LOG"]).open("a", encoding="utf8") as log:
     log.write(" ".join(args) + "\\n")
 
-if "release-video" in args and "RELEASE_TAG=v0.0.309" in args:
-    sys.stderr.write("release-video: v0.0.309 is opted out\\n")
+if "release-video" in args and any(
+    ("RELEASE_TAG=" + t) in args for t in ("v0.0.309", "v0.0.310")
+):
+    sys.stderr.write("release-video: tag is opted out\\n")
     raise SystemExit(1)
 raise SystemExit(0)
 """,
@@ -3047,8 +3049,8 @@ raise SystemExit(0)
     [
         ("existing", "v0.0.309", "", False),
         ("new", "v0.0.309", "v0.0.308", False),
-        ("existing", "v0.0.310", "", True),
-        ("new", "v0.0.310", "v0.0.309", True),
+        ("existing", "v0.0.311", "", True),
+        ("new", "v0.0.311", "v0.0.310", True),
     ],
 )
 def test_release_makefile_treats_only_opt_out_tag_as_successful_no_video_path(
@@ -3177,8 +3179,8 @@ raise SystemExit(0)
             "RELEASE_TEST_MAKE_LOG": str(tmp_path / "make.log"),
             "RELEASE_TEST_MAKEFILE": str(wrapper),
             "RELEASE_TEST_SCENARIO": "new",
-            "RELEASE_TEST_TAG": "v0.0.310",
-            "RELEASE_TEST_LATEST_TAG": "v0.0.309",
+            "RELEASE_TEST_TAG": "v0.0.311",
+            "RELEASE_TEST_LATEST_TAG": "v0.0.310",
             "SKIP_MAKEFILE_REGEN": "1",
         }
     )
@@ -3206,8 +3208,8 @@ raise SystemExit(0)
     assert "Skipping release video because RELEASE_VIDEO=0" in result.stdout
     assert not output_dir.exists()
     git_calls = (tmp_path / "git.log").read_text(encoding="utf8").splitlines()
-    assert "tag -a v0.0.310 -m Release v0.0.310" in git_calls
-    assert "push origin v0.0.310" in git_calls
+    assert "tag -a v0.0.311 -m Release v0.0.311" in git_calls
+    assert "push origin v0.0.311" in git_calls
 
 
 def test_release_video_makefile_empty_local_defaults_are_unset():
@@ -3270,9 +3272,16 @@ def test_release_video_workflow_explicitly_opts_out_v0_0_309():
     )
     publish_job = workflow["jobs"]["publish-pypi"]
     steps = {step["name"]: step for step in publish_job["steps"] if "name" in step}
-    opt_out_condition = "github.ref_name != env.RELEASE_VIDEO_OPT_OUT_TAG"
+    opt_out_condition = (
+        "!contains(fromJSON(env.RELEASE_VIDEO_OPT_OUT_TAGS), github.ref_name)"
+    )
 
-    assert publish_job["env"]["RELEASE_VIDEO_OPT_OUT_TAG"] == "v0.0.309"
+    # A JSON array checked by array membership. Plain substring `contains`
+    # would make the tag v0.0.31 match the entry v0.0.310.
+    assert json.loads(publish_job["env"]["RELEASE_VIDEO_OPT_OUT_TAGS"]) == [
+        "v0.0.309",
+        "v0.0.310",
+    ]
     for step_name in (
         "Create release video and prepend link to notes (best-effort)",
         "Upload release video recovery artifacts",
@@ -8509,3 +8518,58 @@ def test_backfill_workflow_behavior_preserves_release_on_validation_failure(
     assert result.returncode != 0
     assert release_state == "Existing GitHub-generated notes\n"
     assert all(not call.startswith("release edit") for call in gh_calls)
+
+
+def test_release_video_opt_out_is_a_set_covering_every_opted_out_tag() -> None:
+    """Opting a new release out must not re-enable video for an earlier one.
+
+    The opt-out used to be one tag, so opting out a new release meant
+    overwriting the previous value. The guarantee is per-release and permanent:
+    v0.0.309 carries no ``pdd-release-video-skipped`` marker on its GitHub
+    Release, so this set is the only thing keeping a later backfill from
+    attaching a video to it.
+    """
+    from scripts.release_video import (  # noqa: PLC0415
+        RELEASE_VIDEO_OPT_OUT_TAGS,
+        release_video_opt_out_reason,
+    )
+
+    assert {"v0.0.309", "v0.0.310"} <= RELEASE_VIDEO_OPT_OUT_TAGS
+
+    for tag in sorted(RELEASE_VIDEO_OPT_OUT_TAGS):
+        reason = release_video_opt_out_reason(tag)
+        assert reason is not None and tag in reason
+
+    # Exact membership, never prefix or substring.
+    assert release_video_opt_out_reason("v0.0.31") is None
+    assert release_video_opt_out_reason("v0.0.3100") is None
+    assert release_video_opt_out_reason("v0.0.311") is None
+
+
+def test_release_video_opt_out_sources_agree() -> None:
+    """Makefile, workflow, and script must name the same opted-out tags.
+
+    Three independent copies gate three different execution paths (local make,
+    the tag-triggered workflow, and the script). A tag opted out in only some
+    of them is silently opted in via the others.
+    """
+    from scripts.release_video import RELEASE_VIDEO_OPT_OUT_TAGS  # noqa: PLC0415
+
+    makefile = (ROOT / "Makefile").read_text(encoding="utf8")
+    make_line = next(
+        line
+        for line in makefile.splitlines()
+        if line.startswith("RELEASE_VIDEO_OPT_OUT_TAGS")
+    )
+    make_tags = set(make_line.split("?=", 1)[1].split())
+
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf8")
+    )
+    workflow_tags = set(
+        json.loads(
+            workflow["jobs"]["publish-pypi"]["env"]["RELEASE_VIDEO_OPT_OUT_TAGS"]
+        )
+    )
+
+    assert make_tags == workflow_tags == set(RELEASE_VIDEO_OPT_OUT_TAGS)
