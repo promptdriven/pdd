@@ -67,6 +67,7 @@ from .grounding_provenance import (
     resolve_grounding_overrides_for_invoke,
     reviewed_from_click_ctx,
 )
+from .tokenrouter import tokenrouter_litellm_base_url
 
 # Environment variable to control log level
 PDD_LOG_LEVEL = os.getenv("PDD_LOG_LEVEL", "INFO")
@@ -3562,6 +3563,49 @@ def _select_model_candidates(
     return candidates
 
 
+def _select_exact_model_candidate(
+    model_df: pd.DataFrame,
+    model: Optional[str],
+    model_provider: Optional[str],
+) -> Optional[List[Dict[str, Any]]]:
+    """Resolve one request-scoped catalog row without environment mutation.
+
+    ``model_provider`` is a CSV provider display name rather than a LiteLLM
+    adapter name.  Requiring an unambiguous row prevents an exact request from
+    silently entering the normal cross-provider fallback cascade.
+    """
+    if model_provider and not model:
+        raise ValueError("'model_provider' requires an exact 'model'.")
+    if not model:
+        return None
+
+    matches = model_df[model_df["model"].astype(str) == str(model)]
+    if model_provider:
+        provider_name = str(model_provider).strip().casefold()
+        matches = matches[
+            matches["provider"].astype(str).str.strip().str.casefold()
+            == provider_name
+        ]
+
+    if matches.empty:
+        provider_detail = (
+            f" under provider {model_provider!r}" if model_provider else ""
+        )
+        raise ValueError(
+            f"Exact model {model!r}{provider_detail} was not found in the "
+            "active model catalog."
+        )
+    if len(matches.index) != 1:
+        providers = sorted(
+            {str(value) for value in matches["provider"].tolist()}
+        )
+        raise ValueError(
+            f"Exact model {model!r} is ambiguous across providers {providers}; "
+            "pass 'model_provider' to select one catalog row."
+        )
+    return [matches.iloc[0].to_dict()]
+
+
 def _sanitize_api_key(key_value: str) -> str:
     """
     Sanitize API key by removing whitespace and carriage returns.
@@ -4504,6 +4548,8 @@ def llm_invoke(
     shots: int = 1,
     verifier: Optional[Callable[[str], bool]] = None,
     task_class: Optional[str] = None,
+    model: Optional[str] = None,
+    model_provider: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Runs a prompt with given input using LiteLLM, handling model selection,
@@ -4534,6 +4580,11 @@ def llm_invoke(
             "explain") used by the per-task router to look up the best
             (model, temperature, effort, shots) row from task_routing.csv. Only
             active when PDD_ENABLE_TASK_ROUTING=1; None skips the router.
+        model: Optional exact model string from the active CSV. When supplied,
+            bypasses strength routing and cross-model fallback for this request.
+        model_provider: Optional exact CSV provider display name used to
+            disambiguate ``model`` (for example, ``"TokenRouter"``). Requires
+            ``model``. This is request-local and never mutates environment state.
 
     Returns:
         Dictionary containing 'result', 'cost', 'model_name', 'thinking_output'.
@@ -4562,6 +4613,8 @@ def llm_invoke(
         logger.debug(f"  messages: {'provided' if messages else 'None'}")
         logger.debug(f"  use_cloud: {use_cloud}")
         logger.debug(f"  estimate_only: {estimate_mode}")
+        logger.debug(f"  exact model: {model!r}")
+        logger.debug(f"  exact model provider: {model_provider!r}")
 
     # --- 0. Validate Inputs (before any dispatch) ---
     # Validation runs before cloud dispatch so the ValueError contract holds
@@ -4619,7 +4672,7 @@ def llm_invoke(
     # task_class have no effect and the function behaves exactly as before.
     # The router's exact-model choice for THIS call arrives either from a matched
     # route below or, inside a multi-shot recursion, via _ROUTER_MODEL_OVERRIDE.
-    model_override: Optional[str] = _ROUTER_MODEL_OVERRIDE.get()
+    model_override: Optional[str] = model or _ROUTER_MODEL_OVERRIDE.get()
     if _env_truthy("PDD_ENABLE_TASK_ROUTING"):
         if use_batch_mode and isinstance(shots, int) and shots > 1:
             raise ValueError(
@@ -4629,7 +4682,7 @@ def llm_invoke(
         # Apply the static router's overrides before model resolution.
         route = _select_task_route(task_class)
         if route:
-            if route.get("model"):
+            if route.get("model") and not model:
                 model_override = route["model"]
             if "temperature" in route:
                 temperature = route["temperature"]
@@ -4665,6 +4718,8 @@ def llm_invoke(
                 grounding_overrides=grounding_overrides,
                 source_prompt=source_prompt,
                 estimate_only=estimate_only,
+                model=model,
+                model_provider=model_provider,
             )
     else:
         # Guard inactive: shots/verifier/task_class are inert.
@@ -4698,6 +4753,12 @@ def llm_invoke(
                 use_cloud = CloudConfig.is_cloud_enabled()
             except ImportError:
                 use_cloud = False
+
+    if (model or model_provider) and use_cloud:
+        raise ValueError(
+            "Exact model/provider selection is a local invocation contract; "
+            "pass use_cloud=False so the request-scoped catalog row is used."
+        )
 
     attribution_context = _maybe_build_llm_attribution_context(
         strength=strength,
@@ -4955,17 +5016,22 @@ def llm_invoke(
                     LLM_MODEL_CSV_PATH if LLM_MODEL_CSV_PATH else "package default",
                 )
         manifest_by_model = _load_deepswe_manifest()
+        exact_candidates = _select_exact_model_candidate(
+            model_df,
+            model,
+            model_provider,
+        )
         # Router exact-model override (issue #1584): bypass the strength
         # cascade and select the routed model directly when it exists.
-        if model_override:
+        if model_override and exact_candidates is None:
             _effective_default_model = model_override
-        candidate_models = _select_model_candidates(
+        candidate_models = exact_candidates or _select_model_candidates(
             strength,
             _effective_default_model,
             model_df,
             manifest_by_model=manifest_by_model,
         )
-        if model_override:
+        if model_override and exact_candidates is None:
             _exact = [
                 c for c in candidate_models
                 if str(c.get("model")) == str(model_override)
@@ -5214,6 +5280,11 @@ def llm_invoke(
             # Add base_url/api_base override if present in CSV
             api_base = model_info.get('base_url')
             if pd.notna(api_base) and api_base:
+                api_base = tokenrouter_litellm_base_url(
+                    str(model_info.get("provider", "")),
+                    str(model_name_litellm),
+                    str(api_base).strip(),
+                )
                 # LiteLLM prefers `base_url`; some older paths accept `api_base`.
                 litellm_kwargs["base_url"] = str(api_base)
                 litellm_kwargs["api_base"] = str(api_base)
@@ -5221,7 +5292,11 @@ def llm_invoke(
             # Enable 1M context window for Claude models via Anthropic beta header.
             # Safe to send for all prompt lengths — the API only charges premium rates
             # when the request actually exceeds 200K tokens.
-            if "claude" in model_name_litellm.lower():
+            if (
+                "claude" in model_name_litellm.lower()
+                and str(model_info.get("provider", "")).strip().casefold()
+                != "tokenrouter"
+            ):
                 litellm_kwargs["extra_headers"] = {"anthropic-beta": "context-1m-2025-08-07"}
                 if verbose:
                     logger.info("[INFO] Added anthropic-beta: context-1m-2025-08-07 header for Claude model.")

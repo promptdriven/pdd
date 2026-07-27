@@ -410,6 +410,15 @@ For a concrete, up-to-date reference of supported models and example rows, see t
 
 For proper model identifiers to use in your custom configuration, refer to the [LiteLLM Model List](https://docs.litellm.ai/docs/providers) documentation. LiteLLM typically uses model identifiers in the format `provider/model_name` (e.g., "openai/gpt-4", "anthropic/claude-3-opus-20240229").
 
+#### TokenRouter
+
+Set `TOKENROUTER_API_KEY` and run `pdd setup` to add TokenRouter's deterministic
+PDD-supported text-model catalog. Routes use the pinned
+`https://api.tokenrouter.com/v1` base and explicit OpenAI chat, OpenAI
+Responses, Anthropic Messages, or Gemini protocols rather than assuming every
+model is an OpenAI chat completion. See [TokenRouter integration and exact
+request-scoped routing](docs/tokenrouter.md).
+
 #### Z.AI (GLM Models)
 
 PDD supports two Z.AI API endpoints:
