@@ -2,7 +2,7 @@
   "pdd_version": "0.0.246.dev34",
   "timestamp": "2026-05-21T02:39:13.009516+00:00",
   "command": "update",
-  "prompt_hash": "d4bb457d5fbf85648e7c2222affd99928729947aa2a46936b7ae2c855bf34d80",
+  "prompt_hash": "28794cffa18194b501eded78319872baa77ae024bcbf7d675aa69f1b183f4450",
   "code_hash": "e715f8c9f90dd9cb6b656ef83df4a09388edd97451e0706e964fe713eecf6aaf",
   "example_hash": "99f9b729f3b148891d471e79e5a29e67e39c30aad8e9922ced2982ca02b158ea",
   "test_hash": "049ed6ddc2cd8bd3915eeb79f0b87524eef136157f684cfd7453d35d0f799425",
@@ -10,7 +10,7 @@
     "test_summarize_directory.py": "049ed6ddc2cd8bd3915eeb79f0b87524eef136157f684cfd7453d35d0f799425"
   },
   "include_deps": {
-    "context/llm_invoke_example.py": "48c5aece0ddd153f95ec8a53802d2173d4da12a920b398c5feebb307b9958417",
+    "context/llm_invoke_example.py": "74bf0192fd6aa73150e3179f124db82137a0d5412b38d29332ce217c4026de1c",
     "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }

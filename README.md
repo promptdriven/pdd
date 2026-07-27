@@ -1,17 +1,10 @@
-# PDD: The Last Programming Language™
+# PDD (Prompt-Driven Development) Command Line Interface
 
 ![PyPI version](https://img.shields.io/pypi/v/pdd-cli.svg) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
-PDD (Prompt-Driven Development) is a prompt-native programming system. `.prompt`
-files are the human-authored source language; Python, TypeScript, Go, and other
-traditional languages are generated artifacts.
-
-PDD is the last programming language in this specific sense: developers author
-durable intent, constraints, examples, and tests, then compile that source into
-whatever implementation language the project needs. Code remains real and
-reviewable, but it is no longer the primary source of truth.
+PDD (Prompt-Driven Development) is a toolkit for AI-powered code generation and maintenance.
 
 **Getting started is simple:**
 
@@ -42,8 +35,6 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
 
 ## Whitepaper
-
-For the positioning essay behind this shift, read [The Last Programming Language](docs/the-last-programming-language.md).
 
 For a detailed explanation of the concepts, architecture, and benefits of Prompt-Driven Development, please refer to our full whitepaper. This document provides an in-depth look at the PDD philosophy, its advantages over traditional development, and includes benchmarks and case studies.
 
@@ -346,6 +337,12 @@ The CSV includes columns for:
 For a concrete, up-to-date reference of supported models and example rows, see the bundled CSV in this repository: [pdd/data/llm_model.csv](pdd/data/llm_model.csv).
 
 For proper model identifiers to use in your custom configuration, refer to the [LiteLLM Model List](https://docs.litellm.ai/docs/providers) documentation. LiteLLM typically uses model identifiers in the format `provider/model_name` (e.g., "openai/gpt-4", "anthropic/claude-3-opus-20240229").
+
+### Pinning the default model
+
+Set `PDD_MODEL_DEFAULT` to choose the base model (e.g. `PDD_MODEL_DEFAULT=vertex_ai/gemini-3.5-flash`). When the value carries a known LiteLLM routing prefix (`vertex_ai/`, `gemini/`, `anthropic/`, or `azure_ai/`), PDD locks the fallback to that provider by default — base lookup, surrogate selection, and strength interpolation all stay inside that provider, so a single-provider deployment (e.g. Cloud Run with only Vertex credentials) will not silently jump to a higher-ELO row whose credentials are missing. A bare CSV `provider=google` column is not enough on its own to enable a Vertex or Gemini lock; the routing prefix on `PDD_MODEL_DEFAULT` is what authorises the cross-row match.
+
+Operators who intentionally want a rate-limit/timeout escape hatch can opt in with `PDD_CROSS_PROVIDER_FALLBACK=1`. In that mode PDD still tries the prefixed provider first, only unlocks other providers after a transient provider error, and skips any fallback provider whose credentials are not already configured. Use `PDD_MODEL_FALLBACK_PROVIDERS=anthropic,fireworks` to restrict which providers are allowed.
 
 ## Troubleshooting Common Installation Issues
 
@@ -935,10 +932,7 @@ The sync command automatically detects what files exist and executes the appropr
     - Each declared symbol must exist in the generated code (architecture.json symbol-existence check).
     - For interface entries that declare a paren-list `signature` (`module`, `cli`, and `command` types), each declared parameter name must appear in the matching function/method signature (dotted names like `ContentSelector.select` are resolved through the class body; variadic `*args`/`**kwargs` do not satisfy a declared named parameter).
     - **Signature drift** is checked per parameter: annotation drift fires only when both sides specify and differ (conservative — gradually-typed code does not churn), while default drift fires whenever the prompt declares a default and the generated code drops or changes it (strict — a missing default is a runtime contract break for callers omitting the optional kwarg).
-    - **Public-surface regression gate**: when a module already has a generated code file in the working tree (i.e., not a first-time generation), the gate ALSO snapshots the pre-generation public surface and rejects a generation that removes, renames, or changes the callable signature of any public symbol. For Python the snapshot covers top-level functions, classes, `class.method` symbols (including nested classes), module-level constants (`PUBLIC_FLAG = ...`, including bound `AnnAssign` like `PUBLIC_FLAG: bool = True`), and re-exported imports (`import git` exposes `git`; `from .helpers import load` exposes `load`). `from __future__ import …` directives and bare type-only annotations are not part of the surface. Intentional removals/signature changes must be scoped, e.g. `BREAKING-CHANGE: remove calculate_sha256` or `BREAKING-CHANGE: change signature calculate`; listing a top-level class (`BREAKING-CHANGE: remove Service`) implicitly authorizes removing every `Service.method` / `Service.Inner.method` descendant captured in the snapshot. A bare `BREAKING-CHANGE:` does not disable the gate. First-time generation (no prior code file) is exempt. Set `PDD_SKIP_PUBLIC_SURFACE_GATE=1` to disable only this gate, or `PDD_SKIP_CONFORMANCE=1` to skip all conformance gates.
-    - **Test-churn gate**: if `pdd sync` is about to overwrite an existing test file through the code-generation writer, `cmd_test_main`, or one-session agentic sync, and the unified-diff churn ratio between the pre-sync and proposed test file exceeds `PDD_TEST_CHURN_THRESHOLD` (default `0.40`, i.e., 40%), the gate fails fast with `TestChurnError` so a small prompt change cannot land a thousand-line test rewrite that drops broad existing coverage. Pure additive test growth is allowed, first-time test generation is exempt, and intentional rewrites require an explicit marker such as `BREAKING-CHANGE: rewrite tests`. Set `PDD_SKIP_TEST_CHURN_GATE=1` to disable only this gate.
-    - **Empty-generation guard**: when the LLM provider returns an empty (or whitespace-only) body and the output path already has non-empty existing content, the writer refuses to truncate the file. Python public modules / test files trip `PublicSurfaceRegressionError` / `TestChurnError` through the normal gates; non-Python artifacts (JSON, YAML, prompts, etc.) raise a `click.UsageError("Refusing to overwrite ...")` instead. Set `PDD_ALLOW_EMPTY_GENERATION=1` for the rare case where empty output is intentional.
-    - On failure, sync retries the generation step up to `MAX_CONFORMANCE_ATTEMPTS` with a `PDD_REPAIR_DIRECTIVE` that names the function to fix and the parameters/annotations/defaults to add or restore. Public-surface and test-churn failures use the same repair loop **only on the generate and one-session paths**; surface regressions detected after a crash/fix/verify write are hard failures (no retry) because each of those operations already runs its own internal fix loop and a second outer retry would compound retries (`N × M`) without converging. `.pddrc` context/strength are pinned across the entire retry sequence so a retry never silently switches model or context. The retry stops early when the missing-symbol/signature set repeats across attempts, and the final failure is surfaced as a structured `=== architecture conformance failure ===`, `=== public surface regression ===`, or `=== test churn threshold exceeded ===` block listing the offending symbols / churn ratio plus a `Reproduce locally: pdd sync <basename>` line.
+    - On failure, sync retries the generation step up to `MAX_CONFORMANCE_ATTEMPTS` with a `PDD_REPAIR_DIRECTIVE` that names the function to fix and the parameters/annotations/defaults to add or restore. The retry stops early when the missing-symbol set repeats across attempts, and the final failure is surfaced as a structured `=== architecture conformance failure ===` block.
 3. **example**: Generate usage example if it doesn't exist or is outdated
 4. **crash**: Fix any runtime errors to make code executable
 5. **verify**: Run functional verification against prompt intent (unless --skip-verify)
@@ -2757,7 +2751,6 @@ Arguments:
 Options:
 - `--no-fix`: Report-only mode — discover and report issues without applying fixes
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
-- `--start-step STEP`: Recovery override for the legacy checkup flow; accepted values are `1`, `2`, `3`, `4`, `5`, `6.1`, `6.2`, `6.3`, `7`, and `8`. Not compatible with `--review-loop`.
 - `--no-github-state`: Disable GitHub state persistence, use local-only
 - `--pr PR_URL`: Verify an existing pull request instead of creating a new one. Requires `--issue` and cannot be combined with a positional issue URL.
 - `--issue ISSUE_URL`: Source GitHub issue for `--pr`; used as the expected behavior and acceptance criteria for PR verification.
@@ -2791,7 +2784,7 @@ Options:
 
 **Iterative Fix-Verify Loop**: Steps 3-7 run in a loop (max 3 iterations). If step 7 finds remaining issues, the workflow loops back to step 3 for another pass. The loop exits when step 7 reports "All Issues Fixed" or max iterations are reached.
 
-**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch for issue mode, checkout-scoped `checkup/pr-{N}-<scope>` branch for PR mode), keeping the user's working directory clean.
+**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch for issue mode, `checkup/pr-{N}` for PR mode), keeping the user's working directory clean.
 
 **Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
 
@@ -3675,7 +3668,7 @@ One or more patent applications covering aspects of the PDD workflows and system
 
 ## Conclusion
 
-PDD (Prompt-Driven Development) is a prompt-native programming system for managing `.prompt` source files, generating code, creating examples, running tests, and keeping implementation artifacts synchronized with durable intent. By treating prompts and tests as the source of truth, PDD turns conventional code into reviewable output that can be regenerated as requirements evolve.
+PDD (Prompt-Driven Development) CLI provides a comprehensive set of tools for managing prompt files, generating code, creating examples, running tests, and handling various aspects of prompt-driven development. By leveraging the power of AI models and iterative processes, PDD aims to streamline the development workflow and improve code quality.
 
 The various commands and options allow for flexible usage, from simple code generation to complex workflows involving multiple steps. The ability to track costs and manage output locations through environment variables further enhances the tool's utility in different development environments.
 
@@ -3685,4 +3678,4 @@ As you become more familiar with PDD, you can compose richer workflows by chaini
 
 Remember to stay mindful of security considerations, especially when working with generated code or sensitive data. Regularly update PDD to access the latest features and improvements.
 
-Keep prompts as source; regenerate with PDD.
+Happy coding with PDD!

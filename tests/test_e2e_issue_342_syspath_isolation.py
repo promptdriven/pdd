@@ -68,7 +68,6 @@ def stub_test_generation(monkeypatch):
         output_test_file,
         verbose=False,
         quiet=False,
-        repair_directive=None,
     ):
         content = (
             "const { add } = require('../math');\n\n"

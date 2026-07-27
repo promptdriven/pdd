@@ -39,8 +39,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from pdd.cli_branding import PDD_POSITIONING
-
 # Import the command under test
 # We assume the package structure allows this import based on the file path provided
 from pdd.commands.connect import connect
@@ -110,7 +108,6 @@ def test_connect_defaults(mock_dependencies):
             result = runner.invoke(connect)
 
             assert result.exit_code == 0
-            assert PDD_POSITIONING in result.output
             assert "Starting PDD server on http://127.0.0.1:9876" in result.output
 
             # Verify create_app called with current directory
