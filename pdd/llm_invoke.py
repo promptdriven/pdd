@@ -2013,6 +2013,18 @@ _PROVIDER_PREFIX_TO_PROVIDER = {
     "azure_ai/": "Azure AI",
 }
 
+_PROVIDER_LOCK_ALIASES = {
+    "Google Vertex AI": {"Google Vertex AI", "Google"},
+    "Google Gemini": {"Google Gemini", "Google"},
+}
+
+
+def _provider_filter(df: pd.DataFrame, provider: str) -> pd.Series:
+    """Return a boolean mask for a provider lock, including legacy aliases."""
+
+    provider_names = _PROVIDER_LOCK_ALIASES.get(provider, {provider})
+    return df['provider'].isin(provider_names)
+
 
 def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     """Return ``(alt_name, required_provider)`` pairs to try when the literal
@@ -2053,6 +2065,17 @@ def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     return alternatives
 
 
+def _provider_lock_for_base_model(base_model_name: Any) -> Optional[str]:
+    """Return the provider implied by an explicit model-name routing prefix."""
+
+    if not isinstance(base_model_name, str):
+        return None
+    for prefix, provider in _PROVIDER_PREFIX_TO_PROVIDER.items():
+        if base_model_name.startswith(prefix):
+            return provider
+    return None
+
+
 def _select_model_candidates(
     strength: float,
     base_model_name: str,
@@ -2084,8 +2107,28 @@ def _select_model_candidates(
         # For now, let's raise an error as it likely indicates a CSV issue.
         raise ValueError("No models available after initial filtering (all had NaN 'api_key'?).")
 
+    # An explicit LiteLLM routing prefix is a provider boundary. If the chosen
+    # base is missing from the local CSV, fallback must stay inside that
+    # provider instead of jumping to a higher-ELO row with different credentials.
+    prefix_provider_lock = _provider_lock_for_base_model(base_model_name)
+    exact_base_any_provider = None
+    if prefix_provider_lock:
+        exact_base_any = available_df[available_df['model'] == base_model_name]
+        if not exact_base_any.empty:
+            exact_base_any_provider = str(exact_base_any.iloc[0]['provider'])
+    provider_lock = exact_base_any_provider or prefix_provider_lock
+    selection_df = available_df
+    if provider_lock:
+        selection_df = available_df[_provider_filter(available_df, provider_lock)].copy()
+        if selection_df.empty:
+            raise ValueError(
+                f"Base model '{base_model_name}' is routed to provider "
+                f"'{provider_lock}', but no models for that provider are available "
+                "in the LLM model CSV."
+            )
+
     # 2. Find Base Model
-    base_model_row = available_df[available_df['model'] == base_model_name]
+    base_model_row = selection_df[selection_df['model'] == base_model_name]
     if base_model_row.empty:
         # The bundled llm_model.csv has inconsistent provider-prefix conventions
         # for Vertex AI models — most have a `vertex_ai/` prefix, but a few
@@ -2107,9 +2150,9 @@ def _select_model_candidates(
         # bare name.
         alt_resolved = False
         for alt_name, required_provider in _alternative_base_lookups(base_model_name):
-            alt_row = available_df[
-                (available_df['model'] == alt_name)
-                & (available_df['provider'] == required_provider)
+            alt_row = selection_df[
+                (selection_df['model'] == alt_name)
+                & _provider_filter(selection_df, required_provider)
             ]
             if not alt_row.empty:
                 base_model = alt_row.iloc[0]
@@ -2118,18 +2161,20 @@ def _select_model_candidates(
         if not alt_resolved:
             # Try finding base model in the *original* df in case it was filtered out
             original_base = model_df[model_df['model'] == base_model_name]
+            if provider_lock:
+                original_base = original_base[_provider_filter(original_base, provider_lock)]
             if not original_base.empty:
                 # Base exists but may be misconfigured (e.g., missing API key). Keep erroring loudly.
                 raise ValueError(
                     f"Base model '{base_model_name}' found in CSV but requires API key '{original_base.iloc[0]['api_key']}' which might be missing or invalid configuration."
                 )
-            # Option A': Soft fallback – choose a reasonable surrogate base and continue
-            # Strategy (simplified and deterministic): pick the first available model
-            # from the CSV as the surrogate base. This mirrors typical CSV ordering
-            # expectations and keeps behavior predictable across environments.
+            # Option A': Soft fallback – choose a reasonable surrogate base and
+            # continue. For provider-prefixed base models, the surrogate is the
+            # first available model from that same provider; otherwise preserve
+            # legacy behavior and use the first available model from the CSV.
             # Fix for issue #296: Don't warn when any base model (from env var or default) is not found in CSV
             try:
-                base_model = available_df.iloc[0]
+                base_model = selection_df.iloc[0]
                 # Silently use the first available model from user's CSV without warning
                 # Users who intentionally customize their CSV shouldn't see warnings about removed models
             except Exception:
@@ -2147,8 +2192,8 @@ def _select_model_candidates(
     if strength == 0.5:
         # target_model = base_model
         # Sort remaining by ELO descending as fallback
-        available_df['sort_metric'] = -available_df['coding_arena_elo'] # Negative for descending sort
-        candidates = available_df.sort_values(by='sort_metric').to_dict('records')
+        selection_df['sort_metric'] = -selection_df['coding_arena_elo'] # Negative for descending sort
+        candidates = selection_df.sort_values(by='sort_metric').to_dict('records')
         # Ensure effective base model is first if it exists (supports surrogate base)
         effective_base_name = str(base_model['model']) if isinstance(base_model, pd.Series) else base_model_name
         if any(c['model'] == effective_base_name for c in candidates):
@@ -2158,7 +2203,7 @@ def _select_model_candidates(
     elif strength < 0.5:
         # Interpolate by Cost (downwards from base)
         base_cost = base_model['avg_cost']
-        cheapest_model = available_df.loc[available_df['avg_cost'].idxmin()]
+        cheapest_model = selection_df.loc[selection_df['avg_cost'].idxmin()]
         cheapest_cost = cheapest_model['avg_cost']
 
         if base_cost <= cheapest_cost: # Handle edge case where base is cheapest
@@ -2167,14 +2212,14 @@ def _select_model_candidates(
              # Interpolate between cheapest and base
              target_cost = cheapest_cost + (strength / 0.5) * (base_cost - cheapest_cost)
 
-        available_df['sort_metric'] = abs(available_df['avg_cost'] - target_cost)
-        candidates = available_df.sort_values(by='sort_metric').to_dict('records')
+        selection_df['sort_metric'] = abs(selection_df['avg_cost'] - target_cost)
+        candidates = selection_df.sort_values(by='sort_metric').to_dict('records')
         target_metric_value = f"Target Cost: {target_cost:.6f}"
 
     else: # strength > 0.5
         # Interpolate by ELO (upwards from base)
         base_elo = base_model['coding_arena_elo']
-        highest_elo_model = available_df.loc[available_df['coding_arena_elo'].idxmax()]
+        highest_elo_model = selection_df.loc[selection_df['coding_arena_elo'].idxmax()]
         highest_elo = highest_elo_model['coding_arena_elo']
 
         if highest_elo <= base_elo: # Handle edge case where base has highest ELO
@@ -2183,8 +2228,8 @@ def _select_model_candidates(
             # Interpolate between base and highest
             target_elo = base_elo + ((strength - 0.5) / 0.5) * (highest_elo - base_elo)
 
-        available_df['sort_metric'] = abs(available_df['coding_arena_elo'] - target_elo)
-        candidates = available_df.sort_values(by='sort_metric').to_dict('records')
+        selection_df['sort_metric'] = abs(selection_df['coding_arena_elo'] - target_elo)
+        candidates = selection_df.sort_values(by='sort_metric').to_dict('records')
         target_metric_value = f"Target ELO: {target_elo:.2f}"
 
 
@@ -2200,7 +2245,7 @@ def _select_model_candidates(
         logger.debug("Available DF (Sorted by metric):")
         # Select columns relevant to the sorting metric
         sort_cols = ['model', 'avg_cost', 'coding_arena_elo', 'sort_metric']
-        logger.debug(available_df.sort_values(by='sort_metric')[sort_cols])
+        logger.debug(selection_df.sort_values(by='sort_metric')[sort_cols])
         logger.debug("Final Candidates List (Model Names):")
         logger.debug([c['model'] for c in candidates])
         logger.debug("---------------------------------------\n")

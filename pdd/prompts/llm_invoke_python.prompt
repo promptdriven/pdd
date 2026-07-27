@@ -112,7 +112,7 @@
     - strength < 0.5: Interpolate by cost from base down to cheapest.
     - strength > 0.5: Interpolate by ELO from base up to highest.
     - strength = 0.5: Use base model, fallback to next highest ELO on failure.
-    - Soft fallback: If base model not in CSV, use first available model as surrogate (silently, no warning).
+    - Soft fallback: If base model not in CSV, use first available model as surrogate (silently, no warning). When `$PDD_MODEL_DEFAULT` carries an explicit provider routing prefix (`vertex_ai/`, `gemini/`, `anthropic/`, `azure_ai/`), treat that prefix as a provider boundary for the whole candidate set: if an exact CSV row exists, lock candidates to that row's provider; otherwise resolve prefix/bare aliases only within the matching provider, use a same-provider surrogate if the exact model is missing, interpolate/sort only among same-provider rows for every strength value, and raise a clear error if the CSV has no rows for the requested provider. This prevents a Cloud Run default such as `vertex_ai/gemini-3.5-flash` from falling through to direct Anthropic/Fireworks high-ELO rows that require different credentials.
 
 % API Key Management:
     - The CSV `api_key` column may be pipe-delimited (e.g. "VAR1|VAR2|VAR3").

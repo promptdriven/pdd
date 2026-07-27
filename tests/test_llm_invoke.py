@@ -4366,12 +4366,12 @@ class TestSelectModelCandidates:
             0.5, "vertex_ai/claude-opus-4-6", df
         )
         # CSV has no `Google Vertex AI,claude-opus-4-6` row → strip-attempt
-        # constrained to provider="Google Vertex AI" finds nothing → falls
-        # through to surrogate-base = first row (AWS Bedrock).
+        # constrained to provider="Google Vertex AI" finds nothing → provider
+        # locked surrogate-base stays on the first Vertex row.
         assert candidates[0]["model"] != "claude-opus-4-6", (
             "vertex_ai/ prefix must not silently match direct Anthropic row"
         )
-        assert candidates[0]["model"] == "anthropic.claude-opus-4-6-v1"
+        assert candidates[0]["provider"] == "Google Vertex AI"
 
     def test_vertex_prefix_does_not_match_gemini_direct_row(self, llm_mod, tmp_path):
         """Provider-boundary regression: vertex_ai/gemini-3-flash-preview
@@ -4388,6 +4388,7 @@ class TestSelectModelCandidates:
         assert candidates[0]["model"] != "gemini/gemini-3-flash-preview", (
             "vertex_ai/ prefix must not silently match direct Gemini row"
         )
+        assert candidates[0]["provider"] == "Google Vertex AI"
 
     def test_vertex_prefix_resolves_correctly_when_vertex_row_exists(self, llm_mod, tmp_path):
         """Positive companion to the negative tests: when the configured
@@ -4401,6 +4402,63 @@ class TestSelectModelCandidates:
         # Should resolve to the Google Vertex AI row, not anything else.
         assert candidates[0]["model"] == "gemini-3.1-pro-preview"
         assert candidates[0]["provider"] == "Google Vertex AI"
+
+    def test_provider_prefixed_base_strength_one_stays_with_provider(self, llm_mod, tmp_path):
+        """Cloud regression: `PDD_MODEL_DEFAULT=vertex_ai/...` is an explicit
+        provider boundary. At strength=1.0 the selector must not jump to
+        higher-ELO direct Anthropic/Fireworks rows that need missing API keys."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Anthropic,claude-opus-4-7,5.0,25.0,1565,ANTHROPIC_API_KEY,"
+            "True,budget,200000,8192,128000\n"
+            "Fireworks,fireworks_ai/accounts/fireworks/models/kimi-k2p6,0.95,4.0,1529,"
+            "FIREWORKS_API_KEY,False,none,0,0,0\n"
+            "Google Vertex AI,vertex_ai/gemini-3.1-pro-preview,2.0,12.0,1456,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+            "Google Vertex AI,vertex_ai/gemini-3.1-flash,0.5,3.0,1440,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "cloud_provider_boundary.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+
+        candidates = llm_mod._select_model_candidates(
+            1.0, "vertex_ai/gemini-3.1-flash", df
+        )
+
+        assert candidates
+        assert {candidate["provider"] for candidate in candidates} == {"Google Vertex AI"}
+        assert candidates[0]["model"] == "vertex_ai/gemini-3.1-pro-preview"
+
+    def test_unknown_provider_prefixed_base_uses_provider_surrogate(self, llm_mod, tmp_path):
+        """If a prefixed deployment default is newer than the local CSV, soft
+        fallback must stay inside the requested provider instead of using the
+        first or highest-ELO model from another provider."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Anthropic,claude-opus-4-7,5.0,25.0,1565,ANTHROPIC_API_KEY,"
+            "True,budget,200000,8192,128000\n"
+            "Google Vertex AI,vertex_ai/gemini-3.1-pro-preview,2.0,12.0,1456,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "unknown_prefixed_default.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+
+        candidates = llm_mod._select_model_candidates(
+            1.0, "vertex_ai/gemini-3.5-flash", df
+        )
+
+        assert candidates
+        assert candidates[0]["provider"] == "Google Vertex AI"
+        assert candidates[0]["model"] == "vertex_ai/gemini-3.1-pro-preview"
 
 
 class TestAlternativeBaseLookups:
