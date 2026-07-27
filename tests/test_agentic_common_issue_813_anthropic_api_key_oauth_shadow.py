@@ -30,9 +30,11 @@ from pdd.agentic_common import (
 def _reset_oauth_probe_cache():
     """Clear the lru_cache between tests so probe-mocking is reliable."""
     _probe_claude_auth_status.cache_clear()
+    agentic_common._probe_claude_auth_status_for_profile.cache_clear()
     agentic_common._ANTHROPIC_KEY_STRIP_NOTICE_LOGGED.clear()
     yield
     _probe_claude_auth_status.cache_clear()
+    agentic_common._probe_claude_auth_status_for_profile.cache_clear()
     agentic_common._ANTHROPIC_KEY_STRIP_NOTICE_LOGGED.clear()
 
 
@@ -47,6 +49,24 @@ def test_pops_keys_when_oauth_login_present():
     assert popped is True
     assert "ANTHROPIC_API_KEY" not in env
     assert "ANTHROPIC_AUTH_TOKEN" not in env
+
+
+def test_pops_keys_when_named_claude_profile_has_oauth():
+    env = {
+        "ANTHROPIC_API_KEY": "stale",
+        "CLAUDE_CONFIG_DIR": "/tmp/.claude-work",
+    }
+    with patch.object(
+        agentic_common, "_claude_profile_has_oauth_login", return_value=True
+    ) as profile_probe, patch.object(agentic_common, "_claude_has_oauth_login") as default_probe:
+        popped = _strip_anthropic_creds_for_claude_subprocess(
+            env,
+            cli_path="/bin/claude-work",
+        )
+    assert popped is True
+    assert "ANTHROPIC_API_KEY" not in env
+    profile_probe.assert_called_once_with("/bin/claude-work", "/tmp/.claude-work")
+    default_probe.assert_not_called()
 
 
 def test_keeps_keys_when_no_oauth_login():

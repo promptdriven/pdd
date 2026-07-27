@@ -70,7 +70,15 @@ PROVIDER_DISPLAY: Dict[str, str] = {
 }
 
 # CLI preference order (claude first because it supports subscription auth)
-CLI_PREFERENCE: List[str] = ["gemini", "claude", "codex", "opencode"]
+CLI_PREFERENCE: List[str] = [
+    "gemini",
+    "claude",
+    "claude-work",
+    "claude-work2",
+    "claude-work3",
+    "codex",
+    "opencode",
+]
 
 # Ordered list for the numbered selection table: (provider, cli_name, display_name)
 _TABLE_ORDER: List[Tuple[str, str, str]] = [

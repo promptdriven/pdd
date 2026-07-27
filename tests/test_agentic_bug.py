@@ -125,8 +125,26 @@ def test_happy_path_execution(mock_dependencies: Tuple[Any, ...], tmp_path: Path
     assert call_kwargs["repo_owner"] == "owner"
     assert call_kwargs["repo_name"] == "repo"
     assert call_kwargs["issue_number"] == 1
+    assert call_kwargs["resume"] is True
     assert "Title: Bug in calculation" in call_kwargs["issue_content"]
     assert "--- Comment by helper ---" in call_kwargs["issue_content"]
+
+
+def test_run_agentic_bug_forwards_no_resume(mock_dependencies: Tuple[Any, ...]) -> None:
+    """run_agentic_bug should let callers intentionally ignore saved state."""
+    _, mock_subprocess, mock_orchestrator, _, _ = mock_dependencies
+
+    issue_json = json.dumps({
+        "title": "Bug",
+        "body": "Body",
+        "user": {"login": "reporter"},
+        "comments_url": "https://api.github.com/repos/owner/repo/issues/1/comments",
+    })
+    mock_subprocess.return_value = MagicMock(stdout=issue_json, returncode=0)
+
+    run_agentic_bug("https://github.com/owner/repo/issues/1", resume=False)
+
+    assert mock_orchestrator.call_args.kwargs["resume"] is False
 
 
 def test_gh_cli_missing(mock_dependencies: Tuple[Any, ...]) -> None:

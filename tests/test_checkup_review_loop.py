@@ -60,6 +60,16 @@ def _json(status: str, findings: List[Dict[str, str]] | None = None) -> str:
     )
 
 
+def test_parse_reviewers_preserves_named_claude_profiles() -> None:
+    from pdd.checkup_review_loop import parse_reviewers
+
+    assert parse_reviewers("claude-work,claude-work2,claude-work3") == (
+        "claude-work",
+        "claude-work2",
+        "claude-work3",
+    )
+
+
 class TestCheckupReviewLoopCli:
     def test_review_loop_flags_reach_agentic_checkup_without_forcing_no_fix(self) -> None:
         runner = CliRunner()

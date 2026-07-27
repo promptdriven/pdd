@@ -49,6 +49,9 @@ console = Console()
 
 ROLE_TO_PROVIDER: Dict[str, str] = {
     "claude": "anthropic",
+    "claude-work": "claude-work",
+    "claude-work2": "claude-work2",
+    "claude-work3": "claude-work3",
     "anthropic": "anthropic",
     "codex": "openai",
     "openai": "openai",

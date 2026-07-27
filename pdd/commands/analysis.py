@@ -183,6 +183,11 @@ def conflicts(
     default=False,
     help="Disable GitHub state persistence (agentic mode only).",
 )
+@click.option(
+    "--resume/--no-resume",
+    default=True,
+    help="Resume from saved bug workflow state if available (agentic mode only).",
+)
 @click.pass_context
 @track_cost
 def bug(
@@ -193,6 +198,7 @@ def bug(
     language: str = "Python",
     timeout_adder: float = 0.0,
     no_github_state: bool = False,
+    resume: bool = True,
 ) -> Optional[Tuple[str, float, str]]:
     """Generate a unit test (manual) or investigate a bug (agentic).
 
@@ -244,11 +250,14 @@ def bug(
                 quiet=obj.get("quiet", False),
                 timeout_adder=timeout_adder,
                 use_github_state=not no_github_state,
+                resume=resume,
                 reasoning_time=obj.get("time") if obj.get("time_explicit") else None,
             )
             
             result_str = f"Success: {success}\nMessage: {message}\nChanged Files: {changed_files}"
             if not success:
+                if not obj.get("quiet", False):
+                    click.echo(result_str, err=True)
                 raise click.exceptions.Exit(1)
             return result_str, cost, model
 

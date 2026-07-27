@@ -167,7 +167,7 @@ For CLI enthusiasts, implement GitHub issues directly:
    ```
 
 2. **One Agentic CLI** - Required to run the workflows (install at least one):
-   - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your stored Claude Max/Pro OAuth login if you've run `claude auth login`, otherwise falls back to `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
+   - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your stored Claude Max/Pro OAuth login if you've run `claude auth login`, otherwise falls back to `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing; optional profile aliases `claude-work`, `claude-work2`, and `claude-work3` can be selected with `PDD_AGENTIC_PROVIDER`)
    - **Gemini CLI**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth credentials if present, otherwise `GOOGLE_API_KEY` or `GEMINI_API_KEY`)
    - **Codex CLI**: `npm install -g @openai/codex` (uses `~/.codex/auth.json` ChatGPT login if present, otherwise `OPENAI_API_KEY`)
    - **OpenCode CLI**: `npm install -g opencode-ai` (uses OpenCode provider auth from `opencode auth login`, `~/.config/opencode/opencode.json`, project `opencode.json`, or provider env vars; set `OPENCODE_MODEL=provider/model`)
@@ -2063,6 +2063,7 @@ For the agentic fallback to function, you need to have at least one of the suppo
 1.  **Anthropic Claude:**
     *   Requires the `claude` CLI to be installed and in your `PATH`.
     *   Authenticates with your stored Claude Max/Pro OAuth login if you've run `claude auth login` (recommended), otherwise with `ANTHROPIC_API_KEY` from your environment.
+    *   Named Claude OAuth profiles are supported for separate subscriptions: `claude-work`, `claude-work2`, and `claude-work3`. Each profile should point at a separate `CLAUDE_CONFIG_DIR` (for example `~/.claude-work`) and can be selected with `PDD_AGENTIC_PROVIDER=claude-work`.
     *   Issue #813: under `CI=1` (which pdd always sets) the `claude` CLI normally prefers `ANTHROPIC_API_KEY` over OAuth — pdd auto-detects this and drops a stale env key when an OAuth login is present so your subscription is used. Set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing instead.
 2.  **Google Gemini:**
     *   Requires the `gemini` CLI to be installed and in your `PATH`.
@@ -3127,12 +3128,13 @@ PDD uses several environment variables to customize its behavior:
 #### Agentic Workflow Variables
 
 - **`CLAUDE_MODEL`**: Override the model used by Claude CLI in agentic workflows (e.g., `claude-sonnet-4-5-20250929`). When set, passes `--model` to the Claude CLI command. No default; only used if explicitly set. Surfaced in the `.pdd/agentic-logs/` audit trail's `model` field when the response JSON does not carry an explicit model name (Issue #1376).
+- **`CLAUDE_WORK_MODEL`, `CLAUDE_WORK2_MODEL`, `CLAUDE_WORK3_MODEL`**: Optional model overrides for the named Claude OAuth profiles selected with `PDD_AGENTIC_PROVIDER=claude-work`, `claude-work2`, or `claude-work3`. These take precedence over `CLAUDE_MODEL` for their matching profile.
 - **`GEMINI_MODEL`**: Override the model used by Gemini CLI in agentic workflows (e.g., `gemini-3-flash-preview`). When set, passes `--model` to the Gemini CLI command. No default; only used if explicitly set. Used as a fallback for the audit trail's `model` field when the response JSON's `stats.models` is unavailable (Issue #1376).
 - **`CODEX_MODEL`**: Override the model used by Codex (OpenAI) CLI in agentic workflows (e.g., `gpt-5`). When set, passes `--model` to the Codex CLI command. No default; only used if explicitly set. Used as a fallback for the audit trail's `model` field when the response JSON does not carry one (Issue #1376).
 - **`OPENCODE_MODEL`**: Override the model used by OpenCode CLI in agentic workflows. Use OpenCode's `provider/model` format (for example, `anthropic/claude-sonnet-4-5` or `openrouter/openai/gpt-5.3-codex`). Strongly recommended so non-interactive runs do not depend on OpenCode default model resolution.
 - **`OPENCODE_AGENT`**: Optional OpenCode agent name passed as `--agent` for agentic workflows using `PDD_AGENTIC_PROVIDER=opencode`.
 - **`OPENCODE_VARIANT`**: Optional OpenCode model variant passed as `--variant` for providers that support variants.
-- **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens include `anthropic`, `google`, `openai`, and `opencode` (for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`).
+- **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens include `anthropic`, `claude` (alias for `anthropic`), `claude-work`, `claude-work2`, `claude-work3`, `google`, `openai`, and `opencode` (for example, `PDD_AGENTIC_PROVIDER=claude-work,opencode,anthropic`).
 - **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
 - **`PDD_GH_TOKEN_FILE`**: Path to a file containing a fresh GitHub App installation token. When set, the e2e fix orchestrator reads a new token from this file on push auth failure and retries once. The token file is written and refreshed by the cloud job runner (pdd_cloud). No default; only used in cloud-hosted job environments.
 

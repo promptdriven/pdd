@@ -38,6 +38,21 @@ def _load_model_data(*args, **kwargs):
 
 # Constants
 _DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai", "opencode"]
+_CLAUDE_PROFILE_PROVIDERS: Dict[str, str] = {
+    "anthropic": "claude",
+    "claude": "claude",
+    "claude-work": "claude-work",
+    "claude-work2": "claude-work2",
+    "claude-work3": "claude-work3",
+}
+_CLAUDE_PROFILE_CONFIG_DIRS: Dict[str, str] = {
+    "claude-work": ".claude-work",
+    "claude-work2": ".claude-work2",
+    "claude-work3": ".claude-work3",
+}
+_AGENTIC_CLI_NAMES = frozenset(
+    {"claude", "codex", "gemini", "opencode", *_CLAUDE_PROFILE_PROVIDERS.values()}
+)
 
 # Default number of tail lines to scan for semantic regex patterns.
 # Semantic matching is restricted to the tail to prevent false positives
@@ -216,6 +231,41 @@ def classify_step_output(
         return TokenMatch(tier="llm_classification_error", token="CLASSIFICATION_ERROR")
 
 
+def _normalize_agent_provider_token(provider: str) -> str:
+    """Normalize public provider aliases used by PDD_AGENTIC_PROVIDER."""
+    token = provider.strip().lower()
+    if token == "claude":
+        return "anthropic"
+    return token
+
+
+def _provider_family(provider: str) -> str:
+    """Return the canonical provider family for provider aliases."""
+    normalized = _normalize_agent_provider_token(provider)
+    if normalized in _CLAUDE_PROFILE_PROVIDERS:
+        return "anthropic"
+    return normalized
+
+
+def _is_claude_provider(provider: str) -> bool:
+    return _provider_family(provider) == "anthropic"
+
+
+def _claude_profile_config_dir(provider: str) -> Optional[Path]:
+    """Return the per-profile Claude config dir for work aliases."""
+    dirname = _CLAUDE_PROFILE_CONFIG_DIRS.get(_normalize_agent_provider_token(provider))
+    if not dirname:
+        return None
+    return Path.home() / dirname
+
+
+def _claude_profile_model_env(provider: str) -> Optional[str]:
+    token = _normalize_agent_provider_token(provider).replace("-", "_").upper()
+    if token in {"ANTHROPIC", "CLAUDE"}:
+        return None
+    return f"{token}_MODEL"
+
+
 def substitute_template_variables(
     template: Any,
     context: Dict[str, Any],
@@ -256,12 +306,20 @@ def get_agent_provider_preference() -> List[str]:
     """
     env_val = os.environ.get("PDD_AGENTIC_PROVIDER", "")
     if env_val:
-        return [p.strip() for p in env_val.split(",") if p.strip()]
+        return [
+            _normalize_agent_provider_token(p.strip())
+            for p in env_val.split(",")
+            if p.strip()
+        ]
     return _DEFAULT_PROVIDER_PREFERENCE
 
 # CLI command mapping for each provider
 CLI_COMMANDS: Dict[str, str] = {
     "anthropic": "claude",
+    "claude": "claude",
+    "claude-work": "claude-work",
+    "claude-work2": "claude-work2",
+    "claude-work3": "claude-work3",
     "google": "gemini",
     "openai": "codex",
     "opencode": "opencode",
@@ -385,6 +443,12 @@ def _is_permanent_error(error_message: str) -> bool:
         r"quota\s+(exhausted|exceeded)",
         r"daily\s+quota",
         r"terminal\s*quota\s*error",
+        # Claude Code subscription / account usage cap. This often includes
+        # an HTTP 429 field, but the reset is days away, so retrying in this
+        # process only burns attempts.
+        r"you(?:'|’)ve\s+hit\s+your\s+limit",
+        r"usage\s+limit\s+(?:reached|exceeded)",
+        r"\blimit\s+resets\b",
         # Issue #1232: Anthropic CLI OAuth/login failure on cloud workers
         # ("Not logged in - Please run /login"). Without this, every cloud
         # one-session run burns its first attempt on Anthropic before falling
@@ -533,6 +597,9 @@ _PROVIDER_MODEL_ENV: Dict[str, str] = {
     "google": "GEMINI_MODEL",
     "openai": "CODEX_MODEL",
     "opencode": "OPENCODE_MODEL",
+    "claude-work": "CLAUDE_WORK_MODEL",
+    "claude-work2": "CLAUDE_WORK2_MODEL",
+    "claude-work3": "CLAUDE_WORK3_MODEL",
 }
 
 
@@ -542,11 +609,21 @@ def _get_provider_model(provider: str) -> Optional[str]:
     Returns ``None`` when the env var is unset, empty, or the provider is
     unknown, signalling "provider default" in the audit log.
     """
-    env_var = _PROVIDER_MODEL_ENV.get(provider)
-    if not env_var:
-        return None
-    value = os.environ.get(env_var) or ""
-    return value.strip() or None
+    normalized = _normalize_agent_provider_token(provider)
+    env_vars: List[str] = []
+    profile_env = _claude_profile_model_env(normalized)
+    if profile_env:
+        env_vars.append(profile_env)
+    env_var = _PROVIDER_MODEL_ENV.get(normalized)
+    if env_var:
+        env_vars.append(env_var)
+    if _is_claude_provider(normalized):
+        env_vars.append("CLAUDE_MODEL")
+    for name in dict.fromkeys(env_vars):
+        value = os.environ.get(name) or ""
+        if value.strip():
+            return value.strip()
+    return None
 
 
 def _log_agentic_interaction(
@@ -745,7 +822,7 @@ def _iter_common_cli_paths(name: str) -> List[Path]:
     discovery still honors the current home directory.
     """
     paths = list(_COMMON_CLI_PATHS.get(name, []))
-    if name in {"claude", "codex", "gemini", "opencode"}:
+    if name in _AGENTIC_CLI_NAMES:
         home = Path.home()
         paths.extend([
             home / ".npm-global" / "bin" / name,
@@ -793,6 +870,25 @@ def _get_cli_diagnostic_info(name: str) -> str:
     return "\n".join(lines)
 
 
+def _is_claude_profile_available(provider: str) -> bool:
+    """Return True when a Claude profile alias can be launched."""
+    normalized = _normalize_agent_provider_token(provider)
+    if normalized == "anthropic":
+        return _find_cli_binary("claude") is not None
+    cli_name = _CLAUDE_PROFILE_PROVIDERS.get(normalized)
+    config_dir = _claude_profile_config_dir(normalized)
+    has_profile_dir = config_dir is not None and config_dir.exists()
+    cli_path = _find_cli_binary(cli_name) if cli_name else None
+    if cli_name and cli_path and Path(cli_path).name == cli_name and has_profile_dir:
+        return True
+    requested = {
+        _normalize_agent_provider_token(p.strip())
+        for p in os.environ.get("PDD_AGENTIC_PROVIDER", "").split(",")
+        if p.strip()
+    }
+    return bool(normalized in requested and has_profile_dir and _find_cli_binary("claude"))
+
+
 def get_available_agents() -> List[str]:
     """
     Returns list of available provider names based on CLI existence and API key configuration.
@@ -805,9 +901,13 @@ def get_available_agents() -> List[str]:
     available = []
 
     # 1. Anthropic (Claude)
-    # Available if 'claude' CLI exists. API key not strictly required (subscription auth).
-    if _find_cli_binary("claude"):
-        available.append("anthropic")
+    # Available if 'claude' CLI exists. API key not strictly required
+    # (subscription auth). Work aliases require their isolated config
+    # directories so tests and fresh machines do not auto-enable phantom
+    # providers just because _find_cli_binary is mocked broadly.
+    for claude_provider in ("anthropic", "claude-work", "claude-work2", "claude-work3"):
+        if _is_claude_profile_available(claude_provider):
+            available.append(claude_provider)
 
     # 2. Google (Gemini)
     # Available if 'gemini' CLI exists AND any supported non-interactive auth
@@ -2205,26 +2305,17 @@ _CLAUDE_OAUTH_PROBE_TIMEOUT_SECONDS = 10
 _ANTHROPIC_KEY_STRIP_NOTICE_LOGGED: Dict[str, bool] = {}
 
 
-@functools.lru_cache(maxsize=1)
-def _probe_claude_auth_status() -> Dict[str, Any]:
-    """Cached `claude auth status` output for OAuth detection (Issue #813).
-
-    Returns ``{}`` on any failure (CLI missing, timeout, non-zero exit, parse
-    error, missing subcommand on older Claude Code). Callers must treat that as
-    'no OAuth detected' and leave the API key in place.
-
-    Probe runs with ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN popped to avoid an
-    env-supplied key shadowing the OAuth signal in the JSON payload, and uses
-    ``subprocess.run`` directly (not ``_subprocess_run``) so it isn't
-    intercepted by mocks for the main provider call site.
-    """
-    cli_path = _find_cli_binary("claude")
-    if not cli_path:
-        return {}
-
+def _run_claude_auth_status_probe(
+    cli_path: str,
+    *,
+    config_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Run `claude auth status` and return its JSON payload when available."""
     probe_env = os.environ.copy()
     probe_env.pop("ANTHROPIC_API_KEY", None)
     probe_env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    if config_dir:
+        probe_env["CLAUDE_CONFIG_DIR"] = config_dir
 
     # Claude Code documents `claude auth status` as the JSON-producing probe.
     # Some versions accepted/required `--json`, while others reject that flag.
@@ -2263,6 +2354,35 @@ def _probe_claude_auth_status() -> Dict[str, Any]:
     return {}
 
 
+@functools.lru_cache(maxsize=1)
+def _probe_claude_auth_status() -> Dict[str, Any]:
+    """Cached `claude auth status` output for OAuth detection (Issue #813).
+
+    Returns ``{}`` on any failure (CLI missing, timeout, non-zero exit, parse
+    error, missing subcommand on older Claude Code). Callers must treat that as
+    'no OAuth detected' and leave the API key in place.
+
+    Probe runs with ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN popped to avoid an
+    env-supplied key shadowing the OAuth signal in the JSON payload, and uses
+    ``subprocess.run`` directly (not ``_subprocess_run``) so it isn't
+    intercepted by mocks for the main provider call site.
+    """
+    cli_path = _find_cli_binary("claude")
+    if not cli_path:
+        return {}
+
+    return _run_claude_auth_status_probe(cli_path)
+
+
+@functools.lru_cache(maxsize=16)
+def _probe_claude_auth_status_for_profile(
+    cli_path: str,
+    config_dir: str,
+) -> Dict[str, Any]:
+    """Cached OAuth detection for a Claude Code profile config directory."""
+    return _run_claude_auth_status_probe(cli_path, config_dir=config_dir)
+
+
 _CLAUDE_OAUTH_AUTH_METHODS = frozenset({
     # Local interactive `claude auth login` — keychain-backed Max/Pro OAuth.
     "claude.ai",
@@ -2279,6 +2399,14 @@ _CLAUDE_OAUTH_AUTH_METHODS = frozenset({
     # shouldn't arise in production.
     "oauth_token",
 })
+
+
+def _claude_auth_status_is_oauth(info: Dict[str, Any]) -> bool:
+    return (
+        bool(info.get("loggedIn"))
+        and info.get("authMethod") in _CLAUDE_OAUTH_AUTH_METHODS
+        and info.get("apiProvider") == "firstParty"
+    )
 
 
 def _claude_has_oauth_login() -> bool:
@@ -2299,15 +2427,21 @@ def _claude_has_oauth_login() -> bool:
     correctly excluded here.
     """
     info = _probe_claude_auth_status()
-    return (
-        bool(info.get("loggedIn"))
-        and info.get("authMethod") in _CLAUDE_OAUTH_AUTH_METHODS
-        and info.get("apiProvider") == "firstParty"
-    )
+    return _claude_auth_status_is_oauth(info)
+
+
+def _claude_profile_has_oauth_login(cli_path: str, config_dir: str) -> bool:
+    """True when a CLAUDE_CONFIG_DIR-backed profile has Claude OAuth."""
+    info = _probe_claude_auth_status_for_profile(cli_path, config_dir)
+    return _claude_auth_status_is_oauth(info)
 
 
 def _strip_anthropic_creds_for_claude_subprocess(
-    env: Dict[str, str], *, verbose: bool = False, quiet: bool = False
+    env: Dict[str, str],
+    *,
+    verbose: bool = False,
+    quiet: bool = False,
+    cli_path: Optional[str] = None,
 ) -> bool:
     """Pop stale ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN when claude has OAuth.
 
@@ -2343,7 +2477,13 @@ def _strip_anthropic_creds_for_claude_subprocess(
     if not (env.get("ANTHROPIC_API_KEY") or env.get("ANTHROPIC_AUTH_TOKEN")):
         return False
 
-    if not _claude_has_oauth_login():
+    config_dir = (env.get("CLAUDE_CONFIG_DIR") or "").strip()
+    has_oauth = (
+        _claude_profile_has_oauth_login(cli_path, config_dir)
+        if cli_path and config_dir
+        else _claude_has_oauth_login()
+    )
+    if not has_oauth:
         return False
 
     env.pop("ANTHROPIC_API_KEY", None)
@@ -2441,6 +2581,8 @@ def _run_with_provider(
             keep receiving the signal via the global variable set by
             ``pdd/core/cli.py``.
     """
+    provider = _normalize_agent_provider_token(provider)
+    provider_family = _provider_family(provider)
 
     # Prepare Environment
     env = os.environ.copy()
@@ -2452,13 +2594,6 @@ def _run_with_provider(
     # the .git file pointer back to the main repo (Issue #894).
     env["GIT_WORK_TREE"] = str(cwd)
 
-    # Issue #813: under CI=1 the claude CLI prefers ANTHROPIC_API_KEY over the
-    # user's stored OAuth (Max/Pro) credential. Drop a stale key only when an
-    # OAuth login is confirmed so API-key-only setups (e.g. GitHub App
-    # executor with Secret-Manager-injected keys) still work.
-    if provider == "anthropic":
-        _strip_anthropic_creds_for_claude_subprocess(env, verbose=verbose, quiet=quiet)
-
     # Get CLI binary name for this provider
     cli_name = CLI_COMMANDS.get(provider)
     if not cli_name:
@@ -2467,8 +2602,24 @@ def _run_with_provider(
     # Find CLI binary path (use explicit path if provided)
     if cli_path is None:
         cli_path = _find_cli_binary(cli_name)
+        if not cli_path and provider_family == "anthropic" and provider != "anthropic":
+            cli_path = _find_cli_binary("claude")
     if not cli_path:
         return False, f"CLI '{cli_name}' not found. {_get_cli_diagnostic_info(cli_name)}", 0.0, None
+
+    claude_config_dir = _claude_profile_config_dir(provider)
+    if claude_config_dir is not None:
+        env["CLAUDE_CONFIG_DIR"] = str(claude_config_dir)
+
+    # Issue #813: under CI=1 the claude CLI prefers ANTHROPIC_API_KEY over the
+    # user's stored OAuth (Max/Pro) credential. Drop a stale key only when an
+    # OAuth login is confirmed so API-key-only setups (e.g. GitHub App
+    # executor with Secret-Manager-injected keys) still work. Claude profile
+    # aliases use their own CLAUDE_CONFIG_DIR during the probe.
+    if provider_family == "anthropic":
+        _strip_anthropic_creds_for_claude_subprocess(
+            env, verbose=verbose, quiet=quiet, cli_path=cli_path
+        )
 
     cmd: List[str] = []
 
@@ -2498,7 +2649,7 @@ def _run_with_provider(
             reasoning_effort = ""
 
     # Construct Command using discovered cli_path (Issue #234 fix)
-    if provider == "anthropic":
+    if provider_family == "anthropic":
         # Use -p - to pipe prompt as direct user message via stdin.
         # This prevents Claude from interpreting file-discovered instructions
         # as "automated bot workflow" and refusing to execute.
@@ -2518,8 +2669,11 @@ def _run_with_provider(
                 "--dangerously-skip-permissions",
                 "--output-format", "json",
             ]
-        # Allow model override via CLAUDE_MODEL env var (Issue #318)
-        claude_model = env.get("CLAUDE_MODEL")
+        # Allow model override via CLAUDE_MODEL, with profile-specific
+        # variants (CLAUDE_WORK_MODEL, CLAUDE_WORK2_MODEL, CLAUDE_WORK3_MODEL)
+        # taking precedence for named Claude OAuth profiles.
+        profile_model_env = _claude_profile_model_env(provider)
+        claude_model = (env.get(profile_model_env or "") if profile_model_env else None) or env.get("CLAUDE_MODEL")
         if claude_model:
             cmd.extend(["--model", claude_model])
         if reasoning_effort and not quiet:
@@ -2641,7 +2795,7 @@ def _run_with_provider(
     # For anthropic, pipe prompt content via stdin; others use file path in cmd.
     # OpenCode reads the prompt from the file referenced in the trailing
     # message argv, so it does NOT receive the body via stdin.
-    stdin_content = prompt_content if provider == "anthropic" else None
+    stdin_content = prompt_content if provider_family == "anthropic" else None
 
     try:
         result = _subprocess_run(
@@ -2785,7 +2939,7 @@ def _run_with_provider(
             except json.JSONDecodeError:
                 data = _extract_json_from_output(output_str)
 
-        success, text, cost, actual_model = _parse_provider_json(provider, data)
+        success, text, cost, actual_model = _parse_provider_json(provider_family, data)
         if cost == 0.0 and verbose and isinstance(data, dict):
             console.print(
                 f"[dim]Warning: {provider} returned $0 cost. "

@@ -240,6 +240,24 @@ def test_get_available_agents_mixed(mock_env, mock_load_model_data, mock_shutil_
     assert agents == ["anthropic"]
 
 
+def test_get_available_agents_includes_named_claude_profile(
+    mock_env, mock_load_model_data, mock_shutil_which, monkeypatch, tmp_path
+):
+    """Claude work profiles are exposed only when their isolated config exists."""
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    (tmp_path / ".claude-work").mkdir()
+
+    def fake_find(cmd):
+        if cmd in {"claude", "claude-work"}:
+            return str(tmp_path / ".local" / "bin" / cmd)
+        return None
+
+    mock_shutil_which.side_effect = fake_find
+
+    agents = get_available_agents()
+    assert agents == ["anthropic", "claude-work"]
+
+
 def test_get_available_agents_includes_openai_with_codex_auth_file(
     mock_env, mock_load_model_data, mock_shutil_which
 ):
@@ -2694,6 +2712,66 @@ def test_claude_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_
     assert "--model" not in cmd, f"Did not expect --model in command, got: {cmd}"
 
 
+def test_named_claude_profile_uses_profile_command_and_config_dir(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, monkeypatch
+):
+    """PDD_AGENTIC_PROVIDER=claude-work runs the isolated Claude profile."""
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: mock_cwd))
+    (mock_cwd / ".claude-work").mkdir()
+    mock_shutil_which.side_effect = (
+        lambda cmd: f"/bin/{cmd}" if cmd in {"claude", "claude-work"} else None
+    )
+    os.environ["PDD_AGENTIC_PROVIDER"] = "claude-work"
+
+    mock_output = {
+        "result": "Done with enough output to satisfy the false-positive guard.",
+        "total_cost_usd": 0.05,
+        "is_error": False,
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success
+    assert provider == "claude-work"
+    assert "Done" in msg
+    assert cost == 0.05
+    args, kwargs = mock_subprocess.call_args
+    assert args[0][0] == "/bin/claude-work"
+    assert kwargs["env"]["CLAUDE_CONFIG_DIR"] == str(mock_cwd / ".claude-work")
+
+
+def test_named_claude_profile_model_env_overrides_global(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, monkeypatch
+):
+    """Profile-specific CLAUDE_WORK_MODEL takes precedence over CLAUDE_MODEL."""
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: mock_cwd))
+    (mock_cwd / ".claude-work").mkdir()
+    mock_shutil_which.side_effect = (
+        lambda cmd: f"/bin/{cmd}" if cmd in {"claude", "claude-work"} else None
+    )
+    os.environ["PDD_AGENTIC_PROVIDER"] = "claude-work"
+    os.environ["CLAUDE_MODEL"] = "claude-sonnet-global"
+    os.environ["CLAUDE_WORK_MODEL"] = "claude-opus-work"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done with enough output to satisfy the false-positive guard.",
+        "total_cost_usd": 0.05,
+        "is_error": False,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    success, _, _, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success
+    assert provider == "claude-work"
+    cmd = mock_subprocess.call_args.args[0]
+    assert cmd[cmd.index("--model") + 1] == "claude-opus-work"
+
+
 # ---------------------------------------------------------------------------
 # GEMINI_MODEL environment variable tests
 # ---------------------------------------------------------------------------
@@ -3354,6 +3432,17 @@ def test_get_agent_provider_preference_single(mock_env):
     """Single provider override."""
     mock_env["PDD_AGENTIC_PROVIDER"] = "google"
     assert get_agent_provider_preference() == ["google"]
+
+
+def test_get_agent_provider_preference_claude_aliases(mock_env):
+    """Personal Claude aliases normalize while work profiles remain selectable."""
+    mock_env["PDD_AGENTIC_PROVIDER"] = "claude,claude-work,claude-work2,claude-work3"
+    assert get_agent_provider_preference() == [
+        "anthropic",
+        "claude-work",
+        "claude-work2",
+        "claude-work3",
+    ]
 
 
 def test_get_agent_provider_preference_reordered(mock_env):
@@ -4841,6 +4930,15 @@ class TestIssue1072PermanentErrors:
         assert _is_permanent_error("Quota Exceeded — daily limit reached") is True, (
             "_is_permanent_error('Quota Exceeded — daily limit reached') returned False"
         )
+
+    def test_is_permanent_error_recognizes_claude_account_limit(self):
+        """Claude Code account caps with distant reset dates are terminal for this run."""
+        assert (
+            _is_permanent_error("You've hit your limit - resets May 15, 11pm (UTC)")
+            is True
+        )
+        assert _is_permanent_error("usage limit reached for this account") is True
+        assert _is_permanent_error("limit resets tomorrow") is True
 
     def test_existing_permanent_patterns_unaffected_by_quota_addition(self):
         """Regression: Adding quota patterns must not break existing permanent error detection."""

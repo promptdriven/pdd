@@ -1325,6 +1325,7 @@ def run_agentic_bug_orchestrator(
     quiet: bool = False,
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
+    resume: bool = True,
     reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
@@ -1341,6 +1342,11 @@ def run_agentic_bug_orchestrator(
         console.print(f"[bold]🔍 Investigating issue #{issue_number}: \"{escape(issue_title)}\"[/bold]")
 
     state_dir = _get_state_dir(cwd)
+
+    if not resume:
+        clear_workflow_state(
+            cwd, issue_number, "bug", state_dir, repo_owner, repo_name, use_github_state
+        )
 
     # Load state
     state, loaded_gh_id = load_workflow_state(

@@ -134,6 +134,18 @@ def test_happy_path_execution(mock_dependencies, default_args):
     assert model == "gpt-4"
 
 
+def test_no_resume_clears_saved_bug_state(mock_dependencies, default_args):
+    """--no-resume should clear persisted bug state before loading workflow state."""
+    mock_run, _, _ = mock_dependencies
+    mock_run.return_value = (False, "All agent providers failed", 0.0, "")
+
+    with patch("pdd.agentic_bug_orchestrator.clear_workflow_state") as mock_clear:
+        run_agentic_bug_orchestrator(**default_args, resume=False)
+
+    mock_clear.assert_called_once()
+    assert mock_clear.call_args.args[2] == "bug"
+
+
 def test_hard_stop_step_1_duplicate(mock_dependencies, default_args):
     """
     Test early exit at Step 1 if issue is a duplicate.

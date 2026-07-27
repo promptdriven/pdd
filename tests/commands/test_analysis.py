@@ -173,6 +173,8 @@ def test_bug_agentic_failure_exit_code_1(runner, mock_context_obj):
 
         mock_agentic.assert_called_once()
         assert result.exit_code == 1
+        assert "Success: False" in result.output
+        assert "Issue not found or API error" in result.output
 
 
 def test_bug_agentic_wrong_args(runner, mock_context_obj):
@@ -589,6 +591,7 @@ def test_bug_agentic_mode_success(runner):
         assert mock_agentic.call_args[1]["issue_url"] == "https://github.com/user/repo/issues/1"
         assert mock_agentic.call_args[1]["timeout_adder"] == 5.0
         assert mock_agentic.call_args[1]["use_github_state"] is True
+        assert mock_agentic.call_args[1]["resume"] is True
 
 def test_bug_agentic_mode_no_github_state(runner):
     """Test 'bug' agentic mode with --no-github-state flag."""
@@ -599,6 +602,16 @@ def test_bug_agentic_mode_no_github_state(runner):
         
         assert result.exit_code == 0
         assert mock_agentic.call_args[1]["use_github_state"] is False
+
+def test_bug_agentic_mode_no_resume(runner):
+    """Test 'bug' agentic mode with --no-resume flag."""
+    with patch("pdd.commands.analysis.run_agentic_bug") as mock_agentic:
+        mock_agentic.return_value = (True, "Fixed", 1.0, "gpt-4", [])
+
+        result = runner.invoke(bug, ["https://github.com/u/r/issues/1", "--no-resume"])
+
+        assert result.exit_code == 0
+        assert mock_agentic.call_args[1]["resume"] is False
 
 def test_bug_manual_mode_success(runner):
     """Test 'bug' in manual mode with 5 valid files."""
