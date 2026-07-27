@@ -51,16 +51,17 @@ You are working on step 10 of 13 in an agentic change workflow. Previous step im
       - Use interface type: module | cli | command | frontend
       - Format as valid JSON
    d. Generate `<pdd-dependency>` tags:
-      - Extract from `<include>` directives in the prompt
-      - Only include .prompt file dependencies (not .py, .md, etc.)
-      - One `<pdd-dependency>` tag per dependency
+      - Extract real PDD module dependencies from the prompt's `<include>` directives and implementation contract. A dependency can be referenced as a module prompt (`prompts/foo_python.prompt` or `foo_python.prompt`), an implementation include (`pdd/foo.py`), or an example include (`context/foo_example.py`); normalize all of these to the owning prompt filename (for example, `sync_order_python.prompt`).
+      - Do not create dependency tags for docs, preambles, generic shared context, or same-module self-includes.
+      - One `<pdd-dependency>` tag per dependency.
    e. Prepend tags to the prompt file (before first % line)
 
 4. **For each MODIFIED prompt in FILES_MODIFIED:**
    a. Check if prompt already has PDD tags at the top
    b. If tags exist and requirements changed significantly, update them
    c. If no tags exist, add them following the same process as step 3
-   d. Skip if no meaningful interface changes
+   d. Always re-check `<pdd-dependency>` tags when Step 9 added, removed, or changed dependencies/includes. If the prompt now includes another PDD module's source, example, or prompt, add the matching `<pdd-dependency>` tag even when the public interface did not change. This prevents `architecture.json` from declaring a dependency that the prompt metadata does not declare.
+   e. Skip only when neither interface metadata nor dependency metadata changed
 
 5. **Update architecture.json (if it exists):**
    a. For new prompts: Add new entry with reason, interface, dependencies

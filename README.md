@@ -2658,6 +2658,10 @@ The command uses a two-stage retrieval pipeline when candidates exceed 50:
 
 After inserting `<include>` directives, the command performs a **deduplication pass** that identifies and removes inline content in the prompt that semantically duplicates what the included documents already provide.
 
+**Metadata finalization (on success):** After a successful `auto-deps` run, the command writes/updates the fingerprint in `.pdd/meta/` under the original prompt's module identity (with `operation="auto-deps"` and the current include-dependency hashes), using the prompt file that `auto-deps` wrote as the hashed prompt path. It also clears any stale per-module `_run.json` report, so downstream sync commands see a consistent view. The fingerprint write and include-dependency metadata update are committed together (atomic from the caller's perspective) and use hash-based, language-agnostic helpers from `pdd.operation_log`. Finalization errors are surfaced as warnings and do not mask a successful `auto-deps` result.
+
+**Note on `pdd sync`:** `pdd sync` invokes `auto-deps` with a `*_with_deps.prompt` temp output and then moves it to the canonical prompt. After that move, sync clears the stale `_run.json` report and writes its own fingerprint via its atomic state machinery.
+
 The command maintains a CSV file with the following columns:
 - `full_path`: The full path to the dependency file
 - `file_summary`: A one-sentence summary of the file's content and purpose
@@ -2747,7 +2751,7 @@ Options:
 - `--reviewer-fallback ROLE`: Optional secondary reviewer role to invoke once if the primary reviewer cannot complete (for example, because of auth, network, sandbox, or CLI failures). The fallback must resolve to a role different from the reviewer and fixer; if it succeeds, it becomes the active reviewer for the remaining loop and the superseded primary's row in the final report is annotated `(optional, superseded by <fallback>)` so downstream verdict adapters drop the failed primary from the required-reviewer set and resolve to `ship_degraded` instead of `unknown`.
 - `--fixer-fallback ROLE`: Optional secondary fixer role to invoke once if the primary fixer cannot complete (for example, Claude Code subscription-tier `credential-limit` failures). Role aliases are normalized so `claude` and `anthropic` resolve to the same identity; the fallback must resolve to a role different from the active fixer, the active reviewer, AND the originally configured reviewer (so `--reviewer codex --reviewer-fallback gemini --fixer-fallback codex` is skipped even after gemini takes over reviewing). Before the fallback runs the worktree is reset so the primary fixer's partial edits do not leak; on success the fallback takes over as the active fixer for the remaining rounds.
 - `--max-review-rounds INT`: Maximum primary-reviewer/fixer rounds (default: 5).
-- `--max-review-cost FLOAT`: Maximum review-loop LLM cost in USD (default: 10.0).
+- `--max-review-cost FLOAT`: Maximum review-loop LLM cost in USD (default: 50.0).
 - `--max-review-minutes FLOAT`: Maximum review-loop wall-clock minutes (default: 90.0).
 - `--blocking-severities LIST`: Comma-separated severity names used for review-loop reporting and prompt guidance (default: `blocker,critical,medium`). The fixer still receives every valid reviewer finding.
 - `--continue-on-reviewer-limit`: Report provider, rate, context-window, timeout, auth, network, sandbox, permission, and non-zero-exit reviewer failures as `degraded` instead of `failed`. Degraded reviewers are still not clean unless a configured fallback reviewer completes successfully and takes over as the active reviewer.

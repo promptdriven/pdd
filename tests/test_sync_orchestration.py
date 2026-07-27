@@ -2578,16 +2578,22 @@ def test_auto_deps_rolls_back_shared_files_when_checkpoint_is_interrupted(orches
     csv_path = tmp_path / 'project_dependencies.csv'
     arch_path = tmp_path / 'architecture.json'
     temp_output = prompt_path.with_name('calculator_python_with_deps.prompt')
+    fingerprint_path = tmp_path / '.pdd' / 'meta' / 'calculator_python.json'
+    run_report_path = tmp_path / '.pdd' / 'meta' / 'calculator_python_run.json'
 
     original_prompt = 'Original calculator prompt.\n'
     original_csv = 'full_path,file_summary,content_hash\nold.py,Old,oldhash\n'
     original_arch = [
         {'filename': prompt_path.name, 'dependencies': []},
     ]
+    original_fingerprint = {'operation': 'generate', 'before': True}
+    original_run_report = {'verified': True, 'before': True}
 
     prompt_path.write_text(original_prompt, encoding='utf-8')
     csv_path.write_text(original_csv, encoding='utf-8')
     arch_path.write_text(json.dumps(original_arch), encoding='utf-8')
+    fingerprint_path.write_text(json.dumps(original_fingerprint), encoding='utf-8')
+    run_report_path.write_text(json.dumps(original_run_report), encoding='utf-8')
 
     def fake_auto_deps(*args, **kwargs):
         Path(kwargs['output']).write_text(
@@ -2602,6 +2608,11 @@ def test_auto_deps_rolls_back_shared_files_when_checkpoint_is_interrupted(orches
             json.dumps([{'filename': prompt_path.name, 'dependencies': ['dep_python.prompt']}]),
             encoding='utf-8',
         )
+        fingerprint_path.write_text(
+            json.dumps({'operation': 'auto-deps', 'after': True}),
+            encoding='utf-8',
+        )
+        run_report_path.unlink()
         return ('updated prompt', 0.01, 'mock-model')
 
     mock_auto_deps.side_effect = fake_auto_deps
@@ -2617,6 +2628,8 @@ def test_auto_deps_rolls_back_shared_files_when_checkpoint_is_interrupted(orches
     assert prompt_path.read_text(encoding='utf-8') == original_prompt
     assert csv_path.read_text(encoding='utf-8') == original_csv
     assert json.loads(arch_path.read_text(encoding='utf-8')) == original_arch
+    assert json.loads(fingerprint_path.read_text(encoding='utf-8')) == original_fingerprint
+    assert json.loads(run_report_path.read_text(encoding='utf-8')) == original_run_report
     assert not temp_output.exists()
 
 
@@ -2637,6 +2650,8 @@ def test_auto_deps_keeps_shared_file_updates_after_successful_commit(orchestrati
         json.dumps([{'filename': prompt_path.name, 'dependencies': []}]),
         encoding='utf-8',
     )
+    run_report_path = tmp_path / '.pdd' / 'meta' / 'calculator_python_run.json'
+    run_report_path.write_text(json.dumps({'stale': True}), encoding='utf-8')
 
     def fake_auto_deps(*args, **kwargs):
         Path(kwargs['output']).write_text(
@@ -2665,6 +2680,7 @@ def test_auto_deps_keeps_shared_file_updates_after_successful_commit(orchestrati
     assert '<include>dep_python.prompt</include>' in prompt_path.read_text(encoding='utf-8')
     assert 'dep.py,Dep,newhash' in csv_path.read_text(encoding='utf-8')
     assert json.loads(arch_path.read_text(encoding='utf-8'))[0]['dependencies'] == ['dep_python.prompt']
+    assert not run_report_path.exists()
     assert not temp_output.exists()
 
 

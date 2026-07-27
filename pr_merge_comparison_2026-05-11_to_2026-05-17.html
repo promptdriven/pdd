@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>PR Merge Comparison: May 11-18, 2026</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #5b667a;
+      --line: #dce3ef;
+      --greg: #2f6fed;
+      --greg-soft: #dbe7ff;
+      --serhan: #d65f2e;
+      --serhan-soft: #ffe2d4;
+      --bot: #8a63d2;
+      --bot-soft: #eadffd;
+      --pdd: #148a7a;
+      --cloud: #7a5af8;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(180deg, #eef3fb 0%, var(--bg) 36%, #ffffff 100%);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 36px 0 48px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+      gap: 24px;
+      align-items: stretch;
+      margin-bottom: 24px;
+    }
+
+    .hero-copy,
+    .panel {
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.88);
+      box-shadow: 0 18px 48px rgba(21, 33, 58, 0.08);
+    }
+
+    .hero-copy {
+      padding: 30px;
+      border-radius: 8px;
+    }
+
+    .eyebrow {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(34px, 5vw, 64px);
+      line-height: 0.96;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 680px;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.55;
+    }
+
+    .scorecard {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .score {
+      min-height: 172px;
+      padding: 22px;
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .score.greg {
+      border-top: 5px solid var(--greg);
+    }
+
+    .score.serhan {
+      border-top: 5px solid var(--serhan);
+    }
+
+    .score .name {
+      color: var(--muted);
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .score .value {
+      margin-top: 8px;
+      font-size: 58px;
+      line-height: 1;
+      font-weight: 850;
+      letter-spacing: 0;
+    }
+
+    .score .note {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .lead-box {
+      grid-column: span 2;
+      padding: 18px 20px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #121826;
+      color: #fff;
+    }
+
+    .lead-box strong {
+      font-size: 26px;
+    }
+
+    .lead-box span {
+      color: #b7c0d4;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 0.72fr);
+      gap: 24px;
+      align-items: start;
+    }
+
+    .panel {
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    h2 {
+      margin: 0 0 18px;
+      font-size: 22px;
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    .bar-group {
+      display: grid;
+      gap: 22px;
+      margin-top: 8px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 112px 1fr 48px;
+      gap: 14px;
+      align-items: center;
+    }
+
+    .bar-name {
+      font-weight: 800;
+      line-height: 1.2;
+    }
+
+    .bar-track {
+      position: relative;
+      height: 42px;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #edf1f7;
+      border: 1px solid var(--line);
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 7px;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      padding-right: 12px;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 800;
+      min-width: 44px;
+    }
+
+    .bar-fill.greg {
+      width: calc(135 / 135 * 100%);
+      background: linear-gradient(90deg, #295fd4, var(--greg));
+    }
+
+    .bar-fill.serhan {
+      width: calc(40 / 135 * 100%);
+      background: linear-gradient(90deg, #bd4e23, var(--serhan));
+    }
+
+    .repo-bars {
+      display: grid;
+      gap: 18px;
+    }
+
+    .repo-row {
+      display: grid;
+      gap: 9px;
+    }
+
+    .repo-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .stack {
+      display: flex;
+      height: 36px;
+      overflow: hidden;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #edf1f7;
+    }
+
+    .stack span {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 850;
+      min-width: 34px;
+    }
+
+    .stack .greg {
+      background: var(--greg);
+    }
+
+    .stack .serhan {
+      background: var(--serhan);
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .metric {
+      padding: 16px;
+      border-radius: 8px;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+    }
+
+    .metric label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 26px;
+      line-height: 1;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      padding: 13px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+    }
+
+    th {
+      color: var(--muted);
+      background: #f6f8fc;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      font-weight: 800;
+    }
+
+    .pill-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      color: #3f2d65;
+      background: var(--bot-soft);
+      border: 1px solid #d7c4fb;
+      font-size: 13px;
+      font-weight: 800;
+      text-decoration: none;
+    }
+
+    .pill:hover {
+      background: #dfcffc;
+    }
+
+    .caption {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 820px) {
+      main {
+        width: min(100vw - 24px, 1180px);
+        padding-top: 18px;
+      }
+
+      .hero,
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .scorecard,
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+
+      .lead-box {
+        grid-column: span 1;
+      }
+
+      .bar-row {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+
+      .bar-row .num {
+        text-align: left;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">May 11-18, 2026 PDT · pdd + pdd_cloud + Video Editor</p>
+        <h1>PR Merge Comparison</h1>
+        <p class="subtitle">Merged PRs attributed to Greg Tanaka and Serhan Asad, now including Video Editor. Bot-created PRs are counted inside the repo totals for the person who drove them.</p>
+      </div>
+
+      <div class="scorecard">
+        <div class="score greg">
+          <div>
+            <div class="name">Greg Tanaka</div>
+            <div class="value">135</div>
+          </div>
+          <div class="note">33 in pdd · 30 in pdd_cloud · 72 in Video Editor</div>
+        </div>
+        <div class="score serhan">
+          <div>
+            <div class="name">Serhan Asad</div>
+            <div class="value">40</div>
+          </div>
+          <div class="note">24 in pdd · 16 in pdd_cloud</div>
+        </div>
+        <div class="lead-box">
+          <strong>Greg +95 PRs</strong><br>
+          <span>175 total merged PRs counted across the three repos.</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div>
+        <div class="panel">
+          <h2>Total Merged PRs</h2>
+          <div class="bar-group">
+            <div class="bar-row">
+              <div class="bar-name">Greg</div>
+              <div class="bar-track"><div class="bar-fill greg">135</div></div>
+              <div class="num">77.1%</div>
+            </div>
+            <div class="bar-row">
+              <div class="bar-name">Serhan</div>
+              <div class="bar-track"><div class="bar-fill serhan">40</div></div>
+              <div class="num">22.9%</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Repo Breakdown</h2>
+          <div class="repo-bars">
+            <div class="repo-row">
+              <div class="repo-title">
+                <span>promptdriven/pdd</span>
+                <span>57 total</span>
+              </div>
+              <div class="stack" aria-label="pdd: Greg 33, Serhan 24">
+                <span class="greg" style="width:57.89%">Greg 33</span>
+                <span class="serhan" style="width:42.11%">Serhan 24</span>
+              </div>
+            </div>
+            <div class="repo-row">
+              <div class="repo-title">
+                <span>promptdriven/pdd_cloud</span>
+                <span>46 total</span>
+              </div>
+              <div class="stack" aria-label="pdd_cloud: Greg 30, Serhan 16">
+                <span class="greg" style="width:65.22%">Greg 30</span>
+                <span class="serhan" style="width:34.78%">Serhan 16</span>
+              </div>
+            </div>
+            <div class="repo-row">
+              <div class="repo-title">
+                <span>promptdriven/Generative-Video-Studio</span>
+                <span>72 total</span>
+              </div>
+              <div class="stack" aria-label="Video Editor: Greg 72, Serhan 0">
+                <span class="greg" style="width:100%">Greg 72</span>
+              </div>
+            </div>
+          </div>
+          <div class="legend">
+            <span><i class="dot" style="background:var(--greg)"></i>Greg</span>
+            <span><i class="dot" style="background:var(--serhan)"></i>Serhan</span>
+          </div>
+        </div>
+      </div>
+
+      <aside>
+        <div class="panel">
+          <h2>Key Metrics</h2>
+          <div class="metrics">
+            <div class="metric">
+              <label>Total</label>
+              <strong>175</strong>
+            </div>
+            <div class="metric">
+              <label>Gap</label>
+              <strong>95</strong>
+            </div>
+            <div class="metric">
+              <label>Repos</label>
+              <strong>3</strong>
+            </div>
+          </div>
+          <p class="caption">Serhan's pdd_cloud count includes the four extra current-day PRs. Bot-created PRs are included directly in pdd or pdd_cloud.</p>
+        </div>
+
+        <div class="panel">
+          <h2>Comparison Table</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Person</th>
+                <th class="num">pdd</th>
+                <th class="num">pdd_cloud</th>
+                <th class="num">Video</th>
+                <th class="num">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Greg Tanaka</td>
+                <td class="num">33</td>
+                <td class="num">30</td>
+                <td class="num">72</td>
+                <td class="num">135</td>
+              </tr>
+              <tr>
+                <td>Serhan Asad</td>
+                <td class="num">24</td>
+                <td class="num">16</td>
+                <td class="num">0</td>
+                <td class="num">40</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </aside>
+    </section>
+
+    <section class="panel">
+      <h2>Serhan Bot-Attributed PRs</h2>
+      <div class="pill-list">
+        <a class="pill" href="https://github.com/promptdriven/pdd/pull/973">pdd#973</a>
+        <a class="pill" href="https://github.com/promptdriven/pdd/pull/994">pdd#994</a>
+        <a class="pill" href="https://github.com/promptdriven/pdd/pull/1002">pdd#1002</a>
+        <a class="pill" href="https://github.com/promptdriven/pdd/pull/1008">pdd#1008</a>
+        <a class="pill" href="https://github.com/promptdriven/pdd/pull/1009">pdd#1009</a>
+        <a class="pill" href="https://github.com/promptdriven/pdd/pull/1022">pdd#1022</a>
+        <a class="pill" href="https://github.com/promptdriven/pdd/pull/1026">pdd#1026</a>
+        <a class="pill" href="https://github.com/promptdriven/pdd/pull/1037">pdd#1037</a>
+        <a class="pill" href="https://github.com/promptdriven/pdd_cloud/pull/1447">pdd_cloud#1447</a>
+        <a class="pill" href="https://github.com/promptdriven/pdd_cloud/pull/1460">pdd_cloud#1460</a>
+        <a class="pill" href="https://github.com/promptdriven/pdd_cloud/pull/1463">pdd_cloud#1463</a>
+        <a class="pill" href="https://github.com/promptdriven/pdd_cloud/pull/1464">pdd_cloud#1464</a>
+        <a class="pill" href="https://github.com/promptdriven/pdd_cloud/pull/1468">pdd_cloud#1468</a>
+        <a class="pill" href="https://github.com/promptdriven/pdd_cloud/pull/1471">pdd_cloud#1471</a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

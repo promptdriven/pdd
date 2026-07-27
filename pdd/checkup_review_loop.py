@@ -3845,10 +3845,10 @@ def _finalize(
 
 
 def _resolve_issue_aligned(state: ReviewLoopState) -> str:
-    if state.issue_aligned is False:
-        return "false"
     if _has_hard_not_clean_state(state) or _has_limit_state(state):
         return "unknown"
+    if state.issue_aligned is False and _remaining_findings(state):
+        return "false"
     if state.issue_aligned is True:
         return "true"
     # Fall back to "true" only when there are no remaining required findings.

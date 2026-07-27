@@ -14,6 +14,8 @@
 <pdd-dependency>construct_paths_python.prompt</pdd-dependency>
 <pdd-dependency>insert_includes_python.prompt</pdd-dependency>
 <pdd-dependency>validate_prompt_includes_python.prompt</pdd-dependency>
+<pdd-dependency>auto_deps_architecture_python.prompt</pdd-dependency>
+<pdd-dependency>operation_log_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the `auto_deps_main` function that will be part of the `pdd` command-line program. This function will handle the core logic for the `auto-deps` command.
 
@@ -80,6 +82,28 @@
     - Error handling:
         • On `click.Abort` exception: re-raise to allow the orchestrator to stop the sync loop.
         • On any other exception: print a red error message (unless `quiet`) and return an error tuple `("", 0.0, f"Error: {exc}")` instead of calling `sys.exit(1)`. This allows the orchestrator to handle failures gracefully.
+    - Metadata finalization (on successful runs only — skip on the error path above):
+        • After the modified prompt and any CSV output have been written successfully, finalize fingerprint and include-dependency state for the prompt file that `auto-deps` wrote so downstream commands see a consistent view.
+        • Use the existing helpers from `pdd.operation_log` (`infer_module_identity`, `save_fingerprint`, `clear_run_report`, `get_run_report_path`). Behavior must be language-agnostic (hash-based).
+        • Always derive identity from the *original* `prompt_file`, never the output path:
+            - Resolve `(basename, language)` via `infer_module_identity(Path(prompt_file))`. `infer_module_identity` returns the tuple `(None, None)` for unrecognized prompt names — check `basename is None or language is None` explicitly and skip finalization (logged as a warning below) rather than guessing.
+            - Clear any stale per-module run report via `clear_run_report(basename, language)` because the prompt content changed. If `clear_run_report` raises, log a warning and continue — it must not abort the subsequent fingerprint save.
+            - After invoking `clear_run_report`, verify the report path is actually gone via `get_run_report_path(basename, language)`. If it still exists, attempt a direct unlink; if it remains, log a yellow warning (unless `quiet`). This is defensive because the helper silently swallows unlink failures.
+            - Write/update the fingerprint via `save_fingerprint(...)` with `operation="auto-deps"`, `paths={"prompt": Path(output_path)}`, `cost=total_cost`, and `model=model_name`, recording the new prompt hash and the current include-dependency hashes so the fingerprint write and the include-dependency metadata update are committed together (atomic from the caller's perspective).
+        • Architecture file updates (architecture.json) are merged by `merge_auto_deps_includes_from_cwd` and are not finalized here — that file is not a `(basename, language)`-keyed module and has its own atomicity guarantees inside the merge helper.
+        • Finalization errors must not mask a successful `auto-deps` result: log a warning (unless `quiet`) and continue; do not raise.
+
+<operation_log_interface>
+<include select="def:save_fingerprint,def:infer_module_identity,def:clear_run_report,def:get_run_report_path" mode="interface">pdd/operation_log.py</include>
+</operation_log_interface>
+
+<operation_log_usage_example>
+<include>context/operation_log_example.py</include>
+</operation_log_usage_example>
+
+<auto_deps_architecture_interface>
+<include select="def:merge_auto_deps_includes_from_cwd" mode="interface">pdd/auto_deps_architecture.py</include>
+</auto_deps_architecture_interface>
 
 <examples>
    % Here are examples of how to use internal modules:

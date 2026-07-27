@@ -898,6 +898,61 @@ class TestCheckupReviewLoopRuntime:
             "review-loop |"
         ) in report
 
+    def test_clean_verify_clears_stale_issue_aligned_false(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """An initial misalignment finding must not poison the final verdict
+        after the verifier accepts the fix and no findings remain."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        finding = {
+            "severity": "medium",
+            "area": "contract",
+            "location": "pdd/review.py:12",
+            "evidence": "changed_files omitted included docs",
+            "finding": "Included docs are not reported.",
+            "required_fix": "Report included docs in changed_files.",
+        }
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if label == "checkup-review-loop-review-codex-round1":
+                return (
+                    True,
+                    json.dumps(
+                        {
+                            "status": "findings",
+                            "issue_aligned": False,
+                            "summary": "needs fix",
+                            "findings": [finding],
+                        }
+                    ),
+                    0.1,
+                    role,
+                )
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return True, '{"summary":"fixed","changed_files":[]}', 0.1, role
+            if label == "checkup-review-loop-verify-codex-round1":
+                return True, "No actionable findings remain.", 0.1, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=2),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "reviewer-status: codex=clean claude=fixer fresh-final=clean" in report
+        assert "issue_aligned: true" in report
+        assert "Included docs are not reported." not in report
+
     def test_repeated_rejection_loops_until_max_rounds(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:

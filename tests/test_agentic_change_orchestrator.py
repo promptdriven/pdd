@@ -4315,6 +4315,86 @@ class TestValidateArchitectureFilepaths:
         assert "ghost_python.prompt" in warnings[0] or "pdd/ghost.py" in warnings[0]
 
 
+class TestValidateChangedPromptArchitectureIncludes:
+    """Tests for scoped architecture/include drift postchecks."""
+
+    def test_changed_prompt_arch_dep_without_pdd_dependency_warns(self, tmp_path):
+        from pdd.agentic_change_orchestrator import (
+            _validate_changed_prompt_architecture_includes,
+        )
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "agentic_update_python.prompt").write_text(
+            "<pdd-dependency>agentic_update_LLM.prompt</pdd-dependency>\n"
+            "<include select=\"def:extract_includes_from_file\" mode=\"interface\">"
+            "pdd/sync_order.py</include>\n",
+            encoding="utf-8",
+        )
+        arch_data = [
+            {
+                "filename": "agentic_update_python.prompt",
+                "dependencies": [
+                    "agentic_update_LLM.prompt",
+                    "sync_order_python.prompt",
+                ],
+            },
+            {"filename": "sync_order_python.prompt", "dependencies": []},
+            {"filename": "agentic_update_LLM.prompt", "dependencies": []},
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(arch_data),
+            encoding="utf-8",
+        )
+
+        warnings = _validate_changed_prompt_architecture_includes(
+            tmp_path,
+            ["pdd/prompts/agentic_update_python.prompt"],
+        )
+
+        assert len(warnings) == 1
+        assert "agentic_update_python.prompt" in warnings[0]
+        assert "sync_order" in warnings[0]
+
+    def test_only_reports_warnings_for_changed_prompts(self, tmp_path):
+        from pdd.agentic_change_orchestrator import (
+            _validate_changed_prompt_architecture_includes,
+        )
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "agentic_update_python.prompt").write_text(
+            "<include>context/python_preamble.prompt</include>\n",
+            encoding="utf-8",
+        )
+        (prompts_dir / "other_python.prompt").write_text(
+            "<pdd-dependency>sync_order_python.prompt</pdd-dependency>\n",
+            encoding="utf-8",
+        )
+        arch_data = [
+            {
+                "filename": "agentic_update_python.prompt",
+                "dependencies": ["sync_order_python.prompt"],
+            },
+            {
+                "filename": "other_python.prompt",
+                "dependencies": ["sync_order_python.prompt"],
+            },
+            {"filename": "sync_order_python.prompt", "dependencies": []},
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(arch_data),
+            encoding="utf-8",
+        )
+
+        warnings = _validate_changed_prompt_architecture_includes(
+            tmp_path,
+            ["pdd/prompts/other_python.prompt"],
+        )
+
+        assert warnings == []
+
+
 # ---------------------------------------------------------------------------
 # register_untracked_prompts called after Step 10 sanitizers
 # ---------------------------------------------------------------------------

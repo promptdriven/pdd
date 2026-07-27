@@ -12,6 +12,7 @@
 </pdd-interface>
 
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_include_validation_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the `pdd/agentic_change_orchestrator.py` module.
@@ -265,7 +266,9 @@ After Step 10 completes, sanitize architecture.json in the worktree:
 
 3. **`_sanitize_architecture_interfaces(worktree_path, previous_architecture)`**: Compare current architecture.json against `previous_architecture`. For each entry that exists in both, call `_merge_interface_signatures(old_interface, new_interface)` to preserve existing interface parameters that Step 10's LLM may have dropped. Append any merge warnings to step output under `ORCHESTRATOR_POSTCHECK_WARNINGS:`.
 
-4. **Auto-register untracked prompts (narrow safety net, in-workflow scope only)**: After all sanitizers run, build an `only_files` scope set restricted to **this workflow's prompt files**, then call `register_untracked_prompts(prompts_dir=worktree_path / "prompts", architecture_path=worktree_path / "architecture.json", dry_run=False, only_files=only_files)` from `pdd.architecture_sync`. Build `only_files` by iterating `changed_files` (which contains Step 9's `FILES_CREATED` / `FILES_MODIFIED` plus Step 10's own arch_files output), normalizing each path (replace `\\` with `/`, find the last `prompts/` index, take everything after it), and keeping only entries ending in `.prompt`. Skip the call entirely if `only_files` is empty. This catches modified prompts that have correct PDD tags but no pre-existing arch.json entry — the case where Step 10's LLM rule 5(b) falls through — **WITHOUT silently sweeping unrelated repo-wide drift into the PR**. A full-scan call (no `only_files`) would auto-register every untracked prompt in the repo: in current state that is 38+ unrelated prompts, including nonstandard paths like `frontend/components/*.prompt` where `_infer_filepath` would produce an incorrect Python-style filepath. The scope filter is required for correctness, not just politeness: any out-of-scope registration is an unreviewed mutation of shared project state and may write wrong metadata. If `reg_result["registered"]` is non-empty, append `\n\nORCHESTRATOR_AUTO_REGISTERED: {comma-separated list}` to step_output and print `[blue]Auto-registered untracked prompts in arch.json: {list}[/blue]` (unless quiet).
+4. **Architecture/include drift postcheck**: After `_sanitize_architecture_dependencies`, `_validate_architecture_filepaths`, and `_sanitize_architecture_interfaces`, call helper `_validate_changed_prompt_architecture_includes(worktree_path, changed_files)` which loads `architecture.json`, calls `cross_validate_architecture_with_prompt_includes(...)`, and filters warnings to prompt files touched by this workflow. Append any warnings to the existing `ORCHESTRATOR_POSTCHECK_WARNINGS:` block so Step 11/12 can repair a missing `<pdd-dependency>` before PR creation. This catches the failure mode where Step 9 adds an implementation include such as `pdd/sync_order.py`, later metadata adds `sync_order_python.prompt` to `architecture.json`, but the prompt itself lacks `<pdd-dependency>sync_order_python.prompt</pdd-dependency>`.
+
+5. **Auto-register untracked prompts (narrow safety net, in-workflow scope only)**: After all sanitizers run, build an `only_files` scope set restricted to **this workflow's prompt files**, then call `register_untracked_prompts(prompts_dir=worktree_path / "prompts", architecture_path=worktree_path / "architecture.json", dry_run=False, only_files=only_files)` from `pdd.architecture_sync`. Build `only_files` by iterating `changed_files` (which contains Step 9's `FILES_CREATED` / `FILES_MODIFIED` plus Step 10's own arch_files output), normalizing each path (replace `\\` with `/`, find the last `prompts/` index, take everything after it), and keeping only entries ending in `.prompt`. Skip the call entirely if `only_files` is empty. This catches modified prompts that have correct PDD tags but no pre-existing arch.json entry — the case where Step 10's LLM rule 5(b) falls through — **WITHOUT silently sweeping unrelated repo-wide drift into the PR**. A full-scan call (no `only_files`) would auto-register every untracked prompt in the repo: in current state that is 38+ unrelated prompts, including nonstandard paths like `frontend/components/*.prompt` where `_infer_filepath` would produce an incorrect Python-style filepath. The scope filter is required for correctness, not just politeness: any out-of-scope registration is an unreviewed mutation of shared project state and may write wrong metadata. If `reg_result["registered"]` is non-empty, append `\n\nORCHESTRATOR_AUTO_REGISTERED: {comma-separated list}` to step_output and print `[blue]Auto-registered untracked prompts in arch.json: {list}[/blue]` (unless quiet).
 
 % Step 8.5 — Pre-Flight Drift Heal (Issue #739)
 
@@ -426,6 +429,7 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
 Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `substitute_template_variables`, `validate_cached_state`, `post_step_comment`, `set_agentic_progress`, `clear_agentic_progress`
 Import from `pdd.preprocess`: `preprocess`
 Import from `pdd.architecture_sync`: `_merge_interface_signatures`, `register_untracked_prompts`
+Import from `pdd.architecture_include_validation`: `cross_validate_architecture_with_prompt_includes`
 Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
 <pdd.agentic_common><include select="def:run_agentic_task,def:load_workflow_state,def:save_workflow_state,def:clear_workflow_state,def:substitute_template_variables,def:validate_cached_state,def:post_step_comment,def:set_agentic_progress,def:clear_agentic_progress">pdd/agentic_common.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
@@ -434,6 +438,7 @@ Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Tim
 <pdd.get_extension><include>context/get_extension_example.py</include></pdd.get_extension>
 <pdd.preprocess><include select="def:preprocess">pdd/preprocess.py</include></pdd.preprocess>
 <pdd.architecture_sync><include select="def:_merge_interface_signatures,def:register_untracked_prompts">pdd/architecture_sync.py</include></pdd.architecture_sync>
+<pdd.architecture_include_validation><include select="def:cross_validate_architecture_with_prompt_includes">pdd/architecture_include_validation.py</include></pdd.architecture_include_validation>
 
 % Deliverables
 - Code: `pdd/agentic_change_orchestrator.py`

@@ -44,6 +44,9 @@ from pdd.get_extension import get_extension
 from pdd.preprocess import preprocess
 from pdd.architecture_registry import extract_modules
 from pdd.architecture_sync import _merge_interface_signatures, register_untracked_prompts
+from pdd.architecture_include_validation import (
+    cross_validate_architecture_with_prompt_includes,
+)
 
 # Initialize console for rich output
 console = Console()
@@ -274,6 +277,50 @@ def _validate_architecture_filepaths(
             pass
 
     return warnings
+
+
+def _validate_changed_prompt_architecture_includes(
+    worktree_path: Path,
+    changed_files: Sequence[str],
+) -> List[str]:
+    """Return architecture/include drift warnings for prompts touched by this run."""
+    arch_path = worktree_path / "architecture.json"
+    if not arch_path.exists():
+        return []
+
+    changed_prompt_refs: Set[str] = set()
+    changed_prompt_names: Set[str] = set()
+    for file_path in changed_files:
+        normalized = str(file_path).replace("\\", "/")
+        prompts_idx = normalized.rfind("prompts/")
+        if prompts_idx == -1:
+            continue
+        rel = normalized[prompts_idx + len("prompts/") :].strip("/")
+        if not rel.endswith(".prompt"):
+            continue
+        changed_prompt_refs.add(rel)
+        changed_prompt_names.add(Path(rel).name)
+
+    if not changed_prompt_refs:
+        return []
+
+    try:
+        with open(arch_path, "r", encoding="utf-8") as f:
+            modules = extract_modules(json.load(f))
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    warnings = cross_validate_architecture_with_prompt_includes(
+        modules,
+        worktree_path,
+    )
+    scoped: List[str] = []
+    for warning in warnings:
+        if any(repr(ref) in warning for ref in changed_prompt_refs) or any(
+            repr(name) in warning for name in changed_prompt_names
+        ):
+            scoped.append(warning)
+    return scoped
 
 
 def _sanitize_architecture_interfaces(
@@ -1786,7 +1833,11 @@ def run_agentic_change_orchestrator(
                     worktree_path,
                     previous_architecture,
                 )
-                all_warnings = filepath_warnings + interface_warnings
+                include_warnings = _validate_changed_prompt_architecture_includes(
+                    worktree_path,
+                    changed_files,
+                )
+                all_warnings = filepath_warnings + interface_warnings + include_warnings
                 if all_warnings:
                     if not quiet:
                         for warning in all_warnings:

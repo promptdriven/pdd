@@ -40,6 +40,8 @@ from .operation_log import (
     save_fingerprint,
     save_run_report,
     clear_run_report,
+    get_fingerprint_path,
+    get_run_report_path,
 )
 from .sync_determine_operation import (
     sync_determine_operation,
@@ -320,7 +322,12 @@ def _find_auto_deps_architecture_path(prompt_path: Path) -> Optional[Path]:
         return None
 
 
-def _build_auto_deps_rollback(prompt_path: Path, temp_output: Path) -> OperationFileRollback:
+def _build_auto_deps_rollback(
+    prompt_path: Path,
+    temp_output: Path,
+    basename: Optional[str] = None,
+    language: Optional[str] = None,
+) -> OperationFileRollback:
     """Capture the files auto-deps can mutate before the fingerprint commit."""
     rollback_paths = [
         prompt_path,
@@ -330,6 +337,11 @@ def _build_auto_deps_rollback(prompt_path: Path, temp_output: Path) -> Operation
     arch_path = _find_auto_deps_architecture_path(prompt_path)
     if arch_path is not None:
         rollback_paths.append(arch_path)
+    if basename and language:
+        rollback_paths.extend([
+            get_fingerprint_path(basename, language),
+            get_run_report_path(basename, language),
+        ])
     return OperationFileRollback(rollback_paths)
 
 
@@ -352,6 +364,17 @@ def _save_run_report_atomic(report: Dict[str, Any], basename: str, language: str
     else:
         # Direct write using operation_log
         save_run_report(basename, language, report)
+
+
+def _clear_run_report_verified(basename: str, language: str) -> None:
+    """Clear a run report and fail if the helper silently leaves it behind."""
+    clear_run_report(basename, language)
+    run_report_path = get_run_report_path(basename, language)
+    if run_report_path.exists():
+        try:
+            run_report_path.unlink()
+        except FileNotFoundError:
+            pass
 
 def _save_fingerprint_atomic(basename: str, language: str, operation: str,
                                paths: Dict[str, Path], cost: float, model: str,
@@ -2177,6 +2200,8 @@ def sync_orchestration(
                                 operation_rollback = _build_auto_deps_rollback(
                                     pdd_files['prompt'],
                                     temp_output,
+                                    basename,
+                                    language,
                                 )
                                 original_content = pdd_files['prompt'].read_text(encoding='utf-8')
                                 # Issue #522: Capture include deps BEFORE auto-deps may strip tags
@@ -2196,6 +2221,7 @@ def sync_orchestration(
                                     new_content = temp_output.read_text(encoding='utf-8')
                                     if new_content != original_content:
                                         shutil.move(str(temp_output), str(pdd_files['prompt']))
+                                        _clear_run_report_verified(basename, language)
                                     else:
                                         temp_output.unlink()
                                         result = (new_content, 0.0, 'no-changes')
