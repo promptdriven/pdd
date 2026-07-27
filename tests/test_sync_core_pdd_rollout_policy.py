@@ -36,6 +36,50 @@ from tests.conftest import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _paths_added_since(base_ref: str) -> frozenset[str]:
+    """Repository paths tracked at HEAD but absent from ``base_ref``.
+
+    ``manifest._ownership_rules`` loads ownership *only* from the protected
+    base tree. A few regressions below pin a historical base commit in order to
+    re-verify one exact transition, so any file added to the repository after
+    that pin necessarily has no ownership rule in it — permanently, since the
+    pin never moves.
+
+    Left unfiltered, that turns those regressions into a blanket ban on adding
+    files: every later PR fails them with "tracked path has no ownership rule"
+    for paths that have nothing to do with the transition under test. Coverage
+    is not lost by excluding them, because auto-heal builds the same manifest
+    with ``base_ref=origin/main`` — a base that does move — and that is where a
+    genuinely unowned new path is caught.
+    """
+    added = subprocess.check_output(
+        ["git", "diff", "--diff-filter=A", "--name-only", base_ref, "HEAD"],
+        cwd=ROOT,
+        text=True,
+    )
+    return frozenset(line.strip() for line in added.splitlines() if line.strip())
+
+
+def _invalid_reasons_for_base_paths(manifest, base_ref: str) -> tuple[str, ...]:
+    """``manifest.invalid_reasons`` minus paths added after ``base_ref``."""
+    ignored = _paths_added_since(base_ref)
+    return tuple(
+        reason
+        for reason in manifest.invalid_reasons
+        if reason.split(":", 1)[0].strip() not in ignored
+    )
+
+
+def _unaccounted_base_paths(manifest, base_ref: str) -> tuple[PurePosixPath, ...]:
+    """``manifest.unaccounted_tracked_paths`` minus post-base additions."""
+    ignored = _paths_added_since(base_ref)
+    return tuple(
+        path for path in manifest.unaccounted_tracked_paths if path.as_posix() not in ignored
+    )
+
+
 EXPECTED_PATH = ROOT / ".pdd" / "expected-managed.json"
 OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
@@ -1580,8 +1624,8 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
         if item.candidate_id.artifact_relpath.as_posix()
         in SYNC_ROLLOUT_EXISTING_METADATA_PATHS
     }
-    assert not manifest.invalid_reasons
-    assert not manifest.unaccounted_tracked_paths
+    assert not _invalid_reasons_for_base_paths(manifest, SYNC_ROLLOUT_PROTECTED_BASE)
+    assert not _unaccounted_base_paths(manifest, SYNC_ROLLOUT_PROTECTED_BASE)
     assert set(records) == SYNC_ROLLOUT_EXISTING_METADATA_PATHS
     assert all(
         item.in_base
@@ -1661,8 +1705,10 @@ def test_release_video_opt_out_uses_only_actual_base_owned_paths() -> None:
         in RELEASE_VIDEO_OPT_OUT_EXISTING_PATHS
     }
 
-    assert not manifest.invalid_reasons
-    assert not manifest.unaccounted_tracked_paths
+    assert not _invalid_reasons_for_base_paths(
+        manifest, RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE
+    )
+    assert not _unaccounted_base_paths(manifest, RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE)
     assert set(records) == RELEASE_VIDEO_OPT_OUT_EXISTING_PATHS
     assert all(item.in_base and item.in_head for item in records.values())
     makefile = records["Makefile"]
@@ -3306,3 +3352,54 @@ def test_sync_rollout_repair_ownership_pin_tracks_the_actual_policy_file() -> No
         "_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES[1] in pdd/sync_core/manifest.py. "
         f"Set it to {actual!r}."
     )
+
+
+class _FakeManifest:
+    """Minimal stand-in exposing only the two fields the filters read."""
+
+    def __init__(self, invalid_reasons, unaccounted_tracked_paths):
+        self.invalid_reasons = tuple(invalid_reasons)
+        self.unaccounted_tracked_paths = tuple(unaccounted_tracked_paths)
+
+
+def test_post_base_addition_filter_ignores_only_paths_added_after_the_base() -> None:
+    """Pinned-base regressions must not become a blanket ban on new files.
+
+    ``manifest._ownership_rules`` reads ownership only from the protected base,
+    so a path added after a pinned base can never have a rule there. Filtering
+    those out keeps the pinned-base guards meaningful without making the
+    repository unable to accept new files.
+    """
+    base = SYNC_ROLLOUT_PROTECTED_BASE
+    added = _paths_added_since(base)
+    assert added, "expected at least one path added since the pinned base"
+
+    new_path = sorted(added)[0]
+    stale_path = "pdd/llm_invoke.py"
+    assert stale_path not in added, "control path must predate the pinned base"
+
+    manifest = _FakeManifest(
+        invalid_reasons=(
+            f"{new_path}: tracked path has no ownership rule",
+            f"{stale_path}: tracked path has no ownership rule",
+        ),
+        unaccounted_tracked_paths=(PurePosixPath(new_path), PurePosixPath(stale_path)),
+    )
+
+    # The post-base addition is excluded; the pre-existing path still fails.
+    assert _invalid_reasons_for_base_paths(manifest, base) == (
+        f"{stale_path}: tracked path has no ownership rule",
+    )
+    assert _unaccounted_base_paths(manifest, base) == (PurePosixPath(stale_path),)
+
+
+def test_post_base_addition_filter_is_inert_when_nothing_was_added() -> None:
+    """Filtering against HEAD itself must change nothing."""
+    manifest = _FakeManifest(
+        invalid_reasons=("pdd/llm_invoke.py: tracked path has no ownership rule",),
+        unaccounted_tracked_paths=(PurePosixPath("pdd/llm_invoke.py"),),
+    )
+
+    assert _paths_added_since("HEAD") == frozenset()
+    assert _invalid_reasons_for_base_paths(manifest, "HEAD") == manifest.invalid_reasons
+    assert _unaccounted_base_paths(manifest, "HEAD") == manifest.unaccounted_tracked_paths
