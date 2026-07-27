@@ -32,10 +32,11 @@ Entry point for sync orchestration. Supports two public workflows:
 14. Run dry-run validation for each module (see Dry-Run Validation below); fail the workflow if any module cannot be validated
 15. Filter already-synced modules via fingerprint check (see Fingerprint Filtering below); skip workflow if all modules are synced
 16. If `dry_run=True`, stop after dry-run validation and fingerprint filtering, return success with a concise list of modules that would sync, and do not instantiate `AsyncSyncRunner` or `DurableSyncRunner`
-17. Dispatch to `AsyncSyncRunner` with basenames, dep graph, sync options, GitHub info, `issue_url`, `module_cwds` map from dry-run validation, and `initial_cost` (the sum of LLM identification + dry-run LLM fallback costs) so the runner can display the full cost in its GitHub progress comment
-18. If `durable=True`, dispatch to `DurableSyncRunner` instead of `AsyncSyncRunner`. Pass the issue URL, durable branch override, `no_resume` flag, and durable max-parallel setting through unchanged. Durable mode must still use the same module identification, dependency graph, dry-run validation, fingerprint filtering, sync options, and initial cost accounting as standard issue sync.
-19. Aggregate costs from LLM identification + dry-run LLM fallback + runner execution
-20. Include `one_session`, `local`, and `target_coverage` in `sync_options` dict passed to the selected runner
+17. Extract issue split-contract allowed write sets from the raw issue body/comments before escaping braces. `_extract_allowed_write_paths(issue_text)` must recognize explicit contract marker lines that start with `allowed write set`, `allowed files`, `allowed paths`, `allowed only`, or `split contract`/`issue contract` plus `allowed`, then collect backticked repo-relative paths in first-seen order. Do not parse title text or historical prose such as "in PR X, the issue contract allowed only"; return an empty list when no contract marker is present so legacy issues are unaffected.
+18. Dispatch to `AsyncSyncRunner` with basenames, dep graph, sync options, GitHub info, `issue_url`, `module_cwds` map from dry-run validation, `initial_cost` (the sum of LLM identification + dry-run LLM fallback costs), and the extracted `allowed_write_paths` so the runner can block generated artifacts outside the issue contract.
+19. If `durable=True`, dispatch to `DurableSyncRunner` instead of `AsyncSyncRunner`. Pass the issue URL, durable branch override, `no_resume` flag, durable max-parallel setting, and `allowed_write_paths` through unchanged. Durable mode must still use the same module identification, dependency graph, dry-run validation, fingerprint filtering, sync options, initial cost accounting, and write-set enforcement as standard issue sync.
+20. Aggregate costs from LLM identification + dry-run LLM fallback + runner execution
+21. Include `one_session`, `local`, and `target_coverage` in `sync_options` dict passed to the selected runner
 
 % Global Sync (Tier 1)
 1. Function: `run_global_sync(*, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, dry_run: bool = False, target_coverage: Optional[float] = None, one_session: bool = False, local: bool = False, timeout_adder: float = 0.0) -> Tuple[bool, str, float, str]`. Forward `timeout_adder` to the runner via `sync_options['timeout_adder']`.
@@ -78,6 +79,7 @@ After dry-run validation, check which modules are already fully synced:
 - `_find_project_root(start: Path) -> Path`: walk up to find `.pddrc` or `.git`
 - `_load_architecture_json(project_root: Path, issue_number: Optional[int] = None) -> Tuple[Optional[List], Path]`: discover and combine architecture files via `find_architecture_for_project`
 - `_parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict]]`: extract modules (deduplicated), deps validity, corrections
+- `_extract_allowed_write_paths(issue_text: str) -> List[str]`: parse split-contract allowed write sets from issue body/comments. Capture only backticked repo-relative paths after an allowed-write marker and preserve order.
 - `_apply_architecture_corrections(arch_path, architecture, corrections, quiet) -> List[Dict]`: patch and write architecture.json
 - `_is_catchall_match(basename: str, config: Dict) -> bool`: check if match is only from wildcard patterns (specificity 0)
 - `_is_broad_basename_glob_match(basename: str, config: Dict, context_name: str) -> bool`: check if a nested context matched only via broad basename globs such as `*llm*`

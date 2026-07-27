@@ -531,12 +531,15 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
     assert abs(cost - 7.50) < 0.0001
 
     # Verify command - now uses full path from _find_cli_binary
-    args, _ = mock_subprocess.call_args
+    args, kwargs = mock_subprocess.call_args
     cmd = args[0]
     assert cmd[0] == "/bin/codex"  # Uses discovered path, not hardcoded name
     assert "--sandbox" in cmd
     assert "danger-full-access" in cmd
     assert "--json" in cmd
+    assert cmd[-1] == "-"
+    assert kwargs["input"] is not None
+    assert "instruction" in kwargs["input"]
 
 def test_run_agentic_task_fallback(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
     """Test fallback from Anthropic (failure) to Google (success)."""
@@ -3576,6 +3579,42 @@ def test_issue557_ndjson_modern_item_completed_parsing(tmp_path):
         f"Expected agent_message text in output, got: {output!r}"
     )
     assert "auth" in output and "payments" in output
+
+
+def test_codex_provider_pipes_prompt_via_stdin(tmp_path):
+    """Codex positional prompt must be '-' so it receives the prompt body."""
+    from pdd.agentic_common import _run_with_provider
+
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
+         patch("pdd.agentic_common._subprocess_run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({
+                "type": "result",
+                "output": "ok",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 10,
+                    "cached_input_tokens": 0,
+                },
+            }),
+            stderr="",
+        )
+        prompt_file = tmp_path / ".agentic_prompt_test.txt"
+        prompt_file.write_text("test prompt body")
+
+        success, output, _cost, _model = _run_with_provider(
+            "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=False
+        )
+
+    assert success is True
+    assert output == "ok"
+    args, kwargs = mock_run.call_args
+    cmd = args[0]
+    assert cmd[-1] == "-"
+    assert str(prompt_file) not in cmd
+    assert kwargs["input"] == "test prompt body"
 
 
 def test_issue557_ndjson_multiple_item_completed_picks_agent_message(tmp_path):

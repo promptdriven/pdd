@@ -325,6 +325,15 @@ def test_unsafe_staged_paths_rejects_sensitive_artifacts(tmp_path: Path):
     assert result == sorted(unsafe_paths)
 
 
+def test_allowed_write_set_rejects_out_of_scope_checkpoint_paths(tmp_path: Path):
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(repo, allowed_write_paths=["src/app.py"])
+
+    assert runner._out_of_scope_staged_paths(
+        ["src/app.py", "architecture.json", ".pdd/meta/foo_python.json"]
+    ) == [".pdd/meta/foo_python.json", "architecture.json"]
+
+
 def test_push_failure_preserves_local_checkpoint_and_next_run_pushes_it(tmp_path: Path):
     repo = _init_repo_with_remote(tmp_path)
     first = _runner(repo, runner_cls=PushFailingMetadataRunner)
