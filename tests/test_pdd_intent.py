@@ -9,6 +9,7 @@ import pytest
 from pdd.intent import (
     INTENT_PLAN_SCHEMA_VERSION,
     build_intent_plan,
+    detected_technology_terms,
     intent_plan_to_dict,
     render_review_card,
 )
@@ -310,3 +311,28 @@ def test_empty_greenfield_root_stays_unwarned(tmp_path: Path) -> None:
     assert plan.project_kind == "greenfield"
     assert not any("no recognized source" in item for item in plan.open_decisions)
     assert not any("non-source files" in item for item in plan.warnings)
+
+
+def test_greenfield_without_a_named_technology_is_flagged(tmp_path: Path) -> None:
+    """Planning must surface the undecided stack before apply is attempted."""
+    plan = build_intent_plan("Create a calculator.", tmp_path / "new_project")
+
+    assert plan.project_kind == "greenfield"
+    assert detected_technology_terms(plan.original_request) == ()
+    assert any("No language or runtime" in item for item in plan.open_decisions)
+    assert any("cannot select a technology" in item for item in plan.warnings)
+
+
+def test_named_technology_is_detected_and_not_flagged(tmp_path: Path) -> None:
+    plan = build_intent_plan(
+        "Create a calculator in Python using poetry.", tmp_path / "new_project"
+    )
+
+    assert detected_technology_terms(plan.original_request) == ("poetry", "python")
+    assert not any("No language or runtime" in item for item in plan.open_decisions)
+    assert not any("cannot select a technology" in item for item in plan.warnings)
+
+
+def test_ambiguous_english_is_not_mistaken_for_a_technology() -> None:
+    """A false positive would let generation start on an undecided stack."""
+    assert detected_technology_terms("Go through the c and r columns.") == ()

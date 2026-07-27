@@ -152,6 +152,67 @@ _NEGATIVE_OR_INVARIANT_MARKERS = (
     "unchanged",
 )
 _EXAMPLE_MARKERS = ("for example", "e.g.", "such as", "when ")
+# Deliberately excludes ambiguous ordinary words such as "go", "c", and "r":
+# a missed technology only costs an explicit assertion, while a false match
+# lets greenfield generation start against an undecided stack.
+_TECHNOLOGY_TERMS = frozenset(
+    {
+        "angular",
+        "bash",
+        "bun",
+        "cargo",
+        "clojure",
+        "cmake",
+        "cpp",
+        "csharp",
+        "deno",
+        "django",
+        "docker",
+        "dotnet",
+        "elixir",
+        "erlang",
+        "fastapi",
+        "flask",
+        "fortran",
+        "golang",
+        "haskell",
+        "java",
+        "javascript",
+        "julia",
+        "kotlin",
+        "kubernetes",
+        "lua",
+        "matlab",
+        "mongodb",
+        "mysql",
+        "node",
+        "nodejs",
+        "perl",
+        "php",
+        "pnpm",
+        "poetry",
+        "postgres",
+        "postgresql",
+        "powershell",
+        "python",
+        "python3",
+        "rails",
+        "react",
+        "ruby",
+        "rust",
+        "scala",
+        "spring",
+        "sqlite",
+        "svelte",
+        "swift",
+        "terraform",
+        "typescript",
+        "vue",
+        "wasm",
+        "webassembly",
+        "zig",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -541,6 +602,17 @@ def _story_recommendation(request: str) -> Tuple[bool, Tuple[str, ...]]:
     return bool(reasons), tuple(reasons)
 
 
+def detected_technology_terms(request: str) -> Tuple[str, ...]:
+    """Return technology names stated in the request, in stable order.
+
+    Greenfield generation must pick a language and runtime. When the request
+    names none, an agent should decide explicitly rather than let the
+    architecture workflow guess at cost.
+    """
+    found = {term for term in _lexemes(request) if term in _TECHNOLOGY_TERMS}
+    return tuple(sorted(found))
+
+
 def _infer_title(request: str) -> str:
     first = next((line.strip() for line in request.splitlines() if line.strip()), "Intent")
     first = re.sub(r"^[#*>\-\s]+", "", first).strip()
@@ -640,6 +712,15 @@ def build_intent_plan(
         open_decisions.append(
             "Review the proposed technology choices and architecture before prompt generation."
         )
+        if not detected_technology_terms(retained_request):
+            open_decisions.append(
+                "No language or runtime was named; decide the technology before any "
+                "greenfield generation is attempted."
+            )
+            warnings.append(
+                "Greenfield generation cannot select a technology on its own. Apply "
+                "will refuse until the request names one or the agent asserts it."
+            )
         if project_exists and other_content_found:
             open_decisions.append(
                 "This existing directory holds files but no recognized source; confirm "
