@@ -122,8 +122,12 @@ and allocate the other eight by phase:
   uncertainty, and up to four for high uncertainty.
 - Implementation: up to seven Terra-high workers, normally leaving one slot
   free for newly discovered work or replacement.
-- Review: one Sol-high reviewer at a time; unused slots remain available for
-  independent reproduction of uncertain findings.
+- Review: one Sol-high reviewer at a time per PR; unused slots remain
+  available for independent reproduction of uncertain findings, and for
+  reviewing *other* PRs concurrently. Rounds are sequential within a PR
+  because each round reviews the previous round's remediation — that ordering
+  is the point, and parallel reviewers of the same head would duplicate the
+  first round rather than deepen it.
 - Remediation: up to seven Terra-high workers when findings have disjoint
   ownership.
 
@@ -293,15 +297,61 @@ unrelated files must not appear unexpectedly.
 
 ### 5. Sequential review/fix loop
 
-Run at most three sequential review rounds. Launch exactly one fresh Sol-high
-reviewer per round, remediate that review before starting the next reviewer, and
-stop early when a reviewer returns clean.
+#### Risk tier
+
+Classify the PR before reviewing it. The tier sets review depth; it never
+changes the standard for what counts as a finding.
+
+**Tier A — touches product code.** Any change to shipped code: `pdd/`,
+`scripts/`, `ci/`, `.github/workflows/`, `Makefile`, or packaging metadata.
+Run the full loop: up to three sequential rounds.
+
+**Tier B — touches no product code.** The diff is confined to `tests/`,
+`.pdd/`, `docs/`, and fixtures. Run **one** review round with the correctness
+perspective, widened to ask explicitly whether the change weakens a signal —
+a loosened assertion, a widened allowlist, a disabled or skipped test.
+
+Tier B is not a lower bar, it is less repetition. The reviewer still inspects
+the whole diff exhaustively and applies the same P1/P2 classification.
+
+Any reviewer may promote a PR from Tier B to Tier A, and says so in its
+verdict. Promote whenever the change alters what the suite would *catch*
+rather than only how it is expressed: a fixture that now masks a real defect
+is a product change wearing a test's clothes. When in doubt, promote.
+
+Why the tiers exist: of 91 PRs merged in the two weeks to 2026-07-26, 29 (32%)
+touched no product code at all, at a median of one file each. That set is every
+`preauthorize` bookkeeping PR, every fixture stabilization, and the four
+prose-judge regex widenings (#2278, #2281, #2283, #2286) that blocked the
+v0.0.307 release for roughly 21 hours. Paying three sequential full-diff
+reviews for a one-line allowlist edit is most of why release-blocking churn
+cleared so slowly.
+
+#### Rounds
+
+Run at most three sequential review rounds for Tier A, or one for Tier B.
+Launch exactly one fresh Sol-high reviewer per round, remediate that review
+before starting the next reviewer, and stop early when a reviewer returns
+clean.
 
 A round is consumed when its reviewer returns a verdict. A failed launch or
 timed-out reviewer may be replaced without consuming a round.
 
-Each reviewer inspects the whole current diff exhaustively. Give each round a
-primary perspective so successive reviews add depth:
+The first reviewer of a PR inspects the whole diff exhaustively. A reviewer
+that follows remediation inspects **the delta since the previous verdict, plus
+everything that delta can affect** — callers of changed functions, tests
+covering changed behavior, and any invariant the previous round relied on. It
+does not re-derive the untouched remainder of the diff from scratch.
+
+This is what makes remediation affordable. Under whole-diff re-review every fix
+invalidated the entire preceding review, so cost grew as rounds times diff
+size, and a large PR was punished for having findings at all.
+
+State the reviewed scope in the verdict: `full-diff` or `delta-since-<sha>`.
+A reviewer that cannot bound the blast radius of a delta reviews the full diff
+and says so.
+
+Give each Tier A round a primary perspective so successive reviews add depth:
 
 1. **Round 1 — correctness:** logic, state transitions, error handling, async
    and concurrency behavior, backward compatibility.
@@ -317,13 +367,18 @@ it finds.
 Reviewer rules:
 
 - Model must be `gpt-5.6-sol` with `high` reasoning.
-- Review the integrated diff against `origin/main`.
+- Review the integrated diff against `origin/main`, or the assigned delta plus
+  its blast radius after remediation.
 - Remain read-only.
 - Find all material findings in one pass.
 - Review only the current code and evidence; do not inherit or merely confirm
-  the previous reviewer's conclusions.
+  the previous reviewer's conclusions. A delta reviewer inherits *scope* from
+  the previous round, never *judgement*: re-examine any earlier conclusion the
+  delta touches.
 - Cite exact files and lines.
 - Classify findings as P1 or P2 and provide a concrete proposed fix.
+- State the risk tier and the reviewed scope (`full-diff` or
+  `delta-since-<sha>`) in the verdict.
 - Return a structured verdict to the orchestrator; the orchestrator posts one
   PR comment for that round.
 
@@ -464,7 +519,9 @@ The loop is complete when all of these are true:
 3. Every P2 is fixed, disproven with evidence, or documented as an accepted
    trade-off supported by repository behavior or an explicit invariant.
 4. The most recent Sol-high reviewer returned clean, and no code changed after
-   that verdict.
+   that verdict. A clean delta review satisfies this: the delta reviewer's
+   scope plus the earlier full-diff review must together cover every line of
+   the final diff, with no gap between the last full review and HEAD.
 5. Targeted tests and lint pass.
 6. The safe end-to-end boundary passes, or an explicitly required live path is
    documented as the sole escalation.
@@ -523,12 +580,24 @@ Model: gpt-5.6-sol
 Reasoning: high
 Mutation: forbidden
 
-Review the complete integrated diff against origin/main from the assigned
-perspective, while remaining alert to every material correctness, security,
-verification, compatibility, and design issue.
+Risk tier: <A | B>
+Scope: <full-diff | delta-since-<sha>>
 
-Be exhaustive in one pass. Review the current diff independently rather than
-inheriting the prior reviewer's conclusions. For each finding return:
+Review the assigned scope against origin/main from the assigned perspective,
+while remaining alert to every material correctness, security, verification,
+compatibility, and design issue. For a delta scope, also review everything the
+delta can affect: callers of changed functions, tests covering changed
+behavior, and any invariant the previous round relied on. If you cannot bound
+that blast radius, review the full diff and say so.
+
+For Tier B (no product code), additionally answer explicitly: does this change
+weaken a signal? Look for loosened assertions, widened allowlists, and
+disabled or skipped tests. If the change alters what the suite would catch
+rather than only how it is expressed, promote it to Tier A and say so.
+
+Be exhaustive in one pass. Review the current code independently rather than
+inheriting the prior reviewer's conclusions; you inherit scope, never
+judgement. For each finding return:
 - P1 or P2;
 - one-line title;
 - exact file and line;
@@ -553,7 +622,8 @@ or wait for another reviewer.
 
 ### Parallel execution
 - Terra-high lane: <ownership> — <commits>
-- Sol-high sequential rounds: <round, perspective, and verdict>
+- Risk tier: <A | B, and any promotion with its reason>
+- Sol-high sequential rounds: <round, perspective, scope, and verdict>
 
 ### Review disposition
 - <finding>: FIXED | DISPROVEN | ACCEPTED — <evidence or rationale>
