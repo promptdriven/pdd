@@ -1295,8 +1295,20 @@ def _check_hard_stop(step_num: Union[int, float], output: str, files_extracted: 
     return None
 
 
-# Step 3 clarification hard-stop: resume must re-run triage with new user comments.
-_CLARIFICATION_STEPS = {3}
+# Resumable hard stops need user feedback and must rewind far enough to recreate
+# every uncommitted artifact in a fresh executor filesystem.  Step 3 has not
+# created a worktree yet, so triage alone can rerun.  Stops from Step 7 onward
+# rewind to Step 5 because reproduction, prompt, and test files from those
+# steps are intentionally uncommitted until Step 12 and therefore do not
+# survive an ephemeral Cloud Run execution.
+_HARD_STOP_RESTART_AFTER = {
+    3: 2,
+    7: 4,
+    9: 4,
+    10: 4,
+    11: 4,
+}
+_CLARIFICATION_STEPS = set(_HARD_STOP_RESTART_AFTER)
 
 # Steps whose recoverable soft-failure hands downstream work a deterministic
 # fallback (Step 8 test strategy → Step 9 fallback test plan). Their persisted
@@ -2055,7 +2067,42 @@ def run_agentic_bug_orchestrator(
         cwd=cwd,
         quiet=quiet,
     )
-    if state.get("steer_generation", 0) != steer_generation_before:
+    # A prior hard stop may have cached reasoning and visible reports whose
+    # underlying files lived only in the terminated executor.  Once its user
+    # feedback has been merged, discard the stale suffix so the resumed run
+    # deterministically recreates those artifacts before PR creation.
+    paused_step = state.get("awaiting_clarification_step")
+    try:
+        paused_step_num = int(paused_step)
+    except (TypeError, ValueError):
+        paused_step_num = None
+    restart_after = _HARD_STOP_RESTART_AFTER.get(paused_step_num)
+    clarification_rewound = restart_after is not None
+    if restart_after is not None:
+        for key in list(step_outputs):
+            try:
+                output_step = int(float(key))
+            except (TypeError, ValueError):
+                continue
+            if output_step > restart_after:
+                step_outputs.pop(key, None)
+        step_comments = state.get("step_comments")
+        if isinstance(step_comments, dict):
+            for key in list(step_comments):
+                try:
+                    comment_step = int(float(key))
+                except (TypeError, ValueError):
+                    continue
+                if comment_step > restart_after:
+                    step_comments.pop(key, None)
+        state["last_completed_step"] = restart_after
+        last_completed_step = restart_after
+        state.pop("awaiting_clarification_step", None)
+
+    if (
+        state.get("steer_generation", 0) != steer_generation_before
+        or clarification_rewound
+    ):
         save_result = save_workflow_state(
             cwd,
             issue_number,
@@ -3444,10 +3491,12 @@ def run_agentic_bug_orchestrator(
         if stop_reason:
             if not quiet:
                 console.print(f"[yellow]⏹️  Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
-            # Clarification stops save step_num - 1 so triage re-runs on resume.
-            state["last_completed_step"] = (
-                step_num - 1 if step_num in _CLARIFICATION_STEPS else step_num
-            )
+            restart_after = _HARD_STOP_RESTART_AFTER.get(step_num)
+            if restart_after is not None:
+                state["awaiting_clarification_step"] = step_num
+                state["last_completed_step"] = restart_after
+            else:
+                state["last_completed_step"] = step_num
             state["step_outputs"][str(step_num)] = _state_safe_step_output(step_output)
             save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             if save_result:

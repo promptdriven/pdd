@@ -1413,6 +1413,17 @@ def workflow_awaiting_clarification(
     clarification_step_numbers: Set[int],
 ) -> bool:
     """True when cached outputs show the workflow paused for user clarification."""
+    # Orchestrators with non-textual hard-stop conditions (for example, a
+    # missing generated file or a failed test-quality gate) persist the exact
+    # paused step explicitly.  Those stops cannot be recovered reliably by
+    # scanning the cached LLM output for STOP_CONDITION text alone.
+    paused_step = state.get("awaiting_clarification_step")
+    try:
+        if int(paused_step) in clarification_step_numbers:
+            return True
+    except (TypeError, ValueError):
+        pass
+
     outputs = state.get("step_outputs") or {}
     for step in clarification_step_numbers:
         out = outputs.get(str(step), "")

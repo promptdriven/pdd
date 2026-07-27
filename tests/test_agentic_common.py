@@ -6865,6 +6865,19 @@ def test_workflow_awaiting_clarification_needs_more_info_without_stop_tag():
     assert workflow_awaiting_clarification(state, {4}) is False
 
 
+def test_workflow_awaiting_clarification_explicit_hard_stop_step():
+    """Non-textual quality-gate stops use the persisted paused-step marker."""
+    from pdd.agentic_common import workflow_awaiting_clarification
+
+    state = {
+        "awaiting_clarification_step": 10,
+        "step_outputs": {"10": "FAIL: Test does not work as expected"},
+    }
+
+    assert workflow_awaiting_clarification(state, {3, 10}) is True
+    assert workflow_awaiting_clarification(state, {3, 11}) is False
+
+
 def test_apply_clarification_steers_on_resume_merges_content(mock_cwd):
     from pdd.agentic_common import apply_clarification_steers_on_resume
 

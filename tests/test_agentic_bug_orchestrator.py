@@ -857,6 +857,116 @@ def test_step3_clarification_saves_step_minus_one(mock_dependencies, default_arg
     assert "Stopped at step 3" in msg
     final_state = mock_save.call_args[0][3]
     assert final_state["last_completed_step"] == 2
+    assert final_state["awaiting_clarification_step"] == 3
+
+
+def test_step10_clarification_rewinds_to_persistable_boundary(
+    mock_dependencies, default_args
+):
+    """A bad generated test must resume before ephemeral artifacts were made."""
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_CREATED: tests/test_bug.py", 0.1, "model")
+        if label == "step10":
+            return (
+                True,
+                "FAIL: Test does not work as expected",
+                0.1,
+                "model",
+            )
+        return (True, f"Output for {label}", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+    with patch(
+        "pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None
+    ) as mock_save:
+        success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert "Stopped at step 10" in msg
+    final_state = mock_save.call_args[0][3]
+    assert final_state["last_completed_step"] == 4
+    assert final_state["awaiting_clarification_step"] == 10
+    assert "9" in final_state["step_outputs"]
+    assert "10" in final_state["step_outputs"]
+
+
+def test_step10_clarification_resume_recreates_ephemeral_artifacts(
+    mock_dependencies, default_args, monkeypatch
+):
+    """Step-10 feedback rewinds to Step 5 and reaches regenerated PR work."""
+    mock_run, mock_load, _ = mock_dependencies
+    resumed_state = {
+        "last_completed_step": 4,
+        "step_outputs": {
+            str(step): (
+                "FAIL: Test does not work as expected"
+                if step == 10
+                else f"stale output {step}"
+            )
+            for step in range(1, 11)
+        },
+        "step_comments": {
+            str(step): {"posted": True} for step in range(1, 11)
+        },
+        "awaiting_clarification_step": 10,
+        "last_steered_comment_id": "100",
+        "total_cost": 1.0,
+        "model_used": "model",
+        "clean_restart": True,
+    }
+    monkeypatch.setenv(
+        "PDD_STEER_JSON",
+        '[{"comment_id":"101","author":"reporter","body":"Keep the six behavioral regressions and remove the static source scans."}]',
+    )
+    mock_load.return_value = "Issue: {issue_content}"
+    captured_step5_prompts = []
+    step5_comment_keys = []
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step5":
+            captured_step5_prompts.append(kwargs.get("instruction", ""))
+            step5_comment_keys.append(set(resumed_state["step_comments"]))
+        if label == "step9":
+            test_path = (
+                default_args["cwd"]
+                / ".pdd/worktrees/fix-issue-1/tests/test_bug.py"
+            )
+            test_path.parent.mkdir(parents=True, exist_ok=True)
+            test_path.write_text("def test_regression():\n    assert False\n")
+            return (True, "FILES_CREATED: tests/test_bug.py", 0.1, "model")
+        if label == "step10":
+            return (True, "Verification passed\nE2E_NEEDED: no", 0.1, "model")
+        if label == "step12":
+            return (True, "PR Created: https://github.com/o/r/pull/1", 0.1, "model")
+        return (True, f"Output for {label}", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+    with patch(
+        "pdd.agentic_bug_orchestrator.load_workflow_state",
+        return_value=(resumed_state, None),
+    ):
+        success, _, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    called_labels = [entry.kwargs["label"] for entry in mock_run.call_args_list]
+    assert called_labels == [
+        "step5",
+        "step6",
+        "step7",
+        "step8",
+        "step9",
+        "step10",
+        "step12",
+    ]
+    assert captured_step5_prompts
+    assert "remove the static source scans" in captured_step5_prompts[0]
+    assert step5_comment_keys == [{"1", "2", "3", "4"}]
+    assert "awaiting_clarification_step" not in resumed_state
 
 
 def test_bug_clarification_resume_merges_steers(mock_dependencies, default_args, tmp_path):
