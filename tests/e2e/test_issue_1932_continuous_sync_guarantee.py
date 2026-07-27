@@ -7,9 +7,11 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Callable, Dict, List
+from unittest.mock import patch
 
 import pytest
 
+from pdd import continuous_sync
 from pdd.operation_log import save_fingerprint
 from pdd.sync_determine_operation import get_pdd_file_paths
 
@@ -104,7 +106,7 @@ def pdd_project(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (repo / "prompts/widget_python.prompt").write_text(
-        "Build a deterministic widget.\n<include>../docs/widget.md</include>\n",
+        "Build a deterministic widget.\n<include>docs/widget.md</include>\n",
         encoding="utf-8",
     )
     (repo / "prompts/runtime_template_LLM.prompt").write_text(
@@ -144,7 +146,7 @@ def pdd_project(tmp_path: Path) -> Path:
 
 
 def _unit_classification(report: dict) -> str:
-    units = report["units"]
+    units = [unit for unit in report["units"] if unit["basename"] == "widget"]
     assert len(units) == 1
     return units[0]["classification"]
 
@@ -171,31 +173,356 @@ def _last_ledger_classification(repo: Path) -> str:
     assert ledger.exists()
     lines = [line for line in ledger.read_text(encoding="utf-8").splitlines() if line]
     assert lines
-    return json.loads(lines[-1])["classification"]
+    widget_entries = [
+        json.loads(line) for line in lines if json.loads(line)["basename"] == "widget"
+    ]
+    assert widget_entries
+    return widget_entries[-1]["classification"]
 
 
 def _fingerprint(repo: Path) -> dict:
     return json.loads((repo / ".pdd/meta/widget_python.json").read_text(encoding="utf-8"))
 
 
-def _assert_valid_fingerprint(repo: Path) -> None:
-    fingerprint = _fingerprint(repo)
-    for key in ("prompt_hash", "code_hash", "example_hash", "test_hash"):
-        assert fingerprint.get(key), f"{key} missing from fingerprint"
+def _write_fingerprint(repo: Path, fingerprint: dict) -> None:
+    (repo / ".pdd/meta/widget_python.json").write_text(
+        json.dumps(fingerprint, indent=2),
+        encoding="utf-8",
+    )
 
 
-def test_issue_1932_clean_baseline_reports_no_drift(pdd_project: Path) -> None:
-    reconcile = _pdd_json(pdd_project, "reconcile", "--json", "--strict")
+def test_issue_1932_complete_inventory_blocks_unbaselined_units(pdd_project: Path) -> None:
+    reconcile = _pdd_json(
+        pdd_project, "reconcile", "--json", "--strict", check=False
+    )
     sync = _pdd_json(pdd_project, "sync", "--dry-run", "--json")
     update = _pdd_json(pdd_project, "update", "--all", "--dry-run", "--json")
 
     for report in (reconcile, sync, update):
-        assert report["ok"] is True
+        assert report["ok"] is False
         assert report["metadata_stale"] == 0
         assert report["summary"]["conflicts"] == 0
-        assert report["summary"]["unbaselined"] == 0
-        assert report["summary"]["total"] == 1
-        assert report["units"][0]["basename"] == "widget"
+        assert report["summary"]["unbaselined"] == 2
+        assert report["summary"]["total"] == 3
+        assert {unit["basename"] for unit in report["units"]} == {
+            "widget",
+            "runtime_template",
+            "unbaselined_helper",
+        }
+
+
+def test_issue_1996_mixed_contexts_keep_implicit_default_prompt_inventory(
+    pdd_project: Path,
+) -> None:
+    (pdd_project / ".pddrc").write_text(
+        "contexts:\n"
+        "  default:\n"
+        "    paths: ['**']\n"
+        "    defaults: {}\n"
+        "  frontend:\n"
+        "    paths: ['frontend/**']\n"
+        "    defaults:\n"
+        "      prompts_dir: prompts/frontend\n",
+        encoding="utf-8",
+    )
+    frontend = pdd_project / "prompts/frontend/card_typescript.prompt"
+    frontend.parent.mkdir(parents=True, exist_ok=True)
+    frontend.write_text("Build a card.\n", encoding="utf-8")
+
+    report = _pdd_json(pdd_project, "sync", "--dry-run", "--json", check=False)
+
+    assert report["ok"] is False
+    assert {unit["basename"] for unit in report["units"]} >= {
+        "widget",
+        "unbaselined_helper",
+        "card",
+    }
+
+
+def test_issue_1996_discovered_context_owns_configured_report_paths(
+    pdd_project: Path,
+) -> None:
+    """Discovery must retain the context identity used for output resolution."""
+    (pdd_project / ".pddrc").write_text(
+        "contexts:\n"
+        "  default:\n"
+        "    paths: ['**']\n"
+        "    defaults: {}\n"
+        "  frontend:\n"
+        "    paths: ['frontend/**']\n"
+        "    defaults:\n"
+        "      prompts_dir: prompts/frontend\n"
+        "      outputs:\n"
+        "        code: {path: 'web/{category}/{name}.{ext}'}\n"
+        "        example: {path: 'demo/{category}/{name}_example.{ext}'}\n"
+        "        test: {path: 'checks/{category}/test_{name}.{ext}'}\n",
+        encoding="utf-8",
+    )
+    prompt = pdd_project / "prompts/frontend/components/AssetCard_typescriptreact.prompt"
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text("Build an asset card.\n", encoding="utf-8")
+
+    report = continuous_sync.build_report(consumer="sync", root=pdd_project)
+    unit = next(
+        item for item in report["units"]
+        if item["paths"]["prompt"].endswith(prompt.name)
+    )
+
+    assert unit["paths"]["code"] == "web/components/AssetCard.tsx"
+    assert unit["paths"]["example"] == "demo/components/AssetCard_example.tsx"
+    assert unit["paths"]["test"] == "checks/components/test_AssetCard.tsx"
+
+
+def test_issue_1996_read_only_resolver_uses_full_context_template_contract(
+    pdd_project: Path,
+) -> None:
+    (pdd_project / ".pddrc").write_text(
+        "contexts:\n"
+        "  default:\n"
+        "    paths: ['**']\n"
+        "    defaults: {}\n"
+        "  frontend:\n"
+        "    paths: ['frontend/**']\n"
+        "    defaults:\n"
+        "      prompts_dir: prompts/frontend\n"
+        "      outputs:\n"
+        "        code:\n"
+        "          path: 'web/{category}/{name}/{name_snake}-{name_pascal}-{name_kebab}.{ext}'\n"
+        "        example:\n"
+        "          path: 'demo/{dir_prefix}{name}.{ext}'\n",
+        encoding="utf-8",
+    )
+    prompt = pdd_project / "prompts/frontend/components/AssetCard_typescriptreact.prompt"
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text("Build an asset card.\n", encoding="utf-8")
+    unit = continuous_sync.SyncUnit(
+        basename="frontend/components/AssetCard",
+        language="typescriptreact",
+        prompt_path=prompt,
+        prompts_dir=pdd_project / "prompts/frontend",
+    )
+
+    paths = continuous_sync._resolve_report_paths(unit, pdd_project)
+
+    assert paths["code"] == pdd_project / "web/components/AssetCard/asset_card-Assetcard-asset-card.tsx"
+    assert paths["example"] == pdd_project / "demo/components/AssetCard.tsx"
+
+
+def test_issue_1996_object_architecture_uses_context_derived_artifact_paths(
+    pdd_project: Path,
+) -> None:
+    (pdd_project / ".pddrc").write_text(
+        "contexts:\n"
+        "  frontend:\n"
+        "    paths: ['frontend/**']\n"
+        "    defaults:\n"
+        "      prompts_dir: prompts/frontend\n"
+        "      generate_output_path: web/src\n"
+        "      example_output_path: web/examples\n"
+        "      test_output_path: web/tests\n",
+        encoding="utf-8",
+    )
+    nested = pdd_project / "prompts/frontend/admin"
+    nested.mkdir(parents=True, exist_ok=True)
+    prompt = nested / "page_typescriptreact.prompt"
+    prompt.write_text("Build admin page.\n", encoding="utf-8")
+    (pdd_project / "prompts/frontend/architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "admin/page_typescriptreact.prompt", "filepath": "page.tsx"}]}),
+        encoding="utf-8",
+    )
+    unit = continuous_sync.SyncUnit(
+        basename="frontend/admin/page",
+        language="typescriptreact",
+        prompt_path=prompt,
+        prompts_dir=pdd_project / "prompts/frontend",
+    )
+
+    paths = continuous_sync._resolve_report_paths(unit, pdd_project)
+
+    assert paths["code"] == pdd_project / "prompts/frontend/web/src/page.tsx"
+    assert paths["example"] == pdd_project / "prompts/frontend/web/examples/page_example.tsx"
+    assert paths["test"] == pdd_project / "prompts/frontend/web/tests/test_page.tsx"
+
+
+def test_issue_1996_nested_architecture_anchors_qualified_filepath_at_owner(
+    pdd_project: Path,
+) -> None:
+    nested = pdd_project / "packages/store"
+    prompt = nested / "prompts/pages/cart_typescriptreact.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("Build cart.\n", encoding="utf-8")
+    (nested / "architecture.json").write_text(
+        json.dumps([
+            {
+                "filename": "pages/cart_typescriptreact.prompt",
+                "filepath": "src/pages/cart.tsx",
+            }
+        ]),
+        encoding="utf-8",
+    )
+    unit = continuous_sync.SyncUnit(
+        "pages/cart", "typescriptreact", prompt, nested / "prompts"
+    )
+
+    paths = continuous_sync._resolve_report_paths(unit, pdd_project)
+
+    assert paths["code"] == nested / "src/pages/cart.tsx"
+
+
+def test_issue_1996_qualified_prompt_rejects_wrong_directory_architecture_leaf(
+    pdd_project: Path,
+) -> None:
+    prompt = pdd_project / "prompts/bar/page_typescriptreact.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("Build bar page.\n", encoding="utf-8")
+    (pdd_project / "architecture.json").write_text(
+        json.dumps([
+            {
+                "filename": "foo/page_typescriptreact.prompt",
+                "filepath": "src/foo/page.tsx",
+            }
+        ]),
+        encoding="utf-8",
+    )
+    unit = continuous_sync.SyncUnit(
+        "bar/page", "typescriptreact", prompt, pdd_project / "prompts"
+    )
+
+    paths = continuous_sync._resolve_report_paths(unit, pdd_project)
+
+    assert paths["code"] == pdd_project / "bar/page.tsx"
+
+
+def test_issue_1996_report_templates_do_not_inspect_unvalidated_external_paths(
+    pdd_project: Path,
+) -> None:
+    outside = pdd_project.parent / "outside"
+    outside.mkdir()
+    (pdd_project / ".pddrc").write_text(
+        "contexts:\n  app:\n    paths: ['app/**']\n    defaults:\n"
+        "      prompts_dir: prompts/app\n      outputs:\n"
+        f"        prompt: {{path: '{outside}/{{name}}_{{language}}.prompt'}}\n"
+        f"        test: {{path: '{outside}/test_{{name}}.{{ext}}'}}\n",
+        encoding="utf-8",
+    )
+    prompt = pdd_project / "prompts/app/widget_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("Build widget.\n", encoding="utf-8")
+    unit = continuous_sync.SyncUnit("app/widget", "python", prompt, prompt.parent)
+
+    with patch(
+        "pdd.sync_main._case_insensitive_prompt_lookup",
+        side_effect=AssertionError("external prompt lookup occurred"),
+    ) as lookup:
+        with pytest.raises(ValueError, match="outside project"):
+            continuous_sync._resolve_report_paths(unit, pdd_project)
+
+    lookup.assert_not_called()
+
+
+def test_issue_1996_duplicate_architecture_leaves_get_distinct_derived_stems(
+    pdd_project: Path,
+) -> None:
+    architecture = {
+        "modules": [
+            {"filename": "admin/page_typescriptreact.prompt", "filepath": "app/admin/page.tsx"},
+            {"filename": "settings/page_typescriptreact.prompt", "filepath": "app/settings/page.tsx"},
+        ]
+    }
+    (pdd_project / "architecture.json").write_text(json.dumps(architecture), encoding="utf-8")
+    prompt = pdd_project / "prompts/admin/page_typescriptreact.prompt"
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text("Build admin page.\n", encoding="utf-8")
+    unit = continuous_sync.SyncUnit(
+        basename="admin/page",
+        language="typescriptreact",
+        prompt_path=prompt,
+        prompts_dir=pdd_project / "prompts",
+    )
+
+    paths = continuous_sync._resolve_report_paths(unit, pdd_project)
+
+    assert paths["example"] == pdd_project / "examples/app_admin_page_example.tsx"
+    assert paths["test"] == pdd_project / "tests/test_app_admin_page.tsx"
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlink unavailable")
+def test_issue_1996_nested_pddrc_symlink_fails_before_identity_read(
+    pdd_project: Path,
+) -> None:
+    nested = pdd_project / "prompts/sub"
+    nested.mkdir()
+    (nested / "thing_python.prompt").write_text("Build thing.\n", encoding="utf-8")
+    outside = pdd_project.parent / "outside-pddrc"
+    outside.write_text("contexts: {}\n", encoding="utf-8")
+    os.symlink(outside, nested / ".pddrc")
+
+    report = _pdd_json(pdd_project, "sync", "--dry-run", "--json", check=False)
+
+    assert report["ok"] is False
+    assert any(item["failure"] == "unsafe_config" for item in report["failures"])
+    assert all(item["basename"] != "sub/thing" for item in report["units"])
+
+
+def test_issue_1996_metadata_units_share_command_discovery_budget(
+    pdd_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(continuous_sync, "MAX_PROMPT_DISCOVERY_FILES", 4)
+    meta = pdd_project / ".pdd/meta"
+    for index in range(8):
+        (meta / f"extra_{index}_python.json").write_text("{}", encoding="utf-8")
+
+    report = continuous_sync.build_report(consumer="sync", root=pdd_project)
+
+    assert report["ok"] is False
+    assert report["summary"]["total"] <= 5
+    assert any(item["failure"] == "discovery_budget" for item in report["failures"])
+
+
+def test_issue_1996_metadata_enumeration_stops_at_remaining_budget(
+    pdd_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    meta = pdd_project / ".pdd/meta"
+    enumerated = 0
+    real_scandir = os.scandir
+
+    def observing_scandir(path: Path):
+        nonlocal enumerated
+        if path != meta:
+            return real_scandir(path)
+        iterator = real_scandir(path)
+
+        class Observed:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                iterator.close()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                nonlocal enumerated
+                entry = next(iterator)
+                enumerated += 1
+                return entry
+
+        return Observed()
+
+    for index in range(20):
+        (meta / f"candidate_{index}_python.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(continuous_sync.os, "scandir", observing_scandir)
+    monkeypatch.setattr(continuous_sync, "MAX_PROMPT_DISCOVERY_ENTRIES", 2)
+
+    _identities, failure = continuous_sync._metadata_identities(
+        meta, pdd_project, {"entries": 0, "files": 0}
+    )
+
+    assert failure is not None and failure.failure == "discovery_budget"
+    assert enumerated == 3
 
 
 @pytest.mark.parametrize(
@@ -212,7 +539,7 @@ def test_issue_1932_clean_baseline_reports_no_drift(pdd_project: Path) -> None:
             "prompts/widget_python.prompt",
             lambda p: p.write_text(
                 "Build a deterministic widget with a new requirement.\n"
-                "<include>../docs/widget.md</include>\n",
+                "<include>docs/widget.md</include>\n",
                 encoding="utf-8",
             ),
             "PROMPT_CHANGED",
@@ -234,14 +561,13 @@ def test_issue_1932_clean_baseline_reports_no_drift(pdd_project: Path) -> None:
         ),
     ],
 )
-def test_issue_1932_all_consumers_classify_and_heal_idempotently(
+def test_issue_1932_all_consumers_classify_without_blind_healing(
     pdd_project: Path,
     name: str,
     path: str,
     edit: Callable[[Path], None],
     classification: str,
 ) -> None:
-    baseline = _git(pdd_project, "rev-parse", "HEAD").stdout.strip()
     edit(pdd_project / path)
     _git(pdd_project, "add", path)
     _git(pdd_project, "commit", "-q", "-m", f"{name} drift")
@@ -249,20 +575,19 @@ def test_issue_1932_all_consumers_classify_and_heal_idempotently(
     _assert_all_consumers_classify(pdd_project, classification)
     assert _last_ledger_classification(pdd_project) == classification
 
-    first_heal = _pdd_json(pdd_project, "reconcile", "--json", "--strict", "--heal")
-    assert first_heal["ok"] is True
-    assert first_heal["metadata_stale"] == 0
-    _assert_valid_fingerprint(pdd_project)
-
-    _git(pdd_project, "add", ".pdd/meta/widget_python.json")
-    _git(pdd_project, "commit", "-q", "-m", f"{name} metadata heal")
-
-    second_heal = _pdd_json(pdd_project, "reconcile", "--json", "--strict", "--heal")
-    assert second_heal["ok"] is True
-    assert second_heal["metadata_stale"] == 0
-    _git(pdd_project, "diff", "--exit-code")
-
-    _git(pdd_project, "reset", "--hard", baseline)
+    fingerprint_before = (pdd_project / ".pdd/meta/widget_python.json").read_text(
+        encoding="utf-8"
+    )
+    refused = _run(
+        pdd_project,
+        [sys.executable, "-m", "pdd", "reconcile", "--json", "--heal"],
+        check=False,
+    )
+    assert refused.returncode != 0
+    assert "--heal is disabled" in refused.stderr
+    assert (pdd_project / ".pdd/meta/widget_python.json").read_text(
+        encoding="utf-8"
+    ) == fingerprint_before
 
 
 def test_issue_1932_unbaselined_fingerprints_are_not_stamped(pdd_project: Path) -> None:
@@ -275,7 +600,6 @@ def test_issue_1932_unbaselined_fingerprints_are_not_stamped(pdd_project: Path) 
         "reconcile",
         "--json",
         "--strict",
-        "--heal",
         "--module",
         "widget",
         check=False,
@@ -290,7 +614,6 @@ def test_issue_1932_unbaselined_fingerprints_are_not_stamped(pdd_project: Path) 
         "reconcile",
         "--json",
         "--strict",
-        "--heal",
         "--module",
         "widget",
         check=False,
@@ -307,7 +630,7 @@ def test_issue_1932_prompt_code_coedit_is_conflict_without_data_loss(pdd_project
     prompt_path = pdd_project / "prompts/widget_python.prompt"
     prompt_text = (
         "Build a deterministic widget with a conflicting prompt change.\n"
-        "<include>../docs/widget.md</include>\n"
+        "<include>docs/widget.md</include>\n"
     )
     prompt_path.write_text(prompt_text, encoding="utf-8")
     (pdd_project / "src/widget.py").write_text(
@@ -316,14 +639,7 @@ def test_issue_1932_prompt_code_coedit_is_conflict_without_data_loss(pdd_project
     )
 
     _assert_all_consumers_classify(pdd_project, "CONFLICT")
-    conflict = _pdd_json(
-        pdd_project,
-        "reconcile",
-        "--json",
-        "--strict",
-        "--heal",
-        check=False,
-    )
+    conflict = _pdd_json(pdd_project, "reconcile", "--json", "--strict", check=False)
     assert conflict["ok"] is False
     assert conflict["conflicts"][0]["operation"] == "conflict"
     assert (pdd_project / ".pdd/meta/widget_python.json").read_text(encoding="utf-8") == fingerprint_before
@@ -334,12 +650,204 @@ def test_issue_1932_incomplete_metadata_reports_failure_not_success(pdd_project:
     fingerprint_path = pdd_project / ".pdd/meta/widget_python.json"
     fingerprint = _fingerprint(pdd_project)
     fingerprint["code_hash"] = None
-    fingerprint_path.write_text(json.dumps(fingerprint, indent=2), encoding="utf-8")
+    _write_fingerprint(pdd_project, fingerprint)
 
     report = _pdd_json(pdd_project, "reconcile", "--json", "--strict", check=False)
     assert report["ok"] is False
     assert report["failures"][0]["classification"] == "FAILURE"
     assert report["failures"][0]["failure"] == "incomplete_metadata"
+
+
+@pytest.mark.parametrize(
+    ("dep_factory", "expected_reason"),
+    [
+        (
+            lambda repo: repo.parent / "outside.md",
+            "outside_project",
+        ),
+        (
+            lambda _repo: "../outside.md",
+            "outside_project",
+        ),
+        (
+            lambda repo: repo / "docs" / "missing.md",
+            "missing",
+        ),
+    ],
+)
+def test_issue_1996_legacy_include_deps_reject_unsafe_paths_before_hashing(
+    pdd_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dep_factory: Callable[[Path], object],
+    expected_reason: str,
+) -> None:
+    dep_path = dep_factory(pdd_project)
+    if isinstance(dep_path, Path) and dep_path.name == "outside.md":
+        dep_path.write_text("outside bytes must not be read\n", encoding="utf-8")
+    if dep_path == "../outside.md":
+        (pdd_project.parent / "outside.md").write_text(
+            "outside bytes must not be read\n",
+            encoding="utf-8",
+        )
+
+    fingerprint = _fingerprint(pdd_project)
+    fingerprint["include_deps"] = {str(dep_path): "stored-hash"}
+    _write_fingerprint(pdd_project, fingerprint)
+
+    def fail_if_hashing_reached(*_args: object, **_kwargs: object) -> dict:
+        raise AssertionError("unsafe include deps reached current hash calculation")
+
+    monkeypatch.setattr(
+        continuous_sync,
+        "calculate_current_hashes",
+        fail_if_hashing_reached,
+    )
+
+    result = continuous_sync.classify_unit(
+        continuous_sync.SyncUnit(
+            basename="widget",
+            language="python",
+            prompt_path=pdd_project / "prompts/widget_python.prompt",
+            prompts_dir=pdd_project / "prompts",
+        ),
+        pdd_project,
+    )
+
+    assert result["classification"] == "FAILURE"
+    assert result["failure"] == "unsafe_include_deps"
+    assert result["unsafe_include_deps"] == [
+        {"path": str(dep_path), "reason": expected_reason}
+    ]
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlink unavailable")
+def test_issue_1996_legacy_include_deps_reject_symlink_before_hashing(
+    pdd_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = pdd_project / "docs" / "target.md"
+    target.write_text("target bytes must not be read through symlink\n", encoding="utf-8")
+    link = pdd_project / "docs" / "link.md"
+    os.symlink(target, link)
+
+    fingerprint = _fingerprint(pdd_project)
+    fingerprint["include_deps"] = {str(link): "stored-hash"}
+    _write_fingerprint(pdd_project, fingerprint)
+
+    monkeypatch.setattr(
+        continuous_sync,
+        "calculate_current_hashes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("symlink include dep reached current hash calculation")
+        ),
+    )
+
+    result = continuous_sync.classify_unit(
+        continuous_sync.SyncUnit(
+            basename="widget",
+            language="python",
+            prompt_path=pdd_project / "prompts/widget_python.prompt",
+            prompts_dir=pdd_project / "prompts",
+        ),
+        pdd_project,
+    )
+
+    assert result["classification"] == "FAILURE"
+    assert result["failure"] == "unsafe_include_deps"
+    assert result["unsafe_include_deps"] == [
+        {"path": str(link), "reason": "symlink"}
+    ]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO unavailable")
+def test_issue_1996_legacy_include_deps_reject_fifo_before_hashing(
+    pdd_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fifo = pdd_project / "docs" / "dep.fifo"
+    os.mkfifo(fifo)
+
+    fingerprint = _fingerprint(pdd_project)
+    fingerprint["include_deps"] = {str(fifo): "stored-hash"}
+    _write_fingerprint(pdd_project, fingerprint)
+
+    monkeypatch.setattr(
+        continuous_sync,
+        "calculate_current_hashes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("FIFO include dep reached current hash calculation")
+        ),
+    )
+
+    result = continuous_sync.classify_unit(
+        continuous_sync.SyncUnit(
+            basename="widget",
+            language="python",
+            prompt_path=pdd_project / "prompts/widget_python.prompt",
+            prompts_dir=pdd_project / "prompts",
+        ),
+        pdd_project,
+    )
+
+    assert result["classification"] == "FAILURE"
+    assert result["failure"] == "unsafe_include_deps"
+    assert result["unsafe_include_deps"] == [
+        {"path": str(fifo), "reason": "nonregular"}
+    ]
+
+
+@pytest.mark.parametrize("include_deps", [["docs/widget.md"], "docs/widget.md", {"docs/widget.md": 7}])
+def test_issue_1996_malformed_include_deps_report_failure_json(
+    pdd_project: Path,
+    include_deps: object,
+) -> None:
+    fingerprint = _fingerprint(pdd_project)
+    fingerprint["include_deps"] = include_deps
+    _write_fingerprint(pdd_project, fingerprint)
+
+    report = _pdd_json(pdd_project, "sync", "--dry-run", "--json", check=False)
+
+    widget = next(unit for unit in report["units"] if unit["basename"] == "widget")
+    assert widget["classification"] == "FAILURE"
+    assert widget["failure"] == "unsafe_include_deps"
+    assert widget["metadata_valid"] is False
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlink unavailable")
+def test_issue_1996_symlinked_metadata_ancestor_reports_failure_without_reading(
+    pdd_project: Path,
+) -> None:
+    meta = pdd_project / ".pdd" / "meta"
+    outside_meta = pdd_project.parent / "outside-meta"
+    meta.rename(outside_meta)
+    os.symlink(outside_meta, meta)
+
+    report = _pdd_json(pdd_project, "sync", "--dry-run", "--json", check=False)
+
+    assert report["ok"] is False
+    assert any(item["failure"] == "unsafe_metadata" for item in report["failures"])
+    assert all(item["basename"] != "widget" for item in report["units"])
+
+
+@pytest.mark.parametrize(
+    "pddrc",
+    [
+        "contexts: []\n",
+        "contexts:\n  default:\n    defaults: []\n",
+        "contexts: [\n",
+    ],
+)
+def test_issue_1996_invalid_pddrc_reports_discovery_failure_json(
+    pdd_project: Path,
+    pddrc: str,
+) -> None:
+    (pdd_project / ".pddrc").write_text(pddrc, encoding="utf-8")
+
+    report = _pdd_json(pdd_project, "sync", "--dry-run", "--json", check=False)
+
+    assert report["ok"] is False
+    assert any(item["failure"] == "invalid_pddrc" for item in report["failures"])
+    assert all(item["basename"] != "widget" for item in report["units"])
 
 
 def test_issue_1932_deleted_generated_artifact_is_failure_not_in_sync(
@@ -355,16 +863,46 @@ def test_issue_1932_deleted_generated_artifact_is_failure_not_in_sync(
     assert report["failures"][0]["failure"] == "missing_artifacts"
     assert report["failures"][0]["changed_files"] == ["code"]
 
-    healed = _pdd_json(
+    refused = _run(
+        pdd_project,
+        [sys.executable, "-m", "pdd", "reconcile", "--json", "--heal"],
+        check=False,
+    )
+    assert refused.returncode != 0
+    assert (pdd_project / ".pdd/meta/widget_python.json").read_text(encoding="utf-8") == fingerprint_before
+
+
+def test_issue_1996_symlinked_generated_artifact_is_failure_not_in_sync(
+    pdd_project: Path,
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside-widget.py"
+    outside.write_text(
+        (pdd_project / "src/widget.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    artifact = pdd_project / "src/widget.py"
+    artifact.unlink()
+    try:
+        artifact.symlink_to(outside)
+    except OSError as exc:  # pragma: no cover - platform permission guard
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    report = _pdd_json(
         pdd_project,
         "reconcile",
         "--json",
         "--strict",
-        "--heal",
+        "--module",
+        "widget",
         check=False,
     )
-    assert healed["ok"] is False
-    assert (pdd_project / ".pdd/meta/widget_python.json").read_text(encoding="utf-8") == fingerprint_before
+    assert report["ok"] is False
+    assert report["summary"]["synced"] == 0
+    assert report["failures"][0]["classification"] == "FAILURE"
+    assert report["failures"][0]["failure"] == "unsafe_artifacts"
+    assert report["failures"][0]["changed_files"] == ["code"]
+    assert "code is a symlink" in report["failures"][0]["reason"]
 
 
 def test_issue_1932_deleted_canonical_artifact_is_not_masked_by_duplicate(
@@ -406,7 +944,7 @@ def test_issue_1932_deleted_prompt_stays_discovered_from_metadata(
         check=False,
     )
     assert default_report["ok"] is False
-    assert default_report["summary"]["total"] == 1
+    assert default_report["summary"]["total"] == 3
     assert default_report["failures"][0]["failure"] == "missing_artifacts"
     assert default_report["failures"][0]["changed_files"] == ["prompt"]
 

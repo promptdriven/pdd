@@ -1,6 +1,7 @@
 language,comment,extension,run_command,run_test_command,outputs
 Python,#,.py,python {file},python -m pytest {file} -v,code|test|example
 Java,//,.java,java {file},,code|test|example
+C,//,.c,,,code|test|example
 C++,//,.cpp,,,code|test|example
 JavaScript,//,.js,node {file},node {file},code|test|example
 HTML,"<!-- -->",.html,,,code

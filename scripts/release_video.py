@@ -77,11 +77,21 @@ DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_sc
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
 DEFAULT_PDS_CLAUDE_MODEL = "glm-5.2"
 DEFAULT_RELEASE_VIDEO_OUTPUT_DIR = ".pdd/release-videos"
-MIN_PDS_CLI_VERSION = (0, 1, 7)
+MIN_PDS_CLI_VERSION = (0, 1, 11)
 MIN_PDS_CLI_VERSION_TEXT = ".".join(str(part) for part in MIN_PDS_CLI_VERSION)
 PDS_VERSION_RE = re.compile(r"(?<!\d)(?P<version>\d+\.\d+\.\d+)(?!\d)")
 PDS_VERSION_PROBE_TIMEOUT_SECONDS = 10.0
 DEFAULT_PDS_CREATE_TIMEOUT_SECONDS = 1800.0
+RELEASE_VIDEO_AUDIT_FIX_POLICY_ARGS = (
+    "--audit-fix-max-passes",
+    "2",
+    "--audit-fix-max-annotations-per-pass",
+    "3",
+    "--audit-fix-max-spend-pddc",
+    "24",
+    "--audit-fix-source-approval",
+    "not-required",
+)
 CLAUDE_OAUTH_TOKEN_ENV_VARS = (
     "CLAUDE_CODE_OAUTH_TOKEN_1",
     "CLAUDE_CODE_OAUTH_TOKEN_2",
@@ -2101,6 +2111,7 @@ def add_optional_pds_create_args(
     changelog_path: Path,
 ) -> None:
     """Append optional PDS release-video create flags in-place."""
+    pds_args.extend(RELEASE_VIDEO_AUDIT_FIX_POLICY_ARGS)
     changelog_full_path = repo / changelog_path
     if changelog_full_path.exists():
         pds_args.extend(["--changelog", str(changelog_full_path)])

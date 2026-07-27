@@ -37,6 +37,7 @@ dependencies = [
     "Requests==2.34.2",
     "aiofiles==25.1.0",
     "click==8.4.1",
+    "cryptography>=46,<50",
     "firecrawl-py==4.28.0",
     "firebase_admin==7.4.0",
     "httpx==0.28.1",
@@ -86,9 +87,11 @@ Issue-Tracker = "https://github.com/promptdriven/pdd/issues"
 
 [project.scripts]
 pdd = "pdd.cli:cli"
+pdd-sync-checker = "pdd.sync_core.released_checker:main"
+pdd-sync-verify = "pdd.sync_core.certificate_verifier:main"
 
 [tool.setuptools]
-packages = ["pdd", "pdd.commands", "pdd.core", "pdd.server", "pdd.server.routes"]
+packages = ["pdd", "pdd.commands", "pdd.core", "pdd.server", "pdd.server.routes", "pdd.sync_core"]
 
 [tool.setuptools.package-data]
 "pdd" = [

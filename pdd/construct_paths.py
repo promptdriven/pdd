@@ -765,53 +765,19 @@ def _candidate_prompt_path(input_files: Dict[str, Path]) -> Path | None:
 def _is_known_language(language_name: str) -> bool:
     """Return True if the language is recognized.
 
-    Prefer CSV in PDD_PATH if available; otherwise fall back to a built-in set
-    so basename/language inference does not fail when PDD_PATH is unset.
+    Resolve only through the package-bundled protected language registry.
     """
     language_name_lower = (language_name or "").lower()
     if not language_name_lower:
         return False
 
-    builtin_languages = {
-        'python', 'javascript', 'typescript', 'typescriptreact', 'javascriptreact',
-        'java', 'cpp', 'c', 'go', 'ruby', 'rust',
-        'kotlin', 'swift', 'csharp', 'php', 'scala', 'r', 'lua', 'perl', 'bash', 'shell',
-        'powershell', 'sql', 'prompt', 'html', 'css', 'makefile',
-        # Additional languages from language_format.csv
-        'haskell', 'dart', 'elixir', 'clojure', 'julia', 'erlang', 'fortran',
-        'nim', 'ocaml', 'groovy', 'coffeescript', 'fish', 'zsh',
-        'prisma', 'lean', 'agda',
-        # Frontend / templating
-        'svelte', 'vue', 'scss', 'sass', 'less',
-        'jinja', 'handlebars', 'pug', 'ejs', 'twig',
-        # Modern / systems languages
-        'zig', 'mojo', 'solidity',
-        # Config / query / infra
-        'graphql', 'protobuf', 'terraform', 'hcl', 'nix',
-        'glsl', 'wgsl', 'starlark', 'dockerfile',
-        # Common data and config formats for architecture prompts and configs
-        'json', 'jsonl', 'yaml', 'yml', 'toml', 'ini'
-    }
-
-    pdd_path_str = os.getenv('PDD_PATH')
-    if not pdd_path_str:
-        return language_name_lower in builtin_languages
-
-    csv_file_path = Path(pdd_path_str) / 'data' / 'language_format.csv'
-    if not csv_file_path.is_file():
-        return language_name_lower in builtin_languages
+    from pdd.sync_core.language import LanguageRegistry, LanguageRegistryError
 
     try:
-        with open(csv_file_path, mode='r', encoding='utf-8', newline='') as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                if row.get('language', '').lower() == language_name_lower:
-                    return True
-    except csv.Error as e:
-        console.print(f"[error]CSV Error reading {csv_file_path}: {e}", style="error")
-        return language_name_lower in builtin_languages
-
-    return language_name_lower in builtin_languages
+        LanguageRegistry.bundled().resolve_alias(language_name_lower)
+    except LanguageRegistryError:
+        return False
+    return True
 
 
 # Languages that only produce a code output (no test/example).

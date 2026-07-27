@@ -23,8 +23,6 @@ from .construct_paths import (
     _find_pddrc_file,
     _get_relative_basename,
     _load_pddrc_config,
-    _detect_context,
-    _get_context_config,
     get_extension
 )
 from .sync_determine_operation import get_pdd_file_paths, AmbiguousModuleError
@@ -932,6 +930,11 @@ def sync_main(
                     basename, resolved_language,
                     str(prompt_file_path.parent),
                     context_override=context_override,
+                )
+
+                from .sync_core.finalize import preflight_legacy_mutation
+                preflight_legacy_mutation(
+                    {"prompt": Path(pdd_files.get("prompt") or Path.cwd())}
                 )
 
                 # Check fingerprint — skip if module is already fully synced

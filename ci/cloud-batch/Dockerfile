@@ -11,7 +11,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tcsh \
     nodejs \
     npm \
+    bubblewrap \
+    sudo \
+    util-linux \
     && rm -rf /var/lib/apt/lists/*
+
+# Protected pytest shards must enter the sandbox as non-root so RLIMIT_NPROC
+# remains kernel-enforced. Trusted bind staging still requires passwordless
+# sudo before setpriv drops back to this user inside the namespace.
+RUN useradd --create-home --uid 1000 --shell /bin/bash pdd && \
+    printf '%s\n' 'pdd ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/pdd && \
+    chmod 0440 /etc/sudoers.d/pdd
 
 # Install Gemini CLI and Codex CLI for agentic fix tests
 RUN npm install -g @google/gemini-cli @openai/codex
@@ -23,9 +33,9 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
     && claude --version
 
 # Git config needed by regression tests that do git init/commit
-RUN git config --global user.email "ci@pdd.dev" && \
-    git config --global user.name "PDD CI" && \
-    git config --global init.defaultBranch main
+RUN git config --system user.email "ci@pdd.dev" && \
+    git config --system user.name "PDD CI" && \
+    git config --system init.defaultBranch main
 
 # Install Python dependencies (rebuild image only when these change)
 WORKDIR /app

@@ -40,9 +40,9 @@ class JudgmentResult:
 CALL_SITE_NAMES = ("ingest", "transform", "export_csv", "audit_log")
 
 _CALL_SITE_TUPLE_HANDLING_PATTERN = re.compile(
-    r"\b(?:unpack|destructur\w*|capture|assign|use|check|inspect|handle|"
+    r"\b(?:unpack(?:s|ed|ing)?|destructur\w*|capture|assign|use|check|inspect|handle|"
     r"update|adapt|adjust|modify)\b.{0,120}\b(?:is_valid|reason)\b|"
-    r"\b(?:is_valid|reason)\b.{0,120}\b(?:unpack|destructur\w*|capture|"
+    r"\b(?:is_valid|reason)\b.{0,120}\b(?:unpack(?:s|ed|ing)?|destructur\w*|capture|"
     r"assign|use|check|inspect|handle|update|adapt|adjust|modify)\b",
     re.IGNORECASE | re.DOTALL,
 )
@@ -74,6 +74,8 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"all\s+\d+\s+(?:retry\s+)?attempts?.{0,80}(?:fail|error|exception)|"
     r"(?:if|when)\s+[\w\s]+fail(?:s|ed)?\s+on\s+(?:the\s+)?"
     r"\d+(?:st|nd|rd|th)\s+attempt|"
+    r"(?:if|when)\s+(?:the\s+)?\d+(?:st|nd|rd|th)\s+attempt\s+"
+    r"(?:(?:also|still)\s+)?fail(?:s|ed)?|"
     r"once\s+(?:the\s+)?(?:max(?:imum)?\s+)?(?:retry\s+)?attempts?\s+"
     r"(?:is\s+|are\s+)?(?:reached|exhausted)|"
     r"(?:once|when|if)\s+(?:the\s+)?max(?:imum)?\s+number\s+of\s+attempts?\s+"
@@ -254,6 +256,14 @@ pipeline.
 class TestDeterministicChangeJudges:
     """Unit coverage for release-gate judges used by the real LLM tests."""
 
+    def test_change_prompt_requires_call_site_safety_in_final_prompt(self) -> None:
+        """The final prompt contract must carry call-site adaptations forward."""
+        template = Path("pdd/prompts/change_LLM.prompt").read_text(encoding="utf-8")
+
+        assert "final modified_prompt itself" in template
+        assert "name every affected call site" in template
+        assert "how each caller must adapt" in template
+
     def test_change_prompt_requires_retry_safety_in_final_prompt(self) -> None:
         template = Path("pdd/prompts/change_LLM.prompt").read_text(encoding="utf-8")
 
@@ -287,6 +297,32 @@ class TestDeterministicChangeJudges:
         assert not copied_inputs.passed
         assert "tuple" in copied_inputs.reasoning
 
+    def test_call_site_judge_accepts_inflected_unpack_before_tuple_name(self) -> None:
+        judgment = _judge_call_site_names(
+            "ingest, transform, export_csv, and audit_log each call validate_record. "
+            "Each caller unpacks the result and branches on is_valid."
+        )
+
+        assert judgment.passed
+
+        unpacked = _judge_call_site_names(
+            "ingest, transform, export_csv, and audit_log each call validate_record. "
+            "Each caller unpacked the result and checked is_valid."
+        )
+        assert unpacked.passed
+
+        unpackable = _judge_call_site_names(
+            "ingest, transform, export_csv, and audit_log see an unpackable result. "
+            "Callers remain unchanged around is_valid."
+        )
+        assert not unpackable.passed
+
+        unpackaged = _judge_call_site_names(
+            "ingest, transform, export_csv, and audit_log receive unpackaged "
+            "is_valid metadata, with no caller changes."
+        )
+        assert not unpackaged.passed
+
     def test_retry_bound_judge_requires_numeric_limit(self) -> None:
         judgment = _judge_retry_bound("Retry up to 3 times before failing.")
         assert judgment.passed
@@ -306,6 +342,22 @@ class TestDeterministicChangeJudges:
             "raise the final connection exception."
         )
         assert ordinal.passed
+
+        ordinal_subject = _judge_retry_fallback(
+            "If the 3rd attempt also fails with a connection error, allow "
+            "the exception to propagate."
+        )
+        assert ordinal_subject.passed
+
+        negated_failure = _judge_retry_fallback(
+            "Retry up to 3 times. If the 3rd attempt does not fail, return success."
+        )
+        assert not negated_failure.passed
+
+        negated_action = _judge_retry_fallback(
+            "If the 3rd attempt succeeds, do not fail the operation; return success."
+        )
+        assert not negated_action.passed
 
         final_attempt = _judge_retry_fallback(
             "Retry up to 3 times. If the final attempt still encounters a "
@@ -349,7 +401,8 @@ class TestCallSiteEnumeration:
         judgment = _judge_call_site_names(modified_prompt)
         assert judgment.passed, (
             f"LLM did not enumerate all 4 call sites. "
-            f"Judge: {judgment.reasoning} | Model: {model}, cost: ${cost:.4f}"
+            f"Judge: {judgment.reasoning} | Model: {model}, cost: ${cost:.4f} | "
+            f"Output excerpt: {modified_prompt[:1000]}"
         )
 
 

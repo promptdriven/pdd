@@ -3196,6 +3196,14 @@ def _load_agentic_config() -> Dict[str, Any]:
     return {}
 
 
+def _is_executable_cli_path(path: Path) -> bool:
+    """Return whether ``path`` is executable without trusting prefix access."""
+    try:
+        return path.exists() and os.access(path, os.X_OK)
+    except OSError:
+        return False
+
+
 def _find_cli_binary(name: str, config: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """
     Find a CLI binary using multiple strategies.
@@ -3224,7 +3232,7 @@ def _find_cli_binary(name: str, config: Optional[Dict[str, Any]] = None) -> Opti
     config_key = f"{name}_path"
     if config_key in config:
         custom_path = Path(config[config_key])
-        if custom_path.exists() and os.access(custom_path, os.X_OK):
+        if _is_executable_cli_path(custom_path):
             return str(custom_path)
 
     # Strategy 2: Standard PATH lookup
@@ -3243,11 +3251,11 @@ def _find_cli_binary(name: str, config: Optional[Dict[str, Any]] = None) -> Opti
             try:
                 for version_dir in path.glob("*/bin"):
                     cli_path = version_dir / name
-                    if cli_path.exists() and os.access(cli_path, os.X_OK):
+                    if _is_executable_cli_path(cli_path):
                         return str(cli_path)
             except Exception:
                 pass
-        elif path.exists() and os.access(path, os.X_OK):
+        elif _is_executable_cli_path(path):
             return str(path)
 
     return None
