@@ -93,7 +93,12 @@ Classify the project as `existing_pdd` when local PDD evidence exists
 otherwise classify it as `conventional_brownfield` when ordinary source files
 exist, and `greenfield` when neither PDD evidence nor ordinary source exists.
 Permit a proposed project root that does not exist yet and classify it as
-greenfield without creating it. Discover the nearest containing Git repository
+greenfield without creating it. When an existing project root holds visible
+files that are neither recognized source nor prompts, such as a documentation
+directory, it MUST still classify as greenfield but MUST also emit a warning
+and an open decision that the root be confirmed before anything is generated
+into it. A genuinely empty root MUST NOT trigger that warning.
+Discover the nearest containing Git repository
 from `.git` evidence and distinguish `repository` from `subproject` scope.
 Return an adoption scenario that distinguishes an existing standalone project,
 a new standalone project, an existing monorepo subproject, a new monorepo
@@ -118,7 +123,11 @@ most five stable, score-sorted candidates. A candidate MUST match at least one
 meaningful request token in an identity field or at least two meaningful
 request tokens in description/reason prose. Common workflow terms such as
 `agent`, `GitHub`, `issue`, `project`, `planning`, `prompt`, and `PDD` MUST NOT
-count as meaningful standalone target tokens. Give additional weight to
+count as meaningful standalone target tokens. Ordinary English function words,
+such as `each`, `every`, `while`, `same`, `other`, `them`, and `what`, MUST NOT
+count either, and a two-word phrase composed only of such words, such as
+`for each`, MUST NOT count as a phrase match. A request that overlaps a product
+area on nothing but function words MUST yield no candidate. Give additional weight to
 matching adjacent two-word phrases, including phrases containing one workflow
 term and one target-specific term (for example, `pdd intent`). After sorting,
 retain only candidates scoring at least 60 percent of the highest score, up to
