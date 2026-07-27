@@ -1,22 +1,20 @@
 {
-  "pdd_version": "0.0.300.dev0",
-  "timestamp": "2026-07-10T18:41:46.623032+00:00",
+  "pdd_version": "0.0.305.dev0",
+  "timestamp": "2026-07-17T16:45:21.171129+00:00",
   "command": "fix",
-  "prompt_hash": "26794b056dcad2d491a8ed86496894ea381aba84f4c1899edda173d33b0024bf",
-  "code_hash": "d04a6cfc261c1e88076398a34d0bf96c4285061668866c5ad305e4b605ffdf56",
+  "prompt_hash": "ef3ad0df0d083968d668d3e48d3e9e53ae2e9defc9a82e82844dc15e41c718e2",
+  "code_hash": "3539ebbfbdae48f0c606451dd400879e010c539fa992aed52d9b30c3d4d18ac9",
   "example_hash": "e7082a4a9ef830048ff32ed774a3e74da1cf4662a22115e6bd5543e1b9cdbf43",
-  "test_hash": "ec9a69c157443c17d8cdece1e5102252f31b470d9107efea66d89cfa977d9d13",
+  "test_hash": "7b39c2c7caaaa31e3c22c467a3a5f092114fc16abd985e150311d6c29a7fc1ae",
   "test_files": {
-    "test_preprocess.py": "ec9a69c157443c17d8cdece1e5102252f31b470d9107efea66d89cfa977d9d13",
-    "test_preprocess_main.py": "0fa3887c7a4e2c3f051ce719117b8f07444da419b35363b9dff4a2b5ae0f17e9",
-    "test_preprocess_main_pdd_tags.py": "abddfe41c460aa7dcd4186028134deb4eef0a85419a7f6f59869a274c25f7ee8"
+    "test_preprocess.py": "7b39c2c7caaaa31e3c22c467a3a5f092114fc16abd985e150311d6c29a7fc1ae"
   },
   "include_deps": {
-    "context/firecrawl_example.py": "4674cc7e418515545b7df1d025fd024ce2006932ede48cebc5c067bc6756f3f1",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
-    "context/auto_include_example.py": "0c278ed716298149777bc7082827eb8aa6d80dac264c66b6cded6871232f2df7",
     "context/path_resolution_example.py": "15ba84fd11c61af8fa12dcb19d63d42f0cb09b747542bf20e69650b8ff4ac137",
-    "pdd/content_selector.py": "727207a44f44c851f3668868f497d348b388b77211bb8ec1e41a5e0b6b79946f",
-    "pdd/include_query_extractor.py": "fa95489a0b7b8f3ad6e887844fe14f38350e56b3d2fc2e4add08318334bcd191"
+    "pdd/content_selector.py": "133080120d2de209a1135d3f20fcb2a7e8f93d6e3295291cf241097eece6f7a1",
+    "pdd/include_query_extractor.py": "fa95489a0b7b8f3ad6e887844fe14f38350e56b3d2fc2e4add08318334bcd191",
+    "context/firecrawl_example.py": "4674cc7e418515545b7df1d025fd024ce2006932ede48cebc5c067bc6756f3f1",
+    "context/auto_include_example.py": "0c278ed716298149777bc7082827eb8aa6d80dac264c66b6cded6871232f2df7"
   }
 }

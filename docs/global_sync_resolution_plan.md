@@ -595,7 +595,7 @@ handling, and enables no conflict resolver until recovery works in CI.
 
 ### 5.6 Transaction protocol
 
-`FingerprintTransaction` owns one resolved unit and participates in a durable
+The sync-core finalizer owns one resolved unit and participates in a durable
 operation journal. Atomic rename of one fingerprint is not described as a
 multi-file transaction.
 
@@ -892,7 +892,7 @@ Issues: #1926, #356, #1836
 
 Tasks:
 
-- Add `FingerprintTransaction`, durable per-operation write-ahead journals,
+- Use the sync-core finalizer with durable per-operation write-ahead journals,
   aggregate multi-unit state, startup recovery, ordered shared-resource locking,
   compare-and-swap preconditions, and typed finalization failures.
 - Route generate, example, auto-deps, update single/all, fix, sync, change,
