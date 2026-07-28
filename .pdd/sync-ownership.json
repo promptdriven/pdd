@@ -34,6 +34,36 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "tests/test_pr_loop_risk_tiers.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_prose_judge_advisory_lane.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_check_cloud_green.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "scripts/check_cloud_green.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".github/workflows/cloud-test-main.yml",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".env.example",
       "role": "human-maintained"
     },
@@ -365,6 +395,18 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/code_generator_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/code_generator_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/commands_checkup_python.json",
       "role": "human-maintained"
     },
@@ -426,7 +468,31 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/continue_generation_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/continue_generation_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/core_cloud_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/detect_change_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/detect_change_python_run.json",
       "role": "human-maintained"
     },
     {
@@ -485,6 +551,18 @@
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/generate_model_catalog_python.json",
       "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/generate_test_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/generate_test_python_run.json",
       "role": "human-maintained"
     },
     {
@@ -552,6 +630,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/preprocess_python.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/postprocess_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
@@ -711,6 +796,13 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": ".pdd/meta/track_cost_python_run.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": ".pdd/meta/unfinished_prompt_python.json",
+      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {

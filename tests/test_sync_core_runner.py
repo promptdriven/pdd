@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Callable
@@ -1298,11 +1299,17 @@ def test_default_runtime_digest_cache_invalidates_changed_native_bytes(
     monkeypatch.setattr(runner_module, "_runtime_digest_cache", {})
     first = runner_module._released_runtime_closure_digest()
     original_stat = native.stat()
-    native.write_bytes(b"native-v2")
+    deadline = time.monotonic() + 2
+    while native.stat().st_ctime_ns == original_stat.st_ctime_ns:
+        native.write_bytes(b"native-v2")
+        if time.monotonic() >= deadline:
+            pytest.fail("native rewrite did not advance ctime within two seconds")
+        time.sleep(0.01)
     os.utime(
         native,
         ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
     )
+    assert native.stat().st_ctime_ns != original_stat.st_ctime_ns
     assert runner_module._released_runtime_closure_digest() != first
 
 

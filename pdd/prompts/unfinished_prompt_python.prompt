@@ -1,3 +1,22 @@
+<pdd-reason>Detects whether LLM output is complete or needs continuation.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "unfinished_prompt",
+        "signature": "(prompt_text: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0, time: float = DEFAULT_TIME, language: Optional[str] = None, verbose: bool = False) -> Tuple[str, bool, float, str]",
+        "returns": "Tuple[str, bool, float, str]",
+        "sideEffects": [
+          "None"
+        ]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a python function called 'unfinished_prompt' that will determine if a given prompt is complete or needs to continue.
 
 <include>./context/python_preamble.prompt</include>
@@ -6,7 +25,7 @@
     Inputs:
         'prompt_text' - A string containing the prompt text to analyze.
         'strength' - A float that is the strength of the LLM model to use for the analysis. Default is DEFAULT_STRENGTH. Range is between 0 and 1.
-        'temperature' - A float that is the temperature of the LLM model to use for the analysis. Default is 0. Range is between 0 and 1.
+        'temperature' - A float that is the temperature of the LLM model to use for the analysis. Default is 0. Range is between 0 and 2.
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'language' - An optional string hint for the language of the prompt (e.g., "python"). Default is None.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.

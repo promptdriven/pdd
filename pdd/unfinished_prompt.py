@@ -49,8 +49,8 @@ def unfinished_prompt(
         if not 0 <= strength <= 1:
             raise ValueError("Strength must be between 0 and 1")
         
-        if not 0 <= temperature <= 1:
-            raise ValueError("Temperature must be between 0 and 1")
+        if not 0 <= temperature <= 2:
+            raise ValueError("Temperature must be between 0 and 2")
 
         # Step 0a: Strip trailing code fences (language-agnostic).
         # Closing ``` is a markdown artifact, not part of any programming language.

@@ -115,6 +115,71 @@ _OPUS_FABLE_COMPOSED_PROFILE_BYTES = (
     "a7dd6a8f4145e2a4712ca925abde0edc58c47be271a1a06e1750aa39347a76c7",
 )
 
+# The release-2026-07-25 protected base contains five stale profile rows even
+# though the corresponding prompt bytes already hold their intended values.
+# Reconcile only the reviewed base/head policy bytes and unchanged prompt
+# bytes; this is not a reusable prompt-transition authorization.
+_SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES = (
+    "3b5117e0ef31b19b68d7190f0753e7aacaef3f75133cabfe4c2470afe87c0a95",
+    "3b5117e0ef31b19b68d7190f0753e7aacaef3f75133cabfe4c2470afe87c0a95",
+)
+_SYNC_ROLLOUT_REPAIR_PROFILE_BYTES = (
+    "a7dd6a8f4145e2a4712ca925abde0edc58c47be271a1a06e1750aa39347a76c7",
+    "30cc5d9cb8d47eda3bd8fb02aab35ab965a256d6729c7ba1dfd836fb7fa1e1d3",
+)
+
+# The nested-temperature repair advances exactly two protected prompt
+# contracts. Preserve the unchanged policy bytes and both profile versions so
+# this reconciliation cannot authorize any other prompt or profile update.
+_TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY = (
+    "3b5117e0ef31b19b68d7190f0753e7aacaef3f75133cabfe4c2470afe87c0a95",
+    "3b5117e0ef31b19b68d7190f0753e7aacaef3f75133cabfe4c2470afe87c0a95",
+)
+_TEMPERATURE_REGRESSION_PROFILE_BYTES = (
+    "30cc5d9cb8d47eda3bd8fb02aab35ab965a256d6729c7ba1dfd836fb7fa1e1d3",
+    "ffd7a11fb15a7aebb20c8199d506cf2deb8bb405b952dcda8444563c24e7a912",
+)
+_TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES = (
+    _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],
+    _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+)
+_SYNC_ROLLOUT_REPAIR_PROMPT_BYTES = (
+    (
+        PurePosixPath("pdd/prompts/code_generator_python.prompt"),
+        "python",
+        "72b374c6501e5264a482c0c3ad73be501d4993629783f842d7abd27779f01c8d",
+    ),
+    (
+        PurePosixPath("pdd/prompts/continue_generation_python.prompt"),
+        "python",
+        "4f57a0c4d3596a328c920f96126fc8b2242f66c415f7d8d27d8d7a17a33291b7",
+    ),
+    (
+        PurePosixPath("pdd/prompts/detect_change_python.prompt"),
+        "python",
+        "344cb9470c8bb555599d87a0ae4885fcbca80dbafc58f6720170225e738335c9",
+    ),
+    (
+        PurePosixPath("pdd/prompts/generate_test_python.prompt"),
+        "python",
+        "42354b865666983f2bae2b959dc64629d9df2de59c3e08ff0542a8e6687ff58c",
+    ),
+    (
+        PurePosixPath("pdd/prompts/sync_determine_operation_python.prompt"),
+        "python",
+        "48fe08ae08004ae02034118cf067b254c22fe7de800a9ece37834738da507677",
+    ),
+)
+_SYNC_ROLLOUT_REPAIR_STALE_ROTATION_IDENTITIES = frozenset(
+    {
+        (PurePosixPath("pdd/prompts/detect_change_python.prompt"), "python"),
+        (
+            PurePosixPath("pdd/prompts/sync_determine_operation_python.prompt"),
+            "python",
+        ),
+    }
+)
+
 
 class VerificationProfileError(ValueError):
     """Raised when protected verification-profile data cannot be parsed."""
@@ -556,6 +621,44 @@ _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS = (
         "2e6ea7ead7695f61c359af7053e3d29a9a6cf8ab45a4896492cd813eb0ba0aac",
         _OPUS_FABLE_COMPOSED_PROFILE_BYTES[0],
         _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
+    ),
+)
+
+_TEMPERATURE_REGRESSION_COMPOSED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/postprocess_python.prompt",
+        "python",
+        "14901b09067362350ebe72062c59177aa49b113f91dbaf1cbb610797f67dfec8",
+        "87a8667cf20a6db8a827a5267df1cd787275b31aec9fc3004a268eabe6bf4dd0",
+        _TEMPERATURE_REGRESSION_PROFILE_BYTES[0],
+        _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/unfinished_prompt_python.prompt",
+        "python",
+        "1902ceff4daac647ce82c6f16acd262a0ab2e19cd13912f6ca2404d6856c5034",
+        "def7bb2cc4ff45f9679e11f7ab10803bf3e8c127a67ba79717299f538c79edef",
+        _TEMPERATURE_REGRESSION_PROFILE_BYTES[0],
+        _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+    ),
+)
+
+_TEMPERATURE_REGRESSION_SYNC_COMPOSED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/postprocess_python.prompt",
+        "python",
+        "14901b09067362350ebe72062c59177aa49b113f91dbaf1cbb610797f67dfec8",
+        "87a8667cf20a6db8a827a5267df1cd787275b31aec9fc3004a268eabe6bf4dd0",
+        _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES[0],
+        _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/unfinished_prompt_python.prompt",
+        "python",
+        "1902ceff4daac647ce82c6f16acd262a0ab2e19cd13912f6ca2404d6856c5034",
+        "def7bb2cc4ff45f9679e11f7ab10803bf3e8c127a67ba79717299f538c79edef",
+        _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES[0],
+        _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES[1],
     ),
 )
 
@@ -2476,6 +2579,51 @@ def _load_requirement_transition_authorizations(
             ),
         }
     )
+    sync_rollout_repair_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        in {
+            (
+                _SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES,
+                _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES[1],
+                    _SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES[1],
+                ),
+                (
+                    _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[1],
+                    _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[1],
+                ),
+            ),
+        }
+    )
+    temperature_regression_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        in {
+            (
+                _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY,
+                _TEMPERATURE_REGRESSION_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY[1],
+                    _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY[1],
+                ),
+                (
+                    _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+                    _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+                ),
+            ),
+            (
+                _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY,
+                _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES,
+            ),
+        }
+    )
+    historical_composed_state = (
+        opus_fable_state or sync_rollout_repair_state or temperature_regression_state
+    )
     gemini_36_terra_sol_state = is_pdd_repository and (
         (policy_digests, profile_digests)
         in {
@@ -2511,7 +2659,7 @@ def _load_requirement_transition_authorizations(
         or terra_sol_consumed_state
         or gemini_36_terra_sol_state
         or generate_reliability_state
-        or opus_fable_state
+        or historical_composed_state
     ):
         # This candidate predates a dormant policy installation.  Expose only
         # its reviewed transitions while consuming the exact profile update,
@@ -2526,7 +2674,7 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in terra_sol_identities
         ) + _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS)
-    if generate_reliability_state or opus_fable_state:
+    if generate_reliability_state or historical_composed_state:
         reliability_identities = {
             (item.prompt_path, item.language_id)
             for item in _GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS
@@ -2537,7 +2685,7 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in reliability_identities
         ) + _GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS)
-    if opus_fable_state:
+    if historical_composed_state:
         opus_fable_identities = {
             (item.prompt_path, item.language_id)
             for item in _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
@@ -2548,6 +2696,33 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in opus_fable_identities
         ) + _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS)
+    if temperature_regression_state:
+        temperature_regression_transitions = (
+            _TEMPERATURE_REGRESSION_SYNC_COMPOSED_REQUIREMENT_TRANSITIONS
+            if profile_digests == _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES
+            else _TEMPERATURE_REGRESSION_COMPOSED_REQUIREMENT_TRANSITIONS
+        )
+        temperature_regression_identities = {
+            (item.prompt_path, item.language_id)
+            for item in temperature_regression_transitions
+        }
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id)
+            not in temperature_regression_identities
+        ) + temperature_regression_transitions
+        authority.update(temperature_regression_transitions)
+    if sync_rollout_repair_state or temperature_regression_state:
+        # These retained schema-2 rows describe historical prompt changes.
+        # Their identities are already at the exact repaired prompt bytes, so
+        # do not re-evaluate them as a live transition at this one state.
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id)
+            not in _SYNC_ROLLOUT_REPAIR_STALE_ROTATION_IDENTITIES
+        )
     pr1971_reconciliation = _is_exact_pr1971_pytest_reconciliation(
         manifest, (protected_policy, candidate_policy), policies, candidate
     )
@@ -2631,14 +2806,16 @@ def _load_requirement_transition_authorizations(
         if item not in protected
         and not (is_pdd_repository and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS)
     )
-    if (
-        legacy_pdd1989_reconciliation
-        or pr1971_reconciliation
-        or pdd1875_reconciliation
-        or terra_sol_reconciliation
-        or terra_sol_consumed_state
-        or opus_fable_state
-    ):
+    consumed_profile_reconciliation = any(
+        (
+            legacy_pdd1989_reconciliation,
+            pr1971_reconciliation,
+            pdd1875_reconciliation,
+            terra_sol_reconciliation,
+            terra_sol_consumed_state,
+        )
+    )
+    if consumed_profile_reconciliation or historical_composed_state:
         # The exact historical pair both installed and consumed its authority
         # before Phase-A isolation existed; validate it as consumption below.
         new_authorizations = ()
@@ -2654,6 +2831,17 @@ def _load_requirement_transition_authorizations(
         new_authorizations = tuple(
             item for item in new_authorizations if item not in terra_sol_authority
         )
+    bootstrap_transition_guard_exception = any(
+        (
+            legacy_pdd1989_reconciliation,
+            pr1971_reconciliation,
+            pdd1875_reconciliation,
+            terra_sol_reconciliation,
+            terra_sol_consumed_state,
+            gemini_36_terra_sol_state,
+            sync_rollout_repair_state,
+        )
+    )
     for item in candidate:
         if item in authority:
             if (
@@ -2664,12 +2852,7 @@ def _load_requirement_transition_authorizations(
                     and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS
                 )
                 and policies[0] != policies[1]
-                and not legacy_pdd1989_reconciliation
-                and not pr1971_reconciliation
-                and not pdd1875_reconciliation
-                and not terra_sol_reconciliation
-                and not terra_sol_consumed_state
-                and not gemini_36_terra_sol_state
+                and not bootstrap_transition_guard_exception
             ):
                 raise VerificationProfileError(
                     "candidate legacy bootstrap requirement transition changes "
@@ -3063,6 +3246,72 @@ def _authorized_profile_additions(
     return additions
 
 
+def _authorized_sync_rollout_profile_reconciliation(
+    root: Path,
+    manifest: UnitManifest,
+    base: Mapping[UnitId, _ProfileInput],
+    head: Mapping[UnitId, _ProfileInput],
+    base_invalid: list[str],
+) -> tuple[dict[UnitId, _ProfileInput], frozenset[str]]:
+    # pylint: disable=too-many-locals
+    """Authorize the one exact stale-profile repair from the protected base."""
+    if manifest.repository_id != _PDD_REPOSITORY_ID:
+        return {}, frozenset()
+    base_profile = read_git_blob(root, manifest.base_ref, PROFILE_PATH)
+    head_profile = read_git_blob(root, manifest.head_ref, PROFILE_PATH)
+    base_rotations = read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH)
+    head_rotations = read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH)
+    if (
+        None in (base_profile, head_profile, base_rotations, head_rotations)
+        or (
+            _sha256(base_profile),
+            _sha256(head_profile),
+        )
+        not in {
+            _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES,
+            _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES,
+        }
+        or (
+            _sha256(base_rotations),
+            _sha256(head_rotations),
+        )
+        != _SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES
+    ):
+        return {}, frozenset()
+    assert base_profile is not None and head_profile is not None
+    assert base_rotations is not None and head_rotations is not None
+
+    stale_reasons = frozenset(
+        f"{manifest.base_ref}: {prompt_path.as_posix()}: profile requirements "
+        "do not match immutable prompt requirements"
+        for prompt_path, _language_id, _digest in _SYNC_ROLLOUT_REPAIR_PROMPT_BYTES
+    )
+    if not stale_reasons <= set(base_invalid):
+        return {}, frozenset()
+
+    expected_managed = set(manifest.expected_managed)
+    additions: dict[UnitId, _ProfileInput] = {}
+    for prompt_path, language_id, expected_digest in _SYNC_ROLLOUT_REPAIR_PROMPT_BYTES:
+        unit_id = UnitId(manifest.repository_id, prompt_path, language_id)
+        base_prompt = read_git_blob(root, manifest.base_ref, prompt_path)
+        head_prompt = read_git_blob(root, manifest.head_ref, prompt_path)
+        if (
+            unit_id not in expected_managed
+            or unit_id in base
+            or unit_id not in head
+        ):
+            return {}, frozenset()
+        if (
+            base_prompt is None
+            or head_prompt is None
+            or _sha256(base_prompt) != expected_digest
+            or _sha256(head_prompt) != expected_digest
+        ):
+            return {}, frozenset()
+        additions[unit_id] = head[unit_id]
+    return additions, stale_reasons
+
+
 def _effective_profile(
     unit_id: UnitId,
     base: _ProfileInput | None,
@@ -3156,14 +3405,21 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
     except ValueError as exc:
         approved_aliases = {}
         invalid.append(str(exc))
-    base, loaded_invalid = _load_inputs(
+    base, base_invalid = _load_inputs(
         root, manifest.base_ref, manifest.repository_id, approved_aliases
     )
-    invalid.extend(loaded_invalid)
-    head, loaded_invalid = _load_inputs(
+    head, head_invalid = _load_inputs(
         root, manifest.head_ref, manifest.repository_id, approved_aliases
     )
-    invalid.extend(loaded_invalid)
+    rollout_profile_additions, reconciled_base_invalid = (
+        _authorized_sync_rollout_profile_reconciliation(
+            root, manifest, base, head, base_invalid
+        )
+    )
+    invalid.extend(
+        reason for reason in base_invalid if reason not in reconciled_base_invalid
+    )
+    invalid.extend(head_invalid)
     (
         requirement_authorizations,
         requirement_prompts,
@@ -3172,6 +3428,7 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
         root, manifest, base, head, approved_aliases
     )
     profile_additions = _authorized_profile_additions(root, manifest, base, head)
+    profile_additions.update(rollout_profile_additions)
     if new_requirement_authorizations:
         _validate_new_authorization_managed_prompt_bytes(
             root,

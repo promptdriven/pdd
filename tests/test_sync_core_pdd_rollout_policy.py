@@ -36,6 +36,50 @@ from tests.conftest import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _paths_added_since(base_ref: str) -> frozenset[str]:
+    """Repository paths tracked at HEAD but absent from ``base_ref``.
+
+    ``manifest._ownership_rules`` loads ownership *only* from the protected
+    base tree. A few regressions below pin a historical base commit in order to
+    re-verify one exact transition, so any file added to the repository after
+    that pin necessarily has no ownership rule in it — permanently, since the
+    pin never moves.
+
+    Left unfiltered, that turns those regressions into a blanket ban on adding
+    files: every later PR fails them with "tracked path has no ownership rule"
+    for paths that have nothing to do with the transition under test. Coverage
+    is not lost by excluding them, because auto-heal builds the same manifest
+    with ``base_ref=origin/main`` — a base that does move — and that is where a
+    genuinely unowned new path is caught.
+    """
+    added = subprocess.check_output(
+        ["git", "diff", "--diff-filter=A", "--name-only", base_ref, "HEAD"],
+        cwd=ROOT,
+        text=True,
+    )
+    return frozenset(line.strip() for line in added.splitlines() if line.strip())
+
+
+def _invalid_reasons_for_base_paths(manifest, base_ref: str) -> tuple[str, ...]:
+    """``manifest.invalid_reasons`` minus paths added after ``base_ref``."""
+    ignored = _paths_added_since(base_ref)
+    return tuple(
+        reason
+        for reason in manifest.invalid_reasons
+        if reason.split(":", 1)[0].strip() not in ignored
+    )
+
+
+def _unaccounted_base_paths(manifest, base_ref: str) -> tuple[PurePosixPath, ...]:
+    """``manifest.unaccounted_tracked_paths`` minus post-base additions."""
+    ignored = _paths_added_since(base_ref)
+    return tuple(
+        path for path in manifest.unaccounted_tracked_paths if path.as_posix() not in ignored
+    )
+
+
 EXPECTED_PATH = ROOT / ".pdd" / "expected-managed.json"
 OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 PROFILE_FILE = ROOT / PROFILE_REL_PATH
@@ -59,6 +103,8 @@ PDD_1875_PROTECTED_BASE = "eb1fc0e2ad14c1bd79e63cabe4fd6bc90c7929a5"
 PDD_1875_COMPOSED_HEAD = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 TERRA_SOL_PROTECTED_BASE = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 TERRA_SOL_COMPOSED_HEAD = "b3902318c35c279e49e6397838825c95bd568942"
+SYNC_ROLLOUT_PROTECTED_BASE = "dec539aa8d0697e357e2077c1dbc73b0621aa617"
+RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE = "c93332e9bc5956677280a3a015c32d16c99b54cb"
 PR_1971_COMBINED_PROFILE_DIGEST = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
 )
@@ -236,6 +282,25 @@ PR_2017_ABSENT_METADATA_PATHS = {
     ".pdd/meta/fix_error_loop_python_run.json",
     ".pdd/meta/get_test_command_python_run.json",
 }
+SYNC_ROLLOUT_EXISTING_METADATA_PATHS = {
+    ".pdd/meta/code_generator_python.json",
+    ".pdd/meta/code_generator_python_run.json",
+    ".pdd/meta/continue_generation_python.json",
+    ".pdd/meta/continue_generation_python_run.json",
+    ".pdd/meta/detect_change_python.json",
+    ".pdd/meta/detect_change_python_run.json",
+    ".pdd/meta/generate_test_python.json",
+    ".pdd/meta/generate_test_python_run.json",
+}
+RELEASE_VIDEO_OPT_OUT_EXISTING_PATHS = {
+    ".github/workflows/backfill-release-video-discord.yml",
+    ".github/workflows/release.yml",
+    "Makefile",
+    "scripts/backfill_release_video_discord.py",
+    "scripts/release_video.py",
+    "tests/test_release_video.py",
+    "tests/test_release_video_discord_backfill.py",
+}
 PREAUTHORIZED_CHILD_PATHS = (
     LEGACY_METADATA_EXAMPLE_PREAUTHORIZED_PATHS
     | ISSUE_2083_VITEST_COORDINATOR_PREAUTHORIZED_PATHS
@@ -271,7 +336,9 @@ PREAUTHORIZED_CHILD_PATHS = (
         "tests/test_sync_core_human_attestation.py",
         ".pdd/meta/ci_detect_changed_modules_python.json",
         ".pdd/meta/evidence_manifest_python.json",
+        ".pdd/meta/postprocess_python.json",
         ".pdd/meta/story_detection_result_python.json",
+        ".pdd/meta/unfinished_prompt_python.json",
         "pdd/schemas/story_detection_result.schema.json",
         "pdd/schemas/story_detection_scope.schema.json",
         "scripts/manual_validate_pr_1875.py",
@@ -1514,6 +1581,152 @@ def test_pr2017_phase_a_is_dormant_on_its_exact_protected_base() -> None:
     assert profiles.coverage == 1.0
 
 
+def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
+    """The rollout repair is valid only from its real protected base to HEAD."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact sync-rollout protected history",
+        SYNC_ROLLOUT_PROTECTED_BASE,
+    )
+    manifest = build_unit_manifest(
+        ROOT,
+        base_ref=SYNC_ROLLOUT_PROTECTED_BASE,
+        head_ref="HEAD",
+    )
+
+    assert (
+        hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, PROFILE_FILE)).hexdigest(),
+        hashlib.sha256(_git_blob("HEAD", PROFILE_FILE)).hexdigest(),
+    ) in {
+        verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES,  # pylint: disable=protected-access
+        (
+            verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
+            verification._TEMPERATURE_REGRESSION_PROFILE_BYTES[1],  # pylint: disable=protected-access
+        ),
+    }
+    assert (
+        hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROTATION_FILE)).hexdigest(),
+        hashlib.sha256(_git_blob("HEAD", ROTATION_FILE)).hexdigest(),
+    ) == verification._SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES  # pylint: disable=protected-access
+    for prompt_path, _language_id, expected_digest in (
+        verification._SYNC_ROLLOUT_REPAIR_PROMPT_BYTES  # pylint: disable=protected-access
+    ):
+        assert (
+            hashlib.sha256(
+                _git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROOT / prompt_path)
+            ).hexdigest(),
+            hashlib.sha256(_git_blob("HEAD", ROOT / prompt_path)).hexdigest(),
+        ) == (expected_digest, expected_digest)
+
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix()
+        in SYNC_ROLLOUT_EXISTING_METADATA_PATHS
+    }
+    assert not _invalid_reasons_for_base_paths(manifest, SYNC_ROLLOUT_PROTECTED_BASE)
+    assert not _unaccounted_base_paths(manifest, SYNC_ROLLOUT_PROTECTED_BASE)
+    assert set(records) == SYNC_ROLLOUT_EXISTING_METADATA_PATHS
+    assert all(
+        item.in_base
+        and item.in_head
+        and item.inventory is InventoryStatus.HUMAN_OWNED
+        and item.candidate_id.role == "human-maintained"
+        and item.ownership_provenance
+        == f"protected-ownership:pdd-maintainers:{path}"
+        for path, item in records.items()
+    )
+
+    profiles = load_verification_profiles(ROOT, manifest)
+
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
+def test_sync_rollout_repair_metadata_bridge_stays_ordinary() -> None:
+    """The exact bridge cannot turn its base-existing paths into absences."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact sync-rollout protected history",
+        SYNC_ROLLOUT_PROTECTED_BASE,
+    )
+    base_rules = manifest_module._ownership_rules(  # pylint: disable=protected-access
+        ROOT, SYNC_ROLLOUT_PROTECTED_BASE
+    )
+    head_rules = manifest_module._ownership_rules(  # pylint: disable=protected-access
+        ROOT, "HEAD"
+    )
+    effective = manifest_module._sync_rollout_repair_ownership_rules(  # pylint: disable=protected-access
+        ROOT,
+        REPOSITORY_ID,
+        SYNC_ROLLOUT_PROTECTED_BASE,
+        "HEAD",
+        base_rules,
+        head_rules,
+    )
+    expected = (
+        manifest_module._SYNC_ROLLOUT_REPAIR_HUMAN_OWNERSHIP  # pylint: disable=protected-access
+    )
+    assert set(expected) <= set(effective)
+    assert all(not rule.preauthorize_absent for rule in expected)
+
+    mutated_head_rules = tuple(
+        replace(rule, preauthorize_absent=True)
+        if rule.pattern == expected[0].pattern
+        else rule
+        for rule in head_rules
+    )
+    assert manifest_module._sync_rollout_repair_ownership_rules(  # pylint: disable=protected-access
+        ROOT,
+        REPOSITORY_ID,
+        SYNC_ROLLOUT_PROTECTED_BASE,
+        "HEAD",
+        base_rules,
+        mutated_head_rules,
+    ) == base_rules
+
+
+def test_release_video_opt_out_uses_only_actual_base_owned_paths() -> None:
+    """The v0.0.309 guard must not introduce a new tracked policy artifact."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "release-video opt-out protected history",
+        RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE,
+    )
+    manifest = build_unit_manifest(
+        ROOT,
+        base_ref=RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE,
+        head_ref="HEAD",
+    )
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix()
+        in RELEASE_VIDEO_OPT_OUT_EXISTING_PATHS
+    }
+
+    assert not _invalid_reasons_for_base_paths(
+        manifest, RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE
+    )
+    assert not _unaccounted_base_paths(manifest, RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE)
+    assert set(records) == RELEASE_VIDEO_OPT_OUT_EXISTING_PATHS
+    assert all(item.in_base and item.in_head for item in records.values())
+    makefile = records["Makefile"]
+    assert (
+        makefile.inventory is InventoryStatus.MANAGED
+        and makefile.candidate_id.role == "code"
+        and makefile.ownership_provenance == "architecture"
+    )
+    assert all(
+        item.inventory is InventoryStatus.HUMAN_OWNED
+        and item.candidate_id.role == "human-maintained"
+        and item.ownership_provenance
+        == f"protected-ownership:pdd-maintainers:{path}"
+        for path, item in records.items()
+        if path != "Makefile"
+    )
+
+
 def _candidate_only_repo(tmp_path: Path) -> tuple[Path, str, str]:
     repo = tmp_path / "candidate-only"
     repo.mkdir()
@@ -1650,6 +1863,23 @@ def test_current_profile_reconciliation_matches_current_prompt_and_profile_rows(
         for authorization in verification._OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
         if authorization.bindings.head_policy_sha256 == profile_digest
     )
+    current_rows.extend(
+        _requirement_authorization_row(authorization)
+        for authorization in verification._TEMPERATURE_REGRESSION_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+        if authorization.bindings.head_policy_sha256 == profile_digest
+    )
+    if profile_digest == verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[1]:  # pylint: disable=protected-access
+        current_rows.extend(
+            {
+                "prompt_path": prompt_path.as_posix(),
+                "language_id": language_id,
+                "to_requirement_id": f"CONTRACT-SHA256:{prompt_digest}",
+                "head_prompt_sha256": prompt_digest,
+            }
+            for prompt_path, language_id, prompt_digest in (
+                verification._SYNC_ROLLOUT_REPAIR_PROMPT_BYTES  # pylint: disable=protected-access
+            )
+        )
     assert current_rows
     profiles = {
         (row["prompt_path"], row["language_id"]): row
@@ -3098,3 +3328,86 @@ def test_story_bootstrap_is_repository_bound(monkeypatch) -> None:
     )
 
     assert result == ()
+
+
+def test_sync_rollout_repair_ownership_pin_tracks_the_actual_policy_file() -> None:
+    """The bridge's head digest must equal the checked-in ownership bytes.
+
+    ``_sync_rollout_repair_rules`` compares sha256 of ``.pdd/sync-ownership.json``
+    against ``_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES`` and, on any mismatch, falls
+    through to ``base_rules``. The eight repaired metadata paths then silently
+    lose their ownership and resurface as unowned tracked paths.
+
+    That makes every edit to the ownership policy — including a one-line
+    preauthorization — a change that must re-pin this digest. Without this
+    guard the failure surfaces as several unrelated-looking assertions about
+    ``.pdd/meta/*`` paths rather than as the one-line cause.
+    """
+    actual = hashlib.sha256(
+        (ROOT / ".pdd" / "sync-ownership.json").read_bytes()
+    ).hexdigest()
+
+    assert actual == manifest_module._SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES[1], (  # pylint: disable=protected-access
+        "`.pdd/sync-ownership.json` changed without re-pinning "
+        "_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES[1] in pdd/sync_core/manifest.py. "
+        f"Set it to {actual!r}."
+    )
+
+
+class _FakeManifest:
+    """Minimal stand-in exposing only the two fields the filters read."""
+
+    def __init__(self, invalid_reasons, unaccounted_tracked_paths):
+        self.invalid_reasons = tuple(invalid_reasons)
+        self.unaccounted_tracked_paths = tuple(unaccounted_tracked_paths)
+
+
+def test_post_base_addition_filter_ignores_only_paths_added_after_the_base() -> None:
+    """Pinned-base regressions must not become a blanket ban on new files.
+
+    ``manifest._ownership_rules`` reads ownership only from the protected base,
+    so a path added after a pinned base can never have a rule there. Filtering
+    those out keeps the pinned-base guards meaningful without making the
+    repository unable to accept new files.
+    """
+    # Cloud Batch shards run from an extracted source tarball with no git
+    # history, so `git diff <pinned base>` exits 128 there. Skip exactly as the
+    # sibling pinned-base regressions do rather than failing the release gate.
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact sync-rollout protected history",
+        SYNC_ROLLOUT_PROTECTED_BASE,
+    )
+    base = SYNC_ROLLOUT_PROTECTED_BASE
+    added = _paths_added_since(base)
+    assert added, "expected at least one path added since the pinned base"
+
+    new_path = sorted(added)[0]
+    stale_path = "pdd/llm_invoke.py"
+    assert stale_path not in added, "control path must predate the pinned base"
+
+    manifest = _FakeManifest(
+        invalid_reasons=(
+            f"{new_path}: tracked path has no ownership rule",
+            f"{stale_path}: tracked path has no ownership rule",
+        ),
+        unaccounted_tracked_paths=(PurePosixPath(new_path), PurePosixPath(stale_path)),
+    )
+
+    # The post-base addition is excluded; the pre-existing path still fails.
+    assert _invalid_reasons_for_base_paths(manifest, base) == (
+        f"{stale_path}: tracked path has no ownership rule",
+    )
+    assert _unaccounted_base_paths(manifest, base) == (PurePosixPath(stale_path),)
+
+
+def test_post_base_addition_filter_is_inert_when_nothing_was_added() -> None:
+    """Filtering against HEAD itself must change nothing."""
+    manifest = _FakeManifest(
+        invalid_reasons=("pdd/llm_invoke.py: tracked path has no ownership rule",),
+        unaccounted_tracked_paths=(PurePosixPath("pdd/llm_invoke.py"),),
+    )
+
+    assert _paths_added_since("HEAD") == frozenset()
+    assert _invalid_reasons_for_base_paths(manifest, "HEAD") == manifest.invalid_reasons
+    assert _unaccounted_base_paths(manifest, "HEAD") == manifest.unaccounted_tracked_paths
