@@ -109,6 +109,9 @@ PR_2316_HISTORICAL_CANDIDATE = "817abe2d0d41355175c3e09b994928c166917123"
 PR_2316_PHASE_A_POLICY_SHA256 = (
     "4e3ca5e64238e7137fedc7c562b2dd5a2e61db61dae422f85c0aaebbc86cb6bb"
 )
+PR_2316_PHASE_A_PREDECESSOR_POLICY_SHA256 = (
+    "3b5117e0ef31b19b68d7190f0753e7aacaef3f75133cabfe4c2470afe87c0a95"
+)
 RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE = "c93332e9bc5956677280a3a015c32d16c99b54cb"
 PR_1971_COMBINED_PROFILE_DIGEST = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
@@ -874,6 +877,10 @@ def _git_blob(ref: str, path: Path) -> bytes:
 def _pr2316_phase_a_policy(protected_policy: bytes) -> bytes:
     """Build the separately prepared schema-3 Phase-A bytes exactly."""
     payload = json.loads(protected_policy)
+    if payload["schema_version"] == 3:
+        candidate = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+        assert hashlib.sha256(candidate).hexdigest() == PR_2316_PHASE_A_POLICY_SHA256
+        return candidate
     assert payload["schema_version"] == 2
     obsolete = next(
         item
@@ -943,6 +950,34 @@ def _pr2316_phase_a_policy(protected_policy: bytes) -> bytes:
     return candidate
 
 
+def _pr2316_phase_a_predecessor_policy(protected_policy: bytes) -> bytes:
+    """Recover the exact schema-2 policy protected by the Phase-A transition."""
+    payload = json.loads(protected_policy)
+    if payload["schema_version"] == 3:
+        assert (
+            hashlib.sha256(protected_policy).hexdigest()
+            == PR_2316_PHASE_A_POLICY_SHA256
+        )
+        assert len(payload["requirement_rotation_retirements"]) == 1
+        replacement = payload["requirement_rotation_retirements"][0]["replacement"]
+        assert payload["requirement_rotations"][-2] == replacement
+        assert (
+            payload["requirement_rotations"][-1]["prompt_path"]
+            == "pdd/prompts/model_tester_python.prompt"
+        )
+        payload["schema_version"] = 2
+        del payload["requirement_rotations"][-2:]
+        del payload["requirement_rotation_retirements"]
+    else:
+        assert payload["schema_version"] == 2
+    predecessor = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+    assert (
+        hashlib.sha256(predecessor).hexdigest()
+        == PR_2316_PHASE_A_PREDECESSOR_POLICY_SHA256
+    )
+    return predecessor
+
+
 @pytest.mark.timeout(600)
 def test_pr2316_schema_3_legacy_retirement_is_exact_through_production_loader(
     tmp_path,
@@ -951,7 +986,12 @@ def test_pr2316_schema_3_legacy_retirement_is_exact_through_production_loader(
     root = tmp_path / "pr2316-phase-a"
     protected = _synthetic_current_tree_repo(root)
     policy_path = root / ".pdd" / "verification-profile-rotations.json"
-    exact_policy = _pr2316_phase_a_policy(policy_path.read_bytes())
+    current_policy = policy_path.read_bytes()
+    exact_policy = _pr2316_phase_a_policy(current_policy)
+    predecessor_policy = _pr2316_phase_a_predecessor_policy(current_policy)
+    if predecessor_policy != current_policy:
+        policy_path.write_bytes(predecessor_policy)
+        protected = _commit(root, "synthetic pr2316 protected predecessor")
 
     def candidate_for(mutation: str) -> tuple[str, str]:
         _git(root, "checkout", "-q", "-B", f"pr2316-{mutation}", protected)
@@ -1848,7 +1888,10 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
     assert (
         hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROTATION_FILE)).hexdigest(),
         hashlib.sha256(_git_blob("HEAD", ROTATION_FILE)).hexdigest(),
-    ) == verification._SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES  # pylint: disable=protected-access
+    ) in {
+        verification._SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES,  # pylint: disable=protected-access
+        verification._PR2316_STALE_LLM_REISSUE_ROTATION_POLICY_BYTES,  # pylint: disable=protected-access
+    }
     for prompt_path, _language_id, expected_digest in (
         verification._SYNC_ROLLOUT_REPAIR_PROMPT_BYTES  # pylint: disable=protected-access
     ):
