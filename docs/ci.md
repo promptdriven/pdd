@@ -77,6 +77,39 @@ The authority-only candidate must leave all managed prompt and profile bytes
 unchanged. Its fresh replacement remains dormant until this retirement/reissue
 candidate itself is protected, and only a later Phase B can consume it.
 
+### Repository-bound legacy llm-invoke retirement (#2316)
+
+One older `pdd/prompts/llm_invoke_python.prompt` row became unreachable before
+schema 3 existed: subsequent protected releases had already moved both its
+prompt and profile source bytes forward. It may be retired only by the
+repository-bound verifier bridge for repository
+`3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0`, and only with the complete protected
+rotation-policy digest
+`3b5117e0ef31b19b68d7190f0753e7aacaef3f75133cabfe4c2470afe87c0a95`,
+the exact prepared schema-3 candidate digest
+`4e3ca5e64238e7137fedc7c562b2dd5a2e61db61dae422f85c0aaebbc86cb6bb`,
+and unchanged protected/candidate verification-profile bytes
+`ffd7a11fb15a7aebb20c8199d506cf2deb8bb405b952dcda8444563c24e7a912`.
+The historical rollout replay is even narrower: it is bound to both complete
+policy/profile pairs and both complete managed-prompt trees. Reformatting,
+reordering, replacement-field substitution, a target-prompt change, an
+unrelated managed-prompt change, or use by another repository is rejected.
+
+This exception requires three separately protected changes, in this order:
+
+1. A governance prerequisite that installs only the verifier binding,
+   documentation, and negative tests. It must not change the rotation policy,
+   verification profile, or either target prompt.
+2. The exact JSON-only schema-3 Phase A policy candidate named above. It retires
+   the unreachable llm-invoke row and installs the llm-invoke and model-tester
+   replacements while all prompts and the verification profile remain unchanged.
+3. A later Phase B that consumes only those now-protected replacement rows by
+   changing their exact prepared prompt/profile bytes. It cannot alter the
+   Phase-A policy or install new authority.
+
+If any byte of the prepared Phase-A JSON changes, prepare a new reviewed
+three-change sequence; do not update the in-code digest or combine phases.
+
 The one-time legacy bootstrap is narrower: an exact in-code bootstrap row may
 install the first schema-2 envelope over an absent or schema-1 protected source.
 A schema-1 source's active `rotations` authority must be preserved exactly; an
