@@ -66,6 +66,7 @@ TOTAL=$((TOTAL_SPOT + TOTAL_EXTRA))
 # Parse all JSON results
 TABLE_ROWS=()
 FAILURE_LOGS=()
+ADVISORY_NOTES=()
 
 for i in $(seq 0 $((TOTAL - 1))); do
     JSON_FILE="${RESULTS_LOCAL}/task_${i}.json"
@@ -77,13 +78,22 @@ for i in $(seq 0 $((TOTAL - 1))); do
         DETAIL=$(python3 -c "import json; d=json.load(open('${JSON_FILE}')); print(d.get('detail',''))" 2>/dev/null || echo "")
         DURATION=$(python3 -c "import json; d=json.load(open('${JSON_FILE}')); print(d.get('duration_seconds',0))" 2>/dev/null || echo "0")
         SETUP=$(python3 -c "import json; d=json.load(open('${JSON_FILE}')); print(d.get('setup_seconds',''))" 2>/dev/null || echo "")
+        ADVISORY=$(python3 -c "import json; d=json.load(open('${JSON_FILE}')); print(d.get('advisory_prose_judge','not-run'))" 2>/dev/null || echo "not-run")
     else
         STATUS="missing"
         SUITE="unknown"
         DETAIL="no result file"
         DURATION="0"
         SETUP=""
+        ADVISORY="not-run"
     fi
+
+    # The prose-judge lane never changes PASSED/FAILED. Surface it anyway, or
+    # "reports but does not gate" silently degrades into "does not gate".
+    case "${ADVISORY}" in
+        fail)         ADVISORY_NOTES+=("task ${i} (${DETAIL}): prose_judge regression — advisory, did not block") ;;
+        lane-error-*) ADVISORY_NOTES+=("task ${i} (${DETAIL}): advisory lane fault (${ADVISORY}) — result unknown") ;;
+    esac
 
     case "${STATUS}" in
         passed) PASSED=$((PASSED + 1)); STATUS_ICON="PASS" ;;
@@ -126,6 +136,15 @@ done
         echo "**${PASSED} passed, ${FAILED} failed, ${ERRORS} errors (of ${TOTAL} tasks)**"
     else
         echo "**${PASSED} passed, ${FAILED} failed, ${ERRORS} errors (of ${TOTAL} tasks)**"
+    fi
+
+    if [ ${#ADVISORY_NOTES[@]} -gt 0 ]; then
+        echo ""
+        echo "## Advisory (did not affect pass/fail)"
+        echo ""
+        for note in "${ADVISORY_NOTES[@]}"; do
+            echo "- ${note}"
+        done
     fi
 
     echo ""
@@ -286,6 +305,13 @@ echo "  Job: ${JOB_NAME}"
 echo "  Commit: ${COMMIT_SHA}"
 echo ""
 echo "  ${PASSED} passed, ${FAILED} failed, ${ERRORS} errors (of ${TOTAL} tasks)"
+if [ ${#ADVISORY_NOTES[@]} -gt 0 ]; then
+    echo ""
+    echo "  ADVISORY (did not affect pass/fail):"
+    for note in "${ADVISORY_NOTES[@]}"; do
+        echo "    - ${note}"
+    done
+fi
 echo "=============================================="
 echo ""
 echo "Full report: ${OUTPUT_FILE}"

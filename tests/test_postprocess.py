@@ -94,12 +94,12 @@ def test_postprocess_invalid_strength_high():
         postprocess(llm_output="some code", language="python", strength=1.1)
 
 def test_postprocess_invalid_temperature_low():
-    with pytest.raises(ValueError, match="temperature must be between 0 and 1"):
+    with pytest.raises(ValueError, match="temperature must be between 0 and 2"):
         postprocess(llm_output="some code", language="python", temperature=-0.1)
 
 def test_postprocess_invalid_temperature_high():
-    with pytest.raises(ValueError, match="temperature must be between 0 and 1"):
-        postprocess(llm_output="some code", language="python", temperature=1.1)
+    with pytest.raises(ValueError, match="temperature must be between 0 and 2"):
+        postprocess(llm_output="some code", language="python", temperature=2.1)
 
 def test_postprocess_invalid_strength_type_string():
     with pytest.raises(TypeError): # Comparison "0 <= 'abc'" raises TypeError
@@ -383,6 +383,23 @@ def test_strength_gt_0_parameters_passed_to_llm_invoke(mock_llm_invoke, mock_loa
     assert kwargs['language'] == language_val
     assert kwargs['verbose'] == verbose_val
     assert kwargs['output_pydantic'] == ExtractedCode
+
+
+@patch('pdd.postprocess.load_prompt_template', return_value="test_prompt")
+@patch('pdd.postprocess.llm_invoke')
+def test_postprocess_accepts_generate_temperature_above_one(
+    mock_llm_invoke, mock_load_template,
+):
+    """The generate CLI's documented 0-2 range reaches code extraction."""
+    mock_llm_invoke.return_value = {
+        'result': ExtractedCode(extracted_code="code"),
+        'cost': 0.1,
+        'model_name': 'model',
+    }
+
+    postprocess("Test LLM Output", "python", temperature=1.5)
+
+    assert mock_llm_invoke.call_args.kwargs['temperature'] == 1.5
 
 
 # IV. Default Parameter Values

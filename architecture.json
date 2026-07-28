@@ -9666,7 +9666,7 @@
   },
   {
     "reason": "Centralized cloud config: routes endpoint URLs (incl. submitExample) and JWT auth honoring PDD_CLOUD_URL.",
-  "description": "CloudConfig provides static methods for cloud URL resolution (get_base_url, get_endpoint_url with CLOUD_ENDPOINTS map including submitExample), environment inference (ensure_default_env), JWT auth (get_jwt_token), and cloud-environment detection (is_running_in_cloud, is_cloud_enabled). JWT auth delegates to the shared helper, preserving injected/cache/keyring-refresh credentials while explicit machine flags cause the helper to refuse device flow. Module-level get_cloud_timeout() reads PDD_CLOUD_TIMEOUT, and get_cloud_request_timeout() returns the requests timeout tuple used by cloud POST calls. Used by sync/fix auto-submit so PDD_CLOUD_URL is honored across staging/prod/local (#859).",
+    "description": "CloudConfig provides static methods for cloud URL resolution (get_base_url, get_endpoint_url with CLOUD_ENDPOINTS map including submitExample), environment inference (ensure_default_env), JWT auth (get_jwt_token), and cloud-environment detection (is_running_in_cloud, is_cloud_enabled). JWT auth delegates to the shared helper, preserving injected/cache/keyring-refresh credentials while explicit machine flags cause the helper to refuse device flow. Module-level get_cloud_timeout() reads PDD_CLOUD_TIMEOUT, and get_cloud_request_timeout() returns the requests timeout tuple used by cloud POST calls. Used by sync/fix auto-submit so PDD_CLOUD_URL is honored across staging/prod/local (#859).",
     "dependencies": [
       "auth_service_python.prompt"
     ],
@@ -9878,6 +9878,11 @@
             "name": "llm_invoke",
             "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud, grounding_overrides=None, source_prompt=None, estimate_only=None, shots=1, verifier=None, task_class=None)",
             "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "model_override_scope",
+            "signature": "(model: Optional[str])",
+            "returns": "Iterator[None]"
           },
           {
             "name": "setup_file_logging",

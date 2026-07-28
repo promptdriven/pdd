@@ -58,7 +58,7 @@ def test_successful_detection(mock_llm_responses, mock_templates):
             MOCK_PROMPT_FILES,
             MOCK_CHANGE_DESCRIPTION,
             strength=0.7,
-            temperature=0.0,
+            temperature=0.7,
             time=None,
             verbose=False
         )
@@ -76,14 +76,14 @@ def test_successful_detection(mock_llm_responses, mock_templates):
         # First call (detection)
         detection_call_kwargs = mock_llm_invoke.call_args_list[0].kwargs
         assert detection_call_kwargs['strength'] == 0.7 # Matches the input strength to detect_change
-        assert detection_call_kwargs['temperature'] == 0.0 # Matches the input temperature to detect_change
+        assert detection_call_kwargs['temperature'] == 0.7 # Matches the input temperature to detect_change
         assert detection_call_kwargs['time'] is None # Check time parameter
         assert detection_call_kwargs['prompt'] == "Processed template" # Mocked preprocessed detect_template
 
         # Second call (extraction)
         extraction_call_kwargs = mock_llm_invoke.call_args_list[1].kwargs
         assert extraction_call_kwargs['strength'] == EXTRACTION_STRENGTH
-        assert extraction_call_kwargs['temperature'] == 0.0
+        assert extraction_call_kwargs['temperature'] == 0.7
         assert extraction_call_kwargs['time'] is None # Check time parameter
         assert extraction_call_kwargs['prompt'] == mock_templates[1] # extract_template
         assert 'llm_output' in extraction_call_kwargs['input_json']

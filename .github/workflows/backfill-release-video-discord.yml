@@ -21,6 +21,7 @@ concurrency:
 
 jobs:
   backfill-discord:
+    if: inputs.tag != 'v0.0.309'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

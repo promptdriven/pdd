@@ -125,7 +125,21 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
         True,
     ),
     OwnershipRule(
+        ".pdd/meta/postprocess_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
         ".pdd/meta/story_detection_result_python.json",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        ".pdd/meta/unfinished_prompt_python.json",
         InventoryStatus.HUMAN_OWNED,
         "human-maintained",
         "pdd-maintainers",
@@ -259,6 +273,65 @@ _REPLAY_HUMAN_OWNERSHIP = tuple(
         "tests/test_mock_contract_fix_wiring.py",
         "tests/test_mock_contract_validation.py",
     )
+)
+
+
+# The release-2026-07-25 rollout repairs eight already-tracked metadata files.
+# The candidate policy must retain ordinary rows, so it cannot itself grant
+# absent-path authority.  This bridge is instead bound to the reviewed base
+# and candidate ownership bytes and to the unchanged bytes of every affected
+# artifact.  It classifies only those base-existing paths and never promotes a
+# row to ``preauthorize_absent``.
+# The second element is the sha256 of `.pdd/sync-ownership.json` at the
+# candidate head, so ANY edit to that file must re-pin it here. Otherwise this
+# bridge falls through to `base_rules`, the eight metadata paths below silently
+# lose their repaired ownership, and they resurface as unowned tracked paths.
+_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES = (
+    "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
+    "558910b5d03c183855dbbccdbde662cc36f028765a9eb24883a85ffa040fae3a",
+)
+_SYNC_ROLLOUT_REPAIR_METADATA_BYTES = (
+    (
+        ".pdd/meta/code_generator_python.json",
+        "fc290e4e99719087de461c390beb1b205a0fef124e7b8b3404088a0a8fc16db9",
+    ),
+    (
+        ".pdd/meta/code_generator_python_run.json",
+        "d06bb9b47711bf02f73b95e2bbf40d3124bbf1c1cb56ca6807165115923e463e",
+    ),
+    (
+        ".pdd/meta/continue_generation_python.json",
+        "e568bad6adce6674679294959f1b975b46bf0e3197f12bf6ae3255df63ee20b9",
+    ),
+    (
+        ".pdd/meta/continue_generation_python_run.json",
+        "127888aed12764a11ba3f3c5b29a5ca4ea5128b4f4fdee1c2e8aa2a68e18d7c5",
+    ),
+    (
+        ".pdd/meta/detect_change_python.json",
+        "67dc5b6e01504773a005e0131dd23b19ea3eb3c14d782809ae54da742a8f09b7",
+    ),
+    (
+        ".pdd/meta/detect_change_python_run.json",
+        "6c3da8d5736a18f7cbfca130c66e792ac82548c034f1ab678daade8bec25d8d0",
+    ),
+    (
+        ".pdd/meta/generate_test_python.json",
+        "ffcc4a5ae929aedbb4191a0920f41f8a1df029604c60a0ba16fc66a8d97fb067",
+    ),
+    (
+        ".pdd/meta/generate_test_python_run.json",
+        "7e64abbfc87b8eb09fa7f402b66276b36bda6a762ae1720ad60d1f57078c8989",
+    ),
+)
+_SYNC_ROLLOUT_REPAIR_HUMAN_OWNERSHIP = tuple(
+    OwnershipRule(
+        pattern,
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+    )
+    for pattern, _digest in _SYNC_ROLLOUT_REPAIR_METADATA_BYTES
 )
 
 
@@ -1160,6 +1233,54 @@ def _bootstrap_ownership_rules(
     return tuple(sorted((*base_rules, *additions)))
 
 
+def _sync_rollout_repair_ownership_rules(
+    root: Path,
+    repository_id: str,
+    base_ref: str,
+    head_ref: str,
+    base_rules: tuple[OwnershipRule, ...],
+    head_rules: tuple[OwnershipRule, ...],
+) -> tuple[OwnershipRule, ...]:
+    # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+    """Bridge the one reviewed base-existing metadata classification repair."""
+    if repository_id != _PDD_REPOSITORY_ID:
+        return base_rules
+    ownership_path = PurePosixPath(".pdd/sync-ownership.json")
+    base_policy = read_git_blob(root, base_ref, ownership_path)
+    head_policy = read_git_blob(root, head_ref, ownership_path)
+    if (
+        base_policy is None
+        or head_policy is None
+        or (
+            hashlib.sha256(base_policy).hexdigest(),
+            hashlib.sha256(head_policy).hexdigest(),
+        )
+        != _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES
+    ):
+        return base_rules
+
+    base_by_pattern = {rule.pattern: rule for rule in base_rules}
+    head_by_pattern = {rule.pattern: rule for rule in head_rules}
+    if any(
+        expected.pattern in base_by_pattern
+        or head_by_pattern.get(expected.pattern) != expected
+        for expected in _SYNC_ROLLOUT_REPAIR_HUMAN_OWNERSHIP
+    ):
+        return base_rules
+    for pattern, expected_digest in _SYNC_ROLLOUT_REPAIR_METADATA_BYTES:
+        path = PurePosixPath(pattern)
+        base_raw = read_git_blob(root, base_ref, path)
+        head_raw = read_git_blob(root, head_ref, path)
+        if (
+            base_raw is None
+            or head_raw is None
+            or hashlib.sha256(base_raw).hexdigest() != expected_digest
+            or hashlib.sha256(head_raw).hexdigest() != expected_digest
+        ):
+            return base_rules
+    return tuple(sorted((*base_rules, *_SYNC_ROLLOUT_REPAIR_HUMAN_OWNERSHIP)))
+
+
 def _replay_bootstrap_weakenings(
     root: Path,
     repository_id: str,
@@ -1468,6 +1589,14 @@ def build_unit_manifest(
         base_ref,
         head_ref,
         ownership,
+        head_ownership,
+    )
+    transition_ownership = _sync_rollout_repair_ownership_rules(
+        repository_root,
+        repository_id,
+        base_ref,
+        head_ref,
+        transition_ownership,
         head_ownership,
     )
     replay_bootstrap_weakenings = _replay_bootstrap_weakenings(

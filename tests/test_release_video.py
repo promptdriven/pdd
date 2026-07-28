@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -1115,6 +1116,42 @@ def test_release_video_generates_script_and_invokes_pds_publish(tmp_path: Path):
     assert_audit_fix_policy_args(pds_call)
     idempotency_key = pds_call[pds_call.index("--idempotency-key") + 1]
     assert idempotency_key.startswith("pdd-release-video:v1.1.0:")
+
+
+def test_release_video_opt_out_tag_blocks_direct_script_before_pds_or_artifacts(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    run(["git", "tag", "-a", "v0.0.309", "-m", "Release v0.0.309"], repo)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v0.0.309",
+            "--claude-cli",
+            str(claude_stub(tmp_path)),
+            "--pds-cli",
+            str(pds_stub(tmp_path, {"ok": True})),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "v0.0.309 is opted out" in result.stderr
+    assert not capture.exists()
+    assert not output_dir.exists()
 
 
 def test_release_video_rejects_explicit_empty_claude_model_before_claude(
@@ -2896,6 +2933,285 @@ def test_release_video_makefile_passes_local_claude_model_default():
     assert '--claude-model "claude-opus-4-8"' in preflight.stdout
 
 
+def test_release_video_makefile_rejects_opt_out_tag_without_release_video_zero(
+    tmp_path: Path,
+):
+    result = subprocess.run(
+        [
+            "make",
+            "release-video",
+            "RELEASE_TAG=v0.0.309",
+            "CLAUDE_CLI=/bin/false",
+            f"RELEASE_VIDEO_OUTPUT_DIR={tmp_path / 'videos'}",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        env=release_video_env(),
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "v0.0.309 is opted out" in result.stderr
+    assert not (tmp_path / "videos").exists()
+
+
+def write_release_makefile_stub_commands(tmp_path: Path) -> tuple[Path, Path]:
+    """Write isolated stubs for aggregate release control-flow tests."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    git_log = tmp_path / "git.log"
+
+    write_executable(
+        bin_dir / "git",
+        f"""#!{sys.executable}
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+with Path(os.environ["RELEASE_TEST_GIT_LOG"]).open("a", encoding="utf8") as log:
+    log.write(" ".join(args) + "\\n")
+
+scenario = os.environ["RELEASE_TEST_SCENARIO"]
+tag = os.environ["RELEASE_TEST_TAG"]
+latest_tag = os.environ["RELEASE_TEST_LATEST_TAG"]
+
+if args == ["version"]:
+    print("git version 2.39.5")
+    raise SystemExit(0)
+if args == ["fetch", "--tags", "--prune", "origin"]:
+    raise SystemExit(0)
+if args == ["rev-parse", "HEAD"]:
+    print("test-sha")
+    raise SystemExit(0)
+if args[:1] == ["tag"]:
+    if "--points-at" in args:
+        if scenario == "existing":
+            print(tag)
+        raise SystemExit(0)
+    if "--merged" in args:
+        if scenario == "new":
+            print(latest_tag)
+        raise SystemExit(0)
+    raise SystemExit(0)
+if args[:2] == ["rev-parse", "--verify"]:
+    raise SystemExit(1)
+if args[:1] == ["ls-remote"]:
+    if "--exit-code" in args:
+        raise SystemExit(2)
+    if scenario == "existing":
+        print(f"test-sha\\trefs/tags/{{tag}}^{{{{}}}}")
+    raise SystemExit(0)
+if args[:1] == ["push"]:
+    raise SystemExit(0)
+
+sys.stderr.write(f"unexpected git invocation: {{args!r}}\\n")
+raise SystemExit(3)
+""",
+    )
+    write_executable(
+        bin_dir / "gh",
+        f"""#!{sys.executable}
+import sys
+
+args = sys.argv[1:]
+if args[:2] in (["release", "view"], ["run", "list"]):
+    raise SystemExit(0)
+sys.stderr.write(f"unexpected gh invocation: {{args!r}}\\n")
+raise SystemExit(3)
+""",
+    )
+    write_executable(
+        bin_dir / "make",
+        f"""#!{sys.executable}
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+with Path(os.environ["RELEASE_TEST_MAKE_LOG"]).open("a", encoding="utf8") as log:
+    log.write(" ".join(args) + "\\n")
+
+if "release-video" in args and any(
+    ("RELEASE_TAG=" + t) in args for t in ("v0.0.309", "v0.0.310")
+):
+    sys.stderr.write("release-video: tag is opted out\\n")
+    raise SystemExit(1)
+raise SystemExit(0)
+""",
+    )
+    return bin_dir, git_log
+
+
+@pytest.mark.parametrize(
+    ("scenario", "release_tag", "latest_tag", "expects_video"),
+    [
+        ("existing", "v0.0.309", "", False),
+        ("new", "v0.0.309", "v0.0.308", False),
+        ("existing", "v0.0.311", "", True),
+        ("new", "v0.0.311", "v0.0.310", True),
+    ],
+)
+def test_release_makefile_treats_only_opt_out_tag_as_successful_no_video_path(
+    tmp_path: Path,
+    scenario: str,
+    release_tag: str,
+    latest_tag: str,
+    expects_video: bool,
+):
+    bin_dir, git_log = write_release_makefile_stub_commands(tmp_path)
+    make_log = tmp_path / "make.log"
+    wrapper = tmp_path / "Makefile"
+    wrapper.write_text(
+        f"""include {ROOT / 'Makefile'}
+
+check-deps:
+\t@:
+check-suspicious-files:
+\t@:
+check-release-remote:
+\t@:
+check-release-branch:
+\t@:
+check-release-clean:
+\t@:
+check-release-video-config:
+\t@:
+""",
+        encoding="utf8",
+    )
+    make_executable = shutil.which("make")
+    assert make_executable is not None
+    env = release_video_env(
+        {
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "RELEASE_TEST_GIT_LOG": str(git_log),
+            "RELEASE_TEST_MAKE_LOG": str(make_log),
+            "RELEASE_TEST_SCENARIO": scenario,
+            "RELEASE_TEST_TAG": release_tag,
+            "RELEASE_TEST_LATEST_TAG": latest_tag,
+        }
+    )
+
+    result = subprocess.run(
+        [make_executable, "-f", str(wrapper), "release"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    make_calls = (
+        make_log.read_text(encoding="utf8").splitlines()
+        if make_log.exists()
+        else []
+    )
+    video_calls = [call for call in make_calls if "release-video" in call]
+
+    assert result.returncode == 0, result.stderr
+    assert bool(video_calls) is expects_video
+    if expects_video:
+        assert video_calls == [
+            f"--no-print-directory release-video RELEASE_TAG={release_tag} "
+            "RELEASE_GIT_SHA=test-sha"
+        ]
+    else:
+        assert f"Skipping release video for opted-out tag {release_tag}." in result.stdout
+
+    if scenario == "new":
+        git_calls = git_log.read_text(encoding="utf8").splitlines()
+        assert f"tag -a {release_tag} -m Release {release_tag}" in git_calls
+        assert f"push origin {release_tag}" in git_calls
+
+
+def test_release_local_with_video_zero_completes_without_creating_video(
+    tmp_path: Path,
+):
+    """The local aggregate release preserves the emergency no-video path."""
+    bin_dir, _git_log = write_release_makefile_stub_commands(tmp_path)
+    (bin_dir / "make").unlink()
+    make_executable = shutil.which("make")
+    assert make_executable is not None
+    wrapper = tmp_path / "Makefile"
+    wrapper.write_text(
+        f"""include {ROOT / 'Makefile'}
+
+check-deps:
+\t@:
+check-suspicious-files:
+\t@:
+check-release-remote:
+\t@:
+check-release-branch:
+\t@:
+check-release-clean:
+\t@:
+""",
+        encoding="utf8",
+    )
+    runner = write_executable(
+        tmp_path / "release-sops-runner.py",
+        f"""#!{sys.executable}
+import os
+import sys
+
+command = sys.argv[sys.argv.index("--") + 1:]
+os.execv(
+    command[0],
+    [command[0], "-f", os.environ["RELEASE_TEST_MAKEFILE"], *command[1:]],
+)
+""",
+    )
+    sops = write_executable(
+        tmp_path / "sops-stub.py",
+        f"""#!{sys.executable}
+raise SystemExit(0)
+""",
+    )
+    output_dir = tmp_path / "release-videos"
+    env = release_video_env(
+        {
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "MAKE": make_executable,
+            "RELEASE_TEST_GIT_LOG": str(tmp_path / "git.log"),
+            "RELEASE_TEST_MAKE_LOG": str(tmp_path / "make.log"),
+            "RELEASE_TEST_MAKEFILE": str(wrapper),
+            "RELEASE_TEST_SCENARIO": "new",
+            "RELEASE_TEST_TAG": "v0.0.311",
+            "RELEASE_TEST_LATEST_TAG": "v0.0.310",
+            "SKIP_MAKEFILE_REGEN": "1",
+        }
+    )
+
+    result = subprocess.run(
+        [
+            make_executable,
+            "-f",
+            str(wrapper),
+            "release-local",
+            "RELEASE_VIDEO=0",
+            f"RELEASE_VIDEO_OUTPUT_DIR={output_dir}",
+            f"SOPS={sops}",
+            f"SOPS_RELEASE_ENV_FILE={ROOT / 'Makefile'}",
+            f"SOPS_RELEASE_ENV_RUNNER={runner}",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Skipping release video because RELEASE_VIDEO=0" in result.stdout
+    assert not output_dir.exists()
+    git_calls = (tmp_path / "git.log").read_text(encoding="utf8").splitlines()
+    assert "tag -a v0.0.311 -m Release v0.0.311" in git_calls
+    assert "push origin v0.0.311" in git_calls
+
+
 def test_release_video_makefile_empty_local_defaults_are_unset():
     release_video = subprocess.run(
         [
@@ -2948,6 +3264,34 @@ def test_release_video_workflow_defaults_and_preflights_recovery_capable_pds_cli
         in workflow_text
     )
     assert "make check-release-video-config" in workflow_text
+
+
+def test_release_video_workflow_explicitly_opts_out_v0_0_309():
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf8")
+    )
+    publish_job = workflow["jobs"]["publish-pypi"]
+    steps = {step["name"]: step for step in publish_job["steps"] if "name" in step}
+    opt_out_condition = (
+        "!contains(fromJSON(env.RELEASE_VIDEO_OPT_OUT_TAGS), github.ref_name)"
+    )
+
+    # A JSON array checked by array membership. Plain substring `contains`
+    # would make the tag v0.0.31 match the entry v0.0.310.
+    assert json.loads(publish_job["env"]["RELEASE_VIDEO_OPT_OUT_TAGS"]) == [
+        "v0.0.309",
+        "v0.0.310",
+    ]
+    for step_name in (
+        "Create release video and prepend link to notes (best-effort)",
+        "Upload release video recovery artifacts",
+        "Post release notes to Discord",
+    ):
+        assert opt_out_condition in steps[step_name]["if"]
+
+    assert "always()" in steps["Upload release video recovery artifacts"]["if"]
+    assert "if" not in steps["Publish to PyPI"]
+    assert "if" not in steps["Create GitHub Release with auto-notes (idempotent)"]
 
 
 def test_release_video_metadata_conflict_recovery_is_documented():
@@ -8174,3 +8518,58 @@ def test_backfill_workflow_behavior_preserves_release_on_validation_failure(
     assert result.returncode != 0
     assert release_state == "Existing GitHub-generated notes\n"
     assert all(not call.startswith("release edit") for call in gh_calls)
+
+
+def test_release_video_opt_out_is_a_set_covering_every_opted_out_tag() -> None:
+    """Opting a new release out must not re-enable video for an earlier one.
+
+    The opt-out used to be one tag, so opting out a new release meant
+    overwriting the previous value. The guarantee is per-release and permanent:
+    v0.0.309 carries no ``pdd-release-video-skipped`` marker on its GitHub
+    Release, so this set is the only thing keeping a later backfill from
+    attaching a video to it.
+    """
+    from scripts.release_video import (  # noqa: PLC0415
+        RELEASE_VIDEO_OPT_OUT_TAGS,
+        release_video_opt_out_reason,
+    )
+
+    assert {"v0.0.309", "v0.0.310"} <= RELEASE_VIDEO_OPT_OUT_TAGS
+
+    for tag in sorted(RELEASE_VIDEO_OPT_OUT_TAGS):
+        reason = release_video_opt_out_reason(tag)
+        assert reason is not None and tag in reason
+
+    # Exact membership, never prefix or substring.
+    assert release_video_opt_out_reason("v0.0.31") is None
+    assert release_video_opt_out_reason("v0.0.3100") is None
+    assert release_video_opt_out_reason("v0.0.311") is None
+
+
+def test_release_video_opt_out_sources_agree() -> None:
+    """Makefile, workflow, and script must name the same opted-out tags.
+
+    Three independent copies gate three different execution paths (local make,
+    the tag-triggered workflow, and the script). A tag opted out in only some
+    of them is silently opted in via the others.
+    """
+    from scripts.release_video import RELEASE_VIDEO_OPT_OUT_TAGS  # noqa: PLC0415
+
+    makefile = (ROOT / "Makefile").read_text(encoding="utf8")
+    make_line = next(
+        line
+        for line in makefile.splitlines()
+        if line.startswith("RELEASE_VIDEO_OPT_OUT_TAGS")
+    )
+    make_tags = set(make_line.split("?=", 1)[1].split())
+
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf8")
+    )
+    workflow_tags = set(
+        json.loads(
+            workflow["jobs"]["publish-pypi"]["env"]["RELEASE_VIDEO_OPT_OUT_TAGS"]
+        )
+    )
+
+    assert make_tags == workflow_tags == set(RELEASE_VIDEO_OPT_OUT_TAGS)

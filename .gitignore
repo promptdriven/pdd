@@ -295,6 +295,11 @@ yarn.lock
 !.pdd/meta/agentic_common_python.json
 !.pdd/meta/routing_policy_python.json
 !.pdd/meta/setup_tool_python.json
+# Temperature regression manual resolution: pin the reviewed source/prompt pairs
+# so auto-heal recognizes their finalized state instead of treating the paired
+# contract update as an unresolved co-edit.
+!.pdd/meta/postprocess_python.json
+!.pdd/meta/unfinished_prompt_python.json
 .pdd/meta/*_run.json
 # Issue #1006 follow-up: these two modules' tests pass quickly but
 # `pdd sync` runs >20 minutes on them in CI, hitting the auto-heal

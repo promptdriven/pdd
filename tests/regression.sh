@@ -510,7 +510,7 @@ else
 fi
 
 # Force cheap models for regression tests to minimize cost
-export PDD_MODEL_DEFAULT="vertex_ai/gemini-3-flash-preview"
+export PDD_MODEL_DEFAULT="vertex_ai/gemini-3.6-flash"
 export PDD_AGENTIC_PROVIDER="google,anthropic,openai"
 
 # Create a local .pddrc to control contexts for this regression run

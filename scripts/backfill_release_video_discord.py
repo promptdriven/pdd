@@ -17,6 +17,11 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+try:
+    from release_video import release_video_opt_out_reason
+except ModuleNotFoundError:
+    from scripts.release_video import release_video_opt_out_reason
+
 
 SEMVER_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 YOUTUBE_URL_RE = re.compile(r"^https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s\"'<>]+$")
@@ -40,6 +45,12 @@ POST_MARKER_RETRY_DELAY_SECONDS = 1.0
 
 class BackfillError(RuntimeError):
     """Raised for actionable release-video Discord backfill failures."""
+
+
+def ensure_release_video_backfill_tag_is_allowed(tag: str) -> None:
+    """Fail closed before any release or Discord backfill mutation."""
+    if reason := release_video_opt_out_reason(tag):
+        raise BackfillError(reason)
 
 
 class DiscordWebhookError(BackfillError):
@@ -573,6 +584,7 @@ def record_release_video_skip(
 ) -> BackfillResult:
     """Record that a historical release video was intentionally skipped."""
     del post_discord
+    ensure_release_video_backfill_tag_is_allowed(tag)
     normalized_reason = " ".join(reason.split())
     validate_skip_inputs(tag, normalized_reason, repo)
 
@@ -608,6 +620,7 @@ def backfill_release_video_discord(
     github: GitHubReleaseClient,
     post_discord: Callable[[str, dict[str, Any]], None] = send_discord_webhook,
 ) -> BackfillResult:
+    ensure_release_video_backfill_tag_is_allowed(tag)
     validate_inputs(tag, youtube_url, repo)
 
     body = github.get_release_body(tag)
@@ -718,6 +731,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        ensure_release_video_backfill_tag_is_allowed(args.tag)
         github = GitHubReleaseClient(
             gh_cli=validate_gh_cli(args.gh_cli),
             repo=args.repo,

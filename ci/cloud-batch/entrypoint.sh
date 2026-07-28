@@ -126,6 +126,7 @@ write_result() {
     "status": "${status}",
     "duration_seconds": ${duration},
     "setup_seconds": ${SETUP_SECONDS:-0},
+    "advisory_prose_judge": "${ADVISORY_VERDICT:-not-run}",
     "identity": {
         "candidate_sha": "${PDD_CANDIDATE_SHA}",
         "candidate_tree": "${PDD_CANDIDATE_TREE}",
@@ -288,7 +289,7 @@ export GOOGLE_CLOUD_PROJECT="${VERTEX_PROJECT}"
 export GOOGLE_CLOUD_LOCATION="us-central1"
 
 # ── Set common env vars ──────────────────────────────────────────────────
-export PDD_MODEL_DEFAULT="vertex_ai/gemini-3-flash-preview"
+export PDD_MODEL_DEFAULT="vertex_ai/gemini-3.6-flash"
 export PDD_STRENGTH_DEFAULT="0.5"
 export PDD_AGENTIC_PROVIDER="google,anthropic,openai"
 export PDD_RUN_REAL_LLM_TESTS=1
@@ -566,9 +567,73 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
     JUNIT_XML="${RESULTS_DIR}/task_${TASK_INDEX}_junit.xml"
     PYTEST_CHUNK_TIMEOUT="${PYTEST_CHUNK_TIMEOUT:-1200}"
     chown -R pdd:pdd "${WORK_DIR}" "${RESULTS_DIR}"
+
+    # ── Advisory prose-judge lane ─────────────────────────────────────
+    # `prose_judge` tests assert on free-form LLM prose with regex oracles.
+    # A model rephrasing flips them with no product regression behind it, so
+    # they must not gate a release — four release-blocking PRs (#2278, #2281,
+    # #2283, #2286) were spent widening those patterns during a release.
+    #
+    # They still run. Their verdict travels in the task's own result JSON
+    # (ADVISORY_VERDICT below, surfaced by collect-results.sh) rather than in
+    # the task's pass/fail, so a phrasing drift is visible without stopping a
+    # release. Set PDD_BATCH_PROSE_JUDGE_BLOCKING=1 to fold them back in.
+    #
+    # The advisory log/junit deliberately do NOT use the `task_*` prefix.
+    # verify-result-identities.py allowlists the results prefix exactly
+    # (`glob("task_*.log")` must equal `{task_<i>.log}`), so a `task_*` name
+    # here makes every run abort with a credential-boundary error even when all
+    # 77 tasks pass. Keep these names outside that namespace.
+    PROSE_JUDGE_BLOCKING="${PDD_BATCH_PROSE_JUDGE_BLOCKING:-0}"
+    ADVISORY_VERDICT="blocking"
+    if [ "${PROSE_JUDGE_BLOCKING}" = "1" ]; then
+        PYTEST_MARKER_ARGS=()
+        echo "=== prose_judge lane: BLOCKING (PDD_BATCH_PROSE_JUDGE_BLOCKING=1) ==="
+    else
+        PYTEST_MARKER_ARGS=(-m "not prose_judge")
+        ADVISORY_LOG="${RESULTS_DIR}/advisory_${TASK_INDEX}_prose_judge.log"
+        ADVISORY_JUNIT="${RESULTS_DIR}/advisory_${TASK_INDEX}_prose_judge_junit.xml"
+        ADVISORY_EXIT=0
+        run_with_timeout "${PYTEST_CHUNK_TIMEOUT}" \
+            "${PYTEST_USER_COMMAND[@]}" python -m pytest -vv \
+            -m "prose_judge" --junitxml="${ADVISORY_JUNIT}" \
+            "${CHUNK_TESTS[@]}" > "${ADVISORY_LOG}" 2>&1 || ADVISORY_EXIT=$?
+        # Only exit 1 means "a prose_judge test failed", which is the sole case
+        # the rephrasing explanation fits. 5 is "nothing collected" (expected in
+        # 31 of 32 chunks). 2/3/4/124 are interrupted/internal/usage/timeout —
+        # harness faults that must not be mislabelled as model drift.
+        case "${ADVISORY_EXIT}" in
+            5)
+                ADVISORY_VERDICT="absent"
+                echo "=== prose_judge lane: no prose_judge tests in chunk ${CHUNK_INDEX} ==="
+                ;;
+            0)
+                ADVISORY_VERDICT="pass"
+                echo "=== prose_judge lane: ADVISORY PASS (chunk ${CHUNK_INDEX}) ==="
+                ;;
+            1)
+                ADVISORY_VERDICT="fail"
+                echo "=== prose_judge lane: ADVISORY FAIL (chunk ${CHUNK_INDEX}) ==="
+                echo "=== This does NOT fail the task. The model likely rephrased its"
+                echo "=== output; widen the judge outside the release, or replace it"
+                echo "=== with a structured assertion. Last 50 lines: ==="
+                tail -50 "${ADVISORY_LOG}" || true
+                ;;
+            *)
+                ADVISORY_VERDICT="lane-error-${ADVISORY_EXIT}"
+                echo "=== prose_judge lane: LANE ERROR exit=${ADVISORY_EXIT} (chunk ${CHUNK_INDEX}) ==="
+                echo "=== This is a harness fault (interrupted/internal/usage/timeout),"
+                echo "=== NOT model drift. The advisory result is unknown for this chunk."
+                echo "=== Last 50 lines: ==="
+                tail -50 "${ADVISORY_LOG}" || true
+                ;;
+        esac
+    fi
+
     run_test "pytest" "chunk_${CHUNK_INDEX}" \
         run_with_timeout "${PYTEST_CHUNK_TIMEOUT}" \
         "${PYTEST_USER_COMMAND[@]}" python -m pytest -vv \
+        ${PYTEST_MARKER_ARGS[@]+"${PYTEST_MARKER_ARGS[@]}"} \
         --junitxml="${JUNIT_XML}" "${CHUNK_TESTS[@]}"
 
 elif [ "${TASK_INDEX}" -ge "${REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${REGRESSION_END}" ]; then

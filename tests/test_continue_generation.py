@@ -14,7 +14,7 @@ def basic_inputs():
         'formatted_input_prompt': 'Test prompt',
         'llm_output': 'Initial output',
         'strength': 0.5,
-        'temperature': 0.0,
+        'temperature': 0.7,
         'verbose': False
     }
 
@@ -65,6 +65,14 @@ def test_successful_generation(basic_inputs, mock_llm_responses):
         assert isinstance(model, str)
         assert model == "gpt-4"
         assert cost > 0
+        assert all(
+            call.kwargs["temperature"] == basic_inputs["temperature"]
+            for call in mock_llm_invoke.call_args_list
+        )
+        assert (
+            mock_unfinished.call_args.kwargs["temperature"]
+            == basic_inputs["temperature"]
+        )
 
 def test_final_trim_malformed_result_raises_issue_1612(basic_inputs, mock_llm_responses):
     """Final-trim guard (issue #1612): if the final trim_results_LLM call returns
