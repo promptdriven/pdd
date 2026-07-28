@@ -11,7 +11,7 @@ from ..sync_main import sync_main
 from ..auto_deps_main import auto_deps_main
 from ..agentic_sync import _is_github_issue_url, run_agentic_sync, run_global_sync
 from ..construct_paths import _find_pddrc_file, _load_pddrc_config
-from ..track_cost import track_cost
+from ..track_cost import EXIT_COST_RESULT_KEY, track_cost
 from ..core.errors import handle_error
 from ..sync_determine_operation import AmbiguousModuleError
 from ..core.utils import _run_setup_utility, echo_model_line
@@ -538,8 +538,27 @@ def sync(
                 agentic_fallback=_agentic_fallback_from_sync_result(result),
                 **grounding_kwargs_from_ctx(ctx.obj),
             )
+        overall_success = (
+            bool(result.get("overall_success", True))
+            if isinstance(result, Mapping)
+            else True
+        )
+        if not overall_success:
+            # Issue #1979: the summary panel says "Overall status: Failed" but the
+            # command used to return the cost-tracking tuple unconditionally and
+            # exit 0. Follow the #1677 / dispatch-helper convention and exit
+            # non-zero so CI, shell `&&` chains, and the agentic child runners
+            # never read a failed sync as success. Raised AFTER the evidence
+            # manifest write so failure evidence is still recorded.
+            #
+            # Stash the cost tuple for @track_cost first: the wrapper writes the
+            # --output-cost / PDD_OUTPUT_COST_PATH CSV row from this stash on an
+            # intentional Exit, so failed attempts keep their cost row (the
+            # agentic runner parses it to accumulate cost and enforce --budget).
+            ctx.obj[EXIT_COST_RESULT_KEY] = (str(result), total_cost, model_name)
+            raise click.exceptions.Exit(1)
         return str(result), total_cost, model_name
-    except click.Abort:
+    except (click.Abort, click.exceptions.Exit):
         raise
     except AmbiguousModuleError as exc:
         # Issue #1677: an ambiguous module name is a hard, actionable error. Always
