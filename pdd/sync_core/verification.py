@@ -143,6 +143,54 @@ _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES = (
     _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
 )
+
+# PR #2316 must retire an older dormant llm-invoke row whose source contract
+# was superseded before the schema-3 retirement representation existed.  This
+# is a one-off repository-bound bridge, not general stale-row authority.  The
+# policy digest names the complete, separately reviewed JSON-only Phase-A
+# artifact; a byte-equivalent reformat or altered replacement no longer
+# matches.  The historical prompt-tree pair prevents the legacy replay used by
+# the protected rollout test from accepting any different prompt evolution.
+_PR2316_STALE_LLM_REISSUE_ROTATION_POLICY_BYTES = (
+    _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY[0],
+    "4e3ca5e64238e7137fedc7c562b2dd5a2e61db61dae422f85c0aaebbc86cb6bb",
+)
+_PR2316_STALE_LLM_REISSUE_PHASE_A_PROFILE_BYTES = (
+    _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+    _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+)
+_PR2316_STALE_LLM_REISSUE_STATIONARY_POLICY_BYTES = (
+    _PR2316_STALE_LLM_REISSUE_ROTATION_POLICY_BYTES[1],
+    _PR2316_STALE_LLM_REISSUE_ROTATION_POLICY_BYTES[1],
+)
+_PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
+    _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
+    _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+)
+_PR2316_STALE_LLM_REISSUE_HISTORY_PROMPT_TREE_BYTES = (
+    "5c1b0273c590dfde59c83830c1284523879b7438c9ec9addd913d73b3c0baa0c",
+    "b1ea7718f06089e9f1d9edcb611c8483f495478958e85e8ee65d320cd14d714f",
+)
+_PR2316_STALE_LLM_REISSUE_CURRENT_PROMPT_SHA256 = (
+    "09e5140c01bbf8136f4c487c873c816f8e75db75412c11794a8b7ea47259cf3c"
+)
+_PR2316_STALE_LLM_REISSUE_REPLACEMENT_ROW = (
+    PurePosixPath("pdd/prompts/llm_invoke_python.prompt"),
+    "python",
+    "CONTRACT-SHA256:09e5140c01bbf8136f4c487c873c816f8e75db75412c11794a8b7ea47259cf3c",
+    "CONTRACT-SHA256:10129606f47d4301052490b7767acc08d8fc713e48bcb2b867efadf2063f8d1e",
+    PROFILE_PATH,
+    "ffd7a11fb15a7aebb20c8199d506cf2deb8bb405b952dcda8444563c24e7a912",
+    "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f",
+    "09e5140c01bbf8136f4c487c873c816f8e75db75412c11794a8b7ea47259cf3c",
+    "10129606f47d4301052490b7767acc08d8fc713e48bcb2b867efadf2063f8d1e",
+)
+_PR2316_STALE_LLM_REISSUE_TARGET_IDENTITIES = frozenset(
+    {
+        (PurePosixPath("pdd/prompts/llm_invoke_python.prompt"), "python"),
+        (PurePosixPath("pdd/prompts/model_tester_python.prompt"), "python"),
+    }
+)
 _SYNC_ROLLOUT_REPAIR_PROMPT_BYTES = (
     (
         PurePosixPath("pdd/prompts/code_generator_python.prompt"),
@@ -2008,6 +2056,75 @@ def _is_exact_combined_requirement_reconciliation(
     }
 
 
+def _pr2316_stale_llm_reissue_digest_state(
+    repository_id: str,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+) -> tuple[tuple[str, str], tuple[str, str]] | None:
+    """Return the complete repository-bound policy/profile identity pair."""
+    if (
+        repository_id != _PDD_REPOSITORY_ID
+        or None in (*rotation_policies, *profile_policies)
+    ):
+        return None
+    protected_policy, candidate_policy = rotation_policies
+    protected_profile, candidate_profile = profile_policies
+    assert protected_policy is not None and candidate_policy is not None
+    assert protected_profile is not None and candidate_profile is not None
+    return (
+        (_sha256(protected_policy), _sha256(candidate_policy)),
+        (_sha256(protected_profile), _sha256(candidate_profile)),
+    )
+
+
+def _is_exact_pr2316_stale_llm_reissue_phase_a(
+    repository_id: str,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+) -> bool:
+    """Recognize only the prepared JSON-only Phase-A policy/profile bytes."""
+    return _pr2316_stale_llm_reissue_digest_state(
+        repository_id,
+        rotation_policies,
+        profile_policies,
+    ) == (
+        _PR2316_STALE_LLM_REISSUE_ROTATION_POLICY_BYTES,
+        _PR2316_STALE_LLM_REISSUE_PHASE_A_PROFILE_BYTES,
+    )
+
+
+def _is_exact_pr2316_stale_llm_reissue_stationary(
+    repository_id: str,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+) -> bool:
+    """Recognize the protected Phase-A state without granting new authority."""
+    return _pr2316_stale_llm_reissue_digest_state(
+        repository_id,
+        rotation_policies,
+        profile_policies,
+    ) == (
+        _PR2316_STALE_LLM_REISSUE_STATIONARY_POLICY_BYTES,
+        _PR2316_STALE_LLM_REISSUE_PHASE_A_PROFILE_BYTES,
+    )
+
+
+def _is_exact_pr2316_stale_llm_reissue_history(
+    repository_id: str,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+) -> bool:
+    """Recognize the one legacy rollout/profile history ending at Phase A."""
+    return _pr2316_stale_llm_reissue_digest_state(
+        repository_id,
+        rotation_policies,
+        profile_policies,
+    ) == (
+        _PR2316_STALE_LLM_REISSUE_ROTATION_POLICY_BYTES,
+        _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES,
+    )
+
+
 def _is_exact_pr1971_pytest_reconciliation(
     manifest: UnitManifest,
     rotation_policies: tuple[bytes | None, bytes | None],
@@ -2199,6 +2316,51 @@ def _retirement_is_provably_unreachable_dormant(
     )
 
 
+def _is_exact_pr2316_stale_llm_reissue_current_prompt_state(
+    authorization: _RequirementTransitionAuthorization,
+    prompts: tuple[bytes | None, bytes | None],
+    exact_reissue_state: bool,
+) -> bool:
+    """Check the only mutable source blob accepted by the legacy retirement."""
+    return bool(
+        exact_reissue_state
+        and (authorization.prompt_path, authorization.language_id)
+        == (PurePosixPath("pdd/prompts/llm_invoke_python.prompt"), "python")
+        and prompts[0] is not None
+        and prompts[0] == prompts[1]
+        and _sha256(prompts[0])
+        == _PR2316_STALE_LLM_REISSUE_CURRENT_PROMPT_SHA256
+    )
+
+
+def _is_exact_pr2316_stale_llm_reissue_historical_replacement_dormant(
+    authorization: _RequirementTransitionAuthorization,
+    prompts: tuple[bytes | None, bytes | None],
+    exact_historical_reissue: bool,
+) -> bool:
+    """Recognize only the fully bound replacement in the legacy replay."""
+    bindings = authorization.bindings
+    return bool(
+        exact_historical_reissue
+        and (
+            authorization.prompt_path,
+            authorization.language_id,
+            authorization.from_requirement_id,
+            authorization.to_requirement_id,
+            authorization.policy_path,
+            bindings.base_policy_sha256,
+            bindings.head_policy_sha256,
+            bindings.base_prompt_sha256,
+            bindings.head_prompt_sha256,
+        )
+        == _PR2316_STALE_LLM_REISSUE_REPLACEMENT_ROW
+        and prompts[0] is not None
+        and prompts[0] == prompts[1]
+        and _sha256(prompts[0])
+        == _PR2316_STALE_LLM_REISSUE_CURRENT_PROMPT_SHA256
+    )
+
+
 def _validate_retirement_history_representation(
     protected_raw: bytes | None,
     candidate_raw: bytes | None,
@@ -2301,6 +2463,52 @@ def _managed_prompt_byte_changes(
     return changed
 
 
+def _managed_prompt_tree_sha256(
+    root: Path,
+    manifest: UnitManifest,
+    ref: str,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
+) -> str | None:
+    """Hash every canonical managed prompt without normalizing its bytes."""
+    digest = hashlib.sha256()
+    prompt_paths = sorted(
+        {
+            _canonical_prompt_path(unit_id.prompt_relpath, approved_aliases)
+            for unit_id in manifest.expected_managed
+        }
+    )
+    for prompt_path in prompt_paths:
+        prompt = read_git_blob(root, ref, prompt_path)
+        if prompt is None:
+            return None
+        digest.update(prompt_path.as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(prompt).digest())
+    return digest.hexdigest()
+
+
+def _has_exact_pr2316_stale_llm_reissue_history_prompt_trees(
+    root: Path,
+    manifest: UnitManifest,
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
+) -> bool:
+    """Bind the legacy replay to its complete protected/candidate prompt trees."""
+    return (
+        _managed_prompt_tree_sha256(
+            root,
+            manifest,
+            manifest.base_ref,
+            approved_aliases,
+        ),
+        _managed_prompt_tree_sha256(
+            root,
+            manifest,
+            manifest.head_ref,
+            approved_aliases,
+        ),
+    ) == _PR2316_STALE_LLM_REISSUE_HISTORY_PROMPT_TREE_BYTES
+
+
 def _validate_retirement_managed_prompt_bytes(
     root: Path,
     manifest: UnitManifest,
@@ -2376,6 +2584,8 @@ def _validate_candidate_retirements(
     protected_active: tuple[_RequirementTransitionAuthorization, ...],
     protected_policy: bytes | None,
     candidate_policy: bytes | None,
+    exact_pr2316_phase_a_reissue: bool,
+    exact_pr2316_historical_reissue: bool,
 ) -> None:
     """Validate append-only retirement/reissue of unreachable protected rows."""
     protected_schema = _policy_schema_version(protected_policy, "protected")
@@ -2409,28 +2619,43 @@ def _validate_candidate_retirements(
             "candidate schema-3 requirement transition policy requires a "
             "retirement/reissue record"
         )
-    if new_retirements:
+    if new_retirements and not exact_pr2316_historical_reissue:
         _validate_retirement_managed_prompt_bytes(root, manifest, approved_aliases)
     for retirement in new_retirements:
         if (
             retirement.obsolete not in protected_active
             or retirement.replacement in protected_rows
             or retirement.replacement not in candidate_rows
-            or not _retirement_is_provably_unreachable_dormant(
-                manifest,
-                base,
-                head,
-                policies,
-                prompts[retirement.obsolete.prompt_path],
-                retirement.obsolete,
+            or not (
+                _retirement_is_provably_unreachable_dormant(
+                    manifest,
+                    base,
+                    head,
+                    policies,
+                    prompts[retirement.obsolete.prompt_path],
+                    retirement.obsolete,
+                )
+                or _is_exact_pr2316_stale_llm_reissue_current_prompt_state(
+                    retirement.obsolete,
+                    prompts[retirement.obsolete.prompt_path],
+                    exact_pr2316_phase_a_reissue
+                    or exact_pr2316_historical_reissue,
+                )
             )
-            or not _candidate_authorization_is_strictly_dormant(
-                manifest,
-                base,
-                head,
-                policies,
-                prompts[retirement.replacement.prompt_path],
-                retirement.replacement,
+            or not (
+                _candidate_authorization_is_strictly_dormant(
+                    manifest,
+                    base,
+                    head,
+                    policies,
+                    prompts[retirement.replacement.prompt_path],
+                    retirement.replacement,
+                )
+                or _is_exact_pr2316_stale_llm_reissue_historical_replacement_dormant(
+                    retirement.replacement,
+                    prompts[retirement.replacement.prompt_path],
+                    exact_pr2316_historical_reissue,
+                )
             )
         ):
             raise VerificationProfileError(
@@ -2488,6 +2713,38 @@ def _load_requirement_transition_authorizations(
         read_git_blob(root, manifest.base_ref, PROFILE_PATH),
         read_git_blob(root, manifest.head_ref, PROFILE_PATH),
     )
+    exact_pr2316_phase_a_reissue = _is_exact_pr2316_stale_llm_reissue_phase_a(
+        manifest.repository_id,
+        (protected_policy, candidate_policy),
+        policies,
+    )
+    exact_pr2316_stationary_reissue = _is_exact_pr2316_stale_llm_reissue_stationary(
+        manifest.repository_id,
+        (protected_policy, candidate_policy),
+        policies,
+    )
+    exact_pr2316_historical_reissue = (
+        _is_exact_pr2316_stale_llm_reissue_history(
+            manifest.repository_id,
+            (protected_policy, candidate_policy),
+            policies,
+        )
+        and _has_exact_pr2316_stale_llm_reissue_history_prompt_trees(
+            root,
+            manifest,
+            approved_aliases,
+        )
+    )
+    if exact_pr2316_historical_reissue:
+        # The complete policy/profile and prompt-tree binding above makes these
+        # two rows historical state recognition only.  It does not authorize
+        # any different future policy, profile, or prompt candidate.
+        authority.update(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id)
+            in _PR2316_STALE_LLM_REISSUE_TARGET_IDENTITIES
+        )
     terra_sol_reconciliation = (
         is_pdd_repository
         and protected_policy is not None
@@ -2598,28 +2855,34 @@ def _load_requirement_transition_authorizations(
             ),
         }
     )
-    temperature_regression_state = is_pdd_repository and (
-        (policy_digests, profile_digests)
-        in {
-            (
-                _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY,
-                _TEMPERATURE_REGRESSION_PROFILE_BYTES,
-            ),
-            (
+    temperature_regression_state = (
+        exact_pr2316_phase_a_reissue
+        or exact_pr2316_stationary_reissue
+        or exact_pr2316_historical_reissue
+        or (
+            is_pdd_repository
+            and (policy_digests, profile_digests)
+            in {
                 (
-                    _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY[1],
-                    _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY[1],
+                    _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY,
+                    _TEMPERATURE_REGRESSION_PROFILE_BYTES,
                 ),
                 (
-                    _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
-                    _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+                    (
+                        _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY[1],
+                        _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY[1],
+                    ),
+                    (
+                        _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+                        _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
+                    ),
                 ),
-            ),
-            (
-                _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY,
-                _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES,
-            ),
-        }
+                (
+                    _TEMPERATURE_REGRESSION_SCHEMA_2_HISTORY,
+                    _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES,
+                ),
+            }
+        )
     )
     historical_composed_state = (
         opus_fable_state or sync_rollout_repair_state or temperature_regression_state
@@ -2764,6 +3027,8 @@ def _load_requirement_transition_authorizations(
         protected,
         protected_policy,
         candidate_policy,
+        exact_pr2316_phase_a_reissue,
+        exact_pr2316_historical_reissue,
     )
     legacy_pdd1989_reconciliation = (
         is_pdd_repository
@@ -2806,6 +3071,11 @@ def _load_requirement_transition_authorizations(
         if item not in protected
         and not (is_pdd_repository and item in _REPLAY_PROFILE_REQUIREMENT_TRANSITIONS)
     )
+    if exact_pr2316_historical_reissue:
+        # This exact legacy history is already fully bound above; presenting
+        # its Phase-A rows as newly installed authority would re-run the
+        # unrelated-prompt isolation check across pre-existing history.
+        new_authorizations = ()
     consumed_profile_reconciliation = any(
         (
             legacy_pdd1989_reconciliation,
@@ -3249,37 +3519,50 @@ def _authorized_profile_additions(
 def _authorized_sync_rollout_profile_reconciliation(
     root: Path,
     manifest: UnitManifest,
-    base: Mapping[UnitId, _ProfileInput],
-    head: Mapping[UnitId, _ProfileInput],
+    profile_inputs: tuple[
+        Mapping[UnitId, _ProfileInput], Mapping[UnitId, _ProfileInput]
+    ],
     base_invalid: list[str],
+    approved_aliases: Mapping[PurePosixPath, PurePosixPath],
 ) -> tuple[dict[UnitId, _ProfileInput], frozenset[str]]:
     # pylint: disable=too-many-locals
     """Authorize the one exact stale-profile repair from the protected base."""
+    base, head = profile_inputs
     if manifest.repository_id != _PDD_REPOSITORY_ID:
         return {}, frozenset()
     base_profile = read_git_blob(root, manifest.base_ref, PROFILE_PATH)
     head_profile = read_git_blob(root, manifest.head_ref, PROFILE_PATH)
     base_rotations = read_git_blob(root, manifest.base_ref, ROTATION_POLICY_PATH)
     head_rotations = read_git_blob(root, manifest.head_ref, ROTATION_POLICY_PATH)
-    if (
-        None in (base_profile, head_profile, base_rotations, head_rotations)
-        or (
-            _sha256(base_profile),
-            _sha256(head_profile),
-        )
-        not in {
-            _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES,
-            _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES,
-        }
-        or (
-            _sha256(base_rotations),
-            _sha256(head_rotations),
-        )
-        != _SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES
-    ):
+    if None in (base_profile, head_profile, base_rotations, head_rotations):
         return {}, frozenset()
     assert base_profile is not None and head_profile is not None
     assert base_rotations is not None and head_rotations is not None
+    profile_pair = (_sha256(base_profile), _sha256(head_profile))
+    rotation_pair = (_sha256(base_rotations), _sha256(head_rotations))
+    exact_pr2316_history = (
+        _is_exact_pr2316_stale_llm_reissue_history(
+            manifest.repository_id,
+            (base_rotations, head_rotations),
+            (base_profile, head_profile),
+        )
+        and _has_exact_pr2316_stale_llm_reissue_history_prompt_trees(
+            root,
+            manifest,
+            approved_aliases,
+        )
+    )
+    if (profile_pair, rotation_pair) not in {
+        (
+            _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES,
+            _SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES,
+        ),
+        (
+            _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES,
+            _SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES,
+        ),
+    } and not exact_pr2316_history:
+        return {}, frozenset()
 
     stale_reasons = frozenset(
         f"{manifest.base_ref}: {prompt_path.as_posix()}: profile requirements "
@@ -3413,7 +3696,7 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
     )
     rollout_profile_additions, reconciled_base_invalid = (
         _authorized_sync_rollout_profile_reconciliation(
-            root, manifest, base, head, base_invalid
+            root, manifest, (base, head), base_invalid, approved_aliases
         )
     )
     invalid.extend(

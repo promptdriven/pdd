@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import io
 import json
@@ -104,6 +105,10 @@ PDD_1875_COMPOSED_HEAD = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 TERRA_SOL_PROTECTED_BASE = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 TERRA_SOL_COMPOSED_HEAD = "b3902318c35c279e49e6397838825c95bd568942"
 SYNC_ROLLOUT_PROTECTED_BASE = "dec539aa8d0697e357e2077c1dbc73b0621aa617"
+PR_2316_HISTORICAL_CANDIDATE = "817abe2d0d41355175c3e09b994928c166917123"
+PR_2316_PHASE_A_POLICY_SHA256 = (
+    "4e3ca5e64238e7137fedc7c562b2dd5a2e61db61dae422f85c0aaebbc86cb6bb"
+)
 RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE = "c93332e9bc5956677280a3a015c32d16c99b54cb"
 PR_1971_COMBINED_PROFILE_DIGEST = (
     "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1"
@@ -864,6 +869,242 @@ def _git_blob(ref: str, path: Path) -> bytes:
     return subprocess.check_output(
         ["git", "show", f"{ref}:{path.relative_to(ROOT)}"], cwd=ROOT
     )
+
+
+def _pr2316_phase_a_policy(protected_policy: bytes) -> bytes:
+    """Build the separately prepared schema-3 Phase-A bytes exactly."""
+    payload = json.loads(protected_policy)
+    assert payload["schema_version"] == 2
+    obsolete = next(
+        item
+        for item in payload["requirement_rotations"]
+        if item["prompt_path"] == "pdd/prompts/llm_invoke_python.prompt"
+        and item["base_prompt_sha256"]
+        == "15c51e9dbc3bb536ab6d6dfa1a7927a30f33b1423398e326e5a06f9524896735"
+    )
+    llm_replacement = {
+        "prompt_path": "pdd/prompts/llm_invoke_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": (
+            "CONTRACT-SHA256:09e5140c01bbf8136f4c487c873c816f8e75db75412c11794a8b7ea47259cf3c"
+        ),
+        "to_requirement_id": (
+            "CONTRACT-SHA256:10129606f47d4301052490b7767acc08d8fc713e48bcb2b867efadf2063f8d1e"
+        ),
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": (
+            "ffd7a11fb15a7aebb20c8199d506cf2deb8bb405b952dcda8444563c24e7a912"
+        ),
+        "head_policy_sha256": (
+            "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f"
+        ),
+        "base_prompt_sha256": (
+            "09e5140c01bbf8136f4c487c873c816f8e75db75412c11794a8b7ea47259cf3c"
+        ),
+        "head_prompt_sha256": (
+            "10129606f47d4301052490b7767acc08d8fc713e48bcb2b867efadf2063f8d1e"
+        ),
+    }
+    model_tester_replacement = {
+        "prompt_path": "pdd/prompts/model_tester_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": (
+            "CONTRACT-SHA256:7c020d1e55839dfa7a962df32a3991952466bd3710afa3006122424f3d21c89b"
+        ),
+        "to_requirement_id": (
+            "CONTRACT-SHA256:4ab43d1625c4229c4088c6d71cdf92aadbe92b3467cde71b1f24d774b7cfc501"
+        ),
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": (
+            "ffd7a11fb15a7aebb20c8199d506cf2deb8bb405b952dcda8444563c24e7a912"
+        ),
+        "head_policy_sha256": (
+            "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f"
+        ),
+        "base_prompt_sha256": (
+            "7c020d1e55839dfa7a962df32a3991952466bd3710afa3006122424f3d21c89b"
+        ),
+        "head_prompt_sha256": (
+            "4ab43d1625c4229c4088c6d71cdf92aadbe92b3467cde71b1f24d774b7cfc501"
+        ),
+    }
+    payload["schema_version"] = 3
+    payload["requirement_rotations"].extend(
+        (llm_replacement, model_tester_replacement)
+    )
+    payload["requirement_rotation_retirements"] = [
+        {
+            "obsolete": copy.deepcopy(obsolete),
+            "replacement": copy.deepcopy(llm_replacement),
+        }
+    ]
+    candidate = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+    assert hashlib.sha256(candidate).hexdigest() == PR_2316_PHASE_A_POLICY_SHA256
+    return candidate
+
+
+@pytest.mark.timeout(600)
+def test_pr2316_schema_3_legacy_retirement_is_exact_through_production_loader(
+    tmp_path,
+) -> None:
+    """Only the prepared Phase-A bytes can retire the stale llm-invoke row."""
+    root = tmp_path / "pr2316-phase-a"
+    protected = _synthetic_current_tree_repo(root)
+    policy_path = root / ".pdd" / "verification-profile-rotations.json"
+    exact_policy = _pr2316_phase_a_policy(policy_path.read_bytes())
+
+    def candidate_for(mutation: str) -> tuple[str, str]:
+        _git(root, "checkout", "-q", "-B", f"pr2316-{mutation}", protected)
+        base = protected
+        candidate_policy = exact_policy
+        if mutation == "altered-policy":
+            payload = json.loads(candidate_policy)
+            payload["requirement_rotations"][-1]["head_policy_sha256"] = "f" * 64
+            candidate_policy = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+        elif mutation == "reformatted-policy":
+            candidate_policy = (
+                json.dumps(
+                    json.loads(candidate_policy), sort_keys=True, separators=(",", ":")
+                )
+                + "\n"
+            ).encode("utf-8")
+        elif mutation == "reordered-policy":
+            payload = json.loads(candidate_policy)
+            payload["requirement_rotations"][-2:] = reversed(
+                payload["requirement_rotations"][-2:]
+            )
+            candidate_policy = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+        elif mutation == "replacement-binding-substitution":
+            payload = json.loads(candidate_policy)
+            payload["requirement_rotation_retirements"][0]["replacement"][
+                "head_policy_sha256"
+            ] = "0" * 64
+            candidate_policy = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+        elif mutation == "foreign-repository":
+            (root / ".pdd" / "repository-id").write_text(
+                "e602f876-c944-4fe3-b91b-e8a94a39ecea\n", encoding="ascii"
+            )
+            base = _commit(root, "foreign protected base")
+        policy_path.write_bytes(candidate_policy)
+        if mutation == "target-prompt-drift":
+            target = root / "pdd" / "prompts" / "llm_invoke_python.prompt"
+            target.write_bytes(target.read_bytes() + b"\n# candidate drift\n")
+        elif mutation == "unrelated-managed-prompt-drift":
+            unrelated = root / "pdd" / "prompts" / "code_generator_python.prompt"
+            unrelated.write_bytes(unrelated.read_bytes() + b"\n# candidate drift\n")
+        return base, _commit(root, f"pr2316 candidate {mutation}")
+
+    base, head = candidate_for("exact-phase-a")
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+    profiles = load_verification_profiles(root, manifest)
+    assert manifest.repository_id == REPOSITORY_ID
+    assert not manifest.invalid_reasons
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+    for mutation in (
+        "altered-policy",
+        "reformatted-policy",
+        "reordered-policy",
+        "replacement-binding-substitution",
+        "target-prompt-drift",
+        "unrelated-managed-prompt-drift",
+        "foreign-repository",
+    ):
+        base, head = candidate_for(mutation)
+        manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+        try:
+            profiles = load_verification_profiles(root, manifest)
+        except verification.VerificationProfileError:
+            continue
+        assert manifest.invalid_reasons or profiles.invalid_reasons, mutation
+
+
+@pytest.mark.timeout(600)
+def test_pr2316_historical_legacy_retirement_is_fully_bound_through_production_loader(
+    tmp_path,
+) -> None:
+    """The legacy history accepts only its exact repository, bytes, and tree."""
+    root = tmp_path / "pr2316-history"
+    subprocess.run(
+        ["git", "clone", "-q", "--shared", str(ROOT), str(root)],
+        check=True,
+        capture_output=True,
+    )
+
+    def candidate_for(mutation: str) -> tuple[str, str]:
+        _git(
+            root,
+            "checkout",
+            "-q",
+            "-B",
+            f"pr2316-history-{mutation}",
+            SYNC_ROLLOUT_PROTECTED_BASE,
+        )
+        base = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        repository_id_path = root / ".pdd" / "repository-id"
+        if mutation == "foreign-repository":
+            repository_id_path.write_text(
+                "e602f876-c944-4fe3-b91b-e8a94a39ecea\n", encoding="ascii"
+            )
+            base = _commit(root, "foreign historical protected base")
+
+        _git(root, "read-tree", "--reset", "-u", PR_2316_HISTORICAL_CANDIDATE)
+        policy_path = root / ".pdd" / "verification-profile-rotations.json"
+        candidate_policy = _pr2316_phase_a_policy(policy_path.read_bytes())
+        if mutation == "replacement-binding-substitution":
+            payload = json.loads(candidate_policy)
+            payload["requirement_rotation_retirements"][0]["replacement"][
+                "head_policy_sha256"
+            ] = "0" * 64
+            candidate_policy = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+        elif mutation == "policy-formatting":
+            candidate_policy += b" "
+        policy_path.write_bytes(candidate_policy)
+
+        if mutation == "profile-formatting":
+            profile_path = root / ".pdd" / "verification-profiles.json"
+            profile_path.write_bytes(profile_path.read_bytes() + b" ")
+        elif mutation == "target-prompt-tree-drift":
+            target = root / "pdd" / "prompts" / "llm_invoke_python.prompt"
+            target.write_bytes(target.read_bytes() + b"\n# candidate drift\n")
+        elif mutation == "unrelated-prompt-tree-drift":
+            unrelated = root / "pdd" / "prompts" / "code_generator_python.prompt"
+            unrelated.write_bytes(unrelated.read_bytes() + b"\n# candidate drift\n")
+        elif mutation == "foreign-repository":
+            repository_id_path.write_text(
+                "e602f876-c944-4fe3-b91b-e8a94a39ecea\n", encoding="ascii"
+            )
+        return base, _commit(root, f"pr2316 historical candidate {mutation}")
+
+    base, head = candidate_for("exact-history")
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+    profiles = load_verification_profiles(root, manifest)
+    assert manifest.repository_id == REPOSITORY_ID
+    assert not _invalid_reasons_for_base_paths(
+        manifest, SYNC_ROLLOUT_PROTECTED_BASE
+    )
+    assert not _unaccounted_base_paths(manifest, SYNC_ROLLOUT_PROTECTED_BASE)
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+    for mutation in (
+        "replacement-binding-substitution",
+        "policy-formatting",
+        "profile-formatting",
+        "target-prompt-tree-drift",
+        "unrelated-prompt-tree-drift",
+        "foreign-repository",
+    ):
+        base, head = candidate_for(mutation)
+        manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+        try:
+            profiles = load_verification_profiles(root, manifest)
+        except verification.VerificationProfileError:
+            continue
+        assert manifest.invalid_reasons or profiles.invalid_reasons, mutation
 
 
 def test_pr1971_combined_profile_reconciliation_is_exact() -> None:
