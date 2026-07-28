@@ -1652,7 +1652,8 @@ def _run_build_smoke(
     failed_gates = [r for r in gate_results if not r.passed]
     failures.extend(
         f"gate {r.gate.name} failed for {r.gate.source}: "
-        f"exit={r.exit_code} error={_scrub(r.error)} stderr={_excerpt(r.stderr_excerpt)}"
+        f"exit={r.exit_code} error={_scrub(r.error)} "
+        f"stderr={_excerpt(r.stderr_excerpt)} stdout={_excerpt(r.stdout_excerpt)}"
         for r in failed_gates
     )
     if gates:
