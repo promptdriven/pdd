@@ -2150,7 +2150,9 @@ def test_estimate_contract_rotations_reject_substitution(
                 "candidate (?:requirement transition "
                 "(?:lacks protected authorization|rules are duplicated or ambiguous)"
                 "|removed unconsumed protected requirement transition"
-                "|schema-2 history rewrites protected representation)"
+                "|schema-2 history rewrites protected representation"
+                "|retirement history is not append-only"
+                "|active requirement transition rules are ambiguous)"
             ),
         ):
             verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
