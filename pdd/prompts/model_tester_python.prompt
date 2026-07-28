@@ -1,4 +1,4 @@
-<pdd-reason>Tests individual models via litellm.completion() with direct API key passing and diagnostics.</pdd-reason>
+<pdd-reason>Tests individual models with provider-appropriate LiteLLM calls, direct API key passing, and diagnostics.</pdd-reason>
 
 <pdd-interface>
 {
@@ -14,11 +14,11 @@
 % You are an expert Python engineer. Your goal is to write the pdd/model_tester.py module.
 
 % Role & Scope
-Tests a single configured model by making one `litellm.completion()` call with a minimal prompt. Only runs when the user explicitly chooses it — no surprise API costs. Uses `litellm.completion()` directly (not `llm_invoke`) because `llm_invoke` doesn't allow choosing a specific model or key.
+Tests a single configured model by making one provider-appropriate LiteLLM request with a minimal prompt. Only runs when the user explicitly chooses it — no surprise API costs. Uses LiteLLM directly (not `llm_invoke`) because `llm_invoke` doesn't allow choosing a specific model or key.
 
 % Requirements
 1. Function: `test_model_interactive()` — show models from `~/.pdd/llm_model.csv`, let user pick one, test it, loop until user exits (empty input or "q")
-2. Test call: `litellm.completion(model=..., messages=[...], timeout=8)`. Only pass `api_key=` for single-var providers. Preserve the exact `claude-opus-5` or `claude-fable-5` catalog model; they are distinct Anthropic API identifiers. Strip only an optional `anthropic/` provider prefix when required by the direct call.
+2. Test call: normally use `litellm.completion(model=..., messages=[...], timeout=8)`. For ChatGPT subscription `chatgpt/*` rows, bridge `codex login` credentials and apply the LiteLLM ChatGPT output patch, then use the Codex Responses smoke path: `litellm.responses(model=..., input=[{"role":"user","content":[{"type":"input_text","text":"Say OK"}]}], timeout=8)`. Treat the smoke test as successful only when the Responses payload contains a nonempty `output_text`; an empty or missing response output is a failure. Never send `chatgpt/*` smoke tests to chat-completions. Only pass `api_key=` for single-var providers. Preserve the exact `claude-opus-5` or `claude-fable-5` catalog model; they are distinct Anthropic API identifiers. Strip only an optional `anthropic/` provider prefix when required by the direct call.
 3. The CSV `api_key` column may be pipe-delimited (e.g. "VAR1|VAR2|VAR3"). Use `parse_api_key_vars()` from provider_manager and `resolve_api_key_from_env()` for single-var lookup so `GOOGLE_API_KEY` satisfies Gemini rows that still name `GEMINI_API_KEY`.
    - Single var: resolve from env including aliases, pass as api_key= to litellm.
    - Multi var: do NOT pass api_key= — litellm reads from os.environ (Bedrock, Azure, Vertex).

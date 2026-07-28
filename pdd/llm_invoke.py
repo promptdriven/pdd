@@ -5298,6 +5298,18 @@ def llm_invoke(
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
 
+        # LiteLLM's ChatGPT subscription adapter only exposes the Codex
+        # Responses endpoint.  Its chat-completions batch endpoint is
+        # unsupported, so fail before credential setup or any provider call
+        # rather than silently routing chatgpt/* through batch_completion().
+        if use_batch_mode and str(model_name_litellm).lower().startswith("chatgpt/"):
+            raise ValueError(
+                "ChatGPT subscription models do not support batch invocations. "
+                "Set use_batch_mode=False and invoke each item individually; "
+                "PDD will not send chatgpt/* requests to LiteLLM's "
+                "chat-completions batch endpoint."
+            )
+
         # Record this candidate before any pre-call validation/skip logic so
         # models skipped mid-call (context window pre-check, missing api_key,
         # github_copilot OAuth missing, auth-error skip, etc.) are still
@@ -5820,9 +5832,23 @@ def llm_invoke(
                     raise EstimateOnlyResult(estimate_payload)
 
 
-                # Route OpenAI gpt-5* models through Responses API to support 'reasoning'
+                # Route OpenAI gpt-5* API models and ChatGPT subscription
+                # models through Responses.  LiteLLM's chatgpt provider is a
+                # Responses-only Codex backend; sending it through
+                # completion() targets /chat/completions and can return a
+                # browser-only Cloudflare challenge.
                 model_lower_for_call = str(model_name_litellm).lower()
                 provider_lower_for_call = str(provider).lower()
+                use_responses_api = (
+                    not use_batch_mode
+                    and (
+                        (
+                            provider_lower_for_call == "openai"
+                            and model_lower_for_call.startswith("gpt-5")
+                        )
+                        or is_chatgpt_subscription
+                    )
+                )
 
                 # Responses calls bypass the chat-completions admission block
                 # below, so perform the same context and hosted-budget checks
@@ -5830,11 +5856,7 @@ def llm_invoke(
                 # could send an uncapped request even when the story-stage
                 # adapter supplied PDD_COMMAND_MAX_* limits.
                 responses_budget_admitted = False
-                if (
-                    not use_batch_mode
-                    and provider_lower_for_call == "openai"
-                    and model_lower_for_call.startswith("gpt-5")
-                ):
+                if use_responses_api:
                     token_count_for_attribution = None
                     context_limit_for_attribution = None
                     try:
@@ -5937,20 +5959,85 @@ def llm_invoke(
                         provider_attempted_this_call = True
                     responses_budget_admitted = True
 
-                if (
-                    not use_batch_mode
-                    and provider_lower_for_call == 'openai'
-                    and model_lower_for_call.startswith('gpt-5')
-                ):
+                if use_responses_api:
                     if verbose:
                         logger.info(f"[INFO] Calling LiteLLM Responses API for {model_name_litellm}...")
                     try:
-                        # Build input text from messages
-                        if isinstance(formatted_messages, list) and formatted_messages and isinstance(formatted_messages[0], dict):
-                            input_text = "\n\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in formatted_messages)
+                        # Build input from the final messages, after any schema
+                        # instruction has been injected.  The ChatGPT/Codex
+                        # backend requires list-form Responses input.
+                        messages_for_responses = litellm_kwargs.get(
+                            "messages", formatted_messages
+                        )
+                        if is_chatgpt_subscription:
+                            input_text = []
+                            for message in messages_for_responses:
+                                if not isinstance(message, dict):
+                                    message = {"role": "user", "content": str(message)}
+                                content = message.get("content", "")
+                                if isinstance(content, list):
+                                    response_content = []
+                                    for part in content:
+                                        if not isinstance(part, dict):
+                                            response_content.append({
+                                                "type": "input_text",
+                                                "text": str(part),
+                                            })
+                                            continue
+                                        part_type = part.get("type")
+                                        if part_type in {"text", "input_text"}:
+                                            response_content.append({
+                                                "type": "input_text",
+                                                "text": str(part.get("text", "")),
+                                            })
+                                        elif part_type in {"image_url", "input_image"}:
+                                            image_data = part.get("image_url", "")
+                                            if isinstance(image_data, dict):
+                                                image_url = image_data.get("url", "")
+                                                detail = image_data.get("detail")
+                                            else:
+                                                image_url = image_data
+                                                detail = part.get("detail")
+                                            if isinstance(image_url, str) and image_url:
+                                                image_part = {
+                                                    "type": "input_image",
+                                                    "image_url": image_url,
+                                                }
+                                                if detail:
+                                                    image_part["detail"] = detail
+                                                response_content.append(image_part)
+                                        else:
+                                            response_content.append({
+                                                "type": "input_text",
+                                                "text": json.dumps(part, default=str),
+                                            })
+                                else:
+                                    response_content = [{
+                                        "type": "input_text",
+                                        "text": (
+                                            content
+                                            if isinstance(content, str)
+                                            else json.dumps(content, default=str)
+                                        ),
+                                    }]
+                                input_text.append(
+                                    {
+                                        "role": message.get("role", "user"),
+                                        "content": response_content,
+                                    }
+                                )
+                        elif (
+                            isinstance(messages_for_responses, list)
+                            and messages_for_responses
+                            and isinstance(messages_for_responses[0], dict)
+                        ):
+                            input_text = "\n\n".join(
+                                f"{m.get('role', 'user')}: {m.get('content', '')}"
+                                for m in messages_for_responses
+                            )
                         else:
                             # Fallback: string cast
-                            input_text = str(formatted_messages)
+                            input_text = str(messages_for_responses)
 
                         # Derive effort mapping already computed in time_kwargs
                         reasoning_param = time_kwargs.get("reasoning")
@@ -5993,8 +6080,12 @@ def llm_invoke(
                         responses_kwargs = {
                             "model": model_name_litellm,
                             "input": input_text,
-                            "text": text_block,
                         }
+                        # The subscription backend ignores/strips Responses
+                        # text.format. Its structured-output contract is the
+                        # schema instruction already included in input.
+                        if not is_chatgpt_subscription:
+                            responses_kwargs["text"] = text_block
                         if effective_output_cap is not None:
                             # Responses API names the hard completion ceiling
                             # differently from chat-completions.
@@ -6020,7 +6111,9 @@ def llm_invoke(
                                 "has_structured_text_format": text_block.get("format", {}).get("type") == "json_schema",
                             },
                         )
-                        resp = litellm.responses(**responses_kwargs)
+                        resp = litellm.responses(
+                            **responses_kwargs, timeout=LLM_CALL_TIMEOUT
+                        )
                         call_duration = time_module.time() - call_start
 
                         # Extract text result from response
@@ -6037,6 +6130,13 @@ def llm_invoke(
                                         break
                         except Exception:
                             result_text = None
+
+                        if not result_text:
+                            result_text = getattr(resp, "output_text", None)
+                        if not isinstance(result_text, str) or not result_text.strip():
+                            raise ValueError(
+                                "Responses API returned no non-empty text output"
+                            )
 
                         # Calculate cost using usage + CSV rates
                         total_cost = 0.0
@@ -6153,6 +6253,12 @@ def llm_invoke(
                         # reservation); terminate this candidate and let the
                         # outer single-attempt guard fail closed.
                         if responses_budget_admitted and command_single_attempt:
+                            break
+                        # Never retry a ChatGPT subscription request through
+                        # completion(): that is a different, unsupported
+                        # endpoint and produces the Cloudflare HTML seen by
+                        # users. Move directly to the next candidate model.
+                        if is_chatgpt_subscription:
                             break
                         # Remove 'reasoning' key to avoid OpenAI Chat API unknown param errors
                         if "reasoning" in litellm_kwargs:
