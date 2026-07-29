@@ -99,12 +99,17 @@ The later Phase-B consumer has a separate, equally exact verifier binding. It
 recognizes only repository `3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0` with the
 stationary prepared policy digest
 `4e3ca5e64238e7137fedc7c562b2dd5a2e61db61dae422f85c0aaebbc86cb6bb`, the
-complete verification-profile pair
+complete transition verification-profile pair
 `ffd7a11fb15a7aebb20c8199d506cf2deb8bb405b952dcda8444563c24e7a912` to
 `a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f`, and
-the complete managed-prompt-tree pair
+the complete transition managed-prompt-tree pair
 `b1ea7718f06089e9f1d9edcb611c8483f495478958e85e8ee65d320cd14d714f` to
 `637087072d0cb5357b99348b962844b4c8da054b3dd382fc2798728995353bd4`.
+After consumption, it recognizes only the corresponding stationary profile
+pair `a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f` to
+itself and stationary prompt-tree pair
+`637087072d0cb5357b99348b962844b4c8da054b3dd382fc2798728995353bd4` to
+itself.
 This state recognition restores only the historical overlay needed to validate
 the already protected rows; the ordinary row bindings still require the two
 prepared target prompt/profile updates. Any policy, profile, target-prompt, or
