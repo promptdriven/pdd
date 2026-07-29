@@ -191,7 +191,7 @@ def _classify_error(exc: Exception) -> str:
 
 
 def _run_test(row: Dict[str, Any]) -> Dict[str, Any]:
-    """Run a single litellm.completion() test against the given model row.
+    """Run a single LiteLLM request against the given model row.
 
     Returns a dict with keys: success, duration_s, cost, error, tokens.
     """
@@ -202,6 +202,7 @@ def _run_test(row: Dict[str, Any]) -> Dict[str, Any]:
     model_name: str = str(row.get("model", ""))
     effective_model_name = canonicalize_claude_cli_model(model_name)
     base_url = _resolve_base_url(row)
+    is_chatgpt_subscription = model_name.lower().startswith("chatgpt/")
 
     kwargs: Dict[str, Any] = {
         "model": effective_model_name,
@@ -226,15 +227,59 @@ def _run_test(row: Dict[str, Any]) -> Dict[str, Any]:
         kwargs["base_url"] = base_url
         kwargs["api_base"] = base_url
 
+    if is_chatgpt_subscription:
+        from pdd.codex_subscription import (
+            apply_litellm_chatgpt_output_patch,
+            bridge_codex_auth_for_litellm,
+        )
+
+        bridge_codex_auth_for_litellm()
+        apply_litellm_chatgpt_output_patch()
+
     start = time_module.time()
     try:
-        response = litellm.completion(**kwargs)
+        if is_chatgpt_subscription:
+            response = litellm.responses(
+                model=model_name,
+                input=[{
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Say OK"}],
+                }],
+                timeout=8,
+            )
+            output_text = None
+            for item in getattr(response, "output", []) or []:
+                if getattr(item, "type", None) != "message":
+                    continue
+                for content in getattr(item, "content", []) or []:
+                    if getattr(content, "type", None) != "output_text":
+                        continue
+                    text = getattr(content, "text", None)
+                    if isinstance(text, str) and text.strip():
+                        output_text = text
+                        break
+                if output_text is not None:
+                    break
+            if output_text is None:
+                raise RuntimeError(
+                    "ChatGPT Responses smoke test returned no meaningful output"
+                )
+        else:
+            response = litellm.completion(**kwargs)
         duration = time_module.time() - start
 
         # Extract token usage
         usage = getattr(response, "usage", None)
-        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-        completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+        prompt_tokens = (
+            getattr(usage, "prompt_tokens", 0)
+            or getattr(usage, "input_tokens", 0)
+            or 0
+        )
+        completion_tokens = (
+            getattr(usage, "completion_tokens", 0)
+            or getattr(usage, "output_tokens", 0)
+            or 0
+        )
 
         input_price = float(row.get("input", 0.0))
         output_price = float(row.get("output", 0.0))

@@ -115,7 +115,7 @@
     - 'output_pydantic': Pydantic model class for structured output.
     - 'output_schema': Raw JSON schema dict (alternative to output_pydantic).
     - 'time': Thinking effort (0-1, default 0.25). Interpreted per model's reasoning_type in CSV.
-    - 'use_batch_mode': Use litellm.batch_completion if True.
+    - 'use_batch_mode': Use litellm.batch_completion if True, except that ChatGPT subscription (`chatgpt/*`) models must fail closed before any provider call because their Codex backend supports only the Responses endpoint, not chat-completions batching. Tell callers to set `use_batch_mode=False` and invoke items individually.
     - 'messages': Pre-formatted messages (ignores prompt/input_json if provided).
     - 'language': Language hint (e.g., "python", "javascript"). Skip Python-specific validation when not "python" or None.
     - 'use_cloud': None=auto-detect (cloud if enabled, local if PDD_FORCE_LOCAL=1), True=force cloud, False=force local.
@@ -182,7 +182,8 @@
     - 'none': No reasoning parameters.
 
 % LLM Invocation:
-    - For OpenAI gpt-5* models: Call litellm.responses() API to support 'reasoning' parameter. Build text.format block for structured output (type=json_schema when output_pydantic/output_schema, else type=text). Skip temperature for Responses API.
+    - For direct OpenAI gpt-5* API models: Call litellm.responses() to support the `reasoning` parameter. Build a `text.format` block for structured output (type=json_schema when output_pydantic/output_schema, else type=text). Skip temperature for Responses API.
+    - For ChatGPT subscription `chatgpt/*` models: always use `litellm.responses()` for single invocations. Build list-form Responses input from the final messages, preserving supported multimodal content: a text/input_text message part becomes `{"type":"input_text","text":...}`, and an OpenAI chat-completions `image_url` part (including a data URL from code_generator) becomes `{"type":"input_image","image_url":...}`. The subscription backend ignores Responses `text.format` and chat-completions `response_format`/`json_schema`; when structured output is requested, omit those fields and inject the JSON schema as an in-band system-message instruction. Never fall back to `litellm.completion()` after a Responses error. Batch invocation is unsupported: fail closed before auth/provider dispatch with an actionable error rather than calling `litellm.completion()` or `litellm.batch_completion()`.
     - For other models: Call litellm.completion() or litellm.batch_completion().
     - Pass: model, messages, temperature, num_retries=2, timeout=LLM_CALL_TIMEOUT (600s).
     - Claude Fable 5 and adaptive Claude Opus models reject `temperature`; remove that parameter before the provider call. Preserve Anthropic `stop_reason="refusal"` when LiteLLM would otherwise map it to generic `stop` with empty content. Treat that response as a provider refusal and continue to the next candidate, never as a corrupted-cache result that retries the same model with cache bypass.
