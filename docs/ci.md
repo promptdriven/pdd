@@ -126,7 +126,7 @@ This exception requires four separately protected changes, in this order:
    Phase-A policy or install new authority.
 
 If any byte of the prepared Phase-A JSON changes, prepare a new reviewed
-three-change sequence; do not update the in-code digest or combine phases.
+four-change sequence; do not update the in-code digest or combine phases.
 
 The one-time legacy bootstrap is narrower: an exact in-code bootstrap row may
 install the first schema-2 envelope over an absent or schema-1 protected source.
