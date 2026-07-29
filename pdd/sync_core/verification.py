@@ -163,6 +163,14 @@ _PR2316_STALE_LLM_REISSUE_STATIONARY_POLICY_BYTES = (
     _PR2316_STALE_LLM_REISSUE_ROTATION_POLICY_BYTES[1],
     _PR2316_STALE_LLM_REISSUE_ROTATION_POLICY_BYTES[1],
 )
+_PR2316_STALE_LLM_REISSUE_PHASE_B_PROFILE_BYTES = (
+    _PR2316_STALE_LLM_REISSUE_PHASE_A_PROFILE_BYTES[1],
+    "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f",
+)
+_PR2316_STALE_LLM_REISSUE_PHASE_B_STATIONARY_PROFILE_BYTES = (
+    _PR2316_STALE_LLM_REISSUE_PHASE_B_PROFILE_BYTES[1],
+    _PR2316_STALE_LLM_REISSUE_PHASE_B_PROFILE_BYTES[1],
+)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
@@ -170,6 +178,14 @@ _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROMPT_TREE_BYTES = (
     "5c1b0273c590dfde59c83830c1284523879b7438c9ec9addd913d73b3c0baa0c",
     "b1ea7718f06089e9f1d9edcb611c8483f495478958e85e8ee65d320cd14d714f",
+)
+_PR2316_STALE_LLM_REISSUE_PHASE_B_PROMPT_TREE_BYTES = (
+    _PR2316_STALE_LLM_REISSUE_HISTORY_PROMPT_TREE_BYTES[1],
+    "637087072d0cb5357b99348b962844b4c8da054b3dd382fc2798728995353bd4",
+)
+_PR2316_STALE_LLM_REISSUE_PHASE_B_STATIONARY_PROMPT_TREE_BYTES = (
+    _PR2316_STALE_LLM_REISSUE_PHASE_B_PROMPT_TREE_BYTES[1],
+    _PR2316_STALE_LLM_REISSUE_PHASE_B_PROMPT_TREE_BYTES[1],
 )
 _PR2316_STALE_LLM_REISSUE_CURRENT_PROMPT_SHA256 = (
     "09e5140c01bbf8136f4c487c873c816f8e75db75412c11794a8b7ea47259cf3c"
@@ -2109,6 +2125,38 @@ def _is_exact_pr2316_stale_llm_reissue_stationary(
     )
 
 
+def _is_exact_pr2316_stale_llm_reissue_phase_b(
+    repository_id: str,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+) -> bool:
+    """Recognize only the prepared Phase-B policy/profile transition."""
+    return _pr2316_stale_llm_reissue_digest_state(
+        repository_id,
+        rotation_policies,
+        profile_policies,
+    ) == (
+        _PR2316_STALE_LLM_REISSUE_STATIONARY_POLICY_BYTES,
+        _PR2316_STALE_LLM_REISSUE_PHASE_B_PROFILE_BYTES,
+    )
+
+
+def _is_exact_pr2316_stale_llm_reissue_phase_b_stationary(
+    repository_id: str,
+    rotation_policies: tuple[bytes | None, bytes | None],
+    profile_policies: tuple[bytes | None, bytes | None],
+) -> bool:
+    """Recognize only the consumed Phase-B policy/profile state."""
+    return _pr2316_stale_llm_reissue_digest_state(
+        repository_id,
+        rotation_policies,
+        profile_policies,
+    ) == (
+        _PR2316_STALE_LLM_REISSUE_STATIONARY_POLICY_BYTES,
+        _PR2316_STALE_LLM_REISSUE_PHASE_B_STATIONARY_PROFILE_BYTES,
+    )
+
+
 def _is_exact_pr2316_stale_llm_reissue_history(
     repository_id: str,
     rotation_policies: tuple[bytes | None, bytes | None],
@@ -2487,12 +2535,13 @@ def _managed_prompt_tree_sha256(
     return digest.hexdigest()
 
 
-def _has_exact_pr2316_stale_llm_reissue_history_prompt_trees(
+def _has_exact_pr2316_stale_llm_reissue_prompt_trees(
     root: Path,
     manifest: UnitManifest,
     approved_aliases: Mapping[PurePosixPath, PurePosixPath],
+    expected_digests: tuple[str, str],
 ) -> bool:
-    """Bind the legacy replay to its complete protected/candidate prompt trees."""
+    """Bind a legacy PR #2316 state to exact managed prompt trees."""
     return (
         _managed_prompt_tree_sha256(
             root,
@@ -2506,7 +2555,7 @@ def _has_exact_pr2316_stale_llm_reissue_history_prompt_trees(
             manifest.head_ref,
             approved_aliases,
         ),
-    ) == _PR2316_STALE_LLM_REISSUE_HISTORY_PROMPT_TREE_BYTES
+    ) == expected_digests
 
 
 def _validate_retirement_managed_prompt_bytes(
@@ -2729,11 +2778,41 @@ def _load_requirement_transition_authorizations(
             (protected_policy, candidate_policy),
             policies,
         )
-        and _has_exact_pr2316_stale_llm_reissue_history_prompt_trees(
+        and _has_exact_pr2316_stale_llm_reissue_prompt_trees(
             root,
             manifest,
             approved_aliases,
+            _PR2316_STALE_LLM_REISSUE_HISTORY_PROMPT_TREE_BYTES,
         )
+    )
+    exact_pr2316_phase_b_consumption = (
+        _is_exact_pr2316_stale_llm_reissue_phase_b(
+            manifest.repository_id,
+            (protected_policy, candidate_policy),
+            policies,
+        )
+        and _has_exact_pr2316_stale_llm_reissue_prompt_trees(
+            root,
+            manifest,
+            approved_aliases,
+            _PR2316_STALE_LLM_REISSUE_PHASE_B_PROMPT_TREE_BYTES,
+        )
+    )
+    exact_pr2316_phase_b_stationary = (
+        _is_exact_pr2316_stale_llm_reissue_phase_b_stationary(
+            manifest.repository_id,
+            (protected_policy, candidate_policy),
+            policies,
+        )
+        and _has_exact_pr2316_stale_llm_reissue_prompt_trees(
+            root,
+            manifest,
+            approved_aliases,
+            _PR2316_STALE_LLM_REISSUE_PHASE_B_STATIONARY_PROMPT_TREE_BYTES,
+        )
+    )
+    exact_pr2316_phase_b_state = (
+        exact_pr2316_phase_b_consumption or exact_pr2316_phase_b_stationary
     )
     if exact_pr2316_historical_reissue:
         # The complete policy/profile and prompt-tree binding above makes these
@@ -2859,6 +2938,7 @@ def _load_requirement_transition_authorizations(
         exact_pr2316_phase_a_reissue
         or exact_pr2316_stationary_reissue
         or exact_pr2316_historical_reissue
+        or exact_pr2316_phase_b_state
         or (
             is_pdd_repository
             and (policy_digests, profile_digests)
@@ -2949,16 +3029,28 @@ def _load_requirement_transition_authorizations(
         ) + _GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS)
     if historical_composed_state:
+        opus_fable_transitions = _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
+        if exact_pr2316_phase_b_state:
+            # The transition and its exact consumed state retain protected rows
+            # for these two identities.  The older Opus/Fable overlay is still
+            # required for every other historical identity, but replacing the
+            # protected rows here would discard their exact Phase-B bindings.
+            opus_fable_transitions = tuple(
+                item
+                for item in opus_fable_transitions
+                if (item.prompt_path, item.language_id)
+                not in _PR2316_STALE_LLM_REISSUE_TARGET_IDENTITIES
+            )
         opus_fable_identities = {
             (item.prompt_path, item.language_id)
-            for item in _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
+            for item in opus_fable_transitions
         }
         candidate = tuple(
             item
             for item in candidate
             if (item.prompt_path, item.language_id) not in opus_fable_identities
-        ) + _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
-        authority.update(_OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS)
+        ) + opus_fable_transitions
+        authority.update(opus_fable_transitions)
     if temperature_regression_state:
         temperature_regression_transitions = (
             _TEMPERATURE_REGRESSION_SYNC_COMPOSED_REQUIREMENT_TRANSITIONS
@@ -3546,10 +3638,11 @@ def _authorized_sync_rollout_profile_reconciliation(
             (base_rotations, head_rotations),
             (base_profile, head_profile),
         )
-        and _has_exact_pr2316_stale_llm_reissue_history_prompt_trees(
+        and _has_exact_pr2316_stale_llm_reissue_prompt_trees(
             root,
             manifest,
             approved_aliases,
+            _PR2316_STALE_LLM_REISSUE_HISTORY_PROMPT_TREE_BYTES,
         )
     )
     if (profile_pair, rotation_pair) not in {

@@ -95,7 +95,27 @@ policy/profile pairs and both complete managed-prompt trees. Reformatting,
 reordering, replacement-field substitution, a target-prompt change, an
 unrelated managed-prompt change, or use by another repository is rejected.
 
-This exception requires three separately protected changes, in this order:
+The later Phase-B consumer has a separate, equally exact verifier binding. It
+recognizes only repository `3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0` with the
+stationary prepared policy digest
+`4e3ca5e64238e7137fedc7c562b2dd5a2e61db61dae422f85c0aaebbc86cb6bb`, the
+complete transition verification-profile pair
+`ffd7a11fb15a7aebb20c8199d506cf2deb8bb405b952dcda8444563c24e7a912` to
+`a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f`, and
+the complete transition managed-prompt-tree pair
+`b1ea7718f06089e9f1d9edcb611c8483f495478958e85e8ee65d320cd14d714f` to
+`637087072d0cb5357b99348b962844b4c8da054b3dd382fc2798728995353bd4`.
+After consumption, it recognizes only the corresponding stationary profile
+pair `a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f` to
+itself and stationary prompt-tree pair
+`637087072d0cb5357b99348b962844b4c8da054b3dd382fc2798728995353bd4` to
+itself.
+This state recognition restores only the historical overlay needed to validate
+the already protected rows; the ordinary row bindings still require the two
+prepared target prompt/profile updates. Any policy, profile, target-prompt, or
+unrelated managed-prompt substitution is rejected.
+
+This exception requires four separately protected changes, in this order:
 
 1. A governance prerequisite that installs only the verifier binding,
    documentation, and negative tests. It must not change the rotation policy,
@@ -103,12 +123,15 @@ This exception requires three separately protected changes, in this order:
 2. The exact JSON-only schema-3 Phase A policy candidate named above. It retires
    the unreachable llm-invoke row and installs the llm-invoke and model-tester
    replacements while all prompts and the verification profile remain unchanged.
-3. A later Phase B that consumes only those now-protected replacement rows by
+3. A Phase-B verifier prerequisite that binds the stationary Phase-A policy,
+   exact Phase-B profile pair, and complete managed-prompt trees. It must leave
+   the Phase-A policy and profiles and all Phase-B product files unchanged.
+4. A later Phase B that consumes only those now-protected replacement rows by
    changing their exact prepared prompt/profile bytes. It cannot alter the
    Phase-A policy or install new authority.
 
 If any byte of the prepared Phase-A JSON changes, prepare a new reviewed
-three-change sequence; do not update the in-code digest or combine phases.
+four-change sequence; do not update the in-code digest or combine phases.
 
 The one-time legacy bootstrap is narrower: an exact in-code bootstrap row may
 install the first schema-2 envelope over an absent or schema-1 protected source.
