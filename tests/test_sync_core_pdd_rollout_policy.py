@@ -106,6 +106,8 @@ TERRA_SOL_PROTECTED_BASE = "b27837fd7fbf681bdec2b7eb311348b642b27979"
 TERRA_SOL_COMPOSED_HEAD = "b3902318c35c279e49e6397838825c95bd568942"
 SYNC_ROLLOUT_PROTECTED_BASE = "dec539aa8d0697e357e2077c1dbc73b0621aa617"
 PR_2316_HISTORICAL_CANDIDATE = "817abe2d0d41355175c3e09b994928c166917123"
+PR_2316_PHASE_A_PROTECTED = "8ac79847ff41f6cafd03b2074bfb4d7893d7b0c6"
+PR_2316_PHASE_B_CANDIDATE = "ce21068b7889b4b76319ad0b390e756c163b198c"
 PR_2316_PHASE_A_POLICY_SHA256 = (
     "4e3ca5e64238e7137fedc7c562b2dd5a2e61db61dae422f85c0aaebbc86cb6bb"
 )
@@ -1136,6 +1138,83 @@ def test_pr2316_historical_legacy_retirement_is_fully_bound_through_production_l
         "profile-formatting",
         "target-prompt-tree-drift",
         "unrelated-prompt-tree-drift",
+        "foreign-repository",
+    ):
+        base, head = candidate_for(mutation)
+        manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+        try:
+            profiles = load_verification_profiles(root, manifest)
+        except verification.VerificationProfileError:
+            continue
+        assert manifest.invalid_reasons or profiles.invalid_reasons, mutation
+
+
+@pytest.mark.timeout(600)
+def test_pr2316_phase_b_transition_is_exact_through_production_loader(tmp_path) -> None:
+    """Only the reviewed Phase-B tree may consume the protected replacements."""
+    root = tmp_path / "pr2316-phase-b"
+    subprocess.run(
+        ["git", "clone", "-q", "--shared", str(ROOT), str(root)],
+        check=True,
+        capture_output=True,
+    )
+
+    def candidate_for(mutation: str) -> tuple[str, str]:
+        _git(
+            root,
+            "checkout",
+            "-q",
+            "-B",
+            f"pr2316-phase-b-{mutation}",
+            PR_2316_PHASE_A_PROTECTED,
+        )
+        base = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        repository_id_path = root / ".pdd" / "repository-id"
+        if mutation == "foreign-repository":
+            repository_id_path.write_text(
+                "e602f876-c944-4fe3-b91b-e8a94a39ecea\n", encoding="ascii"
+            )
+            base = _commit(root, "foreign pr2316 Phase-B protected base")
+
+        _git(root, "read-tree", "--reset", "-u", PR_2316_PHASE_B_CANDIDATE)
+        policy_path = root / ".pdd" / "verification-profile-rotations.json"
+        if mutation == "policy-formatting":
+            policy_path.write_bytes(policy_path.read_bytes() + b" ")
+        elif mutation == "replacement-binding-substitution":
+            payload = json.loads(policy_path.read_bytes())
+            payload["requirement_rotations"][-2]["head_prompt_sha256"] = "0" * 64
+            policy_path.write_bytes((json.dumps(payload, indent=2) + "\n").encode())
+        elif mutation == "profile-formatting":
+            profile_path = root / ".pdd" / "verification-profiles.json"
+            profile_path.write_bytes(profile_path.read_bytes() + b" ")
+        elif mutation == "target-prompt-drift":
+            target = root / "pdd" / "prompts" / "llm_invoke_python.prompt"
+            target.write_bytes(target.read_bytes() + b"\n# candidate drift\n")
+        elif mutation == "unrelated-managed-prompt-drift":
+            unrelated = root / "pdd" / "prompts" / "code_generator_python.prompt"
+            unrelated.write_bytes(unrelated.read_bytes() + b"\n# candidate drift\n")
+        elif mutation == "foreign-repository":
+            repository_id_path.write_text(
+                "e602f876-c944-4fe3-b91b-e8a94a39ecea\n", encoding="ascii"
+            )
+        return base, _commit(root, f"pr2316 Phase-B candidate {mutation}")
+
+    base, head = candidate_for("exact-phase-b")
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+    profiles = load_verification_profiles(root, manifest)
+    assert manifest.repository_id == REPOSITORY_ID
+    assert not manifest.invalid_reasons
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+    for mutation in (
+        "policy-formatting",
+        "replacement-binding-substitution",
+        "profile-formatting",
+        "target-prompt-drift",
+        "unrelated-managed-prompt-drift",
         "foreign-repository",
     ):
         base, head = candidate_for(mutation)
