@@ -39,8 +39,8 @@ from tests.conftest import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _paths_added_since(base_ref: str) -> frozenset[str]:
-    """Repository paths tracked at HEAD but absent from ``base_ref``.
+def _paths_added_since(base_ref: str, head_ref: str = "HEAD") -> frozenset[str]:
+    """Repository paths tracked at ``head_ref`` but absent from ``base_ref``.
 
     ``manifest._ownership_rules`` loads ownership *only* from the protected
     base tree. A few regressions below pin a historical base commit in order to
@@ -56,16 +56,18 @@ def _paths_added_since(base_ref: str) -> frozenset[str]:
     genuinely unowned new path is caught.
     """
     added = subprocess.check_output(
-        ["git", "diff", "--diff-filter=A", "--name-only", base_ref, "HEAD"],
+        ["git", "diff", "--diff-filter=A", "--name-only", base_ref, head_ref],
         cwd=ROOT,
         text=True,
     )
     return frozenset(line.strip() for line in added.splitlines() if line.strip())
 
 
-def _invalid_reasons_for_base_paths(manifest, base_ref: str) -> tuple[str, ...]:
+def _invalid_reasons_for_base_paths(
+    manifest, base_ref: str, head_ref: str = "HEAD"
+) -> tuple[str, ...]:
     """``manifest.invalid_reasons`` minus paths added after ``base_ref``."""
-    ignored = _paths_added_since(base_ref)
+    ignored = _paths_added_since(base_ref, head_ref)
     return tuple(
         reason
         for reason in manifest.invalid_reasons
@@ -73,9 +75,11 @@ def _invalid_reasons_for_base_paths(manifest, base_ref: str) -> tuple[str, ...]:
     )
 
 
-def _unaccounted_base_paths(manifest, base_ref: str) -> tuple[PurePosixPath, ...]:
+def _unaccounted_base_paths(
+    manifest, base_ref: str, head_ref: str = "HEAD"
+) -> tuple[PurePosixPath, ...]:
     """``manifest.unaccounted_tracked_paths`` minus post-base additions."""
-    ignored = _paths_added_since(base_ref)
+    ignored = _paths_added_since(base_ref, head_ref)
     return tuple(
         path for path in manifest.unaccounted_tracked_paths if path.as_posix() not in ignored
     )
@@ -465,10 +469,10 @@ def _commit(root: Path, message: str) -> str:
     ).strip()
 
 
-def _synthetic_current_tree_repo(root: Path) -> str:
-    """Recommit current tracked bytes without requiring candidate ancestors."""
+def _synthetic_current_tree_repo(root: Path, ref: str = "HEAD") -> str:
+    """Recommit one exact tracked tree without requiring candidate ancestors."""
     root.mkdir()
-    archive = subprocess.check_output(["git", "archive", "HEAD"], cwd=ROOT)
+    archive = subprocess.check_output(["git", "archive", ref], cwd=ROOT)
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source:
         source.extractall(root, filter="data")
     _git(root, "init", "-q")
@@ -1201,26 +1205,35 @@ def _assert_pr2316_prompt_trees(
         manifest.head_ref,
         approved_aliases,
     ) == expected_head
-
-
+def _pr2316_phase_a_predecessor_tree(root: Path) -> tuple[str, bytes]:
+    """Rebuild the exact Phase-A predecessor from its pinned protected tree."""
+    _synthetic_current_tree_repo(root, PR_2316_PHASE_A_PROTECTED)
+    policy_path = root / ".pdd" / "verification-profile-rotations.json"
+    phase_a_policy = policy_path.read_bytes()
+    assert hashlib.sha256(phase_a_policy).hexdigest() == PR_2316_PHASE_A_POLICY_SHA256
+    assert hashlib.sha256(
+        (root / ".pdd" / "verification-profiles.json").read_bytes()
+    ).hexdigest() == (
+        verification._PR2316_STALE_LLM_REISSUE_PHASE_A_PROFILE_BYTES[  # pylint: disable=protected-access
+            1
+        ]
+    )
+    exact_policy = _pr2316_phase_a_policy(phase_a_policy)
+    predecessor_policy = _pr2316_phase_a_predecessor_policy(phase_a_policy)
+    policy_path.write_bytes(predecessor_policy)
+    return _commit(root, "synthetic pr2316 protected predecessor"), exact_policy
 @pytest.mark.timeout(600)
 def test_pr2316_schema_3_legacy_retirement_is_exact_through_production_loader(
     tmp_path,
 ) -> None:
     """Only the prepared Phase-A bytes can retire the stale llm-invoke row."""
     root = tmp_path / "pr2316-phase-a"
-    protected = _synthetic_current_tree_repo(root)
+    protected, exact_policy = _pr2316_phase_a_predecessor_tree(root)
     policy_path = root / ".pdd" / "verification-profile-rotations.json"
-    current_policy = policy_path.read_bytes()
-    exact_policy = _pr2316_phase_a_policy(current_policy)
-    predecessor_policy = _pr2316_phase_a_predecessor_policy(current_policy)
-    if predecessor_policy != current_policy:
-        policy_path.write_bytes(predecessor_policy)
-        protected = _commit(root, "synthetic pr2316 protected predecessor")
 
-    def candidate_for(mutation: str) -> tuple[str, str]:
-        _git(root, "checkout", "-q", "-B", f"pr2316-{mutation}", protected)
-        base = protected
+    def candidate_for(mutation: str, protected_ref: str) -> tuple[str, str]:
+        _git(root, "checkout", "-q", "-B", f"pr2316-{mutation}", protected_ref)
+        base = protected_ref
         candidate_policy = exact_policy
         if mutation == "altered-policy":
             payload = json.loads(candidate_policy)
@@ -1259,7 +1272,7 @@ def test_pr2316_schema_3_legacy_retirement_is_exact_through_production_loader(
             unrelated.write_bytes(unrelated.read_bytes() + b"\n# candidate drift\n")
         return base, _commit(root, f"pr2316 candidate {mutation}")
 
-    base, head = candidate_for("exact-phase-a")
+    base, head = candidate_for("exact-phase-a", protected)
     manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
     profiles = load_verification_profiles(root, manifest)
     assert manifest.repository_id == REPOSITORY_ID
@@ -1276,7 +1289,7 @@ def test_pr2316_schema_3_legacy_retirement_is_exact_through_production_loader(
         "unrelated-managed-prompt-drift",
         "foreign-repository",
     ):
-        base, head = candidate_for(mutation)
+        base, head = candidate_for(mutation, protected)
         manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
         try:
             profiles = load_verification_profiles(root, manifest)
@@ -2238,16 +2251,18 @@ def test_pr2017_phase_a_is_dormant_on_its_exact_protected_base() -> None:
 
 
 def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
-    """The rollout repair is valid only from its real protected base to HEAD."""
+    """The rollout repair is valid only through its exact pre-Phase-B head."""
     skip_if_authenticated_candidate_lacks_refs(
         ROOT,
         "exact sync-rollout protected history",
         SYNC_ROLLOUT_PROTECTED_BASE,
+        PR_2316_PHASE_A_PROTECTED,
     )
+    rollout_head = PR_2316_PHASE_A_PROTECTED
     manifest = build_unit_manifest(
         ROOT,
         base_ref=SYNC_ROLLOUT_PROTECTED_BASE,
-        head_ref="HEAD",
+        head_ref=rollout_head,
     )
 
     assert (
@@ -2259,10 +2274,14 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
             verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
             verification._TEMPERATURE_REGRESSION_PROFILE_BYTES[1],  # pylint: disable=protected-access
         ),
+        (
+            verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
+            verification._PR2316_STALE_LLM_REISSUE_PHASE_B_PROFILE_BYTES[1],  # pylint: disable=protected-access
+        ),
     }
     assert (
         hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROTATION_FILE)).hexdigest(),
-        hashlib.sha256(_git_blob("HEAD", ROTATION_FILE)).hexdigest(),
+        hashlib.sha256(_git_blob(rollout_head, ROTATION_FILE)).hexdigest(),
     ) in {
         verification._SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES,  # pylint: disable=protected-access
         verification._PR2316_STALE_LLM_REISSUE_ROTATION_POLICY_BYTES,  # pylint: disable=protected-access
@@ -2274,7 +2293,7 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
             hashlib.sha256(
                 _git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROOT / prompt_path)
             ).hexdigest(),
-            hashlib.sha256(_git_blob("HEAD", ROOT / prompt_path)).hexdigest(),
+            hashlib.sha256(_git_blob(rollout_head, ROOT / prompt_path)).hexdigest(),
         ) == (expected_digest, expected_digest)
 
     records = {
@@ -2283,8 +2302,12 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
         if item.candidate_id.artifact_relpath.as_posix()
         in SYNC_ROLLOUT_EXISTING_METADATA_PATHS
     }
-    assert not _invalid_reasons_for_base_paths(manifest, SYNC_ROLLOUT_PROTECTED_BASE)
-    assert not _unaccounted_base_paths(manifest, SYNC_ROLLOUT_PROTECTED_BASE)
+    assert not _invalid_reasons_for_base_paths(
+        manifest, SYNC_ROLLOUT_PROTECTED_BASE, rollout_head
+    )
+    assert not _unaccounted_base_paths(
+        manifest, SYNC_ROLLOUT_PROTECTED_BASE, rollout_head
+    )
     assert set(records) == SYNC_ROLLOUT_EXISTING_METADATA_PATHS
     assert all(
         item.in_base
