@@ -2989,16 +2989,28 @@ def _load_requirement_transition_authorizations(
         ) + _GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS)
     if historical_composed_state:
+        opus_fable_transitions = _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
+        if exact_pr2316_phase_b_consumption:
+            # Phase B consumes protected rows for these two identities.  The
+            # older Opus/Fable overlay is still required for every other
+            # historical identity, but replacing the protected rows here
+            # would discard their exact Phase-B bindings.
+            opus_fable_transitions = tuple(
+                item
+                for item in opus_fable_transitions
+                if (item.prompt_path, item.language_id)
+                not in _PR2316_STALE_LLM_REISSUE_TARGET_IDENTITIES
+            )
         opus_fable_identities = {
             (item.prompt_path, item.language_id)
-            for item in _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
+            for item in opus_fable_transitions
         }
         candidate = tuple(
             item
             for item in candidate
             if (item.prompt_path, item.language_id) not in opus_fable_identities
-        ) + _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
-        authority.update(_OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS)
+        ) + opus_fable_transitions
+        authority.update(opus_fable_transitions)
     if temperature_regression_state:
         temperature_regression_transitions = (
             _TEMPERATURE_REGRESSION_SYNC_COMPOSED_REQUIREMENT_TRANSITIONS
