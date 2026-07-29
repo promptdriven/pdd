@@ -1907,17 +1907,20 @@ def _estimate_inputs(raw: bytes):
 
 
 def _estimate_updates(monkeypatch, head_profile, head_prompts, head_rotation=None):
-    """Evaluate exact transition authority without loading the 466-unit denominator."""
+    """Evaluate exact transition authority with the protected prompt denominator."""
     _estimate_transition_read(
         monkeypatch,
         head_profile=head_profile,
         head_prompts=head_prompts,
         head_rotation=head_rotation,
     )
+    current_manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    assert not current_manifest.invalid_reasons
     manifest = SimpleNamespace(
         repository_id=REPOSITORY_ID,
         base_ref="protected-base",
         head_ref="candidate-head",
+        expected_managed=current_manifest.expected_managed,
     )
     authorizations, prompts, _new_authorizations = (
         verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
