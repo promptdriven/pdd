@@ -1226,6 +1226,76 @@ def test_pr2316_phase_b_transition_is_exact_through_production_loader(tmp_path) 
         assert manifest.invalid_reasons or profiles.invalid_reasons, mutation
 
 
+@pytest.mark.timeout(600)
+def test_pr2316_phase_b_stationary_state_is_exact_through_production_loader(
+    tmp_path,
+) -> None:
+    """Only the reviewed consumed Phase-B tree retains its historical overlay."""
+    root = tmp_path / "pr2316-phase-b-stationary"
+    subprocess.run(
+        ["git", "clone", "-q", "--shared", str(ROOT), str(root)],
+        check=True,
+        capture_output=True,
+    )
+
+    def stationary_for(mutation: str) -> tuple[str, str]:
+        _git(
+            root,
+            "checkout",
+            "-q",
+            "-B",
+            f"pr2316-phase-b-stationary-{mutation}",
+            PR_2316_PHASE_B_CANDIDATE,
+        )
+        if mutation == "policy-formatting":
+            policy_path = root / ".pdd" / "verification-profile-rotations.json"
+            policy_path.write_bytes(policy_path.read_bytes() + b" ")
+        elif mutation == "profile-formatting":
+            profile_path = root / ".pdd" / "verification-profiles.json"
+            profile_path.write_bytes(profile_path.read_bytes() + b" ")
+        elif mutation == "target-prompt-tree-drift":
+            target = root / "pdd" / "prompts" / "llm_invoke_python.prompt"
+            target.write_bytes(target.read_bytes() + b"\n# candidate drift\n")
+        elif mutation == "unrelated-prompt-tree-drift":
+            unrelated = root / "pdd" / "prompts" / "code_generator_python.prompt"
+            unrelated.write_bytes(unrelated.read_bytes() + b"\n# candidate drift\n")
+        elif mutation == "foreign-repository":
+            (root / ".pdd" / "repository-id").write_text(
+                "e602f876-c944-4fe3-b91b-e8a94a39ecea\n", encoding="ascii"
+            )
+        else:
+            assert mutation == "exact-stationary"
+        ref = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+        if mutation != "exact-stationary":
+            ref = _commit(root, f"pr2316 Phase-B stationary {mutation}")
+        return ref, ref
+
+    base, head = stationary_for("exact-stationary")
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+    profiles = load_verification_profiles(root, manifest)
+    assert manifest.repository_id == REPOSITORY_ID
+    assert not manifest.invalid_reasons
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+    for mutation in (
+        "policy-formatting",
+        "profile-formatting",
+        "target-prompt-tree-drift",
+        "unrelated-prompt-tree-drift",
+        "foreign-repository",
+    ):
+        base, head = stationary_for(mutation)
+        manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+        try:
+            profiles = load_verification_profiles(root, manifest)
+        except verification.VerificationProfileError:
+            continue
+        assert manifest.invalid_reasons or profiles.invalid_reasons, mutation
+
+
 def test_pr1971_combined_profile_reconciliation_is_exact() -> None:
     """Retain #1971's four-byte reconciliation, independent of this replay."""
     skip_if_authenticated_candidate_lacks_refs(
