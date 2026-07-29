@@ -107,12 +107,29 @@ TERRA_SOL_COMPOSED_HEAD = "b3902318c35c279e49e6397838825c95bd568942"
 SYNC_ROLLOUT_PROTECTED_BASE = "dec539aa8d0697e357e2077c1dbc73b0621aa617"
 PR_2316_HISTORICAL_CANDIDATE = "817abe2d0d41355175c3e09b994928c166917123"
 PR_2316_PHASE_A_PROTECTED = "8ac79847ff41f6cafd03b2074bfb4d7893d7b0c6"
-PR_2316_PHASE_B_CANDIDATE = "5944324b7b48a953414ce75c5ccfca040e5a8de9"
 PR_2316_PHASE_A_POLICY_SHA256 = (
     "4e3ca5e64238e7137fedc7c562b2dd5a2e61db61dae422f85c0aaebbc86cb6bb"
 )
 PR_2316_PHASE_A_PREDECESSOR_POLICY_SHA256 = (
     "3b5117e0ef31b19b68d7190f0753e7aacaef3f75133cabfe4c2470afe87c0a95"
+)
+PR_2316_PHASE_A_PROFILE_SHA256 = (
+    "ffd7a11fb15a7aebb20c8199d506cf2deb8bb405b952dcda8444563c24e7a912"
+)
+PR_2316_PHASE_B_PROFILE_SHA256 = (
+    "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f"
+)
+PR_2316_PHASE_A_PROMPT_TREE_SHA256 = (
+    "b1ea7718f06089e9f1d9edcb611c8483f495478958e85e8ee65d320cd14d714f"
+)
+PR_2316_PHASE_B_PROMPT_TREE_SHA256 = (
+    "637087072d0cb5357b99348b962844b4c8da054b3dd382fc2798728995353bd4"
+)
+PR_2316_PHASE_B_LLM_INVOKE_PROMPT_SHA256 = (
+    "10129606f47d4301052490b7767acc08d8fc713e48bcb2b867efadf2063f8d1e"
+)
+PR_2316_PHASE_B_MODEL_TESTER_PROMPT_SHA256 = (
+    "4ab43d1625c4229c4088c6d71cdf92aadbe92b3467cde71b1f24d774b7cfc501"
 )
 RELEASE_VIDEO_OPT_OUT_PROTECTED_BASE = "c93332e9bc5956677280a3a015c32d16c99b54cb"
 PR_1971_COMBINED_PROFILE_DIGEST = (
@@ -980,6 +997,212 @@ def _pr2316_phase_a_predecessor_policy(protected_policy: bytes) -> bytes:
     return predecessor
 
 
+def _replace_expected_bytes(
+    source: bytes, old: bytes, new: bytes, expected_count: int
+) -> bytes:
+    """Replace an exact reviewed byte fixture without normalizing its source."""
+    assert source.count(old) == expected_count
+    return source.replace(old, new)
+
+
+def _pr2316_phase_b_profile(phase_a_profile: bytes) -> bytes:
+    """Build the byte-exact Phase-B verification profile from Phase A."""
+    assert hashlib.sha256(phase_a_profile).hexdigest() == PR_2316_PHASE_A_PROFILE_SHA256
+    candidate = _replace_expected_bytes(
+        phase_a_profile,
+        b"CONTRACT-SHA256:09e5140c01bbf8136f4c487c873c816f8e75db75412c11794a8b7ea47259cf3c",
+        b"CONTRACT-SHA256:10129606f47d4301052490b7767acc08d8fc713e48bcb2b867efadf2063f8d1e",
+        2,
+    )
+    candidate = _replace_expected_bytes(
+        candidate,
+        b"CONTRACT-SHA256:7c020d1e55839dfa7a962df32a3991952466bd3710afa3006122424f3d21c89b",
+        b"CONTRACT-SHA256:4ab43d1625c4229c4088c6d71cdf92aadbe92b3467cde71b1f24d774b7cfc501",
+        2,
+    )
+    assert hashlib.sha256(candidate).hexdigest() == PR_2316_PHASE_B_PROFILE_SHA256
+    return candidate
+
+
+def _pr2316_phase_b_llm_invoke_prompt(phase_a_prompt: bytes) -> bytes:
+    """Build the reviewed Phase-B llm-invoke prompt from exact Phase-A bytes."""
+    assert (
+        hashlib.sha256(phase_a_prompt).hexdigest()
+        == "09e5140c01bbf8136f4c487c873c816f8e75db75412c11794a8b7ea47259cf3c"
+    )
+    candidate = _replace_expected_bytes(
+        phase_a_prompt,
+        b"    - 'use_batch_mode': Use litellm.batch_completion if True.\n",
+        (
+            b"    - 'use_batch_mode': Use litellm.batch_completion if True, except that "
+            b"ChatGPT subscription (`chatgpt/*`) models must fail closed before any "
+            b"provider call because their Codex backend supports only the Responses "
+            b"endpoint, not chat-completions batching. Tell callers to set "
+            b"`use_batch_mode=False` and invoke items individually.\n"
+        ),
+        1,
+    )
+    candidate = _replace_expected_bytes(
+        candidate,
+        (
+            b"    - For OpenAI gpt-5* models: Call litellm.responses() API to support "
+            b"'reasoning' parameter. Build text.format block for structured output "
+            b"(type=json_schema when output_pydantic/output_schema, else type=text). "
+            b"Skip temperature for Responses API.\n"
+        ),
+        (
+            b"    - For direct OpenAI gpt-5* API models: Call litellm.responses() to "
+            b"support the `reasoning` parameter. Build a `text.format` block for "
+            b"structured output (type=json_schema when output_pydantic/output_schema, "
+            b"else type=text). Skip temperature for Responses API.\n"
+            b"    - For ChatGPT subscription `chatgpt/*` models: always use "
+            b"`litellm.responses()` for single invocations. Build list-form Responses "
+            b"input from the final messages, preserving supported multimodal content: a "
+            b'text/input_text message part becomes `{"type":"input_text","text":...}`, '
+            b"and an OpenAI chat-completions `image_url` part (including a data URL from "
+            b'code_generator) becomes `{"type":"input_image","image_url":...}`. The '
+            b"subscription backend ignores Responses `text.format` and chat-completions "
+            b"`response_format`/`json_schema`; when structured output is requested, omit "
+            b"those fields and inject the JSON schema as an in-band system-message "
+            b"instruction. Never fall back to `litellm.completion()` after a Responses "
+            b"error. Batch invocation is unsupported: fail closed before auth/provider "
+            b"dispatch with an actionable error rather than calling `litellm.completion()` "
+            b"or `litellm.batch_completion()`.\n"
+        ),
+        1,
+    )
+    assert (
+        hashlib.sha256(candidate).hexdigest()
+        == PR_2316_PHASE_B_LLM_INVOKE_PROMPT_SHA256
+    )
+    return candidate
+
+
+def _pr2316_phase_b_model_tester_prompt(phase_a_prompt: bytes) -> bytes:
+    """Build the reviewed Phase-B model-tester prompt from exact Phase-A bytes."""
+    assert (
+        hashlib.sha256(phase_a_prompt).hexdigest()
+        == "7c020d1e55839dfa7a962df32a3991952466bd3710afa3006122424f3d21c89b"
+    )
+    candidate = _replace_expected_bytes(
+        phase_a_prompt,
+        (
+            b"<pdd-reason>Tests individual models via litellm.completion() with direct "
+            b"API key passing and diagnostics.</pdd-reason>\n"
+        ),
+        (
+            b"<pdd-reason>Tests individual models with provider-appropriate LiteLLM "
+            b"calls, direct API key passing, and diagnostics.</pdd-reason>\n"
+        ),
+        1,
+    )
+    candidate = _replace_expected_bytes(
+        candidate,
+        (
+            b"Tests a single configured model by making one `litellm.completion()` call "
+            b"with a minimal prompt. Only runs when the user explicitly chooses it \xe2\x80\x94 no "
+            b"surprise API costs. Uses `litellm.completion()` directly (not `llm_invoke`) "
+            b"because `llm_invoke` doesn't allow choosing a specific model or key.\n"
+        ),
+        (
+            b"Tests a single configured model by making one provider-appropriate LiteLLM "
+            b"request with a minimal prompt. Only runs when the user explicitly chooses it "
+            b"\xe2\x80\x94 no surprise API costs. Uses LiteLLM directly (not `llm_invoke`) because "
+            b"`llm_invoke` doesn't allow choosing a specific model or key.\n"
+        ),
+        1,
+    )
+    candidate = _replace_expected_bytes(
+        candidate,
+        (
+            b"2. Test call: `litellm.completion(model=..., messages=[...], timeout=8)`. "
+            b"Only pass `api_key=` for single-var providers. Preserve the exact "
+            b"`claude-opus-5` or `claude-fable-5` catalog model; they are distinct "
+            b"Anthropic API identifiers. Strip only an optional `anthropic/` provider "
+            b"prefix when required by the direct call.\n"
+        ),
+        (
+            b"2. Test call: normally use `litellm.completion(model=..., messages=[...], "
+            b"timeout=8)`. For ChatGPT subscription `chatgpt/*` rows, bridge `codex login` "
+            b"credentials and apply the LiteLLM ChatGPT output patch, then use the Codex "
+            b'Responses smoke path: `litellm.responses(model=..., input=[{"role":"user",'
+            b'"content":[{"type":"input_text","text":"Say OK"}]}], timeout=8)`. '
+            b"Treat the smoke test as successful only when the Responses payload contains a "
+            b"nonempty `output_text`; an empty or missing response output is a failure. "
+            b"Never send `chatgpt/*` smoke tests to chat-completions. Only pass `api_key=` "
+            b"for single-var providers. Preserve the exact `claude-opus-5` or "
+            b"`claude-fable-5` catalog model; they are distinct Anthropic API identifiers. "
+            b"Strip only an optional `anthropic/` provider prefix when required by the "
+            b"direct call.\n"
+        ),
+        1,
+    )
+    assert (
+        hashlib.sha256(candidate).hexdigest()
+        == PR_2316_PHASE_B_MODEL_TESTER_PROMPT_SHA256
+    )
+    return candidate
+
+
+def _write_pr2316_phase_b_candidate(root: Path) -> None:
+    """Synthesize only the exact Phase-B managed bytes from reachable Phase A."""
+    policy_path = root / ".pdd" / "verification-profile-rotations.json"
+    assert hashlib.sha256(policy_path.read_bytes()).hexdigest() == (
+        PR_2316_PHASE_A_POLICY_SHA256
+    )
+    profile_path = root / ".pdd" / "verification-profiles.json"
+    profile_path.write_bytes(_pr2316_phase_b_profile(profile_path.read_bytes()))
+    llm_invoke_path = root / "pdd" / "prompts" / "llm_invoke_python.prompt"
+    llm_invoke_path.write_bytes(
+        _pr2316_phase_b_llm_invoke_prompt(llm_invoke_path.read_bytes())
+    )
+    model_tester_path = root / "pdd" / "prompts" / "model_tester_python.prompt"
+    model_tester_path.write_bytes(
+        _pr2316_phase_b_model_tester_prompt(model_tester_path.read_bytes())
+    )
+
+
+def _clone_pr2316_phase_a_history(root: Path) -> None:
+    """Clone only the verifier branch's reachable history, without alternates."""
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "-q",
+            "--no-local",
+            "--single-branch",
+            "--no-tags",
+            str(ROOT),
+            str(root),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    _git(root, "cat-file", "-e", f"{PR_2316_PHASE_A_PROTECTED}^{{commit}}")
+
+
+def _assert_pr2316_prompt_trees(
+    root: Path,
+    manifest,
+    expected_base: str,
+    expected_head: str,
+) -> None:
+    """Assert the complete managed prompt trees, not just the two target prompts."""
+    approved_aliases = verification.load_protected_aliases(root, manifest)
+    assert verification._managed_prompt_tree_sha256(  # pylint: disable=protected-access
+        root,
+        manifest,
+        manifest.base_ref,
+        approved_aliases,
+    ) == expected_base
+    assert verification._managed_prompt_tree_sha256(  # pylint: disable=protected-access
+        root,
+        manifest,
+        manifest.head_ref,
+        approved_aliases,
+    ) == expected_head
+
+
 @pytest.mark.timeout(600)
 def test_pr2316_schema_3_legacy_retirement_is_exact_through_production_loader(
     tmp_path,
@@ -1153,11 +1376,7 @@ def test_pr2316_historical_legacy_retirement_is_fully_bound_through_production_l
 def test_pr2316_phase_b_transition_is_exact_through_production_loader(tmp_path) -> None:
     """Only the reviewed Phase-B tree may consume the protected replacements."""
     root = tmp_path / "pr2316-phase-b"
-    subprocess.run(
-        ["git", "clone", "-q", "--shared", str(ROOT), str(root)],
-        check=True,
-        capture_output=True,
-    )
+    _clone_pr2316_phase_a_history(root)
 
     def candidate_for(mutation: str) -> tuple[str, str]:
         _git(
@@ -1178,7 +1397,7 @@ def test_pr2316_phase_b_transition_is_exact_through_production_loader(tmp_path) 
             )
             base = _commit(root, "foreign pr2316 Phase-B protected base")
 
-        _git(root, "read-tree", "--reset", "-u", PR_2316_PHASE_B_CANDIDATE)
+        _write_pr2316_phase_b_candidate(root)
         policy_path = root / ".pdd" / "verification-profile-rotations.json"
         if mutation == "policy-formatting":
             policy_path.write_bytes(policy_path.read_bytes() + b" ")
@@ -1206,6 +1425,12 @@ def test_pr2316_phase_b_transition_is_exact_through_production_loader(tmp_path) 
     profiles = load_verification_profiles(root, manifest)
     assert manifest.repository_id == REPOSITORY_ID
     assert not manifest.invalid_reasons
+    _assert_pr2316_prompt_trees(
+        root,
+        manifest,
+        PR_2316_PHASE_A_PROMPT_TREE_SHA256,
+        PR_2316_PHASE_B_PROMPT_TREE_SHA256,
+    )
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
 
@@ -1232,11 +1457,7 @@ def test_pr2316_phase_b_stationary_state_is_exact_through_production_loader(
 ) -> None:
     """Only the reviewed consumed Phase-B tree retains its historical overlay."""
     root = tmp_path / "pr2316-phase-b-stationary"
-    subprocess.run(
-        ["git", "clone", "-q", "--shared", str(ROOT), str(root)],
-        check=True,
-        capture_output=True,
-    )
+    _clone_pr2316_phase_a_history(root)
 
     def stationary_for(mutation: str) -> tuple[str, str]:
         _git(
@@ -1245,8 +1466,10 @@ def test_pr2316_phase_b_stationary_state_is_exact_through_production_loader(
             "-q",
             "-B",
             f"pr2316-phase-b-stationary-{mutation}",
-            PR_2316_PHASE_B_CANDIDATE,
+            PR_2316_PHASE_A_PROTECTED,
         )
+        _write_pr2316_phase_b_candidate(root)
+        ref = _commit(root, "synthetic pr2316 Phase-B candidate")
         if mutation == "policy-formatting":
             policy_path = root / ".pdd" / "verification-profile-rotations.json"
             policy_path.write_bytes(policy_path.read_bytes() + b" ")
@@ -1265,9 +1488,6 @@ def test_pr2316_phase_b_stationary_state_is_exact_through_production_loader(
             )
         else:
             assert mutation == "exact-stationary"
-        ref = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=root, text=True
-        ).strip()
         if mutation != "exact-stationary":
             ref = _commit(root, f"pr2316 Phase-B stationary {mutation}")
         return ref, ref
@@ -1277,6 +1497,12 @@ def test_pr2316_phase_b_stationary_state_is_exact_through_production_loader(
     profiles = load_verification_profiles(root, manifest)
     assert manifest.repository_id == REPOSITORY_ID
     assert not manifest.invalid_reasons
+    _assert_pr2316_prompt_trees(
+        root,
+        manifest,
+        PR_2316_PHASE_B_PROMPT_TREE_SHA256,
+        PR_2316_PHASE_B_PROMPT_TREE_SHA256,
+    )
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
 
