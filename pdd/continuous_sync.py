@@ -29,6 +29,7 @@ from .sync_determine_operation import (
 )
 from .architecture_registry import extract_modules
 from .sync_core import CanonicalReportOptions, build_canonical_report
+from .sync_core.reporting import module_identity
 from .construct_paths import _load_pddrc_config
 
 
@@ -2083,9 +2084,7 @@ def _canonical_compatibility_report(
             classification = FAILURE_CLASSIFICATION
         projected.append(
             {
-                "basename": PurePosixPath(unit["subject"]).relative_to(
-                    "prompts"
-                ).with_suffix("").as_posix().rsplit("_", 1)[0],
+                "basename": module_identity(PurePosixPath(unit["subject"])),
                 "language": Path(unit["subject"]).stem.rsplit("_", 1)[-1],
                 "classification": classification,
                 "operation": "none",
