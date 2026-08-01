@@ -14,6 +14,8 @@ PDD is the last programming language in this specific sense: developers author d
 
 The primary command is ``sync``, which automatically executes the complete PDD workflow loop—from dependency injection through code generation, testing, and verification. For most use cases, ``sync`` is the recommended starting point, as it intelligently determines what steps are needed and executes them in the correct order.
 
+For guidance on writing durable prompt source, see the `Prompt-Driven Development Prompting Guide <https://github.com/promptdriven/pdd/blob/main/pdd/docs/prompting_guide.md>`_.
+
 .. image:: https://img.youtube.com/vi/5lBxpTSnjqo/0.jpg
    :alt: Watch a video demonstration of PDD
    :target: https://www.youtube.com/watch?v=5lBxpTSnjqo
