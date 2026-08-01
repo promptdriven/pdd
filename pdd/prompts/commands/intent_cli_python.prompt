@@ -1,0 +1,65 @@
+<pdd-reason>Exposes local ordinary-language intent planning as a safe `pdd intent plan` command for humans and AI harnesses.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "intent plan",
+        "description": "Plan an ordinary-language request against local project evidence without changing files or requiring GitHub"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>intent_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Write `pdd/commands/intent.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+  Implement a thin Click command group over `pdd.intent`. The command is an
+  agent-facing front door, although it must also be understandable when a human
+  runs it. The first release is planning-only and deliberately has no `apply`
+  subcommand.
+
+<contract_rules>
+R1 - Command surface
+Expose a `@click.group(name="intent")` named `intent_cli` with a `plan`
+subcommand. `pdd intent --help` MUST state that the group accepts ordinary
+product intent and handles PDD routing. `pdd intent plan --help` MUST state
+that planning is local, requires no GitHub issue, and changes no project files.
+
+R2 - Input forms
+`intent plan` MUST accept exactly one input form: `--text
+<ordinary-language request>`, positional `SOURCE` naming an existing local text
+file, or piped standard input when neither `SOURCE` nor `--text` is supplied.
+Reject simultaneous `SOURCE` and `--text`, missing interactive input,
+unreadable/non-file sources, empty input, and input larger than 100,000
+characters with clear Click errors.
+
+R3 - Project and title options
+Support optional `--project-root <directory>` (default current directory) and
+`--title <human title>`. `--project-root` MAY name a proposed new directory
+that does not exist yet; planning MUST NOT create it. Resolve the project root
+before calling `build_intent_plan`. Do not require a GitHub URL, prompt path,
+internal target name, story slug, output path, or PDD configuration knowledge.
+
+R4 - Output modes
+Default output MUST be `render_review_card(plan)`. `--json` MUST instead emit
+only deterministic JSON from `intent_plan_to_dict(plan)`, with indentation and
+sorted object keys suitable for an AI harness. Do not mix status prose into
+JSON stdout.
+
+R5 - Planning-only truthfulness
+The command MUST NOT write any project files, call GitHub, invoke an LLM,
+generate stories/tests/code, or run synchronization. It MUST never imply that
+the request was applied. Errors exit non-zero.
+</contract_rules>
+
+% Deliverables
+- Code: `pdd/commands/intent.py`
+- Tests: `tests/commands/test_pdd_commands_intent.py`
