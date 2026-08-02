@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -304,6 +308,117 @@ def test_llm_failure_does_not_raise(tmp_path: Path) -> None:
     assert result.success is False
     # findings_after must reflect remaining findings so callers do not skip retries
     assert len(result.findings_after) > 0
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires POSIX process groups")
+def test_repair_deadline_terminates_provider_tree_and_preserves_completed_cost(
+    tmp_path: Path,
+) -> None:
+    prompt = tmp_path / "deadline.prompt"
+    original = (FIXTURES / "clean.prompt").read_text(encoding="utf-8")
+    prompt.write_text(original, encoding="utf-8")
+    late_marker = tmp_path / "late.marker"
+
+    def provider(**kwargs):
+        input_prompt = kwargs["input_json"]["input_prompt"]
+        if "% completed round one" not in input_prompt:
+            return {
+                "result": (
+                    "<<<MODIFIED_PROMPT>>>\n"
+                    f"{input_prompt}\n% completed round one\n"
+                    "<<<END_MODIFIED_PROMPT>>>"
+                ),
+                "cost": 0.07,
+                "model_name": "deadline-test-provider",
+            }
+
+        context = json.loads(kwargs["input_json"]["input_code"])
+        Path(context["prompt_path"]).write_text("partial provider write", encoding="utf-8")
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import pathlib,sys,time; time.sleep(1.2); "
+                    "pathlib.Path(sys.argv[1]).write_text('late', encoding='utf-8')"
+                ),
+                str(late_marker),
+            ],
+            close_fds=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(5.0)
+        raise AssertionError("blocking provider was not terminated")
+
+    started = time.monotonic()
+    with (
+        patch("pdd.change.llm_invoke", new=provider),
+        patch(
+            "pdd.prompt_repair._recheck_source_set",
+            return_value=_coverage_report(prompt),
+        ),
+    ):
+        result = run_prompt_repair_loop(
+            prompt,
+            PromptRepairConfig(mode="strict", max_rounds=2, max_seconds=0.9),
+            context={"source_set_report": _coverage_report(prompt)},
+            cwd=tmp_path,
+            quiet=True,
+            strict=True,
+        )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.3
+    assert result.success is False
+    assert result.message == "repair timeout"
+    assert result.rounds_used == 1
+    assert result.cost_usd == pytest.approx(0.07)
+    assert result.billing_status == "reported_nonzero"
+    assert result.model_used == "deadline-test-provider"
+    assert prompt.read_text(encoding="utf-8") == original
+    time.sleep(1.2)
+    assert not late_marker.exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires forked provider fixture")
+def test_repair_deadline_preserves_cost_from_completed_call_in_same_round(
+    tmp_path: Path,
+) -> None:
+    prompt = tmp_path / "extraction-timeout.prompt"
+    original = (FIXTURES / "clean.prompt").read_text(encoding="utf-8")
+    prompt.write_text(original, encoding="utf-8")
+
+    def provider(**kwargs):
+        if "input_prompt" in kwargs["input_json"]:
+            return {
+                "result": "completed first provider call without delimiters",
+                "cost": 0.04,
+                "model_name": "deadline-test-provider",
+            }
+        time.sleep(5.0)
+        raise AssertionError("blocking extraction provider was not terminated")
+
+    started = time.monotonic()
+    with patch("pdd.change.llm_invoke", new=provider):
+        result = run_prompt_repair_loop(
+            prompt,
+            PromptRepairConfig(mode="strict", max_rounds=1, max_seconds=1.2),
+            context={"source_set_report": _coverage_report(prompt)},
+            cwd=tmp_path,
+            quiet=True,
+            strict=True,
+        )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.7
+    assert result.success is False
+    assert result.message == "repair timeout"
+    assert result.rounds_used == 0
+    assert result.cost_usd == pytest.approx(0.04)
+    assert result.billing_status == "reported_nonzero"
+    assert result.model_used == "deadline-test-provider"
+    assert prompt.read_text(encoding="utf-8") == original
 
 
 def test_strict_mode_fails_with_remaining_issues(tmp_path: Path) -> None:
@@ -862,7 +977,6 @@ def test_lint_only_non_vague_findings_still_actionable(tmp_path: Path) -> None:
     The requires_clarification key must be False for non-VAGUE codes so the repair
     loop is NOT blocked from processing them.
     """
-    from pdd.prompt_repair import _actionable_findings, _lint_findings
     from pdd.prompt_lint import LintIssue
 
     non_vague_issue = LintIssue(
