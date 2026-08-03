@@ -20,7 +20,12 @@ from rich.panel import Panel
 from rich.text import Text # ADDED THIS IMPORT
 
 # Import the function to be tested using an absolute path
-from pdd.code_generator_main import code_generator_main, _verify_architecture_conformance
+from pdd.code_generator_main import (
+    code_generator_main,
+    _verify_architecture_conformance,
+    _verify_generated_syntax,
+    ArchitectureConformanceError,
+)
 from pdd.core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 from pdd.get_jwt_token import AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
 
@@ -930,13 +935,13 @@ def test_incremental_gen_with_original_prompt_file(
         {"output": str(output_file_path)}, 
         "python"
     )
-    mock_incremental_generator_fixture.return_value = ("Updated code", True, 0.002, "inc_model")
+    mock_incremental_generator_fixture.return_value = ("def updated():\n    pass\n", True, 0.002, "inc_model")
 
     code, incremental, cost, model = code_generator_main(
         mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
     )
 
-    assert code == "Updated code"
+    assert code == "def updated():\n    pass\n"
     assert incremental
     assert cost == 0.002
     assert model == "inc_model"
@@ -951,7 +956,7 @@ def test_incremental_gen_with_original_prompt_file(
     assert call_kwargs["force_incremental"] is False
     assert call_kwargs["verbose"] is False
     assert call_kwargs["preprocess_prompt"] is False
-    assert output_file_path.read_text() == "Updated code"
+    assert output_file_path.read_text() == "def updated():\n    pass\n"
 
 
 def test_incremental_gen_with_git_committed_prompt(
@@ -1002,13 +1007,13 @@ def test_incremental_gen_with_git_committed_prompt(
         {"output": str(output_file_path)}, 
         "python"
     )
-    mock_incremental_generator_fixture.return_value = ("Git updated code", True, 0.003, "git_inc_model")
+    mock_incremental_generator_fixture.return_value = ("def git_updated():\n    pass\n", True, 0.003, "git_inc_model")
 
     code, incremental, _, _ = code_generator_main(
         mock_ctx, str(prompt_file_path_in_git), str(output_file_path), None, False
     )
 
-    assert code == "Git updated code"
+    assert code == "def git_updated():\n    pass\n"
     assert incremental
     call_kwargs = mock_incremental_generator_fixture.call_args.kwargs
     assert call_kwargs["language"] == "python"
@@ -1067,7 +1072,7 @@ def test_incremental_base_ref_fallback_used_when_no_local_history(
         {"output": str(output_file_path)},
         "python",
     )
-    mock_incremental_generator_fixture.return_value = ("Base-ref updated code", True, 0.004, "base_inc_model")
+    mock_incremental_generator_fixture.return_value = ("def base_ref_updated():\n    pass\n", True, 0.004, "base_inc_model")
 
     def fake_get_content(file_path, git_ref="HEAD"):
         if git_ref == "HEAD":
@@ -1084,7 +1089,7 @@ def test_incremental_base_ref_fallback_used_when_no_local_history(
         )
 
     assert incremental
-    assert code == "Base-ref updated code"
+    assert code == "def base_ref_updated():\n    pass\n"
     call_kwargs = mock_incremental_generator_fixture.call_args.kwargs
     assert call_kwargs["original_prompt"] == base_prompt
     assert call_kwargs["new_prompt"] == on_disk_prompt
@@ -1189,7 +1194,7 @@ def test_incremental_base_ref_env_override_is_honored(
         {"output": str(output_file_path)},
         "python",
     )
-    mock_incremental_generator_fixture.return_value = ("Override updated code", True, 0.004, "override_model")
+    mock_incremental_generator_fixture.return_value = ("def override_updated():\n    pass\n", True, 0.004, "override_model")
 
     seen_refs = []
 
@@ -3908,6 +3913,99 @@ class TestVerifyArchitectureConformance:
             )
 
 
+class TestVerifyGeneratedSyntax:
+    """Tests for _verify_generated_syntax.
+
+    Covers the gap where a `.prompt` file's declared language (via its
+    filename's `_<language>` suffix) doesn't match what the LLM actually
+    generated (e.g. a `_python.prompt` whose content describes an HTML
+    page). Unlike `_verify_public_surface_regression`, this check must run
+    on first-time generation too (no existing_code required).
+    """
+
+    def test_passes_for_valid_python(self):
+        """Valid Python content raises nothing."""
+        _verify_generated_syntax(
+            generated_code="def foo():\n    return 1\n",
+            prompt_name="foo_python.prompt",
+            language="python",
+            output_path="foo.py",
+        )
+
+    def test_fails_for_html_declared_as_python(self):
+        """HTML content in a file declared _python raises a clear conformance error."""
+        with pytest.raises(ArchitectureConformanceError, match="does not parse as valid python"):
+            _verify_generated_syntax(
+                generated_code="<!DOCTYPE html>\n<html><body>Hi</body></html>\n",
+                prompt_name="game_web_python.prompt",
+                language="python",
+                output_path="game_web.py",
+            )
+
+    def test_runs_on_first_time_generation_with_no_existing_code(self):
+        """The whole point of this check: it must not require existing_code.
+
+        Regression test for the gap where first-time generation had zero
+        output validation (only regeneration of an existing file was checked).
+        """
+        with pytest.raises(ArchitectureConformanceError):
+            _verify_generated_syntax(
+                generated_code="not python at all {{{ ]",
+                prompt_name="brand_new_python.prompt",
+                language="python",
+                output_path="brand_new.py",
+            )
+
+    def test_skips_non_python_languages(self):
+        """No parser available for other languages yet; must not raise."""
+        _verify_generated_syntax(
+            generated_code="<html><body>fine</body></html>",
+            prompt_name="page_html.prompt",
+            language="html",
+            output_path="page.html",
+        )
+
+    def test_skips_when_output_empty(self):
+        """Empty/whitespace-only output has nothing to parse; must not raise."""
+        _verify_generated_syntax(
+            generated_code="   \n",
+            prompt_name="foo_python.prompt",
+            language="python",
+            output_path="foo.py",
+        )
+
+    def test_tolerates_surface_markdown_fence_around_valid_code(self):
+        """Some response paths intentionally leave a markdown fence un-stripped
+        (see test_cloud_non_json_response_not_stripped). The real code inside
+        should still be validated rather than tripping on the ``` wrapping."""
+        _verify_generated_syntax(
+            generated_code="```python\ndef hello(): pass\n```",
+            prompt_name="fence_python.prompt",
+            language="python",
+            output_path="fence.py",
+        )
+
+    def test_fence_wrapping_does_not_hide_genuinely_broken_code(self):
+        """A markdown fence around genuinely non-Python content must still fail."""
+        with pytest.raises(ArchitectureConformanceError):
+            _verify_generated_syntax(
+                generated_code="```html\n<html><body>Hi</body></html>\n```",
+                prompt_name="fence_broken_python.prompt",
+                language="python",
+                output_path="fence_broken.py",
+            )
+
+    def test_respects_pdd_skip_conformance_env_flag(self, monkeypatch):
+        """PDD_SKIP_CONFORMANCE opts out, matching the existing conformance gate."""
+        monkeypatch.setenv("PDD_SKIP_CONFORMANCE", "1")
+        _verify_generated_syntax(
+            generated_code="<html>still not python</html>",
+            prompt_name="foo_python.prompt",
+            language="python",
+            output_path="foo.py",
+        )
+
+
 # === Issue #687 Tests: example_output_path must be injected and consumed ===
 # Root cause: generate_prompt.prompt tells the LLM to parse .pddrc YAML for
 # example_output_path, but when .pddrc is missing the LLM has no fallback.
@@ -4318,7 +4416,7 @@ def test_incremental_different_code_no_fallback(
     """When incremental produces genuinely different code, no fallback should occur (regression guard)."""
     mock_ctx.obj['local'] = True
     existing_code = "Existing code content"
-    updated_code = "Updated code that is different"
+    updated_code = "def updated_and_different():\n    pass\n"
 
     prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_diff_prompt.prompt"
     create_file(prompt_file_path, "New prompt")

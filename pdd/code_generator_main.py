@@ -699,6 +699,74 @@ def _is_python_generation(language: Optional[str], output_path: Optional[str]) -
     )
 
 
+def _verify_generated_syntax(
+    generated_code: Optional[str],
+    prompt_name: str,
+    language: Optional[str],
+    output_path: Optional[str],
+) -> None:
+    """Fail fast when generated output does not parse as its declared language.
+
+    Unlike ``_verify_public_surface_regression`` (which only runs when
+    ``existing_code`` is present, i.e. regenerating a mature module), this
+    check runs on every generation, including the first time a file is
+    created. Without it, a prompt whose content doesn't match its declared
+    ``_<language>`` filename suffix (e.g. a ``_python.prompt`` whose content
+    describes an HTML page) can silently write unparseable content into a
+    freshly created file with no error at all (issue: first-time generation
+    has no output validation, only regeneration does).
+    """
+    if _env_flag_enabled("PDD_SKIP_CONFORMANCE"):
+        return
+    if not generated_code or not generated_code.strip():
+        return
+    if not _is_python_generation(language, output_path):
+        return  # no cheap parser available for other languages yet
+
+    try:
+        ast.parse(generated_code)
+        return  # parses as-is; nothing more to check
+    except SyntaxError as syntax_err:
+        first_error = syntax_err
+
+    # Some response paths intentionally leave a surface markdown code fence
+    # un-stripped (e.g. non-JSON cloud responses). Retry once against the
+    # fence-stripped content so this check validates the actual code rather
+    # than tripping on cosmetic ``` wrapping; genuinely wrong content (e.g.
+    # raw HTML) still fails both attempts and reports the original error.
+    stripped = generated_code.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        inner = stripped[3:-3]
+        first_line, _, rest = inner.partition("\n")
+        if first_line.strip() and " " not in first_line.strip():
+            inner = rest  # drop a ```<lang> marker line
+        try:
+            ast.parse(inner)
+            return
+        except SyntaxError:
+            pass
+
+    output_display = output_path or "<unknown>"
+    raise ArchitectureConformanceError(
+        prompt_name=prompt_name,
+        output_path=output_path or "",
+        architecture_entry={},
+        expected_symbols=[],
+        found_symbols=[],
+        missing_symbols=[],
+        message=(
+            f"Generated output for {prompt_name} does not parse as valid "
+            f"{language or 'python'}: {first_error}. Output: {output_display}."
+        ),
+        repair_directive=(
+            f"The generated content is not valid {language or 'python'} "
+            f"syntax ({first_error}). Check whether the prompt's requested "
+            f"output actually matches its declared language (the "
+            f"filename's trailing _{language or 'python'} suffix)."
+        ),
+    ) from first_error
+
+
 def _is_test_output_path(output_path: Optional[str]) -> bool:
     if not output_path:
         return False
@@ -5595,6 +5663,25 @@ def code_generator_main(
                                 raise click.UsageError(f"Generated JSON does not match output_schema: {ve}")
                 except json.JSONDecodeError as jde:
                     raise click.UsageError(f"Generated output is not valid JSON: {jde}")
+
+            # Syntax/language validation: verify the generated output actually
+            # parses as its declared language. Runs on EVERY generation (first
+            # time and regenerate alike), unlike the public-surface regression
+            # gate below which only fires when existing_code is present.
+            if generated_code_content is not None:
+                try:
+                    _verify_generated_syntax(
+                        generated_code=generated_code_content,
+                        prompt_name=pathlib.Path(prompt_file).name,
+                        language=language,
+                        output_path=output_path,
+                    )
+                except ArchitectureConformanceError as syntax_err:
+                    syntax_err.total_cost = float(total_cost or 0.0)
+                    syntax_err.model_name = model_name or "unknown"
+                    raise  # Re-raise syntax-mismatch errors as hard failures
+                except click.UsageError:
+                    raise
 
             # Architecture conformance check: verify generated code exports match
             # the interface declarations in architecture.json (hard failure on mismatch).
