@@ -2379,9 +2379,242 @@ Key differences:
 
 ## Scoping & Modularity
 
-- One prompt → one file/module. If a prompt gets too large or brittle, split it into smaller prompts that compose via explicit interfaces.
+- For ordinary code, one prompt → one file/module. For frontend work whose visual composition is material, use the [UI Intent Bundles](#ui-intent-bundles-for-frontend-work) exception: one owning prompt bundle → one independently regenerable UI unit, which may produce more than one file.
 - Treat examples as interfaces: create a minimal runnable example demonstrating how the module is meant to be used.
 - Avoid "mega‑prompts" that try to implement an entire subsystem. Use the PDD graph of prompts instead. For how prompts compose via examples, see [Dependencies](#dependencies) in the Directives & Context chapter.
+
+---
+
+## UI Intent Bundles for Frontend Work
+
+Frontend code has the same source-of-truth rule as every other PDD target: durable
+intent is versioned source and the implementation is regenerated output. The
+ordinary one-prompt/one-file rule remains a good default for a token-defined
+button, icon, or simple leaf. It is not enough when a reviewer must judge the
+composition of a dialog or screen: prose is poor at conveying hierarchy,
+alignment, relative scale, density, layering, and responsive reflow, while a
+picture cannot specify state transitions, keyboard behavior, accessible names,
+or forbidden outcomes.
+
+Use a **UI Intent Bundle** when appearance materially affects correctness. A
+bundle is one independently regenerable UI unit: a reusable component, a
+coherent dialog, a composed screen, or (at a higher level) a user flow. It is a
+product/review boundary, not necessarily a source-file boundary. A unit may own
+multiple generated files when those files cannot usefully be generated and
+reviewed apart. Every code target still has **exactly one generator**. A
+screen-level bundle may describe where a separately owned shared component
+appears, but must not redefine that component's internals.
+
+This is research-informed guidance, not a claim that one representation has
+already won empirically. Before adopting it broadly, run repeated clean
+generations with common public and hidden behavior, visual, responsive, and
+accessibility gates. Compare the cost, variance, editability, and pass rate of
+text-only, image-assisted, and bundle-based alternatives for representative UI
+work.
+
+### Choose the Smallest Useful Bundle
+
+Start with the smallest source surface that lets a reviewer determine the
+important outcome without mentally reconstructing a screen.
+
+| UI kind | Durable source | Typical verification |
+|---|---|---|
+| Token-defined/simple leaf | Compact text prompt, shared token/design-system include | Component behavior and accessibility tests |
+| Materially visual component | Prompt + one named visual view + small manifest | State, visual-rubric, and accessibility tests |
+| Stateful component or dialog | Prompt + named state table + visual views + manifest | Interaction, negative, focus/keyboard, and visual tests |
+| Responsive screen | Prompt + minimum meaningful desktop/mobile views + responsive invariants + manifest | Representative and boundary viewport, reflow, overflow, and accessibility tests |
+| Cross-screen flow | Human user story + compact transition/flow model, linked to screen bundles | Cross-unit browser scenarios |
+
+Do not manufacture a view for every breakpoint or state combination. Add a
+view when the composition changes materially; describe ordinary variation with
+rules and tests. A lightweight Mermaid flow is normally enough for navigation.
+Use a statechart only when concurrency, hierarchy, cancellation, or recovery
+would otherwise be ambiguous.
+
+### Bundle Responsibilities
+
+A tiered bundle has three small, distinct sources:
+
+1. **Compact UI prompt:** owns purpose, user-visible copy, states,
+   interactions, responsive invariants, semantics, accessibility, and
+   MUST/MUST NOT rules. It must not transcribe a React tree, Tailwind class
+   list, or pixel geometry that a visual source already owns.
+2. **Authoritative visual view:** a semantic SVG, or another versioned visual
+   source when appropriate, owns a named state-plus-viewport view when
+   hierarchy or composition matters. It should name meaningful regions and
+   token roles, not event handlers or a framework DOM tree.
+3. **Small manifest:** owns the unit ID, owner prompt, target mapping, required
+   state/viewport inventory, visual fidelity, and source authority. It is an
+   inventory, not a new layout DSL or a second frontend implementation.
+
+Shared token/design-system prompts own primitives such as color, type, spacing,
+radius, shadow, and motion. A UI bundle references their semantic names rather
+than duplicating hex values or utility classes.
+
+Every fact needs one owner. For example, an SVG can own that a dialog has a
+dominant media region and a narrower detail rail; the prompt owns focus entry,
+Tab containment, Escape, background inertness, and focus restoration. The
+manifest owns which view covers which state and viewport. Tests and generated
+code prove those facts; they do not silently become new sources of intent.
+
+### Visual Authority and Semantic SVG
+
+Declare the authority of each visual source explicitly:
+
+- **Directional:** a mood, sketch, or example. It informs discussion but a
+  difference is not automatically a defect.
+- **Relational:** hierarchy, grouping, order, alignment, relative scale,
+  density, visible copy, and named token roles are requirements. Browser font
+  metrics and antialiasing are normally not.
+- **Exact:** declared geometry, copy, and token identity are strict within a
+  documented tolerance. Use sparingly and say how conformance is judged.
+
+A raw whiteboard photo, annotated screenshot, or external design is valuable
+**intake**. Normalize it into the prompt, manifest, and corrected visual source
+before generation; keep the intake artifact labelled non-authoritative. Do not
+preserve an ambiguous sketch and generated code as competing truths.
+
+For repository-native relational views, canonical semantic SVG is a promising
+default: it is directly viewable, versionable XML that can name groups, regions,
+visible text, descriptions, and semantic token roles. Use stable human IDs,
+`title`/`desc`, and attributes such as `data-intent-role` and `data-token`.
+Avoid editor metadata, generated IDs, hidden alternative layers, base64 assets,
+external resources, and formatting churn. SVG does **not** own interaction,
+accessibility behavior, responsive transformation, or the production DOM.
+
+Current PDD preprocessing treats SVG as text, not as a multimodal image. If a
+generation needs image input, deterministically rasterize the canonical SVG;
+record and verify the source SVG hash for every derived raster. For dense views,
+use a stable overview and named crops rather than relying on an unreadable large
+image. The SVG and prompt remain authoritative; a derived PNG is build evidence,
+not a design source. Never promote a generated implementation screenshot to
+authority merely because it is checked in.
+
+An HTML/CSS prototype is an exception when real reflow, timing, motion, or
+interaction cannot be specified compactly otherwise. It must be substantially
+smaller and less framework-specific than the implementation and must declare
+what it owns, or it becomes a parallel frontend.
+
+### States, Responsiveness, and Accessibility
+
+Stateful UI needs a compact state table, not prose scattered across several
+files. State rows name the trigger or guard, visible view (if any), effect, and
+forbidden outcome. A dialog prompt must explicitly cover its accessible name,
+initial focus, Tab and Shift+Tab containment, Escape/backdrop behavior,
+background inertness, focus return, pending/duplicate-submit behavior, and any
+announcement or error association. A visually correct modal with an escaping
+focus ring is not correct.
+
+For responsive units, include the smallest set of meaningful viewport views and
+a responsive-invariants table. Name what reorders, stacks, collapses, becomes a
+drawer, scrolls, or must remain reachable. Test representative widths and the
+breakpoints where the composition changes, including long copy, overflow, and
+keyboard reachability. Do not treat an SVG drawing order as the required DOM or
+focus order unless the prompt explicitly makes that semantic order a contract.
+
+### Sources, Examples, and Evidence
+
+Keep lifecycle roles separate:
+
+| Artifact | Role |
+|---|---|
+| Intake sketch, issue image, external design | Non-authoritative input/provenance |
+| UI prompt, manifest, authoritative visual | Versioned source of UI intent |
+| Storybook/CSF example | Executable state catalogue or fixture; normally imports the generated component and is not a clean-start design source |
+| Playwright screenshot comparison | Visual drift mold/evidence in a pinned rendering environment |
+| Playwright ARIA snapshot and keyboard assertions | Accessibility mold/evidence; not a substitute for temporal focus rules |
+| Generated browser screenshot, trace, raster projection | Derived evidence only |
+
+Screenshot comparisons can detect drift but are environment-sensitive and do
+not explain intent. ARIA snapshots constrain roles, names, and hierarchy but do
+not prove focus timing or all interactions. Keep both linked to the prompt's
+state IDs and contract rules, and retain hidden cases for important behavior,
+visual, responsive, and accessibility obligations.
+
+### Mapping, Includes, and Modularity
+
+The manifest is a mapping table, not permission for multiple writers:
+
+- A simple UI unit normally maps to one target.
+- One independently regenerable unit may map to multiple targets through one
+  declared owner prompt.
+- Narrow visual or semantic addenda may feed that owner prompt but may not
+  independently overwrite the same target.
+- Several independent UI units must not generate one target. Split the target
+  first, or use one owner and explicitly labelled addenda until it can be
+  split.
+- Do not create a mega-bundle for a whole application or a giant client file.
+  Split by stable public interface, reviewable state boundary, and reusable
+  ownership.
+
+Use `<include>` for the manifest and only the visual views required for the
+generation. Prefer a shared token/preamble include to copying shared rules.
+Treat dynamic web, shell, and semantic-query context as non-deterministic; use
+the snapshot workflow when such context is contract-critical. Keep source views
+outside generated screenshot/baseline directories so their authority cannot be
+confused.
+
+Example layout:
+
+```text
+prompts/ui/thumbnail-preview/
+├── thumbnail-preview.ui.prompt       # behavior, states, accessibility
+├── thumbnail-preview.ui.yaml         # owner, targets, view inventory
+├── views/
+│   ├── open__1440x900.ui.svg          # relational desktop view
+│   └── unavailable__390x844.ui.svg    # relational compact-state view
+└── references/
+    └── whiteboard.jpg                 # directional/non-authoritative intake
+
+.pdd/ui-renders/thumbnail-preview/     # derived, hash-linked raster evidence
+```
+
+The owner prompt stays compact and includes only declared source:
+
+```xml
+% Implement the independently regenerable `thumbnail-preview` UI unit.
+<include>context/frontend_ui_preamble.prompt</include>
+<include>prompts/ui/thumbnail-preview/thumbnail-preview.ui.yaml</include>
+<visual_views>
+  <include>prompts/ui/thumbnail-preview/views/open__1440x900.ui.svg</include>
+  <include>prompts/ui/thumbnail-preview/views/unavailable__390x844.ui.svg</include>
+</visual_views>
+
+<states>
+| State | Trigger | View | Forbidden outcome |
+| open | selected candidate | open.desktop | background remains interactive |
+| unavailable | media absent | unavailable.mobile | invent media or lose focus return |
+</states>
+```
+
+### Frontend Regeneration-Safe Checklist
+
+Before relying on repeated regeneration of a UI unit, confirm:
+
+- [ ] One unit owner and exactly one generator are declared for every target.
+- [ ] The prompt declares its public route/props/events, responsibilities,
+  states, and important MUST/MUST NOT rules.
+- [ ] Each material state and viewport has a named view or a deliberate rule
+  explaining why no distinct view is needed.
+- [ ] Every visual source declares authority, fidelity, owned properties, and
+  its state/viewport mapping.
+- [ ] Shared token/design-system ownership is referenced rather than copied.
+- [ ] Dialogs and interactive controls have role/name, keyboard, focus,
+  pending/error, and negative-behavior coverage.
+- [ ] Responsive tests cover representative and boundary widths, long content,
+  order, overflow, containment, and reachability.
+- [ ] Visual assertions use a declared relational/exact rubric; screenshot
+  baselines run in a pinned environment and remain evidence, not source.
+- [ ] ARIA snapshots/assertions and behavior tests cover semantics separately
+  from pixels; high-risk cases include hidden gates where practical.
+- [ ] SVG views are canonicalized, and every multimodal raster is reproducible
+  and hash-linked to its source SVG.
+- [ ] An unchanged-source regeneration has passed the same behavior, visual,
+  responsive, and accessibility gates more than once for important units.
+
+If this checklist is too costly for a simple leaf, keep that leaf text-only. If
+a view, manifest, or prototype does not improve verified behavior per unit cost
+in clean-regeneration trials, do not standardize it.
 
 ---
 
