@@ -756,12 +756,7 @@ def _verify_generated_syntax(
         missing_symbols=[],
         message=(
             f"Generated output for {prompt_name} does not parse as valid "
-            f"{language or 'python'}: {first_error}. Output: {output_display}.\n"
-            f"Please check that your prompt's requested content actually matches "
-            f"its declared language -- {prompt_name} is declared as "
-            f"'{language or 'python'}' by its filename (the trailing "
-            f"_{language or 'python'} suffix), but the generated content isn't "
-            f"valid {language or 'python'}."
+            f"{language or 'python'}: {first_error}. Output: {output_display}."
         ),
         repair_directive=(
             f"The generated content is not valid {language or 'python'} "

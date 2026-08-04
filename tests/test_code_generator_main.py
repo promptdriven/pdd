@@ -3942,21 +3942,6 @@ class TestVerifyGeneratedSyntax:
                 output_path="game_web.py",
             )
 
-    def test_error_message_tells_user_to_check_prompt_language_match(self):
-        """The user-facing message (not just the agentic repair_directive) must
-        actively prompt the human to check their prompt content against the
-        declared language, not just report the parse failure."""
-        with pytest.raises(
-            ArchitectureConformanceError,
-            match=r"Please check that your prompt's requested content actually matches its declared language",
-        ):
-            _verify_generated_syntax(
-                generated_code="<!DOCTYPE html>\n<html><body>Hi</body></html>\n",
-                prompt_name="game_web_python.prompt",
-                language="python",
-                output_path="game_web.py",
-            )
-
     def test_runs_on_first_time_generation_with_no_existing_code(self):
         """The whole point of this check: it must not require existing_code.
 
