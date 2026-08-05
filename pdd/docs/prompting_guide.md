@@ -2379,9 +2379,83 @@ Key differences:
 
 ## Scoping & Modularity
 
-- One prompt → one file/module. If a prompt gets too large or brittle, split it into smaller prompts that compose via explicit interfaces.
+- For ordinary code, one prompt → one file/module. For frontend work where appearance matters, follow [Frontend Prompt and SVG Files](#frontend-prompt-and-svg-files): one prompt may describe a part of the interface that produces more than one code file, but each code file still has one generator.
 - Treat examples as interfaces: create a minimal runnable example demonstrating how the module is meant to be used.
 - Avoid "mega‑prompts" that try to implement an entire subsystem. Use the PDD graph of prompts instead. For how prompts compose via examples, see [Dependencies](#dependencies) in the Directives & Context chapter.
+
+---
+
+## Frontend Prompt and SVG Files
+
+For a simple component whose appearance is already defined by the shared design
+system, use an ordinary text prompt. When layout or appearance would be unclear
+or verbose in text, use a prompt file plus one or more SVG files. Do not add a
+YAML, JSON, manifest, schema, or index file for frontend requirements.
+
+### Write the Prompt File
+
+The prompt describes everything that cannot be learned safely from a picture:
+
+- what the component or screen is for and which code files it applies to;
+- what happens after clicks, keyboard actions, submission, cancellation, and
+  navigation;
+- loading, empty, error, success, selected, disabled, and pending states;
+- how the layout changes between screen sizes;
+- accessible names, focus behavior, keyboard order, announcements, and actions
+  that must not happen; and
+- which shared design-system values should be used instead of copied colors or
+  framework-specific class names.
+
+Include each SVG directly from the prompt. Immediately before the include,
+state the UI state, screen size, and how strictly the SVG must be followed:
+
+- **Example:** general direction only.
+- **Layout requirements:** preserve grouping, order, alignment, relative size,
+  spacing, visible text, and named design-system roles.
+- **Exact requirements:** preserve the stated measurements and values within a
+  stated tolerance. Use this only when exact matching is necessary.
+
+```xml
+<desktop_open_view>
+This SVG gives layout requirements for the open dialog at 1440x900. Preserve
+the region order, relative size, alignment, and named design-system roles.
+<include>prompts/ui/thumbnail-preview/views/open__1440x900.ui.svg</include>
+</desktop_open_view>
+
+<contract_rules>
+R1 (MUST): Clicking Close or pressing Escape closes the dialog and returns
+focus to the button that opened it.
+R2 (MUST NOT): Allow background controls to operate while the dialog is open.
+</contract_rules>
+```
+
+The existing generator prompt and `.pddrc` remain responsible for selecting the
+generated code files. A frontend prompt may be included by that generator, but
+it must not become a second generator for the same code file.
+
+### Create the SVG Files
+
+Create an SVG only for a state or screen size whose visual arrangement changes
+in an important way. Do not create one for every possible state or width.
+
+- Use a descriptive filename such as `open__1440x900.ui.svg`.
+- Add `title` and `desc` elements and stable, human-readable IDs for important
+  regions.
+- Use attributes such as `data-intent-role` and `data-token` when they clarify
+  a region or shared design-system value.
+- Do not embed event handlers, React structure, Tailwind classes, external
+  resources, base64 files, editor metadata, or hidden alternate designs.
+- Treat example copy and fallback colors as illustrative unless the prompt says
+  they are requirements.
+
+The SVG describes appearance; the prompt describes behavior and accessibility.
+The order of shapes in an SVG does not determine DOM or keyboard-focus order.
+
+### Verify the Generated Frontend
+
+Use behavior and accessibility tests for prompt requirements. Use browser tests
+at the pictured screen sizes and around layout-change widths. Cover long text,
+overflow, keyboard access, focus, and forbidden actions.
 
 ---
 
