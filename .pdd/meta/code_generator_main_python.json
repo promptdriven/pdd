@@ -1,13 +1,13 @@
 {
   "pdd_version": "0.0.309.dev0",
-  "timestamp": "2026-07-25T09:06:20.732938+00:00",
-  "command": "test",
-  "prompt_hash": "25847d1ba891e969d1a33ad76db0e1cfe17bf327cb4a5c8bf33fbc6f9ae70e14",
-  "code_hash": "a8b44cb709a1a52261dd6e972898bcc43d2801b69782d5316e8d049e463431aa",
+  "timestamp": "2026-08-05T22:47:53.000000+00:00",
+  "command": "manual",
+  "prompt_hash": "26ad91a7ed1d240d3df32de75314f6995f682c756a0c59cb784de920d8075cec",
+  "code_hash": "5be54e3eb70e13e62d9bc7a0ee9bf99069f6a44f48259d10c5962b0675b89d47",
   "example_hash": "4b66f24a1e2ac4195255738566b0cccdac0971523a245d3a8b78ad45d9e1a872",
-  "test_hash": "afcd5dca6eac4cf5b8add725cec086626afd031ce004c220cae1f53765167cc1",
+  "test_hash": "dac53e4c679cfb59244f6c23f36378287179bdf5672fa292c2b6a83c15357861",
   "test_files": {
-    "test_code_generator_main.py": "afcd5dca6eac4cf5b8add725cec086626afd031ce004c220cae1f53765167cc1"
+    "test_code_generator_main.py": "dac53e4c679cfb59244f6c23f36378287179bdf5672fa292c2b6a83c15357861"
   },
   "include_deps": {
     "pdd/construct_paths.py": "8970fc0540a8fe14bef8572f73cd417feb013d682fa927948c6df0f6e5cf4f5f",
@@ -16,7 +16,7 @@
     "pdd/code_generator.py": "cff13ded5ef3ecb004978f7f84a55e9cdfdfc6e4f44635acc303dfe1bf80fc04",
     "pdd/incremental_code_generator.py": "8dd5dd7f3016b8fae86056484fdc49b824405cdcd6911e8b8657d3e043b3b06d",
     "pdd/core/cloud.py": "ef6dab1b2ddbd4731fc33d8ba31789ac69e5058e987140f3f55e6f79d00ba951",
-    "pdd/code_generator_main.py": "a8b44cb709a1a52261dd6e972898bcc43d2801b69782d5316e8d049e463431aa",
+    "pdd/code_generator_main.py": "5be54e3eb70e13e62d9bc7a0ee9bf99069f6a44f48259d10c5962b0675b89d47",
     "pdd/python_env_detector.py": "cbe4044a83cd88a683f36d6ecfca245fef6a03ea2abc7f5c407636fccc051f35",
     "context/architecture_sync_example.py": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
     "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
