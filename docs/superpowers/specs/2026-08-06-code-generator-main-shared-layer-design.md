@@ -63,13 +63,41 @@ Prompts of 22–95 lines are the target shape. Not every file needs a prompt.
 
 ## Goals
 
-- Extract the conformance gate layer into `pdd/conformance/`, following `/core`.
+- **Split the prompt.** Decompose `code_generator_main_python.prompt` into a set
+  of small prompts under `pdd/prompts/conformance/`, following `/core`.
+- **Generate the code from those prompts** via `pdd sync`. The regenerated
+  modules must behave the same as today's monolith.
 - Reduce the orchestrator prompt from ~30k tokens to a set of small prompts.
-- Dissolve both circular-import workarounds.
-- **Preserve behavior exactly.** This is a pure decomposition: no functional
-  change, no signature change, no message-format change.
+- Dissolve both circular-import workarounds (a consequence of the above, not a
+  separate workstream).
+
+## Generation mode: prompt-only
+
+Decided: **prompts are the source of truth; `pdd sync` produces the `.py` files.**
+No hand-authoring of the generated modules, no verbatim code moves.
+
+This matches the repo norm — of 114 `.pdd/meta/*.json` fingerprints, 113 record a
+PDD-driven command (`fix` 31, `test` 28, `regenerate-public` 4, `sync`/`update` 6,
+`?` 40) and only `code_generator_main_python` records `manual`.
+
+**Accepted risk, recorded deliberately.** This module has never been produced by
+`pdd generate` in its current form — commit `16a48378c` states that
+`code_generator_main.py` and its prompt "were hand-authored together
+(LanguageMismatchError etc. never went through `pdd generate`)". Regeneration
+therefore asks the model to re-derive ~4,000 lines of intricate AST logic from
+prose: `__all__` source-order resolution, reverse-MRO dataclass `__init__`
+synthesis, byte-offset annotation splicing. The R5c section is 31,877 characters
+precisely because that logic resists specification.
+
+Drift, if it occurs, will be quiet rather than loud. The test suite is the only
+net, which is why the Verification section below is the load-bearing part of this
+plan and why per-module regeneration (not a big-bang sync) is required.
 
 ## Non-goals
+
+- Anything beyond splitting the prompt and regenerating from it. Consumer import
+  updates and test repointing are in scope only where the split strictly forces
+  them; they are not a separate refactor.
 
 - Splitting the `code_generator_main` function itself into pipeline phases.
   The `pdd split` proposal's top option (`full_decomposition_flat_siblings`,
@@ -363,7 +391,24 @@ New prompts use the `%` form with no YAML front-matter.
 
 ## Verification
 
-Behavior preservation is the acceptance criterion.
+Behavior preservation is the acceptance criterion. Because the code is
+**regenerated** rather than moved (see "Generation mode"), verification carries
+the whole weight of this plan.
+
+### Regeneration discipline
+
+- **One module at a time.** Generate, run the suite, commit. Never sync all nine
+  and debug the aggregate.
+- **Diff every generated module against the corresponding lines of the current
+  monolith** before accepting it. The symbol→module map below gives exact line
+  spans for this purpose; a semantic diff of each extracted function against its
+  original is the primary drift detector, because the test suite will not catch
+  every behavioral nuance in this code.
+- **Budget for retries.** `max_attempts: 3` in the `.pddrc` block; if a module
+  will not converge, that is a signal the prompt is under-specified, not a reason
+  to hand-patch the output.
+
+### Checks
 
 1. **Baseline recorded**: 259 passed, 1 skipped on the focused set
    (`test_issue_67`, `test_issue_67_expansion`, `test_issue_1558_semantic_contracts`,
