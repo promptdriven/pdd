@@ -323,7 +323,12 @@ Before the step loop begins, load `.pddrc` configuration to provide context keys
 % Dependency Context (Before Step 6)
 Before Step 6 runs, build a formatted module-dependency summary so the step can identify transitively affected modules. The graph must reflect declared architectural dependencies (`<pdd-dependency>` tags, as recorded in architecture.json) rather than the `<include>` context graph.
 
-`_build_dependency_context(architecture_path: Path, quiet: bool = False) -> str` produces this summary: each module's dependents, ordered by dependent count (top 30, at most 10 dependents per module), under a "## Module Dependency Graph" heading. It's stored in `context["dependency_context"]`, empty when architecture.json is missing or the graph can't be built.
+Helper: `_build_dependency_context(architecture_path: Path, quiet: bool = False) -> str`:
+- Build dependency graph using `build_dependency_graph_from_architecture(architecture_path)` — NOT the include-based `build_dependency_graph(prompts_dir)`
+- Compute reverse dependencies (module → modules that depend on it)
+- Format as "## Module Dependency Graph" with sections showing modules sorted by number of dependents (limit top 30, max 10 dependents shown per module)
+- Add to `context["dependency_context"]`
+- Return empty string if architecture_path doesn't exist or on any error
 
 Point it at `cwd / "architecture.json"` before Step 6 runs.
 
