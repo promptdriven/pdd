@@ -8729,7 +8729,8 @@ class TestLanguageMismatchErrorGate:
         """A prompt declared Python (by filename convention) whose LLM
         output is actually HTML MUST raise `LanguageMismatchError` before
         any file write, and MUST NOT reach the architecture conformance
-        gate."""
+        gate. The gate only runs on first generation, so the output path
+        must not already hold a file."""
         from pdd.code_generator_main import (
             LanguageMismatchError,
             ProseOutputError,
@@ -8743,8 +8744,7 @@ class TestLanguageMismatchErrorGate:
         prompt_file = temp_dir_setup["prompts_dir"] / "page_python.prompt"
         prompt_file.write_text("Generate an HTML page for the landing screen.")
         output_file = temp_dir_setup["output_dir"] / "page.py"
-        existing_code = "def render():\n    return '<div></div>'\n"
-        output_file.write_text(existing_code)
+        assert not output_file.exists()
 
         html_output = "<!DOCTYPE html>\n<html>\n<body>Hello</body>\n</html>\n"
         mock_construct_paths_fixture.return_value = (
@@ -8777,8 +8777,49 @@ class TestLanguageMismatchErrorGate:
         assert "Syntax error:" in msg
         assert "Raw output excerpt:" in msg
 
-        # The gate fires before the writer, so the original file is untouched.
-        assert output_file.read_text(encoding="utf-8") == existing_code
+        # The gate fires before the writer, so no file is created.
+        assert not output_file.exists()
+
+    def test_code_generator_main_language_gate_skips_regeneration_of_existing_file(
+        self,
+        mock_ctx,
+        temp_dir_setup,
+        mock_construct_paths_fixture,
+        mock_local_generator_fixture,
+        mock_env_vars,
+    ):
+        """The gate only runs on first generation. When a real file is
+        already at the output path, the same non-Python output must NOT
+        raise `LanguageMismatchError` — the public-surface gate downstream
+        owns that case."""
+        from pdd.code_generator_main import (
+            LanguageMismatchError,
+            code_generator_main,
+        )
+
+        mock_ctx.obj['local'] = True
+        prompt_file = temp_dir_setup["prompts_dir"] / "page_python.prompt"
+        prompt_file.write_text("Generate an HTML page for the landing screen.")
+        output_file = temp_dir_setup["output_dir"] / "page.py"
+        output_file.write_text("def render():\n    return '<div></div>'\n")
+
+        html_output = "<!DOCTYPE html>\n<html>\n<body>Hello</body>\n</html>\n"
+        mock_construct_paths_fixture.return_value = (
+            {},
+            {"prompt_file": "Generate an HTML page for the landing screen."},
+            {"output": str(output_file)},
+            "python",
+        )
+        mock_local_generator_fixture.return_value = (html_output, 0.001, "mock_model_v1")
+
+        with patch(
+            "pdd.code_generator_main.is_git_repository", return_value=False
+        ), pytest.raises(Exception) as excinfo:
+            code_generator_main(
+                mock_ctx, str(prompt_file), str(output_file), None, False
+            )
+
+        assert not isinstance(excinfo.value, LanguageMismatchError)
 
     def test_code_generator_main_language_gate_is_noop_for_non_python_declared_language(
         self,
