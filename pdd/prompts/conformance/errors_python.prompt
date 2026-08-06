@@ -1,0 +1,179 @@
+<pdd-reason>Typed exceptions raised by the PDD conformance gates, shared by sync_main, sync_orchestration, one_session_sync, cmd_test_main and agentic_test_generate.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "ArchitectureConformanceError", "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)", "returns": "ArchitectureConformanceError"},
+      {"name": "PublicSurfaceRegressionError", "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None, signature_details: Optional[List[Tuple[str, str, str, str]]] = None)", "returns": "PublicSurfaceRegressionError"},
+      {"name": "TestChurnError", "signature": "(prompt_name: str, output_path: str, churn_ratio: float, threshold: float, pre_line_count: int, post_line_count: int, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None, adopted_human: bool = False)", "returns": "TestChurnError"},
+      {"name": "ProseOutputError", "signature": "(prompt_name: str, output_path: str, language: str, model_name: str = \"unknown\", total_cost: float = 0.0, raw_output: Optional[str] = None, extractor_result: str = \"empty\")", "returns": "ProseOutputError"}
+    ]
+  }
+}
+</pdd-interface>
+
+# prompts/conformance/errors_python.prompt
+% You are an expert Python engineer. Your goal is to write the typed conformance
+% exceptions for the PDD CLI in `pdd/conformance/errors.py`.
+
+% Role & Scope
+  Defines the four `click.UsageError` subclasses raised by the PDD conformance
+  gates, plus the churn-nonce provenance helper and two shared module constants.
+  This module contains NO gate logic - only the exception types, their structured
+  attributes, their diagnostic message formats, and their repair directives.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+
+  1. **Peer hierarchy**: all four classes subclass `click.UsageError` directly.
+     NONE is a subclass of another - `ProseOutputError` is explicitly a PEER of
+     `ArchitectureConformanceError`, not a subclass. Existing call sites that
+     catch `click.UsageError` must keep working unchanged.
+
+  2. **Module constants**:
+     - `_LANGUAGE_TEST_FILE_EXTS: Tuple[str, ...]` seeded with `.py`, `.go`,
+       `.rb`, `.rs`, `.exs`, `.ex`, `.dart`, `.clj`, `.cljc`, `.lua`, `.php`.
+       Append here when adding a language that uses the `_test.<ext>` convention.
+     - `PROSE_OUTPUT_REPAIR_DIRECTIVE`, the exact string:
+       *"The previous response contained no extractable code. Return the complete
+       source file only, inside a single code block. Do not include any planning
+       text, prose explanation, or partial snippets outside the code block."*
+
+  3. **`ArchitectureConformanceError`** - raised when generated code violates the
+     architecture contract. Constructor parameters, in this order:
+     `prompt_name: str`, `output_path: str`, `architecture_entry: Dict[str, Any]`,
+     `expected_symbols: List[str]`, `found_symbols: List[str]`,
+     `missing_symbols: List[str]`, `message: Optional[str] = None`,
+     `total_cost: float = 0.0`, `model_name: str = "unknown"`,
+     `repair_directive: Optional[str] = None`.
+     - `output_path`, `architecture_entry` and `model_name` coerce falsy values to
+       `""`, `{}` and `"unknown"` respectively; `total_cost` coerces to `float`.
+       The three symbol lists are copied with `list(...)`.
+     - When `message is None`, build:
+       `Architecture conformance error for {prompt_name}: declared symbols missing
+       from generated code: {', '.join(missing_symbols)}. Output: {output_path or
+       '<unknown>'}. Expected: {expected_symbols}. Found: {found_symbols}.`
+     - `repair_directive` property: return the constructor override when given.
+       Otherwise emit, one per line: a header naming the prompt and stating the
+       generated code is missing required exports declared in architecture.json;
+       the literal line `Required missing exports:`; one `- <symbol>` per missing
+       symbol; a blank line; the literal
+       `Do not modify architecture.json. Do not remove existing valid exports.`;
+       then, only when non-empty, `Expected interface symbols: ...` and
+       `Currently exported symbols: ...`.
+
+  4. **`PublicSurfaceRegressionError`** - raised when generation removes public
+     symbols from an existing module. Constructor parameters, in this order:
+     `prompt_name: str`, `output_path: str`, `removed_symbols: List[str]`,
+     `pre_surface_size: int`, `post_surface_size: int`,
+     `changed_signatures: Optional[List[str]] = None`, `total_cost: float = 0.0`,
+     `model_name: str = "unknown"`, `repair_directive: Optional[str] = None`,
+     `signature_details: Optional[List[Tuple[str, str, str, str]]] = None`.
+     - The positional order MUST match exactly: call sites predating the signature
+       gate pass only removals plus sizes positionally.
+     - `signature_details` carries `(symbol, expected_entry, actual_entry, source)`
+       tuples, where `source` is `"pdd-interface"` when the expected signature came
+       from the prompt's declaration.
+     - `repair_directive` property: return the override when given. Otherwise start
+       with `Public surface regression repair required.`; when there are removals,
+       add `Restore these public symbols from the existing module:` followed by one
+       `- <symbol>` per removal.
+     - For `signature_details` entries whose `source` is `"pdd-interface"`, inject
+       the declared signature as a VERBATIM hard constraint (#1968): instruct the
+       model to emit each declared signature exactly, reproduce the declared
+       annotation text token-for-token, never substitute an equivalent-but-
+       differently-spelled type (keep `object` as `object`; never emit `Any` where
+       the declaration says `object`), and never broaden a declared parameter's
+       type with `|` union members the declaration omits. Emit one bullet per
+       detail naming the symbol, its declared signature and what was found.
+     - Then add declaration-aware advice: if a declared parameter change is
+       intended, edit the prompt's `<pdd-interface>` declaration - the declaration
+       is the contract for declared symbols. Do NOT advise a `BREAKING-CHANGE`
+       marker here; for declared symbols it relaxes only the un-declarable
+       binding-kind/async.
+     - Any `changed_signatures` NOT covered by a declared detail get
+       `Restore compatible signatures for these public symbols:` plus one bullet each.
+     - Close with a line stating that backward-compatible public helpers must be
+       preserved unless the prompt lists the intended removals with
+       `BREAKING-CHANGE: remove <symbol>`.
+
+  5. **`TestChurnError`** - raised when generation rewrites too much of an existing
+     test file. Constructor parameters, in this order: `prompt_name: str`,
+     `output_path: str`, `churn_ratio: float`, `threshold: float`,
+     `pre_line_count: int`, `post_line_count: int`, `total_cost: float = 0.0`,
+     `model_name: str = "unknown"`, `repair_directive: Optional[str] = None`,
+     `adopted_human: bool = False`.
+     - `adopted_human` (#1903 §B.4) is True only when the test was ADOPTED from an
+       existing HUMAN co-located test, unpinned, as determined by the caller at
+       path resolution BEFORE generation. Default False keeps the strict hard-fail.
+     - `repair_directive` property: return the override when given. Otherwise emit
+       exactly four lines: `Test churn repair required.`; a bullet to keep the
+       existing broad test coverage in the output path (or `<unknown>`); a bullet
+       to reduce unrelated rewrites below the configured churn threshold, quoting
+       both the threshold and the current churn to two decimal places; and a bullet
+       to add or update only tests needed for the prompt change.
+
+  6. **`ProseOutputError`** (#1649) - raised when generation produced no extractable
+     source code. Constructor parameters, in this order: `prompt_name: str`,
+     `output_path: str`, `language: str`, `model_name: str = "unknown"`,
+     `total_cost: float = 0.0`, `raw_output: Optional[str] = None`,
+     `extractor_result: str = "empty"`.
+     - Derive a bounded `raw_output_excerpt`: strip the raw text; use the literal
+       `<empty>` when nothing remains; otherwise truncate beyond 240 characters to
+       the first 237 followed by `...`.
+     - `repair_directive` property returns `PROSE_OUTPUT_REPAIR_DIRECTIVE`.
+
+  7. **Churn nonce** - `_CHURN_NONCE_ENV = "PDD_CHURN_NONCE_FD"`, plus module
+     globals `_CHURN_NONCE_CACHE: Optional[str] = None` and
+     `_CHURN_NONCE_READ = False`, and `_read_churn_nonce() -> str`:
+     - The parent sync runner hands this child a secret provenance nonce over a
+       NON-inherited pipe FD whose number is named by `PDD_CHURN_NONCE_FD`. Under
+       the default `close_fds`, grandchild test subprocesses do not inherit the FD,
+       so untrusted project test code cannot learn the nonce even though it can
+       read the env var. This lets the parent authenticate a churn block as
+       genuinely PDD-emitted rather than one a hostile test printed to stdout.
+     - Read ONCE (the pipe yields EOF afterwards) and cache; subsequent calls
+       return the cached value. Set the read flag BEFORE attempting the read.
+     - Read up to 256 bytes, decode ASCII ignoring errors, strip. Accept the token
+       only when it fully matches `[0-9a-f]{8,128}`, so a coincidental FD-number
+       collision cannot inject arbitrary bytes as a valid nonce.
+     - Return `""` when the env var is absent or on ANY `OSError`/`ValueError`.
+       Standalone `pdd test` / `pdd sync` have no channel and never never-block.
+
+% Message-format contract - CROSS-PROCESS, DO NOT CHANGE
+  `agentic_sync_runner` detects these failures by string-prefix scanning the
+  child process's stdout/stderr rather than importing the classes. The prefixes
+  and field lines below are a parsed contract and MUST be byte-identical.
+
+  - `Architecture conformance error for {prompt_name}:` (single line, see 3).
+  - `Public surface regression for {prompt_name}:` followed by, each on its own
+    line: `removed: `, `signature_changed: ` (both `<none>` when empty, else
+    comma-joined), `output: `, `pre_surface_size: `, `post_surface_size: `.
+    THEN append - never alter the lines above - one
+    `signature_detail: <json>` line per `signature_details` tuple, where `<json>`
+    is a compact one-line `json.dumps` of keys `symbol`, `expected`, `actual`,
+    `source`. JSON encoding keeps a signature containing PEP-604 `|` unions or
+    quoted defaults from corrupting the parser
+    (`agentic_sync_runner._parse_signature_detail_lines`).
+  - `Test churn threshold exceeded for {prompt_name}:` followed by, each on its
+    own line: `ratio: ` and `threshold: ` (two decimal places), `output: `,
+    `pre_line_count: `, `post_line_count: `, `adopted: ` (lowercased bool).
+    Append `\nnonce: <token>` ONLY when `_read_churn_nonce()` returns a token.
+  - `Generation output extraction failure for {prompt_name}:` followed by, each on
+    its own line: `model_name: `, `language: `, `output: `, `Extractor result: `,
+    `Raw output excerpt: `.
+
+% Dependencies
+  - Imports `click`, `json`, `os`, `re`.
+  - Imports `Any`, `Dict`, `List`, `Optional`, `Tuple` from `typing`.
+
+% Instructions
+  - Every other conformance module imports this one. It must import none of them.
+  - Use `output_path or "<unknown>"` for the displayed path in every message.
+  - Each class stores an optional constructor `repair_directive` override on a
+    private attribute and returns it from the property when set.
+
+% Deliverables
+  - Code: `pdd/conformance/errors.py`
