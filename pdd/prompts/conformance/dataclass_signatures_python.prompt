@@ -1,0 +1,127 @@
+<pdd-reason>Synthesises the constructor signature of a @dataclass that has no explicit __init__, so the signature gate can detect a field change that alters the runtime constructor ABI.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "_is_dataclass_decorator", "signature": "(decorator: ast.AST) -> bool", "returns": "bool"},
+      {"name": "_dataclass_decorator_is_kw_only", "signature": "(decorator: ast.AST) -> bool", "returns": "bool"},
+      {"name": "_dataclass_decorator_synthesizes_init", "signature": "(decorator: ast.AST) -> bool", "returns": "bool"},
+      {"name": "_is_kw_only_sentinel", "signature": "(annotation: Optional[ast.AST]) -> bool", "returns": "bool"},
+      {"name": "_dataclass_field_call_is_init_false", "signature": "(value: Optional[ast.AST]) -> bool", "returns": "bool"},
+      {"name": "_collect_dataclass_own_parts", "signature": "(class_node: ast.ClassDef) -> List[str]", "returns": "List[str]"},
+      {"name": "_part_field_name", "signature": "(part: str) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_collect_dataclass_inherited_parts", "signature": "(class_node: ast.ClassDef, class_defs: Optional[Dict[str, ast.ClassDef]], imported_names: Optional[Set[str]], visited: frozenset) -> List[str]", "returns": "List[str]"},
+      {"name": "_synthesize_dataclass_init_signature", "signature": "(class_node: ast.ClassDef, class_defs: Optional[Dict[str, ast.ClassDef]] = None, imported_names: Optional[Set[str]] = None) -> Optional[str]", "returns": "Optional[str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+# prompts/conformance/dataclass_signatures_python.prompt
+% You are an expert Python engineer. Your goal is to write the `@dataclass`
+% constructor synthesiser in `pdd/conformance/dataclass_signatures.py`.
+
+% Role & Scope
+  A `@dataclass` without an explicit `__init__` still has a constructor - the
+  decorator generates one from the annotated class-body fields. The signature gate
+  must therefore reconstruct that signature statically, or a field rename would
+  silently change the constructor ABI without diffing. Stdlib `ast` only; never
+  import or execute the analysed code.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+
+  1. **Decorator recognition** - `_is_dataclass_decorator` accepts all four forms:
+     bare `@dataclass`, called `@dataclass(...)`, and the attribute variants
+     `@dataclasses.dataclass` / `@dataclasses.dataclass(...)`.
+
+  2. **`_dataclass_decorator_is_kw_only`** - `True` only for a Call decorator
+     carrying the keyword `kw_only=True` (both the bare and `dataclasses.`
+     attribute forms). When true, the synthesised signature emits a SINGLE leading
+     `*` so every field becomes keyword-only.
+
+  3. **`_dataclass_decorator_synthesizes_init`** - `False` when the decorator
+     carries `init=False`, else `True`. This governs whether the class gets its
+     OWN synthesised `__init__`; it does NOT stop the class contributing fields to
+     a derived dataclass (see 8).
+
+  4. **`_is_kw_only_sentinel(annotation)`** - recognises the in-body `_: KW_ONLY`
+     marker, both as a bare `KW_ONLY` Name and as a `dataclasses.KW_ONLY`
+     Attribute. It MUST be checked BEFORE the underscore-prefix skip, since the
+     conventional spelling of the sentinel field is `_`.
+
+  5. **`_dataclass_field_call_is_init_false(value)`** - `True` only when the
+     default is a `field(init=False, ...)` or `dataclasses.field(init=False, ...)`
+     call. `init=True`, a missing `init` kwarg, or any non-`field` call keeps the
+     field IN the synth.
+
+  6. **`_collect_dataclass_own_parts(class_node)`** - walk the class body in
+     SOURCE ORDER (the stdlib's own order) and emit one token per constructor
+     parameter, plus a `"*"` token at the position of a `KW_ONLY` sentinel.
+     - Only `ast.AnnAssign` entries are fields.
+     - The `KW_ONLY` sentinel emits `"*"` at its position: fields before it stay
+       positional, fields after become keyword-only.
+     - `InitVar[...]` fields ARE included - they are real constructor parameters
+       even though not stored as instance attributes. Emitting the verbatim
+       annotation text makes an `InitVar[int]` <-> `int` flip diff naturally.
+     - `ClassVar[...]` fields are EXCLUDED per PEP 557.
+     - Fields whose default is `field(init=False, ...)` are EXCLUDED, because the
+       runtime constructor omits them.
+     - Each emitted token carries the field name, its verbatim annotation text and
+       its default text, so a change in any of the three diffs.
+
+  7. **`_synthesize_dataclass_init_signature(class_node, class_defs=None,
+     imported_names=None) -> Optional[str]`** - assemble the final signature.
+     - An explicit `__init__` in the class body ALWAYS wins over synthesis;
+       return `None` so the caller uses the real one.
+     - Merge inherited parts first (see 8), then this class's own parts.
+     - When the decorator carries `kw_only=True`, emit ONE leading `*`.
+     - When BOTH the decorator flag and an in-body sentinel are present, emit only
+       ONE `*` - the decorator wins.
+     - A trailing `*` with no keyword-only fields after it MUST be stripped, so
+       `(*)` never appears in the output.
+
+  8. **Inheritance is REVERSE-MRO**, matching Python's `@dataclass`:
+     `__dataclass_fields__` is populated by walking bases right-to-left so later
+     bases overwrite earlier ones in dict-insertion order.
+     - `_collect_dataclass_inherited_parts` walks `class_node.bases` in REVERSED
+       order. For each `Name` base resolving to a same-module `ClassDef` that
+       carries ANY dataclass decorator, recursively gather ITS inherited parts
+       first, then ITS own parts.
+     - The outer merge appends the class's OWN fields last. So for
+       `class C(A, B)` with one field each the synth is **`(b, a, c)`**.
+     - A base decorated `@dataclass(init=False)` STILL contributes its annotated
+       fields. `init=False` suppresses only that base's OWN `__init__` synthesis,
+       while its fields still live in `__dataclass_fields__` for derived classes.
+       Walk a base's fields whenever it carries ANY dataclass decorator.
+     - A base that does not resolve to a same-module `ClassDef` - a cross-module
+       import, or an attribute-form reference like `pkg.Base` - emits a single
+       `"[inherited_unresolved]"` token, so local field changes still diff while we
+       do not claim authoritative knowledge of the imported base. A free name that
+       is neither a same-module class nor imported (e.g. the `object` builtin)
+       contributes nothing.
+     - A non-dataclass base contributes no fields.
+     - The `visited` frozenset guards self-reference cycles: `class A(A)` is
+       illegal at runtime but the AST permits it, so bail out gracefully rather
+       than recursing forever.
+
+  9. **Redeclaration keeps the base's SLOT.** When a derived class redeclares a
+     base's field name, the derived annotation/default text wins but the field's
+     POSITION is the base's original slot - dict insertion-order semantics.
+     `_part_field_name(part)` extracts the field name from a synth token so the
+     merge can detect and apply this.
+
+% Dependencies
+  - Imports `ast`.
+  - Imports `Dict`, `List`, `Optional`, `Set` from `typing`.
+
+% Instructions
+  - This module is called by `signatures.py`; it must not import it.
+  - Known limitation, documented rather than handled: `KW_ONLY` sentinel
+    propagation across an inheritance boundary is not modelled - a derived class
+    re-emits its own marker.
+
+% Deliverables
+  - Code: `pdd/conformance/dataclass_signatures.py`

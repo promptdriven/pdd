@@ -12377,5 +12377,69 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Static synthesis of the @dataclass constructor signature.",
+    "description": "Reconstructs the __init__ a @dataclass decorator would generate, so a field change that alters the constructor ABI diffs in the signature gate. Handles kw_only=True and the in-body _: KW_ONLY sentinel (recognised before the underscore skip, with the decorator winning when both are present and a trailing bare * stripped), includes InitVar fields, excludes ClassVar and field(init=False) fields, and merges inherited fields in REVERSE-MRO order so class C(A, B) synthesises (b, a, c). A base decorated @dataclass(init=False) still contributes its fields; cross-module bases emit a single [inherited_unresolved] token; a derived redeclaration wins on text but keeps the base's slot. Extracted from code_generator_main.",
+    "dependencies": [],
+    "priority": 6,
+    "filename": "conformance/dataclass_signatures_python.prompt",
+    "filepath": "pdd/conformance/dataclass_signatures.py",
+    "tags": [
+      "conformance",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_is_dataclass_decorator",
+            "signature": "(decorator: ast.AST) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_dataclass_decorator_is_kw_only",
+            "signature": "(decorator: ast.AST) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_dataclass_decorator_synthesizes_init",
+            "signature": "(decorator: ast.AST) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_is_kw_only_sentinel",
+            "signature": "(annotation: Optional[ast.AST]) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_dataclass_field_call_is_init_false",
+            "signature": "(value: Optional[ast.AST]) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_collect_dataclass_own_parts",
+            "signature": "(class_node: ast.ClassDef) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "_part_field_name",
+            "signature": "(part: str) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "_collect_dataclass_inherited_parts",
+            "signature": "(class_node: ast.ClassDef, class_defs: Optional[Dict[str, ast.ClassDef]], imported_names: Optional[Set[str]], visited: frozenset) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "_synthesize_dataclass_init_signature",
+            "signature": "(class_node: ast.ClassDef, class_defs: Optional[Dict[str, ast.ClassDef]] = None, imported_names: Optional[Set[str]] = None) -> Optional[str]",
+            "returns": "Optional[str]"
+          }
+        ]
+      }
+    }
   }
 ]
