@@ -12162,5 +12162,69 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Shared BREAKING-CHANGE directive grammar and PDD_* environment-flag helpers.",
+    "description": "Parses anchored BREAKING-CHANGE: directives from the prompt BODY (front matter is stripped first so metadata cannot whitelist a removal), yielding the removal allow-list and the signature-change allow-list used by the public-surface gate. Buried mid-line marker mentions and bare markers with no named symbols do not disarm any gate; symbol tokens must be bare or wrapped in matching backticks/quotes, so prose tokens are rejected. Also owns _env_flag_enabled and _parse_llm_bool. Extracted from code_generator_main.",
+    "dependencies": [],
+    "priority": 5,
+    "filename": "conformance/directives_python.prompt",
+    "filepath": "pdd/conformance/directives.py",
+    "tags": [
+      "conformance",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_parse_llm_bool",
+            "signature": "(value: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_env_flag_enabled",
+            "signature": "(name: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_strip_yaml_front_matter",
+            "signature": "(prompt_content: Optional[str]) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "_prompt_has_breaking_change_marker",
+            "signature": "(prompt_content: Optional[str]) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_iter_breaking_change_directives",
+            "signature": "(prompt_content: Optional[str]) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "_parse_breaking_change_symbols",
+            "signature": "(directive_tail: str) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_prompt_breaking_change_removed_symbols",
+            "signature": "(prompt_content: Optional[str]) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_prompt_breaking_change_signature_symbols",
+            "signature": "(prompt_content: Optional[str]) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_prompt_allows_breaking_change",
+            "signature": "(prompt_content: Optional[str]) -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    }
   }
 ]
