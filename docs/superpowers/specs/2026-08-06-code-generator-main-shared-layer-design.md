@@ -99,23 +99,46 @@ pdd/conformance/
 
 pdd/prompts/conformance/
     <one *_python.prompt per module above, except __init__.py>
+
+context/conformance/
+    <one *_example.py per module, where warranted>
+
+tests/conformance/
+    <one test_*.py per module, where warranted>
 ```
+
+This mirrors `/core` exactly: `pdd/core/` + `pdd/prompts/core/` +
+`context/core/` + `tests/core/`, with a `core:` block in `.pddrc` binding them
+(`generate_output_path`, `test_output_path`, `example_output_path`, `prompts_dir`).
 
 `pdd/code_generator_main.py` retains ~1,900 lines: the orchestrator function,
 git helpers, front-matter/var expansion, and wiring.
 
 ### Consumer-facing API
 
-Four entry points, exposed via `pdd/conformance/__init__.py`. Internals are
-flat sibling modules per the `/core` pattern, but consumers import from the
-package, so the internal file boundaries can move later without breaking them.
+Follows `pdd/core/`'s actual convention, which is **direct module imports**, with
+`__init__.py` re-exporting only the hottest module's surface.
 
-| Entry point | Backed by |
+`pdd/core/__init__.py` re-exports `.cloud` symbols and nothing else; every other
+core module is imported by path (`from .core.errors import handle_error`,
+`from .core.llm_trace import …`, `from .core.cli import …`, `from .core.utils import …`).
+Even `cloud` is mostly imported directly — 12 `from .core.cloud import` vs a
+handful through the package.
+
+We mirror that: `errors.py` is our `cloud.py` (imported by 5 consumers, the widest
+surface), so `pdd/conformance/__init__.py` re-exports the 5 typed exceptions with
+an explicit `__all__`. Everything else is imported by path.
+
+| Consumer import | Provides |
 |---|---|
-| the 5 typed exceptions | `errors.py` |
-| `_verify_test_churn` and its predicates | `test_churn.py` |
-| `_verify_public_surface_regression` | `declared_surface.py` (+ `surface`, `signatures`, `dataclass_signatures`, `annotation_reconcile`) |
-| `_verify_architecture_conformance`, `_verify_pdd_interface_signatures` | `interface_check.py` |
+| `from .conformance import TestChurnError, …` | the 5 typed exceptions (via `__init__.py`) |
+| `from .conformance.test_churn import _verify_test_churn, …` | churn gate + predicates |
+| `from .conformance.declared_surface import _verify_public_surface_regression` | public-surface gate |
+| `from .conformance.interface_check import _verify_architecture_conformance, …` | architecture + `pdd-interface` checks |
+
+Trade-off, accepted: direct imports bind consumers to file names, so moving a
+symbol between conformance modules later is a breaking change for them. This is
+the cost of matching the house pattern, and `/core` has lived with it fine.
 
 ### Module contents
 
@@ -310,8 +333,33 @@ Per new prompt, mirroring `pdd/core/`:
       max_attempts: 3
 ```
 
-4. `project_dependencies.csv` rows.
+4. `context/conformance/<name>_example.py` — a runnable example, per
+   `context/core/*_example.py`. **These, not the `pdd/` sources, are what
+   `project_dependencies.csv` tracks**: the CSV has 0 rows starting `pdd/` and
+   carries `context/core/cli_example.py`, `context/core/errors_example.py`, etc.
+   Add a CSV row per example.
 5. `pdd/conformance/__init__.py` — hand-written, no prompt, per `pdd/core/__init__.py`.
+6. `tests/conformance/test_<name>.py` where warranted.
+
+Coverage of 4–6 is partial in `/core` and need not be exhaustive here: 9 modules,
+7 prompts, 6 examples, 3 test files, 1 hand-written `__init__.py`. Examples and
+tests are added where they earn their place, not mechanically per module.
+
+### Prompt style
+
+Follow the `/core` prompt form, which differs from today's
+`code_generator_main_python.prompt`:
+
+| | `/core` prompts | `code_generator_main_python.prompt` |
+|---|---|---|
+| YAML front-matter | none | `--- name: … language: Python ---` |
+| Section markers | `% Requirements`, `% Deliverables` | `# Requirements`, `# Deliverables` |
+| Preamble | `<include>context/python_preamble.prompt</include>` in all 7 | present |
+| `<pdd-reason>` / `<pdd-interface>` | both, at top | both |
+| `<pdd-dependency>` | only where needed (3 of 7) | 11 declared |
+| Closing | `% Deliverables\n  - Code: pdd/core/<name>.py` | numbered deliverables list |
+
+New prompts use the `%` form with no YAML front-matter.
 
 ## Verification
 
@@ -352,16 +400,7 @@ proposal estimated 239 of 359 tests move out, leaving 3,500–4,500 lines).
 
 ## Related defects
 
-Found while running `pdd split --intent reduce --propose-only` ($12.08, failed at
-step 5/15):
-
-1. **Step-4 output capture loses the head of multi-part agent output.** The prompt
-   requires `OPTIONS_BEGIN / OPTIONS_END / SELECTED_OPTION_BEGIN / SELECTED_OPTION_END`.
-   The persisted output in `.pdd/split-state/split_state_87871.json` contains only
-   `SELECTED_OPTION_END` and begins mid-JSON-string. Not PDD's own sanitizer —
-   `_sanitize_comment_body` keeps the head and appends `…[truncated]`, neither of
-   which is present.
-2. **A parse failure is unrecoverable.** `agentic_split_orchestrator.py:1717` warns
-   and `break`s; the surrounding retry loop only retries the shared-layer gate. No
-   retry, no raw-output dump, despite the state file holding the content — the
-   proposal was recoverable by hand afterwards.
+The `pdd split` option-parsing failure encountered while producing this spec is
+tracked separately as
+[#2372](https://github.com/promptdriven/pdd/issues/2372). Not a blocker for this
+work.
