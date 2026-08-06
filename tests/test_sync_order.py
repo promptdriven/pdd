@@ -1,3 +1,4 @@
+import json
 import os
 import stat
 import pytest
@@ -783,3 +784,61 @@ def test_issue_1048_mixed_modules_quoting_preserved(tmp_path):
         expected_quoted = shlex.quote(module)
         assert expected_quoted in content, \
             f"Bug #1048: Module {module!r} not shell-quoted. Expected {expected_quoted} in script."
+
+
+
+def test_build_dependency_graph_from_architecture_valid_array(tmp_path):
+    """Test building a dependency graph from a bare array architecture.json."""
+    arch_file = tmp_path / "architecture.json"
+    arch_content = [
+        {
+            "filename": "auth_python.prompt",
+            "dependencies": ["log_python.prompt"]
+        },
+        {
+            "filename": "log_python.prompt",
+            "dependencies": []
+        }
+    ]
+    arch_file.write_text(json.dumps(arch_content), encoding="utf-8")
+    
+    graph = sync_order.build_dependency_graph_from_architecture(arch_file)
+    assert "auth" in graph
+    assert "log" in graph
+    assert graph["auth"] == ["log"]
+    assert graph["log"] == []
+
+
+def test_build_dependency_graph_from_architecture_valid_object(tmp_path):
+    """Test building a dependency graph from an object format with 'modules' key."""
+    arch_file = tmp_path / "architecture.json"
+    arch_content = {
+        "modules": [
+            {
+                "filename": "auth_python.prompt",
+                "dependencies": ["log_python.prompt", "db_python.prompt"]
+            },
+            {
+                "filename": "log_python.prompt",
+                "dependencies": []
+            }
+        ]
+    }
+    arch_file.write_text(json.dumps(arch_content), encoding="utf-8")
+    
+    graph = sync_order.build_dependency_graph_from_architecture(arch_file)
+    assert "auth" in graph
+    assert "log" in graph
+    assert "db" in graph  # Discovered as dependency
+    assert sorted(graph["auth"]) == ["db", "log"]
+
+
+def test_build_dependency_graph_from_architecture_missing_or_invalid(tmp_path, mock_logger):
+    """Test behavior when architecture file is missing, can't be parsed, or is invalid."""
+    missing_file = tmp_path / "missing_architecture.json"
+    assert sync_order.build_dependency_graph_from_architecture(missing_file) == {}
+    
+    bad_file = tmp_path / "bad.json"
+    bad_file.write_text("{invalid json", encoding="utf-8")
+    assert sync_order.build_dependency_graph_from_architecture(bad_file) == {}
+    mock_logger.warning.assert_called()
