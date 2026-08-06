@@ -40,6 +40,16 @@ A utility module that parses `<include>` tags from prompt files, builds a depend
    - Skip self-references (module including its own example)
    - Return empty dict if prompts_dir doesn't exist
 
+3a. Function: build_dependency_graph_from_architecture(architecture_path: Path) -> Dict[str, List[str]]
+   - Build the same `module_name -> [dependency module names]` adjacency-list shape as `build_dependency_graph()`, but sourced from architecture.json's `dependencies` field (populated by `architecture_sync.py` from `<pdd-dependency>` tags) instead of scanning `<include>` tags.
+   - Rationale (issue #1807): `<include>` tags give the LLM context and are not architectural dependencies — a module that `<include>`s another module's example file purely for style reference is not really coupled to it, and a module that truly depends on another via `<pdd-dependency>` may never `<include>` it at all. Callers that need "what will need updating if I change this module" (e.g. `pdd change` Step 6) must read the declared dependency, not the include graph.
+   - Return `{}` if `architecture_path` doesn't exist, can't be read, or contains invalid JSON (log a warning via the module logger, never raise).
+   - Parse module entries tolerantly via `pdd.architecture_registry.extract_modules()` (accepts both the bare-array and `{"modules": [...]}` architecture.json formats, mirrors `discover_associated_documents()`'s handling). Return `{}` if no entries are found.
+   - For each entry, read its `filename` and `dependencies` (default to `[]` when `dependencies` is absent or not a list) and map both through `extract_module_from_include()` to get module names — the same normalization `build_dependency_graph()` applies to include paths. Skip entries whose `filename` doesn't map to a module name.
+   - Ensure every discovered module is a key in the returned graph even when its dependency list is empty (mirrors `build_dependency_graph()`'s "ensure module exists in graph" behavior).
+   - Skip self-references and any dependency that fails to map to a module name.
+   - This is an independent, architecture.json-only view — it does not need to agree with `build_dependency_graph()`'s include-based graph, and callers should not mix the two graphs together.
+
 4. Function: topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[str]]]
    - Implement Kahn's algorithm for topological sorting
    - Return tuple of (sorted_list, cycles_detected)
