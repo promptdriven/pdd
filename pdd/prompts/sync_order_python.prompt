@@ -41,7 +41,7 @@ A utility module that parses `<include>` tags from prompt files, builds a depend
    - Return empty dict if prompts_dir doesn't exist
 
 3a. Function: build_dependency_graph_from_architecture(architecture_path: Path) -> Dict[str, List[str]]
-   - Same shape and module-naming as `build_dependency_graph()`, but reads architecture.json's `dependencies` field (from `<pdd-dependency>` tags, accepting a bare array or `{"modules": [...]}`) instead of scanning `<include>` tags; every module is a key even with no dependencies, self-dependencies excluded
+   - Returns module_name -> [dependency module names], built from architecture.json's `dependencies` field (populated from `<pdd-dependency>` tags), accepting a bare array or `{"modules": [...]}`; every module is a key even with no dependencies, self-dependencies excluded; module names derived from filenames via `extract_module_from_include()`
    - Missing file, unreadable file, or invalid JSON returns an empty dict rather than raising
 
 
