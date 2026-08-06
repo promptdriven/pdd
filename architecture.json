@@ -12418,5 +12418,101 @@
         ]
       }
     }
+  },
+  {
+    "reason": "The public-surface regression gate (#1012, #1900).",
+    "description": "Rejects a regeneration that removes or reshapes public API. Declared type:module symbols are judged against the prompt declaration rather than the previous generation, which gives the repair loop a stable target and unblocked the pdd change -> pdd sync dead-end (#1900); undeclared symbols keep the previous-generation baseline and its BREAKING-CHANGE opt-outs. Comparison is semantic via interface_semantics, with per-side module default-symbol resolution so a literal-to-constant refactor is not a break while the same constant changing value is (#1558). Unparseable generated Python raises ArchitectureConformanceError rather than a phantom all-symbols-removed regression (#1612). Extracted from code_generator_main.",
+    "dependencies": [
+      "conformance/errors_python.prompt",
+      "conformance/surface_python.prompt",
+      "conformance/signatures_python.prompt",
+      "conformance/directives_python.prompt"
+    ],
+    "priority": 8,
+    "filename": "conformance/declared_surface_python.prompt",
+    "filepath": "pdd/conformance/declared_surface.py",
+    "tags": [
+      "conformance",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_verify_public_surface_regression",
+            "signature": "(existing_code: Optional[str], generated_code: str, prompt_name: str, output_path: Optional[str], prompt_content: Optional[str], language: str = \"python\") -> None",
+            "returns": "None"
+          },
+          {
+            "name": "_collect_declared_surface",
+            "signature": "(prompt_content: str, prompt_name: str) -> Dict[str, Optional[str]]",
+            "returns": "Dict[str, Optional[str]]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Deterministic annotation-only drift reconciliation (#1968).",
+    "description": "Runs immediately before the public-surface gate and rewrites a generated annotation to its declared spelling when a declared symbol differs from its declaration ONLY in annotation text. This is the deterministic backstop that guarantees convergence where a retry loop cannot: a model told to emit object keeps re-emitting the equivalent Any. Fail-safe - structural drift disqualifies the symbol, an interchangeable alias is never churned, and the whole rewrite is discarded if the result no longer parses. Returns nothing unless it reconciled something, so it never alters an otherwise-passing generation. Extracted from code_generator_main.",
+    "dependencies": [
+      "conformance/declared_surface_python.prompt"
+    ],
+    "priority": 9,
+    "filename": "conformance/annotation_reconcile_python.prompt",
+    "filepath": "pdd/conformance/annotation_reconcile.py",
+    "tags": [
+      "conformance",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_reconcile_declared_annotation_drift",
+            "signature": "(existing_code: Optional[str], generated_code: str, prompt_name: str, output_path: Optional[str], language: str, prompt_content: Optional[str]) -> Optional[str]",
+            "returns": "Optional[str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Architecture and pdd-interface conformance verification.",
+    "description": "Verifies that generated code exports the symbols its architecture.json entry and its own prompt declare, with the declared parameter shapes. Reports three categories in priority order - missing function or method, missing parameter, signature drift - each in its own sentence so the subprocess parser can route them. Annotation drift is conservative (both sides must annotate and be semantically incompatible); default drift is strict and fails closed on unresolvable defaults, since a dropped default breaks callers with TypeError. Dotted parameters are attributed to their full function name. The camelCase backstop exempts names declared in either the architecture entry or the prompt interface (#1446). Extracted from code_generator_main.",
+    "dependencies": [
+      "conformance/errors_python.prompt"
+    ],
+    "priority": 8,
+    "filename": "conformance/interface_check_python.prompt",
+    "filepath": "pdd/conformance/interface_check.py",
+    "tags": [
+      "conformance",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_verify_architecture_conformance",
+            "signature": "(generated_code: str, prompt_name: str, language: str, output_path: Optional[str] = None, prompt_content: Optional[str] = None) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "_verify_pdd_interface_signatures",
+            "signature": "(generated_code: str, prompt_name: str, prompt_content: Optional[str], output_path: Optional[str] = None) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "_collect_pdd_interface_names",
+            "signature": "(prompt_content: Optional[str]) -> Set[str]",
+            "returns": "Set[str]"
+          }
+        ]
+      }
+    }
   }
 ]

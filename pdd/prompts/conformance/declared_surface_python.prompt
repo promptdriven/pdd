@@ -1,0 +1,96 @@
+<pdd-reason>The public-surface regression gate: rejects a regeneration that removes or reshapes public API, judged against the prompt's declared interface where one exists and against the previous generation otherwise.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "_verify_public_surface_regression", "signature": "(existing_code: Optional[str], generated_code: str, prompt_name: str, output_path: Optional[str], prompt_content: Optional[str], language: str = \"python\") -> None", "returns": "None"},
+      {"name": "_collect_declared_surface", "signature": "(prompt_content: str, prompt_name: str) -> Dict[str, Optional[str]]", "returns": "Dict[str, Optional[str]]"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Implement the public-surface regression gate
+% in `pdd/conformance/declared_surface.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Responsibility
+  Deciding whether a regeneration broke the module's public API, and raising with
+  enough structure for a retry to repair it.
+
+% Non-responsibilities
+  Does not compute surfaces or signatures - `surface.py` and `signatures.py` do.
+  Does not compare types - `pdd.interface_semantics` does. Does not write files.
+
+% Vocabulary
+  - **declared symbol**: a name in the prompt's `<pdd-interface>` `module`
+    declaration. The declaration, not the previous generation, is its contract.
+  - **mature module**: one with pre-existing non-empty code at the output path.
+  - **baseline**: the comparison target - the declaration for declared symbols,
+    the previous generation for everything else.
+
+% Contract rules
+  R1. A module with no pre-existing code MUST be exempt. A brand-new module has
+      no surface to preserve.
+  R2. `PDD_SKIP_PUBLIC_SURFACE_GATE` MUST disable only this gate;
+      `PDD_SKIP_CONFORMANCE` MUST disable all conformance gates.
+  R3. When a pre-existing surface exists, the generated code MUST be checked for
+      parseability BEFORE its surface is computed. Unparseable Python yields an
+      empty surface, which would misreport every prior symbol as removed. Such a
+      failure MUST raise `ArchitectureConformanceError` - NOT
+      `PublicSurfaceRegressionError` - with a syntax-focused repair directive
+      naming the error and then the symbols to restore, so a truncated or
+      prose-wrapped generation is diagnosed as what it is (#1612).
+  R4. Declared symbols MUST be judged against the DECLARATION, not the previous
+      generation. Diffing them against the prior code left no stable repair
+      target and dead-ended `pdd change` into `pdd sync` whenever a declared
+      interface legitimately evolved (#1900).
+  R5. Only a `type: "module"` declaration contributes. `cli` and `command` names
+      are not Python surface symbols and MUST be excluded.
+  R6. A declared name absent from the generated surface is a removal, and a
+      `BREAKING-CHANGE` marker MUST NOT excuse a symbol that is still declared.
+  R7. Declared dotted methods and constructors MUST be compared
+      receiver-stripped, since `<pdd-interface>` cannot express `self`. A
+      constructor's declaration is checked against the class's own entry, because
+      that is where the constructor ABI lives.
+  R8. Only a declaration carrying a parseable parenthesised signature governs
+      that symbol's shape. A description-only declaration is presence-only and
+      MUST fall back to the previous-generation baseline, so existing drift is
+      still caught there.
+  R9. Undeclared symbols MUST keep the previous-generation baseline and its
+      `BREAKING-CHANGE` opt-outs, so helpers and re-exports stay protected
+      exactly as before.
+  R10. Signature comparison MUST be semantic, via `pdd.interface_semantics`, not
+       string equality - a backward-compatible widening or a reformatted default
+       is not a regression. Defaults written as same-module constants MUST be
+       resolved against the module version they belong to, so a literal-to-
+       constant refactor is not a break while the SAME constant name changing
+       value across versions IS one, even though the signature text is identical
+       (#1558). Do not short-circuit on equal text for callables, or that case is
+       missed.
+  R11. For declared symbols, both sides MUST be resolved in the GENERATED
+       module's namespace, since the declaration describes the generated module.
+  R12. `BREAKING-CHANGE: change signature <sym>` on a DECLARED symbol MUST relax
+       only what the declaration cannot express - binding kind and async-ness -
+       and never the declared parameters. An added required parameter that
+       violates the declaration is not bypassable by prose.
+  R13. A violation MUST raise `PublicSurfaceRegressionError` with declared
+       removals joining `removed:` and declared drifts joining
+       `signature_changed:` - those fields stay byte-identical - and MUST carry
+       per-symbol `signature_details` so the in-process and subprocess repair
+       loops receive the exact declared target.
+  R14. Modules whose prompt declares no `type: "module"` interface MUST behave
+       exactly as they did before #1900.
+
+% Inputs and outputs
+  `_collect_declared_surface` maps each declared name to its raw signature, or to
+  nothing when the declaration is description-only.
+
+% Dependencies
+  Standard library `ast`; `PublicSurfaceRegressionError` and
+  `ArchitectureConformanceError` from `.errors`; the surface and signature
+  snapshots from `.surface` and `.signatures`; the opt-out allow-lists from
+  `.directives`; and the semantic comparators and module default-symbol tables
+  from `pdd.interface_semantics`.

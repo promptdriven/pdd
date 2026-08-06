@@ -1,0 +1,100 @@
+<pdd-reason>Architecture and pdd-interface conformance: verifies that generated code actually exports the symbols its architecture entry and its prompt declare, with the declared parameter shapes.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "_verify_architecture_conformance", "signature": "(generated_code: str, prompt_name: str, language: str, output_path: Optional[str] = None, prompt_content: Optional[str] = None) -> None", "returns": "None"},
+      {"name": "_verify_pdd_interface_signatures", "signature": "(generated_code: str, prompt_name: str, prompt_content: Optional[str], output_path: Optional[str] = None) -> None", "returns": "None"},
+      {"name": "_collect_pdd_interface_names", "signature": "(prompt_content: Optional[str]) -> Set[str]", "returns": "Set[str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Implement the architecture and
+% `<pdd-interface>` conformance checks in `pdd/conformance/interface_check.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Responsibility
+  Confirming that generated code exports what it promised - to `architecture.json`
+  and to its own prompt - and that declared callables have the declared parameters.
+
+% Non-responsibilities
+  Does not compare against the PREVIOUS generation; that is the public-surface
+  gate. Does not judge naming beyond the camelCase backstop below.
+
+% Vocabulary
+  - **declared symbol**: a name in `architecture.json`'s interface or in the
+    prompt's `<pdd-interface>`.
+  - **drift**: a declared parameter that exists but whose annotation or default
+    no longer matches the declaration.
+
+% Contract rules
+  R1. Symbol collection MUST NOT descend into `if`, `try` or `with` blocks inside
+      a class body. Conformance is a hard validator and MUST NOT accept a method
+      whose existence depends on branch evaluation.
+  R2. Class members MUST be reported as dotted names at every depth, so a method
+      on `Outer.Inner` is `Outer.Inner.method`.
+  R3. Three `<pdd-interface>` shapes carry callable signatures and MUST all be
+      inspected: `module` functions, `cli` commands, and `command` entries in
+      either the multi-command or single-command form. An entry with no signature
+      is a silent no-op.
+  R4. A dotted declaration MUST be resolved by descending nested classes by name
+      and matching the final segment as a method.
+  R5. Three failure categories are checked in priority order:
+      missing function or method; missing parameter; then signature drift.
+      Reporting a missing symbol from the architecture entry first means the same
+      symbol is never reported twice.
+  R6. Every declared parameter name MUST be present. Variadic `*args` and
+      `**kwargs` MUST NOT satisfy a declared named parameter - the prompt is the
+      source of truth and callers pass the parameter by name. Missing parameters
+      are reported as `function.parameter`.
+  R7. Annotation drift is CONSERVATIVE: raise only when both sides annotate and
+      the two are not semantically compatible. Interchangeable spellings - typing
+      aliases, equivalent optionals - are not drift, and a one-sided missing
+      annotation never fires, since gradually-typed code may catch up later.
+  R8. Default drift is STRICT: raise when the declaration gives a default and the
+      generated code drops it or gives one that is not provably the same value.
+      An unresolvable default MUST fail closed. Defaults are runtime behavior -
+      a caller omitting the declared optional argument breaks with `TypeError`
+      when the default disappears or changes.
+  R9. Each category MUST occupy its own sentence in the message, so the
+      subprocess parser can route them: declared functions or methods missing;
+      declared parameters missing; declared parameters whose signature drifted,
+      each naming the symbol, the kind of drift, and the declared and found text.
+      All three sets combine into the reported missing symbols so retry callers
+      see the full failure.
+  R10. The repair directive MUST attribute a dotted parameter to its FULL
+       function name: `ContentSelector.select.mode` is parameter `mode` of
+       `ContentSelector.select`, never parameter `select.mode` of class
+       `ContentSelector`. Splitting on the first dot instead of the last produces
+       exactly that error. The directive MUST NOT suggest deleting the declared
+       parameter from the prompt.
+  R11. The camelCase backstop MUST exempt any export whose exact name is declared
+       in EITHER the architecture entry OR the prompt's own `<pdd-interface>`,
+       flagging only undeclared camelCase exports. Declared camelCase names are
+       intentional public API, such as Firebase Cloud Function exports, not
+       accidental drift (#1446). The exemption is scoped to the naming check and
+       MUST NOT weaken the missing-symbol check.
+  R12. `_collect_pdd_interface_names` MUST return every declared name including
+       description-only entries, since the exemption keys on the name alone. It
+       MUST NOT reuse the signature-gated collector, and MUST return nothing when
+       the prompt or its interface is absent or malformed - it never blocks
+       generation.
+  R13. A missing `<pdd-interface>` MUST skip the signature check silently. A
+       malformed one MUST log a warning and skip; it MUST NOT raise.
+  R14. All failures MUST raise `ArchitectureConformanceError` carrying the
+       prompt name, output path, matched architecture entry, and the expected,
+       found and missing symbol sets, so retry callers can build a repair
+       directive without parsing the message.
+
+% Inputs and outputs
+  Symbol extraction is AST-based for Python and pattern-based for
+  TypeScript/JavaScript exports.
+
+% Dependencies
+  Standard library `ast`, `json`, `logging`, `re`;
+  `ArchitectureConformanceError` from `.errors`; and the annotation and default
+  comparators plus module default-symbol tables from `pdd.interface_semantics`.
