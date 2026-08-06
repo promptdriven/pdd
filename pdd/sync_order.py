@@ -155,6 +155,68 @@ def build_dependency_graph(prompts_dir: Path) -> Dict[str, List[str]]:
     return {k: list(v) for k, v in dependency_graph.items()}
 
 
+def build_dependency_graph_from_architecture(architecture_path: Path) -> Dict[str, List[str]]:
+    """
+    Builds a dependency graph from architecture.json based on declared dependencies.
+
+    Args:
+        architecture_path: Path to architecture.json.
+
+    Returns:
+        Dictionary mapping module_name -> list of dependencies (module names).
+    """
+    if not architecture_path.exists() or not architecture_path.is_file():
+        logger.warning(f"Architecture file not found: {architecture_path}")
+        return {}
+
+    try:
+        arch_data = json.loads(architecture_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning(f"Failed to read or parse architecture.json at {architecture_path}: {e}")
+        return {}
+
+    try:
+        from pdd.architecture_registry import extract_modules
+        arch_entries = extract_modules(arch_data)
+    except Exception as exc:
+        logger.warning(f"extract_modules failed on {architecture_path}: {exc}")
+        arch_entries = arch_data if isinstance(arch_data, list) else []
+
+    if not arch_entries:
+        return {}
+
+    dependency_graph: Dict[str, Set[str]] = {}
+
+    for entry in arch_entries:
+        if not isinstance(entry, dict):
+            continue
+        filename = entry.get("filename")
+        if not filename:
+            continue
+
+        current_module = extract_module_from_include(filename)
+        if not current_module:
+            continue
+
+        if current_module not in dependency_graph:
+            dependency_graph[current_module] = set()
+
+        deps = entry.get("dependencies")
+        if not isinstance(deps, list):
+            continue
+
+        for dep in deps:
+            if not isinstance(dep, str):
+                continue
+            dep_module = extract_module_from_include(dep)
+            if dep_module and dep_module != current_module:
+                dependency_graph[current_module].add(dep_module)
+                if dep_module not in dependency_graph:
+                    dependency_graph[dep_module] = set()
+
+    return {k: sorted(list(v)) for k, v in dependency_graph.items()}
+
+
 def topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[str]]]:
     """
     Performs topological sort using Kahn's algorithm.
@@ -439,7 +501,7 @@ def generate_sync_order_script(modules: List[str], output_path: Path, worktree_p
 
     script_content = "\n".join(lines)
 
-    try:
+    try: 
         output_path.write_text(script_content, encoding="utf-8")
 
         # Make executable (chmod +x)
@@ -498,7 +560,7 @@ def discover_associated_documents(
     results: List[str] = []
     seen: Set[str] = set()
 
-    def _add(path: str) -> None:
+    def _add(path: str) -> None: 
         if path and path not in seen:
             seen.add(path)
             results.append(path)
@@ -514,7 +576,7 @@ def discover_associated_documents(
 
     # Phase 2: BFS traversal via architecture.json for transitive dependents
     if architecture_path is not None and architecture_path.exists():
-        try:
+        try: 
             arch_data = json.loads(architecture_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning(f"Failed to read architecture.json at {architecture_path}: {exc}")
@@ -526,7 +588,7 @@ def discover_associated_documents(
         # tolerance (architecture_registry.py:21); rejecting non-list
         # data here means object-format repos silently fall out of #739's
         # transitive-doc safety net.
-        try:
+        try: 
             from pdd.architecture_registry import extract_modules
             arch_entries = extract_modules(arch_data)
         except Exception as exc:
@@ -567,7 +629,7 @@ def discover_associated_documents(
         # match a basename-only seed and the dependent doc would be missed.
         modified_filenames: Set[str] = set()
         for p in modified_prompts:
-            try:
+            try: 
                 rel = p.relative_to(prompts_dir).as_posix()
             except ValueError:
                 rel = ""
