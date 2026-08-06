@@ -323,9 +323,9 @@ Before the step loop begins, load `.pddrc` configuration to provide context keys
 % Dependency Context (Before Step 6)
 Before Step 6 runs, build a formatted module-dependency summary so the step can identify transitively affected modules. The graph must reflect declared architectural dependencies (`<pdd-dependency>` tags, as recorded in architecture.json) rather than the `<include>` context graph.
 
-`_build_dependency_context(architecture_path: Path, quiet: bool = False) -> str` builds this summary from `build_dependency_graph_from_architecture(architecture_path)` (not the include-based `build_dependency_graph(prompts_dir)`), computing each module's reverse dependents and formatting them as a "## Module Dependency Graph" section — modules ordered by dependent count, top 30 shown, at most 10 dependents listed per module. The result is stored in `context["dependency_context"]`; it's an empty string when `architecture_path` doesn't exist or on any error.
+`_build_dependency_context(architecture_path: Path, quiet: bool = False) -> str` produces this summary: each module's dependents, ordered by dependent count (top 30, at most 10 dependents per module), under a "## Module Dependency Graph" heading. It's stored in `context["dependency_context"]`, empty when architecture.json is missing or the graph can't be built.
 
-Before Step 6 runs, set `architecture_path = cwd / "architecture.json"` and call `_build_dependency_context(architecture_path, quiet=quiet)` when it exists; otherwise leave `context["dependency_context"]` empty.
+Point it at `cwd / "architecture.json"` before Step 6 runs.
 
 % Files to Stage
 After Step 9 parses FILES_CREATED/FILES_MODIFIED/DIRECT_EDITS, pass the extracted file list to subsequent steps:
