@@ -35,7 +35,7 @@ from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 pytestmark = pytest.mark.timeout(450)
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths, _generate_user_story_artifacts_for_change, _resolve_story_policy, _find_linked_stories_for_prompts
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths, _generate_user_story_artifacts_for_change, _resolve_story_policy, _find_linked_stories_for_prompts, _build_dependency_context
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -10749,3 +10749,36 @@ class TestSetupWorktreeCleanRestart:
         assert err and "clean restart" in err.lower(), (
             f"Expected a clean-restart-refusal error; got {err!r}"
         )
+
+
+# -----------------------------------------------------------------------------
+# _build_dependency_context (issue #1807): Step 6's dependency context must be
+# built from architecture.json's <pdd-dependency>-declared graph, not from
+# scanning <include> tags.
+# -----------------------------------------------------------------------------
+
+class TestBuildDependencyContext:
+    def test_surfaces_pdd_dependency_not_include(self, tmp_path):
+        """A <pdd-dependency> edge with no matching <include> must be surfaced,
+        and an <include>-only edge (no <pdd-dependency>) must not be."""
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps([
+            {"filename": "customer_service_python.prompt", "dependencies": ["payment_status_python.prompt"]},
+            {"filename": "payment_status_python.prompt", "dependencies": []},
+            {"filename": "onboarding_python.prompt", "dependencies": []},
+        ]), encoding="utf-8")
+
+        result = _build_dependency_context(arch_path, quiet=True)
+
+        assert "payment_status" in result and "customer_service" in result
+        assert "affects: customer_service" in result
+        assert "onboarding" not in result
+
+    def test_returns_empty_string_when_architecture_missing(self, tmp_path):
+        missing = tmp_path / "architecture.json"
+        assert _build_dependency_context(missing, quiet=True) == ""
+
+    def test_returns_empty_string_on_empty_graph(self, tmp_path):
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps([]), encoding="utf-8")
+        assert _build_dependency_context(arch_path, quiet=True) == ""
