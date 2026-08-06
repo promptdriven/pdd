@@ -1,0 +1,192 @@
+<pdd-reason>Snapshots the public surface of a Python module - resolving __all__ per Python semantics and otherwise falling back to an underscore heuristic - so regeneration cannot silently delete public API.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "_collect_bound_module_names", "signature": "(tree: ast.Module) -> Set[str]", "returns": "Set[str]"},
+      {"name": "_scannable_children", "signature": "(node: ast.AST) -> Iterator[ast.AST]", "returns": "Iterator[ast.AST]"},
+      {"name": "_node_writes_dunder_all", "signature": "(node: ast.AST) -> bool", "returns": "bool"},
+      {"name": "_subtree_mutates_dunder_all", "signature": "(node: ast.AST) -> bool", "returns": "bool"},
+      {"name": "_clean_dunder_all_literal", "signature": "(node: ast.AST) -> Optional[Set[str]]", "returns": "Optional[Set[str]]"},
+      {"name": "_extract_dunder_all", "signature": "(tree: ast.Module) -> Optional[Set[str]]", "returns": "Optional[Set[str]]"},
+      {"name": "_assign_target_matches", "signature": "(target: ast.AST, symbol: str) -> bool", "returns": "bool"},
+      {"name": "_symbol_exists_in_module", "signature": "(tree: ast.Module, symbol: str) -> bool", "returns": "bool"},
+      {"name": "_effective_patch_targets", "signature": "(file_path: Optional[str], patch_targets: Optional[Set[str]] = None) -> Set[str]", "returns": "Set[str]"},
+      {"name": "_collect_patch_targets", "signature": "(file_path: Optional[str]) -> Set[str]", "returns": "Set[str]"},
+      {"name": "_reexport_binding", "signature": "(alias: ast.alias) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_snapshot_public_surface", "signature": "(code_text: str, language: str, file_path: str = None) -> Set[str]", "returns": "Set[str]"},
+      {"name": "_diff_public_surface", "signature": "(pre: Set[str], post: Set[str]) -> List[str]", "returns": "List[str]"},
+      {"name": "_collect_python_public_surface", "signature": "(source: str) -> List[str]", "returns": "List[str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+# prompts/conformance/surface_python.prompt
+% You are an expert Python engineer. Your goal is to write the public-surface
+% snapshotter for the PDD CLI in `pdd/conformance/surface.py`.
+
+% Role & Scope
+  Produces the SET of names a module exposes to importers, so the public-surface
+  gate can diff pre- against post-generation and reject silent API deletion. This
+  module answers only "what is public"; the comparison and the raised error live
+  elsewhere. Stdlib `ast` only - never import or execute the analysed code.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+
+  1. **`_snapshot_public_surface(code_text, language, file_path=None) -> Set[str]`**
+     is the entry point. For any language other than Python, return `set()` - the
+     gate is Python-only for now; surface that clearly so other languages can opt
+     in later. Unparseable input returns `set()`.
+
+  2. **`__all__` is AUTHORITATIVE when statically resolvable.** Per Python
+     semantics, a name is public **if and only if** it appears in `__all__` -
+     EVEN IF underscore-prefixed. `__all__ = ["_public_helper"]` makes
+     `_public_helper` public. Conversely a non-underscore name NOT in `__all__` is
+     NOT public.
+     - Filter `__all__` entries down to names actually bound somewhere at module
+       scope (functions, classes, `Assign`/`AnnAssign`-with-value, `Import`,
+       `ImportFrom`) - `_collect_bound_module_names` does this.
+     - When a CLASS is listed in `__all__`, its recursively-walked members are
+       ALSO public: methods, nested classes, and methods on nested classes at
+       every depth, regardless of underscore prefix. Without that recursion a
+       removal like `Service.run` would slip past the gate even though
+       `__all__ = ["Service"]` clearly intends the whole class as public.
+
+  3. **`_extract_dunder_all(tree) -> Optional[Set[str]]` resolves in SOURCE
+     ORDER, last write wins**, matching Python runtime semantics. Walk
+     `tree.body` maintaining a state:
+     - A clean top-level `__all__ = <list/tuple of string Constants>` - or a bound
+       `__all__: T = <same>` - SETS the state to that set.
+     - A value-less annotation (`__all__: T` with no value) is a NO-OP; it leaves
+       any prior literal in place. Its target's `Store` ctx is an AST artifact,
+       not a write.
+     - ANY OTHER write to `__all__` RESETS the state to `None` (unresolvable).
+     - Because it is source-order, an earlier mutation is OVERRIDDEN by a later
+       clean literal: `__all__ = [...]; __all__.append(...); __all__ = [...]` is
+       resolvable again.
+     - Return the final state; `None` means "fall back to the heuristic".
+
+  4. **Detecting "any other write"** - `_subtree_mutates_dunder_all` recurses a
+     statement via `_scannable_children`, which descends into `if`/`for`/`while`/
+     `with`/`try`/`match` bodies but NOT into def/class/lambda scopes - including
+     their headers - and does not treat comprehension loop targets as module-scope
+     writes. `_node_writes_dunder_all` reports a single node as a write when it is:
+     - a `Name` `__all__` in a `Store`/`Del` context (covers a computed rebind,
+       a conditional/looped rebind, tuple/list unpacking, a walrus, a
+       `for __all__ in ...` or `with ... as __all__` target, and `del __all__`);
+     - an `ast.AugAssign` to `__all__` (`__all__ += [...]`) - always unresolvable,
+       since it mutates whatever the object already was;
+     - a mutator-method call on `__all__`: `append`, `extend`, `insert`, `remove`,
+       `pop`, `clear`, `sort`, `reverse` and the dunder mutators - but NOT the
+       read-only `copy()` / `index()`;
+     - a subscript/slice store or delete (`__all__[i] = ...`, `del __all__[i]`);
+     - a pattern or exception capture NAMED `__all__` - `except E as __all__`,
+       `case __all__`, `case [*__all__]`, `case {**__all__}`. These bind through a
+       STRING field on the node, so they never appear as a `Store` `Name`;
+     - an import that BINDS `__all__` (`from exports import __all__`,
+       `from m import x as __all__`, `import __all__`), which replaces it with an
+       unresolvable imported value. A plain `from typing import Any` binds `Any`,
+       not `__all__`, and is ignored.
+
+  5. **Fallback heuristic** when `__all__` is absent or unresolvable:
+     - Top-level `FunctionDef` / `AsyncFunctionDef` / `ClassDef` names.
+     - Dotted names for methods and nested classes at EVERY depth, so a method on
+       `Outer.Inner` is recorded as `Outer.Inner.method`. Recurse through public
+       `ClassDef` bodies; do not stop at one level.
+     - Skip dunder methods (`__init__`, `__repr__`, ...). Skip names beginning
+       with a single `_` at any depth, UNLESS they are patch targets (below).
+     - Module-level `ast.Assign` and BOUND `ast.AnnAssign` whose target is a bare
+       `Name`, or every element inside `Tuple`/`List`/`Starred` unpacking. These
+       are public module attributes callers can `from X import Y`.
+       For `AnnAssign`, capture ONLY when `node.value is not None`: a bare
+       annotation like `PUBLIC_NAME: int` binds no runtime attribute, and
+       capturing it causes a false regression when the annotation is removed.
+       `PUBLIC_NAME: int = None` IS captured, because `node.value` is the
+       `Constant(None)` node, not the sentinel meaning "no value".
+       Skip attribute/subscript targets, which mutate existing objects rather
+       than create module-level names.
+
+  6. **Imports are public surface ONLY as explicit re-exports.** Implement
+     `_reexport_binding(alias) -> Optional[str]` returning the bound name when
+     `alias.asname is not None and alias.asname == alias.name and not
+     alias.asname.startswith("_")`, else `None`.
+     - This is Python's own convention (PEP 484; the rule mypy enforces under
+       `implicit_reexport = False`): a redundant alias `import x as x` /
+       `from m import y as y` deliberately re-exports, whereas a plain
+       `import foo`, `import foo.bar`, `from typing import Any`, or a RENAMING
+       alias `from m import y as z` is an implementation detail.
+     - Removing an implementation import on regeneration is routine cleanup and
+       MUST NOT trigger a regression. The gate previously hard-failed real syncs
+       over `removed: Any, Literal, dataclass, field, json` (issues #1662 / #1663 /
+       pdd_cloud#2256).
+     - `ast.Import`: add `_reexport_binding(alias)` when non-`None` (covers
+       `import git as git`). The plain-import top-level-package binding
+       (`import foo.bar` -> `foo`) is NOT captured outside `__all__`.
+     - `ast.ImportFrom`: add `_reexport_binding(alias)` when non-`None`. Skip
+       `from X import *` (`alias.name == "*"` binds no fixed name). Skip
+       `from __future__ import ...` ENTIRELY (`node.module == "__future__"`) -
+       future imports are compiler directives, not runtime attributes, and
+       capturing them blocks harmless cleanup like dropping
+       `from __future__ import annotations`, which would otherwise diff as
+       `removed: annotations`.
+     - The `__future__` skip MUST also be applied inside
+       `_collect_bound_module_names`, so an explicit `__all__ = ["annotations"]`
+       cannot promote the future binding into the surface via the authoritative
+       branch and reintroduce the same false positive.
+     - This re-export-only rule applies uniformly in the fallback whether
+       `__all__` is absent OR unresolvable. Do NOT capture every import
+       conservatively when `__all__` is computed or mutated - that reintroduces
+       the #2256 false positive for the realistic
+       `if platform: __all__.append(...)` conditional-export pattern. The fallback
+       still protects DEFINED symbols added that way, because a function or class
+       appended to `__all__` is a non-underscore module-level name the heuristic
+       already captures.
+
+  7. **Patch-target preservation.** `_collect_patch_targets(file_path)` delegates
+     to `pdd.split_validation.collect_patch_symbols_for_module`, which scans
+     SIBLING `test_*.py` files for mock/patch targets (`@patch`,
+     `monkeypatch.setattr`, `patch.object`) naming this module. Those symbols are
+     included in the snapshot even when underscore-prefixed, so an implementation
+     refactor cannot quietly break tests that patch a private symbol.
+     `_effective_patch_targets` returns a caller-supplied set when given, else
+     collects from `file_path`. A falsy `file_path` yields an empty set.
+
+  8. **`_diff_public_surface(pre, post) -> List[str]`** - return the SORTED list
+     of symbols present in `pre` but absent from `post`. Renames register as a
+     removal plus an addition.
+
+  9. **`_symbol_exists_in_module(tree, symbol) -> bool`** - whether a symbol is
+     defined at module scope, supporting dotted class paths. For a dotted name,
+     walk the leading segments as nested `ClassDef` containers, then match the
+     final segment as a method OR a nested class - resolving the final segment as
+     a class too means a declared nested-class constructor with an underscore in
+     its path (`_Outer.Inner`, `Outer._Inner`) is recognised as defined. This only
+     ever recognises MORE names, so nothing previously matched stops matching.
+     `_assign_target_matches` supports it by testing `Name`, `Tuple`/`List` and
+     `Starred` targets recursively.
+
+  10. **`_collect_python_public_surface(source) -> List[str]`** - a thin sorted-list
+      convenience wrapper over `_snapshot_public_surface(source, "python")`.
+
+% Dependencies
+  - Imports `ast`.
+  - Imports `Iterator`, `List`, `Optional`, `Set` from `typing`.
+  - Imports `collect_patch_symbols_for_module` from `pdd.split_validation`
+    (import it lazily inside the function to keep module import light).
+
+% Instructions
+  - `_snapshot_public_signatures` in `signatures.py` MUST apply the identical
+    `__all__` precedence, class-member recursion, patch-target preservation,
+    re-export rule and `__future__` skip. If the two disagree on what is public,
+    the removed-symbol diff and the signature-drift diff disagree with each other.
+  - Accepted limitations, documented rather than handled: aliasing
+    (`x = __all__; x.append(...)`), `global __all__` inside a called function, and
+    a plain-import re-export listed only in an unresolvable `__all__`. Authors
+    needing those should use a clean `__all__` literal or a redundant-alias import.
+
+% Deliverables
+  - Code: `pdd/conformance/surface.py`

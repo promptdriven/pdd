@@ -12288,5 +12288,94 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Public-surface snapshotting: what a Python module exposes to importers.",
+    "description": "Resolves __all__ in source order with last-write-wins semantics (a value-less annotation is a no-op; any other write resets to unresolvable; a later clean literal restores resolvability), treating it as authoritative when statically resolvable so underscore-prefixed names listed in it are public and classes listed in it contribute their recursively-walked members at every depth. Falls back to an underscore heuristic otherwise. Imports are surface ONLY as explicit re-exports via the redundant-alias rule (PEP 484 / mypy implicit_reexport), which fixed the #1662/#1663/pdd_cloud#2256 false positives; from __future__ imports are skipped in both the surface walk and the bound-name collection. Preserves private symbols identified as patch targets in sibling tests. Extracted from code_generator_main.",
+    "dependencies": [],
+    "priority": 6,
+    "filename": "conformance/surface_python.prompt",
+    "filepath": "pdd/conformance/surface.py",
+    "tags": [
+      "conformance",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_collect_bound_module_names",
+            "signature": "(tree: ast.Module) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_scannable_children",
+            "signature": "(node: ast.AST) -> Iterator[ast.AST]",
+            "returns": "Iterator[ast.AST]"
+          },
+          {
+            "name": "_node_writes_dunder_all",
+            "signature": "(node: ast.AST) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_subtree_mutates_dunder_all",
+            "signature": "(node: ast.AST) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_clean_dunder_all_literal",
+            "signature": "(node: ast.AST) -> Optional[Set[str]]",
+            "returns": "Optional[Set[str]]"
+          },
+          {
+            "name": "_extract_dunder_all",
+            "signature": "(tree: ast.Module) -> Optional[Set[str]]",
+            "returns": "Optional[Set[str]]"
+          },
+          {
+            "name": "_assign_target_matches",
+            "signature": "(target: ast.AST, symbol: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_symbol_exists_in_module",
+            "signature": "(tree: ast.Module, symbol: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_effective_patch_targets",
+            "signature": "(file_path: Optional[str], patch_targets: Optional[Set[str]] = None) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_collect_patch_targets",
+            "signature": "(file_path: Optional[str]) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_reexport_binding",
+            "signature": "(alias: ast.alias) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "_snapshot_public_surface",
+            "signature": "(code_text: str, language: str, file_path: str = None) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_diff_public_surface",
+            "signature": "(pre: Set[str], post: Set[str]) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "_collect_python_public_surface",
+            "signature": "(source: str) -> List[str]",
+            "returns": "List[str]"
+          }
+        ]
+      }
+    }
   }
 ]
