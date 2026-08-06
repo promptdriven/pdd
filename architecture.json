@@ -12226,5 +12226,67 @@
         ]
       }
     }
+  },
+  {
+    "reason": "The test-churn gate (#1012): refuses high-churn rewrites of existing test files.",
+    "description": "Computes the stdlib difflib.unified_diff churn ratio between the pre-sync and proposed test bodies and raises TestChurnError when it exceeds PDD_TEST_CHURN_THRESHOLD (default 0.40, accepting decimal or percent strings, defensively falling back on unparseable values). Owns the test-path taxonomy: tests/, __tests__/ and the singular __test__/ dirs, the test_ prefix, the case-insensitive JS/TS .test./.spec. family including .mjs/.cjs, the lowercase _test.<ext>/_spec.<ext> sibling family driven by _LANGUAGE_TEST_FILE_EXTS, and the case-sensitive PascalCase JVM/.NET/Swift suffixes. Opt-out requires an anchored BREAKING-CHANGE directive whose verb directly governs tests. Extracted from code_generator_main; also used by cmd_test_main and one-session agentic sync.",
+    "dependencies": [
+      "conformance/errors_python.prompt",
+      "conformance/directives_python.prompt"
+    ],
+    "priority": 6,
+    "filename": "conformance/test_churn_python.prompt",
+    "filepath": "pdd/conformance/test_churn.py",
+    "tags": [
+      "conformance",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_prompt_allows_test_churn",
+            "signature": "(prompt_content: Optional[str]) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_is_python_generation",
+            "signature": "(language: Optional[str], output_path: Optional[str]) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_is_test_output_path",
+            "signature": "(output_path: Optional[str]) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_get_test_churn_threshold",
+            "signature": "() -> float",
+            "returns": "float"
+          },
+          {
+            "name": "_compute_test_churn_ratio",
+            "signature": "(pre_text: str, post_text: str) -> float",
+            "returns": "float"
+          },
+          {
+            "name": "_calculate_test_churn_ratio",
+            "signature": "(before: str, after: str) -> float",
+            "returns": "float"
+          },
+          {
+            "name": "_verify_test_churn",
+            "signature": "(existing_code: Optional[str], generated_code: str, prompt_name: str, output_path: Optional[str], prompt_content: Optional[str], adopted_human: bool = False) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "_find_default_test_files",
+            "signature": "(tests_dir: Optional[str], code_file_path: Optional[str]) -> List[str]",
+            "returns": "List[str]"
+          }
+        ]
+      }
+    }
   }
 ]
