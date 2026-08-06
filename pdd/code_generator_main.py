@@ -5602,7 +5602,15 @@ def code_generator_main(
             # Language Validity Gate: verify the generated content is syntactically
             # valid Python before any downstream gate (architecture conformance,
             # public-surface) assumes it can be parsed with ast.parse.
-            syntax_err = _verify_language_validity(generated_code_content, language or "")
+            # Only runs when this generation is creating the file. When a real
+            # file was already there, the public-surface and test-churn gates
+            # compare against its previous contents and diagnose unparseable
+            # output better than a bare SyntaxError would.
+            syntax_err = (
+                _verify_language_validity(generated_code_content, language or "")
+                if existing_code_content is None
+                else None
+            )
             if syntax_err is not None:
                 raise LanguageMismatchError(
                     prompt_name=prompt_name,
