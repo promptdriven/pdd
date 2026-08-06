@@ -41,12 +41,11 @@ A utility module that parses `<include>` tags from prompt files, builds a depend
    - Return empty dict if prompts_dir doesn't exist
 
 3a. Function: build_dependency_graph_from_architecture(architecture_path: Path) -> Dict[str, List[str]]
-   - Read architecture.json via pdd.architecture_registry.extract_modules() (accepts bare-array or {"modules": [...]} formats)
-   - For each module entry, extract module name from its `filename` field (e.g., "foo_python.prompt" -> "foo") using extract_module_from_include()
-   - Map each entry's `dependencies` list (default [] if missing or not a list) to module names using extract_module_from_include()
-   - Build graph: module_name -> list of dependency module names, sourced from architecture.json's `dependencies` field instead of `<include>` tags
-   - Skip self-references and dependencies that don't map to a module name
-   - Return empty dict if architecture_path doesn't exist, can't be read, or contains invalid JSON
+   - Builds the same `module_name -> [dependency module names]` shape as `build_dependency_graph()`, but sourced from architecture.json's `dependencies` field (populated from `<pdd-dependency>` tags) instead of `<include>` tags.
+   - Accepts architecture.json as either a bare array or an object with a `"modules"` key.
+   - Every module present in architecture.json is a key in the result, even with no dependencies; self-dependencies are excluded.
+   - Module names are derived from filenames the same way `build_dependency_graph()` does.
+   - Missing file, unreadable file, or invalid JSON returns an empty dict rather than raising.
 
 
 4. Function: topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[str]]]
@@ -97,11 +96,14 @@ Helper: `_is_document_include(include_path: str) -> bool`
 <include select="def:main">context/auto_include_example.py</include>
 </auto_include_example>
 <utils.architecture_sync>
-    <include select="def:example_sync_all,def:example_validate_dependencies">context/architecture_sync_example.py</include>
+    <include select="def:run_example">context/architecture_sync_example.py</include>
 </utils.architecture_sync>
 <pdd.agentic_common>
     <include select="def:example_run_agentic_task">context/agentic_common_example.py</include>
 </pdd.agentic_common>
+<utils.architecture_registry>
+    <include>context/architecture_registry_example.py</include>
+</utils.architecture_registry>
 
 % Instructions
 - Reuse regex pattern from auto_include.py for parsing `<include>` tags
