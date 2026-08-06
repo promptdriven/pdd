@@ -160,6 +160,21 @@ contexts:
       budget: 10.0
       max_attempts: 3
 
+  # Conformance gate layer extracted from code_generator_main
+  conformance:
+    paths: ["pdd/conformance/**", "**/pdd/conformance/**", "prompts/conformance/**"]
+    defaults:
+      generate_output_path: "pdd/conformance/"
+      test_output_path: "tests/conformance/"
+      example_output_path: "context/conformance/"
+      prompts_dir: "prompts/conformance"
+      default_language: "python"
+      target_coverage: 90.0
+      strength: 0.818
+      temperature: 0.0
+      budget: 10.0
+      max_attempts: 3
+
   # PDD Connect frontend context
   pdd_frontend:
     paths: ["pdd/frontend/**", "**/pdd/frontend/**", "prompts/frontend/**"]
