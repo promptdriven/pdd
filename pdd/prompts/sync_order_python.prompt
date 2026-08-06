@@ -41,11 +41,11 @@ A utility module that parses `<include>` tags from prompt files, builds a depend
    - Return empty dict if prompts_dir doesn't exist
 
 3a. Function: build_dependency_graph_from_architecture(architecture_path: Path) -> Dict[str, List[str]]
-   - Builds the same `module_name -> [dependency module names]` shape as `build_dependency_graph()`, but sourced from architecture.json's `dependencies` field (populated from `<pdd-dependency>` tags) instead of `<include>` tags.
-   - Accepts architecture.json as either a bare array or an object with a `"modules"` key.
-   - Every module present in architecture.json is a key in the result, even with no dependencies; self-dependencies are excluded.
-   - Module names are derived from filenames the same way `build_dependency_graph()` does.
-   - Missing file, unreadable file, or invalid JSON returns an empty dict rather than raising.
+   - Same `module_name -> [dependency module names]` shape as `build_dependency_graph()`, sourced from architecture.json's `dependencies` field (from `<pdd-dependency>` tags) instead of `<include>` tags
+   - Accepts a bare array or an object with a `"modules"` key
+   - Every module in architecture.json is a key, even with no dependencies; self-dependencies excluded
+   - Module names derived from filenames the same way as `build_dependency_graph()`
+   - Missing file, unreadable file, or invalid JSON returns an empty dict rather than raising
 
 
 4. Function: topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[str]]]
