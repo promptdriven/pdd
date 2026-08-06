@@ -476,8 +476,16 @@ Behavior preservation is the acceptance criterion. Because the code is
 - The `pdd split` proposal's remaining children: `codegen_generation_phase`,
   `codegen_postgen_phase` and finer sub-splits. Re-evaluate after this lands.
 - Splitting `tests/test_code_generator_main.py`.
-- Re-splitting the Language Validity Gate section once
-  `feat/language-validity-gate` merges.
+- **Language Validity Gate — layers on afterwards, by its author.** PR
+  [#2370](https://github.com/promptdriven/pdd/pull/2370) (`feat/language-validity-gate`,
+  OPEN, MERGEABLE, +241/−15 across 3 files) adds `LanguageMismatchError`,
+  `_verify_language_validity` and a `5b.` requirement section. Decision: this
+  split lands first against `main`; #2370 is then re-targeted on top, with
+  `LanguageMismatchError` authored into `pdd/prompts/conformance/errors_python.prompt`
+  alongside the other four exceptions and `_verify_language_validity` into the
+  module that owns it. Note this shifts `main`'s section numbering (its gate is
+  inserted as `5b`, pushing public-surface to `5c` and test-churn to `5d`), which
+  is why this spec pins every reference to `main` @ `c443f2f91`.
 
 ## Related defects
 
