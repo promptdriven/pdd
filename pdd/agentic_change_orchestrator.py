@@ -44,6 +44,7 @@ from pdd.agentic_common import (
 from pdd.load_prompt_template import load_prompt_template
 from pdd.sync_order import (
     build_dependency_graph,
+    build_dependency_graph_from_architecture,
     topological_sort,
     get_affected_modules,
     generate_sync_order_script,
@@ -2231,25 +2232,29 @@ def _load_pddrc_context(cwd: Path) -> Dict[str, str]:
         return defaults
 
 
-def _build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str:
+def _build_dependency_context(architecture_path: Path, quiet: bool = False) -> str:
     """
     Build a formatted string describing the module dependency graph.
 
     This is used to provide Step 6 with structured dependency information
-    so it can identify transitively affected modules.
+    so it can identify transitively affected modules. The graph reflects
+    declared architectural dependencies (`<pdd-dependency>` tags, as recorded
+    in architecture.json) rather than the `<include>` context graph — see
+    issue #1807: `<include>` tags are LLM context and are not a reliable
+    signal of "what needs updating if this module changes."
 
     Args:
-        prompts_dir: Path to the prompts directory
+        architecture_path: Path to architecture.json
         quiet: Whether to suppress logging
 
     Returns:
         Formatted string describing dependencies, or empty string if unavailable
     """
-    if not prompts_dir.exists():
+    if not architecture_path.exists():
         return ""
 
     try:
-        graph = build_dependency_graph(prompts_dir)
+        graph = build_dependency_graph_from_architecture(architecture_path)
         if not graph:
             return ""
 
@@ -2846,9 +2851,9 @@ def run_agentic_change_orchestrator(
 
         # Before Step 6, build dependency context to help identify transitively affected modules
         if step_num == 6:
-            prompts_dir = cwd / "prompts"
-            if prompts_dir.exists():
-                dep_context = _build_dependency_context(prompts_dir, quiet=quiet)
+            architecture_path = cwd / "architecture.json"
+            if architecture_path.exists():
+                dep_context = _build_dependency_context(architecture_path, quiet=quiet)
                 context["dependency_context"] = dep_context
             else:
                 context["dependency_context"] = ""
