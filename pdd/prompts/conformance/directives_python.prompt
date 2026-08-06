@@ -1,129 +1,78 @@
-<pdd-reason>Parses anchored BREAKING-CHANGE directives from prompt bodies and reads PDD_* environment flags, so the public-surface and test-churn gates share one grammar.</pdd-reason>
+<pdd-reason>Shared grammar for the BREAKING-CHANGE opt-out directives that let a prompt author authorise a specific change the conformance gates would otherwise block.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "_parse_llm_bool", "signature": "(value: str) -> bool", "returns": "bool"},
       {"name": "_env_flag_enabled", "signature": "(name: str) -> bool", "returns": "bool"},
+      {"name": "_parse_llm_bool", "signature": "(value: str) -> bool", "returns": "bool"},
       {"name": "_strip_yaml_front_matter", "signature": "(prompt_content: Optional[str]) -> str", "returns": "str"},
-      {"name": "_prompt_has_breaking_change_marker", "signature": "(prompt_content: Optional[str]) -> bool", "returns": "bool"},
       {"name": "_iter_breaking_change_directives", "signature": "(prompt_content: Optional[str]) -> List[str]", "returns": "List[str]"},
-      {"name": "_parse_breaking_change_symbols", "signature": "(directive_tail: str) -> Set[str]", "returns": "Set[str]"},
       {"name": "_prompt_breaking_change_removed_symbols", "signature": "(prompt_content: Optional[str]) -> Set[str]", "returns": "Set[str]"},
       {"name": "_prompt_breaking_change_signature_symbols", "signature": "(prompt_content: Optional[str]) -> Set[str]", "returns": "Set[str]"},
-      {"name": "_prompt_allows_breaking_change", "signature": "(prompt_content: Optional[str]) -> bool", "returns": "bool"}
+      {"name": "_prompt_allows_breaking_change", "signature": "(prompt_content: Optional[str]) -> bool", "returns": "bool"},
+      {"name": "_prompt_has_breaking_change_marker", "signature": "(prompt_content: Optional[str]) -> bool", "returns": "bool"}
     ]
   }
 }
 </pdd-interface>
 
-# prompts/conformance/directives_python.prompt
-% You are an expert Python engineer. Your goal is to write the BREAKING-CHANGE
-% directive parser and environment-flag helpers in `pdd/conformance/directives.py`.
-
-% Role & Scope
-  The public-surface and test-churn gates block generation by default. A prompt
-  author opts out of a SPECIFIC blocked change by writing an anchored
-  `BREAKING-CHANGE:` line in the prompt BODY. This module owns that grammar, so
-  both gates agree on exactly which directives count. It contains no gate logic
-  and raises nothing.
+% You are an expert Python engineer. Implement the BREAKING-CHANGE directive
+% grammar in `pdd/conformance/directives.py`.
 
 <include>context/python_preamble.prompt</include>
 
-% Requirements
+% Responsibility
+  Turning a prompt's text into the two allow-lists the conformance gates consult:
+  symbols the author authorised removing, and symbols whose signature the author
+  authorised changing. Plus the `PDD_*` environment-flag readers.
 
-  1. **`_parse_llm_bool(value: str) -> bool`** - parse an LLM-enable flag.
-     An empty/falsy input returns `True` (LLM enabled by default). Otherwise
-     lowercase and strip: `0`, `false`, `no`, `off` return `False`; only
-     `1`, `true`, `yes`, `on` return `True`; anything else returns `False`.
+% Non-responsibilities
+  No gate decisions. The test-churn gate has its own verb-object grammar and owns
+  it. Descendant expansion - treating a permitted class removal as permitting its
+  members - belongs to the public-surface gate, not here.
 
-  2. **`_env_flag_enabled(name: str) -> bool`** - return `True` only when the env
-     var is present AND its stripped lowercase value is one of `1`, `true`,
-     `yes`, `on`. An unset variable returns `False`.
+% Vocabulary
+  - **directive**: a line whose first non-whitespace tokens are
+    `BREAKING-CHANGE:`. The **tail** is everything after that marker.
+  - **anchored**: matched only at the start of a line, so prose mentioning the
+    marker mid-sentence is inert.
 
-  3. **`_strip_yaml_front_matter(prompt_content: Optional[str]) -> str`** -
-     opt-outs must come from the prompt BODY, never from metadata, so an indented
-     directive inside front matter cannot whitelist a removal. This is the
-     stripped form every parser below must see.
-     - The block begins with `---` on line 1 (after an optional UTF-8 BOM) and
-       closes with a `---` line. Accept CRLF and mixed line endings, trailing
-       whitespace on either fence, and a closing fence that is the final line
-       with no trailing newline.
-     - An UNTERMINATED opening fence is left alone - never silently swallow the
-       whole prompt body.
-     - A leading UTF-8 BOM with no front matter is still stripped on its own, so
-       a BOM-only prompt does not retain it ahead of the first directive line.
-     - `None`/empty input returns `""`.
+% Contract rules
+  R1. Only anchored directives count. A line such as
+      `Use BREAKING-CHANGE: remove old_helper to opt out` MUST NOT register.
+  R2. Directives MUST be read from the prompt BODY only. Leading YAML front
+      matter is stripped first, so an indented directive inside metadata cannot
+      authorise anything. A leading UTF-8 BOM is stripped whether or not front
+      matter follows. An UNTERMINATED opening fence MUST be left alone rather
+      than swallowing the body.
+  R3. A removal directive's tail MUST begin with `remove`, `delete`, `drop` or
+      `rename` - any of the `-s`/`-d`/`-ing` inflections, case-insensitively.
+  R4. A signature directive's tail MUST begin with a `change` inflection followed
+      by one of `signature`, `signatures`, `api`, `contract`.
+  R5. After the verb the remainder MUST be a comma-separated list of dotted
+      Python identifiers, each optionally wrapped in backticks, single quotes or
+      double quotes. Wrappers MUST match on both sides, so `"old_helper'` is
+      rejected. A single trailing `.`, `;` or `:` is tolerated.
+  R6. Tokens containing embedded whitespace MUST be rejected, so
+      `BREAKING-CHANGE: remove old_helper to opt out` authorises `old_helper`
+      alone and never `to`, `opt` or `out`. Authors wanting several symbols omit
+      trailing prose entirely.
+  R7. A bare `BREAKING-CHANGE:` with no verb and no symbols MUST authorise
+      nothing. Opt-outs are always scoped to named symbols; there is no global
+      off switch.
+  R8. Every entry point MUST tolerate `None` and empty input by returning an
+      empty result rather than raising.
 
-  4. **`_prompt_has_breaking_change_marker(prompt_content) -> bool`** - `True`
-     when the front-matter-stripped body contains the substring
-     `BREAKING-CHANGE:` anywhere. `_prompt_allows_breaking_change` is a
-     backward-compatible wrapper that simply delegates to it.
-
-  5. **`_iter_breaking_change_directives(prompt_content) -> List[str]`** - return
-     the directive TAIL of each anchored directive line, stripped.
-     - **Anchored** means the first non-whitespace tokens on the line are
-       `BREAKING-CHANGE:`. Match with `re.MULTILINE` on a pattern equivalent to
-       `^[ \t]*BREAKING-CHANGE:[ \t]*(?P<directive>.*)$`.
-     - This is what makes buried mid-line mentions inert. A documentation line
-       such as `Use BREAKING-CHANGE: remove old_helper to opt out` MUST NOT
-       register as a real directive.
-     - Scan the front-matter-stripped body only.
-
-  6. **`_parse_breaking_change_symbols(directive_tail: str) -> Set[str]`** -
-     parse the comma-separated symbol list that follows an action verb.
-     - Drop a single trailing sentence terminator (`.`, `;`, `:`) so
-       `remove old_helper.` parses cleanly.
-     - Split on `,`; each piece must match, in full, an optionally-wrapped dotted
-       identifier: optional leading whitespace, an optional wrapper character
-       (backtick, single quote or double quote), a dotted Python identifier
-       (`[A-Za-z_][A-Za-z0-9_]*` joined by `.`), the SAME wrapper again if one
-       was opened, then optional trailing whitespace and end of piece.
-     - Wrappers MUST match on both sides - use a backreference/conditional so
-       `"old_helper'` is rejected.
-     - Pieces that do not match in full are silently skipped. Because a token
-       containing embedded whitespace can never match, prose is rejected:
-       `BREAKING-CHANGE: remove old_helper to opt out` whitelists ONLY
-       `old_helper`, never `to`/`opt`/`out`. For multi-symbol opt-outs the author
-       must omit trailing prose entirely.
-
-  7. **`_prompt_breaking_change_removed_symbols(prompt_content) -> Set[str]`** -
-     the removal allow-list. For each anchored directive, the tail must BEGIN
-     with a removal verb, matched case-insensitively and anchored at the start:
-     `remove`/`removes`/`removed`/`removing`, `delete`/`deletes`/`deleted`/`deleting`,
-     `drop`/`drops`/`dropped`/`dropping`, `rename`/`renames`/`renamed`/`renaming`.
-     Directives that do not start with one of these are skipped. Parse the
-     remainder with `_parse_breaking_change_symbols` and union the results.
-
-  8. **`_prompt_breaking_change_signature_symbols(prompt_content) -> Set[str]`** -
-     the signature-change allow-list. Same anchored-directive scan, but the tail
-     must begin with a `change` verb (`change`/`changes`/`changed`/`changing`)
-     followed by whitespace and one of `signature`/`signatures`/`api`/`contract`.
-     Parse the remainder identically.
-
-  9. **A bare `BREAKING-CHANGE:` marker MUST NOT disable a gate globally.** With
-     no verb and no symbols, both allow-lists come back empty and both gates stay
-     armed. Opt-outs are always scoped to named symbols.
-
-% Notes for the callers (not implemented here)
-  - Descendant expansion - a top-level class name in the REMOVAL allow-list
-    implicitly authorizes removing its captured `Class.method` /
-    `Class.Inner.method` descendants - is applied by the public-surface gate, not
-    by this module. It is deliberately removal-only: `change signature Service`
-    is ambiguous (constructor? every method?) and silently broadening it would
-    mask real regressions.
-  - The test-churn gate has its OWN verb-object grammar (an opt-out verb whose
-    direct object is `tests`) and lives in `test_churn.py`.
+% Inputs and outputs
+  `_env_flag_enabled(name)` is true only when the variable is present and its
+  stripped, lowercased value is one of `1`, `true`, `yes`, `on`.
+  `_parse_llm_bool(value)` reads an LLM-enable flag and treats empty input as
+  enabled; `0`/`false`/`no`/`off` disable it, `1`/`true`/`yes`/`on` enable it, and
+  anything else is disabled.
+  `_prompt_has_breaking_change_marker` reports whether the stripped body mentions
+  the marker at all; `_prompt_allows_breaking_change` is a backward-compatible
+  alias for it.
 
 % Dependencies
-  - Imports `os` and `re`.
-  - Imports `List`, `Optional`, `Set` from `typing`.
-
-% Instructions
-  - Compile the two regexes once at module level.
-  - Every parser must tolerate `None` and empty input by returning an empty
-    result rather than raising.
-
-% Deliverables
-  - Code: `pdd/conformance/directives.py`
+  Standard library only.

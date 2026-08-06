@@ -9666,7 +9666,7 @@
   },
   {
     "reason": "Centralized cloud config: routes endpoint URLs (incl. submitExample) and JWT auth honoring PDD_CLOUD_URL.",
-  "description": "CloudConfig provides static methods for cloud URL resolution (get_base_url, get_endpoint_url with CLOUD_ENDPOINTS map including submitExample), environment inference (ensure_default_env), JWT auth (get_jwt_token), and cloud-environment detection (is_running_in_cloud, is_cloud_enabled). JWT auth delegates to the shared helper, preserving injected/cache/keyring-refresh credentials while explicit machine flags cause the helper to refuse device flow. Module-level get_cloud_timeout() reads PDD_CLOUD_TIMEOUT, and get_cloud_request_timeout() returns the requests timeout tuple used by cloud POST calls. Used by sync/fix auto-submit so PDD_CLOUD_URL is honored across staging/prod/local (#859).",
+    "description": "CloudConfig provides static methods for cloud URL resolution (get_base_url, get_endpoint_url with CLOUD_ENDPOINTS map including submitExample), environment inference (ensure_default_env), JWT auth (get_jwt_token), and cloud-environment detection (is_running_in_cloud, is_cloud_enabled). JWT auth delegates to the shared helper, preserving injected/cache/keyring-refresh credentials while explicit machine flags cause the helper to refuse device flow. Module-level get_cloud_timeout() reads PDD_CLOUD_TIMEOUT, and get_cloud_request_timeout() returns the requests timeout tuple used by cloud POST calls. Used by sync/fix auto-submit so PDD_CLOUD_URL is honored across staging/prod/local (#859).",
     "dependencies": [
       "auth_service_python.prompt"
     ],
@@ -12158,6 +12158,11 @@
             "name": "ProseOutputError",
             "signature": "(prompt_name: str, output_path: str, language: str, model_name: str = \"unknown\", total_cost: float = 0.0, raw_output: Optional[str] = None, extractor_result: str = \"empty\")",
             "returns": "ProseOutputError"
+          },
+          {
+            "name": "_LANGUAGE_TEST_FILE_EXTS",
+            "signature": "Tuple[str, ...]",
+            "returns": "Tuple[str, ...]"
           }
         ]
       }
@@ -12179,13 +12184,13 @@
       "module": {
         "functions": [
           {
-            "name": "_parse_llm_bool",
-            "signature": "(value: str) -> bool",
+            "name": "_env_flag_enabled",
+            "signature": "(name: str) -> bool",
             "returns": "bool"
           },
           {
-            "name": "_env_flag_enabled",
-            "signature": "(name: str) -> bool",
+            "name": "_parse_llm_bool",
+            "signature": "(value: str) -> bool",
             "returns": "bool"
           },
           {
@@ -12194,19 +12199,9 @@
             "returns": "str"
           },
           {
-            "name": "_prompt_has_breaking_change_marker",
-            "signature": "(prompt_content: Optional[str]) -> bool",
-            "returns": "bool"
-          },
-          {
             "name": "_iter_breaking_change_directives",
             "signature": "(prompt_content: Optional[str]) -> List[str]",
             "returns": "List[str]"
-          },
-          {
-            "name": "_parse_breaking_change_symbols",
-            "signature": "(directive_tail: str) -> Set[str]",
-            "returns": "Set[str]"
           },
           {
             "name": "_prompt_breaking_change_removed_symbols",
@@ -12220,6 +12215,11 @@
           },
           {
             "name": "_prompt_allows_breaking_change",
+            "signature": "(prompt_content: Optional[str]) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_prompt_has_breaking_change_marker",
             "signature": "(prompt_content: Optional[str]) -> bool",
             "returns": "bool"
           }
@@ -12246,24 +12246,9 @@
       "module": {
         "functions": [
           {
-            "name": "_prompt_allows_test_churn",
-            "signature": "(prompt_content: Optional[str]) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "_is_python_generation",
-            "signature": "(language: Optional[str], output_path: Optional[str]) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "_is_test_output_path",
-            "signature": "(output_path: Optional[str]) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "_get_test_churn_threshold",
-            "signature": "() -> float",
-            "returns": "float"
+            "name": "_verify_test_churn",
+            "signature": "(existing_code: Optional[str], generated_code: str, prompt_name: str, output_path: Optional[str], prompt_content: Optional[str], adopted_human: bool = False) -> None",
+            "returns": "None"
           },
           {
             "name": "_compute_test_churn_ratio",
@@ -12276,9 +12261,24 @@
             "returns": "float"
           },
           {
-            "name": "_verify_test_churn",
-            "signature": "(existing_code: Optional[str], generated_code: str, prompt_name: str, output_path: Optional[str], prompt_content: Optional[str], adopted_human: bool = False) -> None",
-            "returns": "None"
+            "name": "_get_test_churn_threshold",
+            "signature": "() -> float",
+            "returns": "float"
+          },
+          {
+            "name": "_is_test_output_path",
+            "signature": "(output_path: Optional[str]) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_is_python_generation",
+            "signature": "(language: Optional[str], output_path: Optional[str]) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_prompt_allows_test_churn",
+            "signature": "(prompt_content: Optional[str]) -> bool",
+            "returns": "bool"
           },
           {
             "name": "_find_default_test_files",
@@ -12305,61 +12305,6 @@
       "module": {
         "functions": [
           {
-            "name": "_collect_bound_module_names",
-            "signature": "(tree: ast.Module) -> Set[str]",
-            "returns": "Set[str]"
-          },
-          {
-            "name": "_scannable_children",
-            "signature": "(node: ast.AST) -> Iterator[ast.AST]",
-            "returns": "Iterator[ast.AST]"
-          },
-          {
-            "name": "_node_writes_dunder_all",
-            "signature": "(node: ast.AST) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "_subtree_mutates_dunder_all",
-            "signature": "(node: ast.AST) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "_clean_dunder_all_literal",
-            "signature": "(node: ast.AST) -> Optional[Set[str]]",
-            "returns": "Optional[Set[str]]"
-          },
-          {
-            "name": "_extract_dunder_all",
-            "signature": "(tree: ast.Module) -> Optional[Set[str]]",
-            "returns": "Optional[Set[str]]"
-          },
-          {
-            "name": "_assign_target_matches",
-            "signature": "(target: ast.AST, symbol: str) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "_symbol_exists_in_module",
-            "signature": "(tree: ast.Module, symbol: str) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "_effective_patch_targets",
-            "signature": "(file_path: Optional[str], patch_targets: Optional[Set[str]] = None) -> Set[str]",
-            "returns": "Set[str]"
-          },
-          {
-            "name": "_collect_patch_targets",
-            "signature": "(file_path: Optional[str]) -> Set[str]",
-            "returns": "Set[str]"
-          },
-          {
-            "name": "_reexport_binding",
-            "signature": "(alias: ast.alias) -> Optional[str]",
-            "returns": "Optional[str]"
-          },
-          {
             "name": "_snapshot_public_surface",
             "signature": "(code_text: str, language: str, file_path: str = None) -> Set[str]",
             "returns": "Set[str]"
@@ -12373,6 +12318,36 @@
             "name": "_collect_python_public_surface",
             "signature": "(source: str) -> List[str]",
             "returns": "List[str]"
+          },
+          {
+            "name": "_extract_dunder_all",
+            "signature": "(tree: ast.Module) -> Optional[Set[str]]",
+            "returns": "Optional[Set[str]]"
+          },
+          {
+            "name": "_collect_bound_module_names",
+            "signature": "(tree: ast.Module) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_reexport_binding",
+            "signature": "(alias: ast.alias) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "_collect_patch_targets",
+            "signature": "(file_path: Optional[str]) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_effective_patch_targets",
+            "signature": "(file_path: Optional[str], patch_targets: Optional[Set[str]] = None) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_symbol_exists_in_module",
+            "signature": "(tree: ast.Module, symbol: str) -> bool",
+            "returns": "bool"
           }
         ]
       }
@@ -12394,49 +12369,51 @@
       "module": {
         "functions": [
           {
-            "name": "_is_dataclass_decorator",
-            "signature": "(decorator: ast.AST) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "_dataclass_decorator_is_kw_only",
-            "signature": "(decorator: ast.AST) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "_dataclass_decorator_synthesizes_init",
-            "signature": "(decorator: ast.AST) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "_is_kw_only_sentinel",
-            "signature": "(annotation: Optional[ast.AST]) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "_dataclass_field_call_is_init_false",
-            "signature": "(value: Optional[ast.AST]) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "_collect_dataclass_own_parts",
-            "signature": "(class_node: ast.ClassDef) -> List[str]",
-            "returns": "List[str]"
-          },
-          {
-            "name": "_part_field_name",
-            "signature": "(part: str) -> Optional[str]",
-            "returns": "Optional[str]"
-          },
-          {
-            "name": "_collect_dataclass_inherited_parts",
-            "signature": "(class_node: ast.ClassDef, class_defs: Optional[Dict[str, ast.ClassDef]], imported_names: Optional[Set[str]], visited: frozenset) -> List[str]",
-            "returns": "List[str]"
-          },
-          {
             "name": "_synthesize_dataclass_init_signature",
             "signature": "(class_node: ast.ClassDef, class_defs: Optional[Dict[str, ast.ClassDef]] = None, imported_names: Optional[Set[str]] = None) -> Optional[str]",
             "returns": "Optional[str]"
+          },
+          {
+            "name": "_is_dataclass_decorator",
+            "signature": "(decorator: ast.AST) -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Public-signature snapshotting with binding-kind prefixes.",
+    "description": "Emits {public_symbol -> signature_entry} where every entry carries a leading kind prefix ([function]/[async_function]/[class] at top level; [instance]/[staticmethod]/[classmethod]/[property:<roles>] in classes; [assignment] for module-level rebindings; [import] variants for re-exports) so a binding-kind flip diffs even when the receiver-stripped parameter list matches. A redundant alias canonicalises to the plain import marker to avoid phantom diffs; ImportFrom modules include the relative level so a re-export re-pointed across packages diffs. Applies the same public-set rules as surface.py - __all__ precedence, class-member recursion, patch-target preservation, re-export-only imports and the __future__ skip - because the removed-symbol diff and the signature diff must agree on what is public. Property accessor roles are merged per property name. Extracted from code_generator_main.",
+    "dependencies": [
+      "conformance/surface_python.prompt",
+      "conformance/dataclass_signatures_python.prompt"
+    ],
+    "priority": 7,
+    "filename": "conformance/signatures_python.prompt",
+    "filepath": "pdd/conformance/signatures.py",
+    "tags": [
+      "conformance",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_snapshot_public_signatures",
+            "signature": "(code_text: str, language: str, file_path: str = None) -> Dict[str, str]",
+            "returns": "Dict[str, str]"
+          },
+          {
+            "name": "_format_python_signature",
+            "signature": "(node: ast.AST, *, skip_first: bool = False) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "_resolve_class_node",
+            "signature": "(tree: ast.Module, dotted_name: str) -> Optional[ast.ClassDef]",
+            "returns": "Optional[ast.ClassDef]"
           }
         ]
       }
