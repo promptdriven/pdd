@@ -1201,6 +1201,36 @@ def test_scope_manifest_preserves_exact_scope_and_rejects_discovery(
     assert payload["scope"]["contracts"] == ["stories/contracts/ok.contract.md"]
 
 
+def test_scope_manifest_accepts_nested_logical_prompt_metadata(tmp_path, monkeypatch):
+    """Metadata written for nested prompts must pass exact-scope preflight."""
+    stories, prompts, story, manifest = _write_scope_manifest(
+        tmp_path, prompt_ref="prompts/conformance/demo.prompt"
+    )
+    nested_prompt = prompts / "conformance" / "demo.prompt"
+    nested_prompt.parent.mkdir()
+    nested_prompt.write_text("prompt", encoding="utf-8")
+    story.write_text(
+        "<!-- pdd-story-prompts: prompts/conformance/demo.prompt -->\n## Story\nOK",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (
+            True,
+            [{"story": str(story), "passed": True, "changes": []}],
+            0.0,
+            "model-safe",
+        )
+        result = CliRunner().invoke(
+            detect_change,
+            ["--stories", "--scope-manifest", str(manifest)],
+            obj={},
+        )
+
+    assert result.exit_code == 0
+    assert mock_runner.call_args.kwargs["prompt_files"] == [nested_prompt]
+
+
 def test_scope_manifest_allows_shared_prompt_across_distinct_stories(
     tmp_path, monkeypatch
 ):
