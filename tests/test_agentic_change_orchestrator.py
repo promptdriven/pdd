@@ -10760,19 +10760,40 @@ class TestSetupWorktreeCleanRestart:
 class TestBuildDependencyContext:
     def test_surfaces_pdd_dependency_not_include(self, tmp_path):
         """A <pdd-dependency> edge with no matching <include> must be surfaced,
-        and an <include>-only edge (no <pdd-dependency>) must not be."""
+        and an <include>-only edge (no <pdd-dependency>) must not be -- through
+        the real prompt -> architecture -> Step 6 path (PR #2376 review)."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "customer_service_python.prompt").write_text(
+            "<pdd-reason>test</pdd-reason>\n"
+            "<pdd-dependency>payment_status_python.prompt</pdd-dependency>\n",
+            encoding="utf-8",
+        )
+        (prompts_dir / "payment_status_python.prompt").write_text(
+            "<pdd-reason>test</pdd-reason>\n", encoding="utf-8"
+        )
+        (prompts_dir / "onboarding_python.prompt").write_text(
+            "<pdd-reason>test</pdd-reason>\n"
+            "<include>legacy_wizard_python.prompt</include>\n",
+            encoding="utf-8",
+        )
+        (prompts_dir / "legacy_wizard_python.prompt").write_text(
+            "<pdd-reason>test</pdd-reason>\n", encoding="utf-8"
+        )
+
         arch_path = tmp_path / "architecture.json"
         arch_path.write_text(json.dumps([
-            {"filename": "customer_service_python.prompt", "dependencies": ["payment_status_python.prompt"]},
+            {"filename": "customer_service_python.prompt", "dependencies": []},
             {"filename": "payment_status_python.prompt", "dependencies": []},
             {"filename": "onboarding_python.prompt", "dependencies": []},
+            {"filename": "legacy_wizard_python.prompt", "dependencies": []},
         ]), encoding="utf-8")
 
         result = _build_dependency_context(arch_path, quiet=True)
 
         assert "payment_status" in result and "customer_service" in result
         assert "affects: customer_service" in result
-        assert "onboarding" not in result
+        assert "legacy_wizard" not in result
 
     def test_returns_empty_string_when_architecture_missing(self, tmp_path):
         missing = tmp_path / "architecture.json"

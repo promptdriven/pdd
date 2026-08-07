@@ -2238,10 +2238,12 @@ def _build_dependency_context(architecture_path: Path, quiet: bool = False) -> s
 
     This is used to provide Step 6 with structured dependency information
     so it can identify transitively affected modules. The graph reflects
-    declared architectural dependencies (`<pdd-dependency>` tags, as recorded
-    in architecture.json) rather than the `<include>` context graph — see
-    issue #1807: `<include>` tags are LLM context and are not a reliable
-    signal of "what needs updating if this module changes."
+    declared architectural dependencies (`<pdd-dependency>` tags, read fresh
+    from each module's prompt file — architecture.json's own `dependencies`
+    field is not `<pdd-dependency>`-only and cannot be trusted directly)
+    rather than the `<include>` context graph — see issue #1807: `<include>`
+    tags are LLM context and are not a reliable signal of "what needs
+    updating if this module changes."
 
     Args:
         architecture_path: Path to architecture.json

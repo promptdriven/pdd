@@ -7,7 +7,7 @@ import shlex
 import stat
 import logging
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Set, Optional, Dict, List, Tuple, Deque
 from collections import deque, defaultdict
 
@@ -109,6 +109,48 @@ def extract_module_from_include(include_path: str) -> Optional[str]:
     return clean_name
 
 
+def _architecture_module_key(filename: str) -> Optional[str]:
+    """
+    Maps an architecture.json entry's filename to a dependency-graph node key.
+
+    Unlike extract_module_from_include() (used to match <include> targets
+    against module basenames), this preserves the full directory prefix and
+    does not reject non-language suffixes like `_LLM`. Two modules with the
+    same basename in different directories (e.g. commands/gate_python.prompt
+    vs. gate_python.prompt), or a code module and its `_LLM.prompt` runtime
+    counterpart, must resolve to distinct keys -- collapsing either pair
+    silently drops a real declared dependency.
+
+    Args:
+        filename: The `filename` field of an architecture.json module entry.
+
+    Returns:
+        The module key, or None if filename isn't a `.prompt` file.
+    """
+    if not filename or not filename.endswith(".prompt"):
+        return None
+
+    path_obj = PurePosixPath(filename.replace("\\", "/"))
+    stem = path_obj.stem
+    if not stem:
+        return None
+
+    suffix_match = re.search(r'_([a-zA-Z0-9]+)$', stem)
+    suffix_value = suffix_match.group(1).lower() if suffix_match else None
+    if suffix_value and suffix_value != 'llm' and _is_known_language(suffix_value):
+        clean_stem = stem[: -(len(suffix_value) + 1)]
+    else:
+        clean_stem = stem
+
+    if not clean_stem:
+        return None
+
+    parent = path_obj.parent
+    if str(parent) in ('.', ''):
+        return clean_stem
+    return f"{parent.as_posix()}/{clean_stem}"
+
+
 def build_dependency_graph(prompts_dir: Path) -> Dict[str, List[str]]:
     """
     Scans prompt files and builds a dependency graph based on includes.
@@ -157,13 +199,20 @@ def build_dependency_graph(prompts_dir: Path) -> Dict[str, List[str]]:
 
 def build_dependency_graph_from_architecture(architecture_path: Path) -> Dict[str, List[str]]:
     """
-    Builds a dependency graph from architecture.json based on declared dependencies.
+    Builds a dependency graph from real `<pdd-dependency>` tags in each
+    module's prompt file, using architecture.json only to enumerate the
+    module universe and resolve each entry to its on-disk prompt file.
+
+    architecture.json's own `dependencies` field is NOT used as the edge
+    source: merge_auto_deps_includes_into_architecture() also writes
+    <include>-derived module edges into that same field, so it cannot be
+    trusted to represent only declared <pdd-dependency> edges.
 
     Args:
         architecture_path: Path to architecture.json.
 
     Returns:
-        Dictionary mapping module_name -> list of dependencies (module names).
+        Dictionary mapping module_key -> list of dependency module keys.
     """
     if not architecture_path.exists() or not architecture_path.is_file():
         logger.warning(f"Architecture file not found: {architecture_path}")
@@ -185,6 +234,14 @@ def build_dependency_graph_from_architecture(architecture_path: Path) -> Dict[st
     if not arch_entries:
         return {}
 
+    try:
+        from pdd.architecture_sync import parse_prompt_tags, _normalize_dependency_filenames
+        from pdd.architecture_include_validation import resolve_architecture_prompt_path
+    except Exception as exc:
+        logger.warning(f"Could not import architecture_sync helpers: {exc}")
+        return {}
+
+    project_root = architecture_path.parent
     dependency_graph: Dict[str, Set[str]] = {}
 
     for entry in arch_entries:
@@ -194,27 +251,35 @@ def build_dependency_graph_from_architecture(architecture_path: Path) -> Dict[st
         if not filename:
             continue
 
-        current_module = extract_module_from_include(filename)
-        if not current_module:
+        current_key = _architecture_module_key(filename)
+        if not current_key:
             continue
 
-        if current_module not in dependency_graph:
-            dependency_graph[current_module] = set()
+        if current_key not in dependency_graph:
+            dependency_graph[current_key] = set()
 
-        deps = entry.get("dependencies")
-        if not isinstance(deps, list):
+        prompt_path = resolve_architecture_prompt_path(filename, project_root)
+        try:
+            prompt_content = prompt_path.read_text(encoding="utf-8")
+        except OSError:
+            logger.warning(f"Prompt file not found for architecture entry '{filename}': {prompt_path}")
             continue
 
-        for dep in deps:
-            if not isinstance(dep, str):
+        tags = parse_prompt_tags(prompt_content)
+        raw_deps = tags.get("dependencies") or []
+        if not raw_deps:
+            continue
+
+        normalized_deps = _normalize_dependency_filenames(raw_deps, arch_entries)
+        for dep_filename in normalized_deps:
+            dep_key = _architecture_module_key(dep_filename)
+            if not dep_key or dep_key == current_key:
                 continue
-            dep_module = extract_module_from_include(dep)
-            if dep_module and dep_module != current_module:
-                dependency_graph[current_module].add(dep_module)
-                if dep_module not in dependency_graph:
-                    dependency_graph[dep_module] = set()
+            dependency_graph[current_key].add(dep_key)
+            if dep_key not in dependency_graph:
+                dependency_graph[dep_key] = set()
 
-    return {k: sorted(list(v)) for k, v in dependency_graph.items()}
+    return {k: sorted(v) for k, v in dependency_graph.items()}
 
 
 def topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[str]]]:
@@ -501,7 +566,7 @@ def generate_sync_order_script(modules: List[str], output_path: Path, worktree_p
 
     script_content = "\n".join(lines)
 
-    try: 
+    try:
         output_path.write_text(script_content, encoding="utf-8")
 
         # Make executable (chmod +x)
@@ -560,7 +625,7 @@ def discover_associated_documents(
     results: List[str] = []
     seen: Set[str] = set()
 
-    def _add(path: str) -> None: 
+    def _add(path: str) -> None:
         if path and path not in seen:
             seen.add(path)
             results.append(path)
@@ -576,7 +641,7 @@ def discover_associated_documents(
 
     # Phase 2: BFS traversal via architecture.json for transitive dependents
     if architecture_path is not None and architecture_path.exists():
-        try: 
+        try:
             arch_data = json.loads(architecture_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning(f"Failed to read architecture.json at {architecture_path}: {exc}")
@@ -588,7 +653,7 @@ def discover_associated_documents(
         # tolerance (architecture_registry.py:21); rejecting non-list
         # data here means object-format repos silently fall out of #739's
         # transitive-doc safety net.
-        try: 
+        try:
             from pdd.architecture_registry import extract_modules
             arch_entries = extract_modules(arch_data)
         except Exception as exc:
@@ -629,7 +694,7 @@ def discover_associated_documents(
         # match a basename-only seed and the dependent doc would be missed.
         modified_filenames: Set[str] = set()
         for p in modified_prompts:
-            try: 
+            try:
                 rel = p.relative_to(prompts_dir).as_posix()
             except ValueError:
                 rel = ""
