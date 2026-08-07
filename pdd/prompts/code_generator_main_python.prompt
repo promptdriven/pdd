@@ -43,7 +43,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
 
 # Requirements
 1. **Path Orchestration**: Resolve input and output paths using `construct_paths`, ensuring that CLI flags, front-matter overrides, and `.pddrc` defaults are applied in the correct precedence (CLI > Front-matter > Config).
-    - Inject `EXAMPLE_OUTPUT_PATH` into `env_vars` for templates that reference `${EXAMPLE_OUTPUT_PATH}`. Precedence: explicit `-e EXAMPLE_OUTPUT_PATH=…` > `resolved_config["example_output_path"]` > `resolved_config["examples_dir"]` > template front-matter default. The fallback to `examples_dir` is required to keep generated `<include>` paths aligned with where `pdd example` writes files (#616). Strip a single trailing `/` or `\` before injection.
+    - Inject `EXAMPLE_OUTPUT_PATH` into `env_vars` for templates that reference `${EXAMPLE_OUTPUT_PATH}`. Precedence: explicit `-e EXAMPLE_OUTPUT_PATH=…` > `resolved_config["example_output_path"]` > `resolved_config["examples_dir"]` > template front-matter default. The fallback to `examples_dir` is required to keep generated include-tag paths aligned with where `pdd example` writes files (#616). Strip a single trailing `/` or `\` before injection.
 2. **Incremental Generation**: 
     - Detect if an output file already exists.
     - Implement a Git-based "time travel" mechanism: if a file is unchanged in HEAD, search up to 10 previous commits to find a different version of the prompt to use as the "original" for a diff-based update.
@@ -65,19 +65,29 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
     - Support a `post_process_python` hook defined in front-matter or environment variables.
     - Handle both `stdin` and `argv` execution modes for post-processing scripts.
     - Include "safety net" logic for specific templates (e.g., automatically running `render_mermaid.py` if the output is `architecture.json`).
-5. **Conformance Gates**: The gate implementations live in `pdd.conformance`; this module orchestrates them and re-exports their public surface.
-    - Call the gates in order: prose/empty-output classification, then architecture and `<pdd-interface>` conformance, then annotation reconciliation, then the public-surface gate, then the test-churn gate. Gate call sites MUST test `generated_code_content is not None`, NOT truthiness: a truthy test skips every gate when the provider returns `""`, and the writer then truncates the existing file to zero bytes.
-    - Own the prose/empty-output classification itself (#1649), since it judges the raw generation rather than a module's symbols: immediately before the conformance gate and before any file write, raise `ProseOutputError` when the extracted content is present but blank, the language is not `prompt`, and `PDD_ALLOW_EMPTY_GENERATION` is not enabled. A response that is planning text or an apology extracts to nothing, so this is what distinguishes "the model did not return code" from "the code is missing a symbol" - the two MUST NOT collapse into one error.
-    - Re-export the four typed exceptions from `pdd.conformance.gate_errors` using the REDUNDANT ALIAS form (`from .conformance.gate_errors import X as X`), so callers keep importing them from `pdd.code_generator_main` unchanged. A plain `from ... import X` is not public surface under this project's own public-surface rules and would read as a symbol removal. Re-export the gate helpers external callers import today for the same reason.
-    - Retry callers pass repairs through `PDD_REPAIR_DIRECTIVE`. When set and non-empty, append it to the prompt inside an `<architecture_repair_directive>` block before either cloud or local generation, without mutating the environment variable. A repair retry MUST bypass incremental generation entirely, or the diff-analysis step can swallow the named repair before it reaches the generator.
-    - Before writing, refuse to overwrite a non-empty existing file with empty generated content unless `PDD_ALLOW_EMPTY_GENERATION` is set.
-    - Every gate MUST run against the generated content in memory, and a raising gate MUST leave the file at the output path byte-identical to its pre-generation content. Where a gate can only be reached after the file was already written, the raising path MUST restore the pre-generation content before propagating, so the repair loop reads the canonical pre-sync file rather than the rejected generation. A failed restore MUST warn rather than raise - it MUST NOT mask the gate failure that is being propagated. The propagated error carries the run's accumulated cost and model name, since the caller that catches it is the one that reports them.
+5. **Conformance Gates**: The gate implementations live in `pdd.conformance`. This module orchestrates them, owns the prose/empty-output classification (#1649) because that judges the raw generation rather than a module's symbols, and re-exports the gate surface so existing callers keep importing it from here. Its obligations are the numbered contract rules below - they are what a user relies on when re-running generation over work they cannot afford to lose.
 
 BREAKING-CHANGE: change signature ArchitectureConformanceError, PublicSurfaceRegressionError, TestChurnError, ProseOutputError
 
 6. **Integration & Wiring**:
     - Implement opt-in "Auto-Wiring": detect public exports in generated Python files and insert/update import statements in the parent `__init__.py` only when `PDD_ENABLE_WIRING=1` is set. The default must not mutate sibling files; `PDD_SKIP_WIRING=1` must continue to override and disable wiring for backward compatibility.
-    - Validate `<include>` tags in generated `.prompt` files to ensure they point to existing files.
+    - Validate include tags in generated `.prompt` files to ensure they point to existing files.
+
+# Contract rules
+<contract_rules>
+  R1 (MUST): Call the gates in this order - prose/empty-output classification, then architecture and `<pdd-interface>` conformance, then annotation reconciliation, then the public-surface gate, then the test-churn gate.
+  R2 (MUST): Test `generated_code_content is not None` at every gate call site rather than truthiness, since a truthy test skips every gate when the provider returns the empty string and the writer then truncates the existing file to zero bytes.
+  R3 (MUST): Raise `ProseOutputError` before the conformance gate and before any file write when the extracted content is present but blank, the language is not `prompt`, and `PDD_ALLOW_EMPTY_GENERATION` is not enabled.
+  R4 (MUST NOT): Collapse "the model did not return code" into the same error as "the code is missing a symbol", since planning text or an apology extracts to nothing and is an output-shape failure rather than a symbol regression.
+  R5 (MUST): Run every gate against the generated content in memory, leaving the file at the output path byte-identical to its pre-generation content whenever a gate raises.
+  R6 (MUST): Restore the pre-generation content before propagating where a gate can only be reached after the file was already written, so the repair loop reads the canonical pre-sync file rather than the rejected generation.
+  R7 (MUST NOT): Let a failed restore raise, since that would mask the gate failure being propagated; warn instead.
+  R8 (MUST): Carry the run's accumulated cost and model name on the propagated error, since the caller that catches it is the one that reports them.
+  R9 (MUST NOT): Overwrite a non-empty existing file with empty generated content unless `PDD_ALLOW_EMPTY_GENERATION` is set.
+  R10 (MUST): Re-export the four typed exceptions and the gate helpers external callers import today using the redundant-alias form, since a plain import is not public surface under this project's own rules and would read as a symbol removal.
+  R11 (MUST): Append a non-empty `PDD_REPAIR_DIRECTIVE` to the prompt inside an `<architecture_repair_directive>` block before either cloud or local generation, without mutating the environment variable.
+  R12 (MUST): Bypass incremental generation entirely on a repair retry, or the diff-analysis step can swallow the named repair before it reaches the generator.
+</contract_rules>
 
 # Dependencies
 <construct_paths>

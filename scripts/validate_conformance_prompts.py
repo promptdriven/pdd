@@ -41,6 +41,30 @@ def _interface_block(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+# Mirrors pdd.contract_ir._XML_SECTION_RE. That scan is non-greedy but
+# non-overlapping, so a bare `<tag>` written in prose pairs with the next real
+# `</tag>` and swallows everything between them. A <contract_rules> block inside
+# that span is invisible to `pdd contracts check` while still looking correct to
+# a line-anchored search, which is a silent loss of coverage evidence.
+XML_SECTION_RE = re.compile(
+    r"<(?P<tag>[a-z_][a-z0-9_]*)>(?P<body>.*?)</(?P=tag)>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def check_rules_are_reachable(path: Path, text: str) -> None:
+    """Require <contract_rules> to survive the real parser's section scan."""
+    scan = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("%")
+    )
+    tags = {m.group("tag").lower() for m in XML_SECTION_RE.finditer(scan)}
+    if "<contract_rules>" in text and "contract_rules" not in tags:
+        errors.append(
+            f"{path}: <contract_rules> is present but swallowed by an unpaired "
+            "tag written in prose; `pdd contracts check` will not see it"
+        )
+
+
 def check_contract_rules(path: Path, text: str) -> None:
     """Require a parseable <contract_rules> block.
 
@@ -105,6 +129,7 @@ def check_prompt(name: str) -> None:
         errors.append(f"{path}: must not reference code_generator_main (circular)")
 
     check_contract_rules(path, text)
+    check_rules_are_reachable(path, text)
 
 
 def check_architecture() -> None:
@@ -200,11 +225,28 @@ def check_orchestrator_selector() -> None:
                 errors.append(f"{ORCH}: selector names missing symbol {sym}")
 
 
+def check_orchestrator_contract_rules() -> None:
+    """The orchestrator carries the gate obligations the units cannot own.
+
+    Atomicity on a failing gate and the prose/empty classification live here, not
+    in any conformance unit, so without a parseable block the story's central
+    criterion - a failing check never alters the file on disk - would carry no
+    coverage evidence and `pdd contracts check` would pass vacuously on it.
+    """
+    if not ORCH.is_file():
+        errors.append(f"{ORCH}: missing")
+        return
+    text = ORCH.read_text(encoding="utf-8")
+    check_contract_rules(ORCH, text)
+    check_rules_are_reachable(ORCH, text)
+
+
 def main() -> int:
     for name in EXPECTED:
         check_prompt(name)
     check_architecture()
     check_orchestrator_selector()
+    check_orchestrator_contract_rules()
 
     if errors:
         print("FAIL")
