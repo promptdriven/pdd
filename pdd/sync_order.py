@@ -7,7 +7,7 @@ import shlex
 import stat
 import logging
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Set, Optional, Dict, List, Tuple, Deque
 from collections import deque, defaultdict
 
@@ -109,6 +109,48 @@ def extract_module_from_include(include_path: str) -> Optional[str]:
     return clean_name
 
 
+def _architecture_module_key(filename: str) -> Optional[str]:
+    """
+    Maps an architecture.json entry's filename to a dependency-graph node key.
+
+    Unlike extract_module_from_include() (used to match <include> targets
+    against module basenames), this preserves the full directory prefix and
+    does not reject non-language suffixes like `_LLM`. Two modules with the
+    same basename in different directories (e.g. commands/gate_python.prompt
+    vs. gate_python.prompt), or a code module and its `_LLM.prompt` runtime
+    counterpart, must resolve to distinct keys -- collapsing either pair
+    silently drops a real declared dependency.
+
+    Args:
+        filename: The `filename` field of an architecture.json module entry.
+
+    Returns:
+        The module key, or None if filename isn't a `.prompt` file.
+    """
+    if not filename or not filename.endswith(".prompt"):
+        return None
+
+    path_obj = PurePosixPath(filename.replace("\\", "/"))
+    stem = path_obj.stem
+    if not stem:
+        return None
+
+    suffix_match = re.search(r'_([a-zA-Z0-9]+)$', stem)
+    suffix_value = suffix_match.group(1).lower() if suffix_match else None
+    if suffix_value and suffix_value != 'llm' and _is_known_language(suffix_value):
+        clean_stem = stem[: -(len(suffix_value) + 1)]
+    else:
+        clean_stem = stem
+
+    if not clean_stem:
+        return None
+
+    parent = path_obj.parent
+    if str(parent) in ('.', ''):
+        return clean_stem
+    return f"{parent.as_posix()}/{clean_stem}"
+
+
 def build_dependency_graph(prompts_dir: Path) -> Dict[str, List[str]]:
     """
     Scans prompt files and builds a dependency graph based on includes.
@@ -153,6 +195,91 @@ def build_dependency_graph(prompts_dir: Path) -> Dict[str, List[str]]:
 
     # Convert sets to lists for return type consistency
     return {k: list(v) for k, v in dependency_graph.items()}
+
+
+def build_dependency_graph_from_architecture(architecture_path: Path) -> Dict[str, List[str]]:
+    """
+    Builds a dependency graph from real `<pdd-dependency>` tags in each
+    module's prompt file, using architecture.json only to enumerate the
+    module universe and resolve each entry to its on-disk prompt file.
+
+    architecture.json's own `dependencies` field is NOT used as the edge
+    source: merge_auto_deps_includes_into_architecture() also writes
+    <include>-derived module edges into that same field, so it cannot be
+    trusted to represent only declared <pdd-dependency> edges.
+
+    Args:
+        architecture_path: Path to architecture.json.
+
+    Returns:
+        Dictionary mapping module_key -> list of dependency module keys.
+    """
+    if not architecture_path.exists() or not architecture_path.is_file():
+        logger.warning(f"Architecture file not found: {architecture_path}")
+        return {}
+
+    try:
+        arch_data = json.loads(architecture_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning(f"Failed to read or parse architecture.json at {architecture_path}: {e}")
+        return {}
+
+    try:
+        from pdd.architecture_registry import extract_modules
+        arch_entries = extract_modules(arch_data)
+    except Exception as exc:
+        logger.warning(f"extract_modules failed on {architecture_path}: {exc}")
+        arch_entries = arch_data if isinstance(arch_data, list) else []
+
+    if not arch_entries:
+        return {}
+
+    try:
+        from pdd.architecture_sync import parse_prompt_tags, _normalize_dependency_filenames
+        from pdd.architecture_include_validation import resolve_architecture_prompt_path
+    except Exception as exc:
+        logger.warning(f"Could not import architecture_sync helpers: {exc}")
+        return {}
+
+    project_root = architecture_path.parent
+    dependency_graph: Dict[str, Set[str]] = {}
+
+    for entry in arch_entries:
+        if not isinstance(entry, dict):
+            continue
+        filename = entry.get("filename")
+        if not filename:
+            continue
+
+        current_key = _architecture_module_key(filename)
+        if not current_key:
+            continue
+
+        if current_key not in dependency_graph:
+            dependency_graph[current_key] = set()
+
+        prompt_path = resolve_architecture_prompt_path(filename, project_root)
+        try:
+            prompt_content = prompt_path.read_text(encoding="utf-8")
+        except OSError:
+            logger.warning(f"Prompt file not found for architecture entry '{filename}': {prompt_path}")
+            continue
+
+        tags = parse_prompt_tags(prompt_content)
+        raw_deps = tags.get("dependencies") or []
+        if not raw_deps:
+            continue
+
+        normalized_deps = _normalize_dependency_filenames(raw_deps, arch_entries)
+        for dep_filename in normalized_deps:
+            dep_key = _architecture_module_key(dep_filename)
+            if not dep_key or dep_key == current_key:
+                continue
+            dependency_graph[current_key].add(dep_key)
+            if dep_key not in dependency_graph:
+                dependency_graph[dep_key] = set()
+
+    return {k: sorted(v) for k, v in dependency_graph.items()}
 
 
 def topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[str]]]:

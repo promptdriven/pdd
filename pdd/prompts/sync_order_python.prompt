@@ -3,6 +3,7 @@
 <pdd-dependency>auto_include_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_include_validation_python.prompt</pdd-dependency>
 
 <include>context/python_preamble.prompt</include>
 
@@ -39,6 +40,20 @@ A utility module that parses `<include>` tags from prompt files, builds a depend
    - Build graph: module_name -> list of modules it depends on
    - Skip self-references (module including its own example)
    - Return empty dict if prompts_dir doesn't exist
+
+3a. Function: _architecture_module_key(filename: str) -> Optional[str]
+   - Maps an architecture.json entry's `filename` to a dependency-graph node key. This is a distinct identity function from `extract_module_from_include()` — do not reuse or merge the two, they serve different purposes (matching `<include>` targets vs. identifying architecture.json entries).
+   - Return None for filenames that don't end in `.prompt`.
+   - Preserve the full directory prefix (e.g. "commands/gate_python.prompt" -> "commands/gate", distinct from "gate_python.prompt" -> "gate"). Two modules with the same basename in different directories must never collapse to the same key.
+   - Strip a trailing recognized-language suffix (via `_is_known_language()`) from the filename's stem. Do NOT strip `_LLM` or any other non-language suffix — "agentic_update_python.prompt" -> "agentic_update" and "agentic_update_LLM.prompt" -> "agentic_update_LLM" must stay distinct, not collapse to the same key (unlike `extract_module_from_include()`, which drops `_LLM.prompt` files entirely).
+
+3b. Function: build_dependency_graph_from_architecture(architecture_path: Path) -> Dict[str, List[str]]
+   - Returns module_key -> [dependency module keys]. architecture.json (accepting a bare array or `{"modules": [...]}`) enumerates the module universe — every entry is a graph key even with no dependencies — and resolves each entry to its on-disk prompt file via `pdd.architecture_include_validation.resolve_architecture_prompt_path()`, relative to the architecture.json's own directory (so a nested architecture.json resolves against its own local prompts/, not the caller's cwd).
+   - Dependency edges are NOT read from architecture.json's `dependencies` field: that field is not `<pdd-dependency>`-only, since `merge_auto_deps_includes_into_architecture()` (in `auto_deps_architecture.py`) also writes `<include>`-derived module edges into it. Instead, for each module, read its prompt file fresh and parse `<pdd-dependency>` tags via `pdd.architecture_sync.parse_prompt_tags()`; resolve each raw dependency string to a canonical architecture filename via `pdd.architecture_sync._normalize_dependency_filenames()`. A missing/unreadable prompt file yields no edges for that module (log and continue) rather than raising.
+   - Module identity uses `_architecture_module_key()`, NOT `extract_module_from_include()`.
+   - Self-dependencies (a module depending on its own key) are excluded.
+   - Missing file, unreadable file, or invalid JSON returns an empty dict rather than raising
+
 
 4. Function: topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[str]]]
    - Implement Kahn's algorithm for topological sorting
@@ -88,11 +103,14 @@ Helper: `_is_document_include(include_path: str) -> bool`
 <include select="def:main">context/auto_include_example.py</include>
 </auto_include_example>
 <utils.architecture_sync>
-    <include select="def:example_sync_all,def:example_validate_dependencies">context/architecture_sync_example.py</include>
+    <include select="def:run_example">context/architecture_sync_example.py</include>
 </utils.architecture_sync>
 <pdd.agentic_common>
     <include select="def:example_run_agentic_task">context/agentic_common_example.py</include>
 </pdd.agentic_common>
+<utils.architecture_registry>
+    <include>context/architecture_registry_example.py</include>
+</utils.architecture_registry>
 
 % Instructions
 - Reuse regex pattern from auto_include.py for parsing `<include>` tags
