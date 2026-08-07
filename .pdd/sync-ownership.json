@@ -14916,6 +14916,12 @@
       "owner": "pdd-maintainers",
       "pattern": "pdd/story_detection_result.py",
       "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/test_zsh_completion.py",
+      "role": "human-maintained"
     }
   ]
 }

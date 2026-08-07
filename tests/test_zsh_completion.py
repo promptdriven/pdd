@@ -1,11 +1,16 @@
 """Regression tests for the shipped Zsh completion dispatcher."""
 
 from pathlib import Path
+import shutil
 import subprocess
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPLETION = ROOT / "pdd" / "pdd_completion.zsh"
+
+pytestmark = pytest.mark.skipif(shutil.which("zsh") is None, reason="requires zsh")
 
 
 def _resolved_subcommand(*words: str) -> str:
