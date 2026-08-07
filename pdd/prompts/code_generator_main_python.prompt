@@ -87,6 +87,8 @@ BREAKING-CHANGE: change signature ArchitectureConformanceError, PublicSurfaceReg
   R10 (MUST): Re-export the four typed exceptions and the gate helpers external callers import today using the redundant-alias form, since a plain import is not public surface under this project's own rules and would read as a symbol removal.
   R11 (MUST): Append a non-empty `PDD_REPAIR_DIRECTIVE` to the prompt inside an `<architecture_repair_directive>` block before either cloud or local generation, without mutating the environment variable.
   R12 (MUST): Bypass incremental generation entirely on a repair retry, or the diff-analysis step can swallow the named repair before it reaches the generator.
+  R13 (MUST NOT): Replace or suppress the error a gate already raised with one from a gate later in the R1 order, so a run failing several checks is reported by the earliest and most fundamental cause instead of an arbitrary or generic one.
+  R14 (MUST): Inject the raising gate's own repair directive with its symbol-level detail intact rather than substituting a generic failure message, since a retry that is not told which symbol regressed and what shape it must have cannot converge.
 </contract_rules>
 
 # Dependencies

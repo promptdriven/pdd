@@ -1,5 +1,5 @@
-<!-- pdd-story-prompts: prompts/conformance/declared_surface_python.prompt, prompts/conformance/directives_python.prompt, prompts/conformance/gate_errors_python.prompt, prompts/conformance/interface_check_python.prompt, prompts/conformance/surface_python.prompt, prompts/conformance/test_churn_python.prompt, prompts/code_generator_main_python.prompt -->
-<!-- pdd-story-dev-units: prompts/conformance/declared_surface_python.prompt, prompts/conformance/directives_python.prompt, prompts/conformance/gate_errors_python.prompt, prompts/conformance/interface_check_python.prompt, prompts/conformance/surface_python.prompt, prompts/conformance/test_churn_python.prompt, prompts/code_generator_main_python.prompt -->
+<!-- pdd-story-prompts: pdd/prompts/conformance/declared_surface_python.prompt, pdd/prompts/conformance/directives_python.prompt, pdd/prompts/conformance/gate_errors_python.prompt, pdd/prompts/conformance/interface_check_python.prompt, pdd/prompts/conformance/surface_python.prompt, pdd/prompts/conformance/test_churn_python.prompt, pdd/prompts/code_generator_main_python.prompt -->
+<!-- pdd-story-dev-units: pdd/prompts/conformance/declared_surface_python.prompt, pdd/prompts/conformance/directives_python.prompt, pdd/prompts/conformance/gate_errors_python.prompt, pdd/prompts/conformance/interface_check_python.prompt, pdd/prompts/conformance/surface_python.prompt, pdd/prompts/conformance/test_churn_python.prompt, pdd/prompts/code_generator_main_python.prompt -->
 
 # User Story: Generation safety checks must survive PDD's own internal reorganisation
 

@@ -59,7 +59,7 @@
   R12 (MUST): Resolve a default written as a same-module constant against the module version it belongs to, so a literal-to-constant refactor is not a break while the same constant changing value is one.
   R13 (MUST): Resolve both sides of a declared symbol in the generated module's namespace, since the declaration describes the generated module.
   R14 (MUST): Limit a `BREAKING-CHANGE: change signature` directive on a declared symbol to what the declaration cannot express - binding kind and async-ness - never to the declared parameters.
-  R15 (MUST): Raise `PublicSurfaceRegressionError` with declared removals joining `removed:` and declared drifts joining `signature_changed:`, keeping those fields byte-identical and carrying `signature_details` per symbol so both the in-process and subprocess repair loops receive the exact declared target.
+  R15 (MUST): Raise `PublicSurfaceRegressionError` naming each regressing symbol together with the required signature text its declaration gives, with declared removals joining `removed:` and declared drifts joining `signature_changed:`, keeping those fields byte-identical and carrying `signature_details` per symbol so both the in-process and subprocess repair loops receive the exact declared target rather than having to infer it.
   R16 (MUST): Leave a module whose prompt declares no `type: "module"` interface behaving exactly as it did before declared symbols were judged against declarations.
   R17 (MUST): Reconcile before the gate judges, so the returned source is what the gate judges and what the writer persists.
   R18 (MUST): Return replacement source only when at least one annotation was reconciled, and nothing otherwise.
