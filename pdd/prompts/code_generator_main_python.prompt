@@ -26,14 +26,11 @@
 <pdd-dependency>context/python_preamble.prompt</pdd-dependency>
 <pdd-dependency>context_snapshot_python.prompt</pdd-dependency>
 <pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
-<pdd-dependency>conformance/errors_python.prompt</pdd-dependency>
+<pdd-dependency>conformance/gate_errors_python.prompt</pdd-dependency>
 <pdd-dependency>conformance/directives_python.prompt</pdd-dependency>
 <pdd-dependency>conformance/test_churn_python.prompt</pdd-dependency>
 <pdd-dependency>conformance/surface_python.prompt</pdd-dependency>
-<pdd-dependency>conformance/signatures_python.prompt</pdd-dependency>
-<pdd-dependency>conformance/dataclass_signatures_python.prompt</pdd-dependency>
 <pdd-dependency>conformance/declared_surface_python.prompt</pdd-dependency>
-<pdd-dependency>conformance/annotation_reconcile_python.prompt</pdd-dependency>
 <pdd-dependency>conformance/interface_check_python.prompt</pdd-dependency>
 
 ---
@@ -70,9 +67,10 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
     - Include "safety net" logic for specific templates (e.g., automatically running `render_mermaid.py` if the output is `architecture.json`).
 5. **Conformance Gates**: The gate implementations live in `pdd.conformance`; this module orchestrates them and re-exports their public surface.
     - Call the gates in order: prose/empty-output classification, then architecture and `<pdd-interface>` conformance, then annotation reconciliation, then the public-surface gate, then the test-churn gate. Gate call sites MUST test `generated_code_content is not None`, NOT truthiness: a truthy test skips every gate when the provider returns `""`, and the writer then truncates the existing file to zero bytes.
-    - Re-export the four typed exceptions from `pdd.conformance.errors` using the REDUNDANT ALIAS form (`from .conformance.errors import X as X`), so callers keep importing them from `pdd.code_generator_main` unchanged. A plain `from ... import X` is not public surface under this project's own public-surface rules and would read as a symbol removal. Re-export the gate helpers external callers import today for the same reason.
+    - Re-export the four typed exceptions from `pdd.conformance.gate_errors` using the REDUNDANT ALIAS form (`from .conformance.gate_errors import X as X`), so callers keep importing them from `pdd.code_generator_main` unchanged. A plain `from ... import X` is not public surface under this project's own public-surface rules and would read as a symbol removal. Re-export the gate helpers external callers import today for the same reason.
     - Retry callers pass repairs through `PDD_REPAIR_DIRECTIVE`. When set and non-empty, append it to the prompt inside an `<architecture_repair_directive>` block before either cloud or local generation, without mutating the environment variable. A repair retry MUST bypass incremental generation entirely, or the diff-analysis step can swallow the named repair before it reaches the generator.
     - Before writing, refuse to overwrite a non-empty existing file with empty generated content unless `PDD_ALLOW_EMPTY_GENERATION` is set.
+    - Every gate MUST run against the generated content in memory, and a raising gate MUST leave the file at the output path byte-identical to its pre-generation content. Where a gate can only be reached after the file was already written, the raising path MUST restore the pre-generation content before propagating, so the repair loop reads the canonical pre-sync file rather than the rejected generation. A failed restore MUST warn rather than raise - it MUST NOT mask the gate failure that is being propagated. The propagated error carries the run's accumulated cost and model name, since the caller that catches it is the one that reports them.
 
 BREAKING-CHANGE: change signature ArchitectureConformanceError, PublicSurfaceRegressionError, TestChurnError, ProseOutputError
 

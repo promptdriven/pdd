@@ -39,6 +39,7 @@
     marker mid-sentence is inert.
 
 % Contract rules
+<contract_rules>
   R1. Only anchored directives count. A line such as
       `Use BREAKING-CHANGE: remove old_helper to opt out` MUST NOT register.
   R2. Directives MUST be read from the prompt BODY only. Leading YAML front
@@ -63,6 +64,7 @@
       off switch.
   R8. Every entry point MUST tolerate `None` and empty input by returning an
       empty result rather than raising.
+</contract_rules>
 
 % Inputs and outputs
   `_env_flag_enabled(name)` is true only when the variable is present and its

@@ -11,6 +11,7 @@
   }
 }
 </pdd-interface>
+<pdd-dependency>conformance/gate_errors_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Implement the architecture and
 % `<pdd-interface>` conformance checks in `pdd/conformance/interface_check.py`.
@@ -32,6 +33,7 @@
     no longer matches the declaration.
 
 % Contract rules
+<contract_rules>
   R1. Symbol collection MUST NOT descend into `if`, `try` or `with` blocks inside
       a class body. Conformance is a hard validator and MUST NOT accept a method
       whose existence depends on branch evaluation.
@@ -43,7 +45,7 @@
       is a silent no-op.
   R4. A dotted declaration MUST be resolved by descending nested classes by name
       and matching the final segment as a method.
-  R5. Three failure categories are checked in priority order:
+  R5. Three failure categories MUST be checked in priority order:
       missing function or method; missing parameter; then signature drift.
       Reporting a missing symbol from the architecture entry first means the same
       symbol is never reported twice.
@@ -51,10 +53,11 @@
       `**kwargs` MUST NOT satisfy a declared named parameter - the prompt is the
       source of truth and callers pass the parameter by name. Missing parameters
       are reported as `function.parameter`.
-  R7. Annotation drift is CONSERVATIVE: raise only when both sides annotate and
-      the two are not semantically compatible. Interchangeable spellings - typing
-      aliases, equivalent optionals - are not drift, and a one-sided missing
-      annotation never fires, since gradually-typed code may catch up later.
+  R7. Annotation drift is CONSERVATIVE: it MUST raise only when both sides
+      annotate and the two are not semantically compatible. Interchangeable
+      spellings - typing aliases, equivalent optionals - are not drift, and an
+      annotation missing on one side only never fires, since gradually-typed code
+      may catch up later.
   R8. Default drift is STRICT: raise when the declaration gives a default and the
       generated code drops it or gives one that is not provably the same value.
       An unresolvable default MUST fail closed. Defaults are runtime behavior -
@@ -89,6 +92,7 @@
        prompt name, output path, matched architecture entry, and the expected,
        found and missing symbol sets, so retry callers can build a repair
        directive without parsing the message.
+</contract_rules>
 
 % Inputs and outputs
   Symbol extraction is AST-based for Python and pattern-based for
@@ -96,5 +100,5 @@
 
 % Dependencies
   Standard library `ast`, `json`, `logging`, `re`;
-  `ArchitectureConformanceError` from `.errors`; and the annotation and default
+  `ArchitectureConformanceError` from `.gate_errors`; and the annotation and default
   comparators plus module default-symbol tables from `pdd.interface_semantics`.

@@ -1,4 +1,4 @@
-<pdd-reason>Determines what names a Python module exposes to importers, so the public-surface gate can detect an API symbol disappearing between generations.</pdd-reason>
+<pdd-reason>Static introspection of a Python module's public API: which names it exposes to importers and the callable shape of each, so the surface gate can detect a symbol disappearing or changing shape between generations.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
@@ -12,102 +12,121 @@
       {"name": "_reexport_binding", "signature": "(alias: ast.alias) -> Optional[str]", "returns": "Optional[str]"},
       {"name": "_collect_patch_targets", "signature": "(file_path: Optional[str]) -> Set[str]", "returns": "Set[str]"},
       {"name": "_effective_patch_targets", "signature": "(file_path: Optional[str], patch_targets: Optional[Set[str]] = None) -> Set[str]", "returns": "Set[str]"},
-      {"name": "_symbol_exists_in_module", "signature": "(tree: ast.Module, symbol: str) -> bool", "returns": "bool"}
+      {"name": "_symbol_exists_in_module", "signature": "(tree: ast.Module, symbol: str) -> bool", "returns": "bool"},
+      {"name": "_snapshot_public_signatures", "signature": "(code_text: str, language: str, file_path: str = None) -> Dict[str, str]", "returns": "Dict[str, str]"},
+      {"name": "_format_python_signature", "signature": "(node: ast.AST, *, skip_first: bool = False) -> str", "returns": "str"},
+      {"name": "_resolve_class_node", "signature": "(tree: ast.Module, dotted_name: str) -> Optional[ast.ClassDef]", "returns": "Optional[ast.ClassDef]"},
+      {"name": "_synthesize_dataclass_init_signature", "signature": "(class_node: ast.ClassDef, class_defs: Optional[Dict[str, ast.ClassDef]] = None, imported_names: Optional[Set[str]] = None) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_is_dataclass_decorator", "signature": "(decorator: ast.AST) -> bool", "returns": "bool"}
     ]
   }
 }
 </pdd-interface>
 
-% You are an expert Python engineer. Implement the public-surface snapshotter in
-% `pdd/conformance/surface.py`.
+% You are an expert Python engineer. Implement the public-surface and
+% public-signature snapshotter in `pdd/conformance/surface.py`.
 
 <include>context/python_preamble.prompt</include>
 
 % Responsibility
-  Answering "what does this module expose?" as a set of names, including dotted
-  names for class members. Analysis is static only - the module under inspection
-  is never imported or executed.
+  Answering two questions about a module from its source alone: what names it
+  exposes to importers, and what shape each of those callables has. One notion of
+  "public" governs both answers, so the removed-symbol diff and the
+  signature-drift diff can never contradict each other.
 
 % Non-responsibilities
-  No signatures (that is `signatures.py`), no comparison verdicts, no exceptions.
+  Reaches no verdict and raises nothing - `declared_surface.py` judges, and
+  `pdd.interface_semantics` compares types. Never imports or executes the module
+  under inspection, and never writes a file.
 
 % Vocabulary
   - **surface**: the set of names an importer can obtain from the module.
+  - **resolvable `__all__`**: an `__all__` bound only by plain assignment of a
+    literal list or tuple of strings. Any other write - computed or imported
+    rebind, augmented assignment, in-place mutation, subscript or slice store,
+    `del`, a conditional or looped rebind, unpacking, a walrus, or a
+    `for`/`with`/`except`/`case` capture - makes it unresolvable. Writes in a
+    nested function, class or lambda scope are not module-level writes.
   - **re-export**: a redundant import alias such as `import x as x` or
-    `from m import y as y`, which by Python convention (PEP 484, the rule mypy
-    enforces under `implicit_reexport = False`) deliberately republishes a name.
-  - **patch target**: a symbol a sibling `test_*.py` mocks by name, which must be
-    preserved even when private.
+    `from m import y as y`, which by PEP 484 convention deliberately republishes
+    a name. A renaming alias is not a re-export.
+  - **patch target**: a symbol a sibling `test_*.py` mocks by name.
+  - **entry**: the recorded string for one symbol's signature.
+  - **binding kind**: how a name is bound - plain or async function, class,
+    instance/static/class method, property, module assignment, or import.
+  - **own field**: an annotated assignment in a class's own body.
+  - **keyword-only sentinel**: a field annotated `dataclasses.KW_ONLY`, bare or
+    qualified, conventionally named `_`.
 
 % Contract rules
-  R1. For any language other than Python, the surface MUST be empty. Unparseable
-      source MUST also yield an empty surface rather than raising.
-  R2. When a module declares `__all__` as a statically resolvable literal list or
-      tuple of strings, it is AUTHORITATIVE: a name is public if and only if it
-      appears there, EVEN IF underscore-prefixed, and a non-underscore name
-      absent from it is NOT public. Entries naming nothing bound at module scope
-      are ignored.
-  R3. A class named in `__all__` MUST contribute its members recursively at every
-      depth - methods, nested classes, and their methods - regardless of
-      underscore prefix. Otherwise removing `Service.run` slips past a gate whose
-      `__all__ = ["Service"]` plainly intends the whole class as public.
-  R4. `__all__` MUST be resolved in SOURCE ORDER with last-write-wins, matching
-      the Python runtime. A value-less annotation is a no-op that leaves any
-      prior literal standing. Any other write - a computed or imported rebind,
-      augmented assignment, in-place mutation, subscript or slice store or
-      delete, `del`, a conditional or looped rebind, unpacking, a walrus, a
-      `for`/`with`/`except`/`case` capture - makes it unresolvable. Because the
-      scan is source-ordered, a later clean literal RESTORES resolvability:
-      `__all__ = [...]; __all__.append(...); __all__ = [...]` resolves again.
-      Writes inside nested function, class or lambda scopes, and comprehension
-      loop targets, are not module-level writes.
-  R5. Without a resolvable `__all__`, the surface is: top-level functions and
-      classes; their members as dotted names at every depth; and module-level
-      assignments binding a bare name. Dunder methods and single-underscore
-      names at any depth are excluded unless they are patch targets. An
-      annotation with no value binds no runtime attribute and MUST NOT be
-      captured, or removing the annotation reads as a regression. Attribute and
-      subscript targets mutate existing objects and are not new names.
-  R6. Imports are surface ONLY as explicit re-exports. A plain `import foo`,
-      `import foo.bar`, `from typing import Any`, or a RENAMING alias is an
-      implementation detail whose removal is routine cleanup and MUST NOT be
-      reported as a regression - the gate previously hard-failed real syncs over
-      `removed: Any, Literal, dataclass, field, json` (#1662, #1663,
-      pdd_cloud#2256). A name listed in a clean `__all__` is protected regardless.
-  R7. `from X import *` binds no fixed name and contributes nothing.
-  R8. `from __future__ import ...` MUST be excluded from the surface AND from the
-      set of module-bound names. Future imports are compiler directives, not
-      runtime attributes; capturing them blocks harmless cleanup such as dropping
-      `from __future__ import annotations`, which would otherwise diff as
-      `removed: annotations` - including via an explicit `__all__` listing.
-  R9. The re-export-only rule MUST apply whether `__all__` is absent OR
-      unresolvable. Capturing every import conservatively when `__all__` is
-      computed reintroduces the #2256 false positive for the realistic
-      `if platform: __all__.append(...)` pattern. Symbols DEFINED and appended
-      that way stay protected anyway, being ordinary non-underscore module names.
-  R10. Underscore-prefixed symbols that sibling tests patch MUST be included, so
-       an implementation refactor cannot quietly break a test that mocks a
-       private name.
-  R11. `_diff_public_surface` returns the sorted names present before and absent
-       after. A rename therefore surfaces as a removal plus an addition.
+<contract_rules>
+  R1 (MUST): Produce an empty surface and an empty signature map for non-Python input or unparseable source, rather than raising.
+  R2 (MUST): Treat a resolvable `__all__` as authoritative - a name is public if and only if it is listed, even when underscore-prefixed - ignoring entries that bind nothing at module scope.
+  R3 (MUST): Expand a class in the surface into its members as dotted names at every depth; a class named in `__all__` contributes its members regardless of underscore prefix.
+  R4 (MUST): Resolve `__all__` in source order with last-write-wins, so a later clean literal restores resolvability after an unresolvable write.
+  R5 (MUST): Without a resolvable `__all__`, take the surface to be top-level functions and classes, their members, and module-level assignments binding a bare name, excluding dunder and single-underscore names.
+  R6 (MUST NOT): Capture a value-less annotation, an attribute target, or a subscript target as a bound name.
+  R7 (MUST NOT): Treat an import as surface unless it is a re-export or a resolvable `__all__` lists it.
+  R8 (MUST NOT): Contribute any name for `from X import *`.
+  R9 (MUST NOT): Capture a `from __future__` import as surface or as a module-bound name, even when `__all__` lists it.
+  R10 (MUST): Apply the re-export rule identically whether `__all__` is absent or unresolvable.
+  R11 (MUST): Include underscore-prefixed patch targets in the surface, so an implementation refactor cannot quietly break a test that mocks a private name.
+  R12 (MUST): Report from `_diff_public_surface` the sorted names present before and absent after, so a rename reads as a removal plus an addition.
+  R13 (MUST): Key the signature map by exactly the surface set for the same source, computed by the same traversal rather than a parallel implementation of R2 through R11.
+  R14 (MUST): Prefix every entry with its binding kind, so a flip such as an instance method becoming a static method is observable even when the receiver-stripped parameter list is unchanged.
+  R15 (MUST): Record an import re-export precisely enough to detect a re-point, including the level of a relative import.
+  R16 (MUST): Canonicalise a redundant alias to the plain import marker, never the renaming form, so normalising `from m import Path as Path` is not a phantom change.
+  R17 (MUST NOT): Admit a non-public import to the signature map, or a later same-named `def` reads as a change to a symbol the surface correctly dropped.
+  R18 (MUST): Merge every accessor of a property into one entry, classifying accessor decorators before general attribute decorators.
+  R19 (MUST): Record a class's entry as its constructor ABI - its explicit `__init__` when present, otherwise the synthesised dataclass constructor.
+  R20 (MUST): Preserve parameter order, positional-only and keyword-only markers, annotations and defaults as written, with `skip_first` dropping a leading receiver so a method compares against a receiver-stripped declaration.
+  R21 (MUST NOT): Synthesise a constructor for a class that defines its own `__init__`.
+  R22 (MUST): Emit own fields in source order, and recognise every dataclass decorator spelling - bare or qualified, called or not.
+  R23 (MUST): Make every field keyword-only under `kw_only=True`; otherwise split at the keyword-only sentinel, recognising it before any underscore-prefix exclusion.
+  R24 (MUST NOT): Emit the keyword-only marker more than once, or emit it with no fields following it.
+  R25 (MUST): Include `InitVar` fields as real constructor parameters, exclude `ClassVar` fields, and exclude a field whose default declares `init=False`.
+  R26 (MUST): Carry each synthesised parameter's annotation and default as written, so a change to either diffs.
+  R27 (MUST): Merge inherited fields in reverse-MRO order, matching how the decorator populates its field table by walking bases right to left.
+  R28 (MUST): Keep a redeclared field at the base's original position while taking the derived annotation and default.
+  R29 (MUST): Contribute a base's fields even when that base declares `init=False`, which suppresses only that base's own constructor.
+  R30 (MUST): Mark a base that cannot be resolved to a class in the same module as unresolved, rather than claiming authority over fields it cannot see.
+  R31 (MUST NOT): Recurse without bound on a self-referential base, which is illegal at runtime but representable in the AST.
+</contract_rules>
 
 % Inputs and outputs
+  Binding-kind markers open every signature entry: `[function]`,
+  `[async_function]`, `[class]`, `[instance]`, `[staticmethod]`, `[classmethod]`,
+  `[property:<roles>]` and `[assignment]`. Imports carry their target: `[import]`
+  for `import m`, `[import:<module>]` for `import m as p`,
+  `[import:from <module>]` for `from m import X`, and
+  `[import:from <module>:<source>]` for `from m import X as P`.
+
   `_symbol_exists_in_module` reports whether a possibly-dotted symbol is defined
-  at module scope, resolving each leading segment as a nested class and the final
-  segment as either a method or a nested class - so a nested-class constructor
-  whose path contains an underscore is still recognised as defined.
-  `_collect_python_public_surface` is a sorted-list convenience wrapper.
+  at module scope, resolving leading segments as nested classes and the final
+  segment as a method or nested class. `_collect_python_public_surface` is a
+  sorted-list convenience wrapper.
 
 % Dependencies
   Standard library `ast`, plus `collect_patch_symbols_for_module` from
   `pdd.split_validation` for patch-target discovery.
 
+% Why these rules exist
+  - The re-export rule (R7, R10, R17) is not stylistic: capturing plain imports
+    hard-failed real syncs on `removed: Any, Literal, dataclass, field, json`
+    (#1662, #1663, cloud 2256). The conservative alternative reintroduces that
+    false positive for `if platform: __all__.append(...)`.
+  - Excluding future imports (R9) keeps dropping `from __future__ import
+    annotations` from reading as `removed: annotations`.
+  - The recursive class expansion (R3) exists because `__all__ = ["Service"]`
+    plainly intends the whole class, so removing `Service.run` must not slip past.
+  - Binding-kind prefixes (R14) exist because a caller doing `Class.f(1)` breaks
+    silently when `def f(self, x)` becomes a static `def f(x)`.
+  - Constructor synthesis (R19, R21-R31) exists because renaming a dataclass
+    field changes the runtime constructor ABI with nothing else to diff.
+
 % Accepted limitations
   Aliasing `__all__` to another name and mutating that, `global __all__` inside a
   called function, and a plain-import re-export listed only in an unresolvable
-  `__all__`. Authors needing those should use a clean `__all__` literal or a
-  redundant-alias import.
-
-% Note
-  `signatures.py` MUST classify public names identically. If the two disagree,
-  the removed-symbol diff and the signature-drift diff contradict each other.
+  `__all__`. Keyword-only sentinel propagation across an inheritance boundary is
+  not modelled: a derived class re-emits its own marker. Authors needing the
+  first three should use a clean `__all__` literal or a redundant-alias import.

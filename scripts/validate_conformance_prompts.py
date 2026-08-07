@@ -17,16 +17,21 @@ SOURCE = Path("pdd/code_generator_main.py")
 ARCH = Path("architecture.json")
 
 EXPECTED = [
-    "errors",
+    "gate_errors",
     "directives",
     "test_churn",
     "surface",
-    "signatures",
-    "dataclass_signatures",
     "declared_surface",
-    "annotation_reconcile",
     "interface_check",
 ]
+
+# Mirrors pdd.contract_ir: a <contract_rules> line is read as a rule ID when it
+# matches _EXPLICIT_ID_RE or _SEQ_ID_RE, and as a MALFORMED one when it matches
+# only _CANDIDATE_ID_RE. A rule that wraps onto a hyphenated word ("prose-wrapped")
+# therefore reads as a broken rule ID, which `pdd contracts check` rejects.
+RULE_ID_RE = re.compile(r"^(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
+SEQ_ID_RE = re.compile(r"^(\d+)[.):\s]")
+CANDIDATE_ID_RE = re.compile(r"^([A-Z]{1,5}[-_]\w+)\b", re.IGNORECASE)
 
 errors: list[str] = []
 
@@ -34,6 +39,35 @@ errors: list[str] = []
 def _interface_block(text: str) -> str | None:
     m = re.search(r"<pdd-interface>\s*(\{.*?\})\s*</pdd-interface>", text, re.S)
     return m.group(1) if m else None
+
+
+def check_contract_rules(path: Path, text: str) -> None:
+    """Require a parseable <contract_rules> block.
+
+    Without the XML tags `pdd checkup coverage` reports "No <contract_rules>
+    section" and `pdd contracts check` passes vacuously, so the rules carry no
+    coverage evidence at all.
+    """
+    block = re.search(r"^<contract_rules>$(.*?)^</contract_rules>$", text, re.S | re.M)
+    if block is None:
+        errors.append(f"{path}: missing a <contract_rules> block")
+        return
+
+    rule_ids: list[str] = []
+    for line in block.group(1).splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if RULE_ID_RE.match(stripped) or SEQ_ID_RE.match(stripped):
+            rule_ids.append(stripped.split(".")[0].split()[0])
+        elif CANDIDATE_ID_RE.match(stripped):
+            token = CANDIDATE_ID_RE.match(stripped).group(1)
+            errors.append(
+                f"{path}: line starting '{token}' parses as a malformed rule ID; "
+                "rewrap so no continuation line begins with a hyphenated word"
+            )
+    if not rule_ids:
+        errors.append(f"{path}: <contract_rules> declares no rules")
 
 
 def check_prompt(name: str) -> None:
@@ -69,6 +103,8 @@ def check_prompt(name: str) -> None:
         errors.append(f"{path}: Deliverables must name pdd/conformance/{name}.py")
     if "code_generator_main" in text:
         errors.append(f"{path}: must not reference code_generator_main (circular)")
+
+    check_contract_rules(path, text)
 
 
 def check_architecture() -> None:

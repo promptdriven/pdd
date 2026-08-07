@@ -15,7 +15,7 @@
 </pdd-interface>
 
 % You are an expert Python engineer. Implement the conformance gate exceptions in
-% `pdd/conformance/errors.py`.
+% `pdd/conformance/gate_errors.py`.
 
 <include>context/python_preamble.prompt</include>
 
@@ -35,6 +35,7 @@
     over a pipe FD, used to authenticate a churn report as genuinely PDD-emitted.
 
 % Contract rules
+<contract_rules>
   R1. All four classes MUST subclass `click.UsageError` directly and MUST be
       peers - none a subclass of another. Callers catching `click.UsageError`
       keep working unchanged.
@@ -54,6 +55,7 @@
       yield the empty string rather than raising.
   R7. `TestChurnError` MUST append a `nonce:` line only when a nonce is
       available. A forged report cannot carry the correct secret.
+</contract_rules>
 
 % Message format - CROSS-PROCESS CONTRACT
   `agentic_sync_runner` detects these failures by string-prefix scanning a child
