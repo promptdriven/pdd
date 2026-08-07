@@ -203,6 +203,34 @@ def test_extract_module_preserves_underscores_in_module_names():
 
 
 # ==============================================================================
+# Unit Tests: _architecture_module_key
+# ==============================================================================
+
+def test_architecture_module_key_preserves_directory():
+    assert sync_order._architecture_module_key("commands/gate_python.prompt") == "commands/gate"
+    assert sync_order._architecture_module_key("gate_python.prompt") == "gate"
+    # These must NOT collide -- see PR #2376 review comment.
+    assert (
+        sync_order._architecture_module_key("commands/gate_python.prompt")
+        != sync_order._architecture_module_key("gate_python.prompt")
+    )
+
+
+def test_architecture_module_key_keeps_llm_prompts_distinct():
+    assert sync_order._architecture_module_key("agentic_update_python.prompt") == "agentic_update"
+    assert sync_order._architecture_module_key("agentic_update_LLM.prompt") == "agentic_update_LLM"
+    assert (
+        sync_order._architecture_module_key("agentic_update_python.prompt")
+        != sync_order._architecture_module_key("agentic_update_LLM.prompt")
+    )
+
+
+def test_architecture_module_key_non_prompt_file_returns_none():
+    assert sync_order._architecture_module_key("README.md") is None
+    assert sync_order._architecture_module_key("") is None
+
+
+# ==============================================================================
 # Unit Tests: build_dependency_graph
 # ==============================================================================
 
@@ -787,50 +815,123 @@ def test_issue_1048_mixed_modules_quoting_preserved(tmp_path):
 
 
 
-def test_build_dependency_graph_from_architecture_valid_array(tmp_path):
-    """Test building a dependency graph from a bare array architecture.json."""
+def _write_prompt(prompts_dir: Path, rel_path: str, *, dependencies=(), includes=()) -> None:
+    dep_tags = "".join(f"<pdd-dependency>{d}</pdd-dependency>\n" for d in dependencies)
+    include_tags = "".join(f"<include>{i}</include>\n" for i in includes)
+    content = f"<pdd-reason>test module</pdd-reason>\n{dep_tags}{include_tags}\n% Requirements\nDo the thing.\n"
+    path = prompts_dir / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def test_build_dependency_graph_from_architecture_real_flow_pdd_dependency_not_include(tmp_path):
+    """Issue #1807: a <pdd-dependency> edge must be surfaced even with no
+    matching <include>, and a plain <include> edge must NOT create a
+    dependency edge -- through the real prompt -> architecture -> graph path,
+    not a hand-written architecture.json (PR #2376 review)."""
+    prompts_dir = tmp_path / "prompts"
+    _write_prompt(
+        prompts_dir, "customer_service_python.prompt",
+        dependencies=["payment_status_python.prompt"],
+        includes=["docs/refund_policy_examples.md"],
+    )
+    _write_prompt(prompts_dir, "payment_status_python.prompt")
+    _write_prompt(prompts_dir, "onboarding_python.prompt", includes=["legacy_wizard_python.prompt"])
+    _write_prompt(prompts_dir, "legacy_wizard_python.prompt")
+
     arch_file = tmp_path / "architecture.json"
-    arch_content = [
-        {
-            "filename": "auth_python.prompt",
-            "dependencies": ["log_python.prompt"]
-        },
-        {
-            "filename": "log_python.prompt",
-            "dependencies": []
-        }
-    ]
-    arch_file.write_text(json.dumps(arch_content), encoding="utf-8")
-    
+    arch_file.write_text(json.dumps([
+        {"filename": "customer_service_python.prompt", "dependencies": []},
+        {"filename": "payment_status_python.prompt", "dependencies": []},
+        {"filename": "onboarding_python.prompt", "dependencies": []},
+        {"filename": "legacy_wizard_python.prompt", "dependencies": []},
+    ]), encoding="utf-8")
+
     graph = sync_order.build_dependency_graph_from_architecture(arch_file)
-    assert "auth" in graph
-    assert "log" in graph
-    assert graph["auth"] == ["log"]
-    assert graph["log"] == []
+
+    assert graph["customer_service"] == ["payment_status"]
+    assert graph["onboarding"] == []  # include-only edge to legacy_wizard must not appear
 
 
-def test_build_dependency_graph_from_architecture_valid_object(tmp_path):
-    """Test building a dependency graph from an object format with 'modules' key."""
+def test_build_dependency_graph_from_architecture_modules_object_format(tmp_path):
+    """The {"modules": [...]} architecture.json shape must work the same as a bare array."""
+    prompts_dir = tmp_path / "prompts"
+    _write_prompt(prompts_dir, "auth_python.prompt", dependencies=["log_python.prompt", "db_python.prompt"])
+    _write_prompt(prompts_dir, "log_python.prompt")
+    _write_prompt(prompts_dir, "db_python.prompt")
+
     arch_file = tmp_path / "architecture.json"
-    arch_content = {
+    arch_file.write_text(json.dumps({
         "modules": [
-            {
-                "filename": "auth_python.prompt",
-                "dependencies": ["log_python.prompt", "db_python.prompt"]
-            },
-            {
-                "filename": "log_python.prompt",
-                "dependencies": []
-            }
+            {"filename": "auth_python.prompt", "dependencies": []},
+            {"filename": "log_python.prompt", "dependencies": []},
+            {"filename": "db_python.prompt", "dependencies": []},
         ]
-    }
-    arch_file.write_text(json.dumps(arch_content), encoding="utf-8")
-    
+    }), encoding="utf-8")
+
     graph = sync_order.build_dependency_graph_from_architecture(arch_file)
-    assert "auth" in graph
-    assert "log" in graph
-    assert "db" in graph  # Discovered as dependency
+
     assert sorted(graph["auth"]) == ["db", "log"]
+
+
+def test_build_dependency_graph_from_architecture_path_qualified_same_basename(tmp_path):
+    """commands/gate_python.prompt and gate_python.prompt share a basename but
+    are different modules; commands/gate's declared dependency on the
+    top-level gate module must not collapse into a dropped self-edge --
+    this is a real collision found in this repo's own architecture.json."""
+    prompts_dir = tmp_path / "prompts"
+    _write_prompt(prompts_dir, "commands/gate_python.prompt", dependencies=["gate_python.prompt"])
+    _write_prompt(prompts_dir, "gate_python.prompt")
+
+    arch_file = tmp_path / "architecture.json"
+    arch_file.write_text(json.dumps([
+        {"filename": "commands/gate_python.prompt", "dependencies": []},
+        {"filename": "gate_python.prompt", "dependencies": []},
+    ]), encoding="utf-8")
+
+    graph = sync_order.build_dependency_graph_from_architecture(arch_file)
+
+    assert graph["commands/gate"] == ["gate"]
+    assert graph["gate"] == []
+
+
+def test_build_dependency_graph_from_architecture_llm_prompt_dependency(tmp_path):
+    """A declared dependency on a `_LLM.prompt` runtime prompt must be kept,
+    not silently discarded (this repo's own architecture.json has real
+    examples, e.g. agentic_arch_step2_analyze_LLM.prompt -> ...step1..._LLM.prompt)."""
+    prompts_dir = tmp_path / "prompts"
+    _write_prompt(prompts_dir, "agentic_update_python.prompt", dependencies=["agentic_update_LLM.prompt"])
+    _write_prompt(prompts_dir, "agentic_update_LLM.prompt")
+
+    arch_file = tmp_path / "architecture.json"
+    arch_file.write_text(json.dumps([
+        {"filename": "agentic_update_python.prompt", "dependencies": []},
+        {"filename": "agentic_update_LLM.prompt", "dependencies": []},
+    ]), encoding="utf-8")
+
+    graph = sync_order.build_dependency_graph_from_architecture(arch_file)
+
+    assert graph["agentic_update"] == ["agentic_update_LLM"]
+
+
+def test_build_dependency_graph_from_architecture_nested_architecture_file(tmp_path):
+    """A non-root architecture.json (e.g. a sub-project's) must resolve its
+    modules' prompt files relative to its own directory, not the caller's cwd
+    or the repo root."""
+    sub_root = tmp_path / "subproject"
+    prompts_dir = sub_root / "prompts"
+    _write_prompt(prompts_dir, "auth_python.prompt", dependencies=["log_python.prompt"])
+    _write_prompt(prompts_dir, "log_python.prompt")
+
+    arch_file = sub_root / "architecture.json"
+    arch_file.write_text(json.dumps([
+        {"filename": "auth_python.prompt", "dependencies": []},
+        {"filename": "log_python.prompt", "dependencies": []},
+    ]), encoding="utf-8")
+
+    graph = sync_order.build_dependency_graph_from_architecture(arch_file)
+
+    assert graph["auth"] == ["log"]
 
 
 def test_build_dependency_graph_from_architecture_missing_or_invalid(tmp_path, mock_logger):
