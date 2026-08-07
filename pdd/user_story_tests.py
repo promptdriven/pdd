@@ -315,7 +315,11 @@ def _prompt_reference_for_metadata(
     """Return a stable metadata reference for a prompt path."""
     if prompts_dir:
         try:
-            return prompt_path.relative_to(prompts_dir).as_posix()
+            logical_prompts_dir = Path(prompts_dir)
+            relative_prompt_path = prompt_path.resolve().relative_to(
+                logical_prompts_dir.resolve()
+            )
+            return (Path(logical_prompts_dir.name) / relative_prompt_path).as_posix()
         except ValueError:
             pass
     return prompt_path.name
