@@ -529,8 +529,36 @@ _pdd_checkup() {
 ##
 # Main PDD completion dispatcher
 ##
+# Return the first PDD subcommand in the current invocation.  Global options
+# are valid before a command, so `$words[2]` cannot be assumed to be one.
+_pdd_find_subcommand() {
+  local token expect_value=0
+
+  for token in "${(@)words[2,CURRENT]}"; do
+    if (( expect_value )); then
+      expect_value=0
+      continue
+    fi
+
+    case "$token" in
+      --strength|--model|--temperature|--time|--output-cost|--context|--keep-core-dumps|--context-compression|--compression-fallback)
+        expect_value=1
+        ;;
+      --strength=*|--model=*|--temperature=*|--time=*|--output-cost=*|--context=*|--keep-core-dumps=*|--context-compression=*|--compression-fallback=*|--*)
+        ;;
+      generate|example|test|preprocess|fix|split|change|update|detect|conflicts|crash|trace|bug|auto-deps|verify|sync|checkup|setup|install_completion|pytest-output)
+        print -r -- "$token"
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
 _pdd() {
   local context="$curcontext" state line
+  local pdd_command
   typeset -A opt_args
 
   # List of known subcommands with descriptions
@@ -558,8 +586,10 @@ _pdd() {
     'pytest-output:Run pytest and capture structured output'
   )
 
-  # If there's no subcommand yet (i.e., user typed only "pdd " or "pdd -<Tab>"), offer global opts or subcommands.
-  if (( CURRENT == 2 )); then
+  pdd_command=$(_pdd_find_subcommand)
+
+  # If no subcommand has been entered, offer global options and subcommands.
+  if [[ -z "$pdd_command" ]]; then
     _arguments -s \
       $_pdd_global_opts \
       '1: :->subcmds' && return 0
@@ -568,8 +598,8 @@ _pdd() {
     return
   fi
 
-  # If the user typed a known subcommand, dispatch to that subcommand's completion function.
-  case $words[2] in
+  # Dispatch after resolving a subcommand past any preceding global options.
+  case $pdd_command in
     generate)
       _pdd_generate
       ;;
