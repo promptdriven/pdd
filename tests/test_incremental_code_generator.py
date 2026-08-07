@@ -725,3 +725,89 @@ def test_unexpected_llm_exception_falls_back_gracefully_issue_1612(
     assert is_incremental is False
     assert total_cost == 0.0
     assert model_name == ""
+
+
+# ---------------------------------------------------------------------------
+# Issue #1695 regression tests — sync repair path crashes after architecture
+# conformance failure when llm_invoke returns a raw error string with the
+# exact `[ERROR]` prefix and `for item 0` suffix emitted by the batch-item
+# error path in llm_invoke.py.
+#
+# Root cause: when both the primary LLM call and the cache-bypass retry return
+# None, llm_invoke appends "ERROR: [ERROR] Cache bypass retry also returned
+# None for item 0" to its results list and returns it as {'result': <str>, ...}.
+# incremental_code_generator then assigns the string to diff_result and
+# accesses diff_result.is_big_change, raising AttributeError.
+# ---------------------------------------------------------------------------
+
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_diff_analyzer_returns_exact_1695_error_string_falls_back_gracefully(
+    mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs
+):
+    """Regression: when the diff-analyzer llm_invoke result is the exact
+    production error string from issue #1695
+    ('ERROR: [ERROR] Cache bypass retry also returned None for item 0'),
+    incremental_code_generator must return the graceful fallback tuple
+    (None, False, cost, model_name) without raising AttributeError.
+
+    The [ERROR] prefix and 'for item 0' suffix are emitted by llm_invoke's
+    batch-item error path — distinct from the shorter string covered by the
+    #1612 regression test — and must be handled by the isinstance guard at
+    line 104 of incremental_code_generator.py.
+    """
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    # Exact production error string observed in the #1695 Cloud Run log
+    mock_llm_invoke.return_value = {
+        "result": "ERROR: [ERROR] Cache bypass retry also returned None for item 0",
+        "cost": 0.01,
+        "model_name": "test-model",
+    }
+
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(
+        **common_inputs
+    )
+
+    # Must return the safe fallback tuple — no AttributeError raised
+    assert updated_code is None
+    assert is_incremental is False
+    assert total_cost == pytest.approx(0.01)
+    assert model_name == "test-model"
+
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_diff_analyzer_malformed_result_shows_warning_not_crash_message_issue_1695(
+    mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs, capsys
+):
+    """Regression: with verbose=True, a malformed diff-analyzer result
+    (exact #1695 error string) must route through the recovery warning branch
+    ('Diff analyzer returned a malformed result') rather than the crash branch
+    ('Error in incremental_code_generator').
+
+    Before the isinstance guard was added, the code reached
+    diff_result.is_big_change on a str, raised AttributeError, and the broad
+    except handler printed 'Error in incremental_code_generator: ...' — the
+    message observed in the #1695 production log.  The guard must intercept the
+    malformed result before any attribute access, print the warning, and return.
+    """
+    common_inputs["verbose"] = True
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    mock_llm_invoke.return_value = {
+        "result": "ERROR: [ERROR] Cache bypass retry also returned None for item 0",
+        "cost": 0.01,
+        "model_name": "test-model",
+    }
+
+    incremental_code_generator(**common_inputs)
+    captured = capsys.readouterr()
+
+    # The recovery warning must appear — proves the isinstance guard branch ran
+    assert "Diff analyzer returned a malformed result" in captured.out
+    # The crash message must NOT appear — proves the exception handler was NOT triggered
+    assert "Error in incremental_code_generator" not in captured.out
