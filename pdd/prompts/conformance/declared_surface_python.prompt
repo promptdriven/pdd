@@ -14,6 +14,7 @@
 <pdd-dependency>conformance/gate_errors_python.prompt</pdd-dependency>
 <pdd-dependency>conformance/surface_python.prompt</pdd-dependency>
 <pdd-dependency>conformance/directives_python.prompt</pdd-dependency>
+<pdd-dependency>conformance/test_churn_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Implement the public-surface regression gate
 % and its annotation reconciler in `pdd/conformance/declared_surface.py`.
@@ -45,7 +46,7 @@
 
 % Contract rules
 <contract_rules>
-  R1 (MUST): Exempt a module with no pre-existing code, since a brand-new module has no surface to preserve.
+  R1 (MUST): Exempt a module with no pre-existing code, since a brand-new module has no surface to preserve, and exempt any output that is not a Python generation or is a test file, using the test-path taxonomy rather than a second copy of it.
   R2 (MUST): Honour `PDD_SKIP_PUBLIC_SURFACE_GATE` for this gate alone, and `PDD_SKIP_CONFORMANCE` for every conformance gate.
   R3 (MUST): Check the generated code for parseability before computing its surface, since unparseable Python yields an empty surface that would misreport every prior symbol as removed.
   R4 (MUST): Raise `ArchitectureConformanceError`, not `PublicSurfaceRegressionError`, for unparseable generated code, with a repair directive naming the syntax error first and then the symbols to restore.
@@ -82,9 +83,10 @@
 % Dependencies
   Standard library `ast`; `PublicSurfaceRegressionError` and
   `ArchitectureConformanceError` from `.gate_errors`; the surface and signature
-  snapshots from `.surface`; the opt-out allow-lists from `.directives`; and the
-  semantic comparators, annotation comparator and module default-symbol tables
-  from `pdd.interface_semantics`.
+  snapshots from `.surface`; the opt-out allow-lists from `.directives`; the
+  test-path and language predicates from `.test_churn`, which owns that
+  taxonomy; and the semantic comparators, annotation comparator and module
+  default-symbol tables from `pdd.interface_semantics`.
 
 % Why these rules exist
   - Judging declared symbols against the previous generation (before R5) left no

@@ -7439,11 +7439,15 @@ class TestSyncCompatibilityGates:
         can authenticate the block. No FD -> no nonce line (standalone)."""
         import os
         import pdd.code_generator_main as cg
+        import pdd.conformance.gate_errors as ge
 
         # Reset the once-only module cache between simulated child processes.
+        # The cache lives in pdd.conformance.gate_errors: code_generator_main
+        # re-exports the name, and rebinding an alias cannot reach the global
+        # that _read_churn_nonce actually consults.
         def _fresh():
-            cg._CHURN_NONCE_CACHE = None
-            cg._CHURN_NONCE_READ = False
+            ge._CHURN_NONCE_CACHE = None
+            ge._CHURN_NONCE_READ = False
 
         nonce = "0123456789abcdef0123456789abcdef"
         r, w = os.pipe()

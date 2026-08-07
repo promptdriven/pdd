@@ -12366,13 +12366,14 @@
   },
   {
     "reason": "The public-surface regression gate (#1012, #1900), with its annotation reconciler (#1968).",
-    "description": "Rejects a regeneration that removes or reshapes public API. Declared type:module symbols are judged against the prompt declaration rather than the previous generation, which gives the repair loop a stable target and unblocked the pdd change -> pdd sync dead-end (#1900); undeclared symbols keep the previous-generation baseline and its BREAKING-CHANGE opt-outs. Comparison is semantic via interface_semantics, with per-side module default-symbol resolution so a literal-to-constant refactor is not a break while the same constant changing value is (#1558). Unparseable generated Python raises ArchitectureConformanceError rather than a phantom all-symbols-removed regression (#1612). Absorbs the former conformance/annotation_reconcile unit, which reads the same declared interface map and ran only on this gate's behalf (#1968).",
+    "description": "Rejects a regeneration that removes or reshapes public API. Declared type:module symbols are judged against the prompt declaration rather than the previous generation, which gives the repair loop a stable target and unblocked the pdd change -> pdd sync dead-end (#1900); undeclared symbols keep the previous-generation baseline and its BREAKING-CHANGE opt-outs. Comparison is semantic via interface_semantics, with per-side module default-symbol resolution so a literal-to-constant refactor is not a break while the same constant changing value is (#1558). Unparseable generated Python raises ArchitectureConformanceError rather than a phantom all-symbols-removed regression (#1612). Absorbs the former conformance/annotation_reconcile unit, which reads the same declared interface map and ran only on this gate's behalf (#1968). Reuses the test-path taxonomy from conformance/test_churn to exempt test files from the surface gate.",
     "dependencies": [
       "conformance/gate_errors_python.prompt",
       "conformance/surface_python.prompt",
-      "conformance/directives_python.prompt"
+      "conformance/directives_python.prompt",
+      "conformance/test_churn_python.prompt"
     ],
-    "priority": 7,
+    "priority": 8,
     "filename": "conformance/declared_surface_python.prompt",
     "filepath": "pdd/conformance/declared_surface.py",
     "tags": [
