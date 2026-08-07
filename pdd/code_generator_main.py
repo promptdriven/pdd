@@ -11,6 +11,8 @@ import subprocess
 import requests
 import tempfile
 import sys
+import textwrap
+import warnings
 from typing import Optional, Tuple, Dict, Any, Iterator, List, Set, Mapping
 
 import click
@@ -433,6 +435,59 @@ class ProseOutputError(click.UsageError):
     @property
     def repair_directive(self) -> str:
         return PROSE_OUTPUT_REPAIR_DIRECTIVE
+
+
+class LanguageMismatchError(click.UsageError):
+    """Raised when the declared language is Python but the generated content is not valid Python."""
+
+    def __init__(
+        self,
+        prompt_name: str,
+        output_path: str,
+        language: str,
+        model_name: str = "unknown",
+        total_cost: float = 0.0,
+        raw_output: Optional[str] = None,
+        syntax_error: str = "",
+    ) -> None:
+        self.prompt_name = prompt_name
+        self.output_path = output_path or ""
+        self.language = language or "unknown"
+        self.model_name = model_name or "unknown"
+        self.total_cost = float(total_cost or 0.0)
+        self.syntax_error = syntax_error or ""
+        raw = "" if raw_output is None else str(raw_output)
+        excerpt = raw.strip()
+        if not excerpt:
+            excerpt = "<empty>"
+        elif len(excerpt) > 240:
+            excerpt = excerpt[:237] + "..."
+        self.raw_output_excerpt = excerpt
+        output_display = self.output_path or "<unknown>"
+        super().__init__(
+            f"Language mismatch for {prompt_name}:\n"
+            f"model_name: {self.model_name}\n"
+            f"language: {self.language}\n"
+            f"output: {output_display}\n"
+            f"Syntax error: {self.syntax_error}\n"
+            f"Raw output excerpt: {self.raw_output_excerpt}"
+        )
+
+
+def _verify_language_validity(generated_code_content: str, language: str) -> Optional[SyntaxError]:
+    """Return the triggering SyntaxError when `language` is Python and the content
+    does not parse as valid Python (after a dedent retry); otherwise None."""
+    if str(language or "").strip().lower() != "python":
+        return None
+    for candidate in (generated_code_content, textwrap.dedent(generated_code_content)):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                ast.parse(candidate)
+            return None
+        except SyntaxError as exc:
+            last_error = exc
+    return last_error
 
 
 # --- Helper Functions ---
@@ -5542,6 +5597,29 @@ def code_generator_main(
                     total_cost=float(total_cost or 0.0),
                     raw_output=generated_code_content,
                     extractor_result="empty",
+                )
+
+            # Language Validity Gate: verify the generated content is syntactically
+            # valid Python before any downstream gate (architecture conformance,
+            # public-surface) assumes it can be parsed with ast.parse.
+            # Only runs when this generation is creating the file. When a real
+            # file was already there, the public-surface and test-churn gates
+            # compare against its previous contents and diagnose unparseable
+            # output better than a bare SyntaxError would.
+            syntax_err = (
+                _verify_language_validity(generated_code_content, language or "")
+                if existing_code_content is None
+                else None
+            )
+            if syntax_err is not None:
+                raise LanguageMismatchError(
+                    prompt_name=prompt_name,
+                    output_path=output_path or "",
+                    language=language or "unknown",
+                    model_name=model_name or "unknown",
+                    total_cost=float(total_cost or 0.0),
+                    raw_output=generated_code_content,
+                    syntax_error=f"{syntax_err.msg} (line {syntax_err.lineno}, offset {syntax_err.offset})",
                 )
 
             # Optional output_schema JSON validation before writing (only when LLM ran)
