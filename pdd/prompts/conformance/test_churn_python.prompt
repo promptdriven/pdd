@@ -1,0 +1,111 @@
+<pdd-reason>The test-churn gate: refuses to overwrite an existing test file when regeneration would rewrite more of it than the configured threshold, so accumulated regression coverage is not discarded.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "_verify_test_churn", "signature": "(existing_code: Optional[str], generated_code: str, prompt_name: str, output_path: Optional[str], prompt_content: Optional[str], adopted_human: bool = False) -> None", "returns": "None"},
+      {"name": "_compute_test_churn_ratio", "signature": "(pre_text: str, post_text: str) -> float", "returns": "float"},
+      {"name": "_calculate_test_churn_ratio", "signature": "(before: str, after: str) -> float", "returns": "float"},
+      {"name": "_get_test_churn_threshold", "signature": "() -> float", "returns": "float"},
+      {"name": "_is_test_output_path", "signature": "(output_path: Optional[str]) -> bool", "returns": "bool"},
+      {"name": "_is_python_generation", "signature": "(language: Optional[str], output_path: Optional[str]) -> bool", "returns": "bool"},
+      {"name": "_prompt_allows_test_churn", "signature": "(prompt_content: Optional[str]) -> bool", "returns": "bool"},
+      {"name": "_find_default_test_files", "signature": "(tests_dir: Optional[str], code_file_path: Optional[str]) -> List[str]", "returns": "List[str]"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>conformance/gate_errors_python.prompt</pdd-dependency>
+<pdd-dependency>conformance/directives_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Implement the test-churn gate in
+% `pdd/conformance/test_churn.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Responsibility
+  Measuring how much of an existing test file a regeneration would rewrite, and
+  refusing the write when that exceeds the threshold. It exists because a model
+  asked to add one test will cheerfully rewrite the whole file.
+
+% Non-responsibilities
+  Does not write files. Callers snapshot the existing content and hand both
+  versions here.
+
+% Vocabulary
+  - **churn ratio**: rewritten proportion of the pre-existing test file, 0.0-1.0.
+  - **opt-out**: a `BREAKING-CHANGE:` directive whose verb's direct object is
+    `test` or `tests`.
+
+% Contract rules
+<contract_rules>
+  R1. The gate MUST permit the write, without computing anything, when the
+      existing content is missing or blank, when the output path is not a test
+      path, when the prompt opts out, or when `PDD_SKIP_TEST_CHURN_GATE` or
+      `PDD_SKIP_CONFORMANCE` is enabled. The first disables only this gate; the
+      second disables all conformance gates.
+  R2. Otherwise the gate MUST raise `TestChurnError` when the churn ratio is
+      strictly greater than the threshold, carrying both values and the pre and
+      post line counts.
+  R3. Pure additive growth MUST NOT count as churn - when no lines were removed
+      the ratio is 0.0. A first generation, where nothing existed before, is
+      likewise exempt.
+  R4. The ratio MUST be computed from a unified diff of the two texts as the
+      larger of added and removed line counts, divided by the pre-existing line
+      count, capped at 1.0. Diff header lines do not count as changes.
+  R5. `PDD_TEST_CHURN_THRESHOLD` defaults to `0.40` and MUST accept either a
+      decimal ratio or a percent string such as `40%`. An unparseable value MUST
+      log a warning and fall back to the default - it MUST NOT yield 0.0, which
+      would silently disable the gate. The result is clamped to 0.0-1.0.
+  R6. `adopted_human` (#1903) MUST only annotate the raised error. It MUST NOT
+      change the gate decision.
+</contract_rules>
+
+% Test-path recognition
+  A path is a test artifact when any of the following holds. These are observable
+  classifications, and the case rules matter:
+
+  - a path segment is `tests`, `__tests__`, or the singular `__test__` (the
+    jest/vitest/Next.js co-located directory, #1903);
+  - the filename starts with `test_`;
+  - case-INSENSITIVELY, the filename ends with `.test.` or `.spec.` plus one of
+    `ts`, `tsx`, `js`, `jsx`, `mjs`, `cjs` - the ESM/CJS variants cover adopted
+    co-located tests (#1903);
+  - case-INSENSITIVELY, the filename ends with `_test` or `_spec` plus any
+    extension in `_LANGUAGE_TEST_FILE_EXTS`, covering sibling-file conventions
+    such as Go's `handler_test.go` and Ruby's `widget_spec.rb`;
+  - case-SENSITIVELY, the filename ends with a PascalCase JVM/.NET/Swift suffix:
+    `Test.java`, `Tests.java`, `TestCase.java`, `IT.java`, `Test.kt`, `Tests.kt`,
+    `Spec.kt`, `Test.scala`, `Tests.scala`, `Spec.scala`, `Test.groovy`,
+    `Tests.groovy`, `Spec.groovy`, `Tests.swift`, `Test.cs`, `Tests.cs`.
+    Case sensitivity is REQUIRED here: lowercasing would misclassify `latest.kt`,
+    `manifest.java`, `request.scala` and `latest.groovy` as tests.
+
+% Opt-out grammar
+  Scanning only anchored directives, a directive opts out when an opt-out verb -
+  `rewrite`, `replace`, `regenerate`, `overwrite`, `churn`, `remove` or `drop`,
+  in any inflection, case-insensitively - directly governs `test`/`tests`. A
+  comma, semicolon, or one of the conjunctions `and`, `but`, `then`, `or`,
+  `plus`, `also` between the verb and its object breaks the phrase, meaning the
+  object belongs to a different verb. Required behavior:
+
+  | Directive | Opts out |
+  |---|---|
+  | `BREAKING-CHANGE: rewriting the failing tests` | yes |
+  | `BREAKING-CHANGE: rewrite the test suite for new helper` | yes |
+  | `BREAKING-CHANGE: drop foo and rewrite tests` | yes - the second verb governs `tests` |
+  | `BREAKING-CHANGE: rewrite docs and update tests` | no - `rewrite` governs `docs`, and `update` is not an opt-out verb |
+
+% Inputs and outputs
+  `_calculate_test_churn_ratio` is a backward-compatible alias of
+  `_compute_test_churn_ratio`. `_is_python_generation` reports whether the target
+  is Python by language name or `.py` extension. `_find_default_test_files`
+  locates existing `test_<stem>.py` files for a module, returning an empty list
+  when either input is missing or the directory does not exist.
+
+% Dependencies
+  Standard library, plus `TestChurnError` and `_LANGUAGE_TEST_FILE_EXTS` from
+  `.gate_errors` and the directive helpers from `.directives`. The same gate is reused
+  by `cmd_test_main` and one-session agentic sync; append and merge modes are
+  exempt because they preserve the existing body.

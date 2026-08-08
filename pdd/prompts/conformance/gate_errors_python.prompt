@@ -1,0 +1,119 @@
+<pdd-reason>Typed exceptions raised by the PDD conformance gates, catchable by sync callers without importing the generation pipeline.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "ArchitectureConformanceError", "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)", "returns": "ArchitectureConformanceError"},
+      {"name": "PublicSurfaceRegressionError", "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None, signature_details: Optional[List[Tuple[str, str, str, str]]] = None)", "returns": "PublicSurfaceRegressionError"},
+      {"name": "TestChurnError", "signature": "(prompt_name: str, output_path: str, churn_ratio: float, threshold: float, pre_line_count: int, post_line_count: int, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None, adopted_human: bool = False)", "returns": "TestChurnError"},
+      {"name": "ProseOutputError", "signature": "(prompt_name: str, output_path: str, language: str, model_name: str = \"unknown\", total_cost: float = 0.0, raw_output: Optional[str] = None, extractor_result: str = \"empty\")", "returns": "ProseOutputError"},
+      {"name": "_LANGUAGE_TEST_FILE_EXTS", "signature": "Tuple[str, ...]", "returns": "Tuple[str, ...]"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Implement the conformance gate exceptions in
+% `pdd/conformance/gate_errors.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Responsibility
+  The four exception types the conformance gates raise, their structured
+  attributes, their diagnostic messages, and the repair directive each hands back
+  to a retrying generator.
+
+% Non-responsibilities
+  No gate logic. Nothing here decides whether a gate fires - callers do that and
+  raise these.
+
+% Vocabulary
+  - **repair directive**: model-facing prose injected into a regeneration attempt
+    via `PDD_REPAIR_DIRECTIVE`. Not machine-parsed.
+  - **churn nonce**: a secret token the parent sync runner passes to this process
+    over a pipe FD, used to authenticate a churn report as genuinely PDD-emitted.
+
+% Contract rules
+<contract_rules>
+  R1. All four classes MUST subclass `click.UsageError` directly and MUST be
+      peers - none a subclass of another. Callers catching `click.UsageError`
+      keep working unchanged.
+  R2. Each class MUST accept a `repair_directive` constructor override and return
+      it verbatim from its `repair_directive` property when supplied.
+  R3. `<unknown>` MUST be displayed wherever an empty `output_path` would appear
+      in a message.
+  R4. `ProseOutputError`'s raw-output excerpt MUST be bounded: `<empty>` when
+      there is no raw text, otherwise truncated to 240 characters with an
+      ellipsis.
+  R5. `TestChurnError.adopted_human` records that the test was adopted from an
+      existing human co-located test (#1903). It MUST only annotate the message;
+      it MUST NOT change any decision. Default `False`.
+  R6. The churn nonce MUST be read at most once per process from the FD named by
+      `PDD_CHURN_NONCE_FD`, cached thereafter, and accepted only when it is a
+      plausible hex token. Absence of the channel, or any read failure, MUST
+      yield the empty string rather than raising.
+  R7. `TestChurnError` MUST append a `nonce:` line only when a nonce is
+      available. A forged report cannot carry the correct secret.
+</contract_rules>
+
+% Message format - CROSS-PROCESS CONTRACT
+  `agentic_sync_runner` detects these failures by string-prefix scanning a child
+  process's stdout, so the following are observable outputs and MUST be
+  byte-identical. Fields listed after a prefix each occupy their own line.
+
+  - `Architecture conformance error for {prompt_name}:` - one line, naming the
+    missing symbols, the output path, and the expected and found symbol lists.
+  - `Public surface regression for {prompt_name}:` then `removed:`,
+    `signature_changed:` (both `<none>` when empty, else comma-joined),
+    `output:`, `pre_surface_size:`, `post_surface_size:`. One
+    `signature_detail: <json>` line per `signature_details` tuple is appended
+    AFTER those, never interleaved; `<json>` is a compact single-line object with
+    keys `symbol`, `expected`, `actual`, `source`. JSON encoding is required so a
+    signature containing PEP-604 `|` unions or quoted defaults cannot corrupt
+    `agentic_sync_runner._parse_signature_detail_lines`.
+  - `Test churn threshold exceeded for {prompt_name}:` then `ratio:` and
+    `threshold:` to two decimal places, `output:`, `pre_line_count:`,
+    `post_line_count:`, `adopted:` (lowercased bool), and the optional `nonce:`.
+  - `Generation output extraction failure for {prompt_name}:` then `model_name:`,
+    `language:`, `output:`, `Extractor result:`, `Raw output excerpt:`.
+
+% Repair directives - observable text
+  - `ArchitectureConformanceError`: states that required exports declared in
+    `architecture.json` are missing, lists them under the literal line
+    `Required missing exports:` one `- <symbol>` per line, and includes the
+    literal instruction
+    `Do not modify architecture.json. Do not remove existing valid exports.`
+    Expected and found symbol lists follow when non-empty.
+  - `PublicSurfaceRegressionError`: opens `Public surface regression repair
+    required.` and lists removed symbols to restore. For `signature_details`
+    entries whose source is `pdd-interface` it MUST demand the declared signature
+    VERBATIM - reproduce the declared annotation text token-for-token, never
+    substitute an equivalent spelling (keep `object` as `object`, never `Any`),
+    never broaden a declared parameter with union members the declaration omits
+    (#1968). It MUST then advise editing the `<pdd-interface>` declaration when a
+    declared parameter change is intended, and MUST NOT advise a
+    `BREAKING-CHANGE` marker for declared symbols - that relaxes only the
+    un-declarable binding-kind and async-ness. Remaining changed signatures not
+    covered by a declaration are listed separately. Closes by requiring
+    backward-compatible helpers to be preserved unless the prompt lists removals
+    with `BREAKING-CHANGE: remove <symbol>`.
+  - `TestChurnError`: opens `Test churn repair required.` then three bullets -
+    keep the existing broad coverage at the output path, reduce unrelated
+    rewrites below the threshold (quoting both the threshold and current churn to
+    two decimals), and add or update only the tests the prompt change needs.
+  - `ProseOutputError`: the module-level `PROSE_OUTPUT_REPAIR_DIRECTIVE` - the
+    previous response contained no extractable code; return the complete source
+    file only, inside a single code block, with no planning text, prose
+    explanation, or partial snippets outside it.
+
+% Inputs and outputs
+  `_LANGUAGE_TEST_FILE_EXTS` is the shared tuple of extensions whose ecosystems
+  use the `_test.<ext>` / `_spec.<ext>` sibling-file convention, seeded with
+  `.py`, `.go`, `.rb`, `.rs`, `.exs`, `.ex`, `.dart`, `.clj`, `.cljc`, `.lua`,
+  `.php`. New languages are added here so the churn gate covers them without a
+  code change elsewhere.
+
+% Dependencies
+  Standard library plus `click`. MUST NOT import any other `pdd.conformance`
+  module - every one of them imports this.
