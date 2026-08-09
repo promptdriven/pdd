@@ -200,6 +200,18 @@ _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES = (
     _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
     _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
 )
+# PR #2376 changes only the dependency-orchestrator and sync-order prompt
+# contracts. Bind the two profile rows to the exact post-#2377 stationary
+# policy/profile pair, so this acknowledgement cannot authorize any other
+# prompt change.
+_PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES = (
+    _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES[1],
+    _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES[1],
+)
+_PR2376_DEPENDENCY_FIX_PROFILE_BYTES = (
+    _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES[1],
+    "2bd747bbd30cf1e4242e3a91692f421dee9a023df51c56fb0ac18500764243db",
+)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
@@ -1009,6 +1021,25 @@ _ZSH_GLOBAL_OPTION_COMPOSED_REQUIREMENT_TRANSITIONS = (
         "488cde2f0d55b75a1cafc4f3e8f0e5f3984d4c0c0b70076c0d61820a4974365f",
         _ZSH_GLOBAL_OPTION_PROFILE_BYTES[0],
         _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
+    ),
+)
+
+_PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_change_orchestrator_python.prompt",
+        "python",
+        "a5f609c2aa21b86d5b1bdb1ef7b36207c40326fc85b617c8b7d7b99dc5b23b9c",
+        "3afe3ea26d5ea37134d923e9428d0820e13eda7145ee0a1a04728d60108a4347",
+        _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[0],
+        _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_order_python.prompt",
+        "python",
+        "4f3169caa3f9ef7429adfad3aea0514d4b7cba7ef581f7cd254064446d591df6",
+        "9bb0a505ad38e88a1b025c52f666dea462a58b7a41a60330e7835261d77c619a",
+        _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[0],
+        _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
     ),
 )
 
@@ -3008,11 +3039,31 @@ def _load_requirement_transition_authorizations(
             ),
         }
     )
+    pr2376_dependency_fix_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        in {
+            (
+                _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES,
+                _PR2376_DEPENDENCY_FIX_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1],
+                    _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1],
+                ),
+                (
+                    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+                    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+                ),
+            ),
+        }
+    )
     temperature_regression_state = (
         exact_pr2316_phase_a_reissue
         or exact_pr2316_stationary_reissue
         or exact_pr2316_historical_reissue
         or exact_pr2316_phase_b_state
+        or pr2376_dependency_fix_state
         or (
             is_pdd_repository
             and (policy_digests, profile_digests)
@@ -3043,6 +3094,7 @@ def _load_requirement_transition_authorizations(
         or sync_rollout_repair_state
         or code_generator_language_gate_state
         or temperature_regression_state
+        or pr2376_dependency_fix_state
     )
     gemini_36_terra_sol_state = is_pdd_repository and (
         (policy_digests, profile_digests)
@@ -3106,6 +3158,17 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in zsh_identities
         ) + _ZSH_GLOBAL_OPTION_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_ZSH_GLOBAL_OPTION_COMPOSED_REQUIREMENT_TRANSITIONS)
+    if pr2376_dependency_fix_state:
+        pr2376_identities = {
+            (item.prompt_path, item.language_id)
+            for item in _PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS
+        }
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id) not in pr2376_identities
+        ) + _PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS
+        authority.update(_PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS)
     if generate_reliability_state or historical_composed_state:
         reliability_identities = {
             (item.prompt_path, item.language_id)
@@ -3119,7 +3182,11 @@ def _load_requirement_transition_authorizations(
         authority.update(_GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS)
     if historical_composed_state:
         opus_fable_transitions = _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
-        if exact_pr2316_phase_b_state or code_generator_language_gate_state:
+        if (
+            exact_pr2316_phase_b_state
+            or code_generator_language_gate_state
+            or pr2376_dependency_fix_state
+        ):
             # The transition and its exact consumed state retain protected rows
             # for these two identities.  The older Opus/Fable overlay is still
             # required for every other historical identity, but replacing the
@@ -3170,6 +3237,7 @@ def _load_requirement_transition_authorizations(
         sync_rollout_repair_state
         or code_generator_language_gate_state
         or temperature_regression_state
+        or pr2376_dependency_fix_state
     ):
         # These retained schema-2 rows describe historical prompt changes.
         # Their identities are already at the exact repaired prompt bytes, so
@@ -3304,6 +3372,7 @@ def _load_requirement_transition_authorizations(
             terra_sol_consumed_state,
             gemini_36_terra_sol_state,
             sync_rollout_repair_state,
+            pr2376_dependency_fix_state,
         )
     )
     for item in candidate:
