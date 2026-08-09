@@ -1,5 +1,6 @@
 # tests/test_commands_maintenance.py
 """Tests for commands/maintenance."""
+import json
 import os
 import sys
 import subprocess
@@ -55,6 +56,388 @@ def test_sync_returns_tuple_on_success(mock_sync_main, mock_auto_update, runner)
 
     # The command should complete successfully
     assert result.exit_code == 0
+    mock_sync_main.assert_called_once()
+
+
+@patch("pdd.core.cli.auto_update")
+@patch("pdd.commands.maintenance.sync_main")
+@patch(
+    "pdd.sync_core.finalize.preflight_legacy_mutation",
+    side_effect=RuntimeError("protected canonical sync"),
+)
+def test_sync_cli_preflights_before_dispatch_and_suppresses_state_writes(
+    mock_preflight, mock_sync_main, mock_auto_update, runner
+):
+    result = runner.invoke(cli.cli, ["--quiet", "sync", "test_module"])
+    assert result.exit_code != 0
+    mock_preflight.assert_called_once()
+    mock_sync_main.assert_not_called()
+    assert result.exception is not None
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_compress_flag_forwarded_to_sync_main(
+    mock_sync_main, mock_auto_update, runner, tmp_path, monkeypatch
+):
+    """``pdd sync --compress`` forwards compress=True to sync_main (#876)."""
+    mock_sync_main.return_value = ({}, 0.0, '')
+    monkeypatch.chdir(tmp_path)
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "demo_python.prompt").write_text("% demo\n", encoding="utf-8")
+
+    result = runner.invoke(
+        cli.cli,
+        ["--quiet", "sync", "demo", "--compress", "--skip-verify", "--skip-tests"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert mock_sync_main.call_args.kwargs["compress"] is True
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_main')
+@patch('pdd.commands.maintenance.run_agentic_sync')
+@patch('pdd.commands.maintenance.run_global_sync')
+def test_sync_without_basename_dispatches_global_sync(
+    mock_global_sync,
+    mock_agentic_sync,
+    mock_sync_main,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+):
+    """No-argument `pdd sync` should run global architecture sync."""
+    monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
+    mock_global_sync.return_value = (True, "Global sync dry run: 1 module(s) would sync.", 0.0, "global-sync")
+
+    result = runner.invoke(cli.cli, ["sync", "--dry-run"])
+
+    assert result.exit_code == 0
+    mock_global_sync.assert_called_once()
+    mock_agentic_sync.assert_not_called()
+    mock_sync_main.assert_not_called()
+    call_kwargs = mock_global_sync.call_args.kwargs
+    assert call_kwargs["dry_run"] is True
+    assert call_kwargs["budget"] is not None
+    assert call_kwargs["local"] is False
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+def test_sync_without_basename_forwards_global_local_flag(
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+):
+    """Top-level --local must be preserved when global sync dispatches children."""
+    mock_global_sync.return_value = (True, "ok", 0.0, "global-sync")
+
+    result = runner.invoke(cli.cli, ["--local", "sync", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert mock_global_sync.call_args.kwargs["local"] is True
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+def test_sync_without_basename_uses_default_budget_without_pddrc(
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """No-argument global sync should use the advertised default budget cap."""
+    monkeypatch.chdir(tmp_path)
+    mock_global_sync.return_value = (True, "ok", 0.0, "global-sync")
+
+    result = runner.invoke(cli.cli, ["sync", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert mock_global_sync.call_args.kwargs["budget"] == pytest.approx(20.0)
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+def test_sync_without_basename_uses_pddrc_default_budget(
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """No-argument global sync should honor .pddrc default budget."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pddrc").write_text(
+        """
+version: "1.0"
+contexts:
+  default:
+    defaults:
+      budget: 7.5
+""",
+        encoding="utf-8",
+    )
+    mock_global_sync.return_value = (True, "ok", 0.0, "global-sync")
+
+    result = runner.invoke(cli.cli, ["sync", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert mock_global_sync.call_args.kwargs["budget"] == pytest.approx(7.5)
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+def test_sync_without_basename_uses_pddrc_default_target_coverage(
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """Global sync analysis should honor .pddrc target coverage like child sync."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pddrc").write_text(
+        """
+version: "1.0"
+contexts:
+  default:
+    defaults:
+      target_coverage: 12.5
+""",
+        encoding="utf-8",
+    )
+    mock_global_sync.return_value = (True, "ok", 0.0, "global-sync")
+
+    result = runner.invoke(cli.cli, ["sync", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert mock_global_sync.call_args.kwargs["target_coverage"] == pytest.approx(12.5)
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+def test_sync_without_basename_target_coverage_cli_overrides_pddrc(
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """Explicit --target-coverage should take precedence over .pddrc defaults."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pddrc").write_text(
+        """
+version: "1.0"
+contexts:
+  default:
+    defaults:
+      target_coverage: 12.5
+""",
+        encoding="utf-8",
+    )
+    mock_global_sync.return_value = (True, "ok", 0.0, "global-sync")
+
+    result = runner.invoke(cli.cli, ["sync", "--dry-run", "--target-coverage", "80"])
+
+    assert result.exit_code == 0
+    assert mock_global_sync.call_args.kwargs["target_coverage"] == pytest.approx(80.0)
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+def test_sync_without_basename_exits_on_global_sync_failure(mock_global_sync, mock_auto_update, runner):
+    """A failed global sync dispatch should produce a non-zero CLI exit."""
+    mock_global_sync.return_value = (False, "No architecture.json found", 0.0, "global-sync")
+
+    result = runner.invoke(cli.cli, ["sync"])
+
+    assert result.exit_code == 1
+    mock_global_sync.assert_called_once()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+@patch('pdd.commands.maintenance.run_agentic_sync')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_with_basename_keeps_single_module_dispatch(
+    mock_sync_main,
+    mock_agentic_sync,
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+):
+    """A basename argument should still use the original single-module sync path."""
+    mock_sync_main.return_value = ('success', 0.5, 'model')
+
+    result = runner.invoke(cli.cli, ["sync", "--dry-run", "--one-session", "test_module"])
+
+    assert result.exit_code == 0
+    mock_sync_main.assert_called_once()
+    mock_agentic_sync.assert_not_called()
+    mock_global_sync.assert_not_called()
+    call_kwargs = mock_sync_main.call_args.kwargs
+    assert call_kwargs["basename"] == "test_module"
+    assert call_kwargs["dry_run"] is True
+    assert call_kwargs["one_session"] is True
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+@patch('pdd.commands.maintenance.sync_main')
+@patch('pdd.commands.maintenance.run_agentic_sync')
+def test_sync_with_github_issue_url_keeps_agentic_dispatch(
+    mock_agentic_sync,
+    mock_sync_main,
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+):
+    """A GitHub issue URL should still dispatch to agentic issue sync."""
+    mock_agentic_sync.return_value = (True, "Sync completed", 0.25, "agentic-sync")
+    issue_url = "https://github.com/gltanaka/pdd/issues/636"
+
+    result = runner.invoke(
+        cli.cli,
+        ["sync", "--budget", "3.5", "--no-one-session", issue_url],
+    )
+
+    assert result.exit_code == 0
+    mock_agentic_sync.assert_called_once()
+    mock_sync_main.assert_not_called()
+    mock_global_sync.assert_not_called()
+    call_kwargs = mock_agentic_sync.call_args.kwargs
+    assert call_kwargs["issue_url"] == issue_url
+    assert call_kwargs["budget"] == 3.5
+    assert call_kwargs["dry_run"] is False
+    assert call_kwargs["one_session"] is False
+    assert call_kwargs["use_github_state"] is True
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+@patch('pdd.commands.maintenance.sync_main')
+@patch('pdd.commands.maintenance.run_agentic_sync')
+def test_sync_with_github_issue_url_forwards_dry_run(
+    mock_agentic_sync,
+    mock_sync_main,
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+):
+    """Issue URL sync must keep --dry-run read-only by forwarding it."""
+    mock_agentic_sync.return_value = (True, "Dry run complete", 0.0, "agentic-sync")
+    issue_url = "https://github.com/gltanaka/pdd/issues/1382"
+
+    result = runner.invoke(cli.cli, ["sync", "--dry-run", issue_url])
+
+    assert result.exit_code == 0
+    mock_agentic_sync.assert_called_once()
+    mock_sync_main.assert_not_called()
+    mock_global_sync.assert_not_called()
+    assert mock_agentic_sync.call_args.kwargs["dry_run"] is True
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+@patch('pdd.commands.maintenance.run_agentic_sync')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_with_architecture_json_keeps_single_module_dispatch(
+    mock_sync_main,
+    mock_agentic_sync,
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """`pdd sync architecture.json` stays on the single-module sync path."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+    mock_sync_main.return_value = ("success", 0.0, "model")
+
+    result = runner.invoke(cli.cli, ["sync", "architecture.json", "--dry-run"])
+
+    assert result.exit_code == 0
+    mock_global_sync.assert_not_called()
+    mock_sync_main.assert_called_once()
+    assert mock_sync_main.call_args.kwargs["basename"] == "architecture.json"
+    mock_agentic_sync.assert_not_called()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_with_architecture_json_subpath_keeps_single_module_dispatch(
+    mock_sync_main,
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """A path ending in `/architecture.json` stays on single-module sync."""
+    monkeypatch.chdir(tmp_path)
+    nested = tmp_path / "subdir"
+    nested.mkdir()
+    (nested / "architecture.json").write_text("[]", encoding="utf-8")
+    mock_sync_main.return_value = ("success", 0.0, "model")
+
+    result = runner.invoke(
+        cli.cli, ["sync", "subdir/architecture.json", "--dry-run"]
+    )
+
+    assert result.exit_code == 0
+    mock_global_sync.assert_not_called()
+    mock_sync_main.assert_called_once()
+    assert mock_sync_main.call_args.kwargs["basename"] == "subdir/architecture.json"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_with_unrelated_json_falls_through_to_single_module(
+    mock_sync_main,
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """Non-`architecture.json` `.json` arguments must NOT trigger global sync."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    mock_sync_main.return_value = ("success", 0.0, "model")
+
+    result = runner.invoke(cli.cli, ["sync", "config.json"])
+
+    assert result.exit_code == 0
+    mock_global_sync.assert_not_called()
+    mock_sync_main.assert_called_once()
+    assert mock_sync_main.call_args.kwargs["basename"] == "config.json"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_with_missing_architecture_json_falls_through(
+    mock_sync_main,
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """`pdd sync architecture.json` remains a normal basename when missing."""
+    monkeypatch.chdir(tmp_path)  # no architecture.json on disk
+    mock_sync_main.return_value = ("success", 0.0, "model")
+
+    result = runner.invoke(cli.cli, ["sync", "architecture.json"])
+
+    assert result.exit_code == 0
+    mock_global_sync.assert_not_called()
     mock_sync_main.assert_called_once()
 
 
@@ -147,6 +530,7 @@ def test_setup_handles_none_ctx_obj(mock_auto_update, mock_install, mock_run, _m
     mock_install.assert_called_once_with(quiet=False)
 
 
+@patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths') # Now this patch should work
 @patch('pdd.commands.maintenance.auto_deps_main')
@@ -183,6 +567,7 @@ def test_cli_auto_deps_strips_quotes(mock_main, mock_construct, mock_auto_update
 @patch('pdd.core.utils._should_show_onboarding_reminder', return_value=False)
 @patch('pdd.core.utils.subprocess.run')
 @patch('pdd.cli.install_completion')  # Patch the actual function, not cli_module
+@patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update')
 def test_cli_setup_command(mock_auto_update, mock_install, mock_run, _mock_reminder, runner):
     """`pdd setup` should install completions and run the setup utility."""
@@ -238,3 +623,245 @@ def test_target_coverage_cli_option_converts_string_to_float(mock_sync_main, moc
     assert isinstance(target_coverage, float), \
         f"target_coverage should be float, got {type(target_coverage)}: {target_coverage}"
     assert target_coverage == 85.5
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_prompts_to_architecture')
+def test_sync_architecture_reports_summary_and_success(mock_sync_prompts, mock_auto_update, runner):
+    """Explicit architecture sync command should call the shared helper and print a summary."""
+    mock_sync_prompts.return_value = {
+        "success": True,
+        "updated_count": 2,
+        "skipped_count": 1,
+        "results": [
+            {"filename": "core_python.prompt", "success": True, "updated": True, "changes": {"reason": {"old": "old", "new": "new"}}, "error": None},
+            {"filename": "dep_python.prompt", "success": True, "updated": False, "changes": {}, "error": None},
+        ],
+        "validation": {"valid": True, "errors": [], "warnings": []},
+        "errors": [],
+    }
+
+    result = runner.invoke(cli.cli, ["sync-architecture"])
+
+    assert result.exit_code == 0
+    mock_sync_prompts.assert_called_once_with(filenames=None, dry_run=False)
+    assert "Updated 2 module(s); skipped 1." in result.output
+    assert "core_python.prompt" in result.output
+    assert "Unexpected result format" not in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_prompts_to_architecture')
+def test_sync_architecture_echoes_module_warnings(mock_sync_prompts, mock_auto_update, runner):
+    """Per-module contract_summary warnings from sync results appear in CLI output."""
+    mock_sync_prompts.return_value = {
+        "success": True,
+        "updated_count": 1,
+        "skipped_count": 0,
+        "results": [
+            {
+                "filename": "refund_python.prompt",
+                "success": True,
+                "updated": True,
+                "changes": {},
+                "error": None,
+                "warnings": ["contract_summary: story file unreadable: broken.md"],
+            },
+        ],
+        "validation": {"valid": True, "errors": [], "warnings": []},
+        "errors": [],
+    }
+
+    result = runner.invoke(cli.cli, ["sync-architecture"])
+
+    assert result.exit_code == 0
+    assert "WARNING refund_python.prompt:" in result.output
+    assert "story file unreadable" in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_prompts_to_architecture')
+def test_sync_architecture_passes_filenames_and_dry_run(mock_sync_prompts, mock_auto_update, runner):
+    """Specific prompt filenames and --dry-run should flow into the shared helper."""
+    mock_sync_prompts.return_value = {
+        "success": True,
+        "updated_count": 1,
+        "skipped_count": 0,
+        "results": [
+            {"filename": "core_python.prompt", "success": True, "updated": True, "changes": {"reason": {"old": "old", "new": "new"}}, "error": None},
+        ],
+        "validation": {"valid": True, "errors": [], "warnings": []},
+        "errors": [],
+    }
+
+    result = runner.invoke(
+        cli.cli,
+        ["sync-architecture", "--dry-run", "prompts/core_python.prompt"],
+    )
+
+    assert result.exit_code == 0
+    mock_sync_prompts.assert_called_once_with(
+        filenames=["prompts/core_python.prompt"],
+        dry_run=True,
+    )
+    assert "Dry run: would update 1 module(s); skipped 0." in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_prompts_to_architecture')
+def test_sync_architecture_exits_nonzero_on_validation_failure(mock_sync_prompts, mock_auto_update, runner):
+    """Validation failures should surface clearly and fail the command."""
+    mock_sync_prompts.return_value = {
+        "success": False,
+        "updated_count": 1,
+        "skipped_count": 0,
+        "results": [
+            {"filename": "core_python.prompt", "success": True, "updated": True, "changes": {"reason": {"old": "old", "new": "new"}}, "error": None},
+        ],
+        "validation": {
+            "valid": False,
+            "errors": [
+                {
+                    "type": "missing_dependency",
+                    "message": "Module 'core_python.prompt' depends on non-existent module 'dep_python.prompt'",
+                    "modules": ["core_python.prompt", "dep_python.prompt"],
+                }
+            ],
+            "warnings": [],
+        },
+        "errors": [],
+    }
+
+    result = runner.invoke(cli.cli, ["sync-architecture"])
+
+    assert result.exit_code == 1
+    assert "Validation errors:" in result.output
+    assert "depends on non-existent module" in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.handle_error')
+@patch('pdd.commands.maintenance.sync_prompts_to_architecture')
+def test_sync_architecture_calls_handle_error_on_exception(mock_sync_prompts, mock_handle_error, mock_auto_update, runner):
+    """Unexpected sync failures should still go through shared CLI error handling."""
+    mock_sync_prompts.side_effect = RuntimeError("boom")
+
+    result = runner.invoke(cli.cli, ["sync-architecture"])
+
+    mock_handle_error.assert_called_once()
+    call_args = mock_handle_error.call_args[0]
+    assert isinstance(call_args[0], RuntimeError)
+    assert call_args[1] == "sync-architecture"
+
+
+@patch('pdd.core.cli.auto_update')
+def test_sync_architecture_uses_nearest_cwd_project(mock_auto_update, runner, tmp_path, monkeypatch):
+    """CLI should target the nearest ancestor project, not always the repo root."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / ".git").mkdir()
+
+    root_prompts = repo_root / "prompts"
+    root_prompts.mkdir()
+    (root_prompts / "root_python.prompt").write_text(
+        "<pdd-reason>Updated root reason</pdd-reason>",
+        encoding="utf-8",
+    )
+    (repo_root / "architecture.json").write_text(
+        '[{"filename":"root_python.prompt","filepath":"root.py","description":"Root module","reason":"Original root reason","dependencies":[],"priority":1}]',
+        encoding="utf-8",
+    )
+
+    nested_root = repo_root / "apps" / "nested"
+    nested_root.mkdir(parents=True)
+    nested_prompts = nested_root / "prompts"
+    nested_prompts.mkdir()
+    (nested_prompts / "nested_python.prompt").write_text(
+        "<pdd-reason>Updated nested reason</pdd-reason>",
+        encoding="utf-8",
+    )
+    (nested_root / "architecture.json").write_text(
+        '[{"filename":"nested_python.prompt","filepath":"nested.py","description":"Nested module","reason":"Original nested reason","dependencies":[],"priority":1}]',
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(nested_root)
+
+    result = runner.invoke(cli.cli, ["sync-architecture"])
+
+    assert result.exit_code == 0
+    assert "Updated 1 module(s); skipped 0." in result.output
+    assert json.loads((repo_root / "architecture.json").read_text(encoding="utf-8"))[0]["reason"] == "Original root reason"
+    assert json.loads((nested_root / "architecture.json").read_text(encoding="utf-8"))[0]["reason"] == "Updated nested reason"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_model_flag_sets_pdd_model_default(mock_sync_main, mock_auto_update, runner, monkeypatch):
+    """`pdd sync <basename> --model X` sets PDD_MODEL_DEFAULT for the run so the
+    selection resolver (which reads it at call time) routes to X — the public-CLI
+    way to force, e.g., the chatgpt/ subscription family (issue #1269)."""
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    seen = {}
+
+    def _capture(*args, **kwargs):
+        seen["model_default"] = os.environ.get("PDD_MODEL_DEFAULT")
+        return ("success", 0.0, "chatgpt/gpt-5.3-codex")
+
+    mock_sync_main.side_effect = _capture
+    result = runner.invoke(
+        cli.cli, ["sync", "test_module", "--model", "chatgpt/gpt-5.3-codex"]
+    )
+    assert result.exit_code == 0, result.output
+    assert seen.get("model_default") == "chatgpt/gpt-5.3-codex"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_without_model_flag_leaves_default_unset(mock_sync_main, mock_auto_update, runner, monkeypatch):
+    """Without --model, sync must not invent a PDD_MODEL_DEFAULT."""
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    seen = {}
+
+    def _capture(*args, **kwargs):
+        seen["model_default"] = os.environ.get("PDD_MODEL_DEFAULT")
+        return ("success", 0.0, "x")
+
+    mock_sync_main.side_effect = _capture
+    result = runner.invoke(cli.cli, ["sync", "test_module"])
+    assert result.exit_code == 0, result.output
+    assert seen.get("model_default") is None
+
+
+def test_llm_invoke_resolves_model_from_env_at_call_time(monkeypatch):
+    """P1 core: llm_invoke must resolve the base model from PDD_MODEL_DEFAULT at
+    CALL time, not the import-frozen constant — this is what makes `pdd sync
+    --model` (which sets the env var) actually change the model in-process,
+    including precedence over a different value present at startup."""
+    import pdd.llm_invoke as li
+
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")  # never touch the cloud auth flow
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "vertex_ai/gemini-3-flash-preview")
+    captured = {}
+
+    def _spy(strength, base, df, manifest_by_model=None):
+        captured["base"] = base
+        # Short-circuit before llm_invoke enters the candidate loop. We only need
+        # to assert the base model resolved at CALL time; letting the call proceed
+        # with a chatgpt/ base drives real get_model_info / token-refresh /
+        # completion attempts that hang in CI (no token) and trip the 60s
+        # pytest-timeout. llm_invoke catches this in its model-selection
+        # try/except and re-raises, which the test's `except Exception` swallows.
+        raise RuntimeError("stop after capturing base (hermetic test, #1269)")
+
+    monkeypatch.setattr(li, "_select_model_candidates", _spy)
+    # change the env AFTER import (as `pdd sync --model` does) and call:
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.3-codex")
+    try:
+        li.llm_invoke(prompt="hi {x}", input_json={"x": "y"}, strength=0.5, verbose=False)
+    except Exception:
+        pass  # selector is stubbed; downstream may error — we only assert the base.
+
+    assert captured.get("base") == "chatgpt/gpt-5.3-codex", (
+        "llm_invoke used a stale base model; --model would not take effect in-process"
+    )

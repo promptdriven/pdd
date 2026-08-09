@@ -1,0 +1,10 @@
+% Fixture: vague_no_vocab_python.prompt
+% Vague terms in rules, no vocabulary block.
+% Expected: VAGUE_TERM warnings for valid, duplicate, graceful, authorized, active.
+
+<contract_rules>
+R1: The system MUST reject duplicate uploads gracefully.
+R2: The system MUST only accept uploads from authorized users.
+R3: The system MUST return a valid response on successful upload.
+R4: The system MUST NOT allow active sessions to exceed 10 uploads per day.
+</contract_rules>

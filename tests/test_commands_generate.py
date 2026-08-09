@@ -74,6 +74,34 @@ def test_cli_generate_incremental_flag_passthrough(mock_main, mock_auto_update, 
     # CLI uses --incremental but main receives force_incremental_flag
     assert call_kwargs["force_incremental_flag"] is True
 
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+@pytest.mark.parametrize("requested_model", ["claude-fable-5", "claude-opus-5"])
+def test_global_model_flag_sets_claude_5_for_generate_run(
+    mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch,
+    requested_model,
+):
+    """The public CLI accepts Fable and Opus 5 names without leaking env."""
+    files = create_dummy_files("fable.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'claude-fable-5')
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    seen = {}
+
+    def capture_model(**kwargs):
+        seen["model"] = os.environ.get("PDD_MODEL_DEFAULT")
+        return ('code', False, 0.0, 'claude-fable-5')
+
+    mock_main.side_effect = capture_model
+    result = runner.invoke(
+        cli.cli,
+        ["--model", requested_model, "generate", str(files["fable.prompt"])],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen["model"] == requested_model
+    assert os.environ.get("PDD_MODEL_DEFAULT") is None
+
 # --- Template Functionality Tests ---
 
 @patch('pdd.core.cli.auto_update')
@@ -140,6 +168,11 @@ def test_cli_generate_github_issue_url_triggers_agentic_mode(mock_agentic, mock_
         issue_url="https://github.com/owner/repo/issues/42",
         verbose=False,
         quiet=False,
+        use_github_state=True,
+        skip_prompts=False,
+        target_dir=None,
+        force_single=False,
+        project_root=None,
     )
     assert "Architecture generated" in result.output
 
@@ -154,8 +187,325 @@ def test_cli_generate_github_issue_url_failure(mock_agentic, mock_auto_update, r
         cli.cli,
         ["generate", "https://github.com/owner/repo/issues/99"],
     )
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert "Failed" in result.output or "gh CLI not found" in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_agentic_architecture')
+def test_cli_generate_agentic_io_failure_exits_nonzero(
+    mock_agentic, mock_auto_update, runner
+):
+    """Handled filesystem failures must remain visible to hosted executors."""
+    mock_agentic.return_value = (
+        False,
+        "[Errno 17] File exists: 'app/sizzle/layout.tsx'",
+        0.0,
+        "",
+        [],
+    )
+
+    result = runner.invoke(
+        cli.cli,
+        ["generate", "https://github.com/owner/repo/issues/2283"],
+    )
+
+    assert result.exit_code == 1
+    assert "File exists" in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_incremental_architecture')
+def test_cli_generate_incremental_github_issue_routes_to_guarded_prd_mode(
+    mock_incremental,
+    mock_auto_update,
+    runner,
+):
+    """`--incremental` with a GitHub issue uses guarded PRD propagation."""
+    mock_incremental.return_value = (
+        True,
+        "Applied incremental PRD propagation",
+        1.25,
+        "anthropic",
+        ["architecture.json"],
+    )
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "generate",
+            "--incremental",
+            "--experimental-prd",
+            "--dry-run",
+            "--no-github-state",
+            "https://github.com/owner/repo/issues/42",
+        ],
+    )
+
+    assert result.exit_code == 0
+    mock_incremental.assert_called_once_with(
+        prd_source="https://github.com/owner/repo/issues/42",
+        dry_run=True,
+        verbose=False,
+        quiet=False,
+        use_github_state=False,
+        target_dir=None,
+        strength=DEFAULT_STRENGTH,
+        temperature=0.0,
+        time=DEFAULT_TIME,
+        project_root=None,
+    )
+    assert "Applied incremental PRD propagation" in result.output
+    assert "Would change files: architecture.json" in result.output
+    assert "Output files:" not in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_incremental_architecture')
+def test_cli_generate_incremental_local_prd_routes_to_guarded_prd_mode(
+    mock_incremental,
+    mock_auto_update,
+    runner,
+    tmp_path,
+):
+    """`--incremental` with a PRD-like file does not run code generation."""
+    prd = tmp_path / "prd.md"
+    prd.write_text("Add audit logging", encoding="utf-8")
+    mock_incremental.return_value = (True, "Dry run incremental PRD propagation", 0.0, "mock", [])
+
+    result = runner.invoke(
+        cli.cli,
+        ["generate", "--incremental", "--experimental-prd", str(prd)],
+    )
+
+    assert result.exit_code == 0
+    mock_incremental.assert_called_once_with(
+        prd_source=str(prd),
+        dry_run=False,
+        verbose=False,
+        quiet=False,
+        use_github_state=True,
+        target_dir=None,
+        strength=DEFAULT_STRENGTH,
+        temperature=0.0,
+        time=DEFAULT_TIME,
+        project_root=None,
+    )
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_incremental_architecture')
+@patch('pdd.commands.generate.code_generator_main')
+def test_cli_generate_incremental_markdown_with_output_uses_code_generation(
+    mock_main,
+    mock_incremental,
+    mock_auto_update,
+    runner,
+    tmp_path,
+):
+    """Markdown prompts with code-generation options keep legacy generate behavior."""
+    prompt = tmp_path / "feature.md"
+    prompt.write_text("Generate a feature module.", encoding="utf-8")
+    output = tmp_path / "feature.py"
+    mock_main.return_value = ("code", True, 0.0, "mock")
+
+    result = runner.invoke(
+        cli.cli,
+        ["generate", "--incremental", "--output", str(output), str(prompt)],
+    )
+
+    assert result.exit_code == 0, result.output
+    mock_incremental.assert_not_called()
+    mock_main.assert_called_once()
+    kwargs = mock_main.call_args.kwargs
+    assert kwargs["prompt_file"] == str(prompt)
+    assert kwargs["output"] == str(output)
+    assert kwargs["force_incremental_flag"] is True
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_incremental_architecture')
+def test_cli_generate_incremental_forwards_strength_temperature_time(
+    mock_incremental,
+    mock_auto_update,
+    runner,
+    tmp_path,
+):
+    """F17: global `--strength` / `--temperature` / `--time` flags must reach
+    `run_incremental_architecture` so user-specified model knobs are not
+    silently ignored on `--incremental`.
+    """
+    prd = tmp_path / "prd.md"
+    prd.write_text("Add audit logging.", encoding="utf-8")
+    mock_incremental.return_value = (True, "Applied", 0.0, "model", [])
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "--strength", "0.85",
+            "--temperature", "0.5",
+            "--time", "0.3",
+            "generate",
+            "--incremental",
+            "--experimental-prd",
+            "--no-github-state",
+            str(prd),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    kwargs = mock_incremental.call_args.kwargs
+    assert kwargs["strength"] == 0.85
+    assert kwargs["temperature"] == 0.5
+    assert kwargs["time"] == 0.3
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_agentic_architecture')
+def test_cli_generate_forwards_project_root_to_agentic(
+    mock_agentic,
+    mock_auto_update,
+    runner,
+    tmp_path,
+):
+    """`--project-root <path>` must be forwarded to run_agentic_architecture
+    as the resolved absolute path so the runtime can pin the project root
+    instead of walking up from cwd (issue #815).
+    """
+    project = tmp_path / "nested-project"
+    project.mkdir()
+    mock_agentic.return_value = (True, "ok", 0.0, "model", [])
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "generate",
+            "--project-root", str(project),
+            "https://github.com/owner/repo/issues/42",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    kwargs = mock_agentic.call_args.kwargs
+    # click resolves --project-root via resolve_path=True, so compare resolved paths.
+    assert kwargs["project_root"] == str(project.resolve())
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_incremental_architecture')
+def test_cli_generate_forwards_project_root_to_incremental(
+    mock_incremental,
+    mock_auto_update,
+    runner,
+    tmp_path,
+):
+    """`--project-root <path>` must be forwarded to run_incremental_architecture
+    in `--incremental --experimental-prd` mode (issue #815).
+    """
+    project = tmp_path / "nested-project"
+    project.mkdir()
+    prd = tmp_path / "prd.md"
+    prd.write_text("Add audit logging.", encoding="utf-8")
+    mock_incremental.return_value = (True, "ok", 0.0, "model", [])
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "generate",
+            "--incremental",
+            "--experimental-prd",
+            "--project-root", str(project),
+            str(prd),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    kwargs = mock_incremental.call_args.kwargs
+    assert kwargs["project_root"] == str(project.resolve())
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_cli_generate_rejects_project_root_in_standard_mode(
+    mock_main,
+    mock_auto_update,
+    runner,
+    create_dummy_files,
+    tmp_path,
+):
+    """`--project-root` is mode-specific. Passing it on a standard prompt-file
+    invocation must raise UsageError instead of silently no-opping (issue #815
+    review feedback)."""
+    files = create_dummy_files("plain.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+    project = tmp_path / "nested-project"
+    project.mkdir()
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "generate",
+            "--project-root", str(project),
+            str(files["plain.prompt"]),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--project-root" in result.output
+    assert "agentic" in result.output or "incremental" in result.output
+    mock_main.assert_not_called()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_incremental_architecture')
+def test_cli_generate_incremental_prd_requires_explicit_experimental_opt_in(
+    mock_incremental,
+    mock_auto_update,
+    runner,
+    tmp_path,
+):
+    prd = tmp_path / "prd.md"
+    prd.write_text("Add audit logging.", encoding="utf-8")
+
+    result = runner.invoke(cli.cli, ["generate", "--incremental", str(prd)])
+
+    assert result.exit_code == 2
+    assert "--experimental-prd" in result.output
+    mock_incremental.assert_not_called()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_incremental_architecture')
+def test_cli_generate_incremental_github_prd_requires_explicit_experimental_opt_in(
+    mock_incremental,
+    mock_auto_update,
+    runner,
+):
+    result = runner.invoke(
+        cli.cli,
+        ["generate", "--incremental", "https://github.com/owner/repo/issues/42"],
+    )
+
+    assert result.exit_code == 2
+    assert "--experimental-prd" in result.output
+    mock_incremental.assert_not_called()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_cli_generate_dry_run_rejected_outside_incremental_prd_mode(
+    mock_main,
+    mock_auto_update,
+    runner,
+    create_dummy_files,
+):
+    files = create_dummy_files("dryrun.prompt")
+
+    result = runner.invoke(cli.cli, ["generate", "--dry-run", str(files["dryrun.prompt"])])
+
+    assert result.exit_code == 2
+    assert "--dry-run is only supported" in result.output
+    mock_main.assert_not_called()
 
 
 @patch('pdd.core.cli.auto_update')
@@ -184,13 +534,14 @@ def test_cli_generate_directory_path_raises_error(mock_main, mock_auto_update, r
     mock_main.assert_not_called()
 
 
-def test_real_generate_command(create_dummy_files, tmp_path):
+def test_real_generate_command(create_dummy_files, tmp_path, monkeypatch):
     """Test the 'generate' command with real files by calling the function directly."""
     if not (os.getenv("PDD_RUN_REAL_LLM_TESTS") or RUN_ALL_TESTS_ENABLED):
         pytest.skip(
             "Real LLM integration tests require network/API access; set "
             "PDD_RUN_REAL_LLM_TESTS=1 or use --run-all / PDD_RUN_ALL_TESTS=1."
         )
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
 
     import sys
     import click

@@ -1,0 +1,643 @@
+<pdd-reason>Orchestrates the 13-step agentic change workflow for implementing GitHub issues.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state, reasoning_time, clean_restart)", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "_artifacts_dir_for", "signature": "(work_dir: Path, issue_number: int) -> Path", "returns": "Path"},
+      {"name": "_clear_step_artifacts", "signature": "(artifacts_dir: Path, step_num: int, name: str) -> None", "returns": "None"},
+      {"name": "_read_step_json", "signature": "(artifacts_dir: Path, filename: str) -> Optional[dict]", "returns": "Optional[dict]"},
+      {"name": "_read_step_md", "signature": "(artifacts_dir: Path, filename: str) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_allow_json_repair_rerun", "signature": "(step_num: int) -> bool", "returns": "bool"},
+      {"name": "_single_provider_attempt_for_step", "signature": "(step_num: int) -> bool", "returns": "bool"},
+      {"name": "_hard_stop_from_json_with_presence", "signature": "(step_num: int, artifacts_dir: Path, name: str) -> Tuple[bool, Optional[str], List[str]]", "returns": "Tuple[bool, Optional[str], List[str]]"},
+      {"name": "_valid_pr_url", "signature": "(value: Any, repo_owner: str = \"\", repo_name: str = \"\") -> bool", "returns": "bool"},
+      {"name": "_git_head_oid", "signature": "(cwd: Path) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_remote_branch_oid", "signature": "(head_branch: str, cwd: Path) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_pr_number_from_url", "signature": "(pr_url: str, repo_owner: str, repo_name: str) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_gh_pr_list_candidates", "signature": "(base_args: Sequence[str], cwd: Optional[Path] = None) -> List[dict]", "returns": "List[dict]"},
+      {"name": "_pr_url_matches_current_head", "signature": "(repo_owner: str, repo_name: str, pr_url: str, head_branch: str, base_branch: str, cwd: Path) -> bool", "returns": "bool"},
+      {"name": "_open_pr_for_head_branch", "signature": "(repo_owner: str, repo_name: str, head_branch: str, base_branch: str, cwd: Path) -> Optional[dict]", "returns": "Optional[dict]"},
+      {"name": "_check_existing_pr_candidates", "signature": "(repo_owner: str, repo_name: str, issue_number: int) -> List[dict]", "returns": "List[dict]"},
+      {"name": "_existing_pr_matches_remote_head", "signature": "(repo_owner: str, repo_name: str, pr: dict, base_branch: str, cwd: Path) -> bool", "returns": "bool"},
+      {"name": "_step9_changed_files_from_json", "signature": "(data: dict) -> Tuple[List[str], List[str], List[str], List[str]]", "returns": "Tuple[List[str], List[str], List[str], List[str]]"},
+      {"name": "_step13_result_from_json_or_output", "signature": "(data: Optional[dict], output: str) -> Tuple[str, str]", "returns": "Tuple[str, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
+<pdd-dependency>pre_checkup_gate_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write the `pdd/agentic_change_orchestrator.py` module.
+
+% Role & Scope
+Orchestrator for the 13-step agentic change workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes a review loop (steps 11-12) that iterates until no issues are found.
+
+% Requirements
+
+Decorate `run_agentic_change_orchestrator` with `provider_failure_workflow` so direct library calls own one provider-health epoch across all steps, while nested CLI calls share the existing outer epoch.
+1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = "", *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
+3. Run 13 steps, with steps 11-12 in a review loop (max 5 iterations)
+4. Accumulate step outputs to pass as context to subsequent steps
+5. Track total cost across all steps
+6. For Step 9: Parse agent output for `FILES_CREATED: path1, path2`, `FILES_MODIFIED: path1, path2`, or `DIRECT_EDITS: path1, path2` lines to extract changed files. Direct edits are code files that were modified directly (not via prompts) because no corresponding prompt exists. Also extract `files_created`, `files_modified`, and `direct_edits` separately. **JSON-first (see % Structured Step Artifacts, B.1): read `09_implement.json` first and use its `files_modified`/`files_created`/`direct_edits`/`status`; this marker-parsing path is the fallback when the JSON is missing or unparseable.**
+7. Pass extracted files to subsequent steps via `files_to_stage` context variable
+7b. For Step 10: Parse agent output for `ARCHITECTURE_FILES_MODIFIED: path1, path2`, `ASSOCIATED_DOCS_MODIFIED: path1, path2`, `ASSOCIATED_DOCS_CONFLICTS: path1, path2`, and `ASSOCIATED_DOCS_UNCHANGED: path1, path2` lines. Append `ARCHITECTURE_FILES_MODIFIED` and `ASSOCIATED_DOCS_MODIFIED` entries to `changed_files` / `files_to_stage`. `ASSOCIATED_DOCS_CONFLICTS` entries are logged but NOT auto-added (they need human review). `ASSOCIATED_DOCS_UNCHANGED` entries are logged only, not staged. **JSON-first (see % Structured Step Artifacts, B.4): read `10_architecture_update.json` first and use its `architecture_files_modified`/`associated_docs_{modified,conflicts,unchanged}` arrays; this marker-parsing path is the fallback when the JSON is missing.**
+7c. For Step 6: Parse agent output for "Direct Edit Candidates" table. Extract file paths and store in `context["direct_edit_candidates"]` list. These are frontend/code files with no corresponding prompt that need scoped edits (uncomment, remove placeholder). Pass this list to Step 9.
+7d. For Step 8.5 (see "Pre-Flight Drift Heal" section): After the worktree is set up and before Step 9 rewrites prompts, call `_preflight_drift_heal()` once per workflow to find and heal modules whose prompts are stale relative to their code (`decision.operation == "update"`). Must be contained to the worktree. Record healed/failed basenames in `state["preflight_healed_modules"]` and `state["preflight_failed_heal_modules"]`. Use `state["preflight_drift_healed"]` as idempotency flag on resume.
+7e. For Step 10.5 (see "Associated-Document Contract Verifier" section): Before Step 10, call `pdd.sync_order.discover_associated_documents(...)` and store the result in `context["associated_documents"]` (for the Step 10 LLM) and `context["_associated_documents_discovered"]` (for the post-step verifier). Build `modified_prompts` from the authoritative changed-file set, not only `files_created` / `files_modified`: include `files_created`, `files_modified`, `files_to_stage`, and the in-memory `changed_files` list so Step 9's successful worktree fallback path cannot bypass doc discovery when the LLM omitted `FILES_*` markers. After Step 10 completes, run `_verify_doc_sync_contract()` to confirm every discovered doc appears in EXACTLY ONE of the `ASSOCIATED_DOCS_MODIFIED` / `ASSOCIATED_DOCS_CONFLICTS` / `ASSOCIATED_DOCS_UNCHANGED` buckets. Silent drops (doc missing from all three) and overlaps (doc in 2+ buckets) are both contract violations; append `ORCHESTRATOR_POSTCHECK_WARNINGS` with `DOC_SYNC_SILENT_DROPS:` and/or `DOC_SYNC_BUCKET_OVERLAPS:` marker lines. Strict mode (env var `PDD_STRICT_DOC_SYNC=1`/`true`/`yes`) aborts the workflow with `success=False` and a message naming the dropped/overlapping docs; default non-strict mode forwards the warnings to Step 11 via `step10_output` for review-loop recovery.
+8. **State Persistence**: Save step outputs to state file after each step completes
+9. **Step Resumption**: On start, load saved state and skip steps that have already completed
+10. **Review Loop**: Steps 11-12 repeat until step 11 signals no remaining issues (max 5 iterations). **JSON-first (see % Structured Step Artifacts, B.2): exit when `11_review.json`'s `status == "clean"`; the case-insensitive "no issues found" substring check is the fallback when the JSON is missing.**
+11. **Sync Order Generation**: After review loop completes (before Step 13):
+    - Import from pdd.sync_order: build_dependency_graph, topological_sort, get_affected_modules, generate_sync_order_script, extract_module_from_include
+    - Build dependency graph from prompts_dir = worktree_path / "prompts"
+    - Extract modified modules from files_to_stage using `extract_module_from_include()` on files matching `prompts/*.prompt`
+    - Get affected modules (modified + transitive dependents)
+    - If affected modules exist, generate sync_order.sh in both user's CWD and worktree root
+    - Generate clean `pdd sync X` command list for sync_order_list (NOT the full bash script with shebang/set -e)
+    - Add to context: sync_order_script (path or ""), sync_order_list (newline-separated commands or "No modules to sync")
+    - Ensure sync_order.sh is added to changed_files for Step 13 to commit
+    - Print warning if circular dependencies detected
+12. **Existing PR Guard**: Before starting the workflow, use validated existing-PR metadata to check whether an open PR already exists for `change/issue-{issue_number}` or a precise `change/issue-{issue_number}-job-*` fallback head. The guard may return early `(True, "PR already exists: {url}", 0.0, "unknown", [])` only when the PR metadata proves exact repo URL, OPEN state, expected base branch, exact head branch, non-empty PR head SHA, and remote branch / PR head SHA alignment. Do not compare against the caller's unrelated local checkout `HEAD` in this startup guard. If validation fails, ignore the shortcut and continue the workflow so stale/wrong PRs cannot bypass Step 13 validation.
+13. **Stale State Detection**: If `issue_updated_at` differs from stored `state["issue_updated_at"]`, clear state and start fresh (issue was modified since last run).
+14. **Impacted Tests**: Before Step 13, identify test files for changed modules by matching changed file basenames (stripping language suffixes like `_python`) against `test_{basename}*` in `test_dir`. Add to context as `impacted_tests`.
+15. **Clean Restart Mode** (`clean_restart=True`): When set by the caller, the orchestrator MUST perform a clean restart for this issue *before* the normal state-load / PR-guard / step-loop entry path runs:
+    - At entry (before `load_workflow_state`), call `clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)` to discard any persisted local + GitHub state from a prior run on this issue.
+    - Skip the **Existing PR Guard** (Requirement 12) entirely — a clean restart explicitly wants to ignore the previously generated `change/issue-{N}` branch and PR.
+    - Skip the **Stale State Detection** (Requirement 13) entirely — state has already been cleared, and `issue_updated_at` comparison would be meaningless.
+    - Force `start_step = 1` regardless of any partially recovered state (loaded state, if present, MUST NOT cause step-skipping in this mode).
+    - Force the worktree base ref. Without `clean_restart`, `_setup_worktree` deliberately reuses `origin/change/issue-{N}` as the base when that remote branch already exists, to preserve cross-machine resume (so a second machine inherits the first machine's prior commits). With `clean_restart=True` this reuse is exactly the bug being fixed (prior stopped / wrong-model artifacts on the remote branch leak into the restart), so the orchestrator MUST pass `clean_restart=True` into `_setup_worktree`. The helper then (a) fetches `+refs/heads/change/issue-{N}:refs/remotes/origin/change/issue-{N}` to refresh Step 13 `--force-with-lease` metadata in the remote-tracking ref (not just `FETCH_HEAD`), (b) keeps `remote_exists=False` so the remote branch is never used as the worktree base, (c) forces the base to `_resolve_main_ref(git_root)`, (d) refuses to fall back to the literal `"HEAD"` (the user's current feature branch) — returning a clear error instead — and (e) when `git branch -D change/issue-{N}` fails, prunes stale worktree registrations (`git worktree prune`) and retries the delete; if the branch is still genuinely checked out in another *live* worktree it does NOT reuse that branch (the fresh-base guarantee forbids it) but instead creates a unique fallback branch `change/issue-{N}-job-{slug}` (slug = first 8 alphanumerics of `JOB_ID`/`PDD_JOB_ID` when present so the branch — and its PR — stay stable across same-job retries, else a random token) from `_resolve_main_ref(git_root)`, fetches that fallback branch's own `+refs/heads/<fallback>:refs/remotes/origin/<fallback>` tracking ref for Step 13 `--force-with-lease` safety, and continues — leaving the locked worktree untouched. Only a non-worktree-lock delete failure aborts with a clear error. The orchestrator MUST also NOT short-circuit worktree setup based on cached `state["worktree_path"]`.
+    - When stale state for a different worktree exists, treat it as fully discarded: do not reuse `state["github_comment_id"]`, `state["step_comments"]`, `state["preflight_drift_healed"]`, or any other resume-only marker.
+    - This mode is idempotent: a second `clean_restart=True` invocation MUST behave identically to the first (state is cleared each time at entry).
+    - **Persist the flag in workflow state**: immediately after initializing the fresh state dict (in the `else` branch), set `state["clean_restart"] = True` when `effective_clean_restart` is True — NOT just when the raw CLI `clean_restart` flag is True. This covers the case where staleness detection triggers a fresh-start during a persisted-clean-restart resume: the new state dict must still carry `clean_restart=True` so the next resume continues to skip the PR guard, use force-push semantics, and skip old-branch reuse. Using the raw CLI flag here would silently drop the flag whenever a stale-detect restart occurs mid-clean-restart chain.
+    - **Compute `effective_clean_restart` early** (immediately after `load_workflow_state`, before the PR guard): `effective_clean_restart = clean_restart or bool((state or {}).get("clean_restart", False))`. This single variable MUST be used in place of the raw `clean_restart` CLI flag for: (a) the Existing PR Guard, (c) both `_setup_worktree` call sites, (d) the Step 13 context, and (e) every `save_workflow_state(..., dedupe=...)` call. **EXCEPTION**: Stale State Detection (Requirement 13) MUST use the raw `clean_restart` CLI flag — NOT `effective_clean_restart`. When the CLI flag is True, the pre-clear already ran so the check is meaningless. When only the persisted flag is True (resume path), the user may have added issue comments between the stopped run and the resume; those would be silently ignored if staleness detection is skipped. The state-initialization branch (`if state is not None and not clean_restart`) also stays on the raw CLI flag — a resume MUST still load the prior step outputs from state, not start fresh.
+    - Duplicate state-comment hazard: forward `dedupe=effective_clean_restart` to every `save_workflow_state` call. The first save (when `github_comment_id` is None) then finds ALL existing state comments for this (issue, workflow), PATCHes the most-recent in place, and DELETEs the rest. This closes the race where a concurrent worker re-creates a state comment in the gap between the pre-clear sweep and the first save, leaving two valid markers that a future normal resume could pick from at random. Once `github_comment_id` is bound (after the first save), the dedupe flag becomes a no-op because saves take the PATCH-by-id path. Note: `github_clear_state` now deletes EVERY matching state comment by default (not just the first), so the pre-clear guarantee holds even without `dedupe=True`. The on-save dedupe still matters because a comment can be re-created BETWEEN clear and save, including when a plain resume inherits `clean_restart=True` from persisted state. Post-first-save concurrent-worker races (where two workers hold valid `github_comment_id`s on different physical comments) are out of scope here.
+16. **Mode-Aware Startup Comment**: Immediately after the worktree is set up and before Step 1 runs, post exactly one trusted startup comment to the issue via `post_step_comment_once` (using a reserved `step_num=0` key so it dedupes correctly on resume). The comment body MUST explicitly state:
+    - **Mode**: `"Clean restart"` when `clean_restart=True`, otherwise `"Resuming from step {start_step}"` if `start_step > 1`, otherwise `"Starting fresh"`.
+    - Do **NOT** include a `**Model**` field (Issue #1306): the model is not reliably known before any step runs — `model_used` is resolved per-step from the provider response, `agy` has no `--model` flag, and PDD does not consume `ANTIGRAVITY_MODEL`, so a startup label can advertise a model the run never uses. The authoritative per-step provider/model lives in the `.pdd/agentic-logs` audit record.
+    - **Base branch**: the result of `_resolve_main_ref_name(git_root)` — returns the branch name (e.g. `"origin/main"`) not the commit SHA, so the reader can verify the workflow started from the correct branch. Falls back to `"HEAD"` when no ref resolves.
+    - **Command**: `"pdd-issue (full change → sync flow)"`.
+    Wrap the body as a `## Step 0/13: Workflow Startup` header so it aligns with the existing per-step success comment format. Failure to post (gh CLI missing, network error) MUST be log-and-continue; never raise into the orchestrator loop.
+
+% Per-Step Timeouts
+Define locally (workflow-specific configuration stays with the workflow):
+```python
+CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
+    1: 240.0,   # Duplicate Check
+    2: 240.0,   # Docs Comparison
+    3: 340.0,   # Research
+    4: 340.0,   # Clarify
+    5: 340.0,   # Docs Changes
+    6: 340.0,   # Identify Dev Units
+    7: 340.0,   # Architecture Review
+    8: 600.0,   # Analyze Prompt Changes (Complex)
+    9: 1000.0,  # Implement Changes (Most Complex)
+    10: 600.0,  # Architecture Update + associated-doc sync (Complex)
+    11: 340.0,  # Identify Issues
+    12: 600.0,  # Fix Issues (Complex)
+    13: 340.0,  # Create PR
+}
+```
+Step 10 bumped from 340s to 600s because the step now covers both architecture metadata updates AND associated-document sync (README, CHANGELOG, etc.) — see "Associated-Document Contract Verifier" section below. The original 340s was sufficient for metadata-only work but risks truncating when the LLM has to also propose edits for multiple doc files.
+
+% Prompt Preprocessing
+Before formatting each step's prompt template, apply a two-step process:
+1. Call `preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude=list(context.keys()))` to expand `<include>` tags and escape curly braces in included content
+2. Call `substitute_template_variables(processed_template, context)` to replace `{key}` placeholders
+
+This prevents curly braces in included prompt content from being treated as format variables.
+
+% Step Execution
+For steps 1-10 and 13:
+1. **Check if step already completed** (from saved state) - if so, skip and use cached output
+2. **Track progress**: Call `set_agentic_progress(workflow="change", current_step=step_num, total_steps=13, step_name=description, completed_steps=[1..step_num-1])`
+3. Load the step prompt template via `load_prompt_template(f"agentic_change_step{n}_{name}_LLM")`
+4. Preprocess and format template (see Prompt Preprocessing section)
+5. Call `run_agentic_task(instruction=formatted_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, label=f"step{step_num}", max_retries=DEFAULT_MAX_RETRIES, steers=_issue_step_steers() or None, single_provider_attempt=_single_provider_attempt_for_step(step_num), before_attempt=lambda _provider, _attempt: _clear_step_artifacts(...))` for artifact-producing steps. `_single_provider_attempt_for_step` MUST return `True` for side-effecting Steps 9, 10, 12, and 13 so provider retry/fallback cannot apply edits twice in the same dirty worktree; it returns `False` for non-mutating decision steps such as Step 11 so they keep the bounded JSON repair/provider fallback behavior.
+6. Store the output for use by subsequent steps
+7. **Save state to file** after step completes (for resumption)
+8. Accumulate cost: `total_cost += step_cost`
+
+% Structured Step Artifacts (JSON as Source of Truth)
+
+Historically the orchestrator learned each step's decision by regex-parsing the LLM's prose (`FILES_MODIFIED:`, `STOP_CONDITION:`, "No Issues Found", etc.). Paraphrase and omission in that prose is a recurring bug class (#865, #868, #1080, #964, #880, #882, #571, #467). To eliminate it, every decision-bearing step now ALSO writes its decision to a machine-readable JSON artifact that the orchestrator reads directly, and its human-facing comment body to a Markdown artifact. **This is JSON-first with prose-parser fallback: the prose markers are still emitted by the step prompts and every parser named elsewhere in this prompt is RETAINED as a permanent fallback.** If a provider emits missing or malformed JSON, the step degrades to the exact legacy prose-parsing behavior instead of failing. No prose parser or marker described elsewhere in this prompt is removed.
+
+### A.1 — Per-issue artifacts directory (gitignored)
+
+Helper: `_artifacts_dir_for(work_dir: Path, issue_number: int) -> Path` — returns `work_dir / ".pdd" / "change" / f"issue-{issue_number}"`, creating it with `mkdir(parents=True, exist_ok=True)`.
+
+- **Injected into context like `issue_content` is.** Immediately before building each step's prompt (Step Execution item 4), set `context["artifacts_dir"] = str(_artifacts_dir_for(current_work_dir, issue_number))` so the step template's `{artifacts_dir}` placeholder resolves to the correct absolute path.
+- **Recompute per phase so it tracks `current_work_dir`:** Steps 1-8 run in `cwd` → `cwd/.pdd/change/issue-{N}/`; Steps 9-13 run in the worktree → `worktree_path/.pdd/change/issue-{N}/`.
+- **Keyed by issue number** so concurrent runs on different issues never collide.
+- `.pdd/**` is already gitignored, so Step 13's `git add -A` never stages these artifacts.
+- **Write-root guard:** the file-tree snapshot guard `run_agentic_task` applies must admit `artifacts_dir` as a writable path. It is always under the step's working-directory root (`cwd` for 1-8, `worktree_path` for 9-13), so the existing allowed-root set already covers it; do NOT narrow the guard such that `.pdd/change/issue-{N}/` becomes unwritable in either phase.
+- **Fresh-run reset:** on a non-resume run (`start_step == 1`, not resuming cached state) and on `clean_restart`, delete the issue's artifacts directory up front (before Step 1) so stale files from a prior run are never mistaken for this run's output. Because Steps 9-13 switch roots, also delete `worktree_path/.pdd/change/issue-{N}/` immediately after the Step 9 worktree is created/restored for that fresh run / clean restart. **NEVER delete either root on resume** — a resumed run must still read artifacts written before the pause.
+
+### A.2 — Read helpers (defined next to the existing prose parsers)
+
+- `_clear_step_artifacts(artifacts_dir: Path, step_num: int, name: str) -> None` — delete the current step's expected `{stem}.json` and `{stem}.md` files from `artifacts_dir`, ignoring missing/unlinkable files. The stem is `_step_artifact_stem(step_num, name)`.
+- `_read_step_json(artifacts_dir: Path, filename: str) -> Optional[dict]` — return the parsed contents of `Path(artifacts_dir) / filename`, or `None` on missing/unreadable/unparseable input. Never raises (wrap `json.loads(p.read_text(...))` in a bare `try/except`).
+- `_read_step_md(artifacts_dir: Path, filename: str) -> Optional[str]` — return the stripped text of `Path(artifacts_dir) / filename`, or `None` when missing/unreadable/empty. Never raises.
+
+### A.3 — Bounded re-run on invalid JSON
+
+Immediately before every step attempt, call `_clear_step_artifacts(artifacts_dir, step_num, name)` so valid JSON/Markdown from a prior run, resume, or previous review-loop iteration cannot be read as the current attempt's output. Do the same immediately before each JSON-repair rerun. In addition, pass `before_attempt=lambda _provider, _attempt: _clear_step_artifacts(...)` to `run_agentic_task` for every artifact-producing step so internal provider retries cannot reuse JSON/Markdown written by an earlier provider attempt inside the same outer call. This applies even on resume: completed earlier steps keep their artifacts for cached context, but the step currently being re-executed must start with its own expected artifacts absent. For decision steps, also remove `state["step_json_outputs"][str(step_num)]` before launching the attempt so a rewound/re-executed step cannot keep using an accepted JSON object from an older attempt.
+
+When a non-mutating step that is supposed to emit a decision JSON finishes and its JSON is invalid, re-run that step EXACTLY ONCE via the existing `run_agentic_task` path before any decision is made, before any trusted success comment is posted, and before successful step state is saved. Invalid means missing file, unreadable file, unparseable JSON, missing required fields, unknown `status`, or a non-list value for fields specified as arrays. Guard with `_allow_json_repair_rerun(step_num)` / `_JSON_RETRY_UNSAFE_STEPS` so side-effecting Steps 9, 10, 12, and 13 never re-run only to repair JSON. Also pass `single_provider_attempt=_single_provider_attempt_for_step(step_num)` to the original attempt so provider retry/fallback is disabled for the same side-effecting steps, not only for explicit JSON repair. Cost/model are accumulated exactly like a normal step, and the same `steers=_issue_step_steers() or None` hook is passed so issue steering is preserved. If the rerun writes valid JSON, the rerun's output becomes the step output. If the JSON is still invalid after the single re-run, fall back to the legacy prose parser for that surface using the first successful output when there was one; only use the retry output for prose fallback when the original attempt failed. For Steps 9, 10, and 12, missing/invalid JSON falls back immediately to the original attempt's prose output when it succeeded; do not rerun those mutating prompts because the worktree may already contain the intended edits. This preserves the exact pre-JSON fallback behavior for providers that wrote legacy markers but forgot the artifact. Log each re-run and each fallback so the fallback rate can be instrumented; a future cleanup PR may delete the prose parsers once that rate is measured ~0.
+
+Required decision JSON fields and list item schemas are enforced, not merely type-checked when present. In particular Step 6 requires `direct_edit_candidates`; Step 9 requires `files_modified`, `files_created`, `direct_edits`, and `manual_review`; Step 10 requires all architecture/doc buckets; Steps 11/12 require `manual_review`; and Step 13 requires `pr_url` for `pr_created` / `pr_updated`. Path/file arrays must contain non-empty strings, and `manual_review` arrays must contain objects with a non-empty string `path` and optional string `reason`. Partial or malformed JSON must be treated as invalid so the prose fallback can still recover markers such as direct-edit candidates and manual-review lines.
+
+When fallback chooses an earlier successful output after a JSON-repair retry, clear that step's artifacts again so retry-written Markdown/JSON cannot be posted or reused while control flow is based on the earlier prose. When a step has valid JSON accepted for control flow, persist the parsed object in `state["step_json_outputs"][str(step_num)]`. Resume hydration must read these persisted accepted JSON objects rather than rereading fixed artifact filenames from disk; if a cached state predates `step_json_outputs`, hydrate from cached prose/worktree detection rather than trusting disk artifacts with unknown provenance.
+
+After `validate_cached_state` corrects `last_completed_step`, ignore cached `step_outputs` and prune `state["step_json_outputs"]` for any numeric step greater than the corrected value or whose cached output starts with `FAILED:`. Those entries belong to failed/rewound work and must not influence `context`, `changed_files`, `files_to_stage`, or Step 13 PR-body synthesis before the step is re-executed.
+
+Treat `manual_review_json_lines` as derived state from accepted Step 9 JSON, never an independent source of truth. If `state["step_json_outputs"]["9"]` is valid after resume pruning, recompute `manual_review_json_lines` exactly from that JSON, overwrite the persisted/local lines, and do not rescan raw Step 9 prose for PR-body manual-review lines. If accepted Step 9 JSON is absent or invalid, clear `manual_review_json_lines` before building Step 13 context and use only the current Step 9 prose fallback so stale denormalized Step 9 review lines cannot survive a rewind. In the review loop, collect both valid Step 11/12 JSON `manual_review` entries and prose fallback `MANUAL_REVIEW:` lines from Step 11/12 outputs into the cumulative review manual-review list; Step 13 must consume that cumulative review list rather than rescanning raw `previous_fixes`.
+
+If resume validation rewinds before Step 10, or if cached Step 9/10/11/12 output is marked `FAILED:`, reset review-loop derived state (`review_iteration`, `previous_fixes`, and `review_manual_review_json_lines`) before continuing. A rerun of Step 9/10 must not inherit maxed review counters or stale review-loop manual-review lines from work that was invalidated.
+
+Step 13 is side-effectful. Invoke `run_agentic_task(..., single_provider_attempt=True)` for Step 13 so the PR prompt runs through exactly one provider attempt with no retries, provider fallback, or routing escalation. Never run the generic JSON-repair retry for Step 13. After the first attempt, recover deterministically: accept/synthesize a result only when the output/JSON contains a PR URL in `{repo_owner}/{repo_name}` and `_pr_url_matches_current_head(repo_owner, repo_name, pr_url, head_branch, base_branch, cwd)` proves the PR is OPEN and its base branch, head branch, and head SHA match the current worktree, or when `_open_pr_for_head_branch()` finds an exact-head OPEN PR in the target repo with expected base branch, exact `headRefName`, non-empty PR head SHA, and remote branch/PR head SHA matching local `HEAD`. This validation must run even when the provider result is `success=False`, because the side-effecting prompt may have created/updated the PR and written valid JSON before the provider was classified as failed. If neither path verifies the current branch/head, fail closed and preserve state. A wrong-repo PR URL, closed PR URL, wrong-base PR URL, wrong-branch PR URL, stale or missing PR head SHA, stale remote branch, missing URL, or missing exact-head PR must fail without retrying the side-effecting prompt. When Step 13 succeeds via prose synthesis or exact-head recovery rather than accepted `13_create_pr.json`, clear unaccepted `13_create_pr.md` before posting the trusted Step 13 comment so stale failed-attempt Markdown cannot be published. The Step 13 prompt must always check `gh pr list --repo {repo_owner}/{repo_name} --head {head_branch}` before `gh pr create`, not only during clean restarts, and must skip only empty commits, not the branch push.
+
+### A.4 — Issue steering non-regression
+
+This migration changes output-side decision reads only. It MUST NOT change input-side steering. Every normal step run and every JSON-repair rerun must keep the existing `steers=_issue_step_steers() or None` call site. `_issue_step_steers`, `drain_step_steers`, the steer cursor, `issue_updated_at` refresh, and `apply_clarification_steers_on_resume` behavior are unchanged. A comment added while `pdd change` is running is still injected into the very next step instruction exactly as before.
+
+### Per-step artifact filenames
+
+Each step's prompt is instructed to write these into `{artifacts_dir}`:
+
+| Step | Decision JSON | Comment-body Markdown |
+|------|---------------|-----------------------|
+| 1 duplicate | `01_duplicate.json` | `01_duplicate.md` |
+| 2 docs | `02_docs.json` | `02_docs.md` |
+| 3 research | — (no decision) | `03_research.md` |
+| 4 clarify | `04_clarify.json` | `04_clarify.md` |
+| 5 docs_change | — (no decision) | `05_docs_change.md` |
+| 6 devunits | `06_devunits.json` | `06_devunits.md` |
+| 7 architecture | `07_architecture.json` | `07_architecture.md` |
+| 8 analyze | — (no decision) | `08_analyze.md` |
+| 9 implement | `09_implement.json` | `09_implement.md` |
+| 10 architecture_update | `10_architecture_update.json` | `10_architecture_update.md` |
+| 11 identify_issues | `11_review.json` | `11_review.md` |
+| 12 fix_issues | `12_fix.json` | `12_fix.md` |
+| 13 create_pr | `13_create_pr.json` | `13_create_pr.md` |
+
+The review loop (steps 11/12) overwrites `11_review.json` / `12_fix.json` (and the `.md`) on each iteration; the orchestrator reads the file immediately after that iteration's step returns — before the next iteration runs — so per-iteration decisions are never confused.
+
+**Filename-stem note (authoritative):** the `.json` / `.md` stems in the table above are the exact filenames to read. Wherever a later section writes `{NN}_{name}` (B.3's `_hard_stop_from_json`, B.6's comment-body reads, the Per-Step Success Comments protocol), `{name}` resolves to the table's stem for that step — NOT the step's `steps_config`/template name. For steps 1–10 and 13 the stem equals the `steps_config` name, so `{NN}_{name}` is already correct. **Steps 11 and 12 are the exception:** their stems are `11_review` / `12_fix`, while their `steps_config` names are `identify_issues` / `fix_issues`. The orchestrator MUST read `11_review.{json,md}` / `12_fix.{json,md}` and never `11_identify_issues.*` / `12_fix_issues.*` — otherwise the JSON/`.md` read misses and the step silently degrades to the prose fallback.
+
+### B — Reading each decision (JSON-first, prose-parser fallback)
+
+For every surface below, read and validate the JSON field first; when the JSON is missing or invalid even after the one allowed JSON-repair rerun, fall back to the existing prose parser named in the other sections of this prompt. Downstream handling (state saves, comment posts, stop dispatch, staging, doc-sync verification) is IDENTICAL regardless of which source produced the values.
+
+- **B.1 Step 9 changed files** (`09_implement.json`): fields `status` ∈ {`changed`, `no_change_needed`, `failed`}; `files_modified`, `files_created`, `direct_edits` (lists of repo-relative paths); `manual_review` (list of `{path, reason}` objects); optional `error` / `summary` when `status == "failed"` or `"no_change_needed"`. When JSON is present: `changed_files = files_modified + files_created + direct_edits` (dedup, order-preserving); populate `context["files_created" | "files_modified" | "direct_edits"]`; feed each `manual_review` entry into the PR-body `manual_review_lines` aggregation as `MANUAL_REVIEW: {path} — {reason}`. `status == "failed"` maps to the existing Step 9 implementation-failure return before falling back to `FAIL:` prose. `status == "no_change_needed"` is a successful no-op terminal path: save Step 9 output/state, post the Step 9 success comment, clear agentic progress, and return success with a message such as `No prompt changes needed for issue #N` without running Step 10-13 or creating a PR. **Keep `_detect_worktree_changes` as the git-status fallback for the empty case** — a real worktree change with no JSON must still be detected. If the JSON is absent, use the existing `_parse_changed_files` / `FAIL:` path. Apply the same JSON-first preference in the Step 9 resume block.
+- **B.2 Steps 11/12 review loop** (`11_review.json` / `12_fix.json`): `status` — Step 11 emits `clean` (no issues) or `issues_found`; Step 12 emits `fixed_issues` or `partial`. **Exit the review loop when Step 11's `status == "clean"`;** fall back to `_review_loop_no_issues(step11_output)` when the JSON is missing. Both may carry `manual_review` (list of `{path, reason}`), folded into `manual_review_lines`. Iteration count, `previous_fixes`, the iteration-keyed comment dedupe, and the `s11_success`/`s12_success` posting gate are all unchanged.
+- **B.3 Hard-stop steps (1, 2, 4, 6, 7)** — each writes a single decision field. Introduce `_hard_stop_from_json_with_presence(step_num: int, artifacts_dir: Path, name: str) -> Tuple[bool, Optional[str], List[str]]` which reads `{NN}_{name}.json` and maps `status` to the EXACT stop-reason string `_check_hard_stop` returns today, so ALL downstream stop handling (clarification re-run for steps 4/7, direct-edit-continue for step 6, `last_completed_step` rewind, `_fetch_issue_updated_at` refresh, state saves, comment posts) is untouched. Return `(json_seen, stop_reason, direct_edit_candidates)`: `json_seen=False` means fall back to prose; `json_seen=True, stop_reason=None` means a valid non-stopping JSON decision, so do NOT fall back to prose:
+  - Step 1: `status == "duplicate"` → the same `Duplicate of #{n}` reason (the `duplicates` list supplies the numbers); `status == "proceed"` → no stop.
+  - Step 2: `status == "already_done"` → the "already implemented" reason; else no stop.
+  - Step 4: `status == "needs_clarification"` → the clarification stop reason; `status == "route_bug"` → the `ROUTE_REDIRECT: bug_fix` reason (with `rationale` used as the `ROUTE_RATIONALE`); else no stop.
+  - Step 6: `status == "no_dev_units"` → the "no dev units found" reason; `direct_edit_candidates` (list) populates `context["direct_edit_candidates"]` (fallback `_parse_direct_edit_candidates`); `status == "proceed"` → no stop.
+  - Step 7: `status == "needs_decision"` → the architectural-decision stop reason; else no stop.
+  The orchestrator calls `_hard_stop_from_json_with_presence(...)` first. When `json_seen` is false, fall back to `_check_hard_stop(step_num, output)`. When `json_seen` is true, use `stop_reason` directly; a valid `proceed` short-circuits the prose parser. Step 6 consumes the returned `direct_edit_candidates` list to populate `context["direct_edit_candidates"]`; if JSON is absent, use `_parse_direct_edit_candidates(step6_output)`. Optional fields carried per step: `duplicates` (#-prefixed issue refs), `questions` (clarification/architectural questions), `rationale` (route/decision rationale), `direct_edit_candidates` (paths).
+- **B.4 Step 10 architecture / doc-sync** (`10_architecture_update.json`): fields `architecture_files_modified`, `associated_docs_modified`, `associated_docs_conflicts`, `associated_docs_unchanged` (all lists of paths). When present: feed `_verify_doc_sync_contract`'s three buckets from `associated_docs_{modified,conflicts,unchanged}` instead of `_extract_marker_paths`; append `architecture_files_modified + associated_docs_modified` to `changed_files` / `files_to_stage`; `associated_docs_conflicts` are logged and synthesized into `manual_review_lines` (NOT auto-staged); `associated_docs_unchanged` are logged only. Silent-drop / overlap detection, the `ORCHESTRATOR_POSTCHECK_WARNINGS` block, the `PDD_STRICT_DOC_SYNC` abort, and all `_sanitize_architecture_dependencies` / `_sanitize_architecture_interfaces` / `_merge_interface_signatures` / `register_untracked_prompts` behavior are unchanged. Fall back to `_extract_marker_paths` over the `ASSOCIATED_DOCS_*:` / `ARCHITECTURE_FILES_MODIFIED:` markers when the JSON is missing.
+- **B.5 Step 13 create PR** (`13_create_pr.json`): fields `status` ∈ {`pr_created`, `pr_updated`, `blocked`}; `pr_url`, `pr_number`, `summary`. Take the PR URL from `pr_url` instead of the inline `re.search(r"https://github.com/\S+/pull/\d+", s13_output)`; fall back to that regex when the JSON is missing. `status == "blocked"` maps to the existing Step 13 failure return. The PR body itself is still authored and posted via `gh` by the Step 13 agent exactly as today — only the orchestrator's read-back of the resulting URL/number becomes JSON.
+
+### B.6 — Comment bodies from Markdown (all steps)
+
+Everywhere the orchestrator currently computes `extract_step_report(step_output)` and passes it to `post_step_comment_once(body=...)`, prefer `_read_step_md(artifacts_dir, "{NN}_{name}.md")`. Fall back to `extract_step_report(step_output)` when the `.md` is missing, then to the existing short placeholder body when both are absent. `_sanitize_comment_body` (secret redaction + 25 000-char truncation), the `## Step {step_num}/13: {description}` header wrap, and the iteration-keyed `posted_steps` dedupe are UNCHANGED — the `.md` body flows through the exact same sanitization and dedupe path. Applies to the step 1-10 loop, the 11/12 review-loop iteration posts, and step 13. Any exception reading the `.md` MUST be log-and-continue (never raise into the loop), matching the existing `extract_step_report` contract.
+
+% Review Loop (Steps 11-12)
+Steps 11 and 12 form a review loop that repeats until no issues are found:
+
+```python
+review_iteration = 0
+MAX_REVIEW_ITERATIONS = 5
+previous_fixes = ""
+
+while review_iteration < MAX_REVIEW_ITERATIONS:
+    review_iteration += 1
+
+    # Step 11: Identify Issues
+    step11_output = run_step_11(review_iteration, previous_fixes)
+    step11_json = read_valid_json_or_rerun_once("11_review.json", step=11)
+
+    if step11_json is not None:
+        manual_review_lines.extend(manual_review_from_json(step11_json))
+        no_issues = step11_json.get("status") == "clean"
+    else:
+        no_issues = _review_loop_no_issues(step11_output)
+
+    if no_issues:
+        break  # Exit loop, proceed to step 13
+
+    # Step 12: Fix Issues
+    step12_output = run_step_12(step11_output, review_iteration)
+    step12_json = read_valid_json_or_none("12_fix.json", step=12)
+    if step12_json is not None:
+        manual_review_lines.extend(manual_review_from_json(step12_json))
+    previous_fixes += f"\n\nIteration {review_iteration}:\n{step12_output}"
+
+if review_iteration >= MAX_REVIEW_ITERATIONS:
+    # Warn but continue to PR creation
+    print("Warning: Maximum review iterations reached")
+```
+
+Helper: `_review_loop_no_issues(output: str) -> bool` — case-insensitive check for "no issues found" in output. LLMs don't reliably emit exact magic tokens, so this is intentionally loose. **This helper is now the FALLBACK: prefer `11_review.json`'s `status == "clean"` (see % Structured Step Artifacts, B.2) and only call this when that JSON is missing/unparseable.** In the loop below, replace the bare `if _review_loop_no_issues(step11_output):` with a JSON-first check: break when the Step 11 JSON `status == "clean"`, else fall back to `_review_loop_no_issues(step11_output)`.
+
+Context for review loop:
+- Step 11 receives: files_to_stage, worktree_path, step9_output, review_iteration, previous_fixes
+- Step 12 receives: step11_output, worktree_path, review_iteration
+
+% Step Sequence
+| Step | Template Name | Purpose |
+|------|---------------|---------|
+| 1 | agentic_change_step1_duplicate_LLM | Search for duplicate issues |
+| 2 | agentic_change_step2_docs_LLM | Check if already implemented |
+| 3 | agentic_change_step3_research_LLM | Research to clarify specifications |
+| 4 | agentic_change_step4_clarify_LLM | Verify requirements are clear, ask questions if not |
+| 5 | agentic_change_step5_docs_change_LLM | Analyze documentation changes needed |
+| 6 | agentic_change_step6_devunits_LLM | Identify dev units involved |
+| 7 | agentic_change_step7_architecture_LLM | Review architecture, ask questions if decisions needed |
+| 8 | agentic_change_step8_analyze_LLM | Analyze how prompts should change |
+| 9 | agentic_change_step9_implement_LLM | Implement the prompt changes |
+| 10 | agentic_change_step10_architecture_update_LLM | Update architecture metadata for new/modified prompts |
+| 11 | agentic_change_step11_identify_issues_LLM | Identify issues with prompts/docs (loop start) |
+| 12 | agentic_change_step12_fix_issues_LLM | Fix identified issues (loop end) |
+| 13 | agentic_change_step13_create_pr_LLM | Create PR and link to issue |
+
+% Project Configuration Context (.pddrc)
+Before the step loop begins, load `.pddrc` configuration to provide context keys needed by step templates (especially Step 6):
+
+1. **Imports**: Add to existing imports:
+   - `from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context`
+   - `from pdd.get_extension import get_extension`
+
+2. **Helper function** `_load_pddrc_context(cwd: Path) -> Dict[str, str]`:
+   - Define sensible defaults: `{"language": "python", "source_dir": "src/", "test_dir": "tests/", "example_dir": "context/", "ext": "py", "lang": "_python"}`
+   - Call `_find_pddrc_file(cwd)` to locate `.pddrc`
+   - If not found, return defaults
+   - Call `_load_pddrc_config(pddrc_path)` to parse YAML
+   - Call `_detect_context(cwd, config)` to detect context name (NOTE: argument order is `cwd` first, then `config`)
+   - Extract from context's `defaults` nested key:
+     - `language` from `default_language`
+     - `source_dir` from `generate_output_path`
+     - `test_dir` from `test_output_path`
+     - `example_dir` from `example_output_path`
+   - Derive `ext` using `get_extension(language)` (strip leading dot if present); if extension lookup fails or returns empty, fall back to the default `ext` while preserving parsed `.pddrc` paths
+   - Derive `lang` as `f"_{language}"`
+   - Return dict with all 6 keys
+   - On locate/parse/context detection exceptions, return defaults
+
+3. **Add to context dict** before step loop:
+   ```python
+   pddrc_context = _load_pddrc_context(cwd)
+   context = {
+       "issue_url": issue_url,
+       # ... other issue fields ...
+       **pddrc_context,  # Adds: language, source_dir, test_dir, example_dir, ext, lang
+   }
+   ```
+
+% Context Accumulation
+- Step 1 receives: issue_content
+- Step 2 receives: issue_content, step1_output
+- Step 3 receives: issue_content, step1_output, step2_output
+- Step 4 receives: issue_content, step1_output, step2_output, step3_output, issue_author
+- Step 5 receives: issue_content, step1_output through step4_output
+- Step 6 receives: issue_content, step1_output through step5_output, dependency_context
+- Step 7 receives: issue_content, step1_output through step6_output, issue_author
+- Step 8 receives: issue_content, step1_output through step7_output
+- Step 9 receives: issue_content, step7_output, step8_output, worktree_path, direct_edit_candidates (from Step 6)
+- Step 10 receives: issue_content, step9_output, worktree_path, files_created, files_modified, direct_edits, **associated_documents** (list of doc paths discovered from the include graph + architecture BFS — LLM must emit `ASSOCIATED_DOCS_{MODIFIED,CONFLICTS,UNCHANGED}` markers, one bucket per doc)
+- Step 11 receives: issue_content, step9_output, **step10_output** (so DOC_SYNC_SILENT_DROPS / DOC_SYNC_BUCKET_OVERLAPS markers emitted by Step 10.5 reach the review loop), worktree_path, files_to_stage, review_iteration, previous_fixes
+- Step 12 receives: issue_content, step11_output, worktree_path, review_iteration
+- Step 13 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list, impacted_tests, base_branch, **head_branch** (the worktree's actual current branch, derived from its HEAD and defaulting to `change/issue-{N}`; it is a `change/issue-{N}-job-*` fallback when the canonical branch was locked under clean restart — Step 13 pushes and opens/updates the PR on this branch rather than a hardcoded `change/issue-{N}`. The existing-PR guard also matches `change/issue-{N}-job-*` heads so a later normal run does not open a duplicate), **user_story_summary** (literal `None` when no story was generated/attempted, otherwise a PR-body markdown section naming generated `user_stories/story__*.md` artifacts and linked prompts), **manual_review_lines** (aggregated `MANUAL_REVIEW:` lines from Step 9 JSON/prose, Step 10 synthesized `associated_docs_conflicts`, and Step 11/12 review-loop JSON/prose manual-review entries; rendered in the PR body's "Manual Review Required" section. The Step 12.5 gate no longer contributes here — a gate failure now hard-blocks before Step 13 rather than surfacing as an advisory line), **clean_restart** (`"true"` or `"false"`) — Step 13 uses this to decide whether to force-push (`--force-with-lease`) and whether to look for an existing open PR to update in place rather than creating a new one
+
+% Dependency Context (Before Step 6)
+Before Step 6 runs, build a formatted dependency graph to help identify transitively affected modules:
+
+Helper: `_build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str`:
+- Build dependency graph using `build_dependency_graph(prompts_dir)`
+- Compute reverse dependencies (module → modules that depend on it)
+- Format as "## Module Dependency Graph" with sections showing modules sorted by number of dependents (limit top 30, max 10 dependents shown per module)
+- Add to `context["dependency_context"]`
+- Return empty string if prompts_dir doesn't exist or on any error
+
+% Files to Stage
+After Step 9 parses FILES_CREATED/FILES_MODIFIED/DIRECT_EDITS, pass the extracted file list to subsequent steps:
+- `context["files_to_stage"] = ", ".join(changed_files)` (includes all three types)
+- Also extract `context["files_created"]`, `context["files_modified"]`, and `context["direct_edits"]` separately for Step 10
+- Step 9 fallback: if no FILES markers found in output but worktree has changes, use `_detect_worktree_changes()` to discover them
+- Step 10 associated-document discovery must consume the fallback-detected prompt files via `changed_files` / `files_to_stage`, not only the explicit `FILES_CREATED` / `FILES_MODIFIED` marker context
+- Step 10 updates prompts/architecture and may edit associated docs; append both `architecture_files_modified` and `associated_docs_modified` (or their prose-marker fallbacks `ARCHITECTURE_FILES_MODIFIED` and `ASSOCIATED_DOCS_MODIFIED`) to `changed_files` / `files_to_stage`. Do not stage `associated_docs_conflicts` or `associated_docs_unchanged`.
+- Step 11 uses files_to_stage to know which files to review
+- Step 13 uses files_to_stage to know which files to commit
+
+% Direct Edit Candidates (from Step 6)
+After Step 6 completes, parse the "Direct Edit Candidates" table from the output:
+- Extract file paths from rows in the table
+- Store in `context["direct_edit_candidates"]` as a list
+- On resume from cached Step 6 output, rehydrate `context["direct_edit_candidates"]` before the step loop begins
+- Pass to Step 9 so it knows which files can be directly edited
+- Step 9 can only directly edit files that appear in this list
+
+Helper function: `_parse_direct_edit_candidates(step6_output: str) -> List[str]`:
+- Use regex to find the "Direct Edit Candidates" table section
+- Extract file paths from table rows (format: `| file_path | edit_type | markers |`)
+- Return list of file paths (first column of each row)
+- Return empty list if no table found
+
+% Early Exit Conditions (Hard Stops)
+
+The orchestrator must detect stop conditions after each stop-capable step. **JSON-first (see % Structured Step Artifacts, B.3): call `_hard_stop_from_json_with_presence(step_num, artifacts_dir, name)` first; it maps the step's `{NN}_{name}.json` `status` field to the exact stop-reason string `_check_hard_stop` returns today and returns whether JSON was present. Fall back to `_check_hard_stop(step_num, output)` only when JSON was missing/invalid; a valid `proceed` short-circuits the prose parser.** The prose-parsing contract that `_check_hard_stop(step_num, output)` implements — unchanged, as the fallback — is:
+
+| Step | Stop Condition | Detection |
+|------|----------------|-----------|
+| 1 | Issue is a duplicate | Output contains "Duplicate of #" |
+| 2 | Already implemented | Line-anchored verdict match: `^(?:\*\*)?(?:status|result)[:\s*]*already implemented` with `re.MULTILINE`. Accepts both bold (`**Status:**`) and plain (`Status:`) formats. Must be at start of line to avoid matching quoted instructions or discussion prose. |
+| 3 | Research complete | (no stop condition - continues to step 4) |
+| 4 | Clarification needed or wrong workflow | Requires explicit `STOP_CONDITION:` tag with "clarification", or `ROUTE_REDIRECT: bug_fix` when Step 4 detects the issue is a runtime bug that belongs in `pdd bug` followed by `pdd fix` |
+| 5 | Docs analysis complete | (no stop condition - continues to step 6) |
+| 6 | No dev units found | Line-anchored verdict match: `^(?:\*\*)?(?:status|result)[:\s*]*no dev units found` with `re.MULTILINE`. Accepts bold and plain formats, must be at start of line. |
+| 7 | Architectural decision needed | Requires explicit `STOP_CONDITION:` tag with "architectural" |
+| 8 | Prompt analysis complete | (no stop condition - continues to step 9; `No Changes Required` means no prompt edits, not no work, because Step 9 may still apply documentation changes or scoped Direct Edit Candidates from Step 6) |
+| 9 | Implementation failed | Output contains "FAIL:" |
+| 10 | Architecture update complete | (no stop condition - continues to step 11) |
+| 11 | No issues found | Output contains "No Issues Found" (exits loop, continues to step 13) |
+
+**STOP_CONDITION tag**: A `STOP_CONDITION: <reason>` tag is recognized as a fallback only on stop-capable steps that do not have a stricter handler. Steps 4 and 7 (clarification steps) ONLY stop via explicit machine-readable markers (not substring matching), because LLMs sometimes use "clarification" or "architectural" in normal prose. For Step 4, also recognize `ROUTE_REDIRECT: bug_fix` as a hard stop only when it appears as its own line, and include a line-anchored `ROUTE_RATIONALE:` in the returned stop reason when present; this prevents runtime bug symptoms from continuing through the change -> sync workflow because the issue used prompt-change phrasing, while avoiding false stops from prose such as "No ROUTE_REDIRECT: bug_fix is needed." Step 8 MUST ignore `STOP_CONDITION` and continue to Step 9 because no prompt edits can still leave documentation changes or scoped Direct Edit Candidates to apply.
+
+**Hard stop behavior:**
+- Call `post_step_comment()` to post findings to GitHub
+- Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
+- Do NOT continue to subsequent steps
+
+**Clarification steps (4, 7) special behavior:**
+- Save `last_completed_step = step_num - 1` (so the step re-runs on resume after user responds)
+- After saving state, call `_fetch_issue_updated_at()` to refresh the timestamp (bot's own comment changes it) and store the refreshed value in state
+
+**Soft failures (continue):**
+- If `run_agentic_task()` returns `(False, ...)` but does NOT match a hard stop condition: log warning and continue
+
+% Consecutive Provider Failure Tracking
+
+Track consecutive steps where output contains "All agent providers failed":
+- Increment counter on provider failure, reset to 0 on any success or non-provider failure
+- If 3+ consecutive provider failures: post step comment, save state, return `(False, "Aborting: N consecutive steps failed — agent providers unavailable", ...)`
+
+% Per-Step Success Comments (Trusted Posting)
+
+The orchestrator owns user-visible per-step `## Step N/13:` comments on the GitHub issue, posted via `gh issue comment` with trusted PDD credentials. Step prompts MUST NOT call `gh issue comment` themselves for successful step progress; they emit a single `<step_report>...</step_report>` block in their final response, and the orchestrator extracts it and posts it once per step.
+
+1. **Helpers**: Import from `pdd.agentic_common`:
+   - `extract_step_report(step_output: str) -> Optional[str]` — returns the trimmed contents of the LAST `<step_report>` block, or `None` if absent/malformed. Missing or malformed report MUST NOT fail the run; the raw step output is preserved in `state["step_outputs"]` regardless.
+   - `post_step_comment_once(*, repo_owner, repo_name, issue_number, step_num: int, body: str, posted_steps: Set[int], cwd) -> bool` — redacts secrets, truncates to GitHub's comment cap, posts via `gh issue comment`, and mutates `posted_steps` to add `step_num` on success. No-op when `step_num` is already in `posted_steps`. Returns `True` on success-or-already-posted, `False` on `gh` failure or missing CLI. Keyword-only signature.
+   - `normalize_step_comments_state(raw) -> Set[int]` — coerces persisted `step_comments` (list/set/None/legacy dict/malformed) into a `Set[int]` of integer step indices for in-memory use.
+
+2. **State shape**: `state["step_comments"]` persists as a sorted `List[int]` of step indices whose trusted success-comment has been posted. Immediately after `load_workflow_state`, hydrate to `Set[int]` via `normalize_step_comments_state(state.get("step_comments"))` and write `state["step_comments"] = sorted(set)` back so the on-disk form stays canonical. Persist back as a sorted list before every `save_workflow_state` call (normal completion AND hard-stop / failure early-returns).
+
+3. **Posting protocol** inside the per-step loop (applied to steps 1-10 with `step_num` as the integer key; steps 11/12 use the iteration-keyed encoding below; step 13 uses `step_num=13`):
+   - On a successful step, compute the comment body JSON-first (see % Structured Step Artifacts, B.6): `report_body = _read_step_md(artifacts_dir, "{NN}_{name}.md")`, falling back to `extract_step_report(step_output)` when the `.md` is missing, then to a short placeholder body (step completed; raw output retained in workflow state) when both are absent. Do not fail the run when the body is a placeholder.
+   - Otherwise build the comment body as `f"## Step {step_num}/13: {description}\n\n{report_body}"` and call `post_step_comment_once(repo_owner=..., repo_name=..., issue_number=..., step_num=step_num, body=body, posted_steps=step_comments_set, cwd=current_work_dir)`.
+   - After the call returns, persist the canonical sorted form: `state["step_comments"] = sorted(step_comments_set)` and rely on the subsequent `save_workflow_state` call to flush it. The set is mutated in place by the helper, so unconditional re-assignment after the call is safe and survives a contract refactor.
+   - Any exception from `extract_step_report` / `post_step_comment_once` / persistence MUST be log-and-continue (never raise into the orchestrator loop). Use `console.print` for the warning.
+
+4. **Review loop (steps 11-12)**: iteration-keyed integer encoding `iteration * 100 + step_num` (so iter=1, step=11 -> 111; iter=2, step=11 -> 211; iter=1, step=12 -> 112). This makes re-runs across review iterations get distinct `posted_steps` keys (otherwise the second iteration's report would silently dedupe against the first).
+   - **REQUIRED success gate**: the `post_step_comment_once` call for Step 11 and Step 12 MUST be guarded by the corresponding `s11_success` / `s12_success` boolean returned by `run_agentic_task`. A failed task (e.g. provider exhaustion) still returns step output, and posting a "Step N completed; no `<step_report>` block returned" fallback comment on top of that failed output would both mislead the user AND mark the iteration-keyed composite (`iteration * 100 + step_num`) as posted in `state["step_comments"]`. On a later resume/retry, the real successful Step 11/12 report would then be silently deduped away. Treat the success flag as a hard precondition for the trusted-post block; do not relax it to "log-and-continue" — the gate is structural, not a transient error.
+
+5. **Relationship to the legacy `post_step_comment()` path**: The existing `post_step_comment()` call under `% Early Exit Conditions (Hard Stops)` and `% Consecutive Provider Failure Tracking` is UNCHANGED. Hard-stop failure comments and 3-consecutive-provider-failure abort comments continue to flow through the legacy helper. The new `post_step_comment_once` is strictly additive — it covers the success-comment case that previously had no first-party posting path and was being filled (incorrectly) by the model invoking `gh issue comment` itself.
+
+% Architecture Sanitization (After Step 10)
+
+After Step 10 completes, sanitize architecture.json in the worktree:
+
+1. **Snapshot before Step 10**: Before running Step 10, read `architecture.json` into `previous_architecture` for later comparison.
+
+2. **`_sanitize_architecture_dependencies(worktree_path)`**: Remove corrupted dependency values from architecture.json — keep only strings that end with `.prompt`, contain no newlines, and are ≤100 chars.
+
+3. **`_sanitize_architecture_interfaces(worktree_path, previous_architecture)`**: Compare current architecture.json against `previous_architecture`. For each entry that exists in both, call `_merge_interface_signatures(old_interface, new_interface)` to preserve existing interface parameters that Step 10's LLM may have dropped. Append any merge warnings to step output under `ORCHESTRATOR_POSTCHECK_WARNINGS:`.
+
+4. **Auto-register untracked prompts (narrow safety net, in-workflow scope only)**: After all sanitizers run, build an `only_files` scope set restricted to **this workflow's prompt files**, then call `register_untracked_prompts(prompts_dir=worktree_path / "prompts", architecture_path=worktree_path / "architecture.json", dry_run=False, only_files=only_files)` from `pdd.architecture_sync`. Build `only_files` by iterating `changed_files` (which contains Step 9's `FILES_CREATED` / `FILES_MODIFIED` plus Step 10's own changed-file outputs: `architecture_files_modified` and `associated_docs_modified`; only prompt paths are retained for registration), normalizing each path (replace `\\` with `/`, find the last `prompts/` index, take everything after it), and keeping only entries ending in `.prompt`. Skip the call entirely if `only_files` is empty. This catches modified prompts that have correct PDD tags but no pre-existing arch.json entry — the case where Step 10's LLM rule 5(b) falls through — **WITHOUT silently sweeping unrelated repo-wide drift into the PR**. A full-scan call (no `only_files`) would auto-register every untracked prompt in the repo: in current state that is 38+ unrelated prompts, including nonstandard paths like `frontend/components/*.prompt` where `_infer_filepath` would produce an incorrect Python-style filepath. The scope filter is required for correctness, not just politeness: any out-of-scope registration is an unreviewed mutation of shared project state and may write wrong metadata. If `reg_result["registered"]` is non-empty, append `\n\nORCHESTRATOR_AUTO_REGISTERED: {comma-separated list}` to step_output and print `[blue]Auto-registered untracked prompts in arch.json: {list}[/blue]` (unless quiet).
+
+% Step 8.5 — Pre-Flight Drift Heal (Issue #739)
+
+Between Step 8 (Analyze Prompt Changes) and Step 9 (Implement), the orchestrator must heal any prompts whose code has drifted, so that Step 9 rewrites the *current* prompt rather than a stale one.
+
+1. Helper function: `_preflight_drift_heal(worktree_path: Path, quiet: bool = False, timeout_per_module: float = 300.0, max_modules: int = _PREFLIGHT_MAX_HEAL_MODULES) -> Tuple[List[str], List[str], List[str]]`
+   - Contained to the isolated worktree — never touches the user's main tree
+   - Uses a process-wide `threading.Lock` (`_PREFLIGHT_CHDIR_LOCK`) to serialize the `os.chdir(worktree_path)` window so concurrent workflow instances do not leak each other's CWD
+   - Imports `pdd.ci_drift_heal.detect_drift` lazily inside the lock; on import failure, log a yellow warning and return `([], [], [])` so the orchestrator continues gracefully
+   - Calls `detect_drift()` to partition modules into `(prompt_drifts, example_drifts)`. Only `prompt_drifts` (operation == "update") are healed here — example drift is a separate class
+   - When `prompt_drifts` is empty: print `[Step 8.5/13] Pre-flight drift check: all prompts in sync with code.` (unless quiet) and return `([], [], [])`
+   - Cap fan-out: when more than `max_modules` (default `_PREFLIGHT_MAX_HEAL_MODULES = 10`) prompt drifts are detected, only the alphabetically-first `max_modules` are healed; the rest are logged as deferred to the CI auto-heal pipeline. With `timeout_per_module=300s`, an unbounded fan-out costs `N × 5min` worst case
+   - Build a headless heal env that mirrors `ci_drift_heal._build_ci_env`: `PDD_FORCE=1`, `CI=1`, `NO_COLOR=1`, `PDD_FORCE_LOCAL=1`, `PDD_SKIP_LOCAL_MODELS=1`, `PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE=1`. The last two are required to avoid LM-Studio hangs on a Cloud Run executor and to keep `.pdd/meta` in a consistent state when `pdd update` times out mid-mutation
+   - For each prompt drift, require both its authoritative `prompt_path` and `code_path`; if either is missing, mark the module failed without launching a subprocess. MUST also fail closed when either path escapes the worktree — a `..` traversal, an absolute path elsewhere, or a symlink out of the tree (the paths come from repo-controlled `.pddrc`/architecture.json config that is issue-influenced in the agentic flow; CWE-022). Validate both against `worktree_path` (e.g. via `content_selector._validated_project_path`) and mark the module failed without launching a subprocess if either does not resolve inside it, so `pdd update --git` can never write beyond the isolated worktree. Run `subprocess.run([sys.executable, "-m", "pdd", "update", "--sync-metadata", "--git", prompt_path, code_path], cwd=str(worktree_path), capture_output=True, text=True, timeout=timeout_per_module, env=heal_env)`. The two-path `--git` form is required even though drift detection already established that code is newer: it selects true update mode while preserving the exact prompt identity already resolved by `DriftInfo`. Never downgrade this to code-only regeneration, which re-derives identity from common leaf basenames such as `page`, `layout`, or `config` and can overwrite an unrelated existing prompt (issue #2004). `--sync-metadata` is required so prompt tags, architecture, run-report cleanup, and fingerprint finalization are completed before preflight considers the heal successful. `sys.executable + -m pdd` is required so the heal subprocess uses the orchestrator's venv; a bare `["pdd", ...]` picks up whatever pdd is on `$PATH` (potentially a different version)
+   - Classify each attempt: returncode 0 → append basename to `healed` AND append the authoritative `prompt_path` to `healed_prompts`. Non-zero exit, timeout (`TimeoutExpired`), missing prompt/code identity, or any other exception → append basename to `failed`. Always restore the original CWD in `finally`
+   - Return `(healed, failed, healed_prompts)` — three lists. The third element is the list of prompt-file paths the heal subprocesses rewrote; Step 10's discovery sweep merges these so docs reachable from a just-healed prompt's `<include>` graph still pass through the doc-sync contract
+
+2. Call site in orchestrator loop:
+   - Fires inside the `if step_num == 9:` block, after the worktree has been set up (so healing is contained) and before Step 9 runs
+   - Idempotency: skip when both `state.get("preflight_drift_healed") is True` AND `state.get("preflight_healed_worktree") == str(worktree_path)`. The worktree-path check is required because a strict-mode abort can delete `.pdd/worktrees/change-issue-{N}/`; on resume the new worktree starts clean so the heal must run again to land its effects
+   - After the call, set `state["preflight_drift_healed"] = True`, `state["preflight_healed_worktree"] = str(worktree_path)`, `state["preflight_healed_modules"] = healed`, `state["preflight_failed_heal_modules"] = failed`, `state["preflight_healed_prompt_paths"] = healed_prompts`. Also set the context keys `preflight_healed_modules` and `preflight_failed_heal_modules` (comma-separated strings or the literal `"None"`) for any downstream step templates that want to reason about the healing.
+   - Step 10's discovery block reads `state["preflight_healed_prompt_paths"]` and merges those prompt paths into the `discover_associated_documents` input set, so any healed-but-otherwise-untouched prompt's `<include>` docs still reach the doc-sync contract.
+
+3. Known v1 limitation (documented in the helper's docstring): a heal-induced cascade (healing module A triggers drift in module B) is NOT handled here. CI auto-heal (`pdd.ci_drift_heal`) is the post-PR safety net. Don't rerun `_preflight_drift_heal` in a fixed-point loop — it's intentionally single-pass to cap cost and worktree mutations.
+
+4. Heal failures are **non-fatal** except metadata-finalization failures: the workflow continues when ordinary subprocess-level module heals fail, and operators inspect `state["preflight_failed_heal_modules"]` for visibility. If a preflight heal subprocess reports `metadata finalization failed`, `metadata staging verification failed`, or the `pdd update --sync-metadata` `[metadata-sync]` error prefix, raise a hard failure instead of continuing, because issue #1006 requires preflight drift-heal to fail loudly rather than publish half-synced metadata.
+
+% Step 10.5 — Associated-Document Contract Verifier (Issue #739)
+
+Step 10 now has two responsibilities: (a) update `architecture.json` metadata as before, and (b) sync any associated documentation files reachable from the modified prompts' `<include>` / `<include-many>` graph. The verifier below enforces the contract deterministically so an LLM omission cannot silently ship a doc-out-of-sync PR.
+
+1. Pre-Step-10 discovery call:
+   - Before Step 10 runs (guarded by `if step_num == 10 and worktree_path and worktree_path.exists():`), call `pdd.sync_order.discover_associated_documents(modified_prompts=..., prompts_dir=worktree_path / "prompts", architecture_path=worktree_path / "architecture.json", max_depth=3)`
+   - Build the input `modified_prompts` set from `files_created + files_modified + files_to_stage + changed_files`, keeping only paths that look like prompts (`*.prompt`). Resolve each to an absolute path under the worktree. This is required because the Step 9 fallback path can succeed with worktree-detected changes while `files_created` and `files_modified` are empty. If the computed set is empty, skip discovery and set both context keys to `"None"` / `[]`.
+   - On resume from a cached Step 9 output with no `FILES_*` markers, re-run `_detect_worktree_changes(worktree_path, _parse_direct_edit_candidates(context.get("step6_output", "")))` to recover the authoritative changed-file set from the existing worktree before Step 10 discovery.
+   - Populate two context keys:
+     - `context["associated_documents"]` — human-facing comma-joined list the Step 10 LLM template will render inline after `ASSOCIATED_DOCUMENTS:`. Empty list → literal string `"None"`.
+     - `context["_associated_documents_discovered"]` — machine-facing list preserved verbatim for the post-step verifier.
+   - On discovery failure (missing prompts_dir, malformed architecture.json, unexpected exception): log yellow warning, set both context keys to `"None"` / `[]`, and continue — never abort the workflow from the discovery phase.
+
+2. Post-Step-10 verifier call:
+   - After Step 10 completes and `step_output` is captured, run `_verify_doc_sync_contract(discovered_docs, step10_output)` which returns `(modified, conflicted, unchanged, silently_dropped, overlapping)`. **JSON-first (see % Structured Step Artifacts, B.4): source the three `ASSOCIATED_DOCS_*` buckets the verifier compares against from `10_architecture_update.json`'s `associated_docs_{modified,conflicts,unchanged}` arrays when present, and only parse them out of `step10_output` (via `_extract_marker_paths`) when the JSON is missing/unparseable. Silent-drop / overlap detection and all downstream handling are identical either way.**
+   - **Silent drop** = discovered doc absent from all three `ASSOCIATED_DOCS_*` buckets. **Overlap** = discovered doc present in 2+ buckets (contradictory state). Both are contract violations.
+   - When violations exist, append to `step_output`:
+     ```
+     ORCHESTRATOR_POSTCHECK_WARNINGS:
+     - Associated doc silently dropped by Step 10: {path}
+     - Associated doc placed in multiple buckets by Step 10: {path}
+     DOC_SYNC_SILENT_DROPS: {comma-separated list}
+     DOC_SYNC_BUCKET_OVERLAPS: {comma-separated list}
+     ```
+     Only emit a marker line when its corresponding violation list is non-empty. The `ORCHESTRATOR_POSTCHECK_WARNINGS` header is always present when at least one violation fires.
+
+3. Strict mode (`PDD_STRICT_DOC_SYNC`):
+   - Read `os.environ.get("PDD_STRICT_DOC_SYNC", "").lower()`; treat `"1"`, `"true"`, `"yes"` as strict.
+   - On any violation under strict mode: print red abort banner, save state with `step_output` prefixed `FAILED:`, and return `(False, f"Stopped at step 10: PDD_STRICT_DOC_SYNC {'; '.join(violations)}", total_cost, model_used, changed_files)`. Do NOT proceed to Step 11.
+
+4. Non-strict (default) mode:
+   - Violations are logged and appended to `step_output` but do NOT abort. Step 11 receives the annotated output via `{step10_output}` and is instructed to surface silent drops / overlaps as issues for Step 12 to fix. This is the review-loop recovery path.
+
+5. Contract scope: the verifier only protects docs that `discover_associated_documents` actually found (i.e. declared via `<include>` or `<include-many>` in the modified prompts' graph or reachable through architecture BFS). Docs that *should* be referenced but aren't tagged are out of scope here — semantic auto-deps discovery is separate future work.
+
+6. Full metadata/fingerprint sync extension (Issue #1293): the `PDD_STRICT_DOC_SYNC` toggle now governs not only associated-document sync but full PDD drift-sync — code ↔ prompt ↔ `architecture.json` ↔ `.pdd/meta` fingerprint. This is the same drift-sync the fix path now runs via `pre_checkup_gate`; the change path already heals prompt drift at Step 8.5 and syncs architecture metadata at Step 10/10.5, so the extension is to ensure the strict toggle ALSO treats a residual `.pdd/meta` fingerprint or `architecture.json` discrepancy (not just a dropped associated doc) as a strict-mode abort. Under strict mode, after Step 10's architecture sanitization, a surviving `update`-class drift or unfinalized fingerprint is a violation aborting the workflow with `success=False`; under default mode it is appended to `step_output` as an `ORCHESTRATOR_POSTCHECK_WARNINGS` line for the Step 11/12 review loop. Reuse the existing `register_untracked_prompts` / `_merge_interface_signatures` / Step 8.5 heal primitives — do NOT introduce a parallel drift engine (coordinate with related issues #884 and #1317).
+
+% Step 12.5 — Pre-PR Build/Smoke Gate (Issue #1293)
+
+After the review loop (Steps 11-12) completes and BEFORE Step 13 creates the PR, run a blocking build/smoke pass over the changed files so the change/feature PR enters `checkup --pr` already building and wired. The worst observed breakage (app won't start, router never mounted, a page replaced with unrelated content) showed up on a feature PR, so this gate MUST run on change/feature flows too — not just the fix path.
+
+1. Import `run_pre_checkup_gate` from `pdd.pre_checkup_gate`.
+2. After the review loop and after `sync_order.sh` generation, call `run_pre_checkup_gate(worktree=worktree_path, changed_files=changed_files, base_ref=None, repo_owner=repo_owner, repo_name=repo_name, issue_number=issue_number)`. Pass `base_ref=None` (do NOT pass `base_branch`): `base_branch` is only resolved Before Step 13 — see the `_normalize_pr_base_branch` step in "Git Worktree Isolation" — so it is not yet defined at Step 12.5. `base_ref` is the gate's optional keyword arg (defaults to `None`); when omitted/`None` the gate derives the diff range itself. Add `gate_cost` to `total_cost`.
+3. The gate's Phase 2 (build/smoke) is what matters here — compile touched files, import changed modules, lint, caller-compatibility sweep, and targeted unit tests by git-diff; it hard-blocks on any red. The route/router-object probe is a NON-BLOCKING note (best-effort app-wiring smoke): it cannot reliably detect an unmounted router and false-positives on non-FastAPI route modules, so it is surfaced for checkup rather than blocking PR creation. Phase 1 drift-sync is largely a no-op on the change path because Step 8.5 already healed prompt drift and Step 10/10.5 synced architecture metadata, but running it confirms the tree is in sync. Note that the gate's `run_metadata_sync` rewrites `.pdd/meta` fingerprints with prompt+code-only hashes (example/test hashes null), so AFTER the gate (and before Step 13) restore tracked `.pdd/meta` (`git checkout -- .pdd/meta` in the gate worktree, guarded) so Step 13's `git add -A` does not commit degraded fingerprints that would arm the #1243 auto-heal loop — `.pdd/meta` fingerprint finalization is deferred to the post-merge sync (#1317), matching the fix path (which filters `.pdd/**`). The gate's prompt/example/architecture sync is committed normally; only `.pdd/meta` is reverted.
+4. Block semantics (Issue #1293: "block — don't hand off to checkup until green"):
+   - A failed gate (`gate_passed` is False) hard-blocks before Step 13 in BOTH default and strict mode — the change/feature PR MUST NOT be created with mechanical breakage or unhealable drift. Save state with `step_output` prefixed `FAILED:` and return `(False, f"Stopped at step 12.5: {gate_message}", total_cost, model_used, changed_files)`. `gate_message` already names the failing phase, check, and touched files, so the failure is actionable.
+   - Do NOT re-check `PDD_STRICT_DOC_SYNC` in the caller to downgrade a failure to an advisory `MANUAL_REVIEW:` note that still creates the PR. The gate already applies the strict/non-strict distinction internally (per `pre_checkup_gate` R7 — in default mode a non-fatal drift-sync residual is reported in `gate_message` but does NOT flip `gate_passed`, while build/smoke failures and fatal drift always do), so whenever `gate_passed` is False the failure is genuine and blocking. (Earlier revisions flag-and-continued in default mode; that shipped broken feature PRs into checkup and is removed.)
+5. Reuse the `checkup_gates` allowlist (`_script_is_acceptable`); never dispatch `npm run`/`build` scripts (fork-PR-RCE constraint). Docs-only diffs skip the build/smoke layer. Wrap the call so a gate exception fails closed (treat as not-passed → block) rather than raising into the orchestrator loop.
+6. Semantic / incomplete-coverage findings remain out of scope for the gate and stay with the cross-model `checkup --pr` review.
+
+After the Step 12.5 gate passes and BEFORE Step 13 creates or updates the PR, generate issue-derived user-story artifacts for changed non-LLM `.prompt` files:
+
+1. Import `generate_user_story` from `pdd.user_story_tests`.
+2. Resolve changed prompt candidates from the authoritative `changed_files` set against the worktree. Include only existing `.prompt` files and exclude runtime `*_LLM.prompt` templates.
+3. Call `generate_user_story(prompt_files=..., issue=issue_url, stories_dir=str(worktree_path / "user_stories"), prompts_dir=<shared prompts root when clear>, strength=0.2, temperature=0.0, time=0.25, verbose=verbose)`. The story body must be authored from the issue, not prompt content; prompt files are used only for metadata linking.
+4. On success, append the generated story path(s) to `changed_files` and `files_to_stage` so Step 13 commits them into the change PR. `generate_user_story` writes a two-file pair — the human-verified `user_stories/story__<slug>.md` and a generated `user_stories/contracts/<slug>.contract.md` (via `_contract_path_for_story`); stage BOTH so the contract travels with the change PR instead of landing as an untracked local file. Set `context["user_story_summary"]` to a markdown section naming each generated story (and its contract) and the linked prompt metadata.
+5. On failure, do not block the change PR. Wrap the `generate_user_story` call so that an unsuccessful result OR an unexpected exception (issue resolution, provider code, file I/O) is caught and converted into a skipped-generation outcome — it must never propagate into the orchestrator loop after the pre-PR gate. Set `context["user_story_summary"]` to a markdown section explaining that story generation was attempted and skipped, including the changed prompt(s) and failure message. This preserves review visibility without reintroducing a metadata-only hard gate.
+6. If there are no changed non-LLM prompt files, set `context["user_story_summary"] = "None"` so Step 13 omits the PR section.
+
+% Git Worktree Isolation
+
+Before Step 9, create an isolated git worktree for prompt changes. This prevents the workflow from disturbing the user's current branch.
+
+1. Helper function: `_resolve_main_ref(git_root: Path) -> str`
+   - Resolve the main branch ref for use as worktree base
+   - Try refs in order: `origin/main`, `origin/master`, `main`, `master`
+   - For each, run `git rev-parse --verify <ref>` — return the **commit hash** on success
+   - If none resolve, return the literal string `"HEAD"` as last resort
+   - This prevents worktrees from being based on the user's current feature branch
+
+1b. Helper function: `_resolve_main_ref_name(git_root: Path) -> str`
+   - Same probe order as `_resolve_main_ref` (`origin/main`, `origin/master`, `main`, `master`)
+   - Returns the **ref name** (e.g. `"origin/main"`) instead of the commit hash
+   - Used for human-readable display (e.g. the Req 16 startup comment's "Base branch" field)
+   - Falls back to the literal string `"HEAD"` when no ref resolves
+
+2. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool, *, clean_restart: bool = False) -> Tuple[Optional[Path], Optional[str]]`
+   - Create worktree at `.pdd/worktrees/change-issue-{issue_number}/` relative to git root
+   - Branch name: `change/issue-{issue_number}`
+   - If worktree already exists at path, remove with `git worktree remove --force`
+   - If directory exists but is NOT a worktree, remove with `shutil.rmtree()`
+   - If branch already exists locally, attempt to delete with `git branch -D`
+     - Check the return value from `_delete_branch(cwd, branch_name)` which returns `Tuple[bool, str]`
+     - If deletion succeeds: Create new branch with `git worktree add -b {branch} {path} _resolve_main_ref(git_root)` — use main ref, NOT HEAD
+     - If deletion fails (e.g., branch is currently checked out): Use existing branch with `git worktree add --force {path} {branch}` (without `-b` flag, `--force` required because git refuses to checkout a branch already in use by another worktree)
+   - If branch does not exist: Create worktree with new branch using `git worktree add -b {branch} {path} _resolve_main_ref(git_root)` — use main ref, NOT HEAD
+   - When `clean_restart=True`, fetch `+refs/heads/change/issue-{issue_number}:refs/remotes/origin/change/issue-{issue_number}` to refresh force-with-lease metadata in the remote-tracking ref for Step 13, but do not reuse it as the worktree base; always create the worktree from `_resolve_main_ref(git_root)` so previous branch artifacts cannot leak into the fresh run
+   - Return (worktree_path, None) on success, (None, error_msg) on failure
+
+3. In orchestrator loop, before Step 9:
+   - Check current branch with `git rev-parse --abbrev-ref HEAD`. If NOT "main" or "master" and NOT quiet, print warning: `[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]`
+   - Call `_setup_worktree(cwd, issue_number, quiet, clean_restart=effective_clean_restart)`
+   - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
+   - Switch working directory to worktree path for Steps 9-13
+   - Add `worktree_path` to context dict (for Steps 9-13 prompt formatting)
+   - Print: `"[blue]Working in worktree: {worktree_path}[/blue]"` (unless quiet)
+
+4. Additional helper functions:
+   - `_get_git_root(cwd: Path) -> Optional[Path]` - Get repo root via `git rev-parse --show-toplevel`
+   - `_worktree_exists(cwd: Path, worktree_path: Path) -> bool` - Check if path is in `git worktree list --porcelain` output
+   - `_branch_exists(cwd: Path, branch: str) -> bool` - Check via `git show-ref --verify refs/heads/{branch}`
+   - `_remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]` - Remove via `git worktree remove --force`
+   - `_delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]` - Delete via `git branch -D`
+   - `_normalize_pr_base_branch(ref_name: str) -> str` - Convert `_resolve_main_ref_name` output into a GitHub PR base branch by stripping a leading `origin/`, returning concrete names like `main` or `master`, and falling back to `main` only when no named ref resolves
+   - `_detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Optional[List[str]] = None) -> List[str]` - Detect file changes in worktree via `git status --porcelain=v1 -z --untracked-files=all`, parsed via `pdd.git_porcelain.parse_porcelain_z` so paths with spaces, embedded quotes, or a literal `" -> "` substring round-trip verbatim (the old text-mode `--porcelain` output is lossy — see issue #1080). Use the new-side path verbatim. By default only allows `.prompt` and `.md` files. If `direct_edit_candidates` list is provided, also allow those specific files (enables detecting direct edits). Skip temp files matching `.agentic_prompt_*`.
+   - `_parse_direct_edit_candidates(step6_output: str) -> List[str]` - Parse Step 6 output for "Direct Edit Candidates" table and extract file paths from the first column of each row. Return empty list if no table found.
+   - `_gh_pr_list_candidates(base_args, cwd=None) -> List[dict]` - Run a supported bounded `gh pr list --limit 1000` query so candidate scanning is not silently capped at the default first page and does not rely on unsupported `--page`.
+   - `_check_existing_pr_candidates(repo_owner, repo_name, issue_number) -> List[dict]` - Use a bounded high-limit `gh pr list` query to collect open PR candidates whose head is exactly `change/issue-{issue_number}` or a precise `change/issue-{issue_number}-job-*` fallback; caller must validate each candidate before early success.
+   - `_existing_pr_matches_remote_head(repo_owner, repo_name, pr, base_branch, cwd) -> bool` - Validate existing-PR guard candidates against exact repo URL, OPEN state, expected base branch, candidate head branch, non-empty PR head SHA, and `git ls-remote origin refs/heads/{head}` so the guard does not compare against the caller's unrelated checkout HEAD.
+   - `_open_pr_for_head_branch(repo_owner: str, repo_name: str, head_branch: str, base_branch: str, cwd: Path) -> Optional[dict]` - Use bounded high-limit `gh pr list --head {head_branch}` to find an exact open PR for Step 13 retry recovery. Return the first candidate whose URL belongs to the target repo, base branch/headRefName/state match, and remote branch / non-empty PR head SHA matches the local worktree `HEAD`; keep scanning later candidates before returning `None` so stale early results cannot mask a valid PR.
+   - `_pr_url_matches_current_head(repo_owner: str, repo_name: str, pr_url: str, head_branch: str, base_branch: str, cwd: Path) -> bool` - Use `gh pr view --repo {repo_owner}/{repo_name} <number> --json url,headRefName,headRefOid,baseRefName`, `git rev-parse HEAD`, and `git ls-remote origin refs/heads/{head_branch}` to verify a Step 13 URL is for the expected repo, base branch, head branch, and current commit before clearing workflow state.
+   - `_fetch_issue_updated_at(repo_owner, repo_name, issue_number) -> str` - Fetch current `updated_at` timestamp for the GitHub issue via `gh api`. Used after clarification stops to capture the timestamp AFTER the bot's own comment.
+   - `_artifacts_dir_for(work_dir: Path, issue_number: int) -> Path` - Return (creating) `work_dir / ".pdd" / "change" / f"issue-{issue_number}"`, the per-issue gitignored artifacts directory injected as `context["artifacts_dir"]` each phase. See % Structured Step Artifacts, A.1.
+   - `_clear_step_artifacts(artifacts_dir: Path, step_num: int, name: str) -> None` - Delete the current step's expected JSON and Markdown artifacts before each step attempt/retry so stale valid artifacts cannot be treated as current output or posted in trusted comments. See % Structured Step Artifacts, A.2/A.3.
+   - `_read_step_json(artifacts_dir: Path, filename: str) -> Optional[dict]` - Parse `artifacts_dir/filename` as JSON; return `None` on missing/unreadable/unparseable input; never raises. See % Structured Step Artifacts, A.2.
+   - `_read_step_md(artifacts_dir: Path, filename: str) -> Optional[str]` - Return the stripped text of `artifacts_dir/filename`, or `None` when missing/unreadable/empty; never raises. See % Structured Step Artifacts, A.2/B.6.
+   - `_hard_stop_from_json_with_presence(step_num: int, artifacts_dir: Path, name: str) -> Tuple[bool, Optional[str], List[str]]` - JSON-first hard-stop dispatch for steps 1/2/4/6/7: read `{NN}_{name}.json`, validate it, and map `status` to the exact stop-reason string `_check_hard_stop` returns today. Return `(False, None, [])` when JSON is missing/invalid so the caller falls back to `_check_hard_stop`; return `(True, None, direct_edit_candidates)` for valid non-stopping statuses such as `proceed` so the caller does not parse fallback prose. See % Structured Step Artifacts, B.3.
+   - Persist accepted parsed step JSON in `state["step_json_outputs"]` and use that state field for resume hydration. Do not reread `09_implement.json` / `10_architecture_update.json` / other fixed artifact filenames from disk to reconstruct cached step decisions after resume unless the JSON was already accepted and saved in workflow state.
+   - Before Step 13, set context key `base_branch` from `_normalize_pr_base_branch(_resolve_main_ref_name(...))` and require the Step 13 prompt to use `gh pr create --base {base_branch}` rather than hardcoding `main`.
+
+% Console Output
+
+Use rich console output (unless `quiet`). Key markers:
+- Header: `Implementing change for issue #{issue_number}: "{issue_title}"`
+- Step progress: `[Step N/13] {description}...` (with iteration count for review loop steps)
+- Step result: `  -> {brief_result}` (last line of output, truncated to 80 chars)
+- Step completion: `  → Step {step_num} complete.` (REQUIRED — executor's credential waterfall depends on this)
+- Hard stop: `Investigation stopped at Step N: {reason}`
+- Final summary: total cost, files changed, PR URL, review iterations, and next steps (run sync_order.sh)
+
+Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
+
+% Progress Tracking
+
+Call `clear_agentic_progress()` at start (clear stale progress) and on successful completion.
+Call `set_agentic_progress(workflow="change", current_step=N, total_steps=13, ...)` before each step so KeyboardInterrupt can report how far the workflow got.
+
+% State Persistence (GitHub + Local)
+
+To avoid re-running completed steps when the workflow is paused (e.g., for clarification or architectural decisions), implement state persistence using shared functions from agentic_common. GitHub is primary storage (enables cross-machine resume), local file is cache.
+
+1. **State file location**: `.pdd/change-state/issue-{issue_number}.json` (local cache)
+
+2. **State file structure**: JSON with keys: `workflow`, `issue_url`, `issue_number`, `last_completed_step`, `step_outputs` (dict keyed by step number string), `total_cost`, `model_used`, `worktree_path`, `github_comment_id`, `issue_updated_at`, `review_iteration`, `previous_fixes`
+
+3. **Use shared functions from agentic_common**:
+   - `load_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)` - Load from GitHub (primary) or local cache
+   - `save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)` - Save to GitHub first, then local
+   - `clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)` - Clear on completion
+   - State directory: `_get_state_dir(cwd) -> Path` returns `.pdd/change-state/` relative to git root
+
+4. **Orchestrator logic**:
+   - On start: Call `load_workflow_state()`, validate cached state, determine `start_step`
+   - Track `github_comment_id` from load result for subsequent saves
+   - **State validation on load**: After loading state, call `validate_cached_state()` to find the actual last *successfully* completed step by scanning `step_outputs` for entries that do NOT start with "FAILED:". This prevents resuming past failed steps.
+   - If state exists: Print `"Resuming from step {start_step} (steps 1-{last_completed_step} cached)"`
+   - For steps < start_step: Use cached output from `state["step_outputs"]`
+   - For steps >= start_step: Execute normally, call `save_workflow_state()` after each
+     - On success: Store output in step_outputs, set `last_completed_step = step_num`
+     - On failure (not hard stop): Store "FAILED: {output}" in step_outputs, keep `last_completed_step` unchanged from its current value (do NOT set to `step_num - 1`, as that step may also have failed)
+   - On successful completion (step 13 completes AND no failed steps): Call `clear_workflow_state()`
+   - On hard stop (e.g., clarification needed): State remains for next run
+   - Review loop state: Store current iteration count and previous_fixes in state
+
+5. **Console output for resumption**: Print which steps are cached and which step is starting.
+
+% Error Handling
+- Return `(False, "Failed to create worktree: {error}", cost, model, [])` if worktree setup fails
+- Return `(False, "Stopped at step N: {reason}", cost, model, changed_files)` on hard stop conditions
+- Log warning and continue if `run_agentic_task()` returns failure without matching a hard stop condition
+- On state file read/write errors, log warning and continue without persistence
+
+% Dependencies
+Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `substitute_template_variables`, `validate_cached_state`, `post_step_comment`, `set_agentic_progress`, `clear_agentic_progress`, `extract_step_report`, `post_step_comment_once`, `normalize_step_comments_state`
+Import from `pdd.preprocess`: `preprocess`
+Import from `pdd.architecture_sync`: `_merge_interface_signatures`, `register_untracked_prompts`
+Import from `pdd.pre_checkup_gate`: `run_pre_checkup_gate` (Step 12.5 build/smoke gate; see "Step 12.5 — Pre-PR Build/Smoke Gate")
+Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
+<pdd.agentic_common><include select="def:run_agentic_task,def:load_workflow_state,def:save_workflow_state,def:clear_workflow_state,def:substitute_template_variables,def:validate_cached_state,def:post_step_comment,def:set_agentic_progress,def:clear_agentic_progress">pdd/agentic_common.py</include></pdd.agentic_common>
+<pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+<pdd.sync_order><include select="def:build_dependency_graph,def:topological_sort,def:get_affected_modules,def:generate_sync_order_script,def:extract_module_from_include,def:discover_associated_documents">pdd/sync_order.py</include></pdd.sync_order>
+<pdd.construct_paths><include>context/construct_paths_example.py</include></pdd.construct_paths>
+<pdd.get_extension><include>context/get_extension_example.py</include></pdd.get_extension>
+<pdd.preprocess><include select="def:preprocess">pdd/preprocess.py</include></pdd.preprocess>
+<pdd.architecture_sync><include select="def:_merge_interface_signatures,def:register_untracked_prompts">pdd/architecture_sync.py</include></pdd.architecture_sync>
+<pdd.pre_checkup_gate><include mode="interface">pdd/pre_checkup_gate.py</include></pdd.pre_checkup_gate>
+
+% Deliverables
+- Code: `pdd/agentic_change_orchestrator.py`

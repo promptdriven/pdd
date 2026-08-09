@@ -6,11 +6,14 @@ These tests verify:
 2. ThreadSafeRedirector properly handles \r for progress bar suppression
 3. Normal newline behavior is preserved
 """
-import pytest
-from unittest.mock import MagicMock, patch
 from typing import List
+from unittest.mock import MagicMock
 
-from pdd.sync_tui import ThreadSafeRedirector, TUIStdoutWrapper, TUIStdinRedirector
+import pytest
+from rich.console import Console
+
+import pdd.sync_tui as sync_tui
+from pdd.sync_tui import ThreadSafeRedirector, TUIStdoutWrapper
 
 
 class MockRichLog:
@@ -18,10 +21,12 @@ class MockRichLog:
 
     def __init__(self):
         self.written_lines: List[str] = []
+        self.written_texts: List[object] = []
 
     def write(self, text):
         """Capture the plain text content."""
         if hasattr(text, 'plain'):
+            self.written_texts.append(text)
             self.written_lines.append(text.plain)
         else:
             self.written_lines.append(str(text))
@@ -57,6 +62,12 @@ def redirector(mock_app, mock_log):
 def captured_lines(mock_log):
     """Return the captured lines from the mock log."""
     return mock_log.written_lines
+
+
+@pytest.fixture
+def captured_texts(mock_log):
+    """Return the captured Rich Text objects from the mock log."""
+    return mock_log.written_texts
 
 
 # =============================================================================
@@ -200,3 +211,510 @@ def test_ansi_codes_preserved(redirector, captured_lines):
     assert len(captured_lines) == 1
     # The ANSI codes get converted to Rich Text, plain text should be just "Green text"
     assert "Green text" in captured_lines[0]
+
+
+def test_rich_printed_ansi_output_does_not_show_escape_fragments(redirector, captured_lines):
+    """ANSI output printed through Rich should not display raw escape fragments."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("\x1b[90mhello\x1b[0m")
+    console.print("\x1b[36m\x1b[1mcyan-bold\x1b[39;49;00m")
+
+    assert captured_lines == ["hello", "cyan-bold"]
+
+
+def test_rich_printed_ansi_preserves_existing_rich_styles(redirector, captured_texts):
+    """Reparsing highlighted ANSI should keep non-ANSI Rich styles on the line."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("[bold]prefix[/bold] \x1b[90mhello\x1b[0m")
+
+    text = captured_texts[0]
+    assert text.plain == "prefix hello"
+    assert any(
+        span.start <= 0 and span.end >= len("prefix") and span.style.bold
+        for span in text.spans
+    )
+    assert any(
+        span.start <= len("prefix ") and span.end >= len("prefix hello")
+        and getattr(span.style.color, "number", None) == 8
+        for span in text.spans
+    )
+
+
+def test_rich_printed_ansi_reset_preserves_outer_suffix_style(
+    redirector,
+    captured_texts,
+):
+    """Nested ANSI reset should not truncate an outer Rich style span."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("[dim]\x1b[31mFAIL\x1b[0m after[/dim]")
+
+    text = captured_texts[0]
+    assert text.plain == "FAIL after"
+    assert any(
+        span.start <= len("FAIL ") and span.end >= len("FAIL after")
+        and span.style.dim
+        for span in text.spans
+    )
+
+
+def test_rich_printed_composite_ansi_reset_preserves_outer_suffix_style(
+    redirector,
+    captured_texts,
+):
+    """Composite SGR reset should restore an outer Rich style afterward."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("[dim]\x1b[31mFAIL\x1b[0;39m after[/dim]")
+
+    text = captured_texts[0]
+    assert text.plain == "FAIL after"
+    assert any(
+        span.start <= len("FAIL ") and span.end >= len("FAIL after")
+        and span.style.dim
+        for span in text.spans
+    )
+
+
+def test_rich_highlighter_style_not_replayed_for_256_color_csi(
+    redirector,
+    captured_texts,
+):
+    """Rich highlighter SGR should not become part of restored CSI style."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("\x1b[38;5;196mRED\x1b[0m after")
+
+    text = captured_texts[0]
+    assert text.plain == "RED after"
+    assert any(
+        span.start <= 0 and span.end >= len("RED")
+        and getattr(span.style.color, "number", None) == 196
+        for span in text.spans
+    )
+    assert not any(span.style.bold for span in text.spans)
+
+
+def test_rich_highlighter_style_not_replayed_after_osc_title(
+    redirector,
+    captured_texts,
+):
+    """Restoring highlighted OSC should not style following visible text."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("pre\x1b]0;title\x1b\\post after")
+
+    text = captured_texts[0]
+    assert text.plain == "prepost after"
+    assert not any(
+        span.start < len("prepost after")
+        and span.end > len("pre")
+        and (span.style.bold or span.style.underline)
+        for span in text.spans
+    )
+
+
+def test_rich_highlighted_osc_interruption_does_not_leak_payload(
+    redirector,
+    captured_lines,
+):
+    """Rich-highlighted OSC payload should be hidden when interrupted by CSI."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("pre\x1b]0;payload\x1b[31mRED\x1b[0mpost")
+
+    assert captured_lines == ["preREDpost"]
+
+
+def test_rich_highlighted_osc_cancellation_does_not_leak_payload(
+    redirector,
+    captured_lines,
+):
+    """Rich-highlighted OSC payload should be hidden when canceled by CAN."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("pre\x1b]0;payload\x18post")
+
+    assert captured_lines == ["prepost"]
+
+
+def test_rich_highlighted_osc_newline_payload_stays_hidden(
+    redirector,
+    captured_lines,
+):
+    """Rich-highlighted multiline OSC payload should not split visible logs."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("pre\x1b]0;ti\nmore\x1b\\post")
+
+    assert captured_lines == ["prepost"]
+
+
+def test_rich_printed_osc_and_csi_preserve_styles(redirector, captured_texts):
+    """OSC hyperlinks and CSI color should not leak or drop existing Rich styles."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+    osc_link = "\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\"
+
+    console.print("[bold]prefix[/bold] " + osc_link + " \x1b[90mhello\x1b[0m")
+
+    text = captured_texts[0]
+    assert text.plain == "prefix link hello"
+    assert any(
+        span.start <= 0 and span.end >= len("prefix") and span.style.bold
+        for span in text.spans
+    )
+    assert any(
+        span.start <= len("prefix ") and span.end >= len("prefix link")
+        and span.style.link == "https://example.com"
+        for span in text.spans
+    )
+    assert any(
+        span.start <= len("prefix link ") and span.end >= len("prefix link hello")
+        and getattr(span.style.color, "number", None) == 8
+        for span in text.spans
+    )
+
+
+def test_direct_bel_terminated_osc_does_not_leak_payload(redirector, captured_lines):
+    """BEL-terminated OSC sequences should be stripped from direct output."""
+    redirector.write("pre\x1b]0;mytitle\x07post\n")
+
+    assert captured_lines == ["prepost"]
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "pre\x1bP1;payload\x1b\\post",
+        "pre\x1bXpayload\x1b\\post",
+        "pre\x1b^payload\x1b\\post",
+        "pre\x1b_payload\x1b\\post",
+        "pre\x90payload\x9cpost",
+    ],
+    ids=[
+        "esc-dcs",
+        "esc-sos",
+        "esc-pm",
+        "esc-apc",
+        "c1-dcs",
+    ],
+)
+def test_string_control_payloads_do_not_leak(sequence, redirector, captured_lines):
+    """DCS/SOS/PM/APC and C1 string-control payloads should be stripped."""
+    redirector.write(sequence + "\n")
+
+    assert captured_lines == ["prepost"]
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "pre\x1bcpost",
+        "pre\x1b#8post",
+        "pre\x1b%Gpost",
+        "pre\x1b Fpost",
+        "pre\x1b Gpost",
+        "pre\x9b?25lpost",
+    ],
+    ids=[
+        "esc-ris",
+        "esc-screen-alignment",
+        "esc-utf8-designate",
+        "esc-sp-f",
+        "esc-sp-g",
+        "c1-csi",
+    ],
+)
+def test_ecma48_controls_do_not_leak(sequence, redirector, captured_lines):
+    """Valid ESC/C1 controls should not reach the log as raw text."""
+    redirector.write(sequence + "\n")
+
+    assert captured_lines == ["prepost"]
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "pre\x1b]0;payload\x1b[31mRED\x1b[0mpost",
+        "pre\x1bPpayload\x1b[31mRED\x1b[0mpost",
+    ],
+    ids=["osc-interrupted-by-csi", "dcs-interrupted-by-csi"],
+)
+def test_interrupted_string_control_payloads_do_not_leak(
+    sequence,
+    redirector,
+    captured_lines,
+):
+    """String-control payload before an interrupting ESC should be stripped."""
+    redirector.write(sequence + "\n")
+
+    assert captured_lines == ["preREDpost"]
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        ("\x1b]0;title", "\x1b\\"),
+        ("\x1bPpayload", "\x1b\\"),
+        ("\x90payload", "\x9c"),
+    ],
+    ids=["osc-st", "dcs-st", "c1-dcs-st"],
+)
+def test_string_control_payloads_can_span_newlines(
+    start,
+    end,
+    redirector,
+    captured_lines,
+):
+    """Newlines inside string controls should not flush hidden payload."""
+    redirector.write("pre" + start + "\n")
+    assert captured_lines == []
+
+    redirector.write("more" + end + "post\n")
+
+    assert captured_lines == ["prepost"]
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "pre\x1b]0;ti\rtle\x1b\\post\n",
+        "pre\x1bPpay\rload\x1b\\post\n",
+    ],
+    ids=["osc-cr", "dcs-cr"],
+)
+def test_string_control_carriage_returns_do_not_leak_or_drop_prefix(
+    sequence,
+    redirector,
+    captured_lines,
+):
+    """CR inside string controls should not trigger progress-line compaction."""
+    redirector.write(sequence)
+
+    assert captured_lines == ["prepost"]
+
+
+def test_split_string_control_carriage_return_stays_hidden(
+    redirector,
+    captured_lines,
+):
+    """CR in a partial string-control payload should remain buffered."""
+    redirector.write("pre\x1bPpay\r")
+    assert captured_lines == []
+
+    redirector.write("load\x1b\\post\n")
+
+    assert captured_lines == ["prepost"]
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "pre\x1b[?25\npost\n",
+        "pre\x1b[?25\rpost\n",
+        "pre\x1b[?25\x18post\n",
+        "pre\x1b[?25\x1apost\n",
+        "pre\x9b?25\npost\n",
+    ],
+    ids=["newline", "carriage-return", "can", "sub", "c1-newline"],
+)
+def test_malformed_csi_c0_terminators_do_not_leak_or_merge_lines(
+    sequence,
+    redirector,
+    captured_lines,
+):
+    """Malformed CSI should stop at C0/newline boundaries."""
+    redirector.write(sequence)
+
+    assert captured_lines == ["pre", "post"]
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "pre\x00post",
+        "pre\x08post",
+        "pre\x0bpost",
+        "pre\x0cpost",
+        "pre\x18post",
+        "pre\x1apost",
+    ],
+    ids=["nul", "bs", "vt", "ff", "can", "sub"],
+)
+def test_standalone_c0_controls_do_not_leak(sequence, redirector, captured_lines):
+    """Standalone C0 controls should be stripped from sync output."""
+    redirector.write(sequence + "\n")
+
+    assert captured_lines == ["prepost"]
+
+
+def test_del_control_does_not_leak(redirector, captured_lines):
+    """DEL should be stripped alongside raw C0 controls."""
+    redirector.write("pre\x7fpost\n")
+
+    assert captured_lines == ["prepost"]
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "pre\x1b]0;payload\x18post\n",
+        "pre\x1bPpayload\x1apost\n",
+    ],
+    ids=["osc-can", "dcs-sub"],
+)
+def test_can_sub_cancel_string_control_payloads(
+    sequence,
+    redirector,
+    captured_lines,
+):
+    """CAN/SUB should cancel string controls and hide accumulated payload."""
+    redirector.write(sequence)
+
+    assert captured_lines == ["prepost"]
+
+
+def test_rich_printed_non_csi_escape_preserves_styles(redirector, captured_texts):
+    """Non-CSI escape controls should be stripped without dropping Rich styles."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("[bold]prefix[/bold] \x1b(Btail")
+
+    text = captured_texts[0]
+    assert text.plain == "prefix tail"
+    assert any(
+        span.start <= 0 and span.end >= len("prefix") and span.style.bold
+        for span in text.spans
+    )
+
+
+def test_rich_printed_charset_selector_sibling_preserves_styles(redirector, captured_texts):
+    """Charset selector siblings such as ESC)0 should not leak raw escape text."""
+    console = Console(
+        file=redirector,
+        force_terminal=True,
+        color_system="standard",
+        highlight=True,
+        width=80,
+    )
+
+    console.print("[bold]prefix[/bold] \x1b)0tail")
+
+    text = captured_texts[0]
+    assert text.plain == "prefix tail"
+    assert any(
+        span.start <= 0 and span.end >= len("prefix") and span.style.bold
+        for span in text.spans
+    )
+
+
+def test_malformed_highlighted_ansi_restore_advances_linearly(monkeypatch):
+    """Malformed highlighted OSC/CSI candidates should not rescan suffixes."""
+    malformed_osc = "\x1b\x1b[1m]\x1b[0m8;;unterminated"
+    malformed_csi = "\x1b\x1b[1m[\x1b[0m999"
+    repeat_count = 20
+    malformed = (malformed_osc + malformed_csi) * repeat_count
+    calls = 0
+    original_skip = sync_tui._skip_sgr_sequences
+
+    def counting_skip(text, start):
+        nonlocal calls
+        calls += 1
+        return original_skip(text, start)
+
+    monkeypatch.setattr(sync_tui, "_skip_sgr_sequences", counting_skip)
+
+    sync_tui._restore_rich_highlighted_ansi(malformed)
+
+    assert calls <= repeat_count * 20
+
+
+def test_malformed_osc_span_mapping_avoids_regex_rescan(monkeypatch):
+    """Fallback span mapping should scan malformed OSC fragments once."""
+    malformed = "\x1b]8;;unterminated"
+    repeat_count = 20
+    plain = "prefix " + malformed * repeat_count + " suffix"
+    original = sync_tui.Text(plain)
+    reparsed = sync_tui.Text(plain)
+    calls = 0
+    original_scan = sync_tui._scan_ansi_token
+
+    def counting_scan(text, start):
+        nonlocal calls
+        calls += 1
+        return original_scan(text, start)
+
+    monkeypatch.setattr(sync_tui, "_scan_ansi_token", counting_scan)
+
+    merged = sync_tui._merge_reparsed_ansi_spans(original, reparsed)
+
+    assert merged.plain == plain
+    assert calls <= repeat_count * 2

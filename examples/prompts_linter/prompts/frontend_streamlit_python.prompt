@@ -1,3 +1,5 @@
+<pdd-dependency>pipeline_Python.prompt</pdd-dependency>
+
 The `frontend_streamlit` module serves as the interactive graphical user interface (GUI) for the PDD Prompt Linter. It is a Single Page Application (SPA) built with Streamlit that allows users to input prompt text, configure LLM settings, trigger the linting process, and visualize the resulting analysis report and suggested fixes. This module acts as a thin presentation layer, delegating all business logic and orchestration to the `utils.pipeline` module.
 
 Requirements

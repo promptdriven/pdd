@@ -1,5 +1,5 @@
 import pytest
-from pdd.conflicts_in_prompts import conflicts_in_prompts
+from pdd.conflicts_in_prompts import conflicts_in_prompts, ConflictResponse, ConflictChange
 from unittest.mock import patch, MagicMock
 from pdd import EXTRACTION_STRENGTH
 
@@ -13,13 +13,11 @@ MOCK_LLM_RESPONSE = {
     'model_name': "test-model"
 }
 MOCK_STRUCTURED_RESPONSE = {
-    'result': MagicMock(
+    'result': ConflictResponse(
         changes_list=[
-            MagicMock(
-                dict=lambda: {
-                    'prompt_name': 'prompt1',
-                    'change_instructions': 'Make less formal'
-                }
+            ConflictChange(
+                prompt_name='prompt1',
+                change_instructions='Make less formal',
             )
         ]
     ),

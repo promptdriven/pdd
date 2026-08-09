@@ -5,6 +5,12 @@ This module handles remote session management for PDD Connect. It enables users 
 `pdd connect` on any machine and access it remotely via PDD Cloud. The cloud acts as a
 message bus - it relays commands from the browser to the CLI via Firestore.
 No external tunnel (ngrok) is required - the cloud hosts everything.
+
+Key features for session reliability:
+- Immediate first heartbeat on startup (prevents early session timeout)
+- 30-second heartbeat interval with 3 retries and exponential backoff
+- Automatic JWT token refresh on 401 errors (handles token expiration)
+- Graceful handling of network errors during long-running operations
 """
 
 from __future__ import annotations
@@ -21,8 +27,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import httpx
 from rich.console import Console
+from rich.markup import escape as rich_escape
 
 from .core.cloud import CloudConfig
+from .get_jwt_token import _get_cached_jwt, FirebaseAuthenticator, KEYRING_AVAILABLE
 
 console = Console()
 
@@ -130,6 +138,12 @@ class RemoteSessionManager:
 
     The cloud acts as a message bus - commands from the browser are relayed via Firestore.
     No external tunnel is required; the cloud generates the access URL.
+
+    Session reliability features:
+    - Heartbeats are sent immediately on startup, then every 30 seconds
+    - Heartbeat failures trigger 3 retries with exponential backoff (1s, 2s, 4s)
+    - 401 errors (token expiration) trigger automatic JWT token refresh
+    - Command polling also handles 401 errors with automatic token refresh
     """
 
     def __init__(self, jwt_token: str, project_path: Path, server_port: int = 9876):
@@ -142,12 +156,64 @@ class RemoteSessionManager:
         self._command_polling_task: Optional[asyncio.Task] = None
         self._stop_event: Optional[asyncio.Event] = None
         self._client_timeout = 30.0
+        self._token_refresh_lock = asyncio.Lock()
 
     def _get_headers(self) -> Dict[str, str]:
         return {
             "Authorization": f"Bearer {self.jwt_token}",
             "Content-Type": "application/json",
         }
+
+    async def _refresh_token(self) -> bool:
+        """
+        Attempt to refresh the JWT token using the stored refresh token.
+
+        Returns:
+            bool: True if token was successfully refreshed, False otherwise.
+        """
+        import os
+        from .get_jwt_token import _cache_jwt
+
+        async with self._token_refresh_lock:
+            # First check if another coroutine already refreshed the token
+            cached_jwt = _get_cached_jwt()
+            if cached_jwt and cached_jwt != self.jwt_token:
+                self.jwt_token = cached_jwt
+                console.print("[green]JWT token refreshed from cache[/green]")
+                return True
+
+            # Try to refresh using the Firebase refresh token
+            firebase_api_key = os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY")
+            if not firebase_api_key:
+                console.print("[yellow]Cannot refresh token: NEXT_PUBLIC_FIREBASE_API_KEY not set[/yellow]")
+                return False
+
+            if not KEYRING_AVAILABLE:
+                console.print("[yellow]Cannot refresh token: keyring not available[/yellow]")
+                return False
+
+            try:
+                firebase_auth = FirebaseAuthenticator(firebase_api_key, "PDD Code Generator")
+                refresh_token = firebase_auth._get_stored_refresh_token()
+
+                if not refresh_token:
+                    console.print("[yellow]Cannot refresh token: no refresh token stored. Please run 'pdd auth login' again.[/yellow]")
+                    return False
+
+                # Refresh the token
+                new_id_token = await firebase_auth._refresh_firebase_token(refresh_token)
+                if new_id_token:
+                    self.jwt_token = new_id_token
+                    _cache_jwt(new_id_token)
+                    console.print("[green]JWT token refreshed successfully[/green]")
+                    return True
+                else:
+                    console.print("[yellow]Token refresh returned empty token[/yellow]")
+                    return False
+
+            except Exception as e:
+                console.print(f"[yellow]Failed to refresh JWT token: {e}[/yellow]")
+                return False
 
     def _get_metadata(self) -> Dict[str, Any]:
         return {
@@ -210,38 +276,75 @@ class RemoteSessionManager:
                 raise RemoteSessionError(f"Network error during registration: {str(e)}")
 
     async def _heartbeat_loop(self) -> None:
-        """Internal loop to send heartbeats every 60 seconds."""
+        """Internal loop to send heartbeats every 30 seconds.
+
+        Sends the first heartbeat immediately upon startup, then continues
+        at regular intervals. Uses retry logic with exponential backoff to
+        handle transient network failures during long-running operations.
+        Automatically refreshes JWT token on 401 errors.
+        """
         endpoint = CloudConfig.get_endpoint_url("heartbeatSession")
 
         # Ensure stop event is initialized
         if self._stop_event is None:
             self._stop_event = asyncio.Event()
 
+        first_heartbeat = True
+
         while not self._stop_event.is_set():
+            # Send heartbeat first (immediate on startup, then after each interval)
+            if self.session_id:
+                max_retries = 3
+                retry_delay = 1.0  # Start with 1 second
+                token_refreshed = False
+
+                for attempt in range(max_retries):
+                    try:
+                        async with httpx.AsyncClient(timeout=10.0) as client:
+                            response = await client.post(
+                                endpoint,
+                                json={"sessionId": self.session_id},
+                                headers=self._get_headers()
+                            )
+
+                            if response.status_code == 401:
+                                # Token expired - try to refresh
+                                if not token_refreshed:
+                                    console.print("[yellow]JWT token expired, attempting refresh...[/yellow]")
+                                    if await self._refresh_token():
+                                        token_refreshed = True
+                                        continue  # Retry with new token
+                                    else:
+                                        console.print("[red]Token refresh failed. Please run 'pdd auth login' to re-authenticate.[/red]")
+                                        break
+                                else:
+                                    console.print("[red]Heartbeat still failing after token refresh (Status: 401)[/red]")
+                                    break
+                            elif response.status_code >= 400:
+                                console.print(f"[yellow]Warning: Heartbeat failed (Status: {response.status_code})[/yellow]")
+
+                            break  # Success or non-retryable error, exit retry loop
+
+                    except Exception as e:
+                        if attempt == max_retries - 1:
+                            # Final attempt failed - log but don't crash
+                            console.print(f"[yellow]Warning: Heartbeat failed after {max_retries} attempts: {str(e)}[/yellow]")
+                        else:
+                            # Retry with exponential backoff
+                            await asyncio.sleep(retry_delay)
+                            retry_delay *= 2
+
+            # For first heartbeat, use a short initial delay (5 seconds) to quickly
+            # establish connection, then switch to normal 30-second intervals
+            interval = 5.0 if first_heartbeat else 30.0
+            first_heartbeat = False
+
+            # Wait for interval or until stop event is set
             try:
-                # Wait for 60 seconds or until stop event is set
-                try:
-                    await asyncio.wait_for(self._stop_event.wait(), timeout=60.0)
-                    break  # Stop event was set
-                except asyncio.TimeoutError:
-                    pass  # Timeout reached, send heartbeat
-
-                if not self.session_id:
-                    continue
-
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    response = await client.post(
-                        endpoint,
-                        json={"sessionId": self.session_id},
-                        headers=self._get_headers()
-                    )
-                    
-                    if response.status_code >= 400:
-                        console.print(f"[yellow]Warning: Heartbeat failed (Status: {response.status_code})[/yellow]")
-
-            except Exception as e:
-                # We don't want to crash the server loop due to a heartbeat failure
-                console.print(f"[yellow]Warning: Heartbeat error: {str(e)}[/yellow]")
+                await asyncio.wait_for(self._stop_event.wait(), timeout=interval)
+                break  # Stop event was set
+            except asyncio.TimeoutError:
+                pass  # Timeout reached, continue to next heartbeat
 
     def start_heartbeat(self) -> None:
         """Start the background heartbeat task."""
@@ -267,13 +370,16 @@ class RemoteSessionManager:
                 pass
             self._heartbeat_task = None
 
-    async def deregister(self) -> None:
+    async def deregister(self) -> bool:
         """
         Deregister the session from the cloud.
         Should be called on application shutdown.
+
+        Returns:
+            True if deregistration succeeded, False otherwise.
         """
         if not self.session_id:
-            return
+            return True
 
         endpoint = CloudConfig.get_endpoint_url("deregisterSession")
 
@@ -281,6 +387,7 @@ class RemoteSessionManager:
         await self.stop_heartbeat()
         await self.stop_command_polling()
 
+        success = False
         async with httpx.AsyncClient(timeout=5.0) as client:
             try:
                 # Server expects POST method for deregisterSession
@@ -289,17 +396,20 @@ class RemoteSessionManager:
                     json={"sessionId": self.session_id},
                     headers=self._get_headers()
                 )
-                
+
                 if response.status_code < 400:
                     console.print("[dim]Session deregistered from cloud.[/dim]")
+                    success = True
                 else:
                     console.print(f"[yellow]Warning: Failed to deregister session (Status: {response.status_code})[/yellow]")
-            
+
             except Exception as e:
                 # Idempotent: don't raise on failure during shutdown
                 console.print(f"[yellow]Warning: Error deregistering session: {str(e)}[/yellow]")
             finally:
                 self.session_id = None
+
+        return success
 
     async def get_pending_commands(self) -> List[CommandInfo]:
         """
@@ -315,30 +425,42 @@ class RemoteSessionManager:
             return []
 
         endpoint = CloudConfig.get_endpoint_url("getCommands")
+        token_refreshed = False
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            try:
-                response = await client.get(
-                    endpoint,
-                    params={"sessionId": self.session_id},
-                    headers=self._get_headers()
-                )
+        for attempt in range(2):  # Allow one retry after token refresh
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                try:
+                    response = await client.get(
+                        endpoint,
+                        params={"sessionId": self.session_id},
+                        headers=self._get_headers()
+                    )
 
-                if response.status_code >= 400:
-                    console.print(f"[yellow]Warning: Failed to get commands (Status: {response.status_code})[/yellow]")
+                    if response.status_code == 401:
+                        # Token expired - try to refresh once
+                        if not token_refreshed:
+                            if await self._refresh_token():
+                                token_refreshed = True
+                                continue  # Retry with new token
+                        console.print(f"[yellow]Warning: Failed to get commands (Status: {response.status_code})[/yellow]")
+                        return []
+                    elif response.status_code >= 400:
+                        console.print(f"[yellow]Warning: Failed to get commands (Status: {response.status_code})[/yellow]")
+                        return []
+
+                    data = response.json()
+                    commands_data = data.get("commands", [])
+
+                    return [CommandInfo.from_dict(c) for c in commands_data]
+
+                except httpx.RequestError as e:
+                    console.print(f"[yellow]Warning: Network error getting commands: {str(e)}[/yellow]")
+                    return []
+                except Exception as e:
+                    console.print(f"[yellow]Warning: Error parsing commands: {str(e)}[/yellow]")
                     return []
 
-                data = response.json()
-                commands_data = data.get("commands", [])
-
-                return [CommandInfo.from_dict(c) for c in commands_data]
-
-            except httpx.RequestError as e:
-                console.print(f"[yellow]Warning: Network error getting commands: {str(e)}[/yellow]")
-                return []
-            except Exception as e:
-                console.print(f"[yellow]Warning: Error parsing commands: {str(e)}[/yellow]")
-                return []
+        return []
 
     async def update_command(
         self,
@@ -373,6 +495,7 @@ class RemoteSessionManager:
         # Retry logic with exponential backoff
         max_retries = 3
         retry_delay = 1  # Start with 1 second
+        token_refreshed = False
 
         for attempt in range(max_retries):
             try:
@@ -383,7 +506,21 @@ class RemoteSessionManager:
                         headers=self._get_headers()
                     )
 
-                    if result.status_code >= 400:
+                    if result.status_code == 401:
+                        # Token expired - try to refresh once
+                        if not token_refreshed:
+                            console.print("[yellow]JWT token expired during command update, attempting refresh...[/yellow]")
+                            if await self._refresh_token():
+                                token_refreshed = True
+                                continue  # Retry with new token
+                            else:
+                                console.print("[red]Token refresh failed. Please run 'pdd auth login' to re-authenticate.[/red]")
+                                raise RuntimeError("Authentication failed: token expired and refresh failed")
+                        else:
+                            console.print("[red]Command update still failing after token refresh (Status: 401)[/red]")
+                            raise RuntimeError("Authentication failed after token refresh")
+
+                    elif result.status_code >= 400:
                         error_msg = f"Failed to update command status: {result.text}"
                         console.print(f"[red]{error_msg}[/red]")
                         raise RuntimeError(error_msg)
@@ -440,7 +577,7 @@ class RemoteSessionManager:
                 return "unknown"
 
         except Exception as e:
-            console.print(f"[yellow]Failed to check command status: {e}[/yellow]")
+            console.print(f"[yellow]Failed to check command status: {rich_escape(str(e))}[/yellow]")
             return "unknown"
 
     async def _is_cancelled(self, command_id: str) -> bool:
@@ -721,7 +858,9 @@ class RemoteSessionManager:
         """
         try:
             # 1. Update status to "processing"
+            console.print(f"[dim]Updating cloud status to 'processing' for {cmd.command_id}[/dim]")
             await self.update_command(cmd.command_id, status="processing")
+            console.print(f"[dim]Cloud status updated to 'processing'[/dim]")
 
             # 2. Check if command was cancelled before starting execution
             if await self._is_cancelled(cmd.command_id):
@@ -759,11 +898,23 @@ class RemoteSessionManager:
             }
 
             final_status = "completed" if job_status == "completed" else "failed"
+            console.print(f"[dim]Updating cloud status to '{final_status}' for {cmd.command_id}[/dim]")
             await self.update_command(
                 cmd.command_id,
                 status=final_status,
                 response=formatted_response
             )
+            console.print(f"[green]Cloud status updated to '{final_status}'[/green]")
+
+            # Verify the update was persisted by reading back the status
+            try:
+                verified_status = await self._get_command_status(cmd.command_id)
+                if verified_status != final_status:
+                    console.print(f"[yellow]WARNING: Cloud status mismatch! Expected '{final_status}', got '{verified_status}'[/yellow]")
+                else:
+                    console.print(f"[dim]Cloud status verified: {verified_status}[/dim]")
+            except Exception as verify_error:
+                console.print(f"[yellow]Could not verify cloud status: {verify_error}[/yellow]")
 
         except asyncio.CancelledError:
             # Task was cancelled externally
@@ -856,22 +1007,34 @@ class RemoteSessionManager:
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            try:
-                response = await client.get(endpoint, headers=headers)
+        page_size = 100
+        offset = 0
+        all_sessions: List[SessionInfo] = []
 
-                if response.status_code >= 400:
-                    raise RemoteSessionError(
-                        f"Failed to list sessions: {response.text}",
-                        status_code=response.status_code
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            while True:
+                try:
+                    response = await client.get(
+                        endpoint, headers=headers,
+                        params={"limit": page_size, "offset": offset}
                     )
 
-                data = response.json()
-                sessions_data = data.get("sessions", [])
+                    if response.status_code >= 400:
+                        raise RemoteSessionError(
+                            f"Failed to list sessions: {response.text}",
+                            status_code=response.status_code
+                        )
 
-                return [SessionInfo.from_dict(s) for s in sessions_data]
+                    data = response.json()
+                    page = [SessionInfo.from_dict(s) for s in data.get("sessions", [])]
+                    all_sessions.extend(page)
+                    if len(page) < page_size:
+                        break
+                    offset += page_size
 
-            except httpx.RequestError as e:
-                raise RemoteSessionError(f"Network error listing sessions: {str(e)}")
-            except ValueError as e:
-                raise RemoteSessionError(f"Invalid response format: {str(e)}")
+                except httpx.RequestError as e:
+                    raise RemoteSessionError(f"Network error listing sessions: {str(e)}")
+                except ValueError as e:
+                    raise RemoteSessionError(f"Invalid response format: {str(e)}")
+
+        return all_sessions

@@ -1,0 +1,21 @@
+% Write a function `get_extension` that returns the file extension for a given programming language.
+
+<include>context/python_preamble.prompt</include>
+
+% Inputs/Outputs
+    Input: language (str) - e.g. "Python", "Bash", "Makefile"
+    Output: str - file extension (e.g. ".py") or "" if not found/invalid
+
+% Data Source
+    CSV at $PDD_PATH/data/language_format.csv with columns: language, comment, extension
+
+% Dependencies
+<path_resolution_example><include>context/path_resolution_example.py</include></path_resolution_example>
+
+% Requirements
+    1. Use PathResolver from pdd/path_resolution.py to locate the CSV:
+       - resolver = get_default_resolver()
+       - csv_path = resolver.resolve_data_file("data/language_format.csv")
+       - If PDD_PATH is not set, raise ValueError
+    2. Case-insensitive language lookup
+    3. Return "" for unknown languages or invalid extensions

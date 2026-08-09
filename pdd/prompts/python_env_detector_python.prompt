@@ -1,0 +1,79 @@
+% You are an expert Python Software Engineer. Your goal is to write a Python module, "python_env_detector", that detects the host shell's Python environment (conda, venv, poetry, pipenv, etc.) and returns the appropriate Python executable for subprocess calls. This ensures that PDD operations use the same Python environment as the shell that launched PDD, rather than the uv tools environment where PDD is installed.
+
+<include>context/python_preamble.prompt</include>
+
+% The module should provide the following functions:
+
+    Function 1: detect_host_python_executable()
+        Inputs: None
+        Outputs: A string containing the path to the Python executable that should be used for subprocess calls.
+        
+        This function should:
+        Step 1. Check for virtual environment (venv, virtualenv, poetry, pipenv) using the VIRTUAL_ENV environment variable.
+        Step 2. If VIRTUAL_ENV is set, try to find Python executable in common locations within the virtual environment:
+            - Unix-like systems: {VIRTUAL_ENV}/bin/python or {VIRTUAL_ENV}/bin/python3
+            - Windows: {VIRTUAL_ENV}/Scripts/python.exe or {VIRTUAL_ENV}/Scripts/python3.exe
+        Step 3. Check for conda environment using the CONDA_PREFIX environment variable.
+        Step 4. If CONDA_PREFIX is set, try to find Python executable in common locations within the conda environment:
+            - Unix-like systems: {CONDA_PREFIX}/bin/python or {CONDA_PREFIX}/bin/python3
+            - Windows: {CONDA_PREFIX}/python.exe or {CONDA_PREFIX}/python3.exe
+        Step 5. Use PATH resolution as fallback using shutil.which('python') and shutil.which('python3').
+        Step 6. Only use PATH resolution result if it's different from sys.executable (to detect when we're in a different environment).
+        Step 7. Final fallback to sys.executable if no host environment is detected.
+
+    Function 2: get_environment_info()
+        Inputs: None
+        Outputs: A dictionary containing detailed environment information for debugging.
+        
+        This function should return a dictionary with the following keys:
+        - 'sys_executable': The current sys.executable path
+        - 'detected_executable': The result of detect_host_python_executable()
+        - 'virtual_env': The VIRTUAL_ENV environment variable
+        - 'conda_prefix': The CONDA_PREFIX environment variable
+        - 'conda_default_env': The CONDA_DEFAULT_ENV environment variable
+        - 'poetry_active': The POETRY_ACTIVE environment variable
+        - 'pipenv_active': The PIPENV_ACTIVE environment variable
+        - 'which_python': The result of shutil.which('python')
+        - 'which_python3': The result of shutil.which('python3')
+        - 'path': The first 3 entries of the PATH environment variable (split by os.pathsep)
+
+    Function 3: is_in_virtual_environment()
+        Inputs: None
+        Outputs: A boolean indicating whether we're currently running in any kind of virtual environment.
+        
+        This function should return True if any of the following environment variables are set:
+        - VIRTUAL_ENV
+        - CONDA_PREFIX
+        - POETRY_ACTIVE
+        - PIPENV_ACTIVE
+
+    Function 4: get_environment_type()
+        Inputs: None
+        Outputs: A string indicating the type of environment ('conda', 'venv', 'poetry', 'pipenv', 'system', 'unknown').
+        
+        This function should:
+        Step 1. Check environment variables in order of precedence:
+            - If CONDA_PREFIX is set, return 'conda'
+            - If POETRY_ACTIVE is set, return 'poetry'
+            - If PIPENV_ACTIVE is set, return 'pipenv'
+            - If VIRTUAL_ENV is set, return 'venv'
+        Step 2. If none of the above but is_in_virtual_environment() returns True, return 'unknown'
+        Step 3. Otherwise, return 'system'
+
+% The module should also include a main section for demonstration/testing that:
+    Step 1. Prints "Python Environment Detection" with a separator line
+    Step 2. Calls get_environment_info() and prints each key-value pair
+    Step 3. Prints the environment type using get_environment_type()
+    Step 4. Prints whether we're in a virtual environment using is_in_virtual_environment()
+    Step 5. Prints the detected Python executable using detect_host_python_executable()
+
+% Required imports:
+    - os (for environment variable access)
+    - sys (for sys.executable)
+    - shutil (for shutil.which())
+    - pathlib.Path (for path manipulation)
+    - typing.Optional (for type hints)
+
+% The module should handle both Unix-like systems and Windows path conventions for finding Python executables in virtual environments. Use proper error handling to ensure the functions don't crash if paths don't exist or environment variables are not set.
+
+% This module solves the problem where PDD installed via uv tools creates an isolated environment, but users want their pytest executions and Python subprocess calls to use their active conda/venv/poetry/pipenv environment instead of the uv tools environment.

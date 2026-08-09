@@ -7,6 +7,7 @@ from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .llm_invoke import llm_invoke
 from .unfinished_prompt import unfinished_prompt
+from .generation_completion import completion_check_tail
 from . import EXTRACTION_STRENGTH, DEFAULT_TIME
 
 console = Console()
@@ -81,13 +82,23 @@ def continue_generation(
             prompt=processed_prompts['trim_start'],
             input_json={"LLM_OUTPUT": llm_output},
             strength=EXTRACTION_STRENGTH,
-            temperature=0,
+            temperature=temperature,
             time=time,
             output_pydantic=TrimResultsStartOutput,
             verbose=verbose,
             language=language,
         )
         total_cost += trim_start_response['cost']
+        # Guard against malformed structured output of any non-``TrimResultsStartOutput``
+        # shape (``None``, a raw string, or a raw ``dict`` that survives the
+        # cloud validation-failure ``pass`` in ``llm_invoke``) before accessing
+        # ``.code_block`` (issue #1612).
+        if not isinstance(trim_start_response['result'], TrimResultsStartOutput):
+            raise ValueError(
+                "continue_generation received a malformed trim-start result "
+                f"(expected TrimResultsStartOutput, got "
+                f"{type(trim_start_response['result']).__name__})."
+            )
         code_block = trim_start_response['result'].code_block
 
         # Step 4: Continue generation loop
@@ -135,11 +146,11 @@ def continue_generation(
 
             # Build prospective new block and check completeness on the updated tail
             new_code_block = code_block + continue_result
-            last_chunk = new_code_block[-600:] if len(new_code_block) > 600 else new_code_block
+            last_chunk = completion_check_tail(new_code_block)
             reasoning, is_finished, check_cost, check_model = unfinished_prompt(
                 prompt_text=last_chunk,
                 strength=0.5,
-                temperature=0,
+                temperature=temperature,
                 time=time,
                 language=language,
                 verbose=verbose
@@ -170,13 +181,26 @@ def continue_generation(
                         "GENERATED_RESULTS": code_block[-200:]
                     },
                     strength=EXTRACTION_STRENGTH,
-                    temperature=0,
+                    temperature=temperature,
                     time=time,
                     output_pydantic=TrimResultsOutput,
                     verbose=verbose,
                     language=language,
                 )
                 total_cost += trim_response['cost']
+                # Guard against malformed structured output of any non-``TrimResultsOutput``
+                # shape (``None``, a raw string, or a raw ``dict`` that survives
+                # the cloud validation-failure ``pass`` in ``llm_invoke``) before
+                # accessing ``.trimmed_continued_generation``. The trim-start call
+                # is guarded above; the final trim needs the same check so a
+                # malformed continuation result cannot crash pdd sync with an
+                # AttributeError (issue #1612).
+                if not isinstance(trim_response['result'], TrimResultsOutput):
+                    raise ValueError(
+                        "continue_generation received a malformed final-trim result "
+                        f"(expected TrimResultsOutput, got "
+                        f"{type(trim_response['result']).__name__})."
+                    )
                 code_block += trim_response['result'].trimmed_continued_generation
                 break
 

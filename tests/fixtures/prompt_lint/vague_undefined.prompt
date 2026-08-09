@@ -1,0 +1,13 @@
+% Fixture: vague terms present, no vocabulary block defined.
+% This fixture produces 2+ warnings (one per undefined vague term).
+
+<contract_rules>
+1. The function must return a valid response within a reasonable time.
+2. Duplicate requests must be rejected gracefully.
+3. Only authorized users may call this endpoint.
+</contract_rules>
+
+<requirements>
+- Accept file uploads from active users only.
+- Mark complete when all required fields are present.
+</requirements>

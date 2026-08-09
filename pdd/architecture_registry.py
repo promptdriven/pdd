@@ -1,0 +1,437 @@
+"""
+Architecture registry for tracking multi-issue generation provenance.
+
+Maintains `.pdd/architecture_registry.json` to record which modules came from
+which GitHub issue, and provides merge logic for combining new architecture
+entries with existing ones.
+"""
+
+from __future__ import annotations
+
+import fnmatch
+import json
+import logging
+import os
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+# Top-level directories in the PDD repo that ship sample architecture (not app code).
+# Routine sync/discovery skips these so a root-level scan does not flatten example
+# modules into the project's own architecture. Opt back in with
+# ``skip_bundled_sample_arch=False`` (used by strict validator runs and by tooling
+# explicitly operating inside an example project).
+BUNDLED_SAMPLE_TOPLEVEL_DIRS: FrozenSet[str] = frozenset(
+    {"examples", "example_project", "example_workspace", "staging"}
+)
+
+
+def extract_modules(data: Any) -> List[Dict[str, Any]]:
+    """Tolerant accessor. Accepts bare-array or {modules: [...]}. Never raises."""
+    if isinstance(data, list):
+        return [e for e in data if isinstance(e, dict)]
+    if isinstance(data, dict) and isinstance(data.get("modules"), list):
+        return [e for e in data["modules"] if isinstance(e, dict)]
+    return []
+
+
+def extract_prd_files(data: Any) -> List[str]:
+    """Return prd_files from object format; [] otherwise."""
+    if isinstance(data, dict) and isinstance(data.get("prd_files"), list):
+        return [p for p in data["prd_files"] if isinstance(p, str)]
+    return []
+
+
+def load_registry(project_root: Path) -> dict:
+    """Load the architecture registry from .pdd/architecture_registry.json.
+
+    Returns an empty registry structure if the file doesn't exist.
+    """
+    registry_path = project_root / ".pdd" / "architecture_registry.json"
+    if not registry_path.exists():
+        return {"version": 1, "generations": []}
+    try:
+        with open(registry_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {"version": 1, "generations": []}
+        return data
+    except (json.JSONDecodeError, OSError):
+        return {"version": 1, "generations": []}
+
+
+def save_registry(project_root: Path, registry: dict) -> None:
+    """Save the architecture registry to .pdd/architecture_registry.json."""
+    pdd_dir = project_root / ".pdd"
+    pdd_dir.mkdir(parents=True, exist_ok=True)
+    registry_path = pdd_dir / "architecture_registry.json"
+    with open(registry_path, "w", encoding="utf-8") as f:
+        json.dump(registry, f, indent=2, ensure_ascii=False)
+
+
+def record_generation(
+    project_root: Path,
+    issue_number: int,
+    issue_url: str,
+    modules_added: List[str],
+    modules_updated: List[str],
+    target_dir: Optional[str] = None,
+) -> None:
+    """Record a generation event in the architecture registry."""
+    registry = load_registry(project_root)
+    registry["generations"].append({
+        "issue_number": issue_number,
+        "issue_url": issue_url,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "target_dir": target_dir or ".",
+        "modules_added": modules_added,
+        "modules_updated": modules_updated,
+    })
+    save_registry(project_root, registry)
+
+
+def merge_architecture(
+    existing_arch: List[dict],
+    new_arch: List[dict],
+    issue_number: int,
+    issue_url: str,
+) -> Tuple[List[dict], dict]:
+    """Merge new modules into existing architecture.
+
+    - Match by ``filename`` (exact match).
+    - New modules: append with origin metadata.
+    - Existing modules with same filename: update, track as "updated".
+    - Modules only in existing: preserve unchanged.
+    - Re-number priorities for valid topological order.
+
+    Returns:
+        (merged_arch, merge_report)
+        merge_report = {"added": [...], "updated": [...], "unchanged": [...]}
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    origin = {
+        "issue_number": issue_number,
+        "issue_url": issue_url,
+        "generated_at": now,
+    }
+
+    # Index existing by filename
+    existing_by_name: Dict[str, dict] = {}
+    for entry in existing_arch:
+        fn = entry.get("filename", "")
+        if fn:
+            existing_by_name[fn] = entry
+
+    # Index new by filename
+    new_by_name: Dict[str, dict] = {}
+    for entry in new_arch:
+        fn = entry.get("filename", "")
+        if fn:
+            new_by_name[fn] = entry
+
+    merged: List[dict] = []
+    added: List[str] = []
+    updated: List[str] = []
+    unchanged: List[str] = []
+
+    # Process existing modules
+    for fn, entry in existing_by_name.items():
+        if fn in new_by_name:
+            # Module updated by new generation
+            updated_entry = dict(new_by_name[fn])
+            updated_entry["origin"] = origin
+            merged.append(updated_entry)
+            updated.append(fn)
+        else:
+            # Module preserved from existing
+            merged.append(dict(entry))
+            unchanged.append(fn)
+
+    # Process new modules not in existing
+    for fn, entry in new_by_name.items():
+        if fn not in existing_by_name:
+            new_entry = dict(entry)
+            new_entry["origin"] = origin
+            merged.append(new_entry)
+            added.append(fn)
+
+    # Re-number priorities based on dependency order
+    _renumber_priorities(merged)
+
+    merge_report = {
+        "added": added,
+        "updated": updated,
+        "unchanged": unchanged,
+    }
+    return merged, merge_report
+
+
+def _renumber_priorities(arch: List[dict]) -> None:
+    """Re-number priorities to form a valid topological order.
+
+    Performs a topological sort based on dependencies, then assigns
+    sequential priority numbers starting from 1.
+    """
+    # Build filename -> entry index map
+    name_to_idx: Dict[str, int] = {}
+    for i, entry in enumerate(arch):
+        name_to_idx[entry.get("filename", "")] = i
+
+    # Build adjacency list (dependency -> dependents)
+    in_degree: Dict[int, int] = {i: 0 for i in range(len(arch))}
+    adj: Dict[int, List[int]] = {i: [] for i in range(len(arch))}
+
+    for i, entry in enumerate(arch):
+        deps = entry.get("dependencies", [])
+        for dep in deps:
+            if dep in name_to_idx:
+                dep_idx = name_to_idx[dep]
+                adj[dep_idx].append(i)
+                in_degree[i] += 1
+
+    # Kahn's algorithm
+    queue = [i for i in range(len(arch)) if in_degree[i] == 0]
+    # Sort queue by original priority to maintain stability
+    queue.sort(key=lambda i: arch[i].get("priority", 999))
+    order: List[int] = []
+
+    while queue:
+        # Process lowest-priority-first for stability
+        queue.sort(key=lambda i: arch[i].get("priority", 999))
+        node = queue.pop(0)
+        order.append(node)
+        for neighbor in adj[node]:
+            in_degree[neighbor] -= 1
+            if in_degree[neighbor] == 0:
+                queue.append(neighbor)
+
+    # Handle cycles: append any remaining nodes
+    if len(order) < len(arch):
+        remaining = [i for i in range(len(arch)) if i not in set(order)]
+        remaining.sort(key=lambda i: arch[i].get("priority", 999))
+        order.extend(remaining)
+
+    # Sort arch in-place by topological order and assign priorities
+    sorted_entries = [arch[i] for i in order]
+    for priority, entry in enumerate(sorted_entries, start=1):
+        entry["priority"] = priority
+
+    # Replace arch contents
+    arch[:] = sorted_entries
+
+
+def find_architecture_for_project(
+    project_root: Path,
+    *,
+    skip_bundled_sample_arch: bool = True,
+) -> List[Path]:
+    """Discover all architecture.json files (root + subdirs).
+
+    When ``skip_bundled_sample_arch`` is True (default), top-level trees that
+    ship bundled examples (``examples/``, ``example_project/``,
+    ``example_workspace/``, ``staging/``) are excluded so a root-level scan
+    does not flatten sample modules into the project's own architecture.
+
+    Pass ``skip_bundled_sample_arch=False`` to opt in to those trees (used by
+    ``pdd checkup --validate-arch-includes --strict`` and by tooling explicitly
+    operating inside a bundled example project — the skip is a no-op when
+    ``project_root`` is itself the example root because relative paths under it
+    do not start with one of the sample directory names).
+
+    Returns paths sorted with root first, then alphabetically by subdir.
+    """
+    results: List[Path] = []
+
+    # Check root
+    root_arch = project_root / "architecture.json"
+    if root_arch.exists():
+        results.append(root_arch)
+
+    # Recursively scan subdirectories (bounded depth)
+    max_depth = 4
+    excluded = {"node_modules", "__pycache__", ".git", "venv", ".venv", "env"}
+    skip_roots: FrozenSet[str] = (
+        BUNDLED_SAMPLE_TOPLEVEL_DIRS if skip_bundled_sample_arch else frozenset()
+    )
+    try:
+        for dirpath, dirnames, filenames in os.walk(project_root):
+            # Enforce depth limit
+            rel = Path(dirpath).relative_to(project_root)
+            depth = len(rel.parts)
+            if depth >= max_depth:
+                dirnames.clear()
+                continue
+            # Prune bundled-sample trees at the top level before descending so
+            # nothing under them is discovered (independent of depth).
+            if depth == 0 and skip_roots:
+                dirnames[:] = [d for d in dirnames if d not in skip_roots]
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if not d.startswith(".") and d not in excluded
+            )
+            if "architecture.json" in filenames:
+                arch_path = Path(dirpath) / "architecture.json"
+                if arch_path != root_arch:
+                    results.append(arch_path)
+    except (OSError, IOError) as exc:
+        logger.warning("Error scanning %s for architecture files: %s", project_root, exc)
+
+    return results
+
+
+_PRD_SPEC_GLOBS = ("prd*.md", "spec*.md", "*_prd.md", "*_spec.md")
+
+
+def _matches_prd_spec(name: str) -> bool:
+    """Return True if ``name`` matches any PRD/spec glob, case-insensitively."""
+    lowered = name.lower()
+    for pattern in _PRD_SPEC_GLOBS:
+        if fnmatch.fnmatchcase(lowered, pattern):
+            return True
+    return False
+
+
+def _has_prd_spec_marker(directory: Path) -> bool:
+    """Return True if ``directory`` contains any PRD/spec markdown file.
+
+    The match is case-insensitive so that ``PRD.md`` or ``Spec.md`` are
+    recognised on case-sensitive filesystems (e.g. Linux).
+    """
+    try:
+        for entry in directory.iterdir():
+            try:
+                if entry.is_file() and _matches_prd_spec(entry.name):
+                    return True
+            except OSError:
+                continue
+    except OSError:
+        return False
+    return False
+
+
+def find_project_root(start: Optional[Path] = None) -> Path:
+    """Resolve the PDD project root by walking up from ``start`` (default: cwd).
+
+    Tiered marker discovery. Tier A (PDD-explicit), Tier B
+    (PDD-conventional), and Tier C (git) are project boundaries. The first
+    boundary found while walking upward wins, so a self-contained PDD project
+    nested inside an unrelated outer git repository is correctly identified as
+    its own root, while an outer PDD marker cannot override a nearer inner git
+    repository.
+
+    * Tier A (PDD-explicit): a directory containing ``.pddrc`` or a ``.pdd/``
+      directory.
+    * Tier B (PDD-conventional): a directory containing ``sources/`` plus PRD
+      or spec markdown (``prd*.md``, ``spec*.md``, ``*_prd.md``, ``*_spec.md``).
+    * Tier C (git): a directory containing ``.git``.
+    """
+    if start is None:
+        start = Path.cwd()
+    current = start.resolve()
+
+    # ~/.pdd / ~/.pddrc and temp-root .pdd markers are ambient config/cache
+    # locations, not project markers. Without this guard, any repo under $HOME
+    # or pytest workspace under /tmp without a closer marker could resolve to an
+    # unrelated ancestor.
+    try:
+        home = Path.home().resolve()
+    except (RuntimeError, OSError):
+        home = None
+    temp_roots = set()
+    for candidate in (tempfile.gettempdir(), os.environ.get("TMPDIR"), "/tmp"):
+        if not candidate:
+            continue
+        try:
+            path = Path(candidate).resolve()
+        except (RuntimeError, OSError):
+            continue
+        temp_roots.add(path)
+
+    for _ in range(20):
+        is_home = home is not None and current == home
+        is_temp_root = current in temp_roots
+        if not is_home and not is_temp_root:
+            is_tier_a = (current / ".pddrc").exists() or (current / ".pdd").is_dir()
+            is_tier_b = (
+                (current / "sources").is_dir() and _has_prd_spec_marker(current)
+            )
+            if is_tier_a or is_tier_b:
+                return current
+        if (current / ".git").exists():
+            return current
+
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    return start.resolve()
+
+
+def find_git_toplevel(start: Optional[Path] = None) -> Optional[Path]:
+    """Walk up from ``start`` (default: cwd) for the enclosing ``.git`` directory.
+
+    Returns the path containing ``.git`` or ``None`` if no git root is found
+    within 20 ancestors.
+    """
+    if start is None:
+        start = Path.cwd()
+    current = start.resolve()
+    for _ in range(20):
+        if (current / ".git").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return None
+
+
+def load_combined_architecture_data(
+    project_root: Path,
+    *,
+    skip_bundled_sample_arch: bool = True,
+) -> Tuple[Optional[List[Dict[str, Any]]], Path]:
+    """Load and merge all architecture.json lists under ``project_root`` (root + subdirs).
+
+    ``skip_bundled_sample_arch`` is forwarded to
+    :func:`find_architecture_for_project` and defaults to True so routine
+    sync/discovery does not pull in sample modules.
+
+    Returns:
+        ``(combined_entries_or_none, primary_arch_path)`` where primary is the first
+        file found (typically root ``architecture.json``).
+    """
+    arch_files = find_architecture_for_project(
+        project_root, skip_bundled_sample_arch=skip_bundled_sample_arch
+    )
+    if not arch_files:
+        return None, project_root / "architecture.json"
+
+    primary_path = arch_files[0]
+    combined: List[Dict[str, Any]] = []
+
+    for arch_path in arch_files:
+        try:
+            with open(arch_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            combined.extend(extract_modules(data))
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    if not combined:
+        return None, primary_path
+
+    return combined, primary_path
+
+
+def get_modules_for_issue(arch_data: List[dict], issue_number: int) -> List[dict]:
+    """Filter architecture entries by origin.issue_number."""
+    return [
+        entry for entry in arch_data
+        if isinstance(entry.get("origin"), dict)
+        and entry["origin"].get("issue_number") == issue_number
+    ]

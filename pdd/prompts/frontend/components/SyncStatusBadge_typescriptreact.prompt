@@ -1,0 +1,26 @@
+1) Role and Responsibility:
+The `SyncStatusBadge` is a React component responsible for displaying the synchronization state between a prompt and its generated code. It serves as a visual indicator within the UI, fetching real-time status from the API and presenting it as a styled badge with icons, labels, and detailed tooltips.
+
+2) Requirements:
+- **Functionality**: Fetch and display the sync status for a specific file (defined by `basename` and `language`).
+- **States**: Handle five distinct sync states: `in_sync`, `prompt_changed`, `code_changed`, `conflict`, and `never_synced`.
+- **Visuals**: Each state must have a unique color scheme (text, background, border), a specific SVG icon, and a descriptive label.
+- **Responsiveness**: Labels should be hidden on small screens (`hidden sm:inline`), showing only the icon to save space.
+- **Interactivity**: Provide a detailed tooltip (using the `title` attribute) showing the status description, last sync timestamp (formatted), and the last sync command used.
+- **Loading & Error Handling**: Display a spinning loader during data fetching and a fallback "Unknown" state with an error icon if the API call fails or returns no data.
+- **Refresh Mechanism**: Support an optional `refreshTrigger` prop that forces a re-fetch when its value changes.
+
+3) Dependencies:
+<api_service>
+  <include>../api</include>
+</api_service>
+
+4) Instructions:
+- **Props**: Define an interface `SyncStatusBadgeProps` containing `basename` (string), `language` (string), `refreshTrigger` (optional number), and `className` (optional string).
+- **Configuration**: Use a constant mapping (`STATUS_CONFIG`) to store the Tailwind CSS classes, icons, and labels for each `SyncStatusType`.
+- **Data Fetching**: Use a `useEffect` hook triggered by changes to `basename`, `language`, or `refreshTrigger`. Call `api.getSyncStatus` and manage `isLoading` and `error` states.
+- **Styling**: Use Tailwind CSS for styling. Ensure the badge has a rounded border, small text (`text-[10px] sm:text-xs`), and smooth transitions.
+- **Date Formatting**: Convert `last_sync_timestamp` to a localized string for the tooltip.
+
+5) Deliverable:
+- A single TypeScript React component file (`SyncStatusBadge.tsx`) exporting the `SyncStatusBadge` component as the default export.

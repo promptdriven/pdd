@@ -27,8 +27,8 @@ make prompts                     # Generate prompt templates
 make USE_FORCE=yes sync_all      # Generate code and tests
 make test                        # Verify all tests pass
 
-# With Infisical (recommended)
-infisical run -- make USE_FORCE=yes sync_all
+# With environment variables exported in the shell
+OPENAI_API_KEY=your-key make USE_FORCE=yes sync_all
 ```
 
 ## Core Concepts
@@ -58,8 +58,8 @@ Requirements (PRD) → Architecture → Prompts → Code & Tests
 # Recommended: local + no prompts
 make USE_FORCE=yes sync_all
 
-# With Infisical (auto-injects API keys)
-infisical run -- make USE_FORCE=yes sync_all
+# With an explicit command prefix
+make COMMAND_PREFIX="env OPENAI_API_KEY=your-key" USE_FORCE=yes sync_all
 
 # Explicit flags
 make USE_LOCAL=yes USE_FORCE=yes sync_all
@@ -70,13 +70,15 @@ make USE_LOCAL=no sync_all
 
 ### API Key Setup
 
+See [API_KEY_SETUP.md](API_KEY_SETUP.md) for more options.
+
 ```bash
 # Option 1: Export manually
 export ANTHROPIC_API_KEY="your-key"
 make sync_all
 
-# Option 2: Use Infisical (recommended)
-infisical run -- make sync_all
+# Option 2: Provide keys inline for a single command
+OPENAI_API_KEY="your-key" make sync_all
 
 # Option 3: Create ~/.pdd/api-env
 echo "ANTHROPIC_API_KEY=your-key" >> ~/.pdd/api-env
@@ -200,12 +202,13 @@ make USE_FORCE=yes sync MODULE=core
 make test
 ```
 
-### Fully automated with Infisical
+### Fully automated with shell environment variables
 ```bash
-infisical run -- make clean
-infisical run -- make template
-infisical run -- make prompts
-infisical run -- make USE_FORCE=yes sync_all
+export OPENAI_API_KEY="your-key"
+make clean
+make template
+make prompts
+make USE_FORCE=yes sync_all
 make test
 ```
 
@@ -352,7 +355,7 @@ If you see GitHub auth prompts:
 1. Ensure `USE_LOCAL=yes` (default)
 2. Check API keys are available:
    ```bash
-   infisical run -- env | grep API_KEY
+   env | grep API_KEY
    ```
 3. Use force mode: `make USE_FORCE=yes sync_all`
 

@@ -1,0 +1,69 @@
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Rejects green fixes whose generated mocks contradict repository-backed schema and interface evidence.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "extract_query_fields", "signature": "(source: str, source_path: str = '&lt;memory&gt;') -> tuple[QueryFieldUse, ...]", "returns": "tuple[QueryFieldUse, ...]"},
+      {"name": "extract_mock_fields", "signature": "(source: str, source_path: str = '&lt;memory&gt;', resources: Optional[set[str]] = None) -> tuple[MockFieldUse, ...]", "returns": "tuple[MockFieldUse, ...]"},
+      {"name": "resolve_protected_schema_ref", "signature": "(project_root: Path) -> str", "returns": "str"},
+      {"name": "validate_mock_contracts", "signature": "(*, project_root: Path, production_sources: Mapping[str | Path, str], test_sources: Mapping[str | Path, str], baseline_production_sources: Optional[Mapping[str | Path, str]] = None, baseline_test_sources: Optional[Mapping[str | Path, str]] = None, protected_schema_ref: Optional[str] = None) -> MockContractReport", "returns": "MockContractReport"},
+      {"name": "validate_changed_files", "signature": "(*, project_root: Path, changed_files: Sequence[str], baseline_ref: Optional[str] = None) -> MockContractReport", "returns": "MockContractReport"},
+      {"name": "format_mock_contract_report", "signature": "(report: MockContractReport) -> str", "returns": "str"},
+      {"name": "enforce_mock_contracts", "signature": "(report: MockContractReport) -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Goal
+Write `pdd/mock_contract_validation.py`, a deterministic success gate for issue #1939. A generated test may execute and pass while fabricating the exact field that makes a production lookup wrong. Detect that contradiction from real repository evidence before a fix can report success.
+
+<vocabulary>
+- Query field: a literal field path used by supported Python data lookups (`query_collection`, `count_collection`, Firestore `where`, or `filter(FieldFilter(...))`).
+- Mock field: a literal dictionary key supplied through `Mock`/`MagicMock`/`AsyncMock`/`patch` return values, side effects, or fake/mock helper returns.
+- Authoritative schema: an exact resource block in a schema Markdown/JSON file that enumerates allowed fields.
+- Sibling evidence: the same exact resource/field pair used by an independent production reader or writer outside the changed file.
+- Diverged: an introduced query/mock pair names a field absent from an exact authoritative schema and lacks corroborating sibling evidence.
+- Inconclusive: a candidate exists but no exact authoritative schema is available; never guess from a suspicious-looking field name.
+</vocabulary>
+
+<contract_rules>
+R1 (MUST): The #1939 regression shape — code queries `user_waitlist.userId`, a passing test mocks `userId`, and the exact `user_waitlist` schema omits it — returns `status="diverged"` with code, mock, and schema locations.
+R2 (MUST): A field explicitly present in the exact schema, or corroborated by an independent production reader/writer, never produces a divergence.
+R3 (MUST): Missing evidence returns `inconclusive`, not a heuristic failure. Field spelling alone is never evidence.
+R4 (MUST): Baseline sources make validation diff-aware. Check newly introduced resource/field queries and newly introduced mock fields tied to an existing query; do not relitigate unchanged legacy pairs.
+R5 (MUST): Schema parsing preserves field paths: a nested object field does not authorize querying that nested name as a top-level field, while the correctly qualified dotted path remains valid.
+R6 (MUST): `MockContractDivergenceError` retains the structured report and formats an explicit `MOCK_CONTRACT_DIVERGENCE` diagnostic.
+R7 (MUST): With a baseline ref, schema authority comes only from that immutable Git base. A schema/query/mock added together cannot self-authorize; a schema-only addition becomes trusted after it is merged to the protected base. Mutable or candidate-committed sibling evidence must never override an exact protected schema. Mock evidence records resource, field, source line, and payload source.
+R8 (MUST): Schema and repository discovery enforce aggregate entry/file/byte/time budgets, reject symlinks, discard partial evidence on exhaustion, and return an explicit fail-closed divergence or inconclusive warning. Protected Git tree names are streamed under entry/output/time limits; never materialize an unbounded `git ls-tree` result before enforcing the limits.
+R9 (MUST): Mock deltas are structured `(resource, field)` identities. Associate each payload with literal resource arguments from calls to that exact mock in the same function/mock scope. Never infer one resource from unrelated file-wide literals: two mocks for two resources in one test retain distinct identities. An existing field on resource A cannot suppress a newly introduced mock of the same field on resource B, including test-only changed-file discovery.
+</contract_rules>
+
+% Requirements
+
+1. Parse Python with `ast`; syntax errors yield no extracted uses rather than crashing the fix workflow. Support literal tuple/list filters and `FieldFilter` calls. Do not infer dynamic resource or field names.
+
+2. Extract mock payload keys only from actual mock/fake structures: return values, side effects, mock constructors, and fake/mock helper returns. Preserve the exact resource identity when a call to that same mock in the same enclosing function/mock scope supplies a literal first argument or `collection_name`/`collection`/`resource` keyword. The optional `resources` set filters candidate resource literals but does not authorize file-wide inference. Do not classify every dictionary in a test as mock evidence.
+
+3. Discover bounded schema files under the project root (`context`, `docs`, `schemas`, and root schema files), skipping generated/vendor/research trees and oversized files. Stream every `scandir` entry and enforce the aggregate entry limit before materializing or sorting a directory; bound file, byte, output-byte, and elapsed-time work; never follow symlinks, and discard all partial authority when any budget is exceeded. Enumerate an immutable protected Git tree through a bounded streaming subprocess and terminate it immediately on exhaustion. For Markdown, require an exact `resource/` block and derive top-level plus indentation-qualified dotted field paths below its document-id row. For JSON, require an exact resource identity/key and explicit `properties`/`fields`, including nested object/array properties as dotted paths.
+
+4. Scan independent Python production files for exact resource query fields and literal writer payload fields. Exclude tests, prospective output paths, and every original/baseline production path (resolved to collapse relative, absolute, and symlink aliases), so an iterative fix candidate already written in place cannot certify itself.
+
+5. `validate_mock_contracts` returns immutable structured evidence. Candidate selection is diff-aware using optional baseline maps. Status is `not_applicable`, `clean`, `inconclusive`, or `diverged`.
+
+6. `resolve_protected_schema_ref` pins an immutable Git commit from the configured protected-base environment or the merge-base with a protected remote/local default branch; it never defaults to candidate `HEAD`, and raises when no protected ref can be established. `validate_changed_files` loads changed Python code/tests from disk and optional baselines with `git show <ref>:<path>`, then delegates to `validate_mock_contracts`. For a test-only edit that adds a `(resource, field)` mock identity, locate an unchanged exact production query tied to that same resource and validate that pair too. Git/read failures degrade to conservative current-source validation, but standalone fix schema authority must never fall back to mutable candidate files.
+
+7. Diagnostics name the exact `resource.field`, production line, schema source, and divergent mock source. `enforce_mock_contracts` raises only for `diverged`; inconclusive evidence remains a visible workflow warning.
+
+<mock_contract_validation_example>
+    <include>context/mock_contract_validation_example.py</include>
+</mock_contract_validation_example>
+
+% Deliverables
+- Code: `pdd/mock_contract_validation.py`
+- Tests: `tests/test_mock_contract_validation.py`
+- Example: `context/mock_contract_validation_example.py`

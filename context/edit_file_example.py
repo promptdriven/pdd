@@ -38,7 +38,7 @@ elif not os.path.isdir(PDD_PATH):
 
 # Define the names for test files
 EXAMPLE_FILE_NAME = "example_file_to_edit.txt"
-# PREPROCESS_FILE_NAME = "/Users/gregtanaka/pdd/staging/regression/foo.py" # Removed
+# PREPROCESS_FILE_NAME = "/path/to/pdd/staging/regression/foo.py" # Removed
 # Note: The edit_file module now finds the config within the package by default.
 # This path is kept here for context but might not be directly used by edit_file.
 MCP_CONFIG_FILE_PATH = os.path.join(PDD_PATH, "pdd", "mcp_config.json") # Updated path

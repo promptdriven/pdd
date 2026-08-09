@@ -1,0 +1,33 @@
+% You are an expert Python engineer. Write `pdd/commands/firecrawl.py`.
+
+% Role & Scope
+Implement the `pdd firecrawl-cache` debugging command group for automatic Firecrawl cache inspection and cleanup.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+1. Define `@click.group("firecrawl-cache")` as `firecrawl_cache_group()` and export `firecrawl_cache = firecrawl_cache_group`.
+2. Use `get_firecrawl_cache_stats`, `clear_firecrawl_cache`, and `get_firecrawl_cache` from `..firecrawl_cache`.
+3. Use a module-level Rich `Console()` and Rich `Table`, `Panel`, and `Text` for output.
+4. `stats` command:
+   - Call `get_firecrawl_cache_stats()`.
+   - Handle `{"error": ...}` and disabled cache early with user-facing messages.
+   - Print a table with safe defaults for missing fields: status, entry counts, size, access metrics, efficiency, TTL, limits, auto-cleanup, location.
+   - Print cache health from efficiency thresholds (`>75` Excellent, `>50` Good, else `Consider cleanup`).
+   - Catch exceptions and print an error.
+5. `clear` command:
+   - Read stats first; no-op when disabled or empty.
+   - Confirm clearing with singular/plural grammar.
+   - On confirm call `clear_firecrawl_cache()` and print cleared count with singular/plural grammar.
+   - On declined confirmation print `Cancelled.`.
+   - Catch exceptions and print an error.
+6. `info` command:
+   - Print a configuration table covering `FIRECRAWL_CACHE_ENABLE`, `FIRECRAWL_CACHE_TTL_HOURS`, `FIRECRAWL_CACHE_MAX_SIZE_MB`, `FIRECRAWL_CACHE_MAX_ENTRIES`, `FIRECRAWL_CACHE_AUTO_CLEANUP`, `FIRECRAWL_API_KEY`.
+   - Read values from `os.environ` with `Not set` fallback and mask API key output.
+   - Print cache directory/file/existence details in a panel via `get_firecrawl_cache().cache_path`.
+   - If cache metadata lookup fails, print a warning and keep the command successful.
+7. `check` command:
+   - Accept required `url` argument.
+   - Use `get_firecrawl_cache()` and return early when cache is disabled.
+   - Print cached/not-cached status; when cached, show content length and a 200-char preview (`...` when truncated).
+   - Catch exceptions and print `Error checking cache`.

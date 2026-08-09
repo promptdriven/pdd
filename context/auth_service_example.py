@@ -10,8 +10,9 @@ from typing import Optional, Tuple, Dict, Any
 
 # Constants for token storage locations
 JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"
-KEYRING_SERVICE_NAME = "firebase-auth-pdd"
+KEYRING_SERVICE_NAME = "firebase-auth-PDD CLI"
 KEYRING_USER_NAME = "refresh_token"
+LEGACY_KEYRING_SERVICE_NAMES = ("firebase-auth-pdd",)
 
 
 def get_jwt_cache_info() -> Tuple[bool, Optional[float]]:
@@ -28,6 +29,11 @@ def get_jwt_cache_info() -> Tuple[bool, Optional[float]]:
 def has_refresh_token() -> bool:
     """
     Check if there's a stored refresh token in keyring.
+
+    Keyring reads are wrapped with _keyring_op_with_timeout so `pdd auth status`
+    does not hang when a desktop keychain is locked in CI or SSH.
+    The current keyring service is checked first, followed by legacy services
+    written by older server auth flows.
 
     Returns:
         True if a refresh token exists, False otherwise.
@@ -49,6 +55,11 @@ def clear_refresh_token() -> Tuple[bool, Optional[str]]:
     """
     Clear the refresh token from keyring.
 
+    Keyring deletion is wrapped with _keyring_op_with_timeout so logout returns
+    a clear timeout error instead of blocking indefinitely.
+    Cleanup deletes both the current keyring service and legacy services written
+    by older server auth flows.
+
     Returns:
         Tuple of (success, error_message). If successful, error_message is None.
     """
@@ -64,6 +75,7 @@ def get_auth_status() -> Dict[str, Any]:
         - authenticated: bool - True if user has valid auth
         - cached: bool - True if using cached JWT (vs refresh token)
         - expires_at: Optional[float] - JWT expiration timestamp if cached
+        - refresh_token_error: Optional[str] - present when keyring status is inconclusive
     """
     ...
 
@@ -86,6 +98,10 @@ def get_refresh_token() -> Optional[str]:
     Get the stored refresh token from keyring.
 
     Tries standard keyring first, falls back to keyrings.alt.file.PlaintextKeyring.
+    Keyring reads are bounded by _keyring_op_with_timeout so server-side auth
+    routes do not hang in headless environments.
+    The current keyring service is checked first, followed by legacy services
+    written by older server auth flows.
 
     Returns:
         The refresh token string if found, None otherwise.

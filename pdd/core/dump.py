@@ -12,9 +12,61 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import click
 import requests
+from pdd.path_resolution import get_default_resolver
 
-from .. import __version__
+try:
+    from .. import __version__
+except ImportError:
+    # Fallback for environments where `pdd` resolves as a namespace package.
+    __version__ = "unknown"
 from .errors import console, get_core_dump_errors
+
+_PATH_RESOLUTION_ERRORS = (OSError, RuntimeError, ValueError)
+
+
+def _extract_sync_steps_from_file_contents(file_contents: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Build per-operation sync step records from any attached *_sync.log files.
+
+    The sync log is JSONL. We only convert "operation" entries (not "event" entries)
+    into a simplified list suitable for core dump inspection.
+    """
+    steps: List[Dict[str, Any]] = []
+    for path_key, content in (file_contents or {}).items():
+        if not isinstance(path_key, str) or not path_key.endswith("_sync.log"):
+            continue
+        if not isinstance(content, str) or content.startswith("<"):
+            continue
+        for line in content.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            # Skip events; keep operation rows
+            if entry.get("type") == "event":
+                continue
+            op = entry.get("operation")
+            if not op:
+                continue
+            details = entry.get("details") or {}
+            steps.append(
+                {
+                    "operation": op,
+                    "success": bool(entry.get("success")),
+                    "cost": entry.get("actual_cost"),
+                    "model": entry.get("model") or "unknown",
+                    "duration": entry.get("duration"),
+                    "reason": entry.get("reason"),
+                    "error": entry.get("error"),
+                    "failure_summary": entry.get("error") or (details.get("failure_reason") if isinstance(details, dict) else None),
+                    "test_output_excerpt": details.get("test_output_excerpt") if isinstance(details, dict) else None,
+                    "source_log": path_key,
+                }
+            )
+    return steps
 
 
 def garbage_collect_core_dumps(keep: int = 10) -> int:
@@ -53,15 +105,86 @@ def garbage_collect_core_dumps(keep: int = 10) -> int:
     return deleted
 
 
+def _detect_project_root_from_cwd_for_model_csv(max_levels: int = 5) -> Path:
+    """Search upward from CWD using the model CSV project-root markers."""
+    try:
+        current_dir = Path.cwd().resolve()
+        for _ in range(max_levels):
+            if (
+                (current_dir / ".git").exists()
+                or (current_dir / "pyproject.toml").exists()
+                or (current_dir / "data").is_dir()
+                or (current_dir / ".env").exists()
+            ):
+                return current_dir
+            parent = current_dir.parent
+            if parent == current_dir:
+                break
+            current_dir = parent
+    except _PATH_RESOLUTION_ERRORS:
+        pass
+    return Path.cwd().resolve()
+
+
+def _resolve_active_llm_model_csv() -> Optional[Path]:
+    """Return the active llm_model.csv path using llm_invoke's precedence."""
+    try:
+        user_model_csv_path = Path.home() / ".pdd" / "llm_model.csv"
+        if user_model_csv_path.is_file():
+            return user_model_csv_path.resolve()
+    except _PATH_RESOLUTION_ERRORS:
+        pass
+
+    try:
+        resolver = get_default_resolver()
+        project_root = resolver.resolve_project_root()
+        project_root_from_env = (
+            resolver.pdd_path_env is not None
+            and project_root == resolver.pdd_path_env
+        )
+        project_csv_from_env = project_root / ".pdd" / "llm_model.csv"
+        if project_root_from_env and project_csv_from_env.is_file():
+            return project_csv_from_env.resolve()
+    except _PATH_RESOLUTION_ERRORS:
+        pass
+
+    try:
+        project_root_from_cwd = _detect_project_root_from_cwd_for_model_csv()
+        project_csv_from_cwd = project_root_from_cwd / ".pdd" / "llm_model.csv"
+        if project_csv_from_cwd.is_file():
+            return project_csv_from_cwd.resolve()
+    except _PATH_RESOLUTION_ERRORS:
+        pass
+
+    try:
+        package_csv = Path(__file__).resolve().parents[1] / "data" / "llm_model.csv"
+        if package_csv.is_file():
+            return package_csv.resolve()
+    except (IndexError, OSError, RuntimeError, ValueError):
+        pass
+
+    return None
+
+
 def _write_core_dump(
     ctx: click.Context,
     normalized_results: List[Any],
     invoked_subcommands: List[str],
     total_cost: float,
     terminal_output: Optional[str] = None,
+    exit_reason: Optional[str] = None,
 ) -> None:
     """Write a JSON core dump for this run if --core-dump is enabled."""
     if not ctx.obj.get("core_dump"):
+        return
+
+    # Skip the auto-snapshot when the run's only error(s) are deliberate,
+    # user-facing click errors (usage mistakes). Framing a usage mistake as a
+    # reportable "bug" snapshot — and littering .pdd/core_dumps for it — is
+    # noise; genuinely unexpected faults (no ``deliberate`` tag) still snapshot
+    # so real bugs stay debuggable (pdd#1889 C-F8).
+    recorded_errors = get_core_dump_errors()
+    if recorded_errors and all(e.get("deliberate") for e in recorded_errors):
         return
 
     try:
@@ -72,13 +195,13 @@ def _write_core_dump(
         dump_path = core_dump_dir / f"pdd-core-{timestamp}.json"
 
         steps: List[Dict[str, Any]] = []
-        for i, result_tuple in enumerate(normalized_results):
-            command_name = (
-                invoked_subcommands[i] if i < len(invoked_subcommands) else f"Unknown Command {i+1}"
-            )
+        step_count = max(len(invoked_subcommands), len(normalized_results))
+        for i in range(step_count):
+            command_name = invoked_subcommands[i] if i < len(invoked_subcommands) else f"Unknown Command {i+1}"
+            result_tuple = normalized_results[i] if i < len(normalized_results) else None
 
-            cost = None
-            model_name = None
+            cost: Optional[float] = None
+            model_name: Optional[str] = None
             if isinstance(result_tuple, tuple) and len(result_tuple) == 3:
                 _result_data, cost, model_name = result_tuple
 
@@ -87,7 +210,7 @@ def _write_core_dump(
                     "step": i + 1,
                     "command": command_name,
                     "cost": cost,
-                    "model": model_name,
+                    "model": (model_name or "unknown"),
                 }
             )
 
@@ -123,6 +246,12 @@ def _write_core_dump(
                         meta_file.stem.endswith(f"_{c}") for c in ["generate", "test", "run", "fix", "update"]
                     ):
                         core_dump_files.add(str(meta_file.resolve()))
+                # Include operation logs and run reports (critical for sync debugging)
+                # These are line-delimited JSON logs and are safe to attach (size-gated below).
+                for log_file in meta_dir.glob("*_sync.log"):
+                    core_dump_files.add(str(log_file.resolve()))
+                for run_file in meta_dir.glob("*_run.json"):
+                    core_dump_files.add(str(run_file.resolve()))
 
         # Auto-include PDD config files if they exist
         config_files = [
@@ -133,6 +262,10 @@ def _write_core_dump(
         for config_file in config_files:
             if config_file.exists() and config_file.is_file():
                 core_dump_files.add(str(config_file.resolve()))
+
+        llm_model_csv = _resolve_active_llm_model_csv()
+        if llm_model_csv is not None:
+            core_dump_files.add(str(llm_model_csv))
 
         for file_path in core_dump_files:
             try:
@@ -169,7 +302,7 @@ def _write_core_dump(
                     console.print(f"[warning]Debug snapshot: Error reading {file_path}: {e}[/warning]")
 
         payload: Dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "pdd_version": __version__,
             "timestamp_utc": timestamp,
             "argv": sys.argv[1:],  # without the 'pdd' binary name
@@ -200,6 +333,11 @@ def _write_core_dump(
             "file_contents": file_contents,
             "terminal_output": terminal_output,
         }
+        sync_steps = _extract_sync_steps_from_file_contents(file_contents)
+        if sync_steps:
+            payload["sync_steps"] = sync_steps
+        if exit_reason is not None:
+            payload["exit_reason"] = exit_reason
 
         dump_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 

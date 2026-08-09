@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from rich.console import Console
 from rich.markdown import Markdown
@@ -181,3 +183,95 @@ def test_whitespace_only_modified_prompt_response(valid_inputs, mock_load_prompt
 
     with pytest.raises(RuntimeError, match="empty modified prompt"):
         update_prompt(**valid_inputs)
+
+
+def _read_update_prompt_template() -> str:
+    repo_root = Path(__file__).resolve().parents[1]
+    return (repo_root / "pdd" / "prompts" / "update_prompt_LLM.prompt").read_text()
+
+
+def test_update_prompt_template_does_not_impose_rewrite_schema():
+    """Guard against the legacy meta-prompt that trained pdd update to flatten prompts."""
+    template = _read_update_prompt_template()
+
+    assert "The prompt you generate must follow this structure" not in template
+    assert "<orders_service>" not in template
+    assert "<pdd.orders_service>" in template
+    assert "<<<MODIFIED_PROMPT>>>" in template
+    assert "<<<END_MODIFIED_PROMPT>>>" in template
+    assert "Treat the existing prompt as authoritative" in template
+    assert "Only fall back to creating a new prompt structure" in template
+
+
+def test_update_prompt_template_preserves_existing_pdd_markup():
+    """The meta-prompt must explicitly preserve the structural tokens that auto-heal broke."""
+    template = _read_update_prompt_template()
+
+    assert "<pdd_prompt_preservation_rules>" in template
+    assert "<include> and <include-many>" in template
+    assert "<pdd.*> namespaced tags exactly" in template
+    assert "`%` section markers" in template
+    assert "fenced code blocks byte-for-byte" in template
+    assert "function signatures, class signatures, dict literals" in template
+    assert "hard-coded strings" in template
+
+
+def test_update_prompt_extracts_delimited_multiline_prompt_without_second_llm(
+    valid_inputs,
+    mock_load_prompt_template,
+    mock_preprocess,
+    monkeypatch,
+):
+    """Use first-pass delimiters directly so multiline prompts bypass lossy extraction."""
+    prompt_fixture = (Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "autoheal_1187_pre.prompt").read_text()
+    delimited_output = (
+        "Notes outside the prompt.\n"
+        "<<<MODIFIED_PROMPT>>>\n"
+        f"{prompt_fixture}\n"
+        "<<<END_MODIFIED_PROMPT>>>\n"
+        "Trailing commentary."
+    )
+
+    def mock_llm(*args, **kwargs):
+        if "output_pydantic" in kwargs:
+            raise AssertionError("Second extraction LLM should be skipped for delimited output")
+        return {
+            "result": delimited_output,
+            "cost": 0.001,
+            "model_name": "gpt-3.5-turbo",
+        }
+
+    monkeypatch.setattr("pdd.update_prompt.llm_invoke", mock_llm)
+
+    modified_prompt, total_cost, model_name = update_prompt(**valid_inputs)
+
+    assert modified_prompt == prompt_fixture
+    assert total_cost == 0.001
+    assert model_name == "gpt-3.5-turbo"
+
+
+def test_update_prompt_extracts_legacy_modified_prompt_wrapper_without_second_llm(
+    valid_inputs,
+    mock_load_prompt_template,
+    mock_preprocess,
+    monkeypatch,
+):
+    """Legacy first-pass responses wrapped in <modified_prompt> should preserve newlines."""
+    wrapped_prompt = "<include>context/python_preamble.prompt</include>\n\n% Goal\nKeep structure intact.\n"
+
+    def mock_llm(*args, **kwargs):
+        if "output_pydantic" in kwargs:
+            raise AssertionError("Second extraction LLM should be skipped for wrapped output")
+        return {
+            "result": f"Preface\n<modified_prompt>{wrapped_prompt}</modified_prompt>\nSuffix",
+            "cost": 0.001,
+            "model_name": "gpt-3.5-turbo",
+        }
+
+    monkeypatch.setattr("pdd.update_prompt.llm_invoke", mock_llm)
+
+    modified_prompt, total_cost, model_name = update_prompt(**valid_inputs)
+
+    assert modified_prompt == wrapped_prompt
+    assert total_cost == 0.001
+    assert model_name == "gpt-3.5-turbo"

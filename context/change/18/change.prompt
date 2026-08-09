@@ -1,0 +1,10 @@
+% llm_invoke and load_prompt_template has replaced the current method. Change the prompt accordingly.
+
+% Here is an example of the change:
+    <before_example>
+        <include>context/change/17/unfinished_prompt_python.prompt</include>
+    </before_example>
+
+    <after_example>
+        <include>context/change/17/updated_unfinished_prompt_python.prompt</include>
+    </after_example>

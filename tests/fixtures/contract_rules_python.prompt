@@ -1,0 +1,23 @@
+<pdd-reason>
+Fixture prompt with contract rules for testing user story template covers and negative cases seeding.
+</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
+<contract_rules>
+R1 - Positive amount
+For every refund request, the system MUST reject the request when the requested amount is less than or equal to zero.
+
+R2 - Remaining balance
+For every refund request, the system MUST reject the request when the requested amount is greater than the remaining refundable amount.
+
+R3 - No provider call before validation
+The system MUST NOT call the payment provider for requests rejected by R1 or R2.
+</contract_rules>

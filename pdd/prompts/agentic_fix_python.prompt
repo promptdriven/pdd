@@ -1,78 +1,60 @@
-% You are an expert Python engineer. Your goal is to write the pdd/agentic_fix.py module.
+You are an expert Python developer responsible for implementing the `agentic_fix.py` module. This module serves as the high-level orchestration layer for "agentic fallback" within a Prompt-Driven Development (PDD) toolchain. Its primary responsibility is to coordinate between LLM agents, local file systems, and verification commands to automatically repair code that failed standard automated fix attempts.
 
-% Role & Scope
-This module provides a robust, multi-agent, two-pass fallback mechanism for fixing code. It orchestrates local CLI-based agents to repair code based on a detailed problem description, verification commands, and test results.
+### Requirements
+1. **Agent Orchestration**: Utilize `run_agentic_task` to invoke LLM agents in explore mode. Support multiple providers (Anthropic, Google, OpenAI) by detecting environment variables and available CLI tools. The agent directly modifies files on disk.
+2. **Change Detection via Mtimes**:
+    - Snapshot file modification times before and after agent execution.
+    - Compare snapshots to detect all changed, new, and deleted files.
+    - Exclude `.git` and `__pycache__` directories from snapshots.
+3. **Verification Logic**:
+    - **Preflight**: If the error log is empty or "useless" (e.g., contains only empty XML tags or lacks keywords like "Error", "Exception", "Traceback", or "failed"), run tests locally first to capture actual failure output.
+    - **Standard Gate** (`_verify_and_log`): Uses `verify_cmd` (with `{test}` and `{cwd}` placeholders) or falls back to `get_run_command_for_file`. If no command is found, default to the Python interpreter.
+    - **Verification Enablement**: Controlled by `PDD_AGENTIC_VERIFY_FORCE` (always on), `verify_cmd` presence, and `PDD_AGENTIC_VERIFY` env var (`"0"` disables, `"auto"` disables, else enabled). Default is enabled.
+    - For non-Python languages, trust the agent's own verification result from the explore task.
+4. **Logging & UI**: Use `rich.console` for formatted output. 
+    - Support "quiet", "normal", and "verbose" log levels via `PDD_AGENTIC_LOGLEVEL`. 
+    - Default to "quiet" if `PYTEST_CURRENT_TEST` is set.
+    - In verbose mode, show unified diffs of changed files and truncated previews of command outputs.
+5. **Resilience**: Handle timeouts (`PDD_AGENTIC_VERIFY_TIMEOUT`) for agent calls and verification steps. Ensure instruction files are cleaned up after execution.
+6. **Test Protection**: Accept a `protect_tests` flag and pass it to the agent prompt template to prevent the agent from modifying test files.
+7. **LLM CSV Discovery**: Implement `find_llm_csv_path` to look for `.pdd/llm_model.csv` in `$HOME` first, then in the project current working directory.
 
-% Requirements
-- The file must start with `from __future__ import annotations`.
-- All functions must be fully type-hinted.
-- Use `rich.console.Console` for all printing.
-- Preserve all public names and function signatures exactly for test compatibility.
-- The module should be configurable via environment variables for logging, timeouts, and feature flags.
-
-% Core Logic
-
-The entry point is `run_agentic_fix`, which takes paths to a prompt, a code file, a unit test file, and an error log.
-
-1.  **Agent Discovery:**
-    - The function first discovers available agent providers (`anthropic`, `google`, `openai`) by checking for corresponding API keys in the environment, respecting the `AGENT_PROVIDER_PREFERENCE` order.
-    - It uses `find_llm_csv_path` and `_load_model_data` to look up API key names.
-    - If no agents are configured, it returns an error.
-
-2.  **Pre-flight Checks:**
-    - It reads the content of the provided files.
-    - If the error log is empty, it runs a verification command (e.g., `pytest`) to populate it. The verification command is determined by `default_verify_cmd_for` or the `PDD_AGENTIC_VERIFY_CMD` environment variable.
-
-3.  **Two-Pass Agentic Fix Loop:**
-    - The module iterates through the available agents, performing a two-pass fix for each.
-    - **Pass 1: Harvest-only:**
-        - A lightweight prompt (`agentic_fix_harvest_only_LLM`) is used to ask the agent for a fix.
-        - The agent's output is parsed to extract corrected code, which is then applied.
-        - The fix is verified using the verification command. If successful, the process terminates.
-    - **Pass 2: Primary Fix:**
-        - If the harvest-only pass fails, a more detailed prompt (`agentic_fix_primary_LLM`) is used.
-        - The agent's output is again parsed and applied.
-        - The fix is verified. If successful, the process terminates.
-
-4.  **File Extraction and Application:**
-    - The agent's output is expected to be in a specific format, with code blocks enclosed in `<<<BEGIN_FILE:path>>>` and `<<<END_FILE:path>>>` markers.
-    - The `_extract_files_from_output` function parses this format.
-    - Fallbacks are in place to handle single-file fixes and, for Google's agent, fenced code blocks.
-    - The `_apply_file_map` function writes the extracted files to disk, ensuring they are within the project root.
-
-5.  **Verification and Testing:**
-    - After applying a fix, the `_post_apply_verify_or_testcmd` function is called.
-    - It first runs the standard verification command.
-    - If verification fails, it looks for a test command in the agent's output (enclosed in `<<<BEGIN_TESTCMD>>>` and `<<<END_TESTCMD>>>`) and runs it.
-    - A successful verification or test command run marks the fix as successful.
-
-% Helper Functions
-
-The module uses several helper functions to encapsulate specific logic:
-
-- **Logging:** `_print`, `_info`, `_always`, `_verbose`, `_print_head`, `_print_diff` for conditional and formatted output using `rich`.
-- **File Markers:** `_begin_marker`, `_end_marker` to generate the file block markers.
-- **Agent Command Generation:** `get_agent_command` to get the command for a specific agent provider.
-- **Output Parsing:** `_extract_files_from_output`, `_extract_testcmd`, `_extract_corrected_from_output`, `_extract_python_code_block` to parse the agent's output.
-- **Environment Sanitization:** `_sanitized_env_common`, `_sanitized_env_for_openai` to create a clean environment for running agent CLIs.
-- **CLI Execution:** `_run_cli`, `_run_openai_variants`, `_run_anthropic_variants`, `_run_google_variants`, `_run_testcmd` to execute external commands with timeouts and retries.
-- **Path Manipulation:** `_safe_is_subpath`, `_strip_common_suffixes`, `_find_existing_by_basename`, `_normalize_target_path` for safe and robust file path handling.
-
-% Dependencies
-<pdd>This module relies on several internal helper modules.</pdd>
-<module_dependencies>
-  <agentic_langtest_example>
-    <include>context/agentic_langtest_example.py</include>
-  </agentic_langtest_example>
-  <get_language_example>
+### Dependencies
+<get_language>
     <include>context/get_language_example.py</include>
-  </get_language_example>
-  <load_prompt_template_example>
+</get_language>
+<get_run_command>
+    <include>context/get_run_command_example.py</include>
+</get_run_command>
+<llm_invoke>
+    <include>context/llm_invoke_example.py</include>
+</llm_invoke>
+<load_prompt_template>
     <include>context/load_prompt_template_example.py</include>
-  </load_prompt_template_example>
-</module_dependencies>
+</load_prompt_template>
+<agentic_common>
+    <include>context/agentic_common_example.py</include>
+</agentic_common>
+<agentic_langtest>
+    <include>context/agentic_langtest_example.py</include>
+</agentic_langtest>
 
-% Deliverables
-- Code: `pdd/agentic_fix.py` containing the implementation.
-- **Test Compatibility Aliases**: At the very end of the file, after all other code, you **must** include the following line to create a public alias for testing:
-`try_harvest_then_verify = _try_harvest_then_verify`
+### Instructions
+1. **Entry Point**: Implement `run_agentic_fix(prompt_file, code_file, unit_test_file, error_log_file, verify_cmd, cwd, *, verbose, quiet, protect_tests)` returning `(success, message, est_cost, used_model, changed_files)`.
+2. **Path Resolution**: Resolve code and test paths relative to the provided `cwd` parameter. Use `Path.resolve()` consistently to ensure the agent receives absolute paths.
+3. **Prompt Construction**: Load `agentic_fix_primary_LLM` (Python) or `agentic_fix_nonpython_LLM` (other languages). 
+    - The Python template requires: `code_abs`, `test_abs`, `prompt_content`, `error_content`, `verify_cmd`, and `protect_tests`.
+    - The non-Python template requires: `code_abs`, `test_abs`, `prompt_content`, `error_content`, and `protect_tests`.
+4. **Execution Flow**:
+    - Detect available agents and log authentication methods (e.g., `ANTHROPIC_API_KEY`, `vertex-ai-auth`).
+    - Perform the preflight check to ensure `error_content` is meaningful before calling the agent.
+    - Snapshot mtimes, run `run_agentic_task`, call scope guard, and snapshot again to identify `changed_files`.
+    - **Scope Guard**: After `run_agentic_task` returns, call `_revert_out_of_scope_changes(working_dir, {code_path.resolve(), test_path.resolve()})` from `agentic_common`. Import it alongside the other agentic_common imports.
+    - Perform local verification for Python files; for others, use the agent's success status.
+5. **Error Handling**: Catch `FileNotFoundError` (specifically for missing CLI tools) and general exceptions. Ensure the temporary `agentic_fix_instructions.txt` is unlinked in all exit paths.
+
+### Deliverables
+A single Python file `agentic_fix.py` containing:
+- The `run_agentic_fix` public function.
+- Helper functions for mtime snapshots (`_snapshot_mtimes`, `_detect_mtime_changes`), verification (`_verify_and_log`, `_run_testcmd`), and CSV discovery (`find_llm_csv_path`).
+- Internal logging helpers (`_info`, `_verbose`, `_print_head`, `_print_diff`) utilizing `rich.console`.

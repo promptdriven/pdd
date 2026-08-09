@@ -1,0 +1,31 @@
+Create a React functional component named `GeneratedCommand` that displays a CLI command in a styled code block with copy-to-clipboard functionality and an optional execution trigger. This component serves as a sticky footer element for a command-line generation interface.
+
+### Requirements:
+1. **Display Logic**: Render the provided `command` string inside a `pre` and `code` tag with word-wrapping and break-all styling.
+2. **Copy Functionality**: Implement a "Copy" button that uses the `navigator.clipboard` API.
+3. **Feedback Loop**: When the command is copied, change the icon to a checkmark and update a tooltip to say "Copied!" for a duration of 2 seconds before resetting.
+4. **Execution Action**: If an `onExecute` callback is provided, display a "Play" button. Handle a `isExecuting` loading state by disabling the button and changing its cursor.
+5. **UI/UX**: 
+    - The component must be sticky to the bottom of its container.
+    - Use a dark theme (gray-900/80 backdrop with blur).
+    - Use Tooltips for both the Copy and Execute actions.
+    - Ensure the layout is responsive and handles long commands without breaking the container.
+6. **Accessibility**: Include appropriate `aria-label` attributes for all interactive buttons.
+
+### Dependencies:
+<Icon_Library>
+    <include>./Icon</include>
+</Icon_Library>
+<Tooltip_Component>
+    <include>./Tooltip</include>
+</Tooltip_Component>
+
+### Instructions:
+- **Props Interface**: Define `GeneratedCommandProps` with `command: string`, `onExecute?: () => void`, and `isExecuting?: boolean`.
+- **State Management**: Use `useState` for the `isCopied` toggle and `useEffect` to manage the 2-second timeout for the copy feedback.
+- **Styling**: Use Tailwind CSS for styling. The main container should be `sticky bottom-0` with a `backdrop-blur-sm`. The code block should use `text-blue-300` and `whitespace-pre-wrap`.
+- **Layout**: Position the action buttons (Copy/Execute) in the top-right corner of the command box using absolute positioning.
+- **Icons**: Use `ClipboardIcon` and `CheckIcon` for the copy state, and `PlayIcon` for the execution state.
+
+### Deliverables:
+- A single TypeScript file `GeneratedCommand.tsx` containing the React functional component and its TypeScript interface.

@@ -1,0 +1,31 @@
+ath,filename,reason,description,libraries
+pdd_mcp_server/__init__.py,__init__.py,Standard Python Package Marker,"Makes the 'pdd_mcp_server' directory a Python package. Typically empty.",
+pdd_mcp_server/main.py,main.py,Application Entry Point,"This script serves as the main entry point for the MCP server when run directly (e.g., `python -m pdd_mcp_server.main` or via `uvx`). 
+It initializes the MCP server instance, registers all the defined PDD tools, sets up the stdio transport, connects the server to the transport, and starts the server's main loop to listen 
+for and process client requests. It orchestrates the overall server startup and execution.",mcp, asyncio, .server, .tools
+pdd_mcp_server/server.py,server.py,MCP Server Core Logic,"Defines the core `McpServer` instance or a subclass. It sets the server's identity (`name`, `version`) and declares its capabilities
+to clients during initialization (primarily specifying support for 'tools' and potentially 'logging'). It might contain helper methods for server setup but delegates tool registration and 
+handling logic.",mcp.server.Server, mcp.types
+pdd_mcp_server/tools/__init__.py,__init__.py,Tools Sub-package Marker,"Makes the 'tools' directory a Python sub-package. It might import key functions or classes from other modules within 
+the sub-package for easier access.",
+pdd_mcp_server/tools/definitions.py,definitions.py,Tool Schema Definitions,"This module is responsible for defining the structure of each PDD command exposed as an MCP tool. It will contain 
+the list of `mcp.types.Tool` objects. Each object defines the tool's `name` (e.g., 'pdd-generate'), `description`, and crucially, the `inputSchema` (as a JSON Schema dictionary). This schema
+details the expected arguments and options for the corresponding `pdd` command, including their types, descriptions, and whether they are required. Pydantic models might be defined here to 
+auto-generate these schemas.",mcp.types, typing, json, pydantic (optional)
+pdd_mcp_server/tools/handlers.py,handlers.py,Tool Call Handlers,"Contains the actual implementation logic for handling `tools/call` requests for each defined PDD tool. Each handler function 
+will receive the tool name and parsed arguments (validated against the inputSchema). It will use the `pdd_runner` utility to construct and execute the corresponding `pdd-cli` command via 
+`subprocess`. It then processes the subprocess result (stdout, stderr, exit code) and formats it into an `mcp.types.CallToolResult`, indicating success or failure (`isError`).",mcp.types, 
+typing, .runner
+pdd_mcp_server/tools/runner.py,runner.py,PDD CLI Subprocess Runner,"Provides a utility function or class to abstract the execution of `pdd-cli` commands. This module handles constructing the
+command list from arguments, running `subprocess.run` or `subprocess.Popen`, capturing stdout and stderr, checking the exit code, handling timeouts, and returning a structured result (e.g., 
+success status, stdout, stderr) to the tool handlers. It ensures consistent and robust execution of the external CLI.",subprocess, typing, shutil
+pyproject.toml,pyproject.toml,Project Configuration and Build,"Defines project metadata (name, version, author, license), dependencies (runtime like `mcp`, optional like `pydantic`, 
+development like `pytest`), build system configuration (e.g., setuptools or hatch), and crucially, the entry point for `uvx` (e.g., ` pdd-mcp-server = pdd_mcp_server.main:run_server`). This 
+file is essential for packaging, installation, and making the server runnable via `uvx`.",
+README.md,README.md,Project Documentation,"Provides instructions for installation, usage, configuration, prerequisites, exposed tools, development, and troubleshooting for the MCP server. 
+(Provided in the prompt).",
+LICENSE,LICENSE,Project License,"Contains the full text of the project's license (MIT License, as indicated in the README).",
+.gitignore,.gitignore,Git Ignore Rules,"Specifies intentionally untracked files that Git should ignore (e.g., virtual environments, cache files, build artifacts). Standard Python .gitignore 
+content.",
+CONTRIBUTING.md,CONTRIBUTING.md,Contribution Guidelines,"(Optional but good practice) Outlines how others can contribute to the project, including code style, pull request process, and issue
+reporting.",

@@ -28,8 +28,8 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     # Error: --csv requires directory for input_code (Validation inside 'change' command)
     result = runner.invoke(cli.cli, ["change", "--manual", "--csv", str(files["changes.csv"]), str(files["p.prompt"])]) # p.prompt is a file
     assert result.exit_code == 2  # UsageError exits with code 2
-    # Check output message from handle_error
-    assert "Usage Error: INPUT_CODE must be a directory when using --csv" in result.output
+    # Check output message (Click native format: "Error: ...")
+    assert "INPUT_CODE must be a directory when using --csv" in result.output
     mock_auto_update.assert_called_once()
     mock_main.assert_not_called() # Fails validation before main
     mock_construct.assert_not_called() # construct_paths is not called by CLI wrapper
@@ -40,8 +40,8 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     mock_construct.reset_mock()
     result = runner.invoke(cli.cli, ["change", "--manual", "--csv", str(files["changes.csv"]), str(code_dir), str(files["p.prompt"])])
     assert result.exit_code == 2  # UsageError exits with code 2
-    # Check output message from handle_error
-    assert "Usage Error: Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously." in result.output or "Usage" in result.output
+    # Check output message (Click native format: "Error: ...")
+    assert "Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously" in result.output or "Usage" in result.output
     mock_auto_update.assert_called_once()
     mock_main.assert_not_called() # Fails validation before main
     mock_construct.assert_not_called()
@@ -53,8 +53,8 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     # No need to mock main side effect, validation happens before
     result = runner.invoke(cli.cli, ["change", "--manual", str(files["changes.csv"]), str(code_dir / "some_code.py")]) # Missing input_prompt_file
     assert result.exit_code == 2  # UsageError exits with code 2
-    # Check output message from handle_error
-    assert "Usage Error: INPUT_PROMPT_FILE is required when not using --csv" in result.output or "Usage" in result.output
+    # Check output message (Click native format: "Error: ...")
+    assert "INPUT_PROMPT_FILE is required when not using --csv" in result.output or "Usage" in result.output
     mock_auto_update.assert_called_once()
     mock_main.assert_not_called() # Fails validation before main
     # mock_construct.assert_called_once() # Optional: assert if construct_paths is expected here
@@ -66,8 +66,8 @@ def test_cli_change_command_csv_validation(mock_main, mock_construct, mock_auto_
     # No need to mock main side effect, validation happens before
     result = runner.invoke(cli.cli, ["change", "--manual", str(files["changes.csv"]), str(code_dir), str(files["p.prompt"])]) # code_dir is a dir
     assert result.exit_code == 2  # UsageError exits with code 2
-    # Check output message from handle_error
-    assert "Usage Error: INPUT_CODE must be a file when not using --csv" in result.output or "Usage" in result.output
+    # Check output message (Click native format: "Error: ...")
+    assert "INPUT_CODE must be a file when not using --csv" in result.output or "Usage" in result.output
     mock_auto_update.assert_called_once()
     mock_main.assert_not_called() # Fails validation before main
 
@@ -354,3 +354,103 @@ def test_cli_update_command_simple_flag_default_false(mock_update_main, mock_aut
     call_kwargs = mock_update_main.call_args.kwargs
     assert call_kwargs['simple'] is False
     mock_auto_update.assert_called_once()
+
+
+# --- Tests for change command exit code on failure (agentic mode) ---
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.modify.run_agentic_change')
+def test_cli_change_agentic_exits_1_on_failure(mock_agentic, mock_auto_update, runner):
+    """Test that agentic change command exits with code 1 when success=False."""
+    mock_agentic.return_value = (False, "All agent providers failed", 0.0, "none", [])
+
+    result = runner.invoke(cli.cli, ["change", "https://github.com/owner/repo/issues/1"])
+
+    assert result.exit_code == 1
+    mock_agentic.assert_called_once()
+    mock_auto_update.assert_called_once()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.modify.run_agentic_change')
+def test_cli_change_agentic_exits_0_on_success(mock_agentic, mock_auto_update, runner):
+    """Test that agentic change command exits with code 0 when success=True."""
+    mock_agentic.return_value = (True, "Changes applied", 1.50, "claude-sonnet", ["src/main.py"])
+
+    result = runner.invoke(cli.cli, ["change", "https://github.com/owner/repo/issues/1"])
+
+    assert result.exit_code == 0
+    mock_agentic.assert_called_once()
+    mock_auto_update.assert_called_once()
+
+
+# --- Tests for --clean-restart flag (issue #1149) ---
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.modify.run_agentic_change')
+def test_cli_change_clean_restart_forwards_true_to_agentic(mock_agentic, mock_auto_update, runner):
+    """`pdd change --clean-restart <url>` must forward
+    ``clean_restart=True`` into the agentic orchestrator entry point."""
+    mock_agentic.return_value = (True, "ok", 0.0, "claude", [])
+
+    result = runner.invoke(
+        cli.cli,
+        ["change", "--clean-restart", "https://github.com/owner/repo/issues/1"],
+    )
+
+    assert result.exit_code == 0, f"unexpected exit: {result.output!r}"
+    mock_agentic.assert_called_once()
+    assert mock_agentic.call_args.kwargs.get("clean_restart") is True, (
+        f"clean_restart=True must reach run_agentic_change; got "
+        f"kwargs={mock_agentic.call_args.kwargs!r}"
+    )
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.modify.run_agentic_change')
+def test_cli_change_default_does_not_clean_restart(mock_agentic, mock_auto_update, runner):
+    """Without --clean-restart, ``clean_restart=False`` must be forwarded
+    so existing pdd change behavior (resume from persisted state) is
+    preserved as the default."""
+    mock_agentic.return_value = (True, "ok", 0.0, "claude", [])
+
+    result = runner.invoke(
+        cli.cli,
+        ["change", "https://github.com/owner/repo/issues/1"],
+    )
+
+    assert result.exit_code == 0
+    assert mock_agentic.call_args.kwargs.get("clean_restart") is False
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.modify.change_main')
+@patch('pdd.commands.modify.run_agentic_change')
+def test_cli_change_clean_restart_with_manual_rejected(
+    mock_agentic, mock_manual, mock_auto_update, runner, tmp_path,
+):
+    """`pdd change --manual --clean-restart ...` must raise UsageError
+    because clean-restart only makes sense for the agentic GitHub-issue
+    flow; combining it with manual mode would silently no-op."""
+    change_file = tmp_path / "c.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file = tmp_path / "p.prompt"
+    for f in (change_file, code_file, prompt_file):
+        f.write_text("dummy")
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "change", "--manual", "--clean-restart",
+            str(change_file), str(code_file), str(prompt_file),
+        ],
+    )
+
+    assert result.exit_code == 2, (
+        f"--manual + --clean-restart should fail with UsageError "
+        f"(exit 2); got exit={result.exit_code}, output={result.output!r}"
+    )
+    assert "--clean-restart" in result.output
+    assert "agentic" in result.output or "manual" in result.output
+    mock_agentic.assert_not_called()
+    mock_manual.assert_not_called()

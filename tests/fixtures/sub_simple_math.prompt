@@ -1,0 +1,8 @@
+% You are an expert Python engineer.
+
+% Module: simple_math (sub-prompt)
+The add() function extracted from the simple_math module.
+
+% Requirements
+- Function `add(a: Union[int, float], b: Union[int, float]) -> Union[int, float]` returns `a + b`
+- `add` docstring includes Args/Returns and doctest examples

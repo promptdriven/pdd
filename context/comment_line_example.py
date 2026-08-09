@@ -1,58 +1,49 @@
-# Here's a concise example of how to use the `comment_line` function from the `comment_line.py` module, along with documentation for the input and output parameters.
+import sys
+import os
 
-# ### `comment_line.py`
+# Import the comment_line function from the pdd.comment_line module
+# The pdd directory is accessible in the python path
+from pdd.comment_line import comment_line
 
-# ```python
-# def comment_line(code_line, comment_characters):
-#     """
-#     Comments out a line of code based on the provided comment characters.
+def main():
+    """
+    Demonstrates how to use the comment_line function to comment out lines of code
+    for different programming languages based on their comment syntax.
+    """
+    print("--- Comment Line Module Examples ---\n")
 
-#     Parameters:
-#     code_line (str): The line of code to be commented out.
-#     comment_characters (str): The comment characters to use. 
-#                               - If 'del', the line will be deleted.
-#                               - If it contains a space, it should be in the format 'start_comment end_comment'.
-#                               - Otherwise, it is treated as a single comment character.
+    # Example 1: Python-style single character comment
+    # Inputs:
+    #   - code_line: "print('Hello, World!')"
+    #   - comment_characters: "#"
+    # Output: "#print('Hello, World!')"
+    py_code = "print('Hello, World!')"
+    py_commented = comment_line(py_code, "#")
+    print("Python Example:")
+    print(f"  Original:  {py_code}")
+    print(f"  Commented: {py_commented}\n")
 
-#     Returns:
-#     str: The commented line of code or an empty string if deleted.
-#     """
-#     # Check if the language requires deletion of the line
-#     if comment_characters == 'del':
-#         return ''
-    
-#     # Check if the language uses separate start and end comment characters
-#     if ' ' in comment_characters:
-#         start_comment, end_comment = comment_characters.split(' ', 1)
-#         return f"{start_comment}{code_line}{end_comment}"
-    
-#     # For languages with a single comment character
-#     return f"{comment_characters}{code_line}"
-# # ```
+    # Example 2: HTML-style encapsulating comment
+    # Inputs:
+    #   - code_line: "<h1>Hello World!</h1>"
+    #   - comment_characters: "<!-- -->" (space indicates encapsulation)
+    # Output: "<!--<h1>Hello World!</h1>-->"
+    html_code = "<h1>Hello World!</h1>"
+    html_commented = comment_line(html_code, "<!-- -->")
+    print("HTML Example:")
+    print(f"  Original:  {html_code}")
+    print(f"  Commented: {html_commented}\n")
 
-# ### Example Usage
+    # Example 3: Deletion style comment
+    # Inputs:
+    #   - code_line: "unsupported_syntax_code_here()"
+    #   - comment_characters: "del"
+    # Output: "" (an empty string, indicating line deletion)
+    del_code = "unsupported_syntax_code_here()"
+    del_commented = comment_line(del_code, "del")
+    print("Deletion Example (for unsupported comment syntax):")
+    print(f"  Original:  {del_code}")
+    print(f"  Commented: '{del_commented}' (empty string)\n")
 
-# ```python
-# Import the function from the module
-from comment_line import comment_line
-
-# Example 1: Python style comment
-python_comment = comment_line("print('Hello World!')", "#")
-print(python_comment)  # Output: "#print('Hello World!')"
-
-# Example 2: HTML style comment
-html_comment = comment_line("<h1>Hello World!</h1>", "<!-- -->")
-print(html_comment)  # Output: "<!--<h1>Hello World!</h1>-->"
-
-# Example 3: Language with no comment character (deletion)
-deleted_line = comment_line("some code", "del")
-print(deleted_line)  # Output: ""
-# ```
-
-# ### Explanation of Parameters
-# - **Input Parameters**:
-#   - `code_line` (str): The line of code you want to comment out.
-#   - `comment_characters` (str): The characters used for commenting. It can be a single character, a pair of characters separated by a space, or the string `'del'` to delete the line.
-
-# - **Output**:
-#   - Returns a string that represents the commented line of code or an empty string if the line is deleted.
+if __name__ == "__main__":
+    main()

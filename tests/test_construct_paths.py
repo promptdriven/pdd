@@ -3,20 +3,20 @@
 import pytest
 import click
 from pathlib import Path
-from unittest import mock
-from unittest.mock import patch, MagicMock, ANY
-import sys
+from unittest.mock import patch, ANY
 import os
+import warnings
 
 # Mock generate_output_paths before importing construct_paths if it's needed globally
 # Or mock within each test as currently done.
 
 # Import after potentially modifying sys.path
-from pdd.construct_paths import construct_paths, list_available_contexts, _resolve_config_hierarchy
+from pdd.construct_paths import construct_paths, list_available_contexts, _resolve_config_hierarchy, get_language_outputs, _strip_language_suffix_with_subdir
 
 # Helper to create absolute path for comparison
 def resolve_path(relative_path_str, base_dir):
     return str(Path(base_dir) / relative_path_str)
+
 
 def test_construct_paths_load_input_files(tmpdir):
     """
@@ -632,8 +632,359 @@ def test_list_available_contexts_malformed_pddrc(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         list_available_contexts()
 
+# ---- Issue #1198: .pddrc unknown-key validation ----
+
+from pdd.construct_paths import _load_pddrc_config
+
+
+def test_load_pddrc_warns_on_unknown_root_key(tmp_path):
+    """Issue #1198: _load_pddrc_config should warn when an unknown key appears at the root level."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'fake_unknown_key: true\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+    )
+    with pytest.warns(UserWarning, match="fake_unknown_key"):
+        _load_pddrc_config(pddrc)
+
+
+def test_load_pddrc_warns_on_unknown_context_key(tmp_path):
+    """Issue #1198: _load_pddrc_config should warn when an unknown key appears in a context block."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    typo_context_key: oops\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+    )
+    with pytest.warns(UserWarning, match="typo_context_key"):
+        _load_pddrc_config(pddrc)
+
+
+def test_load_pddrc_warns_on_unknown_defaults_key(tmp_path):
+    """Issue #1198: _load_pddrc_config should warn when an unknown key appears in defaults."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+        '      typo_defaults_key: oops\n'
+    )
+    with pytest.warns(UserWarning, match="typo_defaults_key"):
+        _load_pddrc_config(pddrc)
+
+
+def test_load_pddrc_clean_config_no_warnings(tmp_path, recwarn):
+    """Issue #1198: a config with only known keys should not emit unknown-key warnings."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      generate_output_path: "src/"\n'
+        '      test_output_path: "tests/"\n'
+        '      example_output_path: "examples/"\n'
+        '      default_language: python\n'
+        '      strength: 0.5\n'
+        '      temperature: 0.0\n'
+        '      target_coverage: 80.0\n'
+        '      budget: 10.0\n'
+        '      max_attempts: 3\n'
+        '      test_token_budget: 1200\n'
+        '      test_ranking_weights: {"import_distance": 1.0}\n'
+        '      test_dedup_threshold: 0.7\n'
+    )
+    _load_pddrc_config(pddrc)
+    unknown_warnings = [w for w in recwarn.list if "unknown key" in str(w.message).lower()]
+    assert unknown_warnings == []
+
+
+def test_load_pddrc_ci_manual_trigger_config_no_warnings(tmp_path, recwarn):
+    """Root-level CI manual trigger config is a known .pddrc section."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'ci:\n'
+        '  external_setup_fail_open: true\n'
+        '  manual_trigger_comment: "/gcbrun"\n'
+        '  manual_triggers:\n'
+        '    auto-heal-pr: "/gcbrun"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults: {}\n'
+    )
+    _load_pddrc_config(pddrc)
+    unknown_warnings = [w for w in recwarn.list if "unknown key" in str(w.message).lower()]
+    assert unknown_warnings == []
+
+
+def test_resolve_config_hierarchy_maps_test_packing_defaults_to_env_vars():
+    resolved = _resolve_config_hierarchy(
+        cli_options={},
+        context_config={},
+        env_vars={
+            "PDD_TEST_TOKEN_BUDGET": "900",
+            "PDD_TEST_RANKING_WEIGHTS": '{"file_recency": 1.0}',
+            "PDD_TEST_DEDUP_THRESHOLD": "0.6",
+        },
+    )
+
+    assert resolved["test_token_budget"] == "900"
+    assert resolved["test_ranking_weights"] == '{"file_recency": 1.0}'
+    assert resolved["test_dedup_threshold"] == "0.6"
+
+
+def test_load_pddrc_warning_message_format(tmp_path):
+    """Issue #1198: warning should follow the format: contains unknown key 'X' at path 'Y', ignored."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'fake_unknown_key: true\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+    )
+    with pytest.warns(UserWarning) as caught:
+        _load_pddrc_config(pddrc)
+    msg = str(caught[0].message)
+    assert "fake_unknown_key" in msg
+    assert "ignored" in msg.lower()
+    assert "pdd setup" in msg.lower()
+
+
+def test_load_pddrc_warns_on_prompt_path(tmp_path):
+    """Issue #1198 + PR #1217 review feedback: prompt_path was documented in
+    construct_paths_python.prompt as an alias for prompts_dir, but
+    _resolve_config_hierarchy never implemented the resolution chain. Per Greg's
+    second review, removed from the schema and from the prompt's spec. Validator
+    should surface it as unknown until aliasing is actually wired through. If
+    this test starts failing, either the wiring landed (CLI prompt_path, .pddrc
+    prompt_path, PDD_PROMPT_PATH env var, all resolving to prompts_dir with the
+    documented precedence) and the key should move into _PDDRC_DEFAULTS_KEYS
+    with regression coverage proving .pddrc affects prompts_dir resolution, or
+    the prompt re-introduced the alias documentation and needs cleanup."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+        '      prompt_path: "configured_prompts"\n'
+    )
+    with pytest.warns(UserWarning, match="prompt_path"):
+        _load_pddrc_config(pddrc)
+
+
+# ---- Issue #1198: .pddrc unknown-key validation ----
+
+from pdd.construct_paths import _load_pddrc_config
+
+
+def test_load_pddrc_warns_on_unknown_root_key(tmp_path):
+    """Issue #1198: _load_pddrc_config should warn when an unknown key appears at the root level."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'fake_unknown_key: true\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+    )
+    with pytest.warns(UserWarning, match="fake_unknown_key"):
+        _load_pddrc_config(pddrc)
+
+
+def test_load_pddrc_warns_on_unknown_context_key(tmp_path):
+    """Issue #1198: _load_pddrc_config should warn when an unknown key appears in a context block."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    typo_context_key: oops\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+    )
+    with pytest.warns(UserWarning, match="typo_context_key"):
+        _load_pddrc_config(pddrc)
+
+
+def test_load_pddrc_warns_on_unknown_defaults_key(tmp_path):
+    """Issue #1198: _load_pddrc_config should warn when an unknown key appears in defaults."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+        '      typo_defaults_key: oops\n'
+    )
+    with pytest.warns(UserWarning, match="typo_defaults_key"):
+        _load_pddrc_config(pddrc)
+
+
+def test_load_pddrc_clean_config_no_warnings(tmp_path, recwarn):
+    """Issue #1198: a config with only known keys should not emit unknown-key warnings."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      generate_output_path: "src/"\n'
+        '      test_output_path: "tests/"\n'
+        '      example_output_path: "examples/"\n'
+        '      default_language: python\n'
+        '      strength: 0.5\n'
+        '      temperature: 0.0\n'
+        '      target_coverage: 80.0\n'
+        '      budget: 10.0\n'
+        '      max_attempts: 3\n'
+    )
+    _load_pddrc_config(pddrc)
+    unknown_warnings = [w for w in recwarn.list if "unknown key" in str(w.message).lower()]
+    assert unknown_warnings == []
+
+
+def test_load_pddrc_warning_message_format(tmp_path):
+    """Issue #1198: warning should follow the format: contains unknown key 'X' at path 'Y', ignored."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'fake_unknown_key: true\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+    )
+    with pytest.warns(UserWarning) as caught:
+        _load_pddrc_config(pddrc)
+    msg = str(caught[0].message)
+    assert "fake_unknown_key" in msg
+    assert "ignored" in msg.lower()
+    assert "pdd setup" in msg.lower()
+
+
+def test_load_pddrc_accepts_auto_deps_csv_path(tmp_path):
+    """Issue #1198 + PR #1238 fix: auto_deps_csv_path is prescribed by
+    pdd/templates/generic/generate_pddrc_YAML.prompt and is now wired into
+    _resolve_config_hierarchy and _PDDRC_DEFAULTS_KEYS. The validator must
+    accept it without warning so that PDD-generated configs don't immediately
+    tell users to regenerate their config."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+        '      auto_deps_csv_path: "project_dependencies.csv"\n'
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        _load_pddrc_config(pddrc)  # must not raise
+
+
+def test_construct_paths_auto_deps_resolves_explicit_csv(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    prompt_file = tmp_path / "sample_python.prompt"
+    prompt_file.write_text("Prompt content")
+
+    _, _, output_file_paths, _ = construct_paths(
+        input_file_paths={"prompt_file": str(prompt_file)},
+        force=True,
+        quiet=True,
+        command="auto-deps",
+        command_options={"output": None, "csv": "explicit.csv"},
+    )
+
+    assert output_file_paths["csv"] == str(tmp_path / "explicit.csv")
+
+
+def test_construct_paths_auto_deps_resolves_pddrc_csv(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    prompt_file = tmp_path / "sample_python.prompt"
+    prompt_file.write_text("Prompt content")
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        "contexts:\n"
+        "  default:\n"
+        "    defaults:\n"
+        '      auto_deps_csv_path: "configured/deps.csv"\n'
+    )
+
+    _, _, output_file_paths, _ = construct_paths(
+        input_file_paths={"prompt_file": str(prompt_file)},
+        force=True,
+        quiet=True,
+        command="auto-deps",
+        command_options={"output": None, "csv": None},
+    )
+
+    assert output_file_paths["csv"] == str(tmp_path / "configured" / "deps.csv")
+
+
+def test_construct_paths_auto_deps_resolves_env_csv(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_AUTO_DEPS_CSV_PATH", "env/deps.csv")
+    prompt_file = tmp_path / "sample_python.prompt"
+    prompt_file.write_text("Prompt content")
+
+    _, _, output_file_paths, _ = construct_paths(
+        input_file_paths={"prompt_file": str(prompt_file)},
+        force=True,
+        quiet=True,
+        command="auto-deps",
+        command_options={"output": None, "csv": None},
+    )
+
+    assert output_file_paths["csv"] == str(tmp_path / "env" / "deps.csv")
+
+
+def test_load_pddrc_warns_on_prompt_path(tmp_path):
+    """Issue #1198 + PR #1217 review feedback: prompt_path was documented in
+    construct_paths_python.prompt as an alias for prompts_dir, but
+    _resolve_config_hierarchy never implemented the resolution chain. Per Greg's
+    second review, removed from the schema and from the prompt's spec. Validator
+    should surface it as unknown until aliasing is actually wired through. If
+    this test starts failing, either the wiring landed (CLI prompt_path, .pddrc
+    prompt_path, PDD_PROMPT_PATH env var, all resolving to prompts_dir with the
+    documented precedence) and the key should move into _PDDRC_DEFAULTS_KEYS
+    with regression coverage proving .pddrc affects prompts_dir resolution, or
+    the prompt re-introduced the alias documentation and needs cleanup."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    defaults:\n'
+        '      default_language: python\n'
+        '      prompt_path: "configured_prompts"\n'
+    )
+    with pytest.warns(UserWarning, match="prompt_path"):
+        _load_pddrc_config(pddrc)
+
 
 def test_construct_paths_missing_command_options(tmpdir):
+
     """
     Test that construct_paths handles missing command options (None) gracefully.
     """
@@ -824,8 +1175,12 @@ def test_construct_paths_sync_discovery_mode(tmpdir):
     assert Path(resolved_config["prompts_dir"]).name == "prompts"
     assert Path(resolved_config["code_dir"]).name == "src"
     assert Path(resolved_config["tests_dir"]).name == "tests"
-    # examples_dir defaults to "context" since no example_output_path in raw config
-    assert resolved_config["examples_dir"] == "context"
+    # examples_dir defaults to EXAMPLES_DIR when no example_output_path is
+    # configured and the project root has no legacy context/ directory (#616).
+    # See test_construct_paths_sync_legacy_context_back_compat for the
+    # back-compat branch.
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert resolved_config["examples_dir"] == EXAMPLES_DIR
 
 
 def test_construct_paths_sync_discovery_requires_basename(tmpdir):
@@ -926,10 +1281,11 @@ def test_construct_paths_sync_uses_outputs_example_path_for_examples_dir(tmpdir)
             input_file_paths, force, quiet, command, command_options
         )
 
-    # examples_dir should be ROOT directory ("context"), NOT parent ("context/backend")
-    # This ensures auto-deps scans ALL examples, not just a subdirectory
-    assert resolved_config["examples_dir"] == "context", \
-        f"Expected 'context' (root) but got '{resolved_config['examples_dir']}' (parent)"
+    # When example_output_path is missing from raw config, fall back to
+    # EXAMPLES_DIR (#616). outputs.example.path is NOT used for scan-scope
+    # resolution (using it caused #332 regression).
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert resolved_config["examples_dir"] == EXAMPLES_DIR
 
 
 def test_construct_paths_sync_with_prompt_uses_outputs_example_path_for_examples_dir(tmpdir):
@@ -977,10 +1333,10 @@ def test_construct_paths_sync_with_prompt_uses_outputs_example_path_for_examples
             input_file_paths, force, quiet, command, command_options
         )
 
-    # examples_dir should be ROOT directory ("context"), NOT parent ("context/backend")
-    # This ensures auto-deps scans ALL examples, not just a subdirectory
-    assert resolved_config["examples_dir"] == "context", \
-        f"Expected 'context' (root) but got '{resolved_config['examples_dir']}' (parent)"
+    # When example_output_path is missing, fall back to EXAMPLES_DIR (#616).
+    # outputs.example.path is intentionally NOT used.
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert resolved_config["examples_dir"] == EXAMPLES_DIR
 
 
 def test_construct_paths_sync_discovery_prompts_dir_bug_fix(tmpdir):
@@ -1616,9 +1972,10 @@ def test_construct_paths_generate_command(setup_test_files):
     # assert "Could not determine language" in str(excinfo.value)
     assert actual_determined_language == "prompt"
     # Basename should be "main_gen" after stripping "_prompt"
+    expected_output_locations = {"output": str(output_dir_abs)}
     mock_gen_ops.assert_called_once_with(
         command='generate',
-        output_locations=command_options, # output_dir_abs is in command_options['output']
+        output_locations=expected_output_locations,
         basename='main_gen',
         language='prompt',
         file_extension='.prompt',
@@ -2521,9 +2878,10 @@ class TestConstructPathsResolutionModeParameter:
         pddrc = subdir / ".pddrc"
         pddrc.write_text("""contexts:
   default:
-    generate_output_path: "src/"
-    test_output_path: "tests/"
-    example_output_path: "examples/"
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
 """)
 
         # Create input files
@@ -2581,9 +2939,10 @@ class TestConstructPathsResolutionModeParameter:
         pddrc = subdir / ".pddrc"
         pddrc.write_text("""contexts:
   default:
-    generate_output_path: "src/"
-    test_output_path: "tests/"
-    example_output_path: "examples/"
+    defaults:
+      generate_output_path: "src/"
+      test_output_path: "tests/"
+      example_output_path: "examples/"
 """)
 
         # Create input files
@@ -2671,11 +3030,12 @@ def test_examples_dir_uses_root_of_outputs_example_path_not_parent(tmpdir):
             input_file_paths, force, quiet, command, command_options
         )
 
-    # examples_dir should be "context" (root), NOT "context/backend" (parent)
-    # This ensures auto-deps scans all example files, not just a subdirectory
-    assert resolved_config["examples_dir"] == "context", \
-        f"Expected 'context' (root) but got '{resolved_config['examples_dir']}' (parent). " \
-        "examples_dir should use root of outputs.example.path, not parent directory."
+    # When example_output_path is missing, examples_dir falls back to
+    # EXAMPLES_DIR (#616). The #332 guard (never a subdirectory path like
+    # 'context/backend') is preserved via the parts[0] extraction.
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert resolved_config["examples_dir"] == EXAMPLES_DIR
+    assert "/" not in resolved_config["examples_dir"]
 
 
 def test_examples_dir_extracts_root_from_flat_example_output_path(tmpdir):
@@ -2848,6 +3208,168 @@ contexts:
             f"Expected 'backend-utils' from paths pattern but got '{context_name}'"
 
 
+class TestNestedPddrcDetectContext:
+    """detect_context_for_file should use the nearest .pddrc when repo_root points to a subdirectory."""
+
+    def test_nested_pddrc_uses_repo_root_not_parent(self, tmp_path):
+        """
+        Bug repro: when a subdirectory has its own .pddrc and repo_root
+        points to that subdirectory, detect_context_for_file should use
+        the subdirectory's .pddrc — not re-search upward and find a
+        parent .pddrc with different contexts.
+        """
+        from pdd.construct_paths import detect_context_for_file
+
+        # Parent repo with its own .pddrc (different contexts)
+        parent_pddrc = tmp_path / ".pddrc"
+        parent_pddrc.write_text('''version: "1.0"
+contexts:
+  pdd_cli:
+    paths: ["pdd/**", "*.py"]
+    defaults:
+      generate_output_path: "pdd"
+  default:
+    defaults:
+      generate_output_path: "./"
+''')
+
+        # Nested subdirectory project with its own .pddrc
+        subdir = tmp_path / "video_editor"
+        subdir.mkdir()
+        sub_pddrc = subdir / ".pddrc"
+        sub_pddrc.write_text('''version: "1.0"
+contexts:
+  lib_db:
+    paths: ["lib/db/**", "*lib_db*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/db.ts"
+        prompt:
+          path: "prompts/lib_db_TypeScript.prompt"
+  default:
+    defaults:
+      prompts_dir: "prompts/"
+''')
+
+        # Create a code file that matches via paths pattern relative to subdir
+        code_dir = subdir / "lib" / "db"
+        code_dir.mkdir(parents=True)
+        code_file = code_dir / "index.ts"
+        code_file.write_text("export const db = {}")
+
+        # Call with repo_root pointing to the subdirectory
+        context_name, config = detect_context_for_file(
+            str(code_file),
+            repo_root=str(subdir)
+        )
+
+        # Should match the subdirectory's .pddrc context, NOT fall through
+        # to default because the parent .pddrc was found instead
+        assert context_name == "lib_db", \
+            f"Expected 'lib_db' from nested .pddrc but got '{context_name}'. " \
+            f"detect_context_for_file is likely finding the parent .pddrc instead of " \
+            f"using the repo_root's .pddrc."
+
+    def test_nested_pddrc_prompt_file_matches(self, tmp_path):
+        """
+        When repo_root points to a subdirectory, prompt files should match
+        contexts in the subdirectory's .pddrc via paths patterns.
+        """
+        from pdd.construct_paths import detect_context_for_file
+
+        # Parent repo .pddrc
+        (tmp_path / ".pddrc").write_text('''version: "1.0"
+contexts:
+  default:
+    defaults:
+      generate_output_path: "./"
+''')
+
+        # Nested project .pddrc with glob-based path patterns
+        subdir = tmp_path / "myproject"
+        subdir.mkdir()
+        (subdir / ".pddrc").write_text('''version: "1.0"
+contexts:
+  lib_utils:
+    paths: ["*lib_utils*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/utils.ts"
+  default:
+    defaults:
+      prompts_dir: "prompts/"
+''')
+
+        # Create a prompt file that should match lib_utils context
+        prompts_dir = subdir / "prompts"
+        prompts_dir.mkdir()
+        prompt_file = prompts_dir / "lib_utils_TypeScript.prompt"
+        prompt_file.write_text("Generate utils module")
+
+        context_name, _ = detect_context_for_file(
+            str(prompt_file),
+            repo_root=str(subdir)
+        )
+
+        assert context_name == "lib_utils", \
+            f"Expected 'lib_utils' but got '{context_name}'. " \
+            f"Relative path should be computed from the nested repo_root."
+
+    def test_nested_pddrc_resolve_prompt_from_pddrc(self, tmp_path):
+        """
+        End-to-end: _resolve_prompt_from_pddrc should use the nested .pddrc
+        to resolve the correct prompt path for a code file, using
+        outputs.code.path to match and outputs.prompt.path for the result.
+        """
+        from pdd.update_main import _resolve_prompt_from_pddrc
+
+        # Parent repo with its own .pddrc
+        (tmp_path / ".pddrc").write_text('''version: "1.0"
+contexts:
+  pdd_cli:
+    paths: ["pdd/**"]
+    defaults:
+      generate_output_path: "pdd"
+  default:
+    defaults:
+      generate_output_path: "./"
+''')
+
+        # Nested subdirectory project with its own .pddrc
+        subdir = tmp_path / "video_editor"
+        subdir.mkdir()
+        (subdir / ".pddrc").write_text('''version: "1.0"
+contexts:
+  api_specs_route:
+    paths: ["*api_specs_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/specs/route.ts"
+        prompt:
+          path: "prompts/api_specs_route_TypeScript.prompt"
+  default:
+    defaults:
+      prompts_dir: "prompts/"
+''')
+
+        # Create the code file
+        code_dir = subdir / "app" / "api" / "specs"
+        code_dir.mkdir(parents=True)
+        code_file = code_dir / "route.ts"
+        code_file.write_text("export async function POST() {}")
+
+        # Resolve prompt path — repo_root is the subdirectory
+        result = _resolve_prompt_from_pddrc(str(code_file), str(subdir), "TypeScript")
+
+        expected = str(subdir / "prompts" / "api_specs_route_TypeScript.prompt")
+        assert result == expected, \
+            f"Expected '{expected}' but got '{result}'. " \
+            f"_resolve_prompt_from_pddrc should use nested .pddrc's outputs.prompt.path."
+
+
 class TestSyncDiscoveryBasenameContextDetection:
     """Sync discovery should infer context from basename prefixes and patterns."""
 
@@ -2907,3 +3429,792 @@ contexts:
         assert resolved_config["_matched_context"] == "frontend-components"
         assert resolved_config["prompts_dir"] == "prompts"
         assert Path(resolved_config["code_dir"]).as_posix().endswith("frontend/src/components")
+
+
+def test_resolve_config_hierarchy_env_prompts_dir(monkeypatch):
+    """PDD_PROMPTS_DIR environment variable should be respected."""
+    monkeypatch.setenv("PDD_PROMPTS_DIR", "/tmp/custom_prompts")
+
+    resolved = _resolve_config_hierarchy(
+        cli_options={},
+        context_config={},
+        env_vars={
+            "PDD_PROMPTS_DIR": os.environ.get("PDD_PROMPTS_DIR"),
+        },
+    )
+
+    assert "prompts_dir" in resolved
+    assert resolved["prompts_dir"] == "/tmp/custom_prompts"
+
+
+def test_resolve_config_hierarchy_pddrc_prompts_dir(monkeypatch):
+    """The .pddrc key `prompts_dir` should be respected."""
+    monkeypatch.delenv("PDD_PROMPTS_DIR", raising=False)
+
+    context_config = {
+        "prompts_dir": "my_prompts",
+    }
+
+    resolved = _resolve_config_hierarchy(
+        cli_options={},
+        context_config=context_config,
+        env_vars={},
+    )
+
+    assert "prompts_dir" in resolved
+    assert resolved["prompts_dir"] == "my_prompts"
+
+
+def test_resolve_config_hierarchy_cli_prompts_dir_wins(monkeypatch):
+    """CLI prompts_dir should take precedence over .pddrc and env vars."""
+    monkeypatch.setenv("PDD_PROMPTS_DIR", "/tmp/env_prompts")
+
+    resolved = _resolve_config_hierarchy(
+        cli_options={
+            "prompts_dir": "cli_prompts",
+        },
+        context_config={
+            "prompts_dir": "pddrc_prompts",
+        },
+        env_vars={
+            "PDD_PROMPTS_DIR": os.environ.get("PDD_PROMPTS_DIR"),
+        },
+    )
+
+    assert "prompts_dir" in resolved
+    assert resolved["prompts_dir"] == "cli_prompts"
+
+
+def test_construct_paths_regular_mode_respects_env_prompts_dir(tmp_path, monkeypatch):
+    """
+    Integration test: PDD_PROMPTS_DIR should be respected in regular mode (e.g., pdd generate).
+    
+    This verifies the environment variable works through the full construct_paths flow,
+    not just in _resolve_config_hierarchy isolation.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_PROMPTS_DIR", "/custom/prompts")
+    
+    # Create minimal test files
+    prompts_dir = tmp_path / "custom_prompts_location"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "test_python.prompt"
+    prompt_file.write_text("% Test prompt", encoding="utf-8")
+    
+    input_file_paths = {"prompt_file": str(prompt_file)}
+    command_options = {"output": "test.py"}
+    
+    resolved_config, _, output_paths, _ = construct_paths(
+        input_file_paths=input_file_paths,
+        force=True,
+        quiet=True,
+        command="generate",
+        command_options=command_options,
+    )
+    
+    # The environment variable should be in resolved_config
+    assert "prompts_dir" in resolved_config
+    assert resolved_config["prompts_dir"] == "/custom/prompts", \
+        f"Expected prompts_dir='/custom/prompts' from PDD_PROMPTS_DIR, got '{resolved_config['prompts_dir']}'"
+
+
+def test_construct_paths_sync_mode_respects_env_prompts_dir(tmp_path, monkeypatch):
+    """
+    Integration test: PDD_PROMPTS_DIR should be respected in sync discovery mode.
+    
+    Verifies the fix for the bug where sync mode would unconditionally overwrite
+    prompts_dir (lines 794, 807, 812) even when PDD_PROMPTS_DIR was set.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_PROMPTS_DIR", "/custom/sync/prompts")
+    
+    # Create minimal structure for sync mode
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "context").mkdir()
+    
+    command_options = {"basename": "calculator"}
+    
+    # Mock generate_output_paths to return predictable paths
+    mock_output_paths = {
+        "generate_output_path": str(tmp_path / "src" / "calculator.py"),
+        "test_output_path": str(tmp_path / "tests" / "test_calculator.py"),
+        "example_output_path": str(tmp_path / "context" / "calculator_example.py"),
+    }
+    
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._get_context_config', return_value={}):
+        
+        resolved_config, _, _, _ = construct_paths(
+            input_file_paths={},
+            force=True,
+            quiet=True,
+            command="sync",
+            command_options=command_options,
+        )
+    
+    # The environment variable should take precedence over sync discovery inference
+    assert "prompts_dir" in resolved_config
+    assert resolved_config["prompts_dir"] == "/custom/sync/prompts", \
+        f"Expected prompts_dir='/custom/sync/prompts' from PDD_PROMPTS_DIR in sync mode, got '{resolved_config['prompts_dir']}'"
+
+
+# ============================================================================
+# Tests for get_language_outputs
+# ============================================================================
+
+def test_get_language_outputs_python():
+    """Executable languages like Python should return code, test, and example."""
+    result = get_language_outputs('python')
+    assert result == {'code', 'test', 'example'}
+
+
+def test_get_language_outputs_typescript():
+    """TypeScript is executable and should return all three outputs."""
+    result = get_language_outputs('typescript')
+    assert result == {'code', 'test', 'example'}
+
+
+def test_get_language_outputs_json():
+    """JSON is a config/data language and should return code only."""
+    result = get_language_outputs('json')
+    assert result == {'code'}
+
+
+def test_get_language_outputs_yaml():
+    """YAML is a config/data language and should return code only."""
+    result = get_language_outputs('yaml')
+    assert result == {'code'}
+
+
+def test_get_language_outputs_css():
+    """CSS is a non-executable language and should return code only."""
+    result = get_language_outputs('css')
+    assert result == {'code'}
+
+
+def test_get_language_outputs_unknown():
+    """Unknown languages should fall back to all three outputs."""
+    result = get_language_outputs('unknownlang99')
+    assert result == {'code', 'test', 'example'}
+
+
+def test_get_language_outputs_case_insensitive():
+    """Language matching should be case-insensitive."""
+    assert get_language_outputs('JSON') == {'code'}
+    assert get_language_outputs('Python') == {'code', 'test', 'example'}
+    assert get_language_outputs('YAML') == {'code'}
+
+
+# ---------------------------------------------------------------------------
+# Fix: BUILTIN_EXT_MAP must include typescriptreact/javascriptreact
+# ---------------------------------------------------------------------------
+
+from pdd.construct_paths import BUILTIN_EXT_MAP
+
+
+def test_builtin_ext_map_has_typescriptreact():
+    """BUILTIN_EXT_MAP must map 'typescriptreact' to '.tsx' so the CSV-less
+    fallback produces the correct extension instead of '.typescriptreact'."""
+    assert 'typescriptreact' in BUILTIN_EXT_MAP
+    assert BUILTIN_EXT_MAP['typescriptreact'] == '.tsx'
+
+
+def test_builtin_ext_map_has_javascriptreact():
+    """BUILTIN_EXT_MAP must map 'javascriptreact' to '.jsx'."""
+    assert 'javascriptreact' in BUILTIN_EXT_MAP
+    assert BUILTIN_EXT_MAP['javascriptreact'] == '.jsx'
+
+
+def test_builtin_ext_map_has_svelte_and_vue():
+    """BUILTIN_EXT_MAP must also cover svelte and vue frameworks."""
+    assert BUILTIN_EXT_MAP.get('svelte') == '.svelte'
+    assert BUILTIN_EXT_MAP.get('vue') == '.vue'
+
+
+# ---------------------------------------------------------------------------
+# Fix: construct_paths should use prompt suffix language before defaulting
+# to Python when _determine_language returns None
+# ---------------------------------------------------------------------------
+
+def test_construct_paths_tsx_extension_when_csv_unavailable(tmpdir):
+    """When get_extension raises (no CSV / no PDD_PATH), BUILTIN_EXT_MAP must
+    still resolve 'typescriptreact' to '.tsx' — not fall through to
+    '.typescriptreact' or default to '.py'."""
+    tmp_path = Path(str(tmpdir))
+
+    prompt_file = tmp_path / 'my_component_typescriptreact.prompt'
+    prompt_file.write_text('Create a React component')
+
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    command_options = {}
+
+    mock_output_paths = {'output': str(tmp_path / 'my_component.tsx')}
+
+    # Simulate CSV being unavailable (get_extension raises ValueError)
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths) as mock_gen, \
+         patch('pdd.construct_paths.get_extension', side_effect=ValueError("PDD_PATH not set")):
+
+        _, _, output_file_paths, language = construct_paths(
+            input_file_paths, True, True, 'generate', command_options
+        )
+
+        assert language == 'typescriptreact', \
+            f"Language should be 'typescriptreact', got '{language}'"
+
+        # Verify BUILTIN_EXT_MAP fallback produced '.tsx', not '.typescriptreact'
+        mock_gen.assert_called_once()
+        call_kwargs = mock_gen.call_args
+        assert call_kwargs.kwargs.get('file_extension') == '.tsx', \
+            f"file_extension should be '.tsx', got '{call_kwargs.kwargs.get('file_extension')}'"
+
+
+def test_construct_paths_jsx_extension_when_csv_unavailable(tmpdir):
+    """Same as above but for javascriptreact → .jsx."""
+    tmp_path = Path(str(tmpdir))
+
+    prompt_file = tmp_path / 'my_widget_javascriptreact.prompt'
+    prompt_file.write_text('Create a React component')
+
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    command_options = {}
+
+    mock_output_paths = {'output': str(tmp_path / 'my_widget.jsx')}
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths) as mock_gen, \
+         patch('pdd.construct_paths.get_extension', side_effect=ValueError("PDD_PATH not set")):
+
+        _, _, output_file_paths, language = construct_paths(
+            input_file_paths, True, True, 'generate', command_options
+        )
+
+        assert language == 'javascriptreact', \
+            f"Language should be 'javascriptreact', got '{language}'"
+
+        # Verify BUILTIN_EXT_MAP fallback produced '.jsx', not '.javascriptreact'
+        mock_gen.assert_called_once()
+        call_kwargs = mock_gen.call_args
+        assert call_kwargs.kwargs.get('file_extension') == '.jsx', \
+            f"file_extension should be '.jsx', got '{call_kwargs.kwargs.get('file_extension')}'"
+
+
+def test_construct_paths_null_language_uses_prompt_suffix_not_python(tmpdir):
+    """When _determine_language returns None but the prompt file has a valid
+    language suffix (e.g., _typescriptreact.prompt), construct_paths should
+    extract the language from the prompt suffix rather than blindly defaulting
+    to Python."""
+    tmp_path = Path(str(tmpdir))
+
+    prompt_file = tmp_path / 'recruit_chat_page_typescriptreact.prompt'
+    prompt_file.write_text('Create a chat page')
+
+    input_file_paths = {'prompt_file': str(prompt_file)}
+    command_options = {}
+
+    mock_output_paths = {'output': str(tmp_path / 'recruit_chat_page.tsx')}
+
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._determine_language', return_value=None):
+
+        _, _, _, language = construct_paths(
+            input_file_paths, True, True, 'sync', command_options
+        )
+
+        assert language == 'typescriptreact', \
+            f"Expected 'typescriptreact' from prompt suffix, got '{language}'"
+
+
+# ---------------------------------------------------------------------------
+# _strip_language_suffix — nested path preservation
+# ---------------------------------------------------------------------------
+
+class TestStripLanguageSuffixWithSubdir:
+    """_strip_language_suffix_with_subdir preserves subdirectory relative to prompts/ root."""
+
+    def test_flat_prompt_unchanged(self):
+        """Flat prompt path returns basename without directory."""
+        result = _strip_language_suffix_with_subdir(Path("ci_validation_python.prompt"))
+        assert result == "ci_validation"
+
+    def test_nested_prompt_preserves_subdir(self):
+        """Subdirectory under prompts/ is preserved."""
+        result = _strip_language_suffix_with_subdir(Path("prompts/commands/fix_python.prompt"))
+        assert result == "commands/fix"
+
+    def test_nested_relative_path_no_prompts_dir(self):
+        """Relative path without prompts/ parent still preserves subdirectory."""
+        result = _strip_language_suffix_with_subdir(Path("commands/fix_python.prompt"))
+        assert result == "commands/fix"
+
+    def test_nested_prompt_deep_subdir(self):
+        """Multiple subdirectory levels are preserved."""
+        result = _strip_language_suffix_with_subdir(Path("prompts/commands/sub/deep_javascript.prompt"))
+        assert result == "commands/sub/deep"
+
+    def test_no_language_suffix_nested(self):
+        """Nested path without a known language suffix preserves directory and full stem."""
+        result = _strip_language_suffix_with_subdir(Path("prompts/commands/fix.prompt"))
+        assert result == "commands/fix"
+
+    def test_flat_prompt_no_language_suffix(self):
+        """Flat path without language suffix still works."""
+        result = _strip_language_suffix_with_subdir(Path("fix.prompt"))
+        assert result == "fix"
+
+    def test_nested_prompt_with_underscores_in_name(self):
+        """Underscores in the module name are preserved."""
+        result = _strip_language_suffix_with_subdir(Path("prompts/commands/fix_main_python.prompt"))
+        assert result == "commands/fix_main"
+
+    def test_absolute_path_with_prompts_dir(self):
+        """Absolute paths with prompts/ component extract subdir correctly."""
+        result = _strip_language_suffix_with_subdir(
+            Path("/Users/me/project/prompts/commands/fix_python.prompt")
+        )
+        assert result == "commands/fix"
+
+    def test_absolute_path_flat_prompt(self):
+        """Absolute paths without subdirs return just the basename."""
+        result = _strip_language_suffix_with_subdir(
+            Path("/Users/me/project/prompts/ci_validation_python.prompt")
+        )
+        assert result == "ci_validation"
+
+    # ------------------------------------------------------------------
+    # Issue #1211 (Step 6a fix): honor .pddrc prompts_dir as the anchor
+    # instead of hard-coding the literal "prompts/" segment.
+    # ------------------------------------------------------------------
+
+    def test_prompts_dir_override_strips_full_anchor(self):
+        """When prompts_dir="prompts/backend" matches the path, no leading 'backend/' leaks into basename.
+
+        Pre-fix: anchor was the literal "prompts" segment, so "backend" became a
+        subdir under the anchor and the basename was "backend/admin_get_users",
+        producing a double-nested output path like backend/functions/backend/...
+        """
+        result = _strip_language_suffix_with_subdir(
+            Path("prompts/backend/admin_get_users_python.prompt"),
+            prompts_dir="prompts/backend",
+        )
+        assert result == "admin_get_users"
+
+    def test_prompts_dir_override_preserves_nested_subdir(self):
+        """Subdirectories below the configured prompts_dir are still preserved."""
+        result = _strip_language_suffix_with_subdir(
+            Path("prompts/backend/services/billing/charge_python.prompt"),
+            prompts_dir="prompts/backend",
+        )
+        assert result == str(Path("services") / "billing" / "charge")
+
+    def test_prompts_dir_override_absolute_path(self):
+        """Anchor matching works on absolute paths too."""
+        result = _strip_language_suffix_with_subdir(
+            Path("/repo/extensions/app/prompts/src/routers/webhook_handlers_Python.prompt"),
+            prompts_dir="prompts",
+        )
+        assert result == str(Path("src") / "routers" / "webhook_handlers")
+
+    def test_prompts_dir_override_with_trailing_slash(self):
+        """Trailing slash on prompts_dir is normalized and still matches."""
+        result = _strip_language_suffix_with_subdir(
+            Path("prompts/backend/admin_python.prompt"),
+            prompts_dir="prompts/backend/",
+        )
+        assert result == "admin"
+
+    def test_prompts_dir_override_no_match_falls_back_to_literal_prompts(self):
+        """When prompts_dir is configured but doesn't appear in the path, the literal 'prompts/' anchor still works."""
+        result = _strip_language_suffix_with_subdir(
+            Path("prompts/commands/fix_python.prompt"),
+            prompts_dir="some/other/dir",
+        )
+        assert result == str(Path("commands") / "fix")
+
+    def test_prompts_dir_none_preserves_legacy_behavior(self):
+        """Omitting prompts_dir (legacy callers) keeps the literal 'prompts/' anchor."""
+        result = _strip_language_suffix_with_subdir(
+            Path("prompts/commands/fix_python.prompt"),
+            prompts_dir=None,
+        )
+        assert result == str(Path("commands") / "fix")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Issue #1165: pdd sync ignores prompts_dir from .pddrc when resolving basenames
+# ──────────────────────────────────────────────────────────────────────────────
+
+from pdd.construct_paths import _detect_context_from_basename, _extract_prefix_from_prompts_dir
+
+
+def _setup_nested_prompts_project(tmp_path: Path) -> dict:
+    """Create a project simulating the .pddrc from issue #1165.
+
+    Returns the config dict that mirrors the .pddrc content.
+    """
+    # Create nested prompt file
+    nested_dir = tmp_path / "extensions" / "github_pdd_app" / "prompts" / "src" / "services"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "solving_orchestrator_Python.prompt").write_text("# prompt content")
+
+    # Create empty default prompts dir
+    (tmp_path / "prompts").mkdir(exist_ok=True)
+
+    # Write .pddrc
+    pddrc_content = """
+version: "1.0"
+contexts:
+  extensions-github_pdd_app:
+    paths:
+      - "extensions/github_pdd_app/**"
+    defaults:
+      prompts_dir: "extensions/github_pdd_app/prompts"
+  default:
+    defaults:
+      default_language: "python"
+"""
+    (tmp_path / ".pddrc").write_text(pddrc_content)
+
+    return {
+        "contexts": {
+            "extensions-github_pdd_app": {
+                "paths": ["extensions/github_pdd_app/**"],
+                "defaults": {
+                    "prompts_dir": "extensions/github_pdd_app/prompts",
+                },
+            },
+            "default": {
+                "defaults": {"default_language": "python"},
+            },
+        }
+    }
+
+
+class TestIssue1165_DetectContextFromBasename:
+    """Issue #1165: _detect_context_from_basename should find context via prompts_dir filesystem scan."""
+
+    def test_basename_in_nested_prompts_dir_returns_context(self, tmp_path):
+        """Test 1: basename 'src/services/solving_orchestrator' should match context
+        'extensions-github_pdd_app' when prompt file exists in that context's prompts_dir.
+
+        Bug: _extract_prefix_from_prompts_dir returns '' for 'extensions/github_pdd_app/prompts',
+        and the `if prefix and ...` guard skips the context. Basename doesn't match paths pattern
+        'extensions/github_pdd_app/**' either, so returns None."""
+        config = _setup_nested_prompts_project(tmp_path)
+
+        result = _detect_context_from_basename(
+            "src/services/solving_orchestrator", config,
+            pddrc_path=tmp_path / ".pddrc",
+        )
+
+        assert result == "extensions-github_pdd_app"
+
+    def test_prompts_dir_with_suffix_still_works(self, tmp_path):
+        """Test 8 (non-regression): prefix-based matching continues to work when
+        prompts_dir has a suffix after the 'prompts' segment."""
+        # Create prompt file for this test
+        prompt_dir = tmp_path / "extensions" / "app" / "prompts" / "frontend"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "Button_Python.prompt").write_text("# button prompt")
+
+        config = {
+            "contexts": {
+                "ext-app": {
+                    "paths": ["extensions/app/**"],
+                    "defaults": {
+                        "prompts_dir": "extensions/app/prompts/frontend",
+                    },
+                },
+            }
+        }
+
+        result = _detect_context_from_basename("frontend/Button", config)
+
+        # prefix = "frontend", basename starts with "frontend/" — existing path works
+        assert result == "ext-app"
+
+    def test_multiple_contexts_selects_correct_one(self, tmp_path):
+        """Test 9: When multiple contexts have nested prompts_dir with empty prefix,
+        the context whose prompts_dir actually contains the prompt file is selected."""
+        # Context ext-app has the prompt
+        app_dir = tmp_path / "extensions" / "app" / "prompts" / "src" / "services"
+        app_dir.mkdir(parents=True)
+        (app_dir / "solving_orchestrator_Python.prompt").write_text("# app prompt")
+
+        # Context ext-api does NOT have the prompt
+        api_dir = tmp_path / "extensions" / "api" / "prompts"
+        api_dir.mkdir(parents=True)
+
+        config = {
+            "contexts": {
+                "ext-app": {
+                    "paths": ["extensions/app/**"],
+                    "defaults": {
+                        "prompts_dir": "extensions/app/prompts",
+                    },
+                },
+                "ext-api": {
+                    "paths": ["extensions/api/**"],
+                    "defaults": {
+                        "prompts_dir": "extensions/api/prompts",
+                    },
+                },
+                "default": {
+                    "defaults": {"default_language": "python"},
+                },
+            }
+        }
+
+        result = _detect_context_from_basename(
+            "src/services/solving_orchestrator", config,
+            pddrc_path=tmp_path / ".pddrc",
+        )
+
+        assert result == "ext-app"
+
+    def test_bracket_basename_glob_metacharacters_escaped(self, tmp_path):
+        """Regression: basenames with glob metacharacters like app/routes/[id]
+        must not be interpreted as character classes during filesystem disambiguation.
+
+        Bug: candidate_dir.glob(f"{name_part}_*.prompt") treats '[id]' as a
+        character class, so the prompt file is never found even when it exists."""
+        prompt_dir = tmp_path / "extensions" / "app" / "prompts" / "app" / "routes"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "[id]_TypeScriptReact.prompt").write_text("# bracket prompt")
+
+        config = {
+            "contexts": {
+                "ext-app": {
+                    "paths": ["extensions/app/**"],
+                    "defaults": {
+                        "prompts_dir": "extensions/app/prompts",
+                    },
+                },
+            }
+        }
+
+        result = _detect_context_from_basename(
+            "app/routes/[id]", config,
+            pddrc_path=tmp_path / ".pddrc",
+        )
+
+        assert result == "ext-app"
+
+
+class TestIssue1165_ConstructPaths:
+    """Issue #1165: construct_paths should resolve nested prompts_dir for basename."""
+
+    def test_construct_paths_returns_nested_prompts_dir(self, tmp_path):
+        """Test 4: construct_paths discovery mode should return the nested prompts_dir
+        from the matching context, not the default 'prompts/' directory.
+
+        Bug: context detection fails -> falls back to default 'prompts' at line 1065."""
+        config = _setup_nested_prompts_project(tmp_path)
+
+        with patch("pdd.construct_paths._find_pddrc_file", return_value=tmp_path / ".pddrc"):
+            try:
+                resolved_config, _, _, _ = construct_paths(
+                    input_file_paths={},
+                    force=False,
+                    quiet=True,
+                    command="sync",
+                    command_options={"basename": "src/services/solving_orchestrator"},
+                    context_override=None,
+                )
+                prompts_dir = resolved_config.get("prompts_dir", "prompts")
+                assert prompts_dir == "extensions/github_pdd_app/prompts"
+            except Exception:
+                pytest.fail(
+                    "construct_paths failed to resolve context for basename "
+                    "'src/services/solving_orchestrator' with nested prompts_dir"
+                )
+
+
+# ---------------------------------------------------------------------------
+# Issue #616 — single-source-of-truth + back-compat regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_default_examples_dir_canonical(tmp_path, monkeypatch):
+    """Empty project: helper returns EXAMPLES_DIR."""
+    monkeypatch.chdir(tmp_path)
+    from pdd.construct_paths import _resolve_default_examples_dir
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert _resolve_default_examples_dir() == EXAMPLES_DIR
+
+
+def test_resolve_default_examples_dir_back_compat_legacy(tmp_path, monkeypatch):
+    """Project with populated context/ but no examples/ → fallback to context/."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "foo_example.py").write_text("# legacy\n")
+    from pdd.construct_paths import _resolve_default_examples_dir
+    assert _resolve_default_examples_dir() == "context"
+
+
+def test_resolve_default_examples_dir_examples_takes_precedence(tmp_path, monkeypatch):
+    """If both directories exist, examples/ wins (forward-compat)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "stale.py").write_text("# old\n")
+    (tmp_path / "examples").mkdir()
+    from pdd.construct_paths import _resolve_default_examples_dir
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert _resolve_default_examples_dir() == EXAMPLES_DIR
+
+
+def test_resolve_default_examples_dir_empty_context_dir_no_fallback(tmp_path, monkeypatch):
+    """An empty context/ directory does not trigger the back-compat path."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()  # empty
+    from pdd.construct_paths import _resolve_default_examples_dir
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert _resolve_default_examples_dir() == EXAMPLES_DIR
+
+
+def test_resolve_default_examples_dir_non_example_context_no_fallback(tmp_path, monkeypatch):
+    """A context/ populated with PRDs / schemas / docs (but no *_example.* files)
+    is NOT a legacy-examples signal — keeps the canonical default so the original
+    issue stays fixed for greenfield projects that use context/ for non-example
+    content (review feedback on the heuristic).
+    """
+    monkeypatch.chdir(tmp_path)
+    ctx = tmp_path / "context"
+    ctx.mkdir()
+    (ctx / "PRD.md").write_text("# product reqs\n")
+    (ctx / "schema.json").write_text("{}\n")
+    (ctx / "notes.txt").write_text("notes\n")
+    (ctx / "subdir").mkdir()
+    (ctx / "subdir" / "design.md").write_text("# design\n")
+    from pdd.construct_paths import _resolve_default_examples_dir
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert _resolve_default_examples_dir() == EXAMPLES_DIR
+
+
+def test_resolve_default_examples_dir_nested_example_triggers_fallback(tmp_path, monkeypatch):
+    """An *_example.* file under a context/ subdirectory still counts as legacy."""
+    monkeypatch.chdir(tmp_path)
+    ctx = tmp_path / "context"
+    (ctx / "prisma").mkdir(parents=True)
+    (ctx / "prisma" / "schema_example.prisma").write_text("// legacy\n")
+    from pdd.construct_paths import _resolve_default_examples_dir
+    assert _resolve_default_examples_dir() == "context"
+
+
+def test_construct_paths_sync_legacy_context_back_compat(tmpdir, monkeypatch):
+    """Issue #616 back-compat: with no .pddrc and a populated legacy context/
+    directory but no examples/, examples_dir falls back to 'context'."""
+    monkeypatch.chdir(tmpdir)
+    legacy = Path(tmpdir) / "context"
+    legacy.mkdir()
+    (legacy / "foo_example.py").write_text("# legacy\n")
+    mock_output_paths = {
+        "generate_output_path": str(tmpdir / "src" / "m.py"),
+        "test_output_path": str(tmpdir / "tests" / "test_m.py"),
+        "example_output_path": str(tmpdir / "context" / "ex_m.py"),
+    }
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {}}), \
+         patch('pdd.construct_paths._detect_context', return_value=None), \
+         patch('pdd.construct_paths._get_context_config', return_value={}):
+        resolved_config, *_ = construct_paths(
+            {}, False, True, 'sync', {'basename': 'm'},
+        )
+    assert resolved_config["examples_dir"] == "context"
+
+
+def test_construct_paths_sync_legacy_context_back_compat_from_subdir(tmp_path, monkeypatch):
+    """Issue #616 back-compat must inspect the .pddrc project root, not CWD.
+
+    Users often run `pdd sync` from a package subdirectory. If the repo root has
+    a populated legacy context/ directory and no examples/ directory, the
+    fallback must still be context/.
+    """
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    defaults:\n      prompts_dir: prompts\n",
+        encoding="utf-8",
+    )
+    legacy = tmp_path / "context"
+    legacy.mkdir()
+    (legacy / "foo_example.py").write_text("# legacy\n", encoding="utf-8")
+    workdir = tmp_path / "pkg"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    mock_output_paths = {
+        "generate_output_path": str(workdir / "m.py"),
+        "test_output_path": str(tmp_path / "tests" / "test_m.py"),
+        "example_output_path": str(tmp_path / "examples" / "m_example.py"),
+    }
+    with patch("pdd.construct_paths.generate_output_paths", return_value=mock_output_paths):
+        resolved_config, *_ = construct_paths(
+            {}, False, True, "sync", {"basename": "m"},
+        )
+
+    assert resolved_config["examples_dir"] == "context"
+
+
+def test_construct_paths_generate_legacy_context_back_compat_from_subdir(tmp_path, monkeypatch):
+    """Normal command finalization should use the .pddrc project root too."""
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    defaults:\n      prompts_dir: prompts\n",
+        encoding="utf-8",
+    )
+    legacy = tmp_path / "context"
+    legacy.mkdir()
+    (legacy / "foo_example.py").write_text("# legacy\n", encoding="utf-8")
+    workdir = tmp_path / "pkg"
+    workdir.mkdir()
+    prompt_file = workdir / "m_python.prompt"
+    prompt_file.write_text("Generate m", encoding="utf-8")
+    monkeypatch.chdir(workdir)
+
+    with patch(
+        "pdd.construct_paths.generate_output_paths",
+        return_value={"output": str(workdir / "m.py")},
+    ):
+        resolved_config, *_ = construct_paths(
+            {"prompt_file": str(prompt_file)},
+            True,
+            True,
+            "generate",
+            {},
+        )
+
+    assert resolved_config["examples_dir"] == "context"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1205 regression tests: BUILTIN_EXT_MAP entries for markdown / yml
+# ---------------------------------------------------------------------------
+
+def test_builtin_ext_map_markdown_maps_to_dot_md():
+    """Bug #1205: BUILTIN_EXT_MAP must have 'markdown' → '.md'.
+
+    Without this entry the fallback f".{lang_key}" synthesises '.markdown',
+    causing --output foo.md to silently land at foo.markdown. This test fails
+    on the buggy code and passes once the entry is added.
+    """
+    from pdd.construct_paths import BUILTIN_EXT_MAP
+
+    result = BUILTIN_EXT_MAP.get('markdown')
+    assert result == '.md', (
+        f"Bug #1205: BUILTIN_EXT_MAP['markdown'] should be '.md' but got {result!r}. "
+        f"Without this entry the fallback f'.{{lang_key}}' synthesises '.markdown', "
+        f"causing --output foo.md to land at foo.markdown."
+    )
+
+
+def test_builtin_ext_map_yml_maps_to_dot_yml():
+    """Regression guard: BUILTIN_EXT_MAP['yml'] must map to '.yml' (not '.yaml').
+
+    This ensures the map correctly preserves the '.yml' extension when the user
+    explicitly requests it, and that the fix does not accidentally break the
+    'yml' entry.
+    """
+    from pdd.construct_paths import BUILTIN_EXT_MAP
+
+    result = BUILTIN_EXT_MAP.get('yml')
+    assert result == '.yml', (
+        f"BUILTIN_EXT_MAP['yml'] should be '.yml' but got {result!r}."
+    )

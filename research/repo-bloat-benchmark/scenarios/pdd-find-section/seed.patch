@@ -1,0 +1,74 @@
+diff --git upstream/pdd/find_section.py core/research/repo-bloat-benchmark/scenarios/pdd-find-section/core/src/pdd/find_section.py
+index d0a8d151a..18ebf8476 100644
+--- upstream/pdd/find_section.py
++++ core/research/repo-bloat-benchmark/scenarios/pdd-find-section/core/src/pdd/find_section.py
+@@ -1,28 +1,42 @@
++"""Locate fenced code blocks in markdown-style text.
++
++Dependency-sliced from ``pdd/find_section.py`` (upstream pinned commit in
++``scenario.json``); identifiers and structure were normalized during slicing
++— see ``seed.patch`` for the recorded transform.
++"""
++
++
+ def find_section(lines, start_index=0, sub_section=False):
+-    sections = []
+-    stack = []
+-
+-    for i, line in enumerate(lines):
+-        line = line.strip()
+-
+-        if line.startswith('```'):
+-            if len(line) > 3:
+-                # Opening of a new block
+-                stack.append((i, line[3:].strip()))
+-            elif stack:
+-                # Closing of a block
+-                start, lang = stack.pop()
+-                if not stack:  # This is a top-level block
+-                    if start >= start_index:
+-                        if sub_section:
+-                            return [(lang, start, i)]
+-                        else:
+-                            sections.append((lang, start, i))
++    """Return ``(language, start, end)`` for each top-level ``` fenced block.
++
++    Only blocks whose opening fence is at or after ``start_index`` are
++    reported. With ``sub_section=True`` the first qualifying closed block is
++    returned on its own. Blocks left unclosed at end of input are reported
++    as running to the end of the input.
++    """
++    found = []
++    open_blocks = []
++
++    for index, raw in enumerate(lines):
++        fence = raw.strip()
++        if not fence.startswith('```'):
++            continue
++        if len(fence) > 3:
++            # Opening fence: remember where it started and its language tag.
++            open_blocks.append((index, fence[3:].strip()))
++        elif open_blocks:
++            # Closing fence for the most recent open block.
++            start, language = open_blocks.pop()
++            if open_blocks or start < start_index:
++                continue
++            if sub_section:
++                return [(language, start, index)]
++            found.append((language, start, index))
++
++    # Unclosed blocks run to the end of the input.
++    while open_blocks:
++        start, language = open_blocks.pop()
++        if not open_blocks and start >= start_index:
++            found.append((language, start, len(lines)))
+
+-    # Handle unclosed blocks
+-    while stack:
+-        start, lang = stack.pop()
+-        if not stack and start >= start_index:  # This is a top-level block
+-            sections.append((lang, start, len(lines) - 1))
+-
+-    return sections
+\ No newline at end of file
++    return found

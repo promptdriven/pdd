@@ -1,3 +1,21 @@
+## Q: Is PDD really a programming language?
+
+*"Yes, if you define the programming language as the human-authored source of truth rather than the CPU's final executable format."*
+
+In PDD, a program is the versioned prompt suite plus its includes, examples, tests, architecture metadata, and configuration. `pdd sync` compiles that source into conventional code and validates the output. Python, TypeScript, Go, Java, and other languages still matter, but they become compilation targets rather than the main thing humans maintain.
+
+## Q: What does "The Last Programming Language" mean?
+
+*"It means PDD moves the durable source from syntax to intent."*
+
+The phrase is a positioning claim for PDD, not a promise that implementation languages disappear. Teams still review generated code, run tests, ship binaries, and debug real systems. The change is that durable behavior lives in prompts and tests, while code can be regenerated from that source as models and project requirements evolve.
+
+## Q: Why not just use Cursor, Claude Code, Codex, or another coding agent?
+
+Those tools are useful, and PDD can work alongside them. The difference is the source-of-truth model.
+
+Interactive coding agents usually treat prompts as transient instructions for patching code. PDD treats prompts as durable source files. That gives teams a reviewable prompt history, repeatable regeneration, explicit includes, accumulating tests, and a path to keep implementation learnings synchronized back into the source.
+
 ## Q: Wouldn't the best language to describe code just be ... code?
 *"Totally get that—that's why every generation of software abstraction still compiles down to real code. We're not trying to replace code as an executable artefact; we're trying to replace code as the primary source-of-truth."*
 
@@ -11,7 +29,7 @@ From a single prompt the system emits: working code, OpenAPI spec, client SDKs, 
 
 **Regeneration is cheaper than patchwork**
 
-Because the prompt knows the full intent, you can change "JWT" to "session cookie" once and re-generate the whole slice—tests and docs included. With code-as-source you chase that change across a dozen files and invariably miss one.
+Because the prompt knows the full intent, you can change "JWT" to "session cookie" once and re-generate the whole slice—tests and docs included. With code-as-source you chase that change across a dozen files and invariably miss one. For large codebases where regeneration costs can grow, PDD uses context compression to selectively include only the most relevant dependencies and tests, keeping the developer loop fast and affordable.
 
 **Non-dev stakeholders can read (and diff) it**
 
@@ -476,3 +494,49 @@ The AI development landscape has a tool for every project size. PDD's strength i
 -   **Small Projects / Demos**: Tools like **Lovable** or **Bolt** are fantastic for getting quick results with minimal setup.
 -   **Medium-Sized Features / Prototyping**: Interactive, chat-based tools like **Cursor** or the **Claude Code** are excellent for iterative refinement and exploration.
 -   **Production-Scale, Long-Lived Systems**: **PDD** is the best choice when you need deterministic, maintainable, and version-controlled code generation that can scale with your team and project complexity."*
+
+## Q: My auth/OAuth modules don't work after `pdd generate` + `pdd sync`. What's going wrong?
+
+*"Auth modules have unique challenges because they depend on external identity providers (Google, GitHub, Auth0, etc.) that can't be called during testing. PDD now detects auth automatically and applies specialized patterns."*
+
+**Why Auth Modules Fail Without Special Handling**
+
+1. **Real provider calls in tests**: Generated tests try to call real OAuth endpoints, which fail without credentials
+2. **Missing token lifecycle**: Code handles login but not refresh, revocation, or expiry
+3. **Inline auth logic**: Auth is embedded in business logic modules instead of being separated, making it untestable
+4. **No mock boundaries**: Tests don't know where to mock because auth isn't injected as a dependency
+
+**How PDD Solves This (v2.x+)**
+
+PDD now includes auth-aware detection and scaffolding across the pipeline:
+
+- **Architecture step** (`pdd generate <issue>`): Detects OAuth/JWT/session auth in your PRD and separates auth concerns into dedicated modules tagged with "auth"
+- **Prompt generation**: Auth-tagged modules automatically get testability requirements (dependency injection), error handling requirements (expired tokens, CSRF), and test fixture references
+- **Test generation**: Auth modules get specialized test patterns — mock OAuth fixtures, pre-generated JWT tokens, token lifecycle testing, and per-stage OAuth flow testing (see `context/test.prompt` Pattern 14)
+- **Completeness validation**: Checks that auth modules cover the full token lifecycle and that business modules don't contain inline auth logic
+
+**Remediation for Existing Projects**
+
+1. Tag your auth modules with `"auth"` in `architecture.json`
+2. Add Pattern 14 fixtures from `context/test.prompt` to your test files
+3. Ensure auth modules use dependency injection (injectable OAuth client, injectable token verifier)
+4. Re-run `pdd sync` on auth modules to regenerate tests with auth-aware patterns
+
+---
+
+# Performance and Cost
+
+## Q: How do I manage large context windows in complex projects?
+
+As projects grow, the size of included files and examples can exceed the model's context window or lead to high costs. PDD provides several ways to manage this:
+
+1. **Selective Includes**: Use `select=` in your `<include>` tags to pull only the specific functions or classes you need.
+2. **Interface Mode**: Use `mode="interface"` for Python dependencies to include only signatures and docstrings.
+3. **Context Compression**: Use the global `--context-compression all` flag to automatically compress examples and test context across the entire project.
+
+## Q: What happens if context compression fails?
+
+If the system cannot compress a file (for example, if a dependency has syntax errors that prevent AST parsing), it will default to including the full file to ensure no critical context is lost. You can change this behavior with the `--compression-fallback {full,error}` flag:
+
+- `full` (default): Fallback to full file inclusion on compression error.
+- `error`: Stop and report an error if compression fails.

@@ -33,7 +33,7 @@ EXPECTED_ERROR_RETURN = {
     "fixed_code": STD_CODE,
     "total_cost": 0.0,
     "model_name": None,
-    "verification_issues_count": 0,
+    "verification_issues_count": -1,
 }
 
 # Define expected error return structure for parsing errors after verification LLM call
@@ -44,7 +44,7 @@ def expected_parse_error_return(cost=0.0, model=None):
         "fixed_code": STD_CODE,
         "total_cost": cost,
         "model_name": model,
-        "verification_issues_count": 0,
+        "verification_issues_count": -1,
     }
 
 # Mock the rich print function to avoid cluttering test output
@@ -259,7 +259,7 @@ def test_verification_llm_invoke_failure(mock_rprint):
     expected_return = EXPECTED_ERROR_RETURN.copy()
     expected_return['total_cost'] = 0.0
     expected_return['model_name'] = None
-    expected_return['verification_issues_count'] = 0 # Ensure this is 0 on LLM error
+    expected_return['verification_issues_count'] = -1 # Ensure this is -1 on LLM error
     assert result == expected_return
     mock_rprint.assert_any_call("[bold red]Error during verification LLM call:[/bold red] API Error")
 
@@ -446,3 +446,166 @@ def test_verbose_mode_runs(mock_markdown, mock_rprint):
 
 # The tests test_parsing_verification_no_details_tag and test_parsing_verification_empty_details_tag
 # were updated to correctly mock Pydantic objects and test the logic for handling empty/None details.
+
+
+# --- Bug #305 Regression Tests ---
+# These tests verify that LLM call failures return verification_issues_count: -1 (error signal)
+# instead of 0 (false success). See: https://github.com/promptdriven/pdd/issues/305
+
+@patch('pdd.fix_verification_errors.rprint')
+def test_verification_llm_invoke_failure_returns_error_signal(mock_rprint):
+    """
+    Regression test for GitHub issue #305: False success when LLM call fails.
+
+    When the verification LLM call fails with an exception (e.g., "Insufficient credits",
+    API timeout, network error), the function should return verification_issues_count: -1
+    to signal an error state, NOT 0 which the caller interprets as "success, no issues".
+
+    Bug behavior: Returns verification_issues_count: 0 → caller thinks success
+    Expected behavior: Returns verification_issues_count: -1 → caller knows error occurred
+
+    This test FAILS on the buggy code and PASSES once the fix is applied.
+    """
+    mock_load_template = MagicMock(side_effect=["find_template", "fix_template"])
+    mock_llm_invoke = MagicMock(side_effect=Exception("Insufficient credits"))
+
+    with patch('pdd.fix_verification_errors.load_prompt_template', mock_load_template), \
+         patch('pdd.fix_verification_errors.llm_invoke', mock_llm_invoke):
+        result = fix_verification_errors(
+            program=STD_PROGRAM,
+            prompt=STD_PROMPT,
+            code=STD_CODE,
+            output=STD_OUTPUT,
+            strength=STD_STRENGTH,
+            temperature=STD_TEMP
+        )
+
+    # CRITICAL ASSERTION: Must return -1 to signal error, NOT 0
+    # The current buggy code returns 0, which the loop misinterprets as "0 issues = success"
+    assert result['verification_issues_count'] == -1, \
+        f"Expected verification_issues_count=-1 to signal error, but got {result['verification_issues_count']}. " \
+        "This causes false success reporting when LLM fails (GitHub issue #305)."
+
+    # Other expected error state values
+    assert result['explanation'] is None
+    assert result['fixed_program'] == STD_PROGRAM
+    assert result['fixed_code'] == STD_CODE
+    assert result['model_name'] is None
+    mock_rprint.assert_any_call("[bold red]Error during verification LLM call:[/bold red] Insufficient credits")
+
+
+@patch('pdd.fix_verification_errors.rprint')
+def test_load_template_failure_returns_error_signal(mock_rprint):
+    """
+    Regression test for GitHub issue #305: Error signal on template loading failure.
+
+    When prompt template loading fails, the function should return verification_issues_count: -1
+    to signal an error state. This is another error path that currently returns 0.
+    """
+    mock_load_template = MagicMock(side_effect=FileNotFoundError("Template not found"))
+
+    with patch('pdd.fix_verification_errors.load_prompt_template', mock_load_template):
+        result = fix_verification_errors(
+            program=STD_PROGRAM,
+            prompt=STD_PROMPT,
+            code=STD_CODE,
+            output=STD_OUTPUT,
+            strength=STD_STRENGTH,
+            temperature=STD_TEMP,
+            verbose=False
+        )
+
+    # CRITICAL ASSERTION: Must return -1 to signal error
+    assert result['verification_issues_count'] == -1, \
+        f"Expected verification_issues_count=-1 to signal error, but got {result['verification_issues_count']}. " \
+        "This causes false success reporting when template loading fails (GitHub issue #305)."
+
+    assert result['explanation'] is None
+    assert result['model_name'] is None
+    mock_rprint.assert_any_call("[bold red]Error loading prompt templates:[/bold red] Template not found")
+
+
+@patch('pdd.fix_verification_errors.rprint')
+def test_parsing_failure_returns_error_signal(mock_rprint):
+    """
+    Regression test for GitHub issue #305: Error signal on parsing failure.
+
+    When the LLM returns an unparseable response (not VerificationOutput),
+    the function should return verification_issues_count: -1 to signal an error state.
+    """
+    mock_load_template = MagicMock(side_effect=["find_template", "fix_template"])
+    mock_llm_invoke = MagicMock(return_value={
+        'result': 'Random unparseable text from LLM',  # Not a VerificationOutput
+        'cost': 0.01,
+        'model_name': 'model-A',
+    })
+
+    with patch('pdd.fix_verification_errors.load_prompt_template', mock_load_template), \
+         patch('pdd.fix_verification_errors.llm_invoke', mock_llm_invoke):
+        result = fix_verification_errors(
+            program=STD_PROGRAM,
+            prompt=STD_PROMPT,
+            code=STD_CODE,
+            output=STD_OUTPUT,
+            strength=STD_STRENGTH,
+            verbose=True
+        )
+
+    # CRITICAL ASSERTION: Must return -1 to signal error
+    assert result['verification_issues_count'] == -1, \
+        f"Expected verification_issues_count=-1 to signal error, but got {result['verification_issues_count']}. " \
+        "This causes false success reporting when LLM response parsing fails (GitHub issue #305)."
+
+    mock_rprint.assert_any_call(
+        "[bold red]Error:[/bold red] Verification LLM call did not return the expected structured output."
+    )
+
+
+@patch('pdd.fix_verification_errors.rprint')
+@pytest.mark.parametrize("missing_arg", ["program", "prompt", "code"])
+def test_missing_input_returns_error_signal(mock_rprint, missing_arg):
+    """
+    Regression test for GitHub issue #305: Error signal on missing required inputs.
+
+    When required inputs are missing, the function should return verification_issues_count: -1
+    to signal an error state, not 0 which implies success.
+    """
+    inputs = {
+        "program": STD_PROGRAM,
+        "prompt": STD_PROMPT,
+        "code": STD_CODE,
+        "output": STD_OUTPUT,
+        "strength": STD_STRENGTH,
+        "temperature": STD_TEMP,
+    }
+    inputs[missing_arg] = ""  # Make input empty
+
+    result = fix_verification_errors(**inputs)
+
+    # CRITICAL ASSERTION: Must return -1 to signal error
+    assert result['verification_issues_count'] == -1, \
+        f"Expected verification_issues_count=-1 to signal error when {missing_arg} is empty, " \
+        f"but got {result['verification_issues_count']}. This causes false success (GitHub issue #305)."
+
+
+@patch('pdd.fix_verification_errors.rprint')
+@pytest.mark.parametrize("invalid_strength", [-0.1, 1.1])
+def test_invalid_strength_returns_error_signal(mock_rprint, invalid_strength):
+    """
+    Regression test for GitHub issue #305: Error signal on invalid parameters.
+
+    When strength is out of valid range, the function should return verification_issues_count: -1.
+    """
+    result = fix_verification_errors(
+        program=STD_PROGRAM,
+        prompt=STD_PROMPT,
+        code=STD_CODE,
+        output=STD_OUTPUT,
+        strength=invalid_strength,
+        temperature=STD_TEMP
+    )
+
+    # CRITICAL ASSERTION: Must return -1 to signal error
+    assert result['verification_issues_count'] == -1, \
+        f"Expected verification_issues_count=-1 to signal error for invalid strength={invalid_strength}, " \
+        f"but got {result['verification_issues_count']}. This causes false success (GitHub issue #305)."

@@ -1,0 +1,49 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/components/FileBrowser.tsx`, a reusable tree picker for files/directories that can render inline or as a modal.
+
+% Dependencies
+<file_browser_dependencies>
+  <include-many>pdd/frontend/api.ts, pdd/frontend/components/Icon.tsx</include-many>
+</file_browser_dependencies>
+
+Requirements
+1. Export default `FileBrowser` with props:
+   - `onSelect(path: string): void`
+   - optional `onClose?: () => void`
+   - optional `filter?: string | string[]`
+   - optional `title?: string` (default `'Select File'`)
+   - optional `directoryMode?: boolean` (default `false`)
+2. Define `TreeNodeProps` for recursive rendering (`node: FileTreeNode`, `onSelect`, optional normalized `filter?: string[]`, `depth`, optional `directoryMode`).
+3. Add `FileIcon({ type, name })` using muted `surface-400` icon styling:
+   - directory -> `FolderIcon`
+   - `.prompt` -> `DocumentTextIcon`
+   - `.py|.ts|.tsx|.js|.jsx` -> `CodeBracketIcon`
+   - `.json` -> `ClipboardDocumentListIcon`
+   - `.md` and fallback -> `DocumentIcon`
+4. Implement recursive `TreeNode`:
+   - local `isExpanded` default `depth < 2`
+   - row click toggles directories, selects files
+   - depth indentation via inline left padding `depth * 16 + 8`
+   - directory chevron (`ChevronDownIcon` expanded, rotated `ChevronUpIcon` collapsed)
+5. Visibility/filtering rules:
+   - directories are always eligible
+   - `directoryMode` hides all files
+   - otherwise files pass when no filter or when file name matches any extension in filter (`endsWith`)
+   - compute `visibleChildren` with same rules
+   - hide empty directories only when filter is active and `directoryMode` is false
+6. In `directoryMode`, show `Select` button for directories; click must `stopPropagation()` and call `onSelect(node.path)`.
+7. Maintain state: `tree`, `loading`, `error`, `searchQuery`; normalize `filter` to `string[] | undefined`.
+8. On mount, call `api.getFileTree('', 5)` in `loadTree()` with loading/error handling and fallback error text `'Failed to load file tree'`.
+9. Render content states:
+   - loading panel: `Loading files...`
+   - error panel with retry button (`loadTree`)
+   - success panel with header, search/status row, and tree body
+10. Success panel details:
+    - header shows `title`; render close button with inline X SVG only when `onClose` exists
+    - search input is controlled by `searchQuery` (`placeholder: "Search files..."`) and is UI-only (no search filtering)
+    - status text: `Showing directories only` in directory mode, otherwise `Showing: ${normalizedFilter.join(', ')}` when filter exists
+    - body renders root `TreeNode` or `No files found`
+11. If `onClose` is provided, wrap content in modal overlay (`fixed inset-0 bg-black/60`, centered dialog `w-full max-w-md mx-4`) and close only on backdrop click (`e.target === e.currentTarget`).
+12. Without `onClose`, return inline content. Preserve current dark Tailwind `surface`/`accent` styling and transitions.
+
+Deliverable
+- Output only `pdd/frontend/components/FileBrowser.tsx`.

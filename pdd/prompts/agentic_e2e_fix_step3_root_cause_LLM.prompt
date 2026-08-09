@@ -1,8 +1,19 @@
+<pdd-reason>Step 3 of the agentic E2E fix workflow: root causes the E2E test failures.</pdd-reason>
+
+<pdd-interface>
+{{{{
+  "type": "config",
+  "config": {{{{
+    "keys": ["issue_url", "repo_owner", "repo_name", "issue_number", "cycle_number", "max_cycles", "issue_content", "step1_output", "step2_output"]
+  }}}}
+}}}}
+</pdd-interface>
+
 % You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to root cause the e2e test failures.
 
 % Context
 
-You are working on step 3 of 9 in an agentic e2e fix workflow. E2e tests are failing and you need to determine whether the problem is in the code, the tests, or both.
+You are working on step 3 of 11 in an agentic e2e fix workflow. E2e tests are failing and you need to determine whether the problem is in the code, the tests, or both.
 
 % Inputs
 
@@ -32,20 +43,29 @@ You are working on step 3 of 9 in an agentic e2e fix workflow. E2e tests are fai
    - Identify the assertion that failed or exception that was raised
    - Trace back to understand what behavior was unexpected
 
-2. **Review the documentation**
-   - Check project README, CLAUDE.md, or other docs
-   - Look for the expected behavior of the functionality being tested
-   - Understand what the correct behavior should be
+2. **Review the authoritative specification**
+   - **The `.prompt` file is the source of truth.** For every module under test, find its associated prompt file at `pdd/prompts/<module_name>_<language>.prompt`. The prompt is the authoritative specification; the code is a generated artifact. When the code disagrees with the prompt, it's a CODE_BUG — the code doesn't match the spec.
+   - Also check project README, CLAUDE.md, and other docs for expected behavior.
+   - If no prompt file exists for a module, fall back to documentation and docstrings.
 
-3. **Compare expected vs actual**
-   - Based on documentation, what should the code do?
+3. **Compare expected vs actual (prompt takes precedence over code)**
+   - Based on the prompt file and documentation, what should the code do?
    - What is the test expecting?
    - What is the code actually doing?
+   - **If the code disagrees with the prompt**: CODE_BUG (the code doesn't match its spec, even if the code "works")
+   - **If the test disagrees with the prompt**: TEST_BUG (the test expects wrong behavior)
+   - **If both disagree with the prompt**: BOTH
 
-4. **Determine root cause category**
+4. **Assess fix scope: localized vs cross-cutting**
+   Before jumping to a fix, count how many places would need the same change:
+   - If the same pattern (e.g., `if not flag:`, `try/except`, `config.get(...)`) would need to be added to 5+ call sites, the right fix is usually a **centralized mechanism** — a new utility module, a decorator, a context manager, a monkey-patch, an environment variable, or a config object. Don't patch 10 functions with the same guard when one mechanism at a higher level solves it.
+   - If the fix is truly localized to 1-4 places, a direct code change is fine.
+
+5. **Determine root cause category**
    - **CODE_BUG**: Code behavior doesn't match documented/expected behavior
    - **TEST_BUG**: Test expectations don't match documented/expected behavior
    - **BOTH**: Both code and tests have issues
+   - **NOT_A_BUG**: The reported issue is not actually a bug (e.g., expected behavior, user error, or feature request). The workflow should stop here.
    - **UNCLEAR**: Need more investigation
 
 % Output
@@ -61,7 +81,7 @@ Your comment should follow this format:
 ```markdown
 ## Step 3: Root Cause Analysis (Cycle {cycle_number})
 
-**Status:** [CODE_BUG | TEST_BUG | BOTH | UNCLEAR]
+**Status:** [CODE_BUG | TEST_BUG | BOTH | NOT_A_BUG | UNCLEAR]
 
 ### Failure Analysis
 
@@ -77,9 +97,10 @@ Your comment should follow this format:
 [If CODE_BUG: Which dev units need fixing]
 [If TEST_BUG: Which test assertions need updating]
 [If BOTH: Both fixes needed]
+[If NOT_A_BUG: Explain why this is not a bug and the workflow should stop]
 
 ---
-*Proceeding to Step 4: Fix E2E Tests (if needed)*
+*If status is NOT_A_BUG: workflow complete, stopping here. Otherwise: proceeding to Step 4 – Fix E2E Tests (if needed).*
 ```
 
 % Important
@@ -87,3 +108,7 @@ Your comment should follow this format:
 - Be thorough in understanding the documented expected behavior
 - If documentation is unclear, note that and make a reasonable judgment
 - Always post your findings as a GitHub comment before completing
+
+% Important — MANDATORY
+
+- **You MUST include your status classification (CODE_BUG, TEST_BUG, BOTH, NOT_A_BUG, or UNCLEAR) as an exact string in your response.** The orchestrator parses your output for these tokens. If the issue is not a bug, you MUST include `NOT_A_BUG`. Omitting the token causes the workflow to proceed unnecessarily.

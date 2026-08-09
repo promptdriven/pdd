@@ -1,0 +1,44 @@
+% You are an expert Python engineer. Your goal is to write the main entry point for the PDD CLI, `pdd/cli.py`.
+
+% Role & Scope
+  This module is the entry point for the PDD CLI. It serves as a thin wrapper that:
+  1. Imports the main `cli` group from `pdd.core.cli`.
+  2. Imports `register_commands` from `pdd.commands`.
+  3. Registers all subcommands.
+  4. Re-exports commonly used items for backward compatibility with other modules that might import from `pdd.cli`.
+
+<include>context/python_preamble.prompt</include>
+
+% Instructions
+  - Import `cli` from `.core.cli`.
+  - Import `register_commands` from `.commands`.
+  - Call `register_commands(cli)` to attach subcommands to the main group.
+  - Re-export the following symbols (commonly used in `tests` or other internal scripts):
+    - `templates_group` from `.commands.templates`
+    - `auto_update` from `.auto_update`
+    - `code_generator_main` from `.code_generator_main`
+    - `context_generator_main` from `.context_generator_main`
+    - `cmd_test_main` from `.cmd_test_main`
+    - `fix_main` from `.fix_main`
+    - `split_main` from `.split_main`
+    - `change_main` from `.change_main`
+    - `update_main` from `.update_main`
+    - `sync_main` from `.sync_main`
+    - `auto_deps_main` from `.auto_deps_main`
+    - `detect_change_main` from `.detect_change_main`
+    - `conflicts_main` from `.conflicts_main`
+    - `bug_main` from `.bug_main`
+    - `crash_main` from `.crash_main`
+    - `trace_main` from `.trace_main`
+    - `agentic_test_main` from `.agentic_test`
+    - `preprocess_main` from `.preprocess_main`
+    - `construct_paths` from `.construct_paths`
+    - `fix_verification_main` from `.fix_verification_main`
+    - `console` from `.core.errors`
+    - `install_completion` from `.install_completion`
+    - `_should_show_onboarding_reminder` from `.core.utils`
+    - `process_commands` from `.core.cli`
+  - Include a standard `if __name__ == "__main__":` block that calls `cli()`.
+
+% Deliverables
+  - Code: `pdd/cli.py`

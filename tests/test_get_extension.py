@@ -64,7 +64,13 @@ def test_get_extension_csv_malformed(mock_env_pdd_path):  # pylint: disable=unus
 
 def test_get_extension_extension_not_string(mock_env_pdd_path):  # pylint: disable=unused-argument, redefined-outer-name
     """Test that a non-string extension is treated as invalid."""
-    invalid_df = SAMPLE_CSV_DATA.copy()
-    invalid_df.loc[0, 'extension'] = 123
+    # pandas 3.0 made string dtype strict, so a plain `.loc[...] = 123`
+    # assignment into a str column raises. Construct the column as object
+    # dtype up-front so the mixed-type case can be exercised faithfully.
+    invalid_df = pd.DataFrame({
+        'language': SAMPLE_CSV_DATA['language'],
+        'comment': SAMPLE_CSV_DATA['comment'],
+        'extension': pd.Series([123, '.java', '.sh', ''], dtype=object),
+    })
     with patch('pdd.get_extension.pd.read_csv', return_value=invalid_df):
         assert get_extension('Python') == ''

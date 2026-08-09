@@ -3,26 +3,78 @@ from __future__ import annotations
 
 import sys
 import os
+import glob
 from pathlib import Path
 from typing import Dict, Tuple, Any, Optional, List, Callable
 import fnmatch
 import logging
+import warnings
 
 import click
 import yaml
-from rich.console import Console
 from rich.theme import Theme
 
+from .cli_theme import get_console
 from .get_extension import get_extension
 from .get_language import get_language
-from .generate_output_paths import generate_output_paths
+from .generate_output_paths import EXAMPLES_DIR, generate_output_paths
+
+
+def _resolve_default_examples_dir(project_root: Optional[Path] = None) -> str:
+    """Return the default examples-dir name when no `.pddrc` configures one.
+
+    Returns :data:`EXAMPLES_DIR` (canonical default). Only falls back to
+    ``"context"`` when the project root has no ``examples/`` directory AND a
+    ``context/`` directory containing at least one ``*_example.*`` file — i.e.
+    actual evidence of a legacy examples layout, not just any context content
+    (PRDs, schemas, docs are NOT a legacy-examples signal). This prevents the
+    original mismatch from staying alive on greenfield projects (#616).
+    """
+    root = project_root or Path.cwd()
+    examples = root / EXAMPLES_DIR
+    legacy = root / "context"
+    if examples.exists() or not legacy.is_dir():
+        return EXAMPLES_DIR
+    try:
+        if next(legacy.rglob("*_example.*"), None) is not None:
+            return "context"
+    except OSError:
+        pass
+    return EXAMPLES_DIR
+
+
+def _default_examples_project_root(pddrc_path: Optional[Path]) -> Path:
+    """Return the base directory used for implicit examples-dir detection."""
+    return pddrc_path.parent if pddrc_path else Path.cwd()
 
 # Assume generate_output_paths raises ValueError on unknown command
 
 # Add csv import for the new helper function
 import csv
 
-console = Console(theme=Theme({"info": "cyan", "warning": "yellow", "error": "bold red"}))
+console = get_console(theme=Theme({"info": "cyan", "warning": "yellow", "error": "bold red"}))
+
+def _extract_prefix_from_prompts_dir(prompts_dir: str) -> str:
+    """Extract the path suffix after the 'prompts' segment in a prompts_dir value.
+
+    Splits on '/' and finds the exact 'prompts' segment, then returns everything
+    after it.  Returns empty string when prompts_dir is exactly 'prompts' or ends
+    at a 'prompts' segment.  Falls back to returning the full normalized path when
+    no exact 'prompts' segment exists.
+
+    Examples:
+        "prompts"                                    -> ""
+        "prompts/frontend"                           -> "frontend"
+        "extensions/github_pdd_app/prompts/frontend" -> "frontend"
+        "extensions/app/prompts"                     -> ""
+    """
+    normalized = prompts_dir.rstrip('/')
+    parts = normalized.split('/')
+    try:
+        idx = parts.index('prompts')
+    except ValueError:
+        return normalized
+    return '/'.join(parts[idx + 1:])
 
 # Shared mapping of language → file extension used across the codebase.
 BUILTIN_EXT_MAP = {
@@ -32,8 +84,12 @@ BUILTIN_EXT_MAP = {
     'scala': '.scala', 'r': '.r', 'lua': '.lua', 'perl': '.pl', 'bash': '.sh',
     'shell': '.sh', 'powershell': '.ps1', 'sql': '.sql', 'html': '.html', 'css': '.css',
     'prompt': '.prompt', 'makefile': '',
+    # Frontend framework variants
+    'typescriptreact': '.tsx', 'javascriptreact': '.jsx',
+    'svelte': '.svelte', 'vue': '.vue',
     # Common data/config formats
     'json': '.json', 'jsonl': '.jsonl', 'yaml': '.yaml', 'yml': '.yml', 'toml': '.toml', 'ini': '.ini',
+    'markdown': '.md',
 }
 
 # Configuration loading functions
@@ -41,7 +97,7 @@ def _find_pddrc_file(start_path: Optional[Path] = None) -> Optional[Path]:
     """Find .pddrc file by searching upward from the given path."""
     if start_path is None:
         start_path = Path.cwd()
-    
+
     # Search upward through parent directories
     for path in [start_path] + list(start_path.parents):
         pddrc_file = path / ".pddrc"
@@ -49,19 +105,127 @@ def _find_pddrc_file(start_path: Optional[Path] = None) -> Optional[Path]:
             return pddrc_file
     return None
 
+
+def _find_nearest_pddrc_for_file(
+    file_path: Path,
+    stop_at: Optional[Path] = None,
+) -> Tuple[Optional[Path], Optional[Path]]:
+    """Find the nearest .pddrc to a file, searching upward from its directory.
+
+    Returns (pddrc_path, effective_root) where effective_root is the
+    directory containing the .pddrc. Returns (None, None) if not found.
+    """
+    start = file_path.parent if file_path.is_file() else file_path
+    stop_at_resolved = stop_at.resolve() if stop_at else None
+
+    for path in [start] + list(start.parents):
+        pddrc_file = path / ".pddrc"
+        if pddrc_file.is_file():
+            return pddrc_file, path
+        if stop_at_resolved and path.resolve() == stop_at_resolved:
+            break
+    return None, None
+
+# Schema for .pddrc validation — see issue #1198.
+# Unknown keys at any level emit a UserWarning rather than being silently ignored.
+_PDDRC_ROOT_KEYS = {"version", "contexts", "checkup", "ci"}
+_PDDRC_CHECKUP_KEYS = {"prompt_gate"}
+_PDDRC_CI_KEYS = {"external_setup_fail_open", "manual_trigger_comment", "manual_triggers"}
+_PDDRC_CONTEXT_KEYS = {"paths", "defaults"}
+_PDDRC_DEFAULTS_KEYS = {
+    "generate_output_path",
+    "test_output_path",
+    "example_output_path",
+    "prompts_dir",
+    "default_language",
+    "target_coverage",
+    "strength",
+    "temperature",
+    "budget",
+    "max_attempts",
+    "compressed_context",
+    "outputs",
+    "auto_deps_csv_path",
+    "context_compression",
+    "compress_examples",
+    "compress_test_context",
+    "compression_fallback",
+    "test_token_budget",
+    "test_ranking_weights",
+    "test_dedup_threshold",
+}
+
+
+def _warn_unknown_pddrc_key(key: str, path: str) -> None:
+    """Emit the standard unknown-key warning for .pddrc (issue #1198)."""
+    warnings.warn(
+        f"WARNING: .pddrc contains unknown key '{key}' at path '{path}', ignored. "
+        f"Run 'pdd setup' to regenerate.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def _validate_pddrc_keys(config: Dict[str, Any]) -> None:
+    """Validate that .pddrc contains only known keys.
+
+    Emits a UserWarning for each unknown key at the root, context, or
+    defaults levels. Does not raise; unknown keys are ignored but reported
+    so users can catch typos and stale config (issue #1198).
+    """
+    # Root level
+    for key in config.keys():
+        if key not in _PDDRC_ROOT_KEYS:
+            _warn_unknown_pddrc_key(key, key)
+
+    checkup = config.get("checkup", {})
+    if isinstance(checkup, dict):
+        for key in checkup.keys():
+            if key not in _PDDRC_CHECKUP_KEYS:
+                _warn_unknown_pddrc_key(key, f"checkup.{key}")
+
+    ci_config = config.get("ci", {})
+    if isinstance(ci_config, dict):
+        for key in ci_config.keys():
+            if key not in _PDDRC_CI_KEYS:
+                _warn_unknown_pddrc_key(key, f"ci.{key}")
+
+    contexts = config.get("contexts", {})
+    if not isinstance(contexts, dict):
+        return
+
+    for ctx_name, ctx_config in contexts.items():
+        if not isinstance(ctx_config, dict):
+            continue
+
+        # Context level
+        for key in ctx_config.keys():
+            if key not in _PDDRC_CONTEXT_KEYS:
+                _warn_unknown_pddrc_key(key, f"contexts.{ctx_name}.{key}")
+
+        # Defaults level
+        defaults = ctx_config.get("defaults", {})
+        if isinstance(defaults, dict):
+            for key in defaults.keys():
+                if key not in _PDDRC_DEFAULTS_KEYS:
+                    _warn_unknown_pddrc_key(
+                        key, f"contexts.{ctx_name}.defaults.{key}"
+                    )
+
 def _load_pddrc_config(pddrc_path: Path) -> Dict[str, Any]:
     """Load and parse .pddrc configuration file."""
     try:
         with open(pddrc_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
-        
+
         if not isinstance(config, dict):
             raise ValueError(f"Invalid .pddrc format: expected dictionary at root level")
-        
+
         # Validate basic structure
         if 'contexts' not in config:
             raise ValueError(f"Invalid .pddrc format: missing 'contexts' section")
-        
+
+        _validate_pddrc_keys(config)
         return config
     except yaml.YAMLError as e:
         raise ValueError(f"YAML syntax error in .pddrc: {e}")
@@ -137,13 +301,33 @@ def _match_path_to_contexts(
     return 'default' if 'default' in contexts else None
 
 
-def _detect_context_from_basename(basename: str, config: Dict[str, Any]) -> Optional[str]:
-    """Detect context by matching a sync basename against prompts_dir prefixes or paths patterns."""
+def _detect_context_from_basename(
+    basename: str,
+    config: Dict[str, Any],
+    pddrc_path: Optional[Path] = None,
+) -> Optional[str]:
+    """Detect context by matching a sync basename against prompts_dir prefixes or paths patterns.
+
+    When a context's ``prompts_dir`` ends at a ``prompts`` segment with a parent
+    (e.g. ``extensions/app/prompts``), the extracted prefix is empty — ``pdd sync``
+    basenames for that context are naturally relative to the extension's
+    ``prompts_dir``.  Such contexts are skipped by prefix-matching and typically
+    also by path-pattern matching; when no syntactic match succeeds the filesystem
+    is checked for the expected prompt file (Issue #1165).
+
+    Args:
+        pddrc_path: Path to the ``.pddrc`` whose ``config`` was loaded.  Used to
+            resolve relative ``prompts_dir`` paths during the filesystem fallback.
+            When omitted, falls back to ``_find_pddrc_file()`` (cwd-based search).
+    """
     if not basename:
         return None
 
     contexts = config.get('contexts', {})
     matches = []
+    # Contexts whose prompts_dir is nested (e.g. extensions/app/prompts) and
+    # produces an empty prefix — deferred for filesystem disambiguation.
+    nested_candidates: list = []
 
     for context_name, context_config in contexts.items():
         if context_name == 'default':
@@ -152,16 +336,18 @@ def _detect_context_from_basename(basename: str, config: Dict[str, Any]) -> Opti
         defaults = context_config.get('defaults', {})
         prompts_dir = defaults.get('prompts_dir', '')
         if prompts_dir:
-            normalized = prompts_dir.rstrip('/')
-            prefix = normalized
-            if normalized == 'prompts':
-                prefix = ''
-            elif normalized.startswith('prompts/'):
-                prefix = normalized[len('prompts/'):]
+            prefix = _extract_prefix_from_prompts_dir(prompts_dir)
 
             if prefix and (basename == prefix or basename.startswith(prefix + '/')):
                 matches.append((context_name, len(prefix)))
                 continue
+
+            # Empty prefix with a nested prompts_dir (parent segments before
+            # "prompts") — defer to filesystem disambiguation below.
+            if not prefix:
+                parts = prompts_dir.rstrip('/').split('/')
+                if len(parts) > 1 and parts[-1] == 'prompts':
+                    nested_candidates.append((context_name, prompts_dir))
 
         for path_pattern in context_config.get('paths', []):
             pattern_base = path_pattern.rstrip('/**').rstrip('/*')
@@ -169,6 +355,25 @@ def _detect_context_from_basename(basename: str, config: Dict[str, Any]) -> Opti
                basename.startswith(pattern_base + '/') or \
                basename == pattern_base:
                 matches.append((context_name, len(pattern_base)))
+
+    # Filesystem disambiguation for nested prompts_dir contexts whose basename
+    # didn't match syntactically.  Uses a direct glob (not rglob) to avoid
+    # walking deep trees.
+    if not matches and nested_candidates:
+        resolved_pddrc = pddrc_path or _find_pddrc_file()
+        if resolved_pddrc:
+            pddrc_parent = resolved_pddrc.parent
+            if '/' in basename:
+                dir_part, name_part = basename.rsplit('/', 1)
+            else:
+                dir_part, name_part = '', basename
+            for context_name, prompts_dir in nested_candidates:
+                candidate_dir = pddrc_parent / prompts_dir
+                if dir_part:
+                    candidate_dir = candidate_dir / dir_part
+                if candidate_dir.is_dir() and \
+                   any(candidate_dir.glob(f"{glob.escape(name_part)}_*.prompt")):
+                    matches.append((context_name, len(prompts_dir)))
 
     if not matches:
         return None
@@ -275,8 +480,24 @@ def detect_context_for_file(file_path: str, repo_root: Optional[str] = None) -> 
     else:
         relative_path = file_path
 
-    # Find and load .pddrc
-    pddrc_path = _find_pddrc_file(Path(repo_root))
+    # Find and load .pddrc — when repo_root was explicitly provided, prefer
+    # the .pddrc at that location (the caller already resolved the nearest one).
+    # Only fall back to searching from the file when repo_root was auto-detected.
+    pddrc_path = None
+    repo_root_pddrc = Path(repo_root) / ".pddrc"
+    if repo_root_pddrc.is_file():
+        pddrc_path = repo_root_pddrc
+    if not pddrc_path:
+        pddrc_path = _find_pddrc_file(Path(file_path).parent)
+
+    # If the .pddrc lives in a directory different from repo_root, recalculate
+    # repo_root_abs and relative_path so context matching works correctly
+    if pddrc_path:
+        pddrc_root_abs = os.path.abspath(str(pddrc_path.parent))
+        if file_path_abs.startswith(pddrc_root_abs + os.sep) or file_path_abs == pddrc_root_abs:
+            repo_root_abs = pddrc_root_abs
+            relative_path = os.path.relpath(file_path_abs, repo_root_abs)
+
     if not pddrc_path:
         return None, {}
 
@@ -340,6 +561,14 @@ def _resolve_config_hierarchy(
         'temperature': None,
         'budget': None,
         'max_attempts': None,
+        'auto_deps_csv_path': 'PDD_AUTO_DEPS_CSV_PATH',
+        'context_compression': 'PDD_CONTEXT_COMPRESSION',
+        'compress_examples': 'PDD_COMPRESS_EXAMPLES',
+        'compress_test_context': 'PDD_COMPRESS_TEST_CONTEXT',
+        'compression_fallback': 'PDD_COMPRESSION_FALLBACK',
+        'test_token_budget': 'PDD_TEST_TOKEN_BUDGET',
+        'test_ranking_weights': 'PDD_TEST_RANKING_WEIGHTS',
+        'test_dedup_threshold': 'PDD_TEST_DEDUP_THRESHOLD',
     }
 
     for config_key, env_var in config_keys.items():
@@ -419,7 +648,7 @@ def resolve_effective_config(
             else:
                 context = _detect_context(cwd, pddrc_config, None)
         elif basename_hint:
-            detected_context = _detect_context_from_basename(basename_hint, pddrc_config)
+            detected_context = _detect_context_from_basename(basename_hint, pddrc_config, pddrc_path=pddrc_path)
             if detected_context:
                 context = detected_context
             else:
@@ -536,53 +765,76 @@ def _candidate_prompt_path(input_files: Dict[str, Path]) -> Path | None:
 def _is_known_language(language_name: str) -> bool:
     """Return True if the language is recognized.
 
-    Prefer CSV in PDD_PATH if available; otherwise fall back to a built-in set
-    so basename/language inference does not fail when PDD_PATH is unset.
+    Resolve only through the package-bundled protected language registry.
     """
     language_name_lower = (language_name or "").lower()
     if not language_name_lower:
         return False
 
-    builtin_languages = {
-        'python', 'javascript', 'typescript', 'typescriptreact', 'javascriptreact',
-        'java', 'cpp', 'c', 'go', 'ruby', 'rust',
-        'kotlin', 'swift', 'csharp', 'php', 'scala', 'r', 'lua', 'perl', 'bash', 'shell',
-        'powershell', 'sql', 'prompt', 'html', 'css', 'makefile',
-        # Additional languages from language_format.csv
-        'haskell', 'dart', 'elixir', 'clojure', 'julia', 'erlang', 'fortran',
-        'nim', 'ocaml', 'groovy', 'coffeescript', 'fish', 'zsh',
-        'prisma', 'lean', 'agda',
-        # Frontend / templating
-        'svelte', 'vue', 'scss', 'sass', 'less',
-        'jinja', 'handlebars', 'pug', 'ejs', 'twig',
-        # Modern / systems languages
-        'zig', 'mojo', 'solidity',
-        # Config / query / infra
-        'graphql', 'protobuf', 'terraform', 'hcl', 'nix',
-        'glsl', 'wgsl', 'starlark', 'dockerfile',
-        # Common data and config formats for architecture prompts and configs
-        'json', 'jsonl', 'yaml', 'yml', 'toml', 'ini'
-    }
-
-    pdd_path_str = os.getenv('PDD_PATH')
-    if not pdd_path_str:
-        return language_name_lower in builtin_languages
-
-    csv_file_path = Path(pdd_path_str) / 'data' / 'language_format.csv'
-    if not csv_file_path.is_file():
-        return language_name_lower in builtin_languages
+    from pdd.sync_core.language import LanguageRegistry, LanguageRegistryError
 
     try:
-        with open(csv_file_path, mode='r', encoding='utf-8', newline='') as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                if row.get('language', '').lower() == language_name_lower:
-                    return True
-    except csv.Error as e:
-        console.print(f"[error]CSV Error reading {csv_file_path}: {e}", style="error")
-        return language_name_lower in builtin_languages
+        LanguageRegistry.bundled().resolve_alias(language_name_lower)
+    except LanguageRegistryError:
+        return False
+    return True
 
-    return language_name_lower in builtin_languages
+
+# Languages that only produce a code output (no test/example).
+# Config, data, markup, and non-executable formats.
+_CODE_ONLY_LANGUAGES = {
+    'json', 'jsonl', 'yaml', 'yml', 'toml', 'ini', 'csv',
+    'xml', 'html', 'css', 'scss', 'sass', 'less',
+    'markdown', 'latex', 'log', 'restructuredtext', 'text',
+    'sql', 'graphql', 'protobuf',
+    'makefile', 'dockerfile',
+    'terraform', 'hcl', 'nix', 'starlark',
+    'glsl', 'wgsl',
+    'prisma',
+}
+
+
+def get_language_outputs(language_name: str) -> set[str]:
+    """Return the set of expected output types for a given language.
+
+    Executable/programmable languages produce {'code', 'test', 'example'}.
+    Config/data/markup languages produce {'code'} only.
+    Unknown languages default to {'code', 'test', 'example'}.
+
+    Uses the ``outputs`` column from ``language_format.csv`` when available,
+    falling back to the built-in ``_CODE_ONLY_LANGUAGES`` set.
+    """
+    language_lower = (language_name or '').lower()
+    if not language_lower:
+        return {'code', 'test', 'example'}
+
+    # Try CSV first (has an 'outputs' column after Step 2)
+    pdd_path_str = os.getenv('PDD_PATH')
+    if pdd_path_str:
+        csv_file_path = Path(pdd_path_str) / 'data' / 'language_format.csv'
+        if csv_file_path.is_file():
+            try:
+                with open(csv_file_path, mode='r', encoding='utf-8', newline='') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        if row.get('language', '').lower() == language_lower:
+                            outputs_val = row.get('outputs', '').strip()
+                            if outputs_val:
+                                return set(outputs_val.split('|'))
+                            # Column exists but empty – fall through to built-in
+                            break
+            except csv.Error:
+                pass
+
+    # Built-in fallback
+    if language_lower in _CODE_ONLY_LANGUAGES:
+        return {'code'}
+
+    if _is_known_language(language_lower):
+        return {'code', 'test', 'example'}
+
+    # Unknown language – assume full outputs
+    return {'code', 'test', 'example'}
 
 
 def _strip_language_suffix(path_like: os.PathLike[str]) -> str:
@@ -603,13 +855,63 @@ def _strip_language_suffix(path_like: os.PathLike[str]) -> str:
         if candidate_lang == 'prompt' and p.suffix != '.prompt':
             return stem
         return "_".join(parts[:-1])
-    
+
     return stem
+
+
+def _strip_language_suffix_with_subdir(
+    prompt_path: Path,
+    prompts_dir: Optional[str] = None,
+) -> str:
+    """Strip language suffix from a prompt path, preserving subdirectory components.
+
+    For nested prompts like ``prompts/commands/fix_python.prompt``, the
+    subdirectory relative to the configured prompts root is part of the
+    basename. When ``prompts_dir`` is supplied (typically from .pddrc), its
+    path segments are used as the anchor so a configured prompts root of
+    e.g. ``prompts/backend`` is treated as the root rather than the literal
+    ``prompts`` segment. Falls back to the literal ``prompts/`` anchor when
+    ``prompts_dir`` is not supplied or doesn't match the path.
+    """
+    stripped_name = _strip_language_suffix(prompt_path)
+    parts = prompt_path.parts
+
+    if prompts_dir:
+        normalized = str(prompts_dir).replace('\\', '/').rstrip('/')
+        dir_parts = tuple(p for p in normalized.split('/') if p and p != '.')
+        if dir_parts:
+            for start in range(len(parts) - len(dir_parts), -1, -1):
+                if start < 0:
+                    break
+                if tuple(parts[start:start + len(dir_parts)]) == dir_parts:
+                    anchor_end = start + len(dir_parts)
+                    subdir_parts = parts[anchor_end:-1]
+                    if subdir_parts:
+                        return str(Path(*subdir_parts) / stripped_name)
+                    return stripped_name
+
+    # Fall back to anchoring on the literal "prompts" segment
+    try:
+        prompts_idx = len(parts) - 1 - list(reversed(parts)).index("prompts")
+    except ValueError:
+        # No "prompts" directory in path — check for subdirectory parent
+        # that isn't a filesystem root (e.g. "commands/fix_python.prompt")
+        parent = prompt_path.parent
+        if parent != Path(".") and not parent.is_absolute():
+            return str(parent / stripped_name)
+        return stripped_name
+
+    # Everything between prompts/ and the filename is the subdir prefix
+    subdir_parts = parts[prompts_idx + 1 : -1]
+    if subdir_parts:
+        return str(Path(*subdir_parts) / stripped_name)
+    return stripped_name
 
 
 def _extract_basename(
     command: str,
     input_file_paths: Dict[str, Path],
+    prompts_dir: Optional[str] = None,
 ) -> str:
     """
     Deduce the project basename according to the rules explained in *Step A*.
@@ -619,8 +921,8 @@ def _extract_basename(
         prompt_path = _candidate_prompt_path(input_file_paths)
         if not prompt_path:
             raise ValueError("Could not determine prompt file for 'fix' command.")
-        
-        prompt_basename = _strip_language_suffix(prompt_path)
+
+        prompt_basename = _strip_language_suffix_with_subdir(prompt_path, prompts_dir)
         
         unit_test_path = input_file_paths.get("unit_test_file")
         if not unit_test_path:
@@ -662,7 +964,7 @@ def _extract_basename(
     # General case: Use the primary prompt file
     prompt_path = _candidate_prompt_path(input_file_paths)
     if prompt_path:
-        return _strip_language_suffix(prompt_path)
+        return _strip_language_suffix_with_subdir(prompt_path, prompts_dir)
 
     # Fallback: If no prompt found (e.g., command only takes code files?),
     # use the first input file's stem. This requires input_file_paths not to be empty.
@@ -800,8 +1102,36 @@ def construct_paths(
     original_context_config = {}  # Keep track of original context config for sync discovery
     
     try:
-        # Find and load .pddrc file
-        pddrc_path = _find_pddrc_file()
+        # Issue #1211: when invoked from a parent directory, prefer the .pddrc
+        # nearest the input prompt file — but only when that .pddrc is a
+        # descendant of the CWD-based one (i.e., a subproject within the same
+        # project tree). When the prompt comes from an unrelated tree (e.g. a
+        # fixture file), use the CWD-based .pddrc.
+        cwd_pddrc = _find_pddrc_file()
+        prompt_pddrc = None
+        if input_file_paths:
+            prompt_file_hint = input_file_paths.get("prompt_file")
+            if prompt_file_hint:
+                # _find_pddrc_file walks [start] + start.parents, so passing the
+                # prompt path directly resolves the same .pddrc whether the hint
+                # is a file or a directory — no explicit exists()/is_file() needed.
+                prompt_pddrc = _find_pddrc_file(Path(prompt_file_hint))
+        # Tracks whether we selected a subproject .pddrc that lives BELOW the run
+        # CWD. In that case relative output dirs must anchor at the subproject
+        # (config_base), not the CWD — otherwise sync/fix write outside it (#1211).
+        subproject_pddrc_below_cwd = False
+        if prompt_pddrc is None:
+            pddrc_path = cwd_pddrc
+        elif cwd_pddrc is None:
+            pddrc_path = prompt_pddrc
+            subproject_pddrc_below_cwd = True
+        else:
+            try:
+                prompt_pddrc.parent.resolve().relative_to(cwd_pddrc.parent.resolve())
+                pddrc_path = prompt_pddrc  # descendant — more specific subproject
+                subproject_pddrc_below_cwd = prompt_pddrc != cwd_pddrc
+            except ValueError:
+                pddrc_path = cwd_pddrc    # unrelated tree — keep local .pddrc
         if pddrc_path:
             pddrc_config = _load_pddrc_config(pddrc_path)
             
@@ -822,7 +1152,7 @@ def construct_paths(
                 else:
                     basename_hint = command_options.get("basename")
                     if basename_hint:
-                        detected_context = _detect_context_from_basename(basename_hint, pddrc_config)
+                        detected_context = _detect_context_from_basename(basename_hint, pddrc_config, pddrc_path=pddrc_path)
                         if detected_context:
                             context = detected_context
                         else:
@@ -855,9 +1185,13 @@ def construct_paths(
         # Also update context_config with resolved environment variables for generate_output_paths
         # This ensures environment variables are available when context config doesn't override them
         for key, value in resolved_config.items():
-            if key.endswith('_output_path') and key not in context_config:
+            if (key.endswith('_output_path') or key == 'auto_deps_csv_path') and key not in context_config:
                 context_config[key] = value
-                
+
+        from .config_resolution import apply_compression_env, effective_compression_config
+
+        apply_compression_env(effective_compression_config(resolved_config))
+
     except Exception as e:
         error_msg = f"Configuration error: {e}"
         console.print(f"[error]{error_msg}[/error]", style="error")
@@ -873,14 +1207,15 @@ def construct_paths(
         if not basename:
             raise ValueError("Basename must be provided in command_options for sync discovery mode.")
         
-        # For discovery, we only need directory paths. Call generate_output_paths with dummy values.
+        # For discovery, we only need directory paths (via .parent) — the language
+        # and extension values here are irrelevant and never used for file output.
         try:
             output_paths_str = generate_output_paths(
                 command="sync",
                 output_locations={},
                 basename=basename,
-                language="python", # Dummy language
-                file_extension=".py", # Dummy extension
+                language="python",
+                file_extension=".py",
                 context_config=context_config,
                 config_base_dir=str(pddrc_path.parent) if pddrc_path else None,
                 path_resolution_mode="cwd",  # Sync resolves paths relative to CWD
@@ -889,49 +1224,55 @@ def construct_paths(
             # Infer base directories from a sample output path
             gen_path = Path(output_paths_str.get("generate_output_path", "src"))
             
-            # First, check current working directory for prompt files matching the basename pattern
-            current_dir = Path.cwd()
-            prompt_pattern = f"{basename}_*.prompt"
-            if list(current_dir.glob(prompt_pattern)):
-                # Found prompt files in current working directory
-                resolved_config["prompts_dir"] = str(current_dir)
-                resolved_config["code_dir"] = str(current_dir)
-                if not quiet:
-                    console.print(f"[info]Found prompt files in current directory:[/info] {current_dir}")
-            else:
-                # Fall back to context-aware logic
-                # Use original_context_config to avoid checking augmented config with env vars
-                if original_context_config and (
-                    'prompts_dir' in original_context_config or
-                    any(key.endswith('_output_path') for key in original_context_config)
-                ):
-                    # For configured contexts, use prompts_dir from config if provided,
-                    # otherwise default to "prompts" at the same level as output dirs
-                    resolved_config["prompts_dir"] = original_context_config.get("prompts_dir", "prompts")
-                    resolved_config["code_dir"] = str(gen_path.parent)
+            # Only infer prompts_dir if it wasn't provided via CLI/.pddrc/env
+            if not resolved_config.get("prompts_dir"):
+                # First, check current working directory for prompt files matching the basename pattern
+                current_dir = Path.cwd()
+                prompt_pattern = f"{glob.escape(basename)}_*.prompt"
+                if list(current_dir.glob(prompt_pattern)):
+                    # Found prompt files in current working directory
+                    resolved_config["prompts_dir"] = str(current_dir)
+                    resolved_config["code_dir"] = str(current_dir)
+                    if not quiet:
+                        console.print(f"[info]Found prompt files in current directory:[/info] {current_dir}")
                 else:
-                    # For default contexts, maintain relative relationship 
-                    # e.g., if code goes to "pi.py", prompts should be at "prompts/" (siblings)
-                    resolved_config["prompts_dir"] = str(gen_path.parent / "prompts")
-                    resolved_config["code_dir"] = str(gen_path.parent)
-            
+                    # Fall back to context-aware logic
+                    # Use original_context_config to avoid checking augmented config with env vars
+                    if original_context_config and (
+                        'prompts_dir' in original_context_config or
+                        any(key.endswith('_output_path') for key in original_context_config)
+                    ):
+                        # For configured contexts, use prompts_dir from config if provided,
+                        # otherwise default to "prompts" at the same level as output dirs
+                        resolved_config["prompts_dir"] = original_context_config.get("prompts_dir", "prompts")
+                        resolved_config["code_dir"] = str(gen_path.parent)
+                    else:
+                        # For default contexts, maintain relative relationship 
+                        # e.g., if code goes to "pi.py", prompts should be at "prompts/" (siblings)
+                        resolved_config["prompts_dir"] = str(gen_path.parent / "prompts")
+                        resolved_config["code_dir"] = str(gen_path.parent)
+
+            # Ensure code_dir is always set (even if prompts_dir was already configured via CLI/env)
+            if "code_dir" not in resolved_config:
+                resolved_config["code_dir"] = str(gen_path.parent)
+
             resolved_config["tests_dir"] = str(Path(output_paths_str.get("test_output_path", "tests")).parent)
 
             # Determine examples_dir for auto-deps scanning
             # NOTE: outputs.example.path is for OUTPUT only (where to write examples),
             # NOT for determining scan scope. Using it caused CSV row deletion issues.
-            # Check RAW context config for example_output_path, or default to "context".
             # Do NOT use output_paths_str since generate_output_paths always returns absolute paths.
             example_path_str = None
             if original_context_config:
                 example_path_str = original_context_config.get("example_output_path")
 
-            # Final fallback to "context" (sensible default for this project)
+            # Default via the SSOT helper (handles greenfield + legacy context/).
             if not example_path_str:
-                example_path_str = "context"
+                example_path_str = _resolve_default_examples_dir(
+                    _default_examples_project_root(pddrc_path)
+                )
 
             # Extract ROOT directory (first component) for scan scope
-            # This ensures auto-deps scans all example files, not just a subdirectory
             # e.g., "context/commands/" -> "context", "examples/foo.py" -> "examples"
             # Fix for Issue #332: Using full subdirectory path caused CSV truncation
             example_path = Path(example_path_str)
@@ -939,7 +1280,9 @@ def construct_paths(
             if parts and parts[0] not in ('/', '.', '..'):
                 resolved_config["examples_dir"] = parts[0]
             else:
-                resolved_config["examples_dir"] = "context"  # Fallback for edge cases
+                resolved_config["examples_dir"] = _resolve_default_examples_dir(
+                    _default_examples_project_root(pddrc_path)
+                )
 
         except Exception as e:
             console.print(f"[error]Failed to determine initial paths for sync: {e}", style="error")
@@ -1028,7 +1371,11 @@ def construct_paths(
         if command in ("sync", "example", "test") and command_options.get("basename"):
             basename = command_options["basename"]
         else:
-            basename = _extract_basename(command, input_paths)
+            basename = _extract_basename(
+                command,
+                input_paths,
+                prompts_dir=resolved_config.get("prompts_dir"),
+            )
     except ValueError as exc:
          # Check if it's the specific error from the initial check (now done at start)
          # This try/except might not be needed if initial check is robust
@@ -1047,18 +1394,28 @@ def construct_paths(
         
         # Add validation to ensure language is never None
         if language is None:
-            # Set a default language based on command, defaulting to 'python' for most commands
-            if command == 'bug':
-                # The bug command typically defaults to python in bug_main.py
+            # Try to extract language from the prompt filename suffix before
+            # falling back to Python.  This prevents TypeScript/TSX modules
+            # (e.g. *_typescriptreact.prompt) from being mis-classified as
+            # Python when _determine_language fails to detect the language.
+            prompt_path = _candidate_prompt_path(input_paths)
+            if prompt_path and prompt_path.suffix == ".prompt":
+                stem = prompt_path.stem
+                if "_" in stem:
+                    suffix_token = stem.rsplit("_", 1)[-1]
+                    if _is_known_language(suffix_token):
+                        language = suffix_token.lower()
+
+            # Final default when no prompt suffix could be extracted
+            if language is None:
                 language = 'python'
-            else:
-                # General fallback for other commands
-                language = 'python'
-            
+
             # Log the issue for debugging
             if not quiet:
                 console.print(
-                    f"[warning]Warning: Could not determine language for '{command}' command. Using default: {language}[/warning]",
+                    f"[warning]Warning: Could not determine language for '{command}' command. "
+                    f"Defaulting to '{language}'. Pass --language explicitly or ensure prompt "
+                    f"filename ends with _<language>.prompt[/warning]",
                     style="warning"
                 )
     except ValueError as e:
@@ -1081,8 +1438,17 @@ def construct_paths(
         if not file_extension and (language or '').lower() != 'prompt':
             raise ValueError('empty extension')
     except Exception:
-        file_extension = BUILTIN_EXT_MAP.get(language.lower(), f".{language.lower()}" if language else '')
-    
+        # Offline fallback: read the same bundled language_format.csv that sync's
+        # get_extension uses, so generation's written extension stays aligned with
+        # the path sync expects when PDD_PATH is unset (issue #551). Only resort to
+        # BUILTIN_EXT_MAP for languages the bundled CSV does not list.
+        from pdd.language_extensions import bundled_extension
+        _bundled = bundled_extension(language)
+        if _bundled is not None:
+            file_extension = f".{_bundled}" if _bundled else ''
+        else:
+            file_extension = BUILTIN_EXT_MAP.get(language.lower(), f".{language.lower()}" if language else '')
+
     # Handle --format option for commands that support it (e.g., example)
     format_option = command_options.get("format")
     if format_option and command == "example":
@@ -1102,7 +1468,10 @@ def construct_paths(
     # Filter user‑provided output_* locations from CLI options
     output_location_opts = {
         k: v for k, v in command_options.items()
-        if k.startswith("output") and v is not None # Ensure value is not None
+        if (
+            k.startswith("output")
+            or (command == "auto-deps" and k == "csv")
+        ) and v is not None # Ensure value is not None
     }
 
     # Determine input file directory for default output path generation
@@ -1150,6 +1519,11 @@ def construct_paths(
         effective_path_resolution_mode = path_resolution_mode
         if effective_path_resolution_mode is None:
             effective_path_resolution_mode = "cwd" if command == "sync" else "config_base"
+        # Issue #1211: when the selected .pddrc is a subproject below the run CWD,
+        # "cwd" resolution would root relative output dirs at the parent CWD and
+        # write outside the subproject. Anchor them at the subproject .pddrc dir.
+        if effective_path_resolution_mode == "cwd" and subproject_pddrc_below_cwd:
+            effective_path_resolution_mode = "config_base"
 
         output_paths_str: Dict[str, str] = generate_output_paths(
             command=command,
@@ -1247,27 +1621,28 @@ def construct_paths(
 
     # Add resolved paths to the config that gets returned
     resolved_config.update(output_file_paths_str_return)
-    # Also add inferred directory paths
+    # Only infer prompts_dir if it wasn't provided via CLI/.pddrc/env.
     gen_path = Path(resolved_config.get("generate_output_path", "src"))
-    resolved_config["prompts_dir"] = str(next(iter(input_paths.values())).parent)
+    if not resolved_config.get("prompts_dir"):
+        resolved_config["prompts_dir"] = str(next(iter(input_paths.values())).parent)
     resolved_config["code_dir"] = str(gen_path.parent)
     resolved_config["tests_dir"] = str(Path(resolved_config.get("test_output_path", "tests")).parent)
 
     # Determine examples_dir for auto-deps scanning
     # NOTE: outputs.example.path is for OUTPUT only (where to write examples),
     # NOT for determining scan scope. Using it caused CSV row deletion issues.
-    # Check RAW context config for example_output_path, or default to "context".
     # Do NOT use resolved_config since generate_output_paths sets it to absolute paths.
     example_path_str = None
     if original_context_config:
         example_path_str = original_context_config.get("example_output_path")
 
-    # Final fallback to "context" (sensible default for this project)
+    # Issue #616: single source of truth via _resolve_default_examples_dir.
     if not example_path_str:
-        example_path_str = "context"
+        example_path_str = _resolve_default_examples_dir(
+            _default_examples_project_root(pddrc_path)
+        )
 
     # Extract ROOT directory (first component) for scan scope
-    # This ensures auto-deps scans all example files, not just a subdirectory
     # e.g., "context/commands/" -> "context", "examples/foo.py" -> "examples"
     # Fix for Issue #332: Using full subdirectory path caused CSV truncation
     example_path = Path(example_path_str)
@@ -1275,7 +1650,9 @@ def construct_paths(
     if parts and parts[0] not in ('/', '.', '..'):
         resolved_config["examples_dir"] = parts[0]
     else:
-        resolved_config["examples_dir"] = "context"  # Fallback for edge cases
+        resolved_config["examples_dir"] = _resolve_default_examples_dir(
+            _default_examples_project_root(pddrc_path)
+        )
 
 
     return resolved_config, input_strings, output_file_paths_str_return, language

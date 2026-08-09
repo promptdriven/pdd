@@ -1,0 +1,6 @@
+find_section(lines) == [("python", 1, 3)]
+find_section(lines) == [("toml", 1, 1)]
+find_section(lines) == [("python", 0, 5)]
+find_section(lines, start_index=3) == [("yaml", 3, 4)]
+len(lines) - 1
+ends at the LAST line index

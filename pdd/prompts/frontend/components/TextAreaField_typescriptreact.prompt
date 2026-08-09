@@ -1,0 +1,21 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/components/TextAreaField.tsx`, a reusable controlled textarea field with label and helper copy.
+
+Requirements
+1. Import `React` and export `TextAreaFieldProps` with:
+   - `label: string`
+   - `name: string`
+   - `value: string`
+   - `onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void`
+   - `placeholder: string`
+   - `description: string`
+   - optional `required?: boolean`
+2. Export default `TextAreaField` typed as `React.FC<TextAreaFieldProps>`, implemented as a stateless controlled component (no local state).
+3. Render a wrapper `<div>` containing:
+   - `<label htmlFor={name} className="block text-sm font-medium text-gray-300 capitalize mb-1">`
+   - label text plus a conditional required marker `<span className="text-red-400">*</span>` when `required` is true.
+4. Render `<textarea>` with `rows={4}`, `name`, `id`, `value`, `onChange`, `placeholder`, and className:
+   `block w-full rounded-md border-0 bg-white/5 py-2 px-3 text-white shadow-sm ring-1 ring-inset ring-white/10 focus:ring-2 focus:ring-inset focus:ring-blue-500 sm:text-sm sm:leading-6 transition-shadow duration-200`
+5. Render description text as `<p className="mt-2 text-xs text-gray-400">{description}</p>`.
+
+Deliverable
+- Output only `pdd/frontend/components/TextAreaField.tsx`.

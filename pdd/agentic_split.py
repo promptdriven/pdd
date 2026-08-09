@@ -1,0 +1,456 @@
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+from rich.console import Console
+
+from .agentic_common_worktree import get_git_root
+from .agentic_split_orchestrator import run_agentic_split_orchestrator
+from .get_language import get_language
+
+console = Console()
+
+
+def run_agentic_split(
+    target_file: str,
+    *,
+    verbose: bool = False,
+    quiet: bool = False,
+    timeout_adder: float = 0.0,
+    use_github_state: bool = True,
+    diagnose_only: bool = False,
+    propose_only: bool = False,
+    delete_dead: bool = False,
+    force_split: bool = False,
+    no_verify: bool = False,
+    skip_regen_gate: bool = False,
+    experimental_language: bool = False,
+    intent: Optional[str] = None,
+    no_phase_extraction: bool = False,
+    strangler: bool = False,
+    max_cost: Optional[float] = None,
+) -> Tuple[bool, str, float, str, List[str]]:
+    """CLI entry point for the agentic split workflow.
+
+    Validates the target file, detects language, resolves git root,
+    then invokes the orchestrator.
+
+    Returns:
+        Tuple of (success, message, total_cost, model_used, changed_files).
+    """
+    # Resolve and validate target file
+    target_path = Path(target_file).resolve()
+    if not target_path.exists() or not target_path.is_file():
+        error_msg = f"Target file does not exist or is not a file: {target_file}"
+        if not quiet:
+            console.print(f"[bold red]Error:[/bold red] {error_msg}")
+        return False, error_msg, 0.0, "", []
+
+    # Detect language
+    language = get_language(target_path.suffix)
+    if not language:
+        error_msg = f"Unsupported file extension '{target_path.suffix}' for: {target_file}"
+        if not quiet:
+            console.print(f"[bold red]Error:[/bold red] {error_msg}")
+        return False, error_msg, 0.0, "", []
+
+    # Resolve git root
+    git_root = get_git_root(target_path.parent)
+    if not git_root:
+        error_msg = f"Not inside a git repository: {target_file}"
+        if not quiet:
+            console.print(f"[bold red]Error:[/bold red] {error_msg}")
+        return False, error_msg, 0.0, "", []
+
+    # Check for corresponding prompt file (warning, not blocking)
+    # Try multiple naming / location conventions across projects
+    stem = target_path.stem
+    prompt_basenames = [
+        f"{stem}_{language}.prompt",
+        f"{stem}_{language.capitalize()}.prompt",  # e.g. "Python"
+    ]
+    prompt_dirs_by_path = [
+        git_root / "prompts",
+        git_root / "pdd" / "prompts",
+    ]
+    # Also search extensions/*/prompts/ (pdd_cloud convention)
+    extensions_root = git_root / "extensions"
+    if extensions_root.is_dir():
+        for ext_dir in extensions_root.iterdir():
+            if ext_dir.is_dir():
+                prompts_dir = ext_dir / "prompts"
+                if prompts_dir.is_dir():
+                    prompt_dirs_by_path.append(prompts_dir)
+                    # Recursive: extensions/X/prompts/**/
+                    for sub in prompts_dir.rglob("*"):
+                        if sub.is_dir():
+                            prompt_dirs_by_path.append(sub)
+
+    prompt_found = False
+    for dir_ in prompt_dirs_by_path:
+        for basename in prompt_basenames:
+            if (dir_ / basename).exists():
+                prompt_found = True
+                break
+        if prompt_found:
+            break
+
+    if not prompt_found and not quiet:
+        console.print(
+            f"[yellow]Warning: No prompt file found for {target_path.name}.[/yellow]"
+        )
+
+    # Check for test file (info only)
+    test_candidates = [
+        git_root / "tests" / f"test_{target_path.stem}{target_path.suffix}",
+        target_path.parent / f"test_{target_path.stem}{target_path.suffix}",
+    ]
+    # Extensions convention: extensions/X/tests/test_<stem>.py
+    if extensions_root.is_dir():
+        for ext_dir in extensions_root.iterdir():
+            if ext_dir.is_dir():
+                tests_dir = ext_dir / "tests"
+                if tests_dir.is_dir():
+                    test_candidates.append(
+                        tests_dir / f"test_{target_path.stem}{target_path.suffix}"
+                    )
+    test_found = any(p.exists() for p in test_candidates)
+    if not test_found and not quiet:
+        console.print(f"[yellow]Warning: No test file found for {target_path.name}[/yellow]")
+
+    # Strangler mode (U7): use the first proposed plan only to determine
+    # N (number of children), then run N independent full orchestrator
+    # passes. Each pass starts fresh — it picks its own plan and extracts
+    # whatever children that plan contains; the original plan is not
+    # threaded through. See issue #1402 for per-child enforcement.
+    if strangler:
+        return _run_strangler_split(
+            target_path=target_path,
+            git_root=git_root,
+            verbose=verbose,
+            quiet=quiet,
+            timeout_adder=timeout_adder,
+            use_github_state=use_github_state,
+            force_split=force_split,
+            no_verify=no_verify,
+            skip_regen_gate=skip_regen_gate,
+            experimental_language=experimental_language,
+            intent=intent,
+            no_phase_extraction=no_phase_extraction,
+            max_cost=max_cost,
+        )
+
+    # Invoke orchestrator
+    try:
+        return run_agentic_split_orchestrator(
+            target_file=str(target_path),
+            cwd=git_root,
+            verbose=verbose,
+            quiet=quiet,
+            timeout_adder=timeout_adder,
+            use_github_state=use_github_state,
+            diagnose_only=diagnose_only,
+            propose_only=propose_only,
+            delete_dead=delete_dead,
+            force_split=force_split,
+            no_verify=no_verify,
+            skip_regen_gate=skip_regen_gate,
+            experimental_language=experimental_language,
+            intent=intent,
+            no_phase_extraction=no_phase_extraction,
+            max_cost=max_cost,
+        )
+    except Exception as e:
+        error_msg = f"Orchestrator failed: {e}"
+        if not quiet:
+            console.print(f"[bold red]Error:[/bold red] {error_msg}")
+        return False, error_msg, 0.0, "", []
+
+
+def _run_strangler_split(
+    *,
+    target_path: Path,
+    git_root: Path,
+    verbose: bool,
+    quiet: bool,
+    timeout_adder: float,
+    use_github_state: bool,
+    force_split: bool,
+    no_verify: bool,
+    skip_regen_gate: bool,
+    experimental_language: bool,
+    intent: Optional[str],
+    no_phase_extraction: bool,
+    max_cost: Optional[float] = None,
+) -> Tuple[bool, str, float, str, List[str]]:
+    """Sequential strangler-fig split: N independent full orchestrator passes.
+
+    Runs `--propose-only` once to determine N (number of children in the
+    best-scoring plan), clears workflow state, then runs N independent
+    `--force-split` orchestrator passes. Each pass starts fresh — it
+    picks its own plan and extracts whatever children that plan
+    contains; the original plan is NOT threaded through to subsequent
+    passes. Each pass also reuses the same split_id (worktree may be
+    reused/removed across passes). See issue #1402 for the work to pass
+    the original plan + a child selector to the orchestrator.
+
+    Python does the sequencing; the orchestrator still does the
+    per-pass work agentically. No new judgment in Python.
+    """
+    # Load any saved state BEFORE running propose-only. If a prior
+    # strangler invocation aborted on --max-cost mid-pass, the saved
+    # state may already contain step_outputs past step 4; running
+    # propose-only with use_github_state=True would resume that saved
+    # workflow and silently advance later pipeline work instead of
+    # only proposing. Reading state first lets us detect a resumable
+    # max-cost abort and skip the redundant propose-only call.
+    from .agentic_common import load_workflow_state
+    from .agentic_split_orchestrator import _stable_split_id
+    state_dir = git_root / ".pdd" / "split-state"
+    # Compute split_id the same way the orchestrator does: use the
+    # repo-relative path so it matches what was saved by the propose-only run.
+    _target_resolved = target_path.resolve()
+    try:
+        _id_path = str(_target_resolved.relative_to(git_root))
+    except ValueError:
+        _id_path = str(target_path)
+    split_id = _stable_split_id(_id_path)
+    saved_state, _ = load_workflow_state(
+        git_root, split_id, "split", state_dir, "", "", use_github_state
+    )
+
+    propose_cost = 0.0
+    model = ""
+
+    # Decide whether to run propose-only:
+    #   - resumable max-cost abort with a usable plan → skip propose
+    #   - otherwise → run propose-only as before
+    is_resumable_max_cost_abort = bool(
+        saved_state
+        and saved_state.get("max_cost_reached")
+        and saved_state.get("step_outputs", {}).get("4")
+    )
+
+    if is_resumable_max_cost_abort:
+        if not quiet:
+            console.print(
+                "[cyan]Strangler mode: resumable max-cost state detected; "
+                "skipping propose-only and resuming from saved plan.[/cyan]"
+            )
+        state = saved_state
+    else:
+        if not quiet:
+            console.print(
+                "[cyan]Strangler mode: proposing once to determine N, then "
+                "running N independent full orchestrator passes...[/cyan]"
+            )
+        # Pass 1 — propose only. The orchestrator persists the plan; we'll
+        # read it from state to enumerate children for subsequent passes.
+        propose_success, propose_msg, propose_cost, model, _ = run_agentic_split_orchestrator(
+            target_file=str(target_path),
+            cwd=git_root,
+            verbose=verbose,
+            quiet=quiet,
+            timeout_adder=timeout_adder,
+            use_github_state=use_github_state,
+            diagnose_only=False,
+            propose_only=True,
+            delete_dead=False,
+            force_split=force_split,
+            no_verify=no_verify,
+            skip_regen_gate=skip_regen_gate,
+            experimental_language=experimental_language,
+            intent=intent,
+            no_phase_extraction=no_phase_extraction,
+            max_cost=max_cost,
+        )
+        if not propose_success and "Propose only complete" not in propose_msg:
+            return False, propose_msg, propose_cost, model, []
+
+        # Re-read state after propose-only has run.
+        state, _ = load_workflow_state(
+            git_root, split_id, "split", state_dir, "", "", use_github_state
+        )
+
+    if state is None:
+        return (
+            False,
+            "Strangler: could not load propose-only state",
+            propose_cost, model, [],
+        )
+    step4_raw = state.get("step_outputs", {}).get("4", "")
+    if not step4_raw:
+        return False, "Strangler: no plan from propose", propose_cost, model, []
+
+    from .agentic_split_orchestrator import (
+        OptionsConsidered, SplitOption, _parse_step_output, _dict_to_dataclass,
+    )
+    saved_total_children = state.get("strangler_total_children")
+    total_children: Optional[int] = None
+    if saved_total_children is not None:
+        try:
+            total_children = int(saved_total_children)
+        except (TypeError, ValueError):
+            total_children = None
+        if total_children is not None and total_children <= 0:
+            total_children = None
+
+    if total_children is None:
+        parsed = _parse_step_output(step4_raw, OptionsConsidered)
+        if not isinstance(parsed, OptionsConsidered) or not parsed.options:
+            return False, "Strangler: could not parse plan", propose_cost, model, []
+        rebuilt = []
+        for o in parsed.options:
+            if isinstance(o, SplitOption):
+                rebuilt.append(o)
+            elif isinstance(o, dict):
+                rebuilt.append(_dict_to_dataclass(SplitOption, o))
+        if not rebuilt:
+            return False, "Strangler: plan had no options", propose_cost, model, []
+        best_plan = max(rebuilt, key=lambda o: o.numeric_score)
+        total_children = len(best_plan.plan.children)
+    if not quiet:
+        console.print(
+            f"[cyan]Strangler: {total_children} children in proposed plan; "
+            "running N independent full orchestrator passes "
+            "(see issue #1402 for true per-child enforcement).[/cyan]"
+        )
+
+    # Pass 2...N — one orchestrator pass per planned child. For each pass,
+    # clear prior state and re-run the full pipeline with force_split.
+    # The orchestrator currently extracts all remaining children per pass
+    # (issue #1402); this wrapper just sequences the passes.
+    total_cost = propose_cost
+    all_changed: List[str] = []
+    from .agentic_common import clear_workflow_state
+    # Resume-aware clear: if the prior strangler run aborted from
+    # --max-cost mid-pass, the propose-only pass we just ran has
+    # already overwritten state["step_outputs"][4] with a fresh plan,
+    # but state["max_cost_reached"] from the saved state is still in
+    # `state` we loaded above. Skip the clear in that case so the next
+    # pass resumes from the saved last_completed_step rather than
+    # restarting from step 0 and re-charging completed steps.
+    #
+    # Carry forward CUMULATIVE strangler spend (not the orchestrator's
+    # per-pass total_cost). Each orchestrator pass initializes its
+    # own total_cost = 0.0 and writes only its own per-pass cost on
+    # max-cost abort, so state["total_cost"] in the saved state is
+    # WRONG for the wrapper — it is per-pass, not strangler-cumulative.
+    # The wrapper persists `strangler_total_cost` explicitly before
+    # AND after each pass so resume reads the true cumulative spend.
+    # Resume index — when a prior strangler run aborted on --max-cost,
+    # the wrapper persists strangler_passes_completed (count of passes
+    # that finished cleanly before the aborted one). The pass loop
+    # below starts at this index, NOT 0, so resume does not re-run
+    # already-paid completed passes.
+    start_idx = 0
+    if state.get("max_cost_reached"):
+        # Prefer the wrapper-managed key; fall back to per-pass cost
+        # only when the side-state is missing (e.g. an older saved
+        # state from before this fix).
+        total_cost = max(
+            total_cost,
+            float(state.get("strangler_total_cost", state.get("total_cost", 0.0))),
+        )
+        start_idx = int(state.get("strangler_passes_completed", 0))
+        if not quiet:
+            console.print(
+                f"[cyan]Strangler: resuming at pass {start_idx + 1}/"
+                f"{total_children} with cumulative cost "
+                f"${total_cost:.2f} from prior --max-cost abort; "
+                f"state preserved.[/cyan]"
+            )
+    else:
+        clear_workflow_state(git_root, split_id, "split", state_dir, "", "", use_github_state)
+
+    for idx in range(start_idx, total_children):
+        if not quiet:
+            console.print(
+                f"\n[bold cyan]=== Strangler pass {idx+1}/{total_children} "
+                f"===[/bold cyan]"
+            )
+        # Each pass is a full independent run — propose, diagnose, plan,
+        # extract — against the already-partially-reduced target. The
+        # pass picks its own plan and extracts whatever children that
+        # plan contains; not necessarily one. See issue #1402.
+        # If a budget cap is set, deduct what we already spent so the cap
+        # applies to the *whole* strangler run, not each pass.
+        per_pass_max_cost = (
+            max_cost - total_cost if max_cost is not None else None
+        )
+        if per_pass_max_cost is not None and per_pass_max_cost <= 0:
+            return (
+                False,
+                f"Strangler aborted at pass {idx+1}: --max-cost ${max_cost:.2f} "
+                f"reached (spent ${total_cost:.2f})",
+                total_cost, model, all_changed,
+            )
+        ok, msg, cost, model, changed = run_agentic_split_orchestrator(
+            target_file=str(target_path),
+            cwd=git_root,
+            verbose=verbose,
+            quiet=quiet,
+            timeout_adder=timeout_adder,
+            use_github_state=use_github_state,
+            diagnose_only=False,
+            propose_only=False,
+            delete_dead=False,
+            force_split=True,  # we know it needs splitting
+            no_verify=no_verify,
+            skip_regen_gate=skip_regen_gate,
+            experimental_language=experimental_language,
+            intent=intent,
+            no_phase_extraction=no_phase_extraction,
+            max_cost=per_pass_max_cost,
+        )
+        total_cost += cost
+        all_changed.extend(changed)
+        if not ok:
+            # If the pass aborted on its own --max-cost cap, persist the
+            # strangler-level cumulative cost AND the count of passes
+            # that finished cleanly before this aborted one, so the next
+            # strangler invocation resumes at the right index with the
+            # true cumulative spend (rather than re-running pass 0..idx-1
+            # and over-spending against --max-cost).
+            if max_cost is not None and "max-cost" in (msg or "").lower():
+                try:
+                    from .agentic_common import save_workflow_state
+                    cur_state, _ = load_workflow_state(
+                        git_root, split_id, "split", state_dir, "", "", use_github_state
+                    )
+                    if cur_state is not None:
+                        cur_state["strangler_total_cost"] = total_cost
+                        cur_state["strangler_total_children"] = total_children
+                        # `idx` is the aborted pass index. Passes 0..idx-1
+                        # completed successfully; resume should re-enter
+                        # at `idx` (the aborted pass itself, since the
+                        # orchestrator's own state preserves per-step
+                        # progress within that pass).
+                        cur_state["strangler_passes_completed"] = idx
+                        save_workflow_state(
+                            git_root, split_id, "split", cur_state, state_dir,
+                            "", "", use_github_state,
+                        )
+                except Exception:
+                    pass  # best-effort; abort message still reflects total_cost
+            return (
+                False,
+                f"Strangler pass {idx+1} failed: {msg}",
+                total_cost, model, all_changed,
+            )
+        # Clear state between passes so the next pass starts fresh.
+        # Note: strangler_total_cost / strangler_passes_completed are
+        # only needed on max-cost aborts (handled above); the cleared
+        # state would lose them, but a clean run does not need them.
+        clear_workflow_state(
+            git_root, split_id, "split", state_dir, "", "", use_github_state
+        )
+
+    return (
+        True,
+        f"Strangler complete: {total_children} orchestrator passes ran "
+        f"({len(all_changed)} files changed across passes)",
+        total_cost, model, all_changed,
+    )

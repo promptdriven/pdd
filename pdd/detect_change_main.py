@@ -4,6 +4,7 @@ from typing import List, Dict, Tuple, Optional
 import click
 from rich import print as rprint
 
+from .cli_status import from_context
 from .construct_paths import construct_paths
 from .detect_change import detect_change
 from . import DEFAULT_TIME, DEFAULT_STRENGTH
@@ -29,7 +30,15 @@ def detect_change_main(
         - Total cost of the operation
         - Name of the model used
     """
+    # Consistent status/progress messaging (EPIC #1540, workstream 2). Inherits
+    # the global --quiet flag from ctx, so nothing is printed in quiet mode.
+    status = from_context(ctx, command="pdd detect")
+    quiet = ctx.obj.get('quiet', False)
     try:
+        status.start(
+            f"checking {len(prompt_files)} prompt(s) against the change description"
+        )
+
         # Construct file paths
         input_file_paths = {
             "change_file": change_file,
@@ -42,7 +51,7 @@ def detect_change_main(
         resolved_config, input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
             force=ctx.obj.get('force', False),
-            quiet=ctx.obj.get('quiet', False),
+            quiet=quiet,
             command="detect",
             command_options=command_options,
             context_override=ctx.obj.get('context')
@@ -59,18 +68,21 @@ def detect_change_main(
         temperature = ctx.obj.get('temperature', 0)
         time_budget = ctx.obj.get('time', DEFAULT_TIME)
 
-        # Analyze which prompts need changes
-        changes_list, total_cost, model_name = detect_change(
-            prompt_files,
-            change_description,
-            strength,
-            temperature,
-            time_budget,
-            verbose=not ctx.obj.get('quiet', False)
-        )
+        # Analyze which prompts need changes (LLM call — show a progress indicator
+        # so the wait never looks like a hang).
+        with status.waiting("asking the model which prompts need changes", on="LLM"):
+            changes_list, total_cost, model_name = detect_change(
+                prompt_files,
+                change_description,
+                strength,
+                temperature,
+                time_budget,
+                verbose=not quiet
+            )
 
         # Save results to CSV if output path is specified
         if output_file_paths.get("output"):
+            status.step(f"writing results to {output_file_paths['output']}")
             with open(output_file_paths["output"], 'w', newline='') as csvfile:
                 fieldnames = ['prompt_name', 'change_instructions']
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -78,9 +90,21 @@ def detect_change_main(
                 for change in changes_list:
                     writer.writerow(change)
 
-        # Provide user feedback
-        if not ctx.obj.get('quiet', False):
-            rprint("[bold green]Change detection completed successfully.[/bold green]")
+        # Completion message with a clear next action.
+        if changes_list:
+            status.success(
+                f"{len(changes_list)} prompt(s) need changes",
+                next_step="review the changes below, then run `pdd change` on each",
+            )
+        else:
+            status.success(
+                "no prompts need changes for this change description",
+                next_step="nothing to do — the prompts already cover it",
+            )
+
+        # Detailed report (suppressed in quiet mode), preserved for parity with
+        # the prior output so downstream readers/scripts see the same fields.
+        if not quiet:
             rprint(f"[bold]Model used:[/bold] {model_name}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
             if output:
@@ -99,6 +123,12 @@ def detect_change_main(
         return changes_list, total_cost, model_name
 
     except Exception as e:
-        if not ctx.obj.get('quiet', False):
-            rprint(f"[bold red]Error:[/bold red] {str(e)}")
+        status.failure(
+            "detecting which prompts need changes",
+            reason=str(e),
+            suggestions=[
+                "check that the change file and prompt files exist and are readable",
+                "re-run without --quiet to see more detail",
+            ],
+        )
         sys.exit(1)

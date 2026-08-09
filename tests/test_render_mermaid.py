@@ -190,7 +190,8 @@ class TestGenerateMermaidCode:
         """Tests if app names with quotes are handled correctly. This test will likely fail."""
         app_name = 'My "Awesome" App'
         # The expected correct output should escape the quotes for the Mermaid label.
-        expected_node = f'PRD["{app_name.replace("\"", "&quot;")} "]'  # Mermaid uses HTML entity for quotes
+        escaped_name = app_name.replace('"', "&quot;")
+        expected_node = f'PRD["{escaped_name} "]'  # Mermaid uses HTML entity for quotes
         mermaid_code = generate_mermaid_code([], app_name=app_name)
         # Note: The current implementation f'PRD["{app_name}"]' will produce PRD["My "Awesome" App"],
         # which is invalid. This test correctly identifies that flaw.
@@ -283,3 +284,81 @@ def test_write_pretty_architecture_json(tmp_path):
     assert content.startswith('[\n  {\n')
     assert content.endswith('\n')
     assert json.loads(content) == data
+
+
+# --- Issue #1256: Dict-format architecture tolerance ---
+
+
+def test_generate_mermaid_code_dict_format_architecture():
+    """generate_mermaid_code with dict-format input produces valid mermaid output (Test 14).
+
+    Bug: iterating dict-format data yields dict keys (strings like "modules"),
+    not module entries. m.get("tags", []) crashes with
+    AttributeError: 'str' object has no attribute 'get' at render_mermaid.py line ~53.
+    """
+    arch = {"modules": [
+        {
+            "filename": "auth_Python.prompt",
+            "priority": 1,
+            "dependencies": [],
+            "tags": ["backend"],
+            "description": "Auth module",
+        }
+    ]}
+    # Bug: iterating dict yields "modules" key string, crashes on .get()
+    result = generate_mermaid_code(arch, "TestApp")
+    assert "auth_Python" in result, (
+        "Dict-format architecture should produce mermaid diagram containing auth module, "
+        "but iterating dict directly yields keys instead of module entries"
+    )
+
+
+def test_render_mermaid_standalone_fallback_mirrors_registry():
+    """render_mermaid runs both as a package module and as a standalone script.
+
+    The ``ImportError`` fallback in ``render_mermaid`` must behave identically to
+    ``architecture_registry.extract_modules`` so the two code paths stay
+    byte-compatible when the helper gains new branches.
+    """
+    import importlib
+    import importlib.util
+    import sys
+
+    from pdd.architecture_registry import extract_modules as canonical
+
+    spec = importlib.util.spec_from_file_location(
+        "render_mermaid_standalone",
+        Path(__file__).resolve().parent.parent / "pdd" / "render_mermaid.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    try:
+        original = sys.modules.get("render_mermaid_standalone")
+        sys.modules["render_mermaid_standalone"] = module
+        spec.loader.exec_module(module)
+    finally:
+        if original is None:
+            sys.modules.pop("render_mermaid_standalone", None)
+        else:
+            sys.modules["render_mermaid_standalone"] = original
+
+    fallback = module.extract_modules
+    # The ImportError branch is only taken if `from .architecture_registry`
+    # fails; that happens in standalone subprocess use. Either way, the two
+    # implementations must agree on every shape.
+    cases = [
+        [{"filename": "a.prompt"}],
+        {"prd_files": ["p.md"], "modules": [{"filename": "b.prompt"}]},
+        {"modules": "wrong"},
+        [],
+        {},
+        None,
+        42,
+        "bare string",
+        [{"filename": "c.prompt"}, "ignored", {"filename": "d.prompt"}],
+    ]
+    for case in cases:
+        assert canonical(case) == fallback(case), (
+            f"fallback extract_modules diverged from architecture_registry on {case!r}; "
+            "keep the two implementations in sync."
+        )

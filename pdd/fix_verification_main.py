@@ -5,7 +5,7 @@ import click
 import logging
 import json
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Mapping, Optional, Tuple, List, Dict, Any
 
 import requests
 
@@ -23,7 +23,7 @@ from .fix_verification_errors_loop import fix_verification_errors_loop
 # Import DEFAULT_STRENGTH from the main package
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
-from .core.cloud import CloudConfig, get_cloud_timeout
+from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 
 # Default values from the README
 DEFAULT_TEMPERATURE = 0.0
@@ -134,6 +134,8 @@ def fix_verification_main(
     agentic_fallback: bool = True,
     strength: Optional[float] = None,
     temperature: Optional[float] = None,
+    compressed_context: Optional[Mapping[str, Any]] = None,
+    agentic_fallback_events: Optional[list[dict[str, Any]]] = None,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     CLI wrapper for the 'verify' command. Verifies code correctness by running
@@ -331,6 +333,10 @@ def fix_verification_main(
                     "program_args": [],
                     "agentic_fallback": agentic_fallback,
                 }
+                if compressed_context is not None:
+                    loop_kwargs["compressed_context"] = compressed_context
+                if agentic_fallback_events is not None:
+                    loop_kwargs["agentic_fallback_events"] = agentic_fallback_events
                 # Only pass use_cloud when explicitly True (cloud not ready for prod yet)
                 if use_cloud_for_loop:
                     loop_kwargs["use_cloud"] = True
@@ -407,7 +413,7 @@ def fix_verification_main(
                             cloud_url,
                             json=payload,
                             headers=headers,
-                            timeout=get_cloud_timeout()
+                            timeout=get_cloud_request_timeout()
                         )
                         response.raise_for_status()
 
@@ -521,16 +527,19 @@ def fix_verification_main(
                 # Call fix_verification_errors with content and program output
                 if not quiet:
                     rich_print("Calling LLM to verify program output against prompt...")
-                fix_results = fix_verification_errors(
-                    program=input_strings["program_file"],
-                    prompt=input_strings["prompt_file"],
-                    code=input_strings["code_file"],
-                    output=program_output,
-                    strength=strength,
-                    temperature=temperature,
-                    verbose=verbose,
-                    time=time # Pass time to single pass function
-                )
+                fix_kwargs = {
+                    "program": input_strings["program_file"],
+                    "prompt": input_strings["prompt_file"],
+                    "code": input_strings["code_file"],
+                    "output": program_output,
+                    "strength": strength,
+                    "temperature": temperature,
+                    "verbose": verbose,
+                    "time": time,
+                }
+                if compressed_context is not None:
+                    fix_kwargs["compressed_context"] = compressed_context
+                fix_results = fix_verification_errors(**fix_kwargs)
 
                 # Determine success: If no issues were found OR if fixes were applied
                 # The definition of 'success' here means the *final* state is verified.

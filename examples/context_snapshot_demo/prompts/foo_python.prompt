@@ -1,0 +1,9 @@
+<pdd-reason>Test-plan prompt: preprocess with --snapshot (include + shell + web).</pdd-reason>
+
+<include>context/note.prompt</include>
+
+<shell>printf pdd-snapshot-demo-shell</shell>
+
+<web>https://example.test/pdd-snapshot-demo</web>
+
+Generate a trivial Python module that prints a greeting.

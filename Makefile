@@ -22,12 +22,17 @@ help:
 	@echo "  make test                    - Run staging tests"
 	@echo "  make coverage                - Run tests with coverage"
 	@echo "  make regression [TEST_NUM=n] - Run regression tests (optionally specific test number)"
+	@echo "  make regression-public       - Run public-safe CLI regressions without LLM/cloud credentials"
+	@echo "  make regression-stories      - Run public-safe user-story regression lane (pytest -m story)"
 	@echo "  make sync-regression [TEST_NUM=n] - Run sync regression tests (optionally specific test number)"
 	@echo "  make all-regression 		  - Run all regression test suites"
 	@echo "  make cloud-regression [TEST_NUM=n] - Run cloud regression tests (no --local flag)"
 	@echo "  make test-all-ci [PR_NUMBER=n] [PR_URL=url] - Run all tests with result capture"
-	@echo "  make test-all-with-infisical [PR_NUMBER=n] [PR_URL=url] - Run all tests with Infisical"
-	@echo "  make pr-test pr-url=URL      - Test any GitHub PR on GitHub Actions (e.g., https://github.com/owner/repo/pull/123)"
+	@echo "  make cloud-test              - Build image + push + run all tests on Cloud Batch"
+	@echo "  make cloud-test-quick        - Run tests on Cloud Batch (skip image rebuild)"
+	@echo "  make cloud-test-build        - Build and push image via Cloud Build"
+	@echo "  make cloud-test-push         - (no-op, included in cloud-test-build)"
+	@echo "  make cloud-test-setup        - One-time GCP infrastructure setup"
 	@echo "  make analysis                - Run regression analysis"
 	@echo "  make verify MODULE=name      - Verify code functionality against prompt intent"
 	@echo "  make lint                    - Run pylint for static code analysis"
@@ -50,11 +55,18 @@ help:
 	@echo "Build & Deployment:"
 	@echo "  make install                 - Install pdd"
 	@echo "  make build                   - Build pdd package"
-	@echo "  make publish                 - Build & upload current version"
+	@echo "  make upload-pypi             - Upload dist/*.whl to PyPI"
+	@echo "  make publish                 - Build & upload current version to PyPI"
 	@echo "  make publish-public          - Copy artifacts to public repo only"
-	@echo "  make publish-public-cap      - Copy artifacts to CAP public repo only"
+	@echo "  make release-video           - Generate and upload a YouTube video for the current release tag"
+	@echo "  make release-video-status RELEASE_TAG=vX.Y.Z - Show persisted PDS release-video run metadata"
+	@echo "  make release-video-discord-backfill RELEASE_TAG=vX.Y.Z RELEASE_VIDEO_YOUTUBE_URL=url - Post recovered video follow-up to Discord"
+	@echo "  make release-video-skip RELEASE_TAG=vX.Y.Z RELEASE_VIDEO_SKIP_REASON=reason - Mark historical release video as skipped"
+	@echo "  make release-local           - Run release with local SOPS release secrets"
+	@echo "  make check-release-claude-oauth-config-local - Verify local SOPS Claude OAuth rotation slots"
 	@echo "  make check-deps              - Check pyproject.toml and requirements.txt are in sync"
-	@echo "  make release                 - Bump version and build package (runs check-deps first)"
+	@echo "  make release                 - On main: tag HEAD with next vN.N.N and push (BUMP=patch|minor|major; default patch)"
+	@echo "                                  Actions publishes to PyPI via OIDC after gltanaka approval"
 	@echo "  make staging                 - Copy files to staging"
 	@echo "  make production              - Copy files from staging to pdd"
 	@echo "  make update-extension        - Update VS Code extension"
@@ -62,9 +74,6 @@ help:
 # Public repo paths (override via env if needed)
 PUBLIC_PDD_REPO_DIR ?= staging/public/pdd
 PUBLIC_PDD_REMOTE ?= https://github.com/promptdriven/pdd.git
-# CAP public repo (optional second destination)
-PUBLIC_PDD_CAP_REPO_DIR ?= staging/public/pdd_cap
-PUBLIC_PDD_CAP_REMOTE ?= https://github.com/promptdriven/pdd_cap.git
 # Top-level files to publish if present (read from .sync-config.yml)
 PUBLIC_ROOT_FILES ?= $(shell python scripts/get_sync_patterns.py root_files 2>/dev/null || echo "LICENSE README.md requirements.txt pyproject.toml")
 # Include core unit tests by default
@@ -76,6 +85,60 @@ PUBLIC_CONTEXT_INCLUDE ?= context/**/*_example.py
 PUBLIC_CONTEXT_EXCLUDE ?= context/**/__pycache__ context/**/*.log context/**/*.csv
 PUBLIC_REGRESSION_SCRIPTS ?= $(wildcard tests/*regression*.sh)
 
+# Release video automation. Set RELEASE_VIDEO=0 for an emergency release that
+# must skip paid video generation/upload.
+RELEASE_VIDEO ?= 1
+RELEASE_VIDEO_OUTPUT_DIR ?= .pdd/release-videos
+RELEASE_VIDEO_PRESET ?= release-notes
+RELEASE_VIDEO_TARGET ?= publish
+RELEASE_VIDEO_PLATFORM ?= youtube
+RELEASE_VIDEO_PRIVACY ?= unlisted
+RELEASE_VIDEO_DRY_RUN ?= 0
+RELEASE_VIDEO_PROJECT_ID ?=
+RELEASE_VIDEO_SCRIPT_PATH ?=
+RELEASE_VIDEO_RELEASE_NOTES_PATH ?=
+RELEASE_VIDEO_IDEMPOTENCY_KEY ?=
+RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE ?=
+RELEASE_VIDEO_ATTEMPT_ID ?=
+RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT ?= 0
+RELEASE_VIDEO_FORCE_REGENERATE ?= 0
+RELEASE_VIDEO_METADATA_CONFLICT ?=
+RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID ?=
+RELEASE_VIDEO_STATUS_QUERY ?= 0
+RELEASE_VIDEO_YOUTUBE_URL ?=
+RELEASE_VIDEO_SKIP_REASON ?=
+# Exact release tags that must never create, upload, or distribute a video.
+# A set, not one tag: overwriting a single value to opt out a new release
+# silently re-enables video for the previous one, and the guarantee is
+# per-release and permanent. v0.0.309 carries no `pdd-release-video-skipped`
+# marker, so this list is the only thing keeping a backfill off it.
+RELEASE_VIDEO_OPT_OUT_TAGS ?= v0.0.309 v0.0.310
+RELEASE_VIDEO_PDS_CREATE_TIMEOUT ?= 1800
+RELEASE_VIDEO_CLAUDE_MODEL ?= claude-opus-4-8
+RELEASE_VIDEO_PDS_CLAUDE_MODEL ?= glm-5.2
+CLAUDE_CLI ?= claude
+PDS_CLI ?= npx -y @promptdriven/pds@0.1.11 --timeout 120s
+ifeq ($(strip $(RELEASE_VIDEO_CLAUDE_MODEL)),)
+override RELEASE_VIDEO_CLAUDE_MODEL := claude-opus-4-8
+endif
+ifeq ($(strip $(CLAUDE_CLI)),)
+override CLAUDE_CLI := claude
+endif
+ifeq ($(strip $(PDS_CLI)),)
+override PDS_CLI := npx -y @promptdriven/pds@0.1.11 --timeout 120s
+endif
+PDS_API_URL ?= https://video.promptdriven.ai
+SOPS ?= sops
+SOPS_RELEASE_ENV_FILE ?= $(firstword $(wildcard ../secrets/pdd_cloud/shared.prod.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.prod.sops.env secrets/pdd_cloud/shared.prod.sops.env) ../secrets/pdd_cloud/shared.prod.sops.env)
+SOPS_RELEASE_CLAUDE_ENV_FILES ?= $(wildcard ../secrets/pdd_cloud/shared.staging.sops.env ../secrets/pdd_cloud/shared.staging2.sops.env ../secrets/pdd_cloud/shared.prod.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.staging.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.staging2.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.prod.sops.env secrets/pdd_cloud/shared.staging.sops.env secrets/pdd_cloud/shared.staging2.sops.env secrets/pdd_cloud/shared.prod.sops.env)
+SOPS_RELEASE_ENV_RUNNER := python scripts/sops_release_env.py --sops "$(SOPS)" --release-env-file "$(SOPS_RELEASE_ENV_FILE)" $(foreach file,$(SOPS_RELEASE_CLAUDE_ENV_FILES),--claude-env-file "$(file)")
+REQUIRE_CLAUDE_OAUTH_SLOTS ?= 1
+
+RELEASE_VIDEO_STATUS_QUERY_FLAG :=
+ifeq ($(RELEASE_VIDEO_STATUS_QUERY),1)
+RELEASE_VIDEO_STATUS_QUERY_FLAG := --status-query
+endif
+
 # Python files
 PY_PROMPTS := $(shell find $(PROMPTS_DIR) -name "*_python.prompt")
 PY_OUTPUTS := $(patsubst $(PROMPTS_DIR)/%_python.prompt,$(PDD_DIR)/%.py,$(PY_PROMPTS))
@@ -84,6 +147,16 @@ PY_OUTPUTS := $(patsubst $(PROMPTS_DIR)/%_python.prompt,$(PDD_DIR)/%.py,$(PY_PRO
 MAKEFILE_PROMPT := $(PROMPTS_DIR)/Makefile_makefile.prompt
 MAKEFILE_OUTPUT := $(STAGING_DIR)/Makefile
 SKIP_MAKEFILE_REGEN ?= 0
+
+# CI should test the checked-in Makefile, not regenerate it interactively.
+ifeq ($(CI),true)
+SKIP_MAKEFILE_REGEN := 1
+endif
+
+RELEASE_MAKE_GOALS := release release-video release-video-status release-video-discord-backfill release-video-skip release-local release-sops release-infisical check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
+ifneq ($(filter $(RELEASE_MAKE_GOALS),$(MAKECMDGOALS)),)
+SKIP_MAKEFILE_REGEN := 1
+endif
 
 # Auto-skip Makefile regeneration if prompt file doesn't exist (e.g., public repo)
 ifeq ($(wildcard $(MAKEFILE_PROMPT)),)
@@ -101,7 +174,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public ensure-dev-deps
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-sops release-infisical release-video release-video-status release-video-discord-backfill release-video-skip check-release-remote check-release-branch check-release-clean check-release-cloud-green check-release-cloud-green-gate check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -120,7 +193,14 @@ ifdef MODULE
 else
 	# Code for generating all examples (nested)
 	@echo "Generating all example files (nested in $(CONTEXT_DIR))"
-	@$(foreach prompt_file,$(PY_PROMPTS),\n\t\t$(eval module_path := $(patsubst $(PROMPTS_DIR)/%_python.prompt,%,$(prompt_file)))\n\t\t$(eval py_file := $(PDD_DIR)/$(module_path).py)\n\t\t$(eval example_file := $(CONTEXT_DIR)/$(module_path)_example.py)\n\t\techo "Generating example for $(module_path) -> $(example_file)";\n\t\tmkdir -p $(dir $(example_file));\n\t\tPYTHONPATH=$(STAGING_DIR) pdd --strength .8 example --output $(example_file) $(prompt_file) $(py_file) || true;\n\t)
+	@$(foreach prompt_file,$(PY_PROMPTS),
+		$(eval module_path := $(patsubst $(PROMPTS_DIR)/%_python.prompt,%,$(prompt_file)))
+		$(eval py_file := $(PDD_DIR)/$(module_path).py)
+		$(eval example_file := $(CONTEXT_DIR)/$(module_path)_example.py)
+		echo "Generating example for $(module_path) -> $(example_file)";
+		mkdir -p $(dir $(example_file));
+		PYTHONPATH=$(STAGING_DIR) pdd --strength .8 example --output $(example_file) $(prompt_file) $(py_file) || true;
+	)
 endif
 
 # Generate Python files
@@ -193,19 +273,20 @@ run-examples: $(EXAMPLE_FILES)
 # Ensure dev dependencies are installed before running tests
 ensure-dev-deps:
 	@echo "Updating pdd conda environment with dev dependencies"
+	@conda run -n pdd --no-capture-output python -c "import site, glob, shutil; [shutil.rmtree(p) for p in glob.glob(site.getsitepackages()[0] + '/pdd_cli-*.dist-info')]" 2>/dev/null || true
 	@conda run -n pdd --no-capture-output pip install -e '.[dev]'
 
 # Run tests
 test: ensure-dev-deps
 	@echo "Running staging tests"
 	@cd $(STAGING_DIR)
-	@conda run -n pdd --no-capture-output PDD_RUN_REAL_LLM_TESTS=1 PDD_RUN_LLM_TESTS=1 PDD_PATH=$(abspath $(PDD_DIR)) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv -n auto $(TESTS_DIR)
+	@conda run -n pdd --no-capture-output PDD_MODEL_DEFAULT=vertex_ai/gemini-3.6-flash PDD_RUN_REAL_LLM_TESTS=1 PDD_RUN_LLM_TESTS=1 PDD_PATH=$(abspath $(PDD_DIR)) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest -vv -n auto $(TESTS_DIR)
 
 # Run tests with coverage
 coverage: ensure-dev-deps
 	@echo "Running tests with coverage"
 	@cd $(STAGING_DIR)
-	@conda run -n pdd --no-capture-output PDD_PATH=$(STAGING_DIR) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
+	@conda run -n pdd --no-capture-output PDD_MODEL_DEFAULT=vertex_ai/gemini-3.6-flash PDD_PATH=$(STAGING_DIR) PYTHONPATH=$(PDD_DIR):$$PYTHONPATH python -m pytest --cov=$(PDD_DIR) --cov-report=term-missing --cov-report=html $(TESTS_DIR)
 
 # Run pylint
 lint: ensure-dev-deps
@@ -431,6 +512,7 @@ else
 	conda run -n pdd --no-capture-output pdd --verbose update --directory pdd --extensions py
 endif
 
+
 # Generate requirements.txt
 requirements:
 	@echo "Generating requirements.txt"
@@ -478,10 +560,21 @@ regression: ensure-dev-deps
 	@find staging/regression -type f ! -name ".*" -delete
 ifdef TEST_NUM
 	@echo "Running specific test: $(TEST_NUM)"
-	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh $(TEST_NUM)
+	@PDD_MODEL_DEFAULT=vertex_ai/gemini-3.6-flash PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh $(TEST_NUM)
 else
-	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
+	@PDD_MODEL_DEFAULT=vertex_ai/gemini-3.6-flash PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
 endif
+
+regression-public:
+	@echo "Running public-safe CLI regression tests"
+	@mkdir -p staging
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression_public.sh
+
+.PHONY: regression-stories
+regression-stories:
+	@echo "Running public-safe user-story regression lane"
+	@mkdir -p staging
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/story_regression.sh
 
 SYNC_PARALLEL ?= 1
 
@@ -513,7 +606,61 @@ else
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/cloud_regression.sh
 endif
 
-# Automated test runner with Infisical for CI/CD
+# Cloud Batch configuration
+CLOUD_BATCH_DIR := ci/cloud-batch
+GCP_PROJECT_ID := prompt-driven-development-stg
+GCP_REGION ?= us-central1
+GCS_BUCKET ?= pdd-stg-ci-results
+AR_IMAGE := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/pdd-ci/pdd-test
+
+# Files baked into the Docker image — changes to these require a rebuild
+CLOUD_IMAGE_DEPS := requirements.txt pyproject.toml $(CLOUD_BATCH_DIR)/entrypoint.sh $(CLOUD_BATCH_DIR)/runtime-secrets.py $(CLOUD_BATCH_DIR)/firebase-token-exchange.py $(CLOUD_BATCH_DIR)/source-identity.py $(CLOUD_BATCH_DIR)/Dockerfile
+CLOUD_IMAGE_HASH_FILE := .cloud-image-hash
+CLOUD_IMAGE_HASH ?= $(shell cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1)
+
+.PHONY: cloud-image-hash
+cloud-image-hash:
+	@cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1
+
+# Smart run: auto-detects whether image rebuild is needed
+cloud-test:
+	@CURRENT_HASH=$$(cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1); \
+	STORED_HASH=$$(cat $(CLOUD_IMAGE_HASH_FILE) 2>/dev/null || echo "none"); \
+	if [ "$$CURRENT_HASH" != "$$STORED_HASH" ]; then \
+		echo "Image deps changed — rebuilding via Cloud Build"; \
+		$(MAKE) cloud-test-build CLOUD_IMAGE_HASH=$$CURRENT_HASH; \
+	else \
+		echo "Image deps unchanged — skipping rebuild"; \
+	fi
+	@$(MAKE) cloud-test-quick
+
+# Upload source and run tests (skip image rebuild — typical workflow)
+cloud-test-quick:
+	@echo "Running tests on Cloud Batch (quick mode — no image rebuild)"
+	@GCP_PROJECT_ID=$(GCP_PROJECT_ID) GCP_REGION=$(GCP_REGION) GCS_BUCKET=$(GCS_BUCKET) \
+		bash $(CLOUD_BATCH_DIR)/submit.sh
+
+# Build and push image via Cloud Build (no local Docker needed)
+cloud-test-build:
+	@echo "Submitting build to Cloud Build"
+	@gcloud builds submit \
+		--config=$(CLOUD_BATCH_DIR)/cloudbuild.yaml \
+		--substitutions=_AR_IMAGE=$(AR_IMAGE),_IMAGE_TAG=deps-$(CLOUD_IMAGE_HASH) \
+		--project=$(GCP_PROJECT_ID) \
+		.
+	@cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1 > $(CLOUD_IMAGE_HASH_FILE)
+
+# No-op — push is handled by Cloud Build
+cloud-test-push:
+	@echo "Push is now handled by cloud-test-build (Cloud Build). Nothing to do."
+
+# One-time GCP infrastructure setup
+cloud-test-setup:
+	@echo "Setting up Cloud Batch infrastructure"
+	@GCP_PROJECT_ID=$(GCP_PROJECT_ID) GCP_REGION=$(GCP_REGION) GCS_BUCKET=$(GCS_BUCKET) \
+		bash $(CLOUD_BATCH_DIR)/setup-gcp.sh
+
+# Automated test runner for CI/CD
 .PHONY: test-all-ci
 test-all-ci: ensure-dev-deps
 	@echo "Running all test suites with result capture for CI/CD"
@@ -527,54 +674,6 @@ endif
 else
 	@conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py
 endif
-
-# Run all tests with Infisical (for local development and CI)
-.PHONY: test-all-with-infisical
-test-all-with-infisical: ensure-dev-deps
-	@echo "Running all test suites with Infisical"
-	@if ! command -v infisical &> /dev/null; then \
-		echo "Error: Infisical CLI not found. Please install it:"; \
-		echo "npm install -g @infisical/cli"; \
-		exit 1; \
-	fi
-	@mkdir -p test_results
-ifdef PR_NUMBER
-ifdef PR_URL
-	@infisical run -- conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py --pr-number $(PR_NUMBER) --pr-url $(PR_URL)
-else
-	@infisical run -- conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py --pr-number $(PR_NUMBER)
-endif
-else
-	@infisical run -- conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py
-endif
-
-# Test a PR from a public or private repo by triggering GitHub Actions
-.PHONY: pr-test
-pr-test:
-	@if [ -z "$(pr-url)" ]; then \
-		echo "Error: pr-url is required"; \
-		echo "Usage: make pr-test pr-url=https://github.com/owner/repo/pull/123"; \
-		exit 1; \
-	fi
-	@echo "Triggering GitHub Actions to test PR at $(pr-url)..."
-	@if ! command -v gh &> /dev/null; then \
-		echo "Error: GitHub CLI (gh) not found. Please install it:"; \
-		echo "  macOS: brew install gh"; \
-		echo "  Linux: https://github.com/cli/cli/blob/trunk/docs/install_linux.md"; \
-		exit 1; \
-	fi
-	@PR_NUMBER=$$(echo "$(pr-url)" | grep -o '[0-9]*$$'); \
-	if [ -z "$$PR_NUMBER" ]; then \
-		echo "Error: Could not extract PR number from URL."; \
-		exit 1; \
-	fi; \
-	gh workflow run pr-tests.yml \
-		--repo gltanaka/pdd \
-		--field public_pr_number=$$PR_NUMBER \
-		--field public_pr_url=$(pr-url)
-	@echo "Workflow triggered successfully!"
-	@echo "View progress: https://github.com/gltanaka/pdd/actions"
-	@echo "Results will be posted to: $(pr-url)"
 
 install:
 	@echo "Installing pdd"
@@ -590,12 +689,43 @@ build:
 	@echo "Post-processing wheel with preprocessed prompts..."
 	@conda run -n pdd --no-capture-output python scripts/preprocess_wheel.py 'dist/*.whl'
 
+upload-pypi:
+	@echo "Uploading wheel to PyPI"
 	@conda run -n pdd --no-capture-output twine upload --repository pypi dist/*.whl
 
 publish:
-	@echo "Building and uploading package"
+	@set -e; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+		echo "Error: working tree is dirty; refusing to publish."; \
+		echo "python -m build reads files from the working tree, not from the commit,"; \
+		echo "so uncommitted edits would be baked into the wheel. Commit or stash first."; \
+		git status --short; \
+		exit 1; \
+	fi; \
+	HEAD_SHA=$$(git rev-parse HEAD); \
+	TAG=$$(git tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
+	if [ -z "$$TAG" ]; then \
+		echo "Error: HEAD has no release tag (vN.N.N) pointing at it; refusing to publish."; \
+		echo "Run 'make release' to create and push a tag instead."; \
+		exit 1; \
+	fi; \
+	echo "Verifying $$TAG exists on origin at HEAD"; \
+	git fetch --tags --prune origin; \
+	REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$TAG^{}" "refs/tags/$$TAG" 2>/dev/null | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
+	if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
+		REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$TAG" 2>/dev/null | awk 'NR==1 {print $$1}'); \
+	fi; \
+	if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
+		echo "Error: tag $$TAG is local-only; push it first ('git push origin $$TAG') or use 'make release'."; \
+		exit 1; \
+	fi; \
+	if [ "$$REMOTE_TAG_COMMIT" != "$$HEAD_SHA" ]; then \
+		echo "Error: origin's $$TAG points at $$REMOTE_TAG_COMMIT, not HEAD ($$HEAD_SHA)."; \
+		exit 1; \
+	fi; \
+	echo "Tag $$TAG verified on origin at HEAD. Building and uploading to PyPI."
 	@$(MAKE) build
-	@$(MAKE) publish-public publish-public-cap
+	@$(MAKE) upload-pypi
 
 # Check that pyproject.toml dependencies match requirements.txt
 check-deps:
@@ -627,35 +757,370 @@ check-suspicious-files:
 		echo "No suspicious files found."; \
 	fi
 
-release: check-deps check-suspicious-files
-	@echo "Preparing release"
-	@CURRENT_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
-	CURRENT_TAG="v$$CURRENT_VERSION"; \
-	if git tag --points-at HEAD | grep -qx "$$CURRENT_TAG"; then \
-		echo "HEAD already at $$CURRENT_TAG; skipping bump and publishing current version."; \
-		$(MAKE) publish; \
+check-release-remote:
+	@FETCH_URL=$$(git remote get-url origin); \
+	PUSH_URL=$$(git remote get-url --push origin); \
+	for url in "$$FETCH_URL" "$$PUSH_URL"; do \
+		case "$$url" in \
+			*github.com:promptdriven/pdd|*github.com:promptdriven/pdd.git|*github.com/promptdriven/pdd|*github.com/promptdriven/pdd.git) ;; \
+			*) \
+				echo "Error: release must run from the public promptdriven/pdd origin."; \
+				echo "  origin fetch: $$FETCH_URL"; \
+				echo "  origin push:  $$PUSH_URL"; \
+				exit 1; \
+				;; \
+		esac; \
+	done; \
+	echo "Release remote verified: $$PUSH_URL"
+
+# HEAD must be *contained in* origin/main, not necessarily equal to it.
+#
+# Requiring equality deadlocks the cloud gate: the gate takes ~2h to bless a
+# SHA while main takes a commit every ~7 minutes, so the blessed commit is
+# almost never still the tip. Releasing the newest proven ancestor lets an
+# unproven tip stop blocking work that is already proven; the commits after it
+# ship in the next release.
+#
+# The safety property is unchanged. HEAD is what gets tagged and what the cloud
+# gate validated, and an ancestor of origin/main is by definition reviewed,
+# merged history — never an arbitrary or local commit.
+check-release-branch:
+	@set -e; \
+	git fetch origin main; \
+	LOCAL=$$(git rev-parse HEAD); \
+	REMOTE=$$(git rev-parse origin/main); \
+	if ! git merge-base --is-ancestor "$$LOCAL" "$$REMOTE"; then \
+		echo "Error: release must run from a commit contained in origin/main."; \
+		echo "  local HEAD:  $$LOCAL"; \
+		echo "  origin/main: $$REMOTE"; \
+		echo "  HEAD is not in origin/main's history; it may be unmerged,"; \
+		echo "  rebased, or from another branch."; \
+		exit 1; \
+	fi; \
+	BEHIND=$$(git rev-list --count "$$LOCAL..$$REMOTE"); \
+	if [ "$$BEHIND" -eq 0 ]; then \
+		echo "Release branch verified: HEAD is origin/main"; \
 	else \
-		echo "Bumping version with commitizen"; \
-		python -m commitizen bump --increment PATCH --yes; \
-		echo "Pushing to origin before publishing"; \
-		git push origin main --tags; \
-		echo "Publishing new version"; \
-		$(MAKE) publish; \
+		echo "Release branch verified: HEAD is in origin/main, $$BEHIND commit(s) behind the tip."; \
+		echo "  Releasing $$LOCAL; the $$BEHIND newer commit(s) ship in the next release."; \
+		git log --oneline "$$LOCAL..$$REMOTE" | sed 's/^/    /'; \
+	fi
+
+check-release-clean:
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "Error: working tree must be clean before release."; \
+		git status --short; \
+		exit 1; \
+	fi
+
+# The release consumes a commit the cloud gate has already proven green; it
+# does not run the gate itself. Running `make cloud-test` for the first time on
+# release day turned every latent failure into a release blocker discovered at
+# the worst possible moment: for v0.0.309 the gate went red twice mid-release
+# and each red restarted the whole run behind a full fix/review/merge cycle.
+#
+# cloud-test-main.yml runs the same gate on every push to main and on a
+# schedule, so by release time the answer already exists. This target asserts
+# it says yes for the exact candidate SHA.
+#
+# The candidate is always HEAD, deliberately with no override. `release` tags
+# HEAD, so any knob that let this check target a different SHA would allow the
+# gate to bless one commit while another shipped — the exact fail-open hole
+# this check exists to close.
+#
+# `:=` not `?=` on purpose. With `?=` an exported CLOUD_GREEN_MAX_AGE_HOURS
+# wins, so a stray line in a `.envrc` (this repo uses direnv) could set `inf`
+# and silently retire the freshness check. `:=` means only an explicit
+# `make check-release-cloud-green CLOUD_GREEN_MAX_AGE_HOURS=N` overrides it,
+# and check_cloud_green.py rejects inf/nan/non-positive values regardless.
+CLOUD_GREEN_MAX_AGE_HOURS := 24
+CLOUD_TEST_MAIN_WORKFLOW := cloud-test-main.yml
+CLOUD_TEST_REPO := promptdriven/pdd
+
+# ── Arming switch ─────────────────────────────────────────────────────────
+# The gate is inert until cloud-test-main.yml can actually run, which needs a
+# GCP service account that does not exist yet (see "Cloud gate setup" in
+# docs/contributors/pdd-cli-release-process.md). Making it a hard prerequisite
+# before then would block every release, since no green run could exist.
+#
+# So it ships disarmed and `make release` warns loudly on every run instead.
+# To arm: provision the service account, confirm one green run exists, then
+# set this to 1. That is the whole change.
+CLOUD_GREEN_GATE_ARMED := 0
+
+# Prerequisite used by `release`. Delegates to the real check once armed;
+# until then it warns and continues, so the release still works but nobody can
+# forget the gate is off.
+check-release-cloud-green-gate:
+	@if [ "$(CLOUD_GREEN_GATE_ARMED)" = "1" ]; then \
+		$(MAKE) --no-print-directory check-release-cloud-green; \
+	else \
+		echo "*******************************************************************"; \
+		echo "WARNING: the cloud-test release gate is NOT ARMED."; \
+		echo "  This release is NOT verified against a cloud-test run."; \
+		echo "  Arm it by provisioning the service account described in"; \
+		echo "  docs/contributors/pdd-cli-release-process.md (Cloud gate setup),"; \
+		echo "  confirming one green run, then setting CLOUD_GREEN_GATE_ARMED := 1."; \
+		echo "*******************************************************************"; \
+	fi
+
+check-release-cloud-green:
+	@set -e; \
+	command -v gh >/dev/null 2>&1 || { \
+		echo "Error: gh is required to verify the cloud-test gate."; \
+		exit 1; \
+	}; \
+	CANDIDATE_SHA="$$(git rev-parse HEAD)"; \
+	echo "Verifying cloud-test gate for $$CANDIDATE_SHA"; \
+	git fetch origin main --quiet; \
+	gh run list --repo "$(CLOUD_TEST_REPO)" \
+		--workflow "$(CLOUD_TEST_MAIN_WORKFLOW)" \
+		--branch main --status success --limit 40 \
+		--json headSha,updatedAt,url \
+	| python3 scripts/check_cloud_green.py \
+		--candidate-sha "$$CANDIDATE_SHA" \
+		--max-age-hours "$(CLOUD_GREEN_MAX_AGE_HOURS)" \
+		--suggest-ancestor-of origin/main
+
+check-release-video-config:
+	@RELEASE_PDS_TOKEN="$${PDS_TOKEN:-}"; \
+	if [ -z "$$RELEASE_PDS_TOKEN" ]; then RELEASE_PDS_TOKEN="$${PDS_RELEASE_TOKEN:-}"; fi; \
+	if [ -n "$$RELEASE_PDS_TOKEN" ]; then export PDS_TOKEN="$$RELEASE_PDS_TOKEN"; export PDS_PROFILE=; fi; \
+	export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
+	RELEASE_VIDEO="$(RELEASE_VIDEO)" \
+	RELEASE_VIDEO_PDS_CREATE_TIMEOUT="$(RELEASE_VIDEO_PDS_CREATE_TIMEOUT)" \
+	python scripts/release_video.py \
+		--preflight \
+		--pds-cli "$(PDS_CLI)" \
+		--claude-model "$(RELEASE_VIDEO_CLAUDE_MODEL)" \
+		--pds-claude-model "$(RELEASE_VIDEO_PDS_CLAUDE_MODEL)" \
+		--project-id "$(RELEASE_VIDEO_PROJECT_ID)"
+
+check-release-claude-oauth-config:
+	@if [ "$(RELEASE_VIDEO)" = "0" ]; then \
+		echo "Claude Code OAuth token preflight skipped because RELEASE_VIDEO=0"; \
+		exit 0; \
+	fi; \
+	configured=0; missing=""; \
+	for name in CLAUDE_CODE_OAUTH_TOKEN_1 CLAUDE_CODE_OAUTH_TOKEN_2 CLAUDE_CODE_OAUTH_TOKEN_3; do \
+		if [ -n "$$(printenv "$$name")" ]; then \
+			configured=$$((configured + 1)); \
+		else \
+			missing="$$missing $$name"; \
+		fi; \
+	done; \
+	if [ "$$configured" -eq 3 ]; then \
+		echo "Claude Code OAuth token slots verified: 3/3 numbered slots configured."; \
+		if [ -n "$${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then \
+			echo "Fallback CLAUDE_CODE_OAUTH_TOKEN is also configured."; \
+		fi; \
+	else \
+		echo "Claude Code OAuth token slots configured: $$configured/3. Missing:$$missing"; \
+		if [ -n "$${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then \
+			echo "Fallback CLAUDE_CODE_OAUTH_TOKEN is configured, but numbered slots should be set for rotation."; \
+		fi; \
+		if [ "$(REQUIRE_CLAUDE_OAUTH_SLOTS)" = "1" ]; then exit 1; fi; \
+	fi
+
+check-release-claude-oauth-config-local: check-release-claude-oauth-config-sops
+
+check-release-claude-oauth-config-sops:
+	@command -v "$(SOPS)" >/dev/null 2>&1 || { echo "Error: $(SOPS) CLI is required."; exit 1; }
+	@test -f "$(SOPS_RELEASE_ENV_FILE)" || { echo "Error: SOPS release env file not found: $(SOPS_RELEASE_ENV_FILE)"; echo "Set SOPS_RELEASE_ENV_FILE to the prod SOPS env file."; exit 1; }
+	@$(SOPS_RELEASE_ENV_RUNNER) \
+		--require-claude-slots "$(REQUIRE_CLAUDE_OAUTH_SLOTS)" \
+		--release-video "$(RELEASE_VIDEO)" \
+		-- $(MAKE) --no-print-directory check-release-claude-oauth-config
+
+check-release-video-config-local: check-release-video-config-sops
+
+check-release-video-config-sops:
+	@command -v "$(SOPS)" >/dev/null 2>&1 || { echo "Error: $(SOPS) CLI is required."; exit 1; }
+	@test -f "$(SOPS_RELEASE_ENV_FILE)" || { echo "Error: SOPS release env file not found: $(SOPS_RELEASE_ENV_FILE)"; echo "Set SOPS_RELEASE_ENV_FILE to the prod SOPS env file."; exit 1; }
+	@$(SOPS_RELEASE_ENV_RUNNER) \
+		--require-claude-slots "$(REQUIRE_CLAUDE_OAUTH_SLOTS)" \
+		--release-video "$(RELEASE_VIDEO)" \
+		-- $(MAKE) --no-print-directory check-release-claude-oauth-config check-release-video-config
+
+check-release-video-config-infisical:
+	@echo "check-release-video-config-infisical is deprecated; use make check-release-video-config-local (SOPS-backed)." >&2
+	@$(MAKE) --no-print-directory check-release-video-config-sops
+
+release-local: release-sops
+
+release-sops:
+	@command -v "$(SOPS)" >/dev/null 2>&1 || { echo "Error: $(SOPS) CLI is required."; exit 1; }
+	@test -f "$(SOPS_RELEASE_ENV_FILE)" || { echo "Error: SOPS release env file not found: $(SOPS_RELEASE_ENV_FILE)"; echo "Set SOPS_RELEASE_ENV_FILE to the prod SOPS env file."; exit 1; }
+	@$(SOPS_RELEASE_ENV_RUNNER) \
+		--require-claude-slots "$(REQUIRE_CLAUDE_OAUTH_SLOTS)" \
+		--release-video "$(RELEASE_VIDEO)" \
+		-- $(MAKE) --no-print-directory check-release-claude-oauth-config release
+
+release-infisical:
+	@echo "release-infisical is deprecated; use make release-local (SOPS-backed)." >&2
+	@$(MAKE) --no-print-directory release-sops
+
+release-video:
+	@if printf '%s\n' $(RELEASE_VIDEO_OPT_OUT_TAGS) | grep -qxF "$(RELEASE_TAG)"; then \
+		echo "release-video: $(RELEASE_TAG) is opted out and must not create, upload, or distribute a video." >&2; \
+		exit 1; \
+	fi
+	@if [ "$(RELEASE_VIDEO)" = "0" ]; then \
+		echo "Skipping release video because RELEASE_VIDEO=0"; \
+		exit 0; \
+	fi; \
+	DRY_RUN_FLAG=""; \
+	if [ "$(RELEASE_VIDEO_DRY_RUN)" = "1" ]; then DRY_RUN_FLAG="--dry-run"; fi; \
+	RELEASE_PDS_TOKEN="$${PDS_TOKEN:-}"; \
+	if [ -z "$$RELEASE_PDS_TOKEN" ]; then RELEASE_PDS_TOKEN="$${PDS_RELEASE_TOKEN:-}"; fi; \
+	if [ -n "$$RELEASE_PDS_TOKEN" ]; then export PDS_TOKEN="$$RELEASE_PDS_TOKEN"; export PDS_PROFILE=; fi; \
+	export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
+	RELEASE_TAG="$(RELEASE_TAG)" RELEASE_GIT_SHA="$(RELEASE_GIT_SHA)" \
+	RELEASE_VIDEO_IDEMPOTENCY_KEY="$(RELEASE_VIDEO_IDEMPOTENCY_KEY)" \
+	RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE="$(RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE)" \
+	RELEASE_VIDEO_ATTEMPT_ID="$(RELEASE_VIDEO_ATTEMPT_ID)" \
+	RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT="$(RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT)" \
+	RELEASE_VIDEO_FORCE_REGENERATE="$(RELEASE_VIDEO_FORCE_REGENERATE)" \
+	RELEASE_VIDEO_METADATA_CONFLICT="$(RELEASE_VIDEO_METADATA_CONFLICT)" \
+	RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID="$(RELEASE_VIDEO_VEO_VALIDATION_RECOVERY_JOB_ID)" \
+	RELEASE_VIDEO_PDS_CREATE_TIMEOUT="$(RELEASE_VIDEO_PDS_CREATE_TIMEOUT)" \
+	RELEASE_VIDEO_RELEASE_NOTES_PATH="$(RELEASE_VIDEO_RELEASE_NOTES_PATH)" \
+	python scripts/release_video.py \
+		--output-dir "$(RELEASE_VIDEO_OUTPUT_DIR)" \
+		--claude-cli "$(CLAUDE_CLI)" \
+		--claude-model "$(RELEASE_VIDEO_CLAUDE_MODEL)" \
+		--script-path "$(RELEASE_VIDEO_SCRIPT_PATH)" \
+		--release-notes-path "$(RELEASE_VIDEO_RELEASE_NOTES_PATH)" \
+		--pds-cli "$(PDS_CLI)" \
+		--pds-claude-model "$(RELEASE_VIDEO_PDS_CLAUDE_MODEL)" \
+		--project-id "$(RELEASE_VIDEO_PROJECT_ID)" \
+		--preset "$(RELEASE_VIDEO_PRESET)" \
+		--target "$(RELEASE_VIDEO_TARGET)" \
+		--platform "$(RELEASE_VIDEO_PLATFORM)" \
+		--privacy "$(RELEASE_VIDEO_PRIVACY)" \
+		$$DRY_RUN_FLAG
+
+release-video-status:
+	@if [ -z "$(RELEASE_TAG)" ]; then \
+		echo "RELEASE_TAG is required, for example make release-video-status RELEASE_TAG=vX.Y.Z" >&2; \
+		exit 1; \
+	fi; \
+	if [ "$(RELEASE_VIDEO_STATUS_QUERY)" = "1" ]; then \
+		RELEASE_PDS_TOKEN="$${PDS_TOKEN:-}"; \
+		if [ -z "$$RELEASE_PDS_TOKEN" ]; then RELEASE_PDS_TOKEN="$${PDS_RELEASE_TOKEN:-}"; fi; \
+		if [ -n "$$RELEASE_PDS_TOKEN" ]; then export PDS_TOKEN="$$RELEASE_PDS_TOKEN"; export PDS_PROFILE=; fi; \
+		export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
+	fi; \
+	STATUS_QUERY_ARGS="$(RELEASE_VIDEO_STATUS_QUERY_FLAG)"; \
+	python scripts/release_video.py \
+		--status \
+		--tag "$(RELEASE_TAG)" \
+		--output-dir "$(RELEASE_VIDEO_OUTPUT_DIR)" \
+		--pds-cli "$(PDS_CLI)" \
+		$$STATUS_QUERY_ARGS
+
+release-video-discord-backfill:
+	@if printf '%s\n' $(RELEASE_VIDEO_OPT_OUT_TAGS) | grep -qxF "$(RELEASE_TAG)"; then \
+		echo "release-video-discord-backfill: $(RELEASE_TAG) is opted out and must not mutate a release or Discord." >&2; \
+		exit 1; \
+	fi
+	@python scripts/backfill_release_video_discord.py \
+		--tag "$(RELEASE_TAG)" \
+		--youtube-url "$(RELEASE_VIDEO_YOUTUBE_URL)" \
+		--repo "$${GITHUB_REPOSITORY:-promptdriven/pdd}"
+
+release-video-skip:
+	@if printf '%s\n' $(RELEASE_VIDEO_OPT_OUT_TAGS) | grep -qxF "$(RELEASE_TAG)"; then \
+		echo "release-video-skip: $(RELEASE_TAG) is opted out and must not mutate a release or Discord." >&2; \
+		exit 1; \
+	fi
+	@python scripts/backfill_release_video_discord.py \
+		--tag "$(RELEASE_TAG)" \
+		--skip-reason "$(RELEASE_VIDEO_SKIP_REASON)" \
+		--repo "$${GITHUB_REPOSITORY:-promptdriven/pdd}"
+
+release: check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean check-release-cloud-green-gate check-release-video-config
+	@echo "Preparing release"
+	@set -e; \
+	echo "Fetching tags from origin"; \
+	git fetch --tags --prune origin; \
+	HEAD_SHA=$$(git rev-parse HEAD); \
+	EXISTING_TAG=$$(git tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1 || true); \
+	if [ -n "$$EXISTING_TAG" ]; then \
+		echo "HEAD is already tagged as $$EXISTING_TAG."; \
+		REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$EXISTING_TAG^{}" "refs/tags/$$EXISTING_TAG" 2>/dev/null | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
+		if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
+			REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$EXISTING_TAG" 2>/dev/null | awk 'NR==1 {print $$1}'); \
+		fi; \
+		if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
+			echo "Local tag $$EXISTING_TAG not on origin; pushing."; \
+			git push origin "$$EXISTING_TAG"; \
+			echo "Tag $$EXISTING_TAG pushed. GHA will request gltanaka approval, then publish."; \
+		elif [ "$$REMOTE_TAG_COMMIT" = "$$HEAD_SHA" ]; then \
+			echo "Tag $$EXISTING_TAG already on origin at HEAD."; \
+			RECOVERY_FAILED=0; \
+			if command -v gh >/dev/null 2>&1; then \
+				if ! gh release view "$$EXISTING_TAG" >/dev/null 2>&1; then \
+					echo "GitHub Release for $$EXISTING_TAG is missing. Creating it idempotently."; \
+					gh release create "$$EXISTING_TAG" --generate-notes --verify-tag --target main \
+						|| { echo "(could not create GitHub Release; check gh auth and permissions)"; RECOVERY_FAILED=1; }; \
+				else \
+					echo "GitHub Release for $$EXISTING_TAG exists."; \
+				fi; \
+				LATEST_RUN_STATUS=$$(gh run list --workflow release.yml --limit 20 --json status,conclusion,headSha --jq ".[] | select(.headSha==\"$$HEAD_SHA\") | \"\(.status):\(.conclusion)\"" 2>/dev/null | head -1); \
+				if [ -z "$$LATEST_RUN_STATUS" ]; then \
+					echo "No release.yml run found for HEAD ($$HEAD_SHA); the workflow may not have started yet."; \
+				else \
+					case "$$LATEST_RUN_STATUS" in \
+						completed:success) echo "release.yml run for this tag: success.";; \
+						completed:*) echo "release.yml run for this tag did not succeed ($$LATEST_RUN_STATUS). To re-trigger, delete and re-push the tag, or run 'gh workflow run release.yml'."; RECOVERY_FAILED=1;; \
+						*) echo "release.yml run for this tag status: $$LATEST_RUN_STATUS (may still be pending gltanaka approval).";; \
+					esac; \
+				fi; \
+			else \
+				echo "(install 'gh' CLI to auto-check release status)"; \
+			fi; \
+			if [ "$$RECOVERY_FAILED" = "1" ]; then exit 1; fi; \
+		else \
+			echo "Error: tag $$EXISTING_TAG on origin points at $$REMOTE_TAG_COMMIT, not HEAD ($$HEAD_SHA)."; \
+			exit 1; \
+		fi; \
+		if printf '%s\n' $(RELEASE_VIDEO_OPT_OUT_TAGS) | grep -qxF "$$EXISTING_TAG"; then \
+			echo "Skipping release video for opted-out tag $$EXISTING_TAG."; \
+		else \
+			make --no-print-directory release-video RELEASE_TAG="$$EXISTING_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
+		fi; \
+		exit 0; \
+	fi; \
+	LATEST_TAG=$$(git tag --list --merged HEAD --sort=-v:refname 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
+	if [ -z "$$LATEST_TAG" ]; then LATEST_TAG="v0.0.0"; fi; \
+	CURRENT_VERSION=$${LATEST_TAG#v}; \
+	BUMP=$${BUMP:-patch}; \
+	case "$$BUMP" in \
+		major|minor|patch) ;; \
+		*) echo "Error: BUMP must be one of: major, minor, patch (got: '$$BUMP')"; exit 1 ;; \
+	esac; \
+	NEW_VERSION=$$(python -c "v=[int(x) for x in '$$CURRENT_VERSION'.split('.')]; i={'major':0,'minor':1,'patch':2}['$$BUMP']; v[i]+=1; [v.__setitem__(j,0) for j in range(i+1,3)]; print('.'.join(map(str,v)))"); \
+	NEW_TAG="v$$NEW_VERSION"; \
+	echo "Releasing $$LATEST_TAG → $$NEW_TAG at $$HEAD_SHA"; \
+	if git rev-parse --verify --quiet "refs/tags/$$NEW_TAG" >/dev/null; then \
+		echo "Error: tag $$NEW_TAG exists locally at a different commit than HEAD."; \
+		exit 1; \
+	fi; \
+	if git ls-remote --exit-code --tags origin "$$NEW_TAG" >/dev/null 2>&1; then \
+		echo "Error: tag $$NEW_TAG already exists on origin."; \
+		exit 1; \
+	fi; \
+	git tag -a "$$NEW_TAG" -m "Release $$NEW_TAG"; \
+	git push origin "$$NEW_TAG"; \
+	echo "Tag $$NEW_TAG is on origin. GHA will request gltanaka approval, then publish."; \
+	if printf '%s\n' $(RELEASE_VIDEO_OPT_OUT_TAGS) | grep -qxF "$$NEW_TAG"; then \
+		echo "Skipping release video for opted-out tag $$NEW_TAG."; \
+	else \
+		make --no-print-directory release-video RELEASE_TAG="$$NEW_TAG" RELEASE_GIT_SHA="$$HEAD_SHA"; \
 	fi
 	@# Post-release cleanup check (Issue #186)
-	@$(MAKE) check-suspicious-files
-	@# Update CHANGELOG.md with changes from this release
-	@echo "Updating CHANGELOG.md..."
-	@claude --dangerously-skip-permissions -p "Update CHANGELOG.md for the latest release. Steps: \
-1. Run 'git tag | tail -2' to find the prior and current version tags. \
-2. Run 'git diff <prior>..HEAD --stat' and 'git log <prior>..HEAD --oneline' to see all changes. \
-3. For files with significant changes (>20 lines in the stat), run 'git diff <prior>..HEAD -- <file>' to understand the SEMANTIC meaning of the change, not just that lines changed. Look for: new features, behavior changes, removed constants/functions, generalized logic. \
-4. Note any DELETED files (shown as 'delete mode' or '0 insertions, N deletions') - these are often meaningful (e.g., removed prompts, deprecated modules). \
-5. IMPORTANT: PR numbers in merge commits (e.g., 'Merge pull request #337') are from the FORK (gltanaka/pdd), NOT the public repo (promptdriven/pdd). Do NOT include fork PR numbers in the CHANGELOG - they will confuse users who look them up on the public repo. \
-6. For external contributor credits ONLY: use 'gh pr list --repo promptdriven/pdd --state merged --limit 20' to find upstream PRs. Verify PRs exist with 'gh pr view <num> --repo promptdriven/pdd --json state,title'. Only credit PRs that are actually merged on promptdriven/pdd. \
-7. Organize changes into sections: Feat, Fix, Build, Refactor, Docs. \
-8. Keep descriptions concise but complete. Every significant code change should be represented. \
-We are using a prompt driven development approach: docs/prompting_guide.md."
+	@make check-suspicious-files
 
 analysis:
 	@echo "Running regression analysis"
@@ -677,6 +1142,10 @@ update-extension:
 	@pdd --strength .865 --verbose --force generate --output utils/vscode_prompt/syntaxes/prompt.tmLanguage.json prompts/prompt.tmLanguage_json.prompt
 	@cd utils/vscode_prompt && vsce package
 	@code --install-extension utils/vscode_prompt/prompt-0.0.1.vsix --force
+test-frontend:
+	@echo "Running frontend Vitest tests"
+	@cd pdd/frontend && npm test
+
 publish-public:
 	@# Ensure target directory is a Git repo (clone if empty and not a repo)
 	@if [ ! -d "$(PUBLIC_PDD_REPO_DIR)/.git" ]; then \
@@ -691,12 +1160,17 @@ publish-public:
 	fi
 	@echo "Ensuring public repo directory exists: $(PUBLIC_PDD_REPO_DIR)"
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)
+	@# Reset to origin/main before copying so the copy lands on a clean baseline
+	@if git -C "$(PUBLIC_PDD_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		cd "$(PUBLIC_PDD_REPO_DIR)" && git fetch origin && git reset --hard origin/main; \
+	fi
 	@echo "Copying files from .sync-config.yml (shared section only)"
 	@python scripts/copy_package_data_to_public.py \
 		--dest $(PUBLIC_PDD_REPO_DIR) \
 		--project-root . \
 		--config .sync-config.yml \
-		--sections shared
+		--sections shared \
+		--sync-deletions
 	@# Create prompts symlink if needed (prompts/ -> pdd/prompts/)
 	@if [ -d "$(PUBLIC_PDD_REPO_DIR)/pdd/prompts" ] && [ ! -e "$(PUBLIC_PDD_REPO_DIR)/prompts" ]; then \
 		echo "Creating prompts symlink"; \
@@ -709,13 +1183,22 @@ publish-public:
 	fi
 	@echo "Committing and pushing updates in public repo"
 	@if git -C "$(PUBLIC_PDD_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		cd "$(PUBLIC_PDD_REPO_DIR)" && git add . && git commit -m "Bump version" && git fetch origin && git rebase origin/main && \
-		CURR_VER=$$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1) && \
-		(git tag -a "v$$CURR_VER" -m "Release v$$CURR_VER" 2>/dev/null || true) && \
-		git push && git push --tags; \
+		cd "$(PUBLIC_PDD_REPO_DIR)" && git add . && \
+		if ! git diff --cached --quiet; then \
+			git commit -m "Bump version" && \
+			CURR_VER=$$(git describe --tags --abbrev=0 --match='v*' 2>/dev/null | sed 's/^v//') && \
+			if [ -z "$$CURR_VER" ] || ! echo "$$CURR_VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$$'; then \
+				echo "Skip tagging: no valid release tag found in public repo (got: '$$CURR_VER')"; \
+			else \
+				(git tag -a "v$$CURR_VER" -m "Release v$$CURR_VER" 2>/dev/null || true); \
+			fi && \
+			git push && git push --tags; \
 		else \
-			echo "Skip commit: $(PUBLIC_PDD_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_REPO_DIR to a clone of $(PUBLIC_PDD_REMOTE)."; \
-		fi
+			echo "No changes to commit in public repo — skipping push"; \
+		fi; \
+	else \
+		echo "Skip commit: $(PUBLIC_PDD_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_REPO_DIR to a clone of $(PUBLIC_PDD_REMOTE)."; \
+	fi
 
 # Ensure the public repo clone exists at $(PUBLIC_PDD_REPO_DIR)
 public-ensure:
@@ -731,48 +1214,6 @@ public-ensure:
 		fi; \
 	else \
 		echo "Public repo clone already present: $(PUBLIC_PDD_REPO_DIR)"; \
-		fi
-
-# Publish to CAP public repo (copies all prompts, including non _LLM.prompt)
-.PHONY: publish-public-cap
-publish-public-cap:
-	@# Ensure target directory is a Git repo (clone if empty and not a repo)
-	@if [ ! -d "$(PUBLIC_PDD_CAP_REPO_DIR)/.git" ]; then \
-		if [ ! -d "$(PUBLIC_PDD_CAP_REPO_DIR)" ] || [ -z "$$(/bin/ls -A "$(PUBLIC_PDD_CAP_REPO_DIR)" 2>/dev/null)" ]; then \
-			echo "Cloning public CAP repo $(PUBLIC_PDD_CAP_REMOTE) into $(PUBLIC_PDD_CAP_REPO_DIR)"; \
-			mkdir -p "$(dir $(PUBLIC_PDD_CAP_REPO_DIR))"; \
-			git clone "$(PUBLIC_PDD_CAP_REMOTE)" "$(PUBLIC_PDD_CAP_REPO_DIR)"; \
-		else \
-			echo "Warning: $(PUBLIC_PDD_CAP_REPO_DIR) exists and is not a Git repo."; \
-			echo "Set PUBLIC_PDD_CAP_REPO_DIR to a clone of $(PUBLIC_PDD_CAP_REMOTE) or remove the directory and re-run."; \
-		fi; \
-	fi
-	@echo "Ensuring CAP public repo directory exists: $(PUBLIC_PDD_CAP_REPO_DIR)"
-	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)
-	@echo "Copying files from .sync-config.yml (shared + cap_only sections)"
-	@python scripts/copy_package_data_to_public.py \
-		--dest $(PUBLIC_PDD_CAP_REPO_DIR) \
-		--project-root . \
-		--config .sync-config.yml \
-		--sections shared cap_only
-	@# Create prompts symlink if needed (prompts/ -> pdd/prompts/)
-	@if [ -d "$(PUBLIC_PDD_CAP_REPO_DIR)/pdd/prompts" ] && [ ! -e "$(PUBLIC_PDD_CAP_REPO_DIR)/prompts" ]; then \
-		echo "Creating prompts symlink"; \
-		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && ln -s pdd/prompts prompts; \
-	fi
-	@# Create data symlink for regression tests (data/ -> pdd/data/)
-	@if [ -d "$(PUBLIC_PDD_CAP_REPO_DIR)/pdd/data" ] && [ ! -e "$(PUBLIC_PDD_CAP_REPO_DIR)/data" ]; then \
-		echo "Creating data symlink for regression tests"; \
-		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && ln -s pdd/data data; \
-	fi
-	@echo "Committing and pushing updates in CAP public repo"
-	@if git -C "$(PUBLIC_PDD_CAP_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git add . && git commit -m "Bump version" && git fetch origin && git rebase origin/main && \
-		CURR_VER=$$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1) && \
-		(git tag -a "v$$CURR_VER" -m "Release v$$CURR_VER" 2>/dev/null || true) && \
-		git push && git push --tags; \
-		else \
-			echo "Skip commit: $(PUBLIC_PDD_CAP_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_CAP_REPO_DIR to a clone of $(PUBLIC_PDD_CAP_REMOTE)."; \
 		fi
 
 # Update the public repo clone to its default branch

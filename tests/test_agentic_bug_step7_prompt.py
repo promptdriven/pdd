@@ -27,7 +27,7 @@ import pytest
 
 # --- Constants ---
 
-PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "agentic_bug_step7_generate_LLM.prompt"
+PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "agentic_bug_step9_generate_LLM.prompt"
 
 
 # --- Fixtures ---
@@ -144,64 +144,53 @@ class TestStep7PromptAntiPatternWarning:
 
 class TestStep7PromptEnforcesStep6Strategy:
     """
-    Test that the Step 7 prompt enforces implementing Step 6's test strategy.
+    Test that the Step 9 prompt enforces implementing Step 8's test strategy.
 
-    Step 6 often correctly identifies the test approach (mock, call_args, etc.),
-    but Step 7 may ignore this and generate easier tests. The prompt should
-    explicitly require implementing what Step 6 planned.
+    Step 8 (test_plan) often correctly identifies the test approach (mock, call_args, etc.),
+    but Step 9 may ignore this and generate easier tests. The prompt should
+    explicitly require implementing what Step 8 planned.
     """
 
     def test_prompt_requires_implementing_step6_test_strategy(
         self, step7_prompt_content: str
     ) -> None:
         """
-        Verify the prompt instructs implementing Step 6's test STRATEGY, not just file path.
+        Verify the prompt instructs implementing Step 8's test STRATEGY, not just file path.
 
-        The current prompt only extracts:
-        - "Extract the test file path from Step 6"
-        - "If Step 6 said (append)/(new)"
+        The prompt should require:
+        - "Implement EXACTLY what Step 8's test plan described"
+        - "If Step 8 provided example test code, use that as the template"
+        - "Follow Step 8's testing approach (mocking, assertions, etc.)"
 
-        But it should ALSO require:
-        - "Implement EXACTLY what Step 6's test plan described"
-        - "If Step 6 provided example test code, use that as the template"
-        - "Follow Step 6's testing approach (mocking, assertions, etc.)"
-
-        Without this, LLMs ignore Step 6's test strategy and generate easier tests.
+        Without this, LLMs ignore Step 8's test strategy and generate easier tests.
         """
         content_lower = step7_prompt_content.lower()
 
-        # The prompt mentions Step 6 for file path extraction, but does it enforce
-        # implementing the actual test STRATEGY from Step 6?
-        #
-        # We need to check for EXPLICIT phrases that indicate strategy enforcement.
-        # The current prompt only says "Extract the test file path from Step 6"
-        # It does NOT say "Implement Step 6's test strategy" or similar.
-        #
-        # Key check: The phrases must be EXPLICIT instructions, not just word presence.
-        # The current prompt says "planned the test strategy" (descriptive) but does NOT
-        # say "implement the strategy" (imperative).
         has_strategy_enforcement = any([
             # Explicit enforcement phrases - these must be exact substrings
-            "implement step 6" in content_lower,
-            "implement the strategy" in content_lower and "step 6" in content_lower,
+            "implement step 8" in content_lower,
+            "implement the strategy" in content_lower and "step 8" in content_lower,
             "implement the test strategy" in content_lower,
-            "implement exactly what step 6" in content_lower,
-            "follow step 6's strategy" in content_lower,
-            "follow step 6's test plan" in content_lower,
-            "follow the test strategy" in content_lower and "step 6" in content_lower,
-            # Template usage - step 6 example as template
-            "step 6" in content_lower and "use as template" in content_lower,
-            "step 6" in content_lower and "example code" in content_lower and "template" in content_lower,
-            # Enforcement keywords in context of Step 6
-            "step 6's approach" in content_lower,
-            "step 6's test approach" in content_lower,
+            "implement exactly what step 8" in content_lower,
+            "follow step 8's strategy" in content_lower,
+            "follow step 8's test plan" in content_lower,
+            "follow the test strategy" in content_lower and "step 8" in content_lower,
+            # Template usage - step 8 example as template
+            "step 8" in content_lower and "use as template" in content_lower,
+            "step 8" in content_lower and "example code" in content_lower and "template" in content_lower,
+            # Enforcement keywords in context of Step 8
+            "step 8's approach" in content_lower,
+            "step 8's test approach" in content_lower,
+            "step 8's test plan" in content_lower,
+            "step 8's test strategy" in content_lower,
+            "follow step 8" in content_lower,
         ])
 
         assert has_strategy_enforcement, (
-            "Step 7 prompt only extracts file path from Step 6, not the test STRATEGY. "
-            "The prompt should require: 'Implement EXACTLY what Step 6's test plan described' "
-            "and 'If Step 6 provided example test code, use that as the template'. "
-            "Currently it only says 'Extract the test file path from Step 6'."
+            "Step 9 prompt only extracts file path from Step 8, not the test STRATEGY. "
+            "The prompt should require: 'Implement EXACTLY what Step 8's test plan described' "
+            "and 'If Step 8 provided example test code, use that as the template'. "
+            "Currently it only says 'Extract the test file path from Step 8'."
         )
 
 
@@ -230,11 +219,17 @@ The caller should use `k=5` to match the callee's signature.
 """,
     "step1_output": "Issue is a valid bug report about parameter name mismatch.",
     "step2_output": "Confirmed bug: caller uses wrong parameter name.",
-    "step3_output": "Root cause: get_recommendations() passes limit= but search_similar_examples() expects k=",
-    "step4_output": "Located bug in src/recommendations.py:45 - get_recommendations() calls search_similar_examples(limit=count)",
-    "step5_output": "Fix: Change line 45 from `search_similar_examples(query, limit=count)` to `search_similar_examples(query, k=count)`",
-    "step5_5_output": "DEFECT_TYPE: code\nThis is a code bug - the caller is using the wrong parameter name.",
-    "step6_output": """
+    "step3_output": "Issue has sufficient information to investigate.",
+    "step4_output": "No external API dependencies identified.",
+    "step5_output": "Root cause: get_recommendations() passes limit= but search_similar_examples() expects k=",
+    "step6_output": "Fix: Change line 45 from `search_similar_examples(query, limit=count)` to `search_similar_examples(query, k=count)`",
+    "step7_output": "DEFECT_TYPE: code\nThis is a code bug - the caller is using the wrong parameter name.",
+    "step5_reproduction_tests": "",
+    "fix_locations": "example/recommendations.py, example/search.py",
+    "step6_expansion_items": "none",
+    "scope_classification": "LOCALIZED",
+    "planned_test_count": "2",
+    "step8_output": """
 ### Test Location
 **File:** tests/test_recommendations.py (new)
 
@@ -280,16 +275,21 @@ def extract_python_code_blocks(text: str) -> list[str]:
     2. ```py blocks
     3. Bash heredocs (cat <<EOF > file.py ... EOF)
     4. Generic ``` blocks containing Python-like code (imports, def, class)
+    5. Shell-escaped backticks (\\`\\`\\`python blocks from gh issue comment output)
     """
     results = []
 
+    # 0. Pre-process: unescape shell-escaped backticks (e.g., from gh issue comment output)
+    #    LLMs sometimes wrap output in shell commands where backticks become \`
+    unescaped_text = text.replace('\\`', '`')
+
     # 1. Standard ```python blocks - use word boundary to ensure full match
     python_pattern = r'```python\b\s*(.*?)```'
-    results.extend(re.findall(python_pattern, text, re.DOTALL))
+    results.extend(re.findall(python_pattern, unescaped_text, re.DOTALL))
 
     # 2. ```py blocks - word boundary prevents matching ```python
     py_pattern = r'```py\b\s*(.*?)```'
-    py_matches = re.findall(py_pattern, text, re.DOTALL)
+    py_matches = re.findall(py_pattern, unescaped_text, re.DOTALL)
     # Filter out duplicates (in case both patterns match same content)
     for match in py_matches:
         if match not in results:
@@ -297,12 +297,12 @@ def extract_python_code_blocks(text: str) -> list[str]:
 
     # 3. Bash heredocs: cat <<EOF > *.py ... EOF or cat <<'EOF' > *.py ... EOF
     heredoc_pattern = r"cat\s+<<'?EOF'?\s*>\s*\S+\.py\s*(.*?)EOF"
-    results.extend(re.findall(heredoc_pattern, text, re.DOTALL))
+    results.extend(re.findall(heredoc_pattern, unescaped_text, re.DOTALL))
 
     # 4. Generic ``` blocks that look like Python (fallback)
     if not results:
         generic_pattern = r'```\s*(.*?)```'
-        generic_matches = re.findall(generic_pattern, text, re.DOTALL)
+        generic_matches = re.findall(generic_pattern, unescaped_text, re.DOTALL)
         for match in generic_matches:
             # Check if it looks like Python code
             python_indicators = [
@@ -431,6 +431,22 @@ pytest tests/test_recommendations.py -v
         # Should get exactly 1 match (from python pattern), not 2
         assert len(result) == 1
         assert "from os import path" in result[0]
+
+    def test_extracts_from_shell_escaped_backticks(self) -> None:
+        """Test extraction when LLM wraps output in gh issue comment with escaped backticks."""
+        text = (
+            'gh issue comment 999 --repo example/repo --body "'
+            '## Step 7: Generated Test\n\n'
+            '\\`\\`\\`python\n'
+            'from unittest.mock import patch\n\n'
+            'def test_example():\n'
+            '    assert True\n'
+            '\\`\\`\\`\n"'
+        )
+        result = extract_python_code_blocks(text)
+        assert len(result) == 1
+        assert "from unittest.mock import patch" in result[0]
+        assert "def test_example():" in result[0]
 
 
 def analyze_test_code_for_mocking_patterns(code: str) -> dict:

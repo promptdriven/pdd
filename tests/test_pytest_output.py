@@ -1,6 +1,8 @@
 import pytest
 import json
 import os
+import shlex
+import subprocess as real_subprocess
 from pathlib import Path
 from pdd.pytest_output import (
     run_pytest_and_capture_output,
@@ -10,7 +12,20 @@ from pdd.pytest_output import (
 )
 import pdd.pytest_output
 import sys
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
+
+
+def _mock_popen_from_completed(completed: real_subprocess.CompletedProcess) -> MagicMock:
+    """Create a mock Popen object from a CompletedProcess for test compatibility.
+
+    After Issue #894, run_pytest_and_capture_output uses Popen instead of
+    subprocess.run. This helper creates a Popen mock that behaves equivalently.
+    """
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (completed.stdout, completed.stderr)
+    mock_proc.returncode = completed.returncode
+    mock_proc.pid = 12345
+    return mock_proc
 
 
 # Create a directory for test outputs (use project root output/ directory)
@@ -55,6 +70,23 @@ def test_run_pytest_and_capture_output_successful_run() -> None:
     # Warnings count may be non-zero due to pytest configuration warnings (unrelated to test)
     assert isinstance(result["test_results"][0]["warnings"], int)
     Path(test_file).unlink(missing_ok=True)
+
+
+def test_run_pytest_and_capture_output_includes_shell_quoted_command(tmp_path) -> None:
+    """The result exposes the exact pytest command for verifier diagnostics."""
+    test_dir = tmp_path / "dir with spaces"
+    test_dir.mkdir()
+    test_file = test_dir / "test_success.py"
+    test_file.write_text("def test_pass():\n    assert True\n")
+
+    result = run_pytest_and_capture_output(str(test_file))
+
+    command = result["command"]
+    assert str(test_file) in shlex.split(command)
+    assert "-B" in shlex.split(command)
+    assert "-m" in shlex.split(command)
+    assert "pytest" in shlex.split(command)
+    assert any(part.startswith("--rootdir=") for part in shlex.split(command))
 
 
 def test_run_pytest_and_capture_output_failed_test() -> None:
@@ -265,14 +297,12 @@ def test_run_pytest_and_capture_output_parses_ansi_failed_output(tmp_path) -> No
     test_file = tmp_path / "test_failure_color_unit.py"
     test_file.write_text("def test_fail():\n    assert False\n", encoding="utf-8")
 
-    import subprocess
-
     ansi_stdout = "test_failure_color_unit.py::test_fail \x1b[31mFAILED\x1b[0m [100%]\n"
-    fake_completed = subprocess.CompletedProcess(
+    fake_completed = real_subprocess.CompletedProcess(
         args=["pytest"], returncode=1, stdout=ansi_stdout, stderr=""
     )
 
-    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+    with patch("pdd.pytest_output.subprocess.Popen", return_value=_mock_popen_from_completed(fake_completed)):
         result = run_pytest_and_capture_output(str(test_file))
 
     results = result.get("test_results", [{}])[0]
@@ -313,17 +343,37 @@ def test_run_pytest_and_capture_output_nonzero_returncode_never_looks_passing(tm
     test_file = tmp_path / "test_nonzero_returncode.py"
     test_file.write_text("def test_fail():\n    assert False\n", encoding="utf-8")
 
-    import subprocess
-
-    fake_completed = subprocess.CompletedProcess(
+    fake_completed = real_subprocess.CompletedProcess(
         args=["pytest"], returncode=1, stdout="(output omitted)", stderr=""
     )
-    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+    with patch("pdd.pytest_output.subprocess.Popen", return_value=_mock_popen_from_completed(fake_completed)):
         result = run_pytest_and_capture_output(str(test_file))
 
     results = result.get("test_results", [{}])[0]
     assert results.get("return_code") == 1
     assert (results.get("failures", 0) + results.get("errors", 0)) > 0
+
+
+def test_run_pytest_exit_code_5_no_tests_collected_is_not_failure(tmp_path) -> None:
+    """
+    Exit code 5 means 'no tests collected' — the file has no test functions.
+    This is benign, not a failure. The safety net should not convert it to errors=1.
+    """
+    test_file = tmp_path / "test_data.py"
+    test_file.write_text("# Utility module, no test functions\nclass TestDataMixin:\n    pass\n", encoding="utf-8")
+
+    import subprocess
+
+    fake_completed = subprocess.CompletedProcess(
+        args=["pytest"], returncode=5, stdout="no tests ran in 0.00s", stderr=""
+    )
+    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+        result = run_pytest_and_capture_output(str(test_file))
+
+    results = result.get("test_results", [{}])[0]
+    assert results.get("return_code") == 5
+    assert results.get("failures", 0) == 0, "Exit code 5 should not produce failures"
+    assert results.get("errors", 0) == 0, "Exit code 5 should not produce errors"
 
 
 # ============================================================================
@@ -408,6 +458,34 @@ def test_run_pytest_without_pddrc_uses_original_behavior(tmp_path) -> None:
     assert results.get("passed") == 1
 
 
+def test_run_pytest_without_pddrc_roots_in_test_directory(tmp_path) -> None:
+    """Ad hoc test-file runs should not let pytest choose an unwritable ancestor."""
+    test_file = tmp_path / "test_simple.py"
+    test_file.write_text(
+        "def test_pass():\n"
+        "    assert True\n",
+        encoding="utf-8"
+    )
+
+    fake_completed = real_subprocess.CompletedProcess(
+        args=["pytest"],
+        returncode=0,
+        stdout="test_simple.py::test_pass PASSED [100%]\n"
+        "========================= 1 passed in 0.01s =========================\n",
+        stderr="",
+    )
+
+    with patch("pdd.pytest_output.subprocess.Popen", return_value=_mock_popen_from_completed(fake_completed)) as popen:
+        result = run_pytest_and_capture_output(str(test_file))
+
+    pytest_args = popen.call_args.args[0]
+    popen_kwargs = popen.call_args.kwargs
+    test_dir = str(tmp_path.resolve())
+    assert popen_kwargs["cwd"] == test_dir
+    assert f"--rootdir={test_dir}" in pytest_args
+    assert result["test_results"][0]["warnings"] == 0
+
+
 # --- Tests for extract_failing_files_from_output (Bug #156) ---
 
 def test_extract_failing_files_single_failure():
@@ -486,3 +564,136 @@ def test_extract_failing_files_mixed_formats():
     # Pattern 1 (FAILED prefix) matches first, then pattern 2 (FAILED suffix)
     assert result == ["tests/test_b.py", "tests/test_d.py", "tests/test_c.py"]
 
+
+# ============================================================================
+# Regression Tests - Issue #485: Naive warning counting
+# ============================================================================
+
+def test_warning_count_ignores_litellm_and_pydantic_warnings(tmp_path):
+    """
+    Issue #485: warnings count should only reflect pytest warnings,
+    not library warnings (LiteLLM UserWarning, Pydantic, PDD log messages)
+    that appear in subprocess stdout.
+    """
+    import subprocess as real_subprocess
+
+    test_file = tmp_path / "test_pass.py"
+    test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    # Simulate pytest output that has all tests passing (return code 0)
+    # but contains library warning strings in stdout
+    fake_stdout = (
+        "test_pass.py::test_ok PASSED [100%]\n"
+        "/usr/lib/python3.11/site-packages/litellm/utils.py:123: UserWarning: client is not initialized\n"
+        "  warnings.warn(\"client is not initialized\")\n"
+        "/usr/lib/python3.11/site-packages/pydantic/main.py:45: PydanticSerializationUnexpectedValue: warning unexpected\n"
+        "WARNING: Cloud fallback is disabled\n"
+        "\n"
+        "========================= 1 passed in 0.03s =========================\n"
+    )
+    fake_completed = real_subprocess.CompletedProcess(
+        args=["pytest"], returncode=0, stdout=fake_stdout, stderr=""
+    )
+
+    with patch("pdd.pytest_output.subprocess.Popen", return_value=_mock_popen_from_completed(fake_completed)):
+        result = run_pytest_and_capture_output(str(test_file))
+
+    results = result["test_results"][0]
+    assert results["return_code"] == 0
+    assert results["passed"] == 1
+    assert results["failures"] == 0
+    assert results["errors"] == 0
+    # BUG: Current code counts 4+ warnings from library output.
+    # After fix, this should be 0 (no pytest summary warnings).
+    assert results["warnings"] == 0, (
+        f"Expected 0 warnings (no pytest warnings in summary line), "
+        f"but got {results['warnings']}. Library warnings should not be counted."
+    )
+
+
+def test_warning_count_parses_pytest_summary_line(tmp_path):
+    """
+    Issue #485: When pytest summary line reports warnings (e.g., '1 passed, 2 warnings'),
+    those should be counted correctly.
+    """
+    import subprocess as real_subprocess
+
+    test_file = tmp_path / "test_warn.py"
+    test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    fake_stdout = (
+        "test_warn.py::test_ok PASSED [100%]\n"
+        "\n"
+        "===================== 1 passed, 2 warnings in 0.05s =====================\n"
+    )
+    fake_completed = real_subprocess.CompletedProcess(
+        args=["pytest"], returncode=0, stdout=fake_stdout, stderr=""
+    )
+
+    with patch("pdd.pytest_output.subprocess.Popen", return_value=_mock_popen_from_completed(fake_completed)):
+        result = run_pytest_and_capture_output(str(test_file))
+
+    results = result["test_results"][0]
+    # After fix, should parse "2 warnings" from summary line
+    assert results["warnings"] == 2, (
+        f"Expected 2 warnings from pytest summary line, got {results['warnings']}"
+    )
+
+
+def test_warning_count_zero_for_clean_output(tmp_path):
+    """
+    Issue #485: Clean pytest output with no warnings anywhere should yield 0 warnings.
+    """
+    import subprocess as real_subprocess
+
+    test_file = tmp_path / "test_clean.py"
+    test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    fake_stdout = (
+        "test_clean.py::test_ok PASSED [100%]\n"
+        "\n"
+        "========================= 1 passed in 0.02s =========================\n"
+    )
+    fake_completed = real_subprocess.CompletedProcess(
+        args=["pytest"], returncode=0, stdout=fake_stdout, stderr=""
+    )
+
+    with patch("pdd.pytest_output.subprocess.Popen", return_value=_mock_popen_from_completed(fake_completed)):
+        result = run_pytest_and_capture_output(str(test_file))
+
+    results = result["test_results"][0]
+    assert results["warnings"] == 0
+
+
+def test_warning_count_mixed_library_and_pytest_warnings(tmp_path):
+    """
+    Issue #485 end-to-end: Output has both library warning strings AND
+    a real pytest warning in the summary. Only the summary count should matter.
+    """
+    import subprocess as real_subprocess
+
+    test_file = tmp_path / "test_mixed.py"
+    test_file.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+
+    fake_stdout = (
+        "test_mixed.py::test_ok PASSED [100%]\n"
+        "/site-packages/litellm/utils.py:10: UserWarning: something\n"
+        "  warnings.warn('something')\n"
+        "WARNING: PDD cloud fallback disabled\n"
+        "\n"
+        "================== 1 passed, 1 warning in 0.04s ==================\n"
+    )
+    fake_completed = real_subprocess.CompletedProcess(
+        args=["pytest"], returncode=0, stdout=fake_stdout, stderr=""
+    )
+
+    with patch("pdd.pytest_output.subprocess.Popen", return_value=_mock_popen_from_completed(fake_completed)):
+        result = run_pytest_and_capture_output(str(test_file))
+
+    results = result["test_results"][0]
+    # BUG: Current code counts 3+ warnings from naive substring matching.
+    # After fix, should be 1 (from pytest summary "1 warning").
+    assert results["warnings"] == 1, (
+        f"Expected 1 warning (from pytest summary), got {results['warnings']}. "
+        f"Library warnings in stdout should not inflate the count."
+    )

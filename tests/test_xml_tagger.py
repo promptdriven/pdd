@@ -5,18 +5,9 @@ in the pdd.xml_tagger module.
 """
 
 import pytest
-from pdd.xml_tagger import xml_tagger
+from pdd.xml_tagger import xml_tagger, XMLOutput
 
-# Mock classes and functions
-class MockXMLOutput:
-    """Mock class for XMLOutput in testing."""
-    def __init__(self, xml_tagged):
-        self.xml_tagged = xml_tagged
-
-    def to_dict(self):
-        """Dummy method to avoid too-few-public-methods warning."""
-        return {"xml_tagged": self.xml_tagged}
-
+# Mock functions
 def mock_load_prompt_template(_):
     """Mock implementation of load_prompt_template."""
     return "mock_template"
@@ -25,7 +16,7 @@ def mock_llm_invoke(**kwargs):
     """Mock implementation of llm_invoke."""
     if kwargs.get('output_pydantic'):
         return {
-            'result': MockXMLOutput(xml_tagged="<xml>mock tagged content</xml>"),
+            'result': XMLOutput(xml_tagged="<xml>mock tagged content</xml>"),
             'cost': 0.001,
             'model_name': 'mock-model'
         }

@@ -14,7 +14,13 @@ from .get_run_command import get_run_command_for_file
 from .llm_invoke import _load_model_data
 from .load_prompt_template import load_prompt_template
 from .agentic_langtest import default_verify_cmd_for
-from .agentic_common import get_available_agents, run_agentic_task, DEFAULT_MAX_RETRIES
+from .agentic_common import (
+    get_available_agents,
+    run_agentic_task,
+    DEFAULT_MAX_RETRIES,
+    AGENTIC_STEP_TIMEOUT_SECONDS,
+    _revert_out_of_scope_changes,
+)
 
 console = Console()
 
@@ -89,6 +95,7 @@ def _print_diff(old: str, new: str, path: Path) -> None:
         return
     text = "".join(diff)
     _print_head("Unified diff (first lines)", text)
+
 
 def _run_testcmd(cmd: str, cwd: Path) -> bool:
     """
@@ -176,6 +183,7 @@ def _detect_mtime_changes(before: Dict[Path, float], after: Dict[Path, float]) -
             changes.append(str(path))
 
     return changes
+
 
 def run_agentic_fix(
     prompt_file: str,
@@ -380,8 +388,12 @@ def run_agentic_fix(
             verbose=verbose,
             quiet=quiet,
             label="agentic_fix",
+            timeout=AGENTIC_STEP_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
             max_retries=DEFAULT_MAX_RETRIES,
         )
+
+        # Scope guard: revert out-of-scope file changes
+        _revert_out_of_scope_changes(working_dir, {code_path.resolve(), test_path.resolve()})
 
         # Snapshot mtimes after and detect changes
         after_mtimes = _snapshot_mtimes(working_dir)

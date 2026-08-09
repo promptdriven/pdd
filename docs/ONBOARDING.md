@@ -47,7 +47,7 @@ pdd --version
 ### 3. Clone the GitHub Repository
 
 ```bash
-git clone https://github.com/gltanaka/pdd.git
+git clone https://github.com/promptdriven/pdd.git
 cd pdd
 ```
 
@@ -74,7 +74,7 @@ To enable syntax highlighting for `.prompt` files in your editor, you'll need to
 
 1. **Download the Extension:**
 
-   - Navigate to the [project&#39;s GitHub Releases page](https://github.com/gltanaka/pdd/releases).
+   - Navigate to the [project&#39;s GitHub Releases page](https://github.com/promptdriven/pdd/releases).
    - Download the latest version of the extension, which will be a file named `prompt-*.vsix`.
 2. **Install in your IDE:**
 
@@ -83,9 +83,31 @@ To enable syntax highlighting for `.prompt` files in your editor, you'll need to
    - Type `"Extensions: Install from VSIX..."` and select it.
    - Locate the `prompt-*.vsix` file you downloaded and select it to complete the installation.
 
-### 7. Set Up API Keys
+### 7. Set Up Credentials
 
-Add your LLM API keys to a `.env` file in the project root:
+**Recommended: Use the setup wizard**
+
+Run the interactive setup wizard to configure your credentials. PDD supports
+API keys for direct prompt/LiteLLM commands and stored OAuth/subscription/config
+credentials for agentic CLI workflows such as Claude Max/Pro, Google
+Gemini/Antigravity auth, Vertex env auth, Codex ChatGPT login, and OpenCode
+provider auth/config:
+
+```bash
+pdd setup
+```
+
+The wizard will:
+- **Scan your environment** for existing API keys from all sources (shell, .env, ~/.pdd files) and detect stored agentic CLI OAuth/subscription/config credentials
+- **Present an interactive menu** to add/fix keys, configure local LLMs, or manage providers. OAuth-only users are not forced to add `ANTHROPIC_API_KEY`; setup explains that direct prompt/LiteLLM commands need one of an API key, a Codex (ChatGPT) subscription login (the `chatgpt/` model family — no API key; `codex login` then `PDD_MODEL_DEFAULT=chatgpt/gpt-5.6-sol`; this is a LOCAL-route path, so on a cloud-enabled install also pass `--local`), or a configured PDD Cloud login.
+- **Validate API keys** with real test requests to ensure they work
+- **Show cost transparency** for different model tiers
+- **Create .pddrc** configuration for your project
+
+**Alternative: Manual configuration**
+
+If you prefer manual setup for direct prompt/LiteLLM commands, add your LLM
+API keys to a `.env` file in the project root:
 
 ```bash
 # Required: At least one LLM provider
@@ -93,21 +115,53 @@ OPENAI_API_KEY=sk-your-key-here
 # OR
 ANTHROPIC_API_KEY=sk-ant-your-key-here
 # OR
-GOOGLE_API_KEY=your-google-api-key
+GEMINI_API_KEY=your-google-api-key
 
 # Optional: For Vertex AI (Gemini via GCP)
-VERTEX_CREDENTIALS=/path/to/service-account.json
-VERTEX_PROJECT=your-gcp-project-id
-VERTEX_LOCATION=us-central1
+# Simplest: use Application Default Credentials (ADC) — run
+#   gcloud auth application-default login
+# and leave GOOGLE_APPLICATION_CREDENTIALS unset, then uncomment and set the project/location:
+# VERTEXAI_PROJECT=your-gcp-project-id
+# VERTEXAI_LOCATION=us-central1
+# Only if NOT using ADC, point this at a REAL local service-account JSON.
+# A placeholder path breaks auth — leave it unset to use ADC:
+# GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+# Legacy aliases also work:
+# VERTEX_PROJECT=your-gcp-project-id
+# VERTEX_LOCATION=us-central1
 ```
 
+For issue-driven agentic CLI workflows, you can instead run the CLI's own
+login flow once, such as `claude auth login`, `gemini` interactive login, or
+`codex login`; for OpenCode run `opencode auth login` or configure `~/.config/opencode/opencode.json` / project `opencode.json`. Then run `pdd setup` so PDD can detect that stored credential.
+
 **To use Vertex AI (optional):**
+
+The simplest path is Application Default Credentials (ADC). With the [`gcloud`
+CLI](https://cloud.google.com/sdk/docs/install) installed, authenticate it and
+point it at your project:
+
+```bash
+gcloud auth login                              # authenticate the gcloud CLI itself
+gcloud auth application-default login          # create ADC that PDD/libraries use
+gcloud config set project YOUR_GCP_PROJECT_ID  # set your default GCP project
+```
+
+Then:
+
+1. Ensure your Google account (or its service account) has the "Vertex AI User" role on the project
+2. Set `VERTEXAI_PROJECT` / `VERTEXAI_LOCATION` and leave `GOOGLE_APPLICATION_CREDENTIALS` unset — PDD authenticates via ADC
+
+Or, with a service-account key file instead of ADC:
 
 1. Go to [GCP Console &gt; IAM &gt; Service Accounts](https://console.cloud.google.com/iam-admin/serviceaccounts)
 2. Create a service account with the "Vertex AI User" role
 3. Create and download a JSON key file
 4. Save it securely (e.g., `~/.gcp/pdd-service-account.json`)
-5. Set `VERTEX_CREDENTIALS` to the file path in your `.env`
+5. Set `GOOGLE_APPLICATION_CREDENTIALS` to that file path in your `.env`
+
+> Don't set `GOOGLE_APPLICATION_CREDENTIALS` to a placeholder path. Any value there is
+> treated as a real credential and disables the ADC fallback.
 
 See `.env.example` for a complete list of supported environment variables.
 
@@ -116,19 +170,24 @@ See `.env.example` for a complete list of supported environment variables.
 These final steps configure the local repository to ensure the application can find its resources correctly.
 
 **1. Set the `PDD_PATH` Environment Variable:**
-The application needs the absolute path to the `pdd/` source directory to function correctly.
+The application needs the absolute path to the `pdd/` **package** directory — the
+one that contains `cli.py` and the `pdd_completion.*` scripts. Because the
+repository and the package share the name `pdd`, this is the *inner* directory:
+the path ends in `…/pdd/pdd`, **not** the repository root. Pointing `PDD_PATH` at
+the repo root makes `pdd setup` fail with "Completion script not found" because
+the completion installer looks for `pdd_completion.*` under `PDD_PATH`.
 
 - **Step 1: Get the path.**
-  From the project root, run:
+  From the project root (the cloned `pdd` repo), run:
   ```bash
   cd pdd
-  pwd  # Copy the full path output by this command
+  pwd  # Copy the full path — it should end in /pdd/pdd
   cd ..
   ```
 - **Step 2: Create a local `.env` file.**
   ```bash
-  # Replace "/path/to/your/project/pdd" with the path you copied
-  echo "PDD_PATH=/path/to/your/project/pdd" > .env
+  # Replace "/path/to/your/project/pdd/pdd" with the path you copied
+  echo "PDD_PATH=/path/to/your/project/pdd/pdd" > .env
   ```
 - **Step 3: Update `.gitignore`** to ensure this local configuration file is not committed to version control.
   ```bash
@@ -139,10 +198,10 @@ The application needs the absolute path to the `pdd/` source directory to functi
 This is the most robust method to ensure `PDD_PATH` is always set correctly when your Conda environment is active, as it takes precedence over system variables within the Conda shell.
 
 - **Step 1: Set the Conda variable.**
-  Using the same absolute path you copied in Step 2.1 (`/path/to/your/project/pdd`), run the following command from your project root (using pwd):
+  Using the same absolute path you copied in Step 2.1 (`/path/to/your/project/pdd/pdd`), run the following command from your project root (using pwd):
   ```bash
-  # Replace "/path/to/your/project/pdd" with the correct path
-  conda env config vars set PDD_PATH="/path/to/your/project/pdd"
+  # Replace "/path/to/your/project/pdd/pdd" with the correct path
+  conda env config vars set PDD_PATH="/path/to/your/project/pdd/pdd"
   ```
 - **Step 2: Reactivate the environment.**
   The change will only take effect after you deactivate and reactivate your environment.
@@ -151,10 +210,11 @@ This is the most robust method to ensure `PDD_PATH` is always set correctly when
   conda activate pdd
   ```
 - **Step 3: Verify the change.**
-  You can now check if the path is set correctly.
+  Check that the path is set and points at the package directory:
   ```bash
   echo $PDD_PATH
-  # It should print the correct path: /path/to/your/project/pdd
+  # Should end in /pdd/pdd
+  ls "$PDD_PATH/cli.py"   # must exist — confirms PDD_PATH is the package dir, not the repo root
   ```
 
 ---
@@ -195,9 +255,11 @@ pdd fix https://github.com/owner/repo/issues/456
    ```
 
 2. **One Agentic CLI** - Required to run the workflows (install at least one):
-   - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
-   - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY`)
-   - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
+   - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your Claude Max/Pro OAuth login from `claude auth login` if present, otherwise `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
+   - **Antigravity CLI (`agy`, preferred)**: install via `curl -fsSL https://antigravity.google/cli/install.sh | bash` (uses Antigravity OAuth or keyring-backed Google subscription sign-in if present, otherwise `ANTIGRAVITY_API_KEY`/`GOOGLE_API_KEY`, Vertex AI env auth, or PDD's compatibility bridge from `GEMINI_API_KEY`). Set `PDD_AGENTIC_PROVIDER=antigravity` to pin Antigravity, or `PDD_GOOGLE_CLI=agy|gemini|auto` to control binary selection (`auto` prefers `agy` when credentialed, but keeps legacy `gemini` for legacy-OAuth-only setups).
+   - **Gemini CLI (legacy, rollback)**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth login if present, otherwise `GEMINI_API_KEY` or `GOOGLE_API_KEY`). Google announced consumer-tier Gemini CLI cutoff on **2026-06-18**; set `PDD_GOOGLE_CLI=gemini` only when you intentionally need the old binary.
+   - **Codex CLI**: `npm install -g @openai/codex@latest` (GPT-5.6 requires Codex CLI 0.144.0 or newer; uses `~/.codex/auth.json` ChatGPT login from `codex login` if present, otherwise `OPENAI_API_KEY`)
+   - **OpenCode CLI**: `npm install -g opencode-ai` (uses OpenCode provider auth from `opencode auth login`, OpenCode JSON config, or provider env vars; set `OPENCODE_MODEL=provider/model`)
 
 ### Manual Prompt Workflow
 
@@ -312,11 +374,11 @@ pdd connect
 **Using CLI:**
 ```bash
 # For feature requests
-pdd change https://github.com/gltanaka/pdd/issues/XXX
+pdd change https://github.com/promptdriven/pdd/issues/XXX
 
 # For bug reports
-pdd bug https://github.com/gltanaka/pdd/issues/XXX
-pdd fix https://github.com/gltanaka/pdd/issues/XXX
+pdd bug https://github.com/promptdriven/pdd/issues/XXX
+pdd fix https://github.com/promptdriven/pdd/issues/XXX
 ```
 
 PDD will create an isolated worktree, implement changes, and generate a PR automatically. Review the PR, refine if needed, then request human review.
@@ -345,7 +407,7 @@ Before submitting a PR, ensure you have completed all applicable items. Incomple
   ```
 - [ ] **Copilot/automated review comments addressed** - Review and resolve all automated review comments before requesting human review
 
-  **Tip:** Use an agentic coding tool (Claude Code, Cursor, Gemini CLI, etc.) to automatically fix Copilot comments:
+  **Tip:** Use an agentic coding tool (Claude Code, Cursor, Antigravity CLI, etc.) to automatically fix Copilot comments:
 
   ```bash
   # Example with Claude Code
@@ -378,7 +440,7 @@ Before submitting a PR, ensure you have completed all applicable items. Incomple
 
 3. [ ] **Wait for approval** - Get a 👍 or approval comment before starting implementation
 
-4. [ ] **Use docs to drive prompt changes** - Your approved documentation describes the intended behavior. Use it to guide your prompt modifications in `pdd_cap`.
+4. [ ] **Use docs to drive prompt changes** - Your approved documentation describes the intended behavior. Use it to guide any prompt modifications in this repository.
 
 **After implementation:**
 
@@ -388,7 +450,7 @@ Before submitting a PR, ensure you have completed all applicable items. Incomple
 
 ### Required if Prompt Files Changed
 
-- [ ] **Prompt changes submitted to pdd_cap** - If you modified any `.prompt` files, submit corresponding changes to the [pdd_cap repository](https://github.com/promptdriven/pdd_cap)
+- [ ] **Prompt changes included** - If you modified behavior generated from prompts, include the corresponding `.prompt` changes in the same PR.
 
 ### PR Description
 
@@ -428,7 +490,7 @@ Use **GitHub Copilot** to auto-generate your PR description:
 - [x] No merge conflicts
 - [ ] (If bug fix) Failing test added
 - [ ] (If feature) A/B comparison included
-- [ ] (If prompts changed) Submitted to pdd_cap
+- [ ] (If prompts changed) Included corresponding prompt updates
 
 Fixes #123
 ```
@@ -438,7 +500,7 @@ Fixes #123
 ## Next Steps
 
 1. **Launch the web interface**: `pdd connect` to explore PDD visually
-2. **Try implementing an issue**: Pick one from [GitHub Issues](https://github.com/gltanaka/pdd/issues)
+2. **Try implementing an issue**: Pick one from [GitHub Issues](https://github.com/promptdriven/pdd/issues)
 3. Join the PDD community on Discord
 4. For manual workflows, see examples in `examples/` directory
 5. Read the [Issue-Driven Development Tutorial](./TUTORIALS.md#issue-driven-development-tutorial)
@@ -488,8 +550,8 @@ pip install -e ".[dev]"
 - **pytest-mock**: Mocking utilities for unit tests
 - **pytest-asyncio**: Support for async test functions
 - **z3-solver**: Formal verification tools
-- **commitizen**: Conventional commits and versioning
 - **build, twine**: Package building and publishing tools
+- **setuptools-scm**: Derives package version from git tags (no static version in pyproject.toml)
 
 ### 2. Enable Test Caching and Smart Execution
 
@@ -617,7 +679,7 @@ rm -rf .testmondata
 rm -rf .coverage htmlcov/
 ```
 
-### 8. Git Workflow with Commitizen
+### 8. Git Workflow
 
 **Make commits following conventional commits:**
 
@@ -625,24 +687,52 @@ rm -rf .coverage htmlcov/
 # Stage your changes
 git add .
 
-# Use commitizen for structured commits
-cz commit
-
-# Or use git commit with conventional format
+# Use conventional commit format
 git commit -m "feat: add new feature"
 git commit -m "fix: resolve bug in module"
 git commit -m "docs: update documentation"
 ```
 
-**Bump version (maintainers only):**
+**Cut a release (maintainers only):**
+
+Use the [canonical release runbook](contributors/pdd-cli-release-process.md)
+for cloud testing, PR/review gates, production publication, release-video
+verification/recovery, Discord, and final evidence. The commands below are only
+a quick entrypoint reference and do not replace its safety and closeout checks.
+
+The version is derived from git tags via setuptools-scm. To release, on `main`:
 
 ```bash
-# Automatically bump version and update CHANGELOG
-cz bump
-
-# Push with tags
-git push --follow-tags
+RELEASE_VIDEO=0 make release-local             # patch bump; CI owns video creation
+RELEASE_VIDEO=0 make release-local BUMP=minor  # minor bump
+RELEASE_VIDEO=0 make release-local BUMP=major  # major bump
 ```
+
+`RELEASE_VIDEO=0 make release-local` injects release secrets from SOPS, tags
+`HEAD` with the derived next `vX.Y.Z`, and pushes the tag while disabling the
+local video-create path. The tag-triggered GitHub Actions job is the sole normal
+release-video authority after its protected `pypi-publish` approval and package
+publication. By default the local wrapper looks for
+`../secrets/pdd_cloud/shared.prod.sops.env`; set `SOPS_RELEASE_ENV_FILE` if your
+`pdd_cloud` checkout is elsewhere. See the canonical runbook for approval
+ordering, recovery, and final evidence.
+
+Release-video diagnostics and recovery:
+
+- Run `make check-release-video-config-local` before a local release. If `PDS_TOKEN` is set, local preflight can only confirm that a token exists; it cannot verify scopes or project access unless the PDS server preflight is run.
+- Set repo secrets `CLAUDE_CODE_OAUTH_TOKEN_1`, `CLAUDE_CODE_OAUTH_TOKEN_2`, and `CLAUDE_CODE_OAUTH_TOKEN_3` for release-note and release-video CI rotation, using staging, staging2, and prod respectively. `CLAUDE_CODE_OAUTH_TOKEN` is only a fallback compatibility slot.
+- Normal create-mode creates a new per-release PDS project. The token must be able to create that project and continue accessing it afterward; otherwise use a backend fix/wildcard token or set `RELEASE_VIDEO_PROJECT_ID` for an authorized fixed project.
+- If Claude Code quota/auth blocks script generation, reuse a generated script artifact with `RELEASE_VIDEO_SCRIPT_PATH=.pdd/release-videos/<tag>/release_video_script.md make release-video RELEASE_TAG=<tag>`.
+- For selected-project bootstrap recovery, reuse the generated script and original release notes, then run `make release-video RELEASE_TAG=<tag> RELEASE_VIDEO_PROJECT_ID=<project-id> RELEASE_VIDEO_SCRIPT_PATH=.pdd/release-videos/<tag>/release_video_script.md RELEASE_VIDEO_RELEASE_NOTES_PATH=.pdd/release-videos/<tag>/release_notes.md RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT=1 RELEASE_VIDEO_FORCE_REGENERATE=1 RELEASE_VIDEO_ATTEMPT_ID=<timestamp-or-label>`.
+- For PDS project metadata mismatch recovery, reuse the generated script and original release notes, then run `make release-video RELEASE_TAG=<tag> RELEASE_VIDEO_PROJECT_ID=<project-id> RELEASE_VIDEO_SCRIPT_PATH=.pdd/release-videos/<tag>/release_video_script.md RELEASE_VIDEO_RELEASE_NOTES_PATH=.pdd/release-videos/<tag>/release_notes.md RELEASE_VIDEO_METADATA_CONFLICT=replace RELEASE_VIDEO_FORCE_REGENERATE=1 RELEASE_VIDEO_ATTEMPT_ID=<timestamp-or-label>`. Use `RELEASE_VIDEO_METADATA_CONFLICT=use-existing` when PDS says to preserve existing metadata.
+- For PDS publish retries, inspect the previous run first. Exact retries should reuse the original idempotency key; start a new attempt only after confirming the old run should not be reused, with `make release-video RELEASE_TAG=<tag> RELEASE_VIDEO_ATTEMPT_ID=<timestamp-or-label>` or a full `RELEASE_VIDEO_IDEMPOTENCY_KEY=<key>`.
+- If a release video is recovered after the release workflow already posted to Discord, run the **Backfill release video Discord post** workflow with the release tag and YouTube URL. Local equivalent: `DISCORD_WEBHOOK_URL=<webhook> make release-video-discord-backfill RELEASE_TAG=<tag> RELEASE_VIDEO_YOUTUBE_URL=<youtube-url>`.
+- Set `PDS_CLI` if `pds` is not on `PATH`. `RELEASE_VIDEO=0` is mandatory for
+  normal local tag creation: it disables the local create and leaves the
+  tag-triggered Actions video path enabled as the sole authority. Omit it only
+  after the canonical runbook proves no Actions attempt started and records an
+  exceptional manual authority transfer; an emergency no-video outcome uses
+  the explicit skip/recovery path instead.
 
 ### 9. Troubleshooting Development Setup
 
@@ -745,7 +835,8 @@ ls -la pdd/prompts pdd/data
 
 # 4. Verify PDD_PATH is set
 echo $PDD_PATH
-# Should show: /absolute/path/to/your/pdd
+# Should show: /absolute/path/to/your/pdd/pdd
+ls "$PDD_PATH/cli.py"
 
 # 5. Test Python can import PDD
 python -c "import pdd; print('PDD imports correctly')"
@@ -824,10 +915,9 @@ python -c "import pdd; print('Success!')"
 **Understanding API key priority:**
 PDD checks for API keys in this order (highest priority first):
 
-1. **Infisical secrets** (when using `infisical run --`)
-2. **`~/.pdd/llm_model.csv`** (user-specific model registry)
-3. **`.env` file** (project root)
-4. **Shell environment variables**
+1. **Shell environment variables**
+2. **`.env` file** (project root)
+3. **`~/.pdd/llm_model.csv`** (user-specific model registry)
 
 **Fix for "quota exceeded":**
 
@@ -841,15 +931,26 @@ rm -f ~/.pdd/llm_model.csv
 
 **Fix for "API key not found":**
 
-- If using **Infisical**: Follow **"Step 7: Set Up Infisical for Secrets Management"** above to configure your API keys
-- If using **.env file**: Ensure your `.env` file in the project root contains your API keys (e.g., `OPENAI_API_KEY=sk-...`)
+**Recommended:** Run the setup wizard to detect and fix missing API keys:
+```bash
+pdd setup
+```
+
+The wizard will:
+- Scan all sources (shell, .env, ~/.pdd files) and show which keys are missing
+- Let you add missing keys with immediate validation
+- Show exactly where each key is loaded from for transparency
+
+**Manual fixes:**
+- If using shell environment variables, export the required API keys before running PDD.
+- If using a **.env file**, ensure your `.env` file in the project root contains your API keys (e.g., `OPENAI_API_KEY=sk-...`).
 
 **Verify keys are loaded:**
 
 ```bash
-infisical run -- env | grep API_KEY  # If using Infisical
+env | grep API_KEY
 # OR
-env | grep API_KEY  # If using .env
+pdd setup  # Shows scan of all keys with source transparency
 ```
 
 **Note on API key requirements for testing:**
@@ -871,9 +972,9 @@ Some tests require multiple API providers. If you only have a single API key (e.
 export TEST_LOCAL=true
 ./tests/regression.sh
 
-# Or with Infisical:
+# Or with explicit API keys exported in the shell:
 export TEST_LOCAL=true
-infisical run -- make regression
+make regression
 ```
 
 **Why this happens:** WSL paths like `/mnt/c/...` sometimes don't translate correctly between Windows and Linux.
@@ -929,12 +1030,12 @@ If you're still having issues after trying the specific fixes above:
 2. **Clear all caches** (see **"Understanding PDD's File Structure → Cache Files"** above)
 3. **Check documentation:**
 
-   - [README](https://github.com/gltanaka/pdd/blob/main/README.md) - Detailed setup instructions
+   - [README](https://github.com/promptdriven/pdd/blob/main/README.md) - Detailed setup instructions
    - [Whitepaper](./whitepaper.md) - Core concepts and architecture
    - [Prompting Guide](./prompting_guide.md) - How to write effective prompts
 4. **Get help:**
 
-   - [GitHub Issues](https://github.com/gltanaka/pdd/issues) - Search existing issues
+   - [GitHub Issues](https://github.com/promptdriven/pdd/issues) - Search existing issues
    - [Discord Community](https://discord.gg/Q7Ts5Qt3) - Ask questions and get support
 
 ---
@@ -969,8 +1070,8 @@ echo "5. Python Import:"
 python -c "import pdd" 2>/dev/null && echo "[PASS] Python can import pdd" || echo "[FAIL] Import failed"
 echo ""
 
-echo "6. API Keys (Infisical):"
-infisical run -- env | grep -q API_KEY && echo "[PASS] API keys available" || echo "[WARN] API keys not detected (may be in .env)"
+echo "6. API Keys:"
+env | grep -q API_KEY && echo "[PASS] API keys available" || echo "[WARN] API keys not detected (may be in .env or ~/.pdd)"
 echo ""
 
 echo "========================="

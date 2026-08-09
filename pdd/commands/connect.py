@@ -17,6 +17,8 @@ from typing import Optional
 
 import click
 
+from ..cli_branding import PDD_POSITIONING
+
 
 # Default port and range for auto-assignment
 DEFAULT_PORT = 9876
@@ -244,7 +246,7 @@ def connect(
                     dim=True
                 ))
                 click.echo(click.style(
-                    "Run 'pdd login' to enable remote access via cloud.",
+                    "Run 'pdd auth login' to enable remote access via cloud.",
                     dim=True
                 ))
             else:
@@ -294,12 +296,21 @@ def connect(
         if token:
             os.environ["PDD_ACCESS_TOKEN"] = token
 
-        app = create_app(project_root, allowed_origins=allowed_origins)
+        # Create ServerConfig with the actual port (after smart port detection)
+        # This ensures spawned terminal callbacks use the correct port
+        from ..server.models import ServerConfig
+        config = ServerConfig(
+            host=host,
+            port=port,  # The ACTUAL port after smart detection
+            allowed_origins=allowed_origins,
+        )
+        app = create_app(project_root, config=config)
     except Exception as e:
         click.echo(click.style(f"Failed to initialize server: {e}", fg="red", bold=True))
         ctx.exit(1)
 
     # 6. Print Status Messages
+    click.echo(click.style(PDD_POSITIONING, fg="cyan"))
     click.echo(click.style(f"Starting PDD server on {server_url}", fg="green", bold=True))
     click.echo(f"Project Root: {click.style(str(project_root), fg='blue')}")
     click.echo(f"API Documentation: {click.style(f'{server_url}/docs', underline=True)}")

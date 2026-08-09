@@ -1,0 +1,14 @@
+You are a senior frontend engineer. Generate `Icon.tsx`, a TypeScript React module exporting shared SVG icon components used across the UI.
+
+Requirements:
+- Import only `React` from `react`.
+- Export named components (no default export): `ClipboardIcon`, `CheckIcon`, `ChevronUpIcon`, `ChevronDownIcon`, `SparklesIcon`, `SplitIcon`, `ConflictIcon`, `LinkIcon`, `SyncIcon`, `DocumentArrowDownIcon`, `LightBulbIcon`, `SpinnerIcon`, `BugAntIcon`, `PlayIcon`, `Squares2X2Icon`, `DocumentTextIcon`, `FolderIcon`, `FolderOpenIcon`, `CodeBracketIcon`, `DocumentIcon`, `ClipboardDocumentListIcon`, `Cog6ToothIcon`, `TrashIcon`, `PlusIcon`.
+- Every component signature must be `(props: React.SVGProps<SVGSVGElement>) => (...)` and spread `...props` on the root `<svg>`.
+- For every icon except `SpinnerIcon`, use heroicon-outline style defaults on the root `<svg>`: `xmlns="http://www.w3.org/2000/svg"`, `fill="none"`, `viewBox="0 0 24 24"`, `strokeWidth={1.5}`, `stroke="currentColor"`.
+- Use rounded stroke caps/joins for path strokes to match the existing outline style.
+- `SpinnerIcon` is special:
+  - Root `<svg>` uses `xmlns`, `fill="none"`, `viewBox="0 0 24 24"`, and spreads props.
+  - Child 1: `<circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />`
+  - Child 2: `<path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />`
+- `SplitIcon` is a custom composed icon made from five stroked path segments: top rectangle, center vertical connector, center horizontal connector, bottom-left rectangle, bottom-right rectangle.
+- Keep all icons static and declarative (no hooks, no state, no runtime logic).

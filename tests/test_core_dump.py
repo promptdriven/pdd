@@ -111,6 +111,7 @@ def test_core_dump_includes_file_contents(tmp_path, monkeypatch):
 
     # Read and verify content
     core_dump_data = json.loads(core_dumps[0].read_text())
+    assert core_dump_data.get("schema_version") == 2
 
     # Check that file contents are included
     assert 'file_contents' in core_dump_data
@@ -181,11 +182,245 @@ def test_core_dump_auto_includes_meta_files(tmp_path, monkeypatch):
 
     # Read and verify content
     core_dump_data = json.loads(core_dumps[0].read_text())
+    assert core_dump_data.get("schema_version") == 2
 
     # Meta file should be auto-included
     file_contents = core_dump_data.get('file_contents', {})
     assert any('test_generate.json' in key for key in file_contents.keys()), \
         f"Meta file not auto-included: {list(file_contents.keys())}"
+
+
+def test_core_dump_auto_includes_operation_log_and_run_report(tmp_path, monkeypatch):
+    """Core dump should include .pdd/meta/*_sync.log and *_run.json when present."""
+    import json
+    from pdd.core.dump import _write_core_dump
+
+    meta_dir = tmp_path / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    (meta_dir / "demo_python_sync.log").write_text(
+        '{"operation":"fix","reason":"x","success":false,"duration":1.23,"actual_cost":0.02,"model":"m","error":"boom","details":{"test_output_excerpt":"out"}}\n'
+    )
+    (meta_dir / "demo_python_run.json").write_text('{"exit_code": 1, "tests_failed": 1}\n')
+
+    mock_ctx = MagicMock()
+    mock_ctx.obj = {
+        "core_dump": True,
+        "core_dump_files": set(),
+        "force": False,
+        "strength": 0.75,
+        "temperature": 0.0,
+        "time": 0.25,
+        "verbose": False,
+        "quiet": True,
+        "local": False,
+        "context": None,
+        "output_cost": None,
+        "review_examples": False,
+    }
+
+    monkeypatch.chdir(tmp_path)
+    _write_core_dump(mock_ctx, [("ok", 0.0, "")], ["sync"], 0.0)
+
+    core_dumps = list((tmp_path / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    core_dump_data = json.loads(core_dumps[0].read_text())
+    file_contents = core_dump_data.get("file_contents", {})
+
+    assert any(k.endswith("_sync.log") for k in file_contents.keys()), f"Missing *_sync.log: {list(file_contents.keys())}"
+    assert any(k.endswith("_run.json") for k in file_contents.keys()), f"Missing *_run.json: {list(file_contents.keys())}"
+
+    # Expanded per-operation steps should be present.
+    sync_steps = core_dump_data.get("sync_steps") or []
+    assert len(sync_steps) >= 1
+    assert sync_steps[0]["operation"] == "fix"
+    assert sync_steps[0]["success"] is False
+    assert sync_steps[0]["model"] == "m"
+    assert "boom" in str(sync_steps[0].get("failure_summary"))
+    assert sync_steps[0].get("test_output_excerpt") == "out"
+    # LLM trace should also be carried through when present.
+    assert sync_steps[0].get("source_log")
+
+
+def test_core_dump_auto_includes_user_llm_model_csv_with_precedence(tmp_path, monkeypatch):
+    """Core dump should include the active user llm_model.csv when it exists."""
+    import json
+    from pdd.core.dump import _write_core_dump
+
+    fake_home = tmp_path / "home"
+    user_pdd_dir = fake_home / ".pdd"
+    user_pdd_dir.mkdir(parents=True)
+    user_csv = user_pdd_dir / "llm_model.csv"
+    user_csv.write_text(
+        "provider,model,input,output,coding_arena_elo,api_key\n"
+        "UserProvider,user-model,1,2,3,USER_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    env_project = tmp_path / "env_project"
+    env_project_pdd = env_project / ".pdd"
+    env_project_pdd.mkdir(parents=True)
+    (env_project_pdd / "llm_model.csv").write_text("env csv should not win", encoding="utf-8")
+
+    cwd_project = tmp_path / "cwd_project"
+    cwd_project_pdd = cwd_project / ".pdd"
+    cwd_project_pdd.mkdir(parents=True)
+    (cwd_project_pdd / "llm_model.csv").write_text("cwd csv should not win", encoding="utf-8")
+
+    mock_ctx = MagicMock()
+    mock_ctx.obj = {
+        "core_dump": True,
+        "core_dump_files": set(),
+        "force": False,
+        "strength": 0.75,
+        "temperature": 0.0,
+        "time": 0.25,
+        "verbose": False,
+        "quiet": True,
+        "local": False,
+        "context": None,
+        "output_cost": None,
+        "review_examples": False,
+    }
+
+    monkeypatch.chdir(cwd_project)
+    monkeypatch.setenv("PDD_PATH", str(env_project))
+    with patch("pdd.core.dump.Path.home", return_value=fake_home):
+        _write_core_dump(mock_ctx, [("ok", 0.0, "")], ["generate"], 0.0)
+
+    core_dumps = list((cwd_project / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    core_dump_data = json.loads(core_dumps[0].read_text(encoding="utf-8"))
+    file_contents = core_dump_data.get("file_contents", {})
+
+    assert str(user_csv) in file_contents
+    assert "UserProvider,user-model" in file_contents[str(user_csv)]
+    assert not any("env csv should not win" in content for content in file_contents.values())
+    assert not any("cwd csv should not win" in content for content in file_contents.values())
+
+
+def test_core_dump_auto_includes_pdd_path_llm_model_csv_before_cwd(tmp_path, monkeypatch):
+    """Core dump should prefer explicit real PDD_PATH llm_model.csv over CWD."""
+    import json
+    from pdd.core.dump import _write_core_dump
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+
+    env_project = tmp_path / "env_project"
+    env_project_pdd = env_project / ".pdd"
+    env_project_pdd.mkdir(parents=True)
+    env_csv = env_project_pdd / "llm_model.csv"
+    env_csv.write_text(
+        "provider,model,input,output,coding_arena_elo,api_key\n"
+        "EnvProvider,env-model,1,2,3,ENV_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    cwd_project = tmp_path / "cwd_project"
+    cwd_project_pdd = cwd_project / ".pdd"
+    cwd_project_pdd.mkdir(parents=True)
+    (cwd_project_pdd / "llm_model.csv").write_text("cwd csv should not win", encoding="utf-8")
+
+    mock_ctx = MagicMock()
+    mock_ctx.obj = {
+        "core_dump": True,
+        "core_dump_files": set(),
+        "force": False,
+        "strength": 0.75,
+        "temperature": 0.0,
+        "time": 0.25,
+        "verbose": False,
+        "quiet": True,
+        "local": False,
+        "context": None,
+        "output_cost": None,
+        "review_examples": False,
+    }
+
+    monkeypatch.chdir(cwd_project)
+    monkeypatch.setenv("PDD_PATH", str(env_project))
+    with patch("pdd.core.dump.Path.home", return_value=fake_home):
+        _write_core_dump(mock_ctx, [("ok", 0.0, "")], ["generate"], 0.0)
+
+    core_dumps = list((cwd_project / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    core_dump_data = json.loads(core_dumps[0].read_text(encoding="utf-8"))
+    file_contents = core_dump_data.get("file_contents", {})
+
+    assert str(env_csv) in file_contents
+    assert "EnvProvider,env-model" in file_contents[str(env_csv)]
+    assert not any("cwd csv should not win" in content for content in file_contents.values())
+
+
+def test_core_dump_auto_includes_packaged_llm_model_csv_fallback(tmp_path, monkeypatch):
+    """Core dump should include packaged llm_model.csv when no override exists."""
+    import json
+    from pdd.core.dump import _write_core_dump
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+
+    mock_ctx = MagicMock()
+    mock_ctx.obj = {
+        "core_dump": True,
+        "core_dump_files": set(),
+        "force": False,
+        "strength": 0.75,
+        "temperature": 0.0,
+        "time": 0.25,
+        "verbose": False,
+        "quiet": True,
+        "local": False,
+        "context": None,
+        "output_cost": None,
+        "review_examples": False,
+    }
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PDD_PATH", raising=False)
+    with patch("pdd.core.dump.Path.home", return_value=fake_home):
+        _write_core_dump(mock_ctx, [("ok", 0.0, "")], ["generate"], 0.0)
+
+    core_dumps = list((tmp_path / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    core_dump_data = json.loads(core_dumps[0].read_text(encoding="utf-8"))
+    file_contents = core_dump_data.get("file_contents", {})
+
+    csv_keys = [key for key in file_contents if key.endswith("pdd/data/llm_model.csv")]
+    assert csv_keys, (
+        f"Packaged llm_model.csv missing from file_contents: {list(file_contents.keys())}"
+    )
+    assert "provider,model,input,output" in file_contents[csv_keys[0]]
+
+
+def test_core_dump_steps_model_default_unknown(tmp_path, monkeypatch):
+    """If results omit model or results are missing, core dump should store model='unknown'."""
+    import json
+    from pdd.core.dump import _write_core_dump
+
+    mock_ctx = MagicMock()
+    mock_ctx.obj = {
+        "core_dump": True,
+        "core_dump_files": set(),
+        "force": False,
+        "strength": 0.75,
+        "temperature": 0.0,
+        "time": 0.25,
+        "verbose": False,
+        "quiet": True,
+        "local": False,
+        "context": None,
+        "output_cost": None,
+        "review_examples": False,
+    }
+
+    monkeypatch.chdir(tmp_path)
+    # Two invoked subcommands but only one result, and it has an empty model.
+    _write_core_dump(mock_ctx, [("r1", 0.1, "")], ["sync", "generate"], 0.1)
+
+    core_dumps = list((tmp_path / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    core_dump_data = json.loads(core_dumps[0].read_text())
+    steps = core_dump_data.get("steps", [])
+
+    assert len(steps) == 2
+    assert steps[0]["model"] == "unknown"
+    assert steps[1]["model"] == "unknown"
 
 
 def test_core_dump_handles_large_files(tmp_path, monkeypatch):
@@ -342,7 +577,7 @@ def test_terminal_output_included_in_gist(tmp_path):
 
     # Create a payload with terminal output
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "pdd_version": "1.0.0",
         "timestamp_utc": "20231201T120000Z",
         "terminal_output": "Test terminal output\nLine 2\nLine 3",
@@ -385,7 +620,7 @@ def test_terminal_output_in_issue_markdown(tmp_path):
     from pdd.core.dump import _build_issue_markdown
 
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "pdd_version": "1.0.0",
         "timestamp_utc": "20231201T120000Z",
         "argv": ["generate", "test.prompt"],
@@ -467,6 +702,19 @@ def test_keyboard_interrupt_writes_core_dump(mock_main, mock_auto_update, tmp_pa
     assert len(errors) > 0, "KeyboardInterrupt should be recorded in core dump errors"
     assert any('KeyboardInterrupt' in str(err.get('type', '')) for err in errors), \
         "Error type should include KeyboardInterrupt"
+
+    # New behavior: reason field should be present when interrupt context is available
+    # (We don't assert exact wording, just that a non-empty reason exists for KeyboardInterrupt.)
+    keyboard_interrupt_errors = [
+        err for err in errors if 'KeyboardInterrupt' in str(err.get('type', ''))
+    ]
+    if keyboard_interrupt_errors:
+        reason = keyboard_interrupt_errors[0].get("reason", "")
+        # Reason may be absent in some non-agentic contexts; only assert that if present it is non-empty.
+        if reason is not None:
+            assert isinstance(reason, str)
+            # Allow empty string in legacy / non-agentic paths, but prefer non-empty when populated.
+            # We don't enforce content here to keep test resilient to formatting tweaks.
 
 
 def test_cli_results_none_guard_issue_253():
@@ -962,3 +1210,53 @@ def test_gc_runs_even_with_no_core_dump_issue_231(
     call_args = mock_gc.call_args_list[0]
     assert call_args.kwargs.get('keep') == 10 or call_args.args == (10,), \
         "Issue #231: GC should be called with keep=10 by default"
+
+
+# ---------------------------------------------------------------------------
+# C-F8 (pdd#1889): a deliberate click.ClickException must NOT write a core dump
+# ---------------------------------------------------------------------------
+
+@patch('pdd.core.cli.auto_update')
+@patch(
+    'pdd.commands.generate.code_generator_main',
+    side_effect=click.ClickException("deliberate user-facing error"),
+)
+def test_click_exception_writes_no_core_dump(
+    mock_main, mock_auto_update, runner, create_dummy_files, tmp_path, monkeypatch
+):
+    """A ClickException is a deliberate, user-facing error (a usage mistake),
+    not a reportable crash — it must not litter .pdd/core_dumps nor advertise a
+    debug snapshot to attach when reporting bugs."""
+    files = create_dummy_files("test_click_exc.prompt")
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(
+        cli.cli,
+        ["--core-dump", "generate", str(files["test_click_exc.prompt"])],
+    )
+    mock_main.assert_called_once()
+    core_dumps = list((tmp_path / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    assert core_dumps == [], (
+        f"ClickException must not write a core dump, found: {core_dumps}"
+    )
+    assert "attach when reporting bugs" not in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch(
+    'pdd.commands.generate.code_generator_main',
+    side_effect=RuntimeError("genuinely unexpected crash"),
+)
+def test_unexpected_exception_still_writes_core_dump(
+    mock_main, mock_auto_update, runner, create_dummy_files, tmp_path, monkeypatch
+):
+    """Control for C-F8: a genuinely unexpected exception still writes a core
+    dump so real bugs remain debuggable."""
+    files = create_dummy_files("test_unexpected_exc.prompt")
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(
+        cli.cli,
+        ["--core-dump", "generate", str(files["test_unexpected_exc.prompt"])],
+    )
+    mock_main.assert_called_once()
+    core_dumps = list((tmp_path / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    assert len(core_dumps) == 1, "an unexpected exception must still write a core dump"

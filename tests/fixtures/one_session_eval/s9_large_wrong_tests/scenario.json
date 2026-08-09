@@ -1,0 +1,10 @@
+{
+    "basename": "config_manager",
+    "description": "S9: Large Config Manager (~2500 lines) with correct code but tests written against wrong API contract. Tests assume eager validation (validate on set), but spec and code use lazy validation (validate on access/save). Multiple tests have wrong expectations.",
+    "expected_behavior": "Agent identifies that tests are wrong (not the code), since the spec says lazy validation. Fixes all failing tests to match the lazy validation behavior. Code remains unchanged. All tests pass.",
+    "evaluation_guidance": "This is a large module (~3400 lines). The key spec requirement is LAZY validation: set() stores values without validation, errors only surface on get() or save(). The code correctly implements this. 8 tests wrongly assume EAGER validation (expect set() to raise ValidationError): test_set_invalid_type_raises, test_set_required_to_none_raises, test_set_with_custom_validator_rejects, test_set_negative_port_raises, test_set_empty_string_required_raises, test_bulk_set_invalid_rolls_back, test_import_invalid_json_validates, test_load_env_validates_types. Did the agent fix the TESTS (not the code)? Did it correctly reason that the spec says lazy validation? Did it fix all 8 failing tests? How did it fix them — did it change the tests to expect no error on set() and instead test that get() raises? Or did it just remove the tests? Did the code remain unchanged? 59 other tests should still pass.",
+    "expected": {
+        "min_test_count": 20,
+        "quality_threshold": 2
+    }
+}

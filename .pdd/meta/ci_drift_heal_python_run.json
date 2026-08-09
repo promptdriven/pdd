@@ -1,0 +1,13 @@
+{
+  "timestamp": "2026-07-13T03:19:19.000000+00:00",
+  "exit_code": 0,
+  "tests_passed": 205,
+  "tests_failed": 0,
+  "tests_skipped": 0,
+  "coverage": 83.3,
+  "test_hash": "db85fe7fa205238398837ce0a97cc8706ef30c2351bade288bb37cee99d39291",
+  "test_files": {
+    "test_ci_drift_heal.py": "db85fe7fa205238398837ce0a97cc8706ef30c2351bade288bb37cee99d39291",
+    "test_ci_drift_heal_e2e.py": "dfcd225cc5a6442ba11e9cd41b79568a57d97b7804ee6ea66f4191aa068478e3"
+  }
+}

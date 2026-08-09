@@ -58,7 +58,7 @@ def test_successful_detection(mock_llm_responses, mock_templates):
             MOCK_PROMPT_FILES,
             MOCK_CHANGE_DESCRIPTION,
             strength=0.7,
-            temperature=0.0,
+            temperature=0.7,
             time=None,
             verbose=False
         )
@@ -76,14 +76,14 @@ def test_successful_detection(mock_llm_responses, mock_templates):
         # First call (detection)
         detection_call_kwargs = mock_llm_invoke.call_args_list[0].kwargs
         assert detection_call_kwargs['strength'] == 0.7 # Matches the input strength to detect_change
-        assert detection_call_kwargs['temperature'] == 0.0 # Matches the input temperature to detect_change
+        assert detection_call_kwargs['temperature'] == 0.7 # Matches the input temperature to detect_change
         assert detection_call_kwargs['time'] is None # Check time parameter
         assert detection_call_kwargs['prompt'] == "Processed template" # Mocked preprocessed detect_template
 
         # Second call (extraction)
         extraction_call_kwargs = mock_llm_invoke.call_args_list[1].kwargs
         assert extraction_call_kwargs['strength'] == EXTRACTION_STRENGTH
-        assert extraction_call_kwargs['temperature'] == 0.0
+        assert extraction_call_kwargs['temperature'] == 0.7
         assert extraction_call_kwargs['time'] is None # Check time parameter
         assert extraction_call_kwargs['prompt'] == mock_templates[1] # extract_template
         assert 'llm_output' in extraction_call_kwargs['input_json']
@@ -160,9 +160,10 @@ def test_verbose_output(mock_llm_responses, mock_templates, capsys):
         assert "Extraction Results" in captured.out
         assert "Detected Changes" in captured.out
 
-def test_general_exception_handling():
-    """Test general exception handling."""
-    with patch('pdd.detect_change.load_prompt_template', side_effect=Exception("Unexpected error")):
+def test_general_exception_handling_does_not_print_raw_exception(capsys):
+    """Low-level failures propagate unchanged without leaking their contents."""
+    secret = "Unexpected error containing api-key=super-secret"
+    with patch('pdd.detect_change.load_prompt_template', side_effect=Exception(secret)):
         with pytest.raises(Exception, match="Unexpected error"):
             detect_change(
                 MOCK_PROMPT_FILES,
@@ -170,4 +171,143 @@ def test_general_exception_handling():
                 strength=0.7,
                 temperature=0.0,
                 time=None
+            )
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Scope addition: covers expansion item pdd/detect_change.py:123 identified
+# by Step 6 but absent from Step 8's plan.
+#
+# Root cause (sibling of issue #1612 Bug 1): `changes_list =
+# extract_response['result'].changes_list` at line 123 has no isinstance
+# guard.  When llm_invoke returns None or a raw str as the extraction result
+# (cache-bypass / truncation path), the attribute access raises AttributeError
+# instead of handling the malformed response gracefully.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_result_none_does_not_raise_attribute_error_issue_1612(mock_templates):
+    """Scope addition: covers expansion item pdd/detect_change.py:123 identified
+    by Step 6 but absent from Step 8's plan.
+
+    When the extraction llm_invoke returns None as result, accessing
+    extract_response['result'].changes_list raises
+    AttributeError('NoneType object has no attribute changes_list').
+    detect_change must not propagate that raw AttributeError; the robust
+    isinstance guard raises a typed ValueError instead — a malformed response
+    is a failure, not a silent "no changes".
+    """
+    detect_response = {
+        'result': 'Analysis results',
+        'cost': 0.05,
+        'token_count': 100,
+        'model_name': 'gpt-3.5-turbo',
+    }
+    # Extraction call returns None as the Pydantic result (cache-bypass path)
+    extract_response_none = {
+        'result': None,
+        'cost': 0.03,
+        'token_count': 50,
+        'model_name': 'gpt-3.5-turbo',
+    }
+
+    with patch('pdd.detect_change.load_prompt_template') as mock_load_template, \
+         patch('pdd.detect_change.preprocess') as mock_preprocess, \
+         patch('pdd.detect_change.llm_invoke') as mock_llm_invoke:
+
+        mock_load_template.side_effect = mock_templates
+        mock_preprocess.return_value = "Processed template"
+        mock_llm_invoke.side_effect = [detect_response, extract_response_none]
+
+        # After the fix, detect_change must not propagate the raw AttributeError.
+        # A malformed result raises a typed ValueError, so callers (e.g.
+        # incremental PRD propagation) fail loudly instead of silently treating
+        # it as "no changes".
+        with pytest.raises((ValueError, RuntimeError, TypeError)):
+            detect_change(
+                MOCK_PROMPT_FILES,
+                MOCK_CHANGE_DESCRIPTION,
+                strength=0.7,
+                temperature=0.0,
+            )
+
+
+def test_extract_result_raw_string_does_not_raise_attribute_error_issue_1612(mock_templates):
+    """Scope addition: covers expansion item pdd/detect_change.py:123 identified
+    by Step 6 but absent from Step 8's plan.
+
+    When the extraction llm_invoke returns a raw string as result (as observed
+    in production for the incremental generator sibling bug), accessing
+    extract_response['result'].changes_list raises
+    AttributeError('str object has no attribute changes_list').
+    detect_change must not propagate that raw AttributeError; the robust guard
+    raises a typed ValueError instead.
+    """
+    detect_response = {
+        'result': 'Analysis results',
+        'cost': 0.05,
+        'token_count': 100,
+        'model_name': 'gpt-3.5-turbo',
+    }
+    extract_response_str = {
+        'result': "Cache bypass retry also returned None",
+        'cost': 0.03,
+        'token_count': 50,
+        'model_name': 'gpt-3.5-turbo',
+    }
+
+    with patch('pdd.detect_change.load_prompt_template') as mock_load_template, \
+         patch('pdd.detect_change.preprocess') as mock_preprocess, \
+         patch('pdd.detect_change.llm_invoke') as mock_llm_invoke:
+
+        mock_load_template.side_effect = mock_templates
+        mock_preprocess.return_value = "Processed template"
+        mock_llm_invoke.side_effect = [detect_response, extract_response_str]
+
+        with pytest.raises((ValueError, RuntimeError, TypeError)):
+            detect_change(
+                MOCK_PROMPT_FILES,
+                MOCK_CHANGE_DESCRIPTION,
+                strength=0.7,
+                temperature=0.0,
+            )
+
+
+def test_extract_result_raw_dict_does_not_raise_attribute_error_issue_1612(mock_templates):
+    """Raw-dict variant of the #1612 guard: a cloud structured-output response
+    that fails Pydantic validation leaves a plain ``dict`` in result['result'].
+    The narrow None/str guard missed it; the robust isinstance(result,
+    ChangesList) guard must raise a typed ValueError (a malformed response is a
+    failure, not a silent "no changes"), not crash on ``.changes_list``.
+    """
+    detect_response = {
+        'result': 'Analysis results',
+        'cost': 0.05,
+        'token_count': 100,
+        'model_name': 'gpt-3.5-turbo',
+    }
+    extract_response_dict = {
+        'result': {'changes_list': []},  # raw dict, not ChangesList
+        'cost': 0.03,
+        'token_count': 50,
+        'model_name': 'gpt-3.5-turbo',
+    }
+
+    with patch('pdd.detect_change.load_prompt_template') as mock_load_template, \
+         patch('pdd.detect_change.preprocess') as mock_preprocess, \
+         patch('pdd.detect_change.llm_invoke') as mock_llm_invoke:
+
+        mock_load_template.side_effect = mock_templates
+        mock_preprocess.return_value = "Processed template"
+        mock_llm_invoke.side_effect = [detect_response, extract_response_dict]
+
+        with pytest.raises((ValueError, RuntimeError, TypeError)):
+            detect_change(
+                MOCK_PROMPT_FILES,
+                MOCK_CHANGE_DESCRIPTION,
+                strength=0.7,
+                temperature=0.0,
             )

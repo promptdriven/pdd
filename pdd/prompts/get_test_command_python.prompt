@@ -1,0 +1,44 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Implement the test-command resolver in `pdd/get_test_command.py`.
+
+% Public API
+- `TestCommand(command: str, cwd: Optional[Path] = None)` MUST remain a dataclass and MUST NOT be collected by pytest.
+- `get_test_command_for_file(test_file: str, language: Optional[str] = None) -> Optional[TestCommand]` MUST remain the public entry point.
+
+% Vocabulary
+- A lexical marker is a directory entry whose name exists even when it is unreadable or is a dangling or looping symlink.
+- A proven workspace member is a package whose relative path is decided by a fully supported, valid, bounded declaration from its workspace provider.
+- A command string is a POSIX-shell command string consumed either by `shell=True` or by `shlex.split` followed by `shell=False`.
+
+% Contract
+R1. Resolution MUST try TypeScript runner discovery first for TypeScript/TSX files, then a non-empty extension-matched `language_format.csv` command, then `default_verify_cmd_for`, and finally return `None`.
+R2. Runner discovery MUST select the nearest ancestor config, preferring Playwright for `.spec.ts`/`.spec.tsx`, then Jest, then Vitest at the same ancestor, and MUST return that config directory as `cwd`.
+R3. Discovery MUST continue beyond five parents but MUST NOT cross a lexical `.git` repository/worktree marker, an independent lexical `package.json` boundary, the nearest proven declaring-workspace-owner ceiling, or the defensive ancestry cap. A runner config at that declaring root is eligible, but a config above it is not.
+R4. A package boundary MUST be crossed only when its lexical `package.json` is a valid, bounded package manifest and an ancestor npm/Yarn, Lerna, or authoritative pnpm declaration proves membership; unrelated or invalidly marked descendants MUST NOT inherit an ancestor runner. Chaining beyond a declaring workspace root is allowed only when that root is itself a valid package proven to belong to another declared workspace, with the same rule applied at every level.
+R5. Workspace matching MUST preserve provider semantics: npm/Yarn/Lerna exclusions prune matching prefixes, while pnpm exclusions and re-inclusions are declaration ordered; unsupported, malformed, unreadable, oversized, over-nested, over-budget, or non-string declarations MUST make the relevant membership unproven.
+R6. The supported workspace glob subset MUST be case-sensitive literals, segment `*`, `?`, `**`, and simple non-nested `{a,b}` alternatives; any bracket class, backslash escape, or extglob form `?(`, `*(`, `+(`, `@(`, or `!(` in a positive or exclusion pattern MUST make the entire relevant declaration unproven.
+R7. A runner config MUST resolve to a regular file within the proven repository/package/workspace owner; an unanchored config symlink or a symlink escaping that owner MUST NOT be accepted.
+R8. Jest MUST use `--runTestsByPath`; Playwright's positional path MUST be regex-escaped; Jest and Vitest paths MUST remain literal.
+R9. Every path-bearing command constructed by this resolver for CSV, Jest, Vitest, or Playwright MUST POSIX-shell-quote the complete path as one literal argument; spaces, quotes, semicolons, backticks, `$()`, and other shell metacharacters MUST NOT split arguments or execute shell syntax. Commands returned unchanged by `default_verify_cmd_for` remain governed by that provider's own contract.
+R10. One public lookup MUST read and parse each relevant workspace manifest at most once and MUST share one deterministic workspace-match work budget across ownership discovery and every candidate package-boundary membership evaluation, without a stale cross-lookup filesystem cache. Exhaustion MUST make further membership unproven and MUST NOT authorize an ancestor runner; all byte, nesting, pattern, segment, per-declaration state, request-wide state, and ancestry limits MUST remain deterministic.
+R11. Discovery MUST NOT execute Node, package managers, manifest code, or a shell, and any ownership or resource uncertainty MUST fail closed to CSV/heuristic/agentic fallback.
+R12. Missing CSV files MUST be treated as an empty mapping, and CSV lookup MUST support both package-relative and project-root-relative `data/language_format.csv` locations.
+
+% Required context
+<agentic_langtest>
+    <include>pdd/agentic_langtest.py</include>
+</agentic_langtest>
+<get_language>
+    <include>pdd/get_language.py</include>
+</get_language>
+<language_format_csv>
+    <include>pdd/data/language_format.csv</include>
+</language_format_csv>
+<pdd.agentic_langtest>
+    <include select="def:default_verify_cmd_for">context/agentic_langtest_example.py</include>
+</pdd.agentic_langtest>
+
+% Deliverable
+Produce `pdd/get_test_command.py` with the public API and observable behavior above.

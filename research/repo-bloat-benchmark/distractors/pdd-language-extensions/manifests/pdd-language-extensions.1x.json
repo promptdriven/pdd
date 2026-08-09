@@ -1,0 +1,22 @@
+{
+  "budget_met": true,
+  "core_loc": 108,
+  "core_tokens": 1004,
+  "distractor_loc": 0,
+  "distractor_tokens_on_disk": 0,
+  "files": [],
+  "mode_counts": {
+    "mutate": 0,
+    "regrow": 0,
+    "template": 0
+  },
+  "realized_total_tokens": 1004,
+  "rejected": [],
+  "scenario_id": "pdd-language-extensions",
+  "schema_version": 3,
+  "selection_seed": 1209,
+  "size": "1x",
+  "size_token_target": 0,
+  "size_token_tolerance_pct": 10.0,
+  "tokenizer": "chars/4-v1"
+}

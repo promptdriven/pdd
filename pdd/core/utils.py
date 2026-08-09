@@ -14,10 +14,23 @@ from ..install_completion import (
 )
 
 def _first_pending_command(ctx: click.Context) -> Optional[str]:
-    """Return the first subcommand scheduled for this invocation."""
+    """Return the first subcommand scheduled for this invocation.
+
+    Click consumes protected_args when it starts invoking the subcommand,
+    so we also check ctx.invoked_subcommand (set by Click's Group) and the
+    invoked_subcommands list tracked by @track_cost on ctx.obj.
+    """
     for arg in ctx.protected_args:
         if not arg.startswith("-"):
             return arg
+    # Click sets invoked_subcommand on the Group context during invoke
+    if ctx.invoked_subcommand:
+        return ctx.invoked_subcommand
+    # track_cost records command names on ctx.obj
+    if isinstance(ctx.obj, dict):
+        invoked = ctx.obj.get("invoked_subcommands") or []
+        if invoked:
+            return invoked[-1]
     return None
 
 
@@ -70,6 +83,8 @@ def _should_show_onboarding_reminder(ctx: click.Context) -> bool:
     first_command = _first_pending_command(ctx)
     if first_command == "setup":
         return False
+    if first_command == "context":
+        return False
 
     if _api_env_exists():
         return False
@@ -88,3 +103,16 @@ def _run_setup_utility() -> None:
     result = subprocess.run([sys.executable, "-m", "pdd.setup_tool"])
     if result.returncode not in (0, None):
         raise RuntimeError(f"Setup utility exited with status {result.returncode}")
+
+
+def should_show_model(model: Optional[str]) -> bool:
+    """Return True when the given model name is meaningful enough to display."""
+    if not model:
+        return False
+    return model.strip().lower() not in {"", "unknown", "n/a"}
+
+
+def echo_model_line(model: Optional[str]) -> None:
+    """Echo a `Model: <name>` line iff the model name is meaningful."""
+    if should_show_model(model):
+        click.echo(f"Model: {model}")

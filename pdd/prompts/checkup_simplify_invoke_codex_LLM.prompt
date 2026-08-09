@@ -1,0 +1,31 @@
+% OpenAI Codex CLI profile for a Claude-Code-/simplify-equivalent cleanup pass.
+% Reference-only today: `pdd checkup simplify` does not invoke Codex yet.
+
+<include>checkup_simplify_workflow_LLM.prompt</include>
+
+<codex>
+## Prerequisites
+- `codex` CLI on PATH (`codex --version`).
+- Authenticated session (`codex login` or API key per your org policy).
+
+## Suggested invocation pattern (manual / future PDD wiring)
+Run inside the candidate worktree root with the prompt body on stdin:
+
+```bash
+cd "$CANDIDATE_WORKTREE"
+codex exec --full-auto --json - < /path/to/simplify_prompt.txt
+```
+
+Where `simplify_prompt.txt` contains:
+1. This workflow prompt (preprocessed includes resolved).
+2. A bullet list of in-scope relative file paths.
+3. Optional focus line from `[tool.pdd.checkup.simplify].focus`.
+
+## Model selection
+- Honor `CODEX_MODEL` or `OPENAI_MODEL` if your Codex build supports `--model`.
+- Keep reasoning effort separate from PDD's LiteLLM steps; this subprocess is code editing only.
+
+## Parity notes
+- Match Claude simplify conservatism: fewer touched files beats aggressive refactors.
+- Do not edit paths outside the explicit allowlist; PDD will reject out-of-scope candidates.
+</codex>

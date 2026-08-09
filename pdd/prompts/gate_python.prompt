@@ -1,0 +1,23 @@
+% Write `pdd/gate_main.py`, evidence policy evaluation for ``pdd checkup gate``.
+
+<include>context/python_preamble.prompt</include>
+<pdd-dependency>evidence_store_python.prompt</pdd-dependency>
+<pdd-dependency>gate_policy_python.prompt</pdd-dependency>
+<pdd-dependency>contract_check_python.prompt</pdd-dependency>
+<pdd-dependency>coverage_contracts_python.prompt</pdd-dependency>
+
+<pdd-reason>Enforces dev-unit evidence manifest policy before merge using deterministic checks on validation status, output freshness, contracts, and cost limits.</pdd-reason>
+
+% Public API
+- `run_gate_policy(project_root: Path, *, policy_path: Optional[Path] = None, target: Optional[str] = None, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> GateResult`
+- `evaluate_manifest(manifest: ManifestView, project_root: Path, policy: GatePolicy, *, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> list[GateFailure]`
+
+% Policy checks
+- Validation flags (story, verify, unit_tests) must pass unless policy allows skips.
+- Generated outputs must match manifest hashes; prompt hash must match when required.
+- Contract coverage: no unchecked critical rules; optional waiver/story-only policy.
+- `check_prompt` for contract syntax when manifests reference prompts.
+- Cost and nondeterministic-context limits from policy YAML.
+
+% Code output
+- Code: `pdd/gate_main.py`

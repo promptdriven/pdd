@@ -8,6 +8,7 @@ from .llm_invoke import llm_invoke
 from .unfinished_prompt import unfinished_prompt
 from .continue_generation import continue_generation
 from .postprocess import postprocess
+from .generation_completion import completion_check_tail, provider_finished_structurally
 
 console = Console()
 
@@ -20,6 +21,7 @@ def code_generator(
     verbose: bool = False,
     preprocess_prompt: bool = True,
     output_schema: Optional[dict] = None,
+    compress: bool = False,
 ) -> Tuple[str, float, str]:
     """
     Generate code from a prompt using a language model.
@@ -60,7 +62,7 @@ def code_generator(
             if verbose:
                 console.print("[bold blue]Step 1: Preprocessing prompt[/bold blue]")
 
-            processed_prompt = preprocess(prompt, recursive=False, double_curly_brackets=True)
+            processed_prompt = preprocess(prompt, recursive=False, double_curly_brackets=True, compress=compress)
         else:
             processed_prompt = prompt
 
@@ -103,20 +105,29 @@ def code_generator(
         initial_output = response['result']
         total_cost += response['cost']
         model_name = response['model_name']
+        finish_reason = response.get('finish_reason')
 
         # Step 3: Check if generation is complete
         if verbose:
             console.print("[bold blue]Step 3: Checking completion status[/bold blue]")
-        last_chunk = initial_output[-600:] if len(initial_output) > 600 else initial_output
-        reasoning, is_finished, check_cost, _ = unfinished_prompt(
-            prompt_text=last_chunk,
-            strength=0.5,
-            temperature=0.0,
-            time=time,
-            language=language,
-            verbose=verbose
-        )
-        total_cost += check_cost
+        if provider_finished_structurally(initial_output, finish_reason, language):
+            is_finished = True
+            if verbose:
+                console.print(
+                    "[green]Provider reported completion and full output passed structural checks; "
+                    "skipping continuation judge.[/green]"
+                )
+        else:
+            last_chunk = completion_check_tail(initial_output)
+            _reasoning, is_finished, check_cost, _ = unfinished_prompt(
+                prompt_text=last_chunk,
+                strength=0.5,
+                temperature=temperature,
+                time=time,
+                language=language,
+                verbose=verbose
+            )
+            total_cost += check_cost
 
         # Step 3a: Continue generation if incomplete
         if not is_finished:
@@ -153,13 +164,13 @@ def code_generator(
                 llm_output=final_output,
                 language=language,
                 strength=EXTRACTION_STRENGTH,
-                temperature=0.0,
+                temperature=temperature,
                 time=time,
                 verbose=verbose
             )
             total_cost += postprocess_cost
 
-        return runnable_code, total_cost, model_name
+        return runnable_code, total_cost, model_name_post
 
     except ValueError as ve:
         if verbose:

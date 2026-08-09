@@ -1,0 +1,41 @@
+<pdd-reason>Utility for expanding path templates with dynamic placeholders for project layout generation.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "expand_template", "signature": "(template: str, context: Dict[str, Any])", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Implement a template expansion utility for output path configuration.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+1. Implement `expand_template(template: str, context: Dict[str, Any]) -> str`.
+2. Support these placeholders:
+   - `{name}`: Base file name.
+   - `{category}`: Parent path segments.
+   - `{dir_prefix}`: Directory prefix (including trailing slash).
+   - `{ext}`: File extension.
+   - `{language}`: Full language name.
+3. Support case-transformed placeholders for `{name}`:
+   - `{name_snake}`: snake_case (e.g., `AssetCard` -> `asset_card`).
+   - `{name_pascal}`: PascalCase (e.g., `asset_card` -> `AssetCard`).
+   - `{name_kebab}`: kebab-case (e.g., `AssetCard` -> `asset-card`).
+4. Robustness: Missing context keys default to an empty string.
+5. Path Normalization:
+   - Collapse consecutive slashes.
+   - Resolve `.` and `..` segments while preserving relative path status.
+   - Use forward slashes `/` consistently (even on Windows).
+6. Transformation Logic:
+   - `snake_case` & `kebab-case`: Insert delimiter before uppercase letters (except first) and lowercase.
+   - `PascalCase`: Split on delimiters (`_`, `-`, space), title-case parts, and join.
+
+% Instructions
+- Implement internal helpers for case conversion and path normalization.
+- Use `os.path.normpath` as part of the normalization process, ensuring slash consistency.

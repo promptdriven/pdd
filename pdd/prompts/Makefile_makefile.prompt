@@ -1,0 +1,99 @@
+% You are an expert software engineer. Your goal is to write a Makefile to handle the following:
+  - Generating these types in the staging directory:
+    a) Python modules (e.g. .py)
+    b) Makefile
+    c) CSV
+    d) Examples (e.g. *_example.py)
+    e) Tests (e.g. test_*.py)
+  - Testing- Be sure to incude the staging Python modules directory in the PYTHONPATH when running tests so it can find the modules. Also, use unittest to run the tests.
+  - Cleaning
+    - Remove the 'output' directory.
+    - Remove the 'pdd/code_fixed.py' file.
+    - Remove the 'tests/test_code_fixed.py' file.
+    - Remove the 'output.csv' file.
+  - Generating requirements.txt from pipreqs
+  - Production (e.g. copy files from staging to pdd)
+  - Staging (e.g. copy files from pdd, context, tests and data  to staging to reduce the cost of regenerating everything)
+  - etc.
+
+% Here is the help of pdd: ```<./README.md>```
+  
+% Here is an example directory structure: ```├── README.md
+├── TODO.md
+├── Makefile
+├── context
+│   ├── code_generator_example.py
+│   ├── context_generator_example.py
+│   ├── get_extension_example.py
+│   ├── langchain_lcel_example.py
+│   ├── postprocess_example.py
+│   ├── preprocess_example.py
+│   └── split
+│       └── 1
+│           ├── final_pdd_python.prompt
+│           ├── initial_pdd_python.prompt
+│           ├── pdd.py
+│           ├── split_get_extension.prompt
+│           └── sub_pdd_python.prompt
+├── data
+│   ├── language_format.csv
+│   └── llm_model.csv
+├── pdd
+│   ├── __pycache__
+│   ├── code_generator.py (used to generate examples in context)
+│   ├── context_generator.py
+│   ├── get_extension.py
+│   ├── pdd.py
+│   ├── postprocess.py
+│   └── preprocess.py
+├── prompts
+│   ├── Makefile_makefile.prompt (generates Makefile in staging)
+│   ├── code_generator_python.prompt
+│   ├── context_generator_python.prompt
+│   ├── get_extension_python.prompt
+│   ├── language_format_csv.prompt (generates language_format.csv in staging/data)
+│   ├── llm_model_csv.prompt
+│   ├── pdd_python.prompt
+│   ├── postprocess_python.prompt
+│   └── preprocess_python.prompt
+├── requirements.txt
+├── staging
+│   ├── Makefile (will be initially tested here and then moved to the base directory of pdd)
+│   ├── data
+│   │   ├── language_format.csv
+│   │   ├── llm_model.csv
+│   ├── context
+│   │   ├── code_generator_example.py
+│   │   ├── context_generator_example.py
+│   │   ├── get_extension_example.py
+│   │   ├── langchain_lcel_example.py
+│   │   ├── postprocess_example.py
+│   │   └── preprocess_example.py
+│   ├── pdd
+│   │   ├── __pycache__
+│   │   ├── code_generator.py
+│   │   ├── context_generator.py
+│   │   ├── get_extension.py
+│   │   ├── get_extension_example.py
+│   │   ├── pdd.py
+│   │   ├── postprocess.py
+│   │   └── preprocess.py
+│   └── tests
+│   │   ├── test_code_generator.py
+│   │   ├── test_context_generator.py
+│   │   ├── test_get_extension.py
+│   │   ├── test_get_extension_example.py
+│   │   ├── test_pdd.py
+│   │   ├── test_postprocess.py
+│   │   └── test_preprocess.py
+│       └── testing.ipynb
+└── tests
+    └── testing.ipynb```
+
+% Rules to follow:
+  - The Makefile needs to use wildcards to ensure all files and found and generated
+  - Prompt file names have this format: '<basename>_<language>.prompt' (e.g. pdd_python.prompt, Makefile_makefile.prompt, setup_bash.prompt). Be sure to not include the '_<language>' as part of the output file.
+  - Prompts have different output file extensions depending on the language. For instance, '_makefile.prompt' has no file extensions, '_csv.prompt' end in '.csv', '_python.prompt' end in '.py', etc. As a result, there needs to be separate generate for each type of language.
+  - Print out the commands as they run.
+  - If the directory doesn't already exist, create it.
+  - To run 'pdd', use the command: ```python pdd/pdd.py`````

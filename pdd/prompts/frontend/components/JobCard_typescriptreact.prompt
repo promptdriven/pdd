@@ -1,0 +1,72 @@
+% You are an expert TypeScript React engineer. Generate `pdd/frontend/components/JobCard.tsx` as the job summary/action card used by the jobs dashboard.
+
+% Requirements
+1) Export a default `JobCard` React functional component using this prop contract:
+   - `job: JobInfo`
+   - `isSelected: boolean`
+   - `onSelect: () => void`
+   - `onCancel: () => void`
+   - `onRemove?: () => void`
+   - `onMarkDone?: (success: boolean) => void`
+   - `onMarkStatus?: (status: 'completed' | 'failed' | 'cancelled') => void`
+2) Import `React` and import `JobInfo` + `JobStatus` from `../hooks/useJobs`.
+3) Keep helper `formatDuration(startedAt, completedAt)`:
+   - Use `completedAt || new Date()` as end time.
+   - Return `Xs` for under a minute, `Xm Ys` for under an hour, and `Xh Ym` otherwise.
+4) Keep helper `formatTimeAgo(date)`:
+   - Return `Xs ago`, `Xm ago`, `Xh ago`, or `Xd ago` based on elapsed time.
+5) Keep helper `extractDevUnitName(displayCommand)`:
+   - Prefer prompt path match `prompts/<name>...` and return `<name>`.
+   - Fallback to `<module>_<Language>.prompt` and return `<module>`.
+   - Fallback to CLI module flags `-m <module>` or `--module <module>`.
+   - Return `null` if no pattern matches.
+6) Keep helper `getStatusStyle(status: JobStatus)` returning `{ bg, text, icon }` with:
+   - `queued -> clock` (yellow classes)
+   - `running -> spinner` (accent classes)
+   - `completed -> check` (green classes)
+   - `failed -> x` (red classes)
+   - `cancelled -> slash` (surface classes)
+   - fallback `question` (surface classes)
+7) Derive component state from `job`:
+   - `isActive` when status is `queued` or `running`
+   - `isSpawnedJob` when `job.id` starts with `spawned-`
+   - `isRemoteJob` when `job.metadata?.remote === true`
+   - `devUnitName = extractDevUnitName(job.displayCommand)`
+   - `progressPercent = Math.round((current / total) * 100)` when `job.progress` exists, else `null`
+8) Make the card root clickable (`onClick={onSelect}`), with selected vs non-selected Tailwind styling (border/background/shadow transition).
+9) Header content:
+   - Show truncated `job.displayCommand` as title with full command in `title`.
+   - Show a small dev-unit badge when `devUnitName` exists.
+   - Show status pill with text `job.status` and inline SVG icon chosen by `statusStyle.icon`.
+   - Show timing text:
+     - active jobs: running duration from `formatDuration(job.startedAt, null)`
+     - completed jobs with `completedAt`: `formatTimeAgo(job.completedAt)`
+     - otherwise fallback to duration from start
+10) Show cost only when `job.cost > 0`, formatted as dollars with 3 decimals.
+11) Show determinate progress bar only when `isActive && progressPercent !== null`:
+   - Left label is `job.progress?.message || 'Processing...'`
+   - Right label is `${progressPercent}%`
+   - Bar width uses inline style `${progressPercent}%`
+12) Show indeterminate bar only when `job.status === 'running' && progressPercent === null` using `animate-indeterminate`.
+13) Show output preview only when `job.output.length > 0`, rendering the last output line in a monospace truncated line.
+14) Action buttons must stop propagation so clicking them does not trigger card selection.
+15) For active spawned local jobs (`isActive && isSpawnedJob && !isRemoteJob && onMarkDone`):
+   - Show `Done` button calling `onMarkDone(true)`
+   - Show `Failed` button calling `onMarkDone(false)`
+   - If `onRemove` exists, show `Dismiss` button calling `onRemove`
+16) For active remote jobs when `onMarkStatus` exists:
+   - Show `Done` (`completed`), `Failed` (`failed`), and `Cancelled` (`cancelled`) buttons calling `onMarkStatus(...)`
+17) For active remote jobs (regardless of `onMarkStatus`), show a disabled-looking `Cancel Remote (Coming Soon)` button that triggers an alert explaining it is not fully implemented yet and manual status buttons should be used.
+18) For active regular async jobs (`isActive && !isSpawnedJob && !isRemoteJob`), show `Cancel` button calling `onCancel`.
+19) For non-active jobs, show `Remove` only when `onRemove` exists.
+20) Always render the trailing action button that calls `onSelect` and shows:
+   - `Details` for spawned jobs
+   - `View Output` otherwise
+
+% Constraints
+- Keep dark-theme Tailwind utility styling consistent with the rest of the dashboard UI.
+- Keep all icons as inline SVG.
+- Keep the component self-contained in one file and default-export `JobCard`.
+
+% Deliverable
+- Output only `pdd/frontend/components/JobCard.tsx`.

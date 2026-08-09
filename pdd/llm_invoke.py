@@ -1,15 +1,72 @@
 # Corrected code_under_test (llm_invoke.py)
 # Added optional debugging prints in _select_model_candidates
 
+import copy
+import csv
+import getpass
 import os
 import pandas as pd
 import litellm
 import logging # ADDED FOR DETAILED LOGGING
 import importlib.resources
+import re
+import socket
+import subprocess
+import sys
+import traceback
+import urllib.request
+import uuid
+from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from litellm.caching.caching import Cache  # Fix for LiteLLM v1.75.5+
 
 # --- Configure Standard Python Logging ---
 logger = logging.getLogger("pdd.llm_invoke")
+
+# A hosted prompt-checkup command is one OS process but can issue several
+# nested ``llm_invoke`` calls (generation continuation, extraction, and repair).
+# Keep a conservative reservation across those calls so each request's token
+# ceiling cannot multiply into a command-level cap overrun.  The worker assigns
+# a fresh budget id for each subprocess; normal interactive invocations leave
+# the contract unset and retain the legacy behavior.
+_HOSTED_BUDGET_KEY: str | None = None
+_HOSTED_BUDGET_RESERVED_USD = Decimal("0")
+_HOSTED_BUDGET_ATTEMPTS = 0
+
+
+def _hosted_budget_state(budget_cap: Decimal | None) -> tuple[Decimal, int]:
+    global _HOSTED_BUDGET_KEY, _HOSTED_BUDGET_RESERVED_USD, _HOSTED_BUDGET_ATTEMPTS
+    if budget_cap is None:
+        return Decimal("0"), 0
+    key = os.environ.get("PDD_COMMAND_BUDGET_ID") or str(budget_cap)
+    if key != _HOSTED_BUDGET_KEY:
+        _HOSTED_BUDGET_KEY = key
+        _HOSTED_BUDGET_RESERVED_USD = Decimal("0")
+        _HOSTED_BUDGET_ATTEMPTS = 0
+    return _HOSTED_BUDGET_RESERVED_USD, _HOSTED_BUDGET_ATTEMPTS
+
+
+def _reserve_hosted_budget(amount: Decimal) -> None:
+    global _HOSTED_BUDGET_RESERVED_USD
+    _HOSTED_BUDGET_RESERVED_USD += amount
+
+
+def _record_hosted_attempt() -> None:
+    global _HOSTED_BUDGET_ATTEMPTS
+    _HOSTED_BUDGET_ATTEMPTS += 1
+
+# Optional lightweight trace for core dumps (best-effort).
+try:
+    from .core.llm_trace import record_llm_pair as _record_llm_pair
+except Exception:  # pragma: no cover
+    _record_llm_pair = None  # type: ignore
+
+from .grounding_provenance import (
+    build_grounding_metadata,
+    resolve_grounding_overrides_for_invoke,
+    reviewed_from_click_ctx,
+)
 
 # Environment variable to control log level
 PDD_LOG_LEVEL = os.getenv("PDD_LOG_LEVEL", "INFO")
@@ -26,6 +83,15 @@ litellm_logger = logging.getLogger("litellm")
 litellm_log_level = os.getenv("LITELLM_LOG_LEVEL", "WARNING" if PRODUCTION_MODE else "INFO")
 litellm_logger.setLevel(getattr(logging, litellm_log_level, logging.WARNING))
 
+# Suppress LiteLLM debug messages and error info that includes "Give Feedback / Get Help"
+# This prevents LiteLLM from printing these messages before raising exceptions
+try:
+    litellm.set_verbose = False
+    litellm.suppress_debug_info = True
+except Exception:
+    # If these attributes don't exist in this LiteLLM version, continue silently
+    pass
+
 # Ensure LiteLLM drops provider-unsupported params instead of erroring
 # This prevents failures like UnsupportedParamsError for OpenAI gpt-5-* when
 # passing generic params (e.g., reasoning_effort) not accepted by that API path.
@@ -36,13 +102,365 @@ except Exception:
     # Be conservative: default to True even if env parsing fails
     litellm.drop_params = True
 
+# Anthropic's adaptive-thinking Claude models (Opus 4.7+ and Fable 5) reject
+# the legacy `thinking={"type":"enabled","budget_tokens":N}` shape on
+# Anthropic-family providers that perform strict validation (Vertex AI
+# confirmed; Bedrock has the same inheritance path). The direct-Anthropic
+# endpoint happens to tolerate both shapes together, which is why a CSV-only
+# flip to `adaptive` is insufficient on relays.
+#
+# LiteLLM's gating helper for "model uses adaptive thinking" has been
+# renamed between releases:
+#   * 1.80.x — `AnthropicConfig._is_claude_opus_4_5` matches only
+#     opus-4-5. `_map_reasoning_effort` ignores the model and always
+#     returns the legacy enabled shape; `map_openai_params` then adds
+#     output_config.effort *and* leaves the enabled-shape thinking
+#     unchanged. So we need (a) predicate extension AND (b) a
+#     post-process wrap to replace the stale enabled shape.
+#   * 1.82.x — `_is_claude_opus_4_5` is gone, replaced by
+#     `_is_claude_4_6_model` (+ `_is_opus_4_6_model`). The new
+#     `_map_reasoning_effort(model)` returns `{type: adaptive}` directly
+#     when the predicate matches, and `map_openai_params` then adds
+#     output_config.effort. So we only need predicate extension.
+#
+# Each patch is in its own try/except and sentinel-guarded against
+# `importlib.reload(pdd.llm_invoke)` (several tests do that). Each is a
+# no-op when the corresponding helper isn't present, so the same module
+# works across LiteLLM 1.80.x and 1.82.x. Remove when LiteLLM ships
+# native opus-4-7 matching.
+#
+# Azure AI uses AzureAIStudioConfig (OpenAI-based), not AnthropicConfig.
+# The runtime adaptive branch sends Azure Opus 4.7/4.8 payloads via
+# `extra_body`, which LiteLLM preserves for AzureAIStudioConfig.
+try:
+    from litellm.llms.anthropic.chat.transformation import (
+        AnthropicConfig as _AnthropicConfigOpus47,
+    )
+except Exception as _opus_4_7_import_err:  # pylint: disable=broad-except
+    _AnthropicConfigOpus47 = None  # type: ignore
+    logger.error(
+        "[opus_4_7_patch] Could not import AnthropicConfig: %s",
+        _opus_4_7_import_err,
+    )
+
+if _AnthropicConfigOpus47 is not None:
+    # Aliases the patched predicate must additionally match. Opus 4.5 is
+    # included so the 1.82.x predicate rename doesn't silently regress
+    # callers (LiteLLM 1.82.6 dropped 4.5 from `_is_claude_4_6_model`,
+    # which it now controls). Dot-aliases mirror LiteLLM's own naming
+    # support so we don't miss `claude-opus-4.7` style identifiers.
+    _ADAPTIVE_CLAUDE_ADDITIONAL_ALIASES = (
+        "fable-5", "fable_5",
+        "opus-4-8", "opus_4_8", "opus-4.8", "opus_4.8",
+        "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7",
+        "opus-4-5", "opus_4_5", "opus-4.5", "opus_4.5",
+    )
+
+    # ---- 1.80.x predicate: _is_claude_opus_4_5 -------------------------------
+    try:
+        _existing_is_opus_4_5 = getattr(_AnthropicConfigOpus47, "_is_claude_opus_4_5", None)
+        if _existing_is_opus_4_5 is not None and not getattr(
+            _existing_is_opus_4_5, "_pdd_opus_4_7_patched", False
+        ):
+            _orig_is_opus_4_5 = _existing_is_opus_4_5
+            def _patched_is_opus_4_5(self, model):  # pylint: disable=function-redefined
+                m = model.lower() if isinstance(model, str) else ""
+                return _orig_is_opus_4_5(self, model) or any(a in m for a in _ADAPTIVE_CLAUDE_ADDITIONAL_ALIASES)
+            _patched_is_opus_4_5._pdd_opus_4_7_patched = True
+            _AnthropicConfigOpus47._is_claude_opus_4_5 = _patched_is_opus_4_5
+    except Exception as _err:  # pylint: disable=broad-except
+        logger.error("[opus_4_7_patch] _is_claude_opus_4_5 patch failed: %s", _err)
+
+    # ---- 1.82.x predicates: _is_claude_4_6_model + _is_opus_4_6_model --------
+    # These are @staticmethod in 1.82.x. Wrap and reinstall as staticmethod so
+    # internal `AnthropicConfig._is_claude_4_6_model(model)` calls still work.
+    for _helper_name in ("_is_claude_4_6_model", "_is_opus_4_6_model"):
+        try:
+            _existing_helper = getattr(_AnthropicConfigOpus47, _helper_name, None)
+            if _existing_helper is None:
+                continue
+            _underlying = (
+                _existing_helper.__func__
+                if hasattr(_existing_helper, "__func__")
+                else _existing_helper
+            )
+            if getattr(_underlying, "_pdd_opus_4_7_helper_patched", False):
+                continue
+            def _make_patched(orig, aliases):
+                def _patched(model):
+                    m = model.lower() if isinstance(model, str) else ""
+                    return orig(model) or any(a in m for a in aliases)
+                _patched._pdd_opus_4_7_helper_patched = True
+                return _patched
+            _new_static = staticmethod(_make_patched(_underlying, _ADAPTIVE_CLAUDE_ADDITIONAL_ALIASES))
+            setattr(_AnthropicConfigOpus47, _helper_name, _new_static)
+        except Exception as _err:  # pylint: disable=broad-except
+            logger.error("[opus_4_7_patch] %s patch failed: %s", _helper_name, _err)
+
+    # ---- map_openai_params post-process wrap (both versions) -----------------
+    # 1.80.x: _map_reasoning_effort always returns the legacy enabled shape;
+    #         reasoning_effort branch overwrites caller's adaptive thinking
+    #         with that — the wrap rewrites enabled→adaptive on opus-4-7.
+    # 1.82.x: _map_reasoning_effort returns adaptive (with the patched
+    #         predicate) but DROPS caller-supplied `display`/extra fields
+    #         when the reasoning_effort branch fires after the thinking
+    #         branch — the wrap restores the caller's richer payload.
+    try:
+        _existing_map = _AnthropicConfigOpus47.map_openai_params
+        if not getattr(_existing_map, "_pdd_opus_4_7_thinking_patched", False):
+            _orig_map_openai_params = _existing_map
+            def _adaptive_pred(self, model):
+                """Either-version predicate accessor."""
+                p1 = getattr(self, "_is_claude_opus_4_5", None)
+                if p1 is not None and p1(model):
+                    return True
+                p2 = getattr(self, "_is_claude_4_6_model", None)
+                if p2 is not None and p2(model):
+                    return True
+                return False
+            def _patched_map_openai_params(self, non_default_params, optional_params, model, drop_params=False):  # pylint: disable=function-redefined
+                result = _orig_map_openai_params(self, non_default_params, optional_params, model, drop_params)
+                if not _adaptive_pred(self, model):
+                    return result
+                current = result.get("thinking")
+                if not isinstance(current, dict):
+                    return result
+                # Case A (1.80.x): result still has enabled shape — rewrite.
+                # Case B (1.82.x): result has bare {type:adaptive} — preserve caller's payload.
+                user_thinking = non_default_params.get("thinking") if isinstance(non_default_params, dict) else None
+                if current.get("type") == "enabled":
+                    if isinstance(user_thinking, dict) and user_thinking.get("type") == "adaptive":
+                        result["thinking"] = user_thinking
+                    else:
+                        result["thinking"] = {"type": "adaptive"}
+                elif current.get("type") == "adaptive":
+                    if isinstance(user_thinking, dict) and user_thinking.get("type") == "adaptive":
+                        # Caller supplied richer payload (display/effort/...) —
+                        # merge their fields into the result without dropping
+                        # anything LiteLLM already filled in.
+                        merged = dict(current)
+                        for k, v in user_thinking.items():
+                            if k not in merged:
+                                merged[k] = v
+                        result["thinking"] = merged
+                if isinstance(non_default_params, dict) and "output_config" not in result:
+                    reasoning_effort = non_default_params.get("reasoning_effort")
+                    if reasoning_effort:
+                        result["output_config"] = {"effort": reasoning_effort}
+                return result
+            _patched_map_openai_params._pdd_opus_4_7_thinking_patched = True
+            _AnthropicConfigOpus47.map_openai_params = _patched_map_openai_params
+    except Exception as _err:  # pylint: disable=broad-except
+        logger.error("[opus_4_7_patch] map_openai_params patch failed: %s", _err)
+
+    # LiteLLM 1.84 maps Anthropic's `stop_reason="refusal"` to the generic
+    # OpenAI `stop` reason and emits an empty message. Preserve the original
+    # provider signal so response processing can fall back instead of treating
+    # a legitimate safety refusal as a corrupt cache entry.
+    try:
+        _existing_transform = _AnthropicConfigOpus47.transform_parsed_response
+        if not getattr(_existing_transform, "_pdd_refusal_reason_patched", False):
+            _orig_transform_parsed_response = _existing_transform
+
+            def _patched_transform_parsed_response(
+                self, completion_response, *args, **kwargs
+            ):  # pylint: disable=function-redefined
+                result = _orig_transform_parsed_response(
+                    self, completion_response, *args, **kwargs
+                )
+                if not isinstance(completion_response, dict):
+                    return result
+                stop_reason = completion_response.get("stop_reason")
+                if stop_reason != "refusal":
+                    return result
+                try:
+                    message = result.choices[0].message
+                    fields = getattr(message, "provider_specific_fields", None)
+                    fields = dict(fields) if isinstance(fields, dict) else {}
+                    fields["anthropic_stop_reason"] = stop_reason
+                    message.provider_specific_fields = fields
+                except (AttributeError, IndexError, TypeError):
+                    logger.warning("[anthropic_refusal_patch] Could not preserve refusal signal")
+                return result
+
+            _patched_transform_parsed_response._pdd_refusal_reason_patched = True
+            _AnthropicConfigOpus47.transform_parsed_response = (
+                _patched_transform_parsed_response
+            )
+    except Exception as _err:  # pylint: disable=broad-except
+        logger.error("[anthropic_refusal_patch] transform patch failed: %s", _err)
+
+# Bedrock Converse uses AmazonConverseConfig — a separate class that does
+# NOT inherit from AnthropicConfig — so the patches above don't reach it
+# directly. In 1.80.x, Converse's `map_openai_params` calls
+# `AnthropicConfig._map_reasoning_effort(value)` (always enabled shape).
+# In 1.82.x, Converse calls `_handle_reasoning_effort_parameter` which
+# calls `AnthropicConfig._map_reasoning_effort(reasoning_effort=value,
+# model=model)` — and the predicate patch above flips that to adaptive
+# for opus-4-7, with no effort field attached.
+#
+# Opus models that use the adaptive-thinking API on the Bedrock/Vertex relays
+# (currently 4.7 and 4.8). Kept SEPARATE from _OPUS_ADDITIONAL_ALIASES, which
+# also lists the pre-adaptive 4.5 — reusing that here would force the adaptive
+# thinking shape onto 4.5 relay rows (reasoning_type='none' today) and likely
+# 400 them. Both relay patch sites below reference this single tuple so a new
+# adaptive Opus can't be half-synced into one relay but not the other.
+_RELAY_OPUS_ADAPTIVE_ALIASES = (
+    "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7",
+    "opus-4-8", "opus_4_8", "opus-4.8", "opus_4.8",
+)
+
+# AWS Bedrock Converse for Claude flattens adaptive thinking into a
+# single key (no output_config sibling like the direct Anthropic API).
+# Wrap Converse `map_openai_params` to:
+#   * normalize any remaining `thinking.type.enabled` to adaptive on
+#     opus-4-7/4-8 (defensive — 1.80.x without the predicate-effective
+#     change), and
+#   * make sure the effort hint from `reasoning_effort` lands in the
+#     thinking dict so `time_to_effort_level()` isn't dropped.
+try:
+    from litellm.llms.bedrock.chat.converse_transformation import (
+        AmazonConverseConfig as _AmazonConverseConfigOpus47,
+    )
+    _existing_converse_map = _AmazonConverseConfigOpus47.map_openai_params
+    if not getattr(_existing_converse_map, "_pdd_opus_4_7_converse_patched", False):
+        _orig_converse_map = _existing_converse_map
+        # Match LiteLLM's own naming convention (hyphen + dot aliases).
+        _CONVERSE_OPUS_47_ALIASES = _RELAY_OPUS_ADAPTIVE_ALIASES
+        def _patched_converse_map(self, non_default_params, optional_params, model, drop_params):  # pylint: disable=function-redefined
+            result = _orig_converse_map(self, non_default_params, optional_params, model, drop_params)
+            m = model.lower() if isinstance(model, str) else ""
+            if not any(a in m for a in _CONVERSE_OPUS_47_ALIASES):
+                return result
+            current = result.get("thinking")
+            if not isinstance(current, dict):
+                return result
+            ctype = current.get("type")
+            if ctype not in ("enabled", "adaptive"):
+                return result
+            new_thinking = {"type": "adaptive"} if ctype == "enabled" else dict(current)
+            user_thinking = non_default_params.get("thinking") if isinstance(non_default_params, dict) else None
+            if isinstance(user_thinking, dict) and user_thinking.get("type") == "adaptive":
+                # Caller-supplied payload wins (carries display=summarized, etc.)
+                new_thinking = dict(user_thinking)
+            effort = non_default_params.get("reasoning_effort") if isinstance(non_default_params, dict) else None
+            if isinstance(effort, str) and "effort" not in new_thinking:
+                new_thinking["effort"] = effort
+            result["thinking"] = new_thinking
+            return result
+        _patched_converse_map._pdd_opus_4_7_converse_patched = True
+        _AmazonConverseConfigOpus47.map_openai_params = _patched_converse_map
+except Exception as _converse_patch_err:  # pylint: disable=broad-except
+    logger.error(
+        "[opus_4_7_patch] Failed to patch AmazonConverseConfig for opus-4-7: %s",
+        _converse_patch_err,
+    )
+
+# Vertex AI Anthropic transform_request unconditionally strips `output_config`
+# from the request body (litellm/llms/vertex_ai/.../transformation.py
+# line ~74 in 1.82.6, comment: "VertexAI doesn't support output_config").
+# That comment is wrong for Opus 4.7: the Vertex API explicitly REQUIRES
+# `output_config.effort` alongside `thinking.type.adaptive` (the error
+# message itself instructs callers to use both).
+#
+# Wrap transform_request: after the original runs (and strips output_config),
+# if model name contains opus-4-7 and the caller's optional_params had an
+# output_config, re-add it to the request body so Vertex receives both
+# `thinking={"type":"adaptive"}` and `output_config={"effort":X}`.
+#
+# Remove this patch when LiteLLM drops the output_config strip for
+# Opus 4.7+ (or learns to gate the strip per model).
+try:
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig as _VertexAIAnthropicConfigOpus47,
+    )
+    _existing_vertex_transform = _VertexAIAnthropicConfigOpus47.transform_request
+    if not getattr(_existing_vertex_transform, "_pdd_opus_4_7_vertex_patched", False):
+        _orig_vertex_transform = _existing_vertex_transform
+        _VERTEX_OPUS_47_ALIASES = _RELAY_OPUS_ADAPTIVE_ALIASES
+        # Map LiteLLM "low/medium/high/max" reasoning_effort levels back to a
+        # default `output_config.effort` value when none is present on the
+        # incoming request. This mirrors what LiteLLM's map_openai_params
+        # does — we replicate it here so retry-path calls that bypass
+        # map_openai_params still get a sensible effort hint.
+        def _effort_from_budget_tokens(budget_tokens):
+            try:
+                bt = int(budget_tokens or 0)
+            except Exception:  # pylint: disable=broad-except
+                return "high"
+            # Anthropic's documented buckets:
+            #   minimal/low: 1024, medium: 4096, high: 8192, max: 16384+
+            if bt >= 16384:
+                return "max"
+            if bt >= 8192:
+                return "high"
+            if bt >= 4096:
+                return "medium"
+            return "low"
+
+        def _patched_vertex_transform(self, model, messages, optional_params, litellm_params, headers):  # pylint: disable=function-redefined
+            data = _orig_vertex_transform(self, model, messages, optional_params, litellm_params, headers)
+            m = model.lower() if isinstance(model, str) else ""
+            if not any(a in m for a in _VERTEX_OPUS_47_ALIASES):
+                return data
+            # Vertex AI Opus 4.7 rejects the legacy `thinking.type.enabled`
+            # shape entirely; the API instructs callers to use
+            # `thinking.type.adaptive` + `output_config.effort`. Force this
+            # shape unconditionally for opus-4-7 because:
+            #
+            #   * map_openai_params produces the right shape on the first
+            #     call (predicate + restore-output_config patches both fire),
+            #     but LiteLLM's `num_retries` retry path re-enters
+            #     transform_request with a stale `optional_params` dict that
+            #     carries `thinking={type:enabled,budget_tokens:N}` and no
+            #     output_config. Without unconditional rewrite here, the
+            #     retry call goes out with the legacy shape and Vertex 400s.
+            #
+            #   * Other code paths (compact-mode retry, fallback budget
+            #     calculation, anything that calls litellm.completion()
+            #     directly with thinking={"type":"enabled",...}) hit the
+            #     same wire if not normalized here.
+            current_thinking = data.get("thinking")
+            budget_tokens = None
+            if isinstance(current_thinking, dict):
+                if current_thinking.get("type") == "enabled":
+                    budget_tokens = current_thinking.get("budget_tokens")
+                    data["thinking"] = {"type": "adaptive"}
+            else:
+                data["thinking"] = {"type": "adaptive"}
+            # output_config: prefer caller's value, else derive from
+            # reasoning_effort/budget_tokens, else default to "high".
+            if "output_config" not in data:
+                oc = optional_params.get("output_config") if isinstance(optional_params, dict) else None
+                if isinstance(oc, dict):
+                    data["output_config"] = oc
+                else:
+                    effort = None
+                    if isinstance(optional_params, dict):
+                        re_effort = optional_params.get("reasoning_effort")
+                        if isinstance(re_effort, str):
+                            effort = re_effort
+                    if effort is None and budget_tokens is not None:
+                        effort = _effort_from_budget_tokens(budget_tokens)
+                    if effort is None:
+                        effort = "high"
+                    data["output_config"] = {"effort": effort}
+            return data
+        _patched_vertex_transform._pdd_opus_4_7_vertex_patched = True
+        _VertexAIAnthropicConfigOpus47.transform_request = _patched_vertex_transform
+except Exception as _vertex_transform_patch_err:  # pylint: disable=broad-except
+    logger.error(
+        "[opus_4_7_patch] Failed to patch VertexAIAnthropicConfig.transform_request: %s",
+        _vertex_transform_patch_err,
+    )
+
 # Add a console handler if none exists
 if not logger.handlers:
     console_handler = logging.StreamHandler()
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
-    
+
     # Only add handler to litellm logger if it doesn't have any
     if not litellm_logger.handlers:
         litellm_logger.addHandler(console_handler)
@@ -52,7 +470,7 @@ def setup_file_logging(log_file_path=None):
     """Configure rotating file handler for logging"""
     if not log_file_path:
         return
-        
+
     try:
         from logging.handlers import RotatingFileHandler
         file_handler = RotatingFileHandler(
@@ -70,23 +488,77 @@ def setup_file_logging(log_file_path=None):
 # Function to set verbose logging
 def set_verbose_logging(verbose=False):
     """Set verbose logging based on flag or environment variable"""
-    if verbose or os.getenv("PDD_VERBOSE_LOGGING") == "1":
+    want_verbose = bool(verbose) or os.getenv("PDD_VERBOSE_LOGGING") == "1"
+
+    # Python logging levels
+    if want_verbose:
         logger.setLevel(logging.DEBUG)
         litellm_logger.setLevel(logging.DEBUG)
-        logger.debug("Verbose logging enabled")
-    
+    else:
+        # Restore defaults
+        if PRODUCTION_MODE:
+            logger.setLevel(logging.WARNING)
+        else:
+            logger.setLevel(getattr(logging, PDD_LOG_LEVEL, logging.INFO))
+        litellm_logger.setLevel(getattr(logging, litellm_log_level, logging.WARNING))
+
+    # LiteLLM internal verbosity/debug info
+    # By default we suppress the noisy "Give Feedback / Get Help" debug banner.
+    # When PDD is run with --verbose, re-enable LiteLLM verbose+debug outputs.
+    try:
+        if hasattr(litellm, "set_verbose"):
+            litellm.set_verbose = want_verbose
+        if hasattr(litellm, "suppress_debug_info"):
+            litellm.suppress_debug_info = not want_verbose
+    except Exception:
+        # If these attributes don't exist in this LiteLLM version, ignore.
+        pass
+
+    if want_verbose:
+        logger.debug("Verbose logging enabled (including LiteLLM debug output)")
+
+
+def set_quiet_logging() -> None:
+    """Suppress non-error logging for quiet mode."""
+    logger.setLevel(logging.ERROR)
+    litellm_logger.setLevel(logging.ERROR)
+    try:
+        if hasattr(litellm, "set_verbose"):
+            litellm.set_verbose = False
+        if hasattr(litellm, "suppress_debug_info"):
+            litellm.suppress_debug_info = True
+    except Exception:
+        pass
+
+
+# Honor process-level quiet mode as early as possible.
+if os.getenv("PDD_QUIET") == "1":
+    set_quiet_logging()
+
 # --- End Logging Configuration ---
 
 import json
 # from rich import print as rprint # Replaced with logger
 from dotenv import load_dotenv
 from pathlib import Path
-from typing import Optional, Dict, List, Any, Type, Union, Tuple
+from typing import Optional, Dict, List, Any, Type, Union, Tuple, Callable
 from pydantic import BaseModel, ValidationError
 import openai  # Import openai for exception handling as LiteLLM maps to its types
 import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
 from pdd.path_resolution import get_default_resolver
+from pdd.server.token_counter import (
+    count_tokens_for_messages,
+    get_context_limit,
+)
+try:
+    from pdd.server.token_counter import get_max_output_tokens as _get_max_output_tokens
+except ImportError:  # Older checkout without the output-cap helper.
+    _get_max_output_tokens = None  # type: ignore[assignment]
+try:
+    from pdd.server.token_counter import estimate_completion_cost as _estimate_completion_cost
+except ImportError:  # Prerequisite sub-issue may not be present in this checkout.
+    _estimate_completion_cost = None  # type: ignore[assignment]
 
 # Opt-in to future pandas behavior regarding downcasting
 try:
@@ -114,6 +586,27 @@ class SchemaValidationError(Exception):
         self.item_index = item_index
 
 
+class ProviderRefusalError(Exception):
+    """Raised when a provider returns a successful but unusable refusal.
+
+    This is separate from cache corruption: callers should try the next model
+    candidate rather than retrying the same request with cache bypass.
+    """
+
+
+def _response_was_refused(response_item: Any) -> bool:
+    """Return whether LiteLLM preserved Anthropic's refusal stop reason."""
+    try:
+        message = response_item.choices[0].message
+        fields = getattr(message, "provider_specific_fields", None)
+        if isinstance(fields, dict) and fields.get("anthropic_stop_reason") == "refusal":
+            return True
+        refusal = getattr(message, "refusal", None)
+        return isinstance(refusal, str) and bool(refusal)
+    except (AttributeError, IndexError, TypeError):
+        return False
+
+
 class CloudFallbackError(Exception):
     """Raised when cloud execution fails and should fall back to local.
 
@@ -139,6 +632,15 @@ class InsufficientCreditsError(Exception):
     and should NOT fall back to local execution - the user needs to know.
     """
     pass
+
+
+class EstimateOnlyResult(Exception):
+    """Raised by llm_invoke when estimate mode should stop before providers."""
+
+    def __init__(self, estimate: Dict[str, Any]):
+        super().__init__("LLM estimate computed; provider call skipped")
+        self.estimate = estimate
+        self.payload = estimate
 
 
 # --- Cloud Execution Helpers ---
@@ -246,6 +748,193 @@ def _pydantic_to_json_schema(pydantic_class: Type[BaseModel]) -> Dict[str, Any]:
     return schema
 
 
+def _unwrap_parameter_envelope(obj: Any) -> Any:
+    """Unwrap Vertex AI Anthropic's tool-call envelope.
+
+    Vertex AI serves Anthropic structured outputs through tool-calling, which
+    returns the schema fields wrapped as ``{"parameter": {<schema fields>}}``.
+    The validators below gate this unwrap so it never silently reshapes a
+    legitimate caller schema that itself accepts a top-level ``parameter`` key.
+    Non-matching inputs are returned unchanged.
+    """
+    if (
+        isinstance(obj, dict)
+        and len(obj) == 1
+        and "parameter" in obj
+        and isinstance(obj["parameter"], dict)
+    ):
+        return obj["parameter"]
+    return obj
+
+
+def _pydantic_schema_accepts_parameter_key(cls: Type[BaseModel]) -> bool:
+    """Return True if ``cls`` could validate a top-level ``"parameter"`` key.
+
+    Walks declared fields and checks the field name, ``Field(alias=...)``, and
+    ``Field(validation_alias=...)`` (string, ``AliasChoices``, or first segment
+    of ``AliasPath``). When any of those equals ``"parameter"``, the envelope
+    unwrap must be skipped — otherwise a payload like
+    ``{"parameter": {"parameter": "inner"}}`` could be silently reshaped.
+    """
+    try:
+        from pydantic import AliasChoices, AliasPath
+    except ImportError:  # pragma: no cover — pydantic is a hard dep
+        AliasChoices = AliasPath = None  # type: ignore
+
+    def _path_first_is_parameter(path_obj: Any) -> bool:
+        if AliasPath is None or not isinstance(path_obj, AliasPath):
+            return False
+        path = getattr(path_obj, "path", None)
+        return bool(path) and path[0] == "parameter"
+
+    for name, info in cls.model_fields.items():
+        if name == "parameter":
+            return True
+        if getattr(info, "alias", None) == "parameter":
+            return True
+        va = getattr(info, "validation_alias", None)
+        if va is None:
+            continue
+        if isinstance(va, str):
+            if va == "parameter":
+                return True
+            continue
+        if _path_first_is_parameter(va):
+            return True
+        if AliasChoices is not None and isinstance(va, AliasChoices):
+            for choice in getattr(va, "choices", ()):
+                if isinstance(choice, str) and choice == "parameter":
+                    return True
+                if _path_first_is_parameter(choice):
+                    return True
+    return False
+
+
+def _jsonschema_eligible_for_envelope_unwrap(schema: Any) -> bool:
+    """Return True if ``schema`` is an explicit object schema safe to unwrap into.
+
+    Greg's review on PR #1365: only unwrap when the caller's schema is an
+    explicit object whose top-level ``properties`` map exists and does not
+    declare ``parameter``. Composed (``allOf``/``anyOf``/``oneOf``/``$ref``)
+    or otherwise flexible (no top-level ``properties``) schemas are skipped
+    rather than risk silently reshaping a payload that the composed schema
+    might accept after unwrap.
+    """
+    if not isinstance(schema, dict):
+        return False
+    for composition_key in ("allOf", "anyOf", "oneOf", "$ref"):
+        if composition_key in schema:
+            return False
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return False
+    return "parameter" not in properties
+
+
+def _validate_pydantic_with_unwrap(
+    payload: Any,
+    pydantic_class: Type[BaseModel],
+) -> BaseModel:
+    """Validate ``payload`` against ``pydantic_class`` with envelope-unwrap fallback.
+
+    Tries direct validation first. On ``ValidationError``, retries once after
+    unwrapping a ``{"parameter": {...}}`` envelope. The original error is
+    re-raised if both attempts fail, so existing diagnostics stay accurate.
+
+    Gating (PR #1365 review): if ``pydantic_class`` could validate a
+    top-level ``parameter`` key — by field name, ``Field(alias=...)``, or
+    ``Field(validation_alias=...)`` (string, ``AliasChoices``, or first
+    segment of ``AliasPath``) — the unwrap retry would silently reshape
+    legitimate user payloads (e.g. ``{"parameter": {"parameter": "x"}}``
+    would be accepted as ``{"parameter": "x"}``). Skip the unwrap branch in
+    that case and let direct-validation errors propagate unchanged.
+    """
+    schema_uses_parameter = _pydantic_schema_accepts_parameter_key(pydantic_class)
+    if isinstance(payload, str):
+        try:
+            return pydantic_class.model_validate_json(payload)
+        except ValidationError as original_err:
+            if schema_uses_parameter:
+                raise
+            try:
+                obj = json.loads(payload)
+            except (json.JSONDecodeError, ValueError):
+                raise original_err
+            unwrapped = _unwrap_parameter_envelope(obj)
+            if unwrapped is obj:
+                raise original_err
+            try:
+                return pydantic_class.model_validate(unwrapped)
+            except ValidationError:
+                raise original_err
+    if isinstance(payload, dict):
+        try:
+            return pydantic_class.model_validate(payload)
+        except ValidationError as original_err:
+            if schema_uses_parameter:
+                raise
+            unwrapped = _unwrap_parameter_envelope(payload)
+            if unwrapped is payload:
+                raise original_err
+            try:
+                return pydantic_class.model_validate(unwrapped)
+            except ValidationError:
+                raise original_err
+    if isinstance(payload, pydantic_class):
+        return payload
+    return pydantic_class.model_validate(payload)
+
+
+def _validate_jsonschema_with_unwrap(
+    instance: Any,
+    schema: Dict[str, Any],
+) -> Any:
+    """Validate ``instance`` against a raw ``output_schema`` with envelope-unwrap fallback.
+
+    Mirrors ``_validate_pydantic_with_unwrap`` for the ``output_schema``/jsonschema
+    code path: tries direct validation first; on ``jsonschema.ValidationError``,
+    retries once after stripping a single-key ``{"parameter": {...}}`` envelope.
+    Vertex AI Anthropic serves structured outputs through tool-calling, and the
+    same envelope shape reaches the jsonschema branch when callers pass
+    ``output_schema`` instead of ``output_pydantic``. The original error is
+    re-raised on second failure so diagnostics keep pointing at real schema
+    fields, never at the synthetic ``parameter`` wrapper.
+
+    Returns the validated payload — either ``instance`` itself when direct
+    validation succeeds, or the unwrapped inner dict when the envelope-unwrap
+    retry succeeds. Callers MUST use the returned value for any downstream
+    serialization; using the original wrapped ``instance`` would leak the
+    ``{"parameter": {...}}`` envelope into the caller's response shape (see
+    PR #1365 review pass 3).
+
+    Gating (PR #1365 review): unwrap only when ``schema`` is an explicit
+    object schema whose top-level ``properties`` map exists and does not
+    declare ``parameter``. Composed (``allOf``/``anyOf``/``oneOf``/``$ref``)
+    or otherwise flexible schemas (e.g. ``additionalProperties`` without
+    explicit ``properties``) are skipped rather than risk silently reshaping
+    a payload the composed schema might accept after unwrap.
+
+    Raises ``jsonschema.ValidationError`` (the original) if neither form
+    validates. Raises ``ImportError`` if ``jsonschema`` is not installed.
+    """
+    import jsonschema
+    eligible = _jsonschema_eligible_for_envelope_unwrap(schema)
+    try:
+        jsonschema.validate(instance=instance, schema=schema)
+        return instance
+    except jsonschema.ValidationError as original_err:
+        if not eligible or not isinstance(instance, dict):
+            raise
+        unwrapped = _unwrap_parameter_envelope(instance)
+        if unwrapped is instance:
+            raise
+        try:
+            jsonschema.validate(instance=unwrapped, schema=schema)
+            return unwrapped
+        except jsonschema.ValidationError:
+            raise original_err
+
+
 def _validate_with_pydantic(
     result: Any,
     pydantic_class: Type[BaseModel]
@@ -262,10 +951,8 @@ def _validate_with_pydantic(
     Raises:
         ValidationError: If validation fails
     """
-    if isinstance(result, dict):
-        return pydantic_class.model_validate(result)
-    elif isinstance(result, str):
-        return pydantic_class.model_validate_json(result)
+    if isinstance(result, dict) or isinstance(result, str):
+        return _validate_pydantic_with_unwrap(result, pydantic_class)
     elif isinstance(result, pydantic_class):
         # Already validated
         return result
@@ -284,6 +971,8 @@ def _llm_invoke_cloud(
     use_batch_mode: bool,
     messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]],
     language: Optional[str],
+    grounding_overrides: Optional[Dict[str, List[str]]] = None,
+    source_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute llm_invoke via cloud endpoint.
 
@@ -302,10 +991,9 @@ def _llm_invoke_cloud(
     from rich.console import Console
 
     # Lazy import to avoid circular dependency
-    from pdd.core.cloud import CloudConfig
+    from pdd.core.cloud import CloudConfig, get_cloud_request_timeout
 
     console = Console()
-    CLOUD_TIMEOUT = 300  # 5 minutes
 
     # Get JWT token
     jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
@@ -313,10 +1001,16 @@ def _llm_invoke_cloud(
         raise CloudFallbackError("Could not authenticate with cloud")
 
     # Prepare payload
+    # Coerce a None ``time`` to the documented default (0.25). The cloud
+    # llm_invoke endpoint parses this with float(data.get("time", 0.25)), where
+    # the default only applies when the key is ABSENT — a present-but-null value
+    # reaches float(None) and 500s with "Internal server error during LLM
+    # invocation". This mirrors the existing guard in fix_error_loop.py's
+    # cloud_fix_errors payload.
     payload: Dict[str, Any] = {
         "strength": strength,
         "temperature": temperature,
-        "time": time,
+        "time": time if time is not None else 0.25,
         "verbose": verbose,
         "useBatchMode": use_batch_mode,
     }
@@ -353,12 +1047,26 @@ def _llm_invoke_cloud(
             cloud_url,
             json=payload,
             headers=headers,
-            timeout=CLOUD_TIMEOUT
+            timeout=get_cloud_request_timeout(),
         )
 
         if response.status_code == 200:
             data = response.json()
             result = data.get("result")
+            # Best-effort trace: store the final prompt/messages and raw cloud "result".
+            if _record_llm_pair is not None:
+                try:
+                    trace_prompt = payload.get("messages") if payload.get("messages") is not None else {
+                        "prompt": payload.get("prompt"),
+                        "inputJson": payload.get("inputJson"),
+                    }
+                    _record_llm_pair(
+                        prompt=trace_prompt,
+                        response=result,
+                        model=str(data.get("modelName", "cloud_model")),
+                    )
+                except Exception:
+                    pass
 
             # Validate with Pydantic if specified
             if output_pydantic and result:
@@ -369,12 +1077,41 @@ def _llm_invoke_cloud(
                     # Return raw result if validation fails
                     pass
 
-            return {
+            examples_used = data.get("examplesUsed")
+            resolved_overrides = resolve_grounding_overrides_for_invoke(
+                grounding_overrides, source_prompt
+            )
+            try:
+                grounding = build_grounding_metadata(
+                    mode="cloud",
+                    examples_used=examples_used,
+                    grounding_overrides=resolved_overrides,
+                    reviewed=reviewed_from_click_ctx(examples_used=examples_used),
+                )
+            except (TypeError, ValueError, KeyError) as exc:
+                logger.warning("Grounding metadata extraction failed: %s", exc)
+                grounding = build_grounding_metadata(
+                    mode="unavailable",
+                    grounding_overrides=resolved_overrides,
+                    reviewed=reviewed_from_click_ctx(examples_used=examples_used),
+                )
+
+            if verbose and grounding.get("selected_examples"):
+                logger.info(
+                    "Grounding examples selected: %s",
+                    [ex.get("module") for ex in grounding["selected_examples"]],
+                )
+
+            cloud_payload: Dict[str, Any] = {
                 "result": result,
                 "cost": data.get("totalCost", 0.0),
                 "model_name": data.get("modelName", "cloud_model"),
                 "thinking_output": data.get("thinkingOutput"),
+                "grounding": grounding,
             }
+            if examples_used is not None:
+                cloud_payload["examplesUsed"] = examples_used
+            return cloud_payload
 
         elif response.status_code == 402:
             error_msg = response.json().get("error", "Insufficient credits")
@@ -414,7 +1151,7 @@ def _llm_invoke_cloud(
 def _is_wsl_environment() -> bool:
     """
     Detect if we're running in WSL (Windows Subsystem for Linux) environment.
-    
+
     Returns:
         True if running in WSL, False otherwise
     """
@@ -424,15 +1161,15 @@ def _is_wsl_environment() -> bool:
             with open('/proc/version', 'r') as f:
                 version_info = f.read().lower()
                 return 'microsoft' in version_info or 'wsl' in version_info
-        
+
         # Alternative check: WSL_DISTRO_NAME environment variable
         if os.getenv('WSL_DISTRO_NAME'):
             return True
-            
+
         # Check for Windows-style paths in PATH
         path_env = os.getenv('PATH', '')
         return '/mnt/c/' in path_env.lower()
-        
+
     except Exception:
         return False
 
@@ -456,12 +1193,12 @@ def _openai_responses_supports_response_format() -> bool:
 def _get_environment_info() -> Dict[str, str]:
     """
     Get environment information for debugging and error reporting.
-    
+
     Returns:
         Dictionary containing environment details
     """
     import platform
-    
+
     info = {
         'platform': platform.system(),
         'platform_release': platform.release(),
@@ -470,16 +1207,18 @@ def _get_environment_info() -> Dict[str, str]:
         'is_wsl': str(_is_wsl_environment()),
         'python_version': platform.python_version(),
     }
-    
+
     # Add WSL-specific information
     if _is_wsl_environment():
         info['wsl_distro'] = os.getenv('WSL_DISTRO_NAME', 'unknown')
         info['wsl_interop'] = os.getenv('WSL_INTEROP', 'not_set')
-    
+
     return info
 
 # <<< SET LITELLM DEBUG LOGGING >>>
 # os.environ['LITELLM_LOG'] = 'DEBUG' # Keep commented out unless debugging LiteLLM itself
+
+LLM_CALL_TIMEOUT = int(os.getenv("LLM_CALL_TIMEOUT", "600"))  # seconds per LLM API call
 
 # --- Constants and Configuration ---
 
@@ -573,19 +1312,19 @@ else:
 # Selection order
 if user_model_csv_path.is_file():
     LLM_MODEL_CSV_PATH = user_model_csv_path
-    logger.info(f"Using user-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
+    logger.debug(f"Using user-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
 elif PROJECT_ROOT_FROM_ENV and project_csv_from_env.is_file():
     # Honor an explicitly-set PDD_PATH pointing to a real project directory
     LLM_MODEL_CSV_PATH = project_csv_from_env
-    logger.info(f"Using project-specific LLM model CSV (from PDD_PATH): {LLM_MODEL_CSV_PATH}")
+    logger.debug(f"Using project-specific LLM model CSV (from PDD_PATH): {LLM_MODEL_CSV_PATH}")
 elif project_csv_from_cwd.is_file():
     # Otherwise, prefer the project relative to the current working directory
     LLM_MODEL_CSV_PATH = project_csv_from_cwd
-    logger.info(f"Using project-specific LLM model CSV (from CWD): {LLM_MODEL_CSV_PATH}")
+    logger.debug(f"Using project-specific LLM model CSV (from CWD): {LLM_MODEL_CSV_PATH}")
 else:
     # Neither exists, we'll use a marker path that _load_model_data will handle
     LLM_MODEL_CSV_PATH = None
-    logger.info("No local LLM model CSV found, will use package default")
+    logger.debug("No local LLM model CSV found, will use package default")
 # ---------------------------------
 
 # Load environment variables from .env file
@@ -662,7 +1401,7 @@ if GCS_BUCKET_NAME and GCS_HMAC_ACCESS_KEY_ID and GCS_HMAC_SECRET_ACCESS_KEY:
 
 # Check if caching is disabled via environment variable
 if os.getenv("LITELLM_CACHE_DISABLE") == "1":
-    logger.info("LiteLLM caching disabled via LITELLM_CACHE_DISABLE=1")
+    logger.debug("LiteLLM caching disabled via LITELLM_CACHE_DISABLE=1")
     litellm.cache = None
     cache_configured = True
 
@@ -672,7 +1411,7 @@ if not cache_configured:
         sqlite_cache_path = PROJECT_ROOT / "litellm_cache.sqlite"
         configured_cache = Cache(type="disk", disk_cache_dir=str(sqlite_cache_path))
         litellm.cache = configured_cache
-        logger.info(f"LiteLLM disk cache configured at {sqlite_cache_path}")
+        logger.debug(f"LiteLLM disk cache configured at {sqlite_cache_path}")
         cache_configured = True
     except Exception as e2:
         warnings.warn(f"Failed to configure LiteLLM disk cache: {e2}. Caching is disabled.")
@@ -712,6 +1451,18 @@ def _litellm_success_callback(
         # Attempt 1: Use the response object directly (works for most single calls)
         cost_val = litellm.completion_cost(completion_response=completion_response)
         calculated_cost = cost_val if cost_val is not None else 0.0
+        # LiteLLM may silently return 0.0 (no exception) for models missing from
+        # its bundled pricing DB. Fall back to CSV rates when tokens were
+        # exchanged but cost came back zero.
+        if calculated_cost == 0.0 and (input_tokens or output_tokens):
+            model_name = kwargs.get("model")
+            rates = _MODEL_RATE_MAP.get(str(model_name)) if model_name else None
+            if rates is not None:
+                in_rate, out_rate = rates
+                calculated_cost = (
+                    float(input_tokens or 0) * in_rate
+                    + float(output_tokens or 0) * out_rate
+                ) / 1_000_000.0
     except Exception as e1:
         # Attempt 2: Compute via tokens and model mapping. If LiteLLM mapping is
         # missing or API differs, fall back to CSV rates in _MODEL_RATE_MAP.
@@ -776,9 +1527,44 @@ litellm.success_callback = [_litellm_success_callback]
 # --- Cost Mapping Support (CSV Rates) ---
 # Populate from CSV inside llm_invoke; used by callback fallback
 _MODEL_RATE_MAP: Dict[str, Tuple[float, float]] = {}
+_MODEL_PROVIDER_MAP: Dict[str, str] = {}
+
+# CSV provider column -> litellm provider token, for models whose id is BARE
+# (no "provider/" prefix). Prefixed ids ("vertex_ai/...") already encode the
+# provider; bare ids from direct-API rows (e.g. Anthropic's "claude-opus-4-8")
+# previously fell through to a hardcoded "openai" default in registration,
+# which silently misrouted any litellm-unknown bare non-OpenAI model to OpenAI
+# (wrong provider + wrong key -> auth failure -> silent fallback). Unmapped
+# providers keep the historical "openai" fallback so existing registrations
+# are unchanged.
+_CSV_PROVIDER_TO_LITELLM_PROVIDER: Dict[str, str] = {
+    "anthropic": "anthropic",
+    "openai": "openai",
+    # AWS Bedrock ids are bare with dots (e.g. "anthropic.claude-opus-4-8"),
+    # so they have no "/" prefix to route on; map the CSV provider explicitly.
+    "aws bedrock": "bedrock",
+}
+
+
+def _litellm_provider_for_csv_model(
+    model_name: str, csv_provider: Optional[str]
+) -> str:
+    """Resolve the litellm provider token a CSV model should register under.
+
+    Prefixed model ids carry the provider in the prefix; bare ids are mapped
+    from the CSV ``provider`` column. Falls back to ``"openai"`` for unmapped
+    providers to preserve prior behavior.
+    """
+    if "/" in model_name:
+        return model_name.split("/", 1)[0]
+    token = _CSV_PROVIDER_TO_LITELLM_PROVIDER.get(
+        str(csv_provider or "").strip().lower()
+    )
+    return token or "openai"
+
 
 def _set_model_rate_map(df: pd.DataFrame) -> None:
-    global _MODEL_RATE_MAP
+    global _MODEL_RATE_MAP, _MODEL_PROVIDER_MAP
     try:
         _MODEL_RATE_MAP = {
             str(row['model']): (
@@ -787,8 +1573,1488 @@ def _set_model_rate_map(df: pd.DataFrame) -> None:
             )
             for _, row in df.iterrows()
         }
+        _MODEL_PROVIDER_MAP = {
+            str(row['model']): str(row['provider'])
+            for _, row in df.iterrows()
+            if pd.notna(row.get('provider'))
+        }
     except Exception:
         _MODEL_RATE_MAP = {}
+        _MODEL_PROVIDER_MAP = {}
+    _register_csv_models_with_litellm()
+
+
+_ESTIMATE_OUTPUT_RATIOS: Dict[str, float] = {
+    "generate": 0.52,
+    "default": 0.52,
+}
+
+_ESTIMATE_INPUT_TOKEN_OVERHEADS: Dict[str, int] = {
+    # Provider transcript accounting includes chat/message framing that is not
+    # visible in the local prompt text. This keeps no-target generate estimates
+    # closer to observed usage while remaining overrideable for evaluation.
+    "generate": 24,
+    "default": 0,
+}
+
+
+def _estimate_mode_active(explicit: Optional[bool]) -> bool:
+    """Return whether this invocation should estimate and skip providers."""
+    if explicit is not None:
+        return bool(explicit)
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is not None and isinstance(click_ctx.obj, dict):
+            if click_ctx.obj.get("estimate"):
+                return True
+    except Exception:
+        pass
+    return os.getenv("PDD_ESTIMATE", "").lower() in ("1", "true", "yes", "on")
+
+
+def _current_estimate_command_name() -> str:
+    """Best-effort command name for output-ratio selection and reporting."""
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is not None and click_ctx.command is not None:
+            name = click_ctx.command.name
+            if name:
+                return str(name)
+    except Exception:
+        pass
+    return os.getenv("PDD_ESTIMATE_COMMAND", "unknown") or "unknown"
+
+
+def _estimate_output_ratio(command_name: str) -> float:
+    """Resolve the configurable output-token ratio for an estimate."""
+    env_keys = []
+    if command_name:
+        normalized = re.sub(r"[^A-Za-z0-9]+", "_", command_name).strip("_").upper()
+        if normalized:
+            env_keys.append(f"PDD_ESTIMATE_OUTPUT_RATIO_{normalized}")
+    env_keys.append("PDD_ESTIMATE_OUTPUT_RATIO")
+
+    for key in env_keys:
+        raw_value = os.getenv(key)
+        if raw_value is None:
+            continue
+        try:
+            value = float(raw_value)
+            if value >= 0:
+                return value
+        except ValueError:
+            logger.warning("Ignoring invalid %s=%r; expected a non-negative float", key, raw_value)
+
+    return _ESTIMATE_OUTPUT_RATIOS.get(
+        command_name,
+        _ESTIMATE_OUTPUT_RATIOS["default"],
+    )
+
+
+def _estimate_input_token_overhead(command_name: str) -> int:
+    """Resolve the configurable per-request input-token overhead."""
+    env_keys = []
+    if command_name:
+        normalized = re.sub(r"[^A-Za-z0-9]+", "_", command_name).strip("_").upper()
+        if normalized:
+            env_keys.append(f"PDD_ESTIMATE_INPUT_TOKEN_OVERHEAD_{normalized}")
+    env_keys.append("PDD_ESTIMATE_INPUT_TOKEN_OVERHEAD")
+
+    for key in env_keys:
+        raw_value = os.getenv(key)
+        if raw_value is None:
+            continue
+        try:
+            value = int(float(raw_value))
+            if value >= 0:
+                return value
+        except ValueError:
+            logger.warning("Ignoring invalid %s=%r; expected a non-negative integer", key, raw_value)
+
+    return _ESTIMATE_INPUT_TOKEN_OVERHEADS.get(
+        command_name,
+        _ESTIMATE_INPUT_TOKEN_OVERHEADS["default"],
+    )
+
+
+def _current_estimate_output_path_hint() -> Optional[str]:
+    """Return a current-command target file hint, if the CLI provided one."""
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is not None and isinstance(click_ctx.obj, dict):
+            hint = click_ctx.obj.get("estimate_output_path_hint")
+            if hint:
+                return str(hint)
+    except Exception:
+        pass
+    return None
+
+
+def _estimate_tokens_from_file_size(path_hint: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Cheap, provider-free token proxy for an existing target file."""
+    if not path_hint:
+        return None
+    try:
+        path = Path(path_hint)
+        if not path.is_file():
+            return None
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    token_proxy = max(1, int((len(text) + 3) // 4))
+    return {
+        "tokens": token_proxy,
+        "path": str(path),
+        "bytes": len(text.encode("utf-8")),
+        "chars": len(text),
+    }
+
+
+def _messages_text_for_estimate(messages_for_count: Any) -> str:
+    """Flatten message content for generate-only heuristic features."""
+    parts: List[str] = []
+
+    def _scan(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            parts.append(value)
+            return
+        if isinstance(value, dict):
+            content = value.get("content")
+            if isinstance(content, str):
+                parts.append(content)
+            else:
+                _scan(content)
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                _scan(item)
+
+    _scan(messages_for_count)
+    return "\n".join(parts).lower()
+
+
+def _generate_output_token_prediction(
+    *,
+    input_tokens: int,
+    messages_for_count: Any,
+    target_hint: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Predict generate output tokens with fixture-calibrated prompt features.
+
+    This intentionally applies only to ``pdd generate``. The predictor uses
+    stable, provider-free signals that are visible in the built request:
+    prompt-size bucket, interface/reason sections, include expansion markers,
+    and wording that asks for code, docs, tests, or examples.
+    """
+    if target_hint:
+        tokens = max(1, int(target_hint["tokens"]))
+        low = max(1, int(round(tokens * 0.85)))
+        high = max(tokens, int(round(tokens * 1.15)))
+        return {
+            "tokens": tokens,
+            "low": low,
+            "high": high,
+            "ratio": round(tokens / max(input_tokens, 1), 4),
+            "basis": "target_file_size_hint",
+            "uncertainty": "low",
+        }
+
+    text = _messages_text_for_estimate(messages_for_count)
+    if input_tokens < 220:
+        ratio = 0.50
+    elif input_tokens < 700:
+        ratio = 0.43
+    else:
+        ratio = 0.34
+
+    if "<pdd-interface" in text:
+        ratio += 0.08
+    if "<pdd-reason" in text:
+        ratio += 0.03
+    if "<include" in text or "processing xml include" in text:
+        ratio += 0.04
+    if any(term in text for term in ("unit test", "pytest", "examples", "example code")):
+        ratio += 0.15
+    if any(term in text for term in ("documentation", "docstring", "readme", "markdown")):
+        ratio += 0.10
+    if any(term in text for term in ("parser", "algorithm", "class ", "dataclass", "api endpoint")):
+        ratio += 0.10
+
+    ratio = min(max(ratio, 0.25), 0.85)
+    tokens = max(1, int(round(input_tokens * ratio)))
+    spread = 0.22 if input_tokens < 700 else 0.28
+    low = max(1, int(round(tokens * (1.0 - spread))))
+    high = max(tokens, int(round(tokens * (1.0 + spread))))
+    return {
+        "tokens": tokens,
+        "low": low,
+        "high": high,
+        "ratio": round(ratio, 4),
+        "basis": "generate_feature_heuristic",
+        "uncertainty": "medium",
+    }
+
+
+def _model_info_value(model_info: Any, key: str) -> Any:
+    """Read a field from a pandas row, dict, or lightweight test object."""
+    try:
+        if isinstance(model_info, dict):
+            return model_info.get(key)
+        if hasattr(model_info, "get"):
+            return model_info.get(key)
+        return getattr(model_info, key)
+    except Exception:
+        return None
+
+
+def _truthy_model_info_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _estimate_metadata_probe_is_safe(model_info: Any, model_name: str) -> bool:
+    """Return False for provider families whose metadata lookup can touch auth."""
+    provider = str(_model_info_value(model_info, "provider") or "").strip().lower()
+    provider_prefix = str(model_name).split("/", 1)[0].strip().lower()
+    if _truthy_model_info_value(_model_info_value(model_info, "interactive_only")):
+        return False
+    return provider not in {"github copilot", "openai chatgpt", "lm studio", "ollama"} and provider_prefix not in {
+        "github_copilot",
+        "chatgpt",
+        "lm_studio",
+        "ollama",
+    }
+
+
+def _positive_int_or_none(value: Any) -> Optional[int]:
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _command_output_token_cap() -> Optional[int]:
+    """Read the optional hard output-token ceiling for hosted command adapters.
+
+    Prompt-checkup runs set this value per subprocess after converting the
+    remaining USD cap with the worst-case provider rate.  It is deliberately an
+    environment contract (rather than a public CLI flag): every nested
+    ``llm_invoke`` call, including retries, sees the same ceiling.  Invalid or
+    non-positive values fail closed so a malformed hosted budget cannot silently
+    fall back to an uncapped provider request.
+    """
+    raw = os.environ.get("PDD_COMMAND_MAX_OUTPUT_TOKENS")
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        cap = int(str(raw).strip())
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("PDD_COMMAND_MAX_OUTPUT_TOKENS must be a positive integer") from exc
+    if cap <= 0:
+        raise RuntimeError("PDD_COMMAND_MAX_OUTPUT_TOKENS must be a positive integer")
+    return cap
+
+
+def _command_input_token_cap() -> Optional[int]:
+    """Read the optional hosted input-token ceiling, failing closed on bad input."""
+    raw = os.environ.get("PDD_COMMAND_MAX_INPUT_TOKENS")
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        cap = int(str(raw).strip())
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("PDD_COMMAND_MAX_INPUT_TOKENS must be a positive integer") from exc
+    if cap <= 0:
+        raise RuntimeError("PDD_COMMAND_MAX_INPUT_TOKENS must be a positive integer")
+    return cap
+
+
+def _command_cost_cap_usd() -> Optional[Decimal]:
+    """Read the per-subprocess USD ceiling supplied by a hosted adapter."""
+    raw = os.environ.get("PDD_COMMAND_MAX_COST_USD")
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        cap = Decimal(str(raw).strip())
+    except (InvalidOperation, ValueError) as exc:
+        raise RuntimeError("PDD_COMMAND_MAX_COST_USD must be a positive finite number") from exc
+    if not cap.is_finite() or cap <= 0:
+        raise RuntimeError("PDD_COMMAND_MAX_COST_USD must be a positive finite number")
+    return cap
+
+
+def _catalog_context_limit(model_info: Any) -> Optional[int]:
+    for key in ("max_input_tokens", "context_limit", "context_window", "max_tokens"):
+        value = _positive_int_or_none(_model_info_value(model_info, key))
+        if value is not None:
+            return value
+    return None
+
+
+def _catalog_output_token_cap(model_info: Any) -> Optional[int]:
+    for key in ("max_completion_tokens", "max_output_tokens"):
+        value = _positive_int_or_none(_model_info_value(model_info, key))
+        if value is not None:
+            return value
+    return None
+
+
+def _completion_cost_from_pricing_api(
+    input_tokens: int,
+    predicted_output_tokens: int,
+    model: str,
+) -> Optional[Dict[str, Any]]:
+    """Call the token-counter completion-pricing API when this checkout has it."""
+    if _estimate_completion_cost is None:
+        return None
+    try:
+        estimate = _estimate_completion_cost(
+            input_tokens=input_tokens,
+            predicted_output_tokens=predicted_output_tokens,
+            model=model,
+            pricing_csv=LLM_MODEL_CSV_PATH,
+        )
+    except Exception as exc:
+        logger.debug("estimate_completion_cost failed for %s: %s", model, exc)
+        return None
+    if estimate is None:
+        return None
+    if hasattr(estimate, "to_dict"):
+        return estimate.to_dict()
+    if isinstance(estimate, dict):
+        return estimate
+    return None
+
+
+def _build_estimate_payload(
+    *,
+    command_name: str,
+    model_info: Any,
+    messages_for_count: Any,
+    model_name: str,
+    context_limit: Optional[int],
+    attempted_models: List[str],
+    call_type: str,
+) -> Dict[str, Any]:
+    """Build the provider-free estimate payload for one concrete LLM request.
+
+    Output tokens cannot be known without running the request, so they are a
+    heuristic: ``input_tokens * ratio`` (a per-command ratio) bounded by the
+    model's real maximum completion budget when litellm exposes one. The bound
+    keeps the prediction request/model-aware rather than letting a large prompt
+    project an impossible output. The result is still a *rough preview*, which
+    the payload labels via ``output_estimation`` and ``estimate_basis`` so the
+    renderer and any programmatic consumer treat it as approximate, not exact.
+
+    Context-window usage is reported against ``input + predicted_output`` (the
+    real constraint — completions are generated into the same window), with the
+    input-only figure retained separately for transparency.
+    """
+    raw_input_tokens = int(count_tokens_for_messages(messages_for_count, model=model_name) or 0)
+    input_token_overhead = _estimate_input_token_overhead(command_name)
+    input_tokens = raw_input_tokens + input_token_overhead
+    ratio = _estimate_output_ratio(command_name)
+    ratio_predicted_output_tokens = max(1, int(round(input_tokens * ratio)))
+    target_hint = _estimate_tokens_from_file_size(_current_estimate_output_path_hint())
+    if command_name == "generate":
+        prediction = _generate_output_token_prediction(
+            input_tokens=input_tokens,
+            messages_for_count=messages_for_count,
+            target_hint=target_hint,
+        )
+        raw_predicted_output_tokens = int(prediction["tokens"])
+        output_tokens_low = int(prediction["low"])
+        output_tokens_high = int(prediction["high"])
+        ratio = float(prediction["ratio"])
+        output_estimation = str(prediction["basis"])
+        uncertainty = str(prediction["uncertainty"])
+    else:
+        # Root CLI currently prevents non-generate estimate mode. This fallback
+        # keeps direct library callers side-effect-free but deliberately generic.
+        raw_predicted_output_tokens = ratio_predicted_output_tokens
+        output_estimation = "heuristic_ratio"
+        output_tokens_low = max(1, int(round(raw_predicted_output_tokens * 0.70)))
+        output_tokens_high = max(raw_predicted_output_tokens, int(round(raw_predicted_output_tokens * 1.30)))
+        uncertainty = "high"
+
+    # Bound the heuristic by what the model can actually emit, so the prediction
+    # is at least an upper bound the provider would honor rather than an
+    # unbounded ratio of the input size.
+    max_output_tokens: Optional[int] = _catalog_output_token_cap(model_info)
+    if max_output_tokens is None and _get_max_output_tokens is not None and _estimate_metadata_probe_is_safe(model_info, model_name):
+        try:
+            max_output_tokens = _get_max_output_tokens(model_name)
+        except Exception:
+            max_output_tokens = None
+    if max_output_tokens and max_output_tokens > 0:
+        predicted_output_tokens = min(raw_predicted_output_tokens, max_output_tokens)
+        output_capped = predicted_output_tokens < raw_predicted_output_tokens
+        output_tokens_low = min(output_tokens_low, predicted_output_tokens)
+        output_tokens_high = min(output_tokens_high, max_output_tokens)
+    else:
+        predicted_output_tokens = raw_predicted_output_tokens
+        output_capped = False
+    if output_capped:
+        output_estimation = f"{output_estimation}_capped"
+
+    # Context usage reflects the real constraint: prompt plus the completion
+    # budget both consume the model's context window. Keep the input-only figure
+    # for callers that want to distinguish the two.
+    input_context_usage_percent = (
+        round((input_tokens / context_limit) * 100, 2)
+        if context_limit
+        else None
+    )
+    context_usage_percent = (
+        round(((input_tokens + predicted_output_tokens) / context_limit) * 100, 2)
+        if context_limit
+        else None
+    )
+
+    # Quota/subscription-backed providers have no per-token list price.
+    # Skip the pricing API so cost fields stay null (unknown_cost=True).
+    _provider_str = str(_model_info_value(model_info, "provider") or "").strip().lower()
+    _is_quota_provider = "coding plan" in _provider_str
+    pricing = (
+        None
+        if _is_quota_provider
+        else _completion_cost_from_pricing_api(
+            input_tokens,
+            predicted_output_tokens,
+            model_name,
+        )
+    )
+
+    input_rate = None
+    output_rate = None
+    input_cost = None
+    output_cost = None
+    total_cost = None
+    cost_known = False
+    pricing_model = model_name
+
+    if pricing:
+        input_rate = pricing.get("input_rate_per_million")
+        output_rate = pricing.get("output_rate_per_million")
+        input_cost = pricing.get("input_cost")
+        output_cost = pricing.get("output_cost")
+        total_cost = pricing.get("total_cost")
+        pricing_model = pricing.get("model") or model_name
+        cost_known = total_cost is not None
+
+    payload = {
+        "estimate": True,
+        "command": command_name,
+        "model": model_name,
+        "pricing_model": pricing_model,
+        "input_tokens": input_tokens,
+        "raw_input_tokens": raw_input_tokens,
+        "input_token_overhead": input_token_overhead,
+        "predicted_output_tokens": predicted_output_tokens,
+        "output_tokens_low": output_tokens_low,
+        "output_tokens_high": output_tokens_high,
+        "uncertainty": uncertainty,
+        "output_ratio": ratio,
+        "ratio_predicted_output_tokens": ratio_predicted_output_tokens,
+        # Output tokens are a heuristic, not a measured value. Surface the basis
+        # so consumers do not mistake the projected cost for an exact figure.
+        "output_estimation": output_estimation,
+        "output_hint_path": target_hint["path"] if target_hint else None,
+        "output_hint_chars": target_hint["chars"] if target_hint else None,
+        "output_hint_bytes": target_hint["bytes"] if target_hint else None,
+        "output_token_cap": max_output_tokens,
+        "estimate_basis": "approximate",
+        "input_rate_per_million": input_rate if cost_known else None,
+        "output_rate_per_million": output_rate if cost_known else None,
+        "input_cost": round(float(input_cost), 6) if input_cost is not None else None,
+        "output_cost": round(float(output_cost), 6) if output_cost is not None else None,
+        "estimated_cost": round(float(total_cost), 6) if total_cost is not None else None,
+        "total_cost": round(float(total_cost), 6) if total_cost is not None else None,
+        "unknown_cost": not cost_known,
+        "cost_known": cost_known,
+        "currency": "USD",
+        "context_limit": context_limit,
+        # Reported against input + predicted output (the real window constraint).
+        "context_usage_percent": context_usage_percent,
+        "input_context_usage_percent": input_context_usage_percent,
+        "call_type": call_type,
+        "provider_call_made": False,
+        "attempted_models": list(attempted_models),
+    }
+    return payload
+
+
+def _accumulate_estimate_on_click_context(estimate: Dict[str, Any]) -> None:
+    """Store estimate rows on ctx.obj for command wrappers and tests."""
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is None:
+            return
+        if click_ctx.obj is None:
+            click_ctx.obj = {}
+        if not isinstance(click_ctx.obj, dict):
+            return
+        estimates = click_ctx.obj.setdefault("estimate_results", [])
+        if isinstance(estimates, list):
+            estimates.append(estimate)
+        totals = click_ctx.obj.setdefault(
+            "estimate_totals",
+            {
+                "input_tokens": 0,
+                "predicted_output_tokens": 0,
+                "total_cost": 0.0,
+                "cost_known": True,
+                "output_estimations": [],
+                "output_hint_paths": [],
+            },
+        )
+        if isinstance(totals, dict):
+            totals["input_tokens"] = int(totals.get("input_tokens", 0)) + int(estimate.get("input_tokens", 0))
+            totals["predicted_output_tokens"] = int(totals.get("predicted_output_tokens", 0)) + int(estimate.get("predicted_output_tokens", 0))
+            output_estimations = totals.setdefault("output_estimations", [])
+            if isinstance(output_estimations, list):
+                output_estimation = estimate.get("output_estimation")
+                if output_estimation and output_estimation not in output_estimations:
+                    output_estimations.append(output_estimation)
+            output_hint_paths = totals.setdefault("output_hint_paths", [])
+            if isinstance(output_hint_paths, list):
+                output_hint_path = estimate.get("output_hint_path")
+                if output_hint_path and output_hint_path not in output_hint_paths:
+                    output_hint_paths.append(output_hint_path)
+            if estimate.get("cost_known"):
+                totals["total_cost"] = float(totals.get("total_cost", 0.0)) + float(estimate.get("total_cost", 0.0))
+            else:
+                totals["cost_known"] = False
+    except Exception:
+        pass
+
+
+def _register_csv_models_with_litellm() -> None:
+    """Register CSV-defined models with LiteLLM so completion_cost works for
+    models LiteLLM doesn't ship pricing for (e.g., new Fireworks aliases). CSV
+    rates are per million tokens; LiteLLM expects per-token."""
+    if not _MODEL_RATE_MAP:
+        return
+    try:
+        existing = getattr(litellm, "model_cost", {}) or {}
+        registrations: Dict[str, Dict[str, Any]] = {}
+        for model_name, (in_rate, out_rate) in _MODEL_RATE_MAP.items():
+            if not model_name or model_name in existing:
+                continue
+            provider = _litellm_provider_for_csv_model(
+                model_name, _MODEL_PROVIDER_MAP.get(model_name)
+            )
+            registration = {
+                "input_cost_per_token": in_rate / 1_000_000.0,
+                "output_cost_per_token": out_rate / 1_000_000.0,
+                "litellm_provider": provider,
+                "mode": "chat",
+            }
+            if _is_kimi_k3_model(model_name):
+                # K3's combined context and supported completion maximum are
+                # 1,048,576 tokens. Do not send max_tokens by default:
+                # Moonshot's provider default is 131,072.
+                registration.update(
+                    {
+                        "max_input_tokens": 1_048_576,
+                        "max_output_tokens": 1_048_576,
+                        "max_tokens": 1_048_576,
+                        "supports_reasoning": True,
+                        "supports_response_schema": True,
+                    }
+                )
+            registrations[model_name] = registration
+        if registrations:
+            litellm.register_model(registrations)
+    except Exception as exc:
+        logger.debug(f"Skipped registering CSV models with LiteLLM: {exc}")
+
+# --- LLM Attribution Logging ---
+
+_ATTRIBUTION_CONTEXT_CACHE: Dict[str, Dict[str, Any]] = {}
+_ATTRIBUTION_LOG_DEFAULT_MAX_BYTES = 25 * 1024 * 1024
+_CLOUD_RUNTIME_ENV_KEYS = (
+    "CLOUD_BUILD",
+    "BATCH_TASK_INDEX",
+    "K_SERVICE",
+    "CLOUD_RUN_JOB",
+    "CLOUD_RUN_EXECUTION",
+)
+_ATTRIBUTION_ENV_KEYS = [
+    "PDD_MODEL_DEFAULT",
+    "PDD_STRENGTH_DEFAULT",
+    "PDD_AGENTIC_PROVIDER",
+    "PDD_ENVIRONMENT",
+    "PDD_FORCE_LOCAL",
+    "PDD_PATH",
+    "PDD_RUN_REAL_LLM_TESTS",
+    "PDD_RUN_LLM_TESTS",
+    "PDD_BUDGET_CAP",
+    "CI",
+    "CLOUD_BUILD",
+    "BUILD_ID",
+    "TRIGGER_NAME",
+    "BRANCH_NAME",
+    "COMMIT_SHA",
+    "_OWNER",
+    "_REPO",
+    "_PR_NUMBER",
+    "K_SERVICE",
+    "K_CONFIGURATION",
+    "K_REVISION",
+    "CLOUD_RUN_JOB",
+    "CLOUD_RUN_EXECUTION",
+    "CLOUD_RUN_TASK_INDEX",
+    "CLOUD_RUN_TASK_ATTEMPT",
+    "CLOUD_RUN_TASK_COUNT",
+    "BATCH_TASK_INDEX",
+    "BATCH_JOB_UID",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "VERTEX_PROJECT",
+    "VERTEX_LOCATION",
+    "VERTEXAI_PROJECT",
+    "VERTEXAI_LOCATION",
+    "CLAUDE_CODE_USE_VERTEX",
+]
+_SECRET_NAME_PATTERN = re.compile(
+    r"(api[_-]?key|token|secret|password|credential|private[_-]?key|oauth|bearer|auth)",
+    re.IGNORECASE,
+)
+_SAFE_SUBCOMMANDS = frozenset({
+    "change",
+    "config",
+    "detect",
+    "example",
+    "fix",
+    "generate",
+    "install",
+    "setup",
+    "split",
+    "sync",
+    "test",
+    "trace",
+    "update",
+    "verify",
+})
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    """Return a bool from a conventional environment flag."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _llm_attribution_enabled() -> bool:
+    """Whether safe LLM attribution metadata should be emitted."""
+    explicit = os.getenv("PDD_LLM_ATTRIBUTION")
+    if explicit is not None:
+        return _env_truthy("PDD_LLM_ATTRIBUTION")
+    # Avoid writing to a developer's ~/.pdd during unit tests unless a test opts in.
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return False
+    return True
+
+
+def _llm_attribution_process_log_enabled() -> bool:
+    """Whether attribution records should also go to the process log stream."""
+    if os.getenv("PDD_LLM_ATTRIBUTION_PROCESS_LOG") is not None:
+        return _env_truthy("PDD_LLM_ATTRIBUTION_PROCESS_LOG")
+    if os.getenv("PDD_LLM_ATTRIBUTION_STDOUT") is not None:
+        return _env_truthy("PDD_LLM_ATTRIBUTION_STDOUT")
+    return _is_cloud_runtime()
+
+
+def _is_cloud_runtime() -> bool:
+    """Return whether the process appears to be running in a Google cloud runner."""
+    return any(os.getenv(name) for name in _CLOUD_RUNTIME_ENV_KEYS)
+
+
+def _llm_attribution_max_bytes() -> int:
+    """Return the max JSONL file size before best-effort single-file rotation."""
+    raw = os.getenv("PDD_LLM_ATTRIBUTION_MAX_BYTES")
+    if raw is None:
+        return _ATTRIBUTION_LOG_DEFAULT_MAX_BYTES
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _ATTRIBUTION_LOG_DEFAULT_MAX_BYTES
+    return max(0, value)
+
+
+def _llm_attribution_log_path() -> Optional[Path]:
+    """Return the JSONL log path for attribution records."""
+    raw_path = os.getenv("PDD_LLM_ATTRIBUTION_LOG_PATH")
+    try:
+        if raw_path:
+            return Path(raw_path).expanduser()
+        return Path.home() / ".pdd" / "logs" / "llm-attribution.jsonl"
+    except Exception:
+        return None
+
+
+def _is_default_llm_attribution_log_path(log_path: Path) -> bool:
+    """Return whether a path is the default local attribution log."""
+    try:
+        default_path = Path.home() / ".pdd" / "logs" / "llm-attribution.jsonl"
+        return log_path.expanduser().resolve(strict=False) == default_path.resolve(strict=False)
+    except Exception:
+        return False
+
+
+def _is_sensitive_name(value: Any) -> bool:
+    return bool(_SECRET_NAME_PATTERN.search(str(value or "")))
+
+
+def _safe_command_summary(argv: List[str]) -> Dict[str, Any]:
+    """Summarize argv without preserving raw positional or flag values."""
+    if not argv:
+        return {"argc": 0}
+
+    option_names: List[str] = []
+    positional_count = 0
+    subcommand: Optional[str] = None
+    args = list(argv[1:])
+
+    idx = 0
+    while idx < len(args):
+        arg = str(args[idx])
+        if arg == "--":
+            positional_count += max(0, len(args) - idx - 1)
+            break
+
+        if arg.startswith("--") and len(arg) > 2:
+            option_name = arg.split("=", 1)[0]
+            option_names.append(option_name)
+            # Treat every explicit flag value as sensitive. Option names are
+            # still useful for attribution; values are not needed and may be
+            # prompts, file contents, tokens, or service account paths.
+            if "=" not in arg and idx + 1 < len(args) and not str(args[idx + 1]).startswith("-"):
+                idx += 1
+            idx += 1
+            continue
+
+        if arg.startswith("-") and len(arg) > 1:
+            option_names.append(arg)
+            if len(arg) == 2 and idx + 1 < len(args) and not str(args[idx + 1]).startswith("-"):
+                idx += 1
+            idx += 1
+            continue
+
+        positional_count += 1
+        if subcommand is None and arg in _SAFE_SUBCOMMANDS:
+            subcommand = arg
+        idx += 1
+
+    return {
+        "executable": Path(str(argv[0])).name,
+        "argc": len(argv),
+        "subcommand": subcommand,
+        "option_names": list(dict.fromkeys(option_names)),
+        "positional_count": positional_count,
+    }
+
+
+def _safe_error_fields(error: BaseException) -> Dict[str, Any]:
+    """Return structured exception metadata without provider message text."""
+    fields: Dict[str, Any] = {"error_type": type(error).__name__}
+    for attr_name in ("status_code", "code", "type", "request_id"):
+        try:
+            value = getattr(error, attr_name, None)
+        except Exception:
+            value = None
+        if value is None or _is_sensitive_name(value):
+            continue
+        if isinstance(value, str):
+            fields[attr_name] = _truncate(value, 120)
+        elif isinstance(value, (int, float, bool)):
+            fields[attr_name] = value
+
+    try:
+        response = getattr(error, "response", None)
+        response_status = getattr(response, "status_code", None)
+        if response_status is not None:
+            fields["response_status_code"] = response_status
+    except Exception:
+        pass
+
+    return fields
+
+
+def _json_safe(value: Any) -> Any:
+    """Convert values into JSON-serializable primitives."""
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    try:
+        return str(value)
+    except Exception:
+        return repr(value)
+
+
+def _truncate(value: Any, max_len: int = 500) -> str:
+    text = str(value)
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "...<truncated>"
+
+
+def _run_attribution_command(args: List[str], cwd: Path) -> Optional[str]:
+    """Run a short local command for attribution metadata."""
+    try:
+        result = subprocess.run(
+            args,
+            cwd=str(cwd),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip()
+    except Exception:
+        return None
+
+
+def _read_json_object(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            parsed = json.load(f)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        return None
+    return None
+
+
+def _service_account_summary(raw: Dict[str, Any]) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "type": raw.get("type"),
+        "client_email": raw.get("client_email"),
+        "project_id": raw.get("project_id"),
+    }
+    private_key_id = raw.get("private_key_id")
+    if private_key_id:
+        summary["private_key_id_prefix"] = str(private_key_id)[:12]
+    quota_project_id = raw.get("quota_project_id")
+    if quota_project_id:
+        summary["quota_project_id"] = quota_project_id
+    client_id = raw.get("client_id")
+    if client_id and raw.get("type") != "service_account":
+        summary["client_id_prefix"] = str(client_id)[:12]
+    return {k: v for k, v in summary.items() if v not in (None, "")}
+
+
+def _gcloud_config_summary() -> Dict[str, Any]:
+    """Read active gcloud account/project without shelling out to gcloud."""
+    config_dir = Path.home() / ".config" / "gcloud"
+    summary: Dict[str, Any] = {}
+    try:
+        active_name = (config_dir / "active_config").read_text(encoding="utf-8").strip()
+        if active_name:
+            summary["active_config"] = active_name
+            config_path = config_dir / "configurations" / f"config_{active_name}"
+        else:
+            config_path = config_dir / "configurations" / "config_default"
+    except Exception:
+        config_path = config_dir / "configurations" / "config_default"
+
+    try:
+        for raw_line in config_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = [part.strip() for part in line.split("=", 1)]
+            if key == "account":
+                summary["account"] = value
+            elif key == "project":
+                summary["project"] = value
+    except Exception:
+        pass
+    return summary
+
+
+def _metadata_server_service_account_summary() -> Dict[str, Any]:
+    """Read the cloud runtime service account email without requesting a token."""
+    if not _is_cloud_runtime():
+        return {}
+
+    metadata_host = os.getenv("GCE_METADATA_HOST", "metadata.google.internal")
+    url = f"http://{metadata_host}/computeMetadata/v1/instance/service-accounts/default/email"
+    request = urllib.request.Request(url, headers={"Metadata-Flavor": "Google"})
+    try:
+        with urllib.request.urlopen(request, timeout=0.2) as response:
+            email = response.read(256).decode("utf-8", errors="replace").strip()
+    except Exception:
+        return {}
+
+    if not email or _is_sensitive_name(email):
+        return {}
+    return {"service_account_email": email}
+
+
+def _credential_context() -> Dict[str, Any]:
+    """Return safe credential identity metadata without token or key material."""
+    context: Dict[str, Any] = {}
+
+    gac = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if gac:
+        gac_path = Path(gac).expanduser()
+        context["google_application_credentials"] = {
+            "path": str(gac_path),
+            "exists": gac_path.exists(),
+        }
+        parsed = _read_json_object(gac_path)
+        if parsed:
+            context["google_application_credentials"].update(_service_account_summary(parsed))
+
+    adc_path = Path.home() / ".config" / "gcloud" / "application_default_credentials.json"
+    context["application_default_credentials"] = {
+        "path": str(adc_path),
+        "exists": adc_path.exists(),
+    }
+    parsed_adc = _read_json_object(adc_path)
+    if parsed_adc:
+        context["application_default_credentials"].update(_service_account_summary(parsed_adc))
+
+    gcloud_config = _gcloud_config_summary()
+    if gcloud_config:
+        context["gcloud_config"] = gcloud_config
+
+    metadata_account = _metadata_server_service_account_summary()
+    if metadata_account:
+        context["metadata_server"] = metadata_account
+
+    return context
+
+
+def _git_context(cwd: Path) -> Dict[str, Any]:
+    """Return git metadata for the current working directory."""
+    cache_key = str(cwd)
+    if cache_key in _ATTRIBUTION_CONTEXT_CACHE:
+        return dict(_ATTRIBUTION_CONTEXT_CACHE[cache_key])
+
+    context: Dict[str, Any] = {}
+    root = _run_attribution_command(["git", "rev-parse", "--show-toplevel"], cwd)
+    if root:
+        context["root"] = root
+        git_cwd = Path(root)
+    else:
+        git_cwd = cwd
+
+    branch = _run_attribution_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], git_cwd)
+    commit = _run_attribution_command(["git", "rev-parse", "HEAD"], git_cwd)
+    status = _run_attribution_command(["git", "status", "--short"], git_cwd)
+    if branch:
+        context["branch"] = branch
+    if commit:
+        context["commit"] = commit
+    if status is not None:
+        context["dirty"] = bool(status)
+        context["status_line_count"] = 0 if not status else len(status.splitlines())
+
+    _ATTRIBUTION_CONTEXT_CACHE[cache_key] = dict(context)
+    return context
+
+
+def _parent_process_context() -> Dict[str, Any]:
+    pids = [str(os.getpid())]
+    ppid = os.getppid()
+    if ppid:
+        pids.append(str(ppid))
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "pid=,ppid=,comm=", "-p", ",".join(pids)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        )
+        if result.returncode == 0:
+            return {
+                "pid": os.getpid(),
+                "ppid": ppid,
+                "processes": [_truncate(line.strip(), 300) for line in result.stdout.splitlines() if line.strip()],
+            }
+    except Exception:
+        pass
+    return {"pid": os.getpid(), "ppid": ppid}
+
+
+def _safe_env_context() -> Dict[str, str]:
+    return {name: os.getenv(name, "") for name in _ATTRIBUTION_ENV_KEYS if os.getenv(name) is not None}
+
+
+def _stack_context(cwd: Path) -> List[str]:
+    """Return a compact stack trace without prompt/message content."""
+    try:
+        git_root = _git_context(cwd).get("root")
+        roots = [Path(git_root)] if git_root else []
+        roots.extend([cwd, Path.home()])
+        frames = []
+        for frame in traceback.extract_stack(limit=40):
+            path = Path(frame.filename)
+            display = str(path)
+            for root in roots:
+                try:
+                    display = str(path.resolve().relative_to(root.resolve()))
+                    break
+                except Exception:
+                    continue
+            frames.append(f"{display}:{frame.lineno}:{frame.name}")
+        return frames[-25:]
+    except Exception:
+        return []
+
+
+def _build_llm_attribution_context(
+    *,
+    strength: float,
+    temperature: float,
+    time_value: Optional[float],
+    use_batch_mode: bool,
+    use_cloud: Optional[bool],
+    output_pydantic: Optional[Type[BaseModel]],
+    output_schema: Optional[Dict[str, Any]],
+    language: Optional[str],
+) -> Dict[str, Any]:
+    """Build safe, prompt-free attribution metadata for an LLM invocation."""
+    cwd = Path.cwd()
+    return {
+        "request_id": uuid.uuid4().hex,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "process": {
+            "command": _safe_command_summary(sys.argv),
+            "cwd": str(cwd),
+            "executable": sys.executable,
+            "user": getpass.getuser(),
+            "hostname": socket.gethostname(),
+            **_parent_process_context(),
+        },
+        "git": _git_context(cwd),
+        "env": _safe_env_context(),
+        "credentials": _credential_context(),
+        "pdd": {
+            "llm_model_csv_path": str(LLM_MODEL_CSV_PATH) if LLM_MODEL_CSV_PATH else "package_default",
+            "default_base_model": DEFAULT_BASE_MODEL,
+            "project_root": str(PROJECT_ROOT),
+            "project_root_from_env": PROJECT_ROOT_FROM_ENV,
+            "env_path": str(ENV_PATH),
+        },
+        "parameters": {
+            "strength": strength,
+            "temperature": temperature,
+            "time": time_value,
+            "use_batch_mode": use_batch_mode,
+            "use_cloud": use_cloud,
+            "output_pydantic": output_pydantic.__name__ if output_pydantic else None,
+            "output_schema": bool(output_schema),
+            "language": language,
+        },
+        "python_stack": _stack_context(cwd),
+    }
+
+
+def _maybe_build_llm_attribution_context(**kwargs: Any) -> Optional[Dict[str, Any]]:
+    """Build attribution context only when emission is enabled."""
+    if not _llm_attribution_enabled():
+        return None
+    return _build_llm_attribution_context(**kwargs)
+
+
+def _api_key_field_names(api_key_field: Any) -> List[str]:
+    try:
+        from pdd.provider_manager import parse_api_key_vars
+        return parse_api_key_vars(str(api_key_field or ""))
+    except Exception:
+        raw = str(api_key_field or "")
+        return [part.strip() for part in raw.split("|") if part.strip()]
+
+
+def _summarize_litellm_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a prompt-free, secret-free summary of LiteLLM kwargs."""
+    safe_keys = [
+        "model",
+        "temperature",
+        "num_retries",
+        "vertex_location",
+        "api_version",
+        "caching",
+    ]
+    summary = {key: kwargs.get(key) for key in safe_keys if key in kwargs}
+    summary["has_api_key"] = bool(kwargs.get("api_key"))
+    summary["has_base_url"] = bool(kwargs.get("base_url") or kwargs.get("api_base"))
+    summary["has_response_format"] = "response_format" in kwargs
+    summary["has_reasoning"] = (
+        "reasoning" in kwargs or _has_thinking_or_reasoning_payload(kwargs)
+    )
+    messages = kwargs.get("messages")
+    if isinstance(messages, list):
+        summary["message_count"] = len(messages)
+        if messages and isinstance(messages[0], list):
+            summary["batch_count"] = len(messages)
+            summary["first_batch_message_count"] = len(messages[0])
+    return summary
+
+
+def _model_disallows_temperature(model_name: Any) -> bool:
+    """Return True for models whose provider rejects the temperature parameter."""
+    model_lower = str(model_name or "").lower()
+    return (
+        "claude-fable-5" in model_lower
+        or
+        "claude-opus-4-7" in model_lower
+        or "claude-opus-4.7" in model_lower
+        or "claude-opus-4-8" in model_lower
+        or "claude-opus-4.8" in model_lower
+        or _is_kimi_k3_model(model_name)
+    )
+
+
+def _is_kimi_k3_model(model_name: Any) -> bool:
+    """Match only the direct Moonshot K3 route."""
+    return (
+        isinstance(model_name, str)
+        and model_name.strip().lower() == "moonshot/kimi-k3"
+    )
+
+
+_KIMI_K3_FIXED_SAMPLING_PARAMETERS = (
+    "temperature",
+    "top_p",
+    "n",
+    "presence_penalty",
+    "frequency_penalty",
+)
+
+
+def _apply_kimi_k3_request_contract(
+    kwargs: Dict[str, Any], model_name: Any
+) -> bool:
+    """Keep K3 requests compatible with Moonshot and pinned LiteLLM.
+
+    K3 fixes its sampling values server-side. LiteLLM 1.84.x also drops the
+    unknown model's top-level ``reasoning_effort``, while ``extra_body`` is
+    merged into the final HTTP JSON body by LiteLLM's HTTP handler.
+    """
+    if not _is_kimi_k3_model(model_name):
+        return False
+    for key in _KIMI_K3_FIXED_SAMPLING_PARAMETERS:
+        kwargs.pop(key, None)
+    top_level_effort = kwargs.pop("reasoning_effort", None)
+    if top_level_effort:
+        extra_body = kwargs.get("extra_body")
+        merged = dict(extra_body) if isinstance(extra_body, dict) else {}
+        merged["reasoning_effort"] = top_level_effort
+        kwargs["extra_body"] = merged
+    return True
+
+
+def _has_thinking_or_reasoning_payload(litellm_kwargs: Dict[str, Any]) -> bool:
+    """Return True when a LiteLLM request carries thinking or reasoning."""
+    if "thinking" in litellm_kwargs or "reasoning_effort" in litellm_kwargs:
+        return True
+    extra_body = litellm_kwargs.get("extra_body")
+    return isinstance(extra_body, dict) and bool(
+        {"thinking", "reasoning_effort"} & extra_body.keys()
+    )
+
+
+# Regex anchored to the Gemini 3 family identifier so that:
+#   - matches: gemini-3, gemini-3-flash, gemini-3-pro, gemini-3.1-..., gemini-3.5-...
+#   - does NOT match: gemini-2.5-*, gemini-1.5-*, gemini-30-* (hypothetical
+#     unrelated families), claude-3, etc.
+# The lookahead requires a separator (-, _, /, ., end-of-string, or whitespace)
+# after the version number so that "gemini-30-something" cannot be mistaken for
+# a Gemini 3 variant.
+_GEMINI_3_RE = re.compile(r"gemini-3(?:\.\d+)?(?=$|[-_./\s])", re.IGNORECASE)
+
+# Gemini 3.6 Flash and Gemini 3.5 Flash-Lite deprecated the sampling
+# parameters below. Match the stable IDs through any LiteLLM provider prefix,
+# and allow Google's normal dated/preview suffixes without broadening the rule
+# to older Gemini releases that still accept caller-controlled sampling.
+_GEMINI_NO_SAMPLING_RE = re.compile(
+    r"gemini-(?:3\.6-flash|3\.5-flash-lite)(?=$|[-_./\s])",
+    re.IGNORECASE,
+)
+_DEPRECATED_GEMINI_SAMPLING_PARAMETERS = ("temperature", "top_p", "top_k")
+
+
+def _is_gemini_3_model(model_name: Any) -> bool:
+    """Return True when *model_name* belongs to the Gemini 3 family.
+
+    See ``_GEMINI_3_RE`` for the matching contract. This intentionally covers
+    every routing prefix (``gemini/``, ``vertex_ai/``, ``gmi/google/``,
+    ``github_copilot/``, bare Vertex AI names like ``gemini-3.1-pro-preview``)
+    by anchoring on the model family identifier itself rather than the prefix.
+
+    Defensive contract (PR #900 follow-up):
+      - Non-string ``model_name`` (None, list, dict, tuple, int, bool, bytes,
+        ...) returns False. Earlier revisions used ``str(model_name)``
+        coercion, which let ``['gemini-3-flash']`` falsely match via its
+        repr ``"['gemini-3-flash']"``.
+      - Empty string returns False via an explicit guard (rather than
+        relying on ``re.search`` returning None) so a future regex change
+        cannot accidentally make ``""`` truthy.
+    """
+    if not isinstance(model_name, str) or not model_name:
+        return False
+    return bool(_GEMINI_3_RE.search(model_name))
+
+
+def _drop_deprecated_gemini_sampling_parameters(
+    litellm_kwargs: Dict[str, Any], model_name: Any, verbose: bool = False
+) -> bool:
+    """Remove sampling fields deprecated by current Gemini Flash models.
+
+    Google ignores these fields for Gemini 3.6 Flash and Gemini 3.5
+    Flash-Lite and documents that future model generations will reject them.
+    The filtering is deliberately limited to those model families so older
+    Gemini and non-Gemini models retain their existing sampling behavior.
+
+    Returns True when at least one parameter was removed.
+    """
+    if not isinstance(model_name, str) or not model_name:
+        return False
+    if not _GEMINI_NO_SAMPLING_RE.search(model_name):
+        return False
+
+    removed = [
+        parameter
+        for parameter in _DEPRECATED_GEMINI_SAMPLING_PARAMETERS
+        if parameter in litellm_kwargs
+    ]
+    for parameter in removed:
+        litellm_kwargs.pop(parameter, None)
+
+    if removed and verbose:
+        logger.info(
+            "[INFO] %s does not use deprecated sampling parameters; omitted: %s",
+            model_name,
+            ", ".join(removed),
+        )
+    return bool(removed)
+
+
+def _maybe_clamp_gemini_3_temperature(
+    litellm_kwargs: Dict[str, Any], model_name: Any, verbose: bool
+) -> bool:
+    """Force ``temperature=1`` in *litellm_kwargs* when the model is Gemini 3.
+
+    WHY this override exists (do NOT remove without checking the litellm
+    upstream behavior):
+
+      litellm prints the following warning for Gemini 3 models invoked with
+      temperature < 1.0::
+
+          Warning: Setting temperature < 1.0 for Gemini 3 models
+          (gemini-3-flash-preview) can cause infinite loops, degraded
+          reasoning performance, and failure on complex tasks. Strongly
+          recommended to use temperature = 1.0 (default).
+
+      PDD's defaults pass ``temperature=0.1`` and many callers pass 0.0
+      explicitly, which would trip this warning on every Gemini 3 call and
+      expose us to the documented production failure modes (infinite loops,
+      degraded reasoning). The fix is a narrow, model-family-scoped clamp
+      that only fires for Gemini 3; every other model keeps the
+      caller-supplied temperature unchanged.
+
+    Returns True iff the clamp fired (used to keep ``current_temperature``
+    in sync at the call site).
+    """
+    if "temperature" not in litellm_kwargs:
+        # Caller already removed temperature (e.g. provider rejects it) —
+        # nothing to clamp.
+        return False
+    if not _is_gemini_3_model(model_name):
+        return False
+    current = litellm_kwargs.get("temperature")
+    try:
+        if current is not None and float(current) >= 1.0:
+            return False
+    except (TypeError, ValueError):
+        return False
+    if verbose:
+        logger.info(
+            "[INFO] Gemini 3 model detected: forcing temperature=1 (was %s). "
+            "See litellm warning re infinite loops / degraded reasoning at "
+            "temperature < 1.0.",
+            current,
+        )
+    litellm_kwargs["temperature"] = 1
+    return True
+
+
+def _response_usage_summary(response: Any) -> Dict[str, Any]:
+    """Return token and finish metadata from a LiteLLM response."""
+    responses = response if isinstance(response, list) else [response]
+    prompt_tokens = 0
+    completion_tokens = 0
+    total_tokens = 0
+    finish_reasons: List[Any] = []
+
+    for item in responses:
+        usage = getattr(item, "usage", None)
+        prompt_tokens += int(getattr(usage, "prompt_tokens", 0) or getattr(usage, "input_tokens", 0) or 0)
+        completion_tokens += int(getattr(usage, "completion_tokens", 0) or getattr(usage, "output_tokens", 0) or 0)
+        total_tokens += int(getattr(usage, "total_tokens", 0) or 0)
+        try:
+            finish_reasons.append(getattr(item.choices[0], "finish_reason", None))
+        except Exception:
+            pass
+
+    return {
+        "response_count": len(responses),
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "finish_reasons": [reason for reason in finish_reasons if reason is not None],
+    }
+
+
+def _completion_with_attribution(
+    *,
+    context: Dict[str, Any],
+    attempt_id: str,
+    call_type: str,
+    model: str,
+    provider: str,
+    api_key_name: Any,
+    kwargs: Dict[str, Any],
+) -> Any:
+    """Call litellm.completion while emitting safe attribution metadata."""
+    # Cache-bypass retries construct fresh kwargs. Apply the model contract at
+    # this shared boundary so none of those fallback paths can reintroduce
+    # deprecated Gemini sampling fields.
+    _drop_deprecated_gemini_sampling_parameters(kwargs, model)
+    _apply_kimi_k3_request_contract(kwargs, model)
+    _emit_llm_attribution(
+        context,
+        "llm_invoke.litellm_request",
+        attempt_id=attempt_id,
+        call_type=call_type,
+        model=str(model),
+        provider=str(provider),
+        api_key_env_names=_api_key_field_names(api_key_name),
+        kwargs_summary=_summarize_litellm_kwargs(kwargs),
+    )
+    start = time_module.time()
+    try:
+        response = litellm.completion(**kwargs)
+    except Exception as e:
+        _emit_llm_attribution(
+            context,
+            "llm_invoke.litellm_error",
+            attempt_id=attempt_id,
+            call_type=call_type,
+            model=str(model),
+            provider=str(provider),
+            **_safe_error_fields(e),
+        )
+        raise
+    _emit_llm_attribution(
+        context,
+        "llm_invoke.litellm_response",
+        attempt_id=attempt_id,
+        call_type=call_type,
+        model=str(model),
+        provider=str(provider),
+        duration_seconds=round(time_module.time() - start, 3),
+        usage=_response_usage_summary(response),
+    )
+    return response
+
+
+def _emit_llm_attribution(context: Optional[Dict[str, Any]], event: str, **fields: Any) -> None:
+    """Emit one safe structured attribution record."""
+    if not context or not _llm_attribution_enabled():
+        return
+
+    record = {
+        "schema": "pdd.llm_attribution.v1",
+        "log_type": "pdd_llm_attribution",
+        "severity": "INFO",
+        "event": event,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **context,
+        **fields,
+    }
+    try:
+        payload = json.dumps(_json_safe(record), sort_keys=True, separators=(",", ":"))
+    except Exception as dump_error:
+        logger.debug(f"Failed to serialize LLM attribution record: {dump_error}")
+        return
+
+    log_path = _llm_attribution_log_path()
+    if log_path is not None:
+        try:
+            _append_llm_attribution_payload(log_path, payload)
+        except Exception as file_error:
+            logger.debug(f"Failed to write LLM attribution log: {file_error}")
+
+    if _llm_attribution_process_log_enabled():
+        sys.stderr.write(payload + "\n")
+        sys.stderr.flush()
+
+
+def _append_llm_attribution_payload(log_path: Path, payload: str) -> None:
+    """Append one JSONL attribution record with restrictive permissions and rotation."""
+    parent_existed = log_path.parent.exists()
+    log_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    if not parent_existed or _is_default_llm_attribution_log_path(log_path):
+        try:
+            os.chmod(log_path.parent, 0o700)
+        except Exception:
+            pass
+
+    max_bytes = _llm_attribution_max_bytes()
+    try:
+        if max_bytes > 0 and log_path.exists() and log_path.stat().st_size >= max_bytes:
+            rotated_path = log_path.with_name(f"{log_path.name}.1")
+            try:
+                rotated_path.unlink()
+            except FileNotFoundError:
+                pass
+            log_path.replace(rotated_path)
+            try:
+                os.chmod(rotated_path, 0o600)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(payload + "\n")
+    finally:
+        try:
+            os.chmod(log_path, 0o600)
+        except Exception:
+            pass
 
 # --- Helper Functions ---
 
@@ -830,6 +3096,12 @@ def _is_malformed_json_response(content: str, threshold: int = 100) -> bool:
     if trailing_newline_count >= threshold:
         return True
 
+    # Also check for excessive actual trailing newlines (not just escaped \\n)
+    # This catches cases where raw newlines cause truncation
+    actual_newline_count = len(content) - len(content.rstrip('\n'))
+    if actual_newline_count >= threshold:
+        return True
+
     # Also check for response that looks truncated mid-string
     # (ends with characters that suggest we're inside a JSON string value)
     if not stripped.endswith('}') and not stripped.endswith(']') and not stripped.endswith('"'):
@@ -842,10 +3114,10 @@ def _is_malformed_json_response(content: str, threshold: int = 100) -> bool:
 
 def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
     """Loads and preprocesses the LLM model data from CSV.
-    
+
     Args:
         csv_path: Path to CSV file, or None to use package default
-        
+
     Returns:
         DataFrame with model configuration data
     """
@@ -862,7 +3134,7 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
             except Exception as e:
                 logger.warning(f"Failed to load CSV from {csv_path}: {e}, trying package default")
                 csv_path = None
-    
+
     # If csv_path is None or loading failed, use package default
     if csv_path is None:
         try:
@@ -873,7 +3145,7 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
             logger.info("Loaded model data from package default")
         except Exception as e:
             raise FileNotFoundError(f"Failed to load default LLM model CSV from package: {e}")
-    
+
     try:
         # Basic validation and type conversion
         required_cols = ['provider', 'model', 'input', 'output', 'coding_arena_elo', 'api_key', 'structured_output', 'reasoning_type']
@@ -882,8 +3154,9 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
                 raise ValueError(f"Missing required column in CSV: {col}")
 
         # Convert numeric columns, handling potential errors
-        numeric_cols = ['input', 'output', 'coding_arena_elo', 'max_tokens',
-                        'max_completion_tokens', 'max_reasoning_tokens']
+        numeric_cols = ['input', 'output', 'coding_arena_elo', 'model_rank_score',
+                        'max_tokens', 'max_completion_tokens', 'max_reasoning_tokens',
+                        'context_limit']
         for col in numeric_cols:
             if col in df.columns:
                 # Use errors='coerce' to turn unparseable values into NaN
@@ -893,6 +3166,12 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
         df['input'] = df['input'].fillna(0.0)
         df['output'] = df['output'].fillna(0.0)
         df['coding_arena_elo'] = df['coding_arena_elo'].fillna(0) # Use 0 ELO for missing
+        if 'model_rank_score' in df.columns:
+             df['model_rank_score'] = df['model_rank_score'].fillna(df['coding_arena_elo'])
+        else:
+             df['model_rank_score'] = df['coding_arena_elo']
+        if 'model_rank_source' not in df.columns:
+             df['model_rank_source'] = 'legacy-coding-arena-elo'
         # Ensure max_reasoning_tokens is numeric, fillna with 0
         df['max_reasoning_tokens'] = df['max_reasoning_tokens'].fillna(0).astype(int) # Ensure int
 
@@ -905,6 +3184,18 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
         else:
              df['structured_output'] = False # Assume false if column missing
 
+        # Boolean interpretation for interactive_only. Parse with string-aware
+        # logic rather than a plain .astype(bool): CSV stores everything as
+        # strings and bool("False") is True, which would mark every row
+        # interactive. Treat only "true"/"1"/"yes" (case-insensitive, stripped)
+        # as True; "false"/"0"/""/NaN and a missing column all mean False.
+        if 'interactive_only' in df.columns:
+             df['interactive_only'] = df['interactive_only'].map(
+                 lambda v: str(v).strip().lower() in ("true", "1", "yes")
+             )
+        else:
+             df['interactive_only'] = False # Old CSVs without the column: non-interactive
+
         # Ensure reasoning_type is string, fillna with 'none' and lowercase
         df['reasoning_type'] = df['reasoning_type'].fillna('none').astype(str).str.lower()
 
@@ -916,10 +3207,316 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
     except Exception as e:
         raise RuntimeError(f"Error loading or processing LLM model CSV {csv_path}: {e}") from e
 
+
+# Provider-prefix aliases. Each maps a model-name prefix (the form
+# `litellm.completion(model=...)` expects for routing) to the provider
+# string used in `llm_model.csv`. When `_select_model_candidates` misses
+# a literal-match lookup, it retries with provider-aware alternatives
+# derived from this map before falling back to the surrogate base.
+#
+# AWS Bedrock is intentionally omitted — its model names use a
+# dot-separated convention (e.g. `anthropic.claude-opus-4-6-v1`) rather
+# than a slash prefix, so there is no clean alias mapping.
+_PROVIDER_PREFIX_TO_PROVIDER = {
+    "openai/": "OpenAI",
+    "azure/": "Azure OpenAI",
+    "chatgpt/": "OpenAI ChatGPT",
+    "vertex_ai/": "Google Vertex AI",
+    "gemini/": "Google Gemini",
+    "anthropic/": "Anthropic",
+    "azure_ai/": "Azure AI",
+}
+
+
+def _is_permanent_invalid_request_error(exc: Exception) -> bool:
+    """Classify whether an exception represents a permanent parameter
+    rejection that retrying through other candidate models cannot fix.
+
+    Used by the candidate-iteration loop in :func:`llm_invoke` to fast-
+    fail the cascade when the request shape itself is wrong (e.g. an
+    unsupported parameter for the model class). Every other provider that
+    relays the same model family will reject the same shape identically,
+    so cascading through them wastes time and hides the root error.
+
+    Intentionally conservative — only clear "wrong parameter" cases are
+    treated as permanent. Context-window errors are explicitly retryable
+    (a different model may have a larger context). Rate limits, transient
+    5xxs, auth failures, and everything else fall through to the existing
+    retry logic.
+
+    Concrete trigger that motivated this: Anthropic enforcing
+    ``thinking.type.adaptive`` for Opus 4.7 on 2026-05-23, where the
+    legacy ``thinking.type.enabled`` shape produces a 400 ``not supported
+    for this model``. Retrying through Vertex/Bedrock/Azure/OpenRouter/
+    Perplexity hits the same Anthropic API and the same 400, every time.
+    """
+    try:
+        import litellm
+    except ImportError:
+        return False
+
+    # Context-window-exceeded is a BadRequestError subclass but IS
+    # retryable: a different model with a larger context may succeed.
+    ctx_err = getattr(litellm.exceptions, "ContextWindowExceededError", None)
+    if ctx_err is not None and isinstance(exc, ctx_err):
+        return False
+
+    bad_req = getattr(litellm.exceptions, "BadRequestError", None)
+    if bad_req is not None and not isinstance(exc, bad_req):
+        return False
+
+    msg = str(exc).lower()
+    # Conservative allow-list of phrases that indicate a permanent
+    # parameter rejection. Extend cautiously — when in doubt, retry.
+    permanent_markers = (
+        "is not supported for this model",
+        "unsupported parameter",
+        "thinking.type",
+        "output_config.effort",
+    )
+    return any(marker in msg for marker in permanent_markers)
+
+
+def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
+    """Return ``(alt_name, required_provider)`` pairs to try when the literal
+    form of ``base_model_name`` is not in the CSV.
+
+    The lookup is provider-aware: each alternative is bound to the specific
+    `provider` column value the prefix implies. This prevents a configured
+    Vertex name like ``vertex_ai/claude-opus-4-6`` from silently resolving
+    to a direct ``Anthropic,claude-opus-4-6`` row, which would change both
+    credentials (`GOOGLE_APPLICATION_CREDENTIALS` → `ANTHROPIC_API_KEY`)
+    and the actual API endpoint that gets hit. The same provider boundary
+    is what the user's deployment expects when they pick a prefixed name.
+
+    Two cases:
+
+    * Configured name *has* a known provider prefix → try the bare form,
+      constrained to the corresponding provider only. (Solves the bundled
+      CSV's prefix inconsistency for Vertex models like
+      ``vertex_ai/gemini-3.1-pro-preview`` that are stored bare under
+      ``Google Vertex AI``.)
+    * Configured name has *no* known prefix → try each prefix added,
+      each constrained to its provider. (Solves the inverse direction:
+      a bare configured name where the CSV only has the prefixed form.)
+
+    Returns an empty list for empty/None input.
+    """
+    if not base_model_name:
+        return []
+    alternatives: List[Tuple[str, str]] = []
+    z_ai_openai_compatible_models = {
+        "glm-5.2",
+        "glm-5-turbo",
+        "glm-5.1",
+        "glm-5",
+        "glm-4.7",
+    }
+    if base_model_name in z_ai_openai_compatible_models:
+        # Z.AI's current GLM endpoints are OpenAI-compatible, so the catalog
+        # stores them as openai/<model> with endpoint-specific base_url rows.
+        # Try those rows before the generic surrogate-base fallback so a user
+        # default like PDD_MODEL_DEFAULT=glm-5.2 cannot silently select an
+        # unrelated first CSV row. Coding Plan is first because its rows are
+        # quota-backed and are the ZCode-specific path from issue #1827; a
+        # user CSV containing only the general row still resolves on the
+        # second alternative.
+        alternatives.extend(
+            [
+                (f"openai/{base_model_name}", "Z.AI Coding Plan"),
+                (f"openai/{base_model_name}", "Z.AI"),
+            ]
+        )
+    for prefix, provider in _PROVIDER_PREFIX_TO_PROVIDER.items():
+        if base_model_name.startswith(prefix):
+            # Strip the prefix; only consider rows from the matching provider.
+            alternatives.append((base_model_name[len(prefix):], provider))
+            return alternatives
+    # No known prefix → try with each prefix added, each provider-bound.
+    for prefix, provider in _PROVIDER_PREFIX_TO_PROVIDER.items():
+        alternatives.append((prefix + base_model_name, provider))
+    return alternatives
+
+
+_UNRANKED_CLAUDE_5_MODELS = {"claude-fable-5", "claude-opus-5"}
+
+
+def _explicit_unranked_claude_5_model(
+    model_name: Optional[str],
+) -> Optional[str]:
+    """Return the exact unranked Claude 5 model explicitly requested.
+
+    ``PDD_MODEL_DEFAULT`` normally supplies the base point for the strength
+    interpolation. Claude Fable 5 and Claude Opus 5 are intentionally
+    unranked, however, so a high-strength interpolation would otherwise
+    replace an explicit choice before it is attempted. Provider-qualified
+    Anthropic names select the same exact direct-provider catalog row.
+    """
+    normalized = str(model_name or "").strip().lower()
+    if normalized.startswith("anthropic/"):
+        normalized = normalized.split("/", 1)[1]
+    return normalized if normalized in _UNRANKED_CLAUDE_5_MODELS else None
+
+
+def _prioritize_explicit_unranked_claude_candidate(
+    candidates: List[Dict[str, Any]],
+    requested_model: str,
+) -> List[Dict[str, Any]]:
+    """Return the exact requested Claude 5 model first, retaining fallbacks.
+
+    The remaining candidates are deliberately retained: an explicit model
+    selection means "try the requested model first", not "disable recovery".
+    allows authentication, refusal, and provider failures to continue through
+    the existing candidate fallback loop after the exact model was attempted.
+    """
+    exact_candidates = [
+        candidate
+        for candidate in candidates
+        if str(candidate.get("model", "")).strip().lower() == requested_model
+    ]
+    if not exact_candidates:
+        raise ValueError(
+            f"{requested_model!r} was explicitly selected, but the active "
+            f"model catalog has no {requested_model!r} row. Add that row or "
+            "use the packaged catalog; refusing to silently select another "
+            "model."
+        )
+    return exact_candidates + [
+        candidate
+        for candidate in candidates
+        if str(candidate.get("model", "")).strip().lower() != requested_model
+    ]
+
+
+def _clean_optional_scalar(value: Any) -> Optional[str]:
+    """Return a stripped string for a scalar value, treating blank/NaN as missing."""
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _interactive_credential_acquisition_allowed() -> bool:
+    """Whether API-key setup may prompt interactively in this process."""
+    return not (_env_truthy("PDD_FORCE") or _is_cloud_runtime())
+
+
+def _vertex_project_value() -> Optional[str]:
+    """Return the configured Vertex project, honoring legacy aliases."""
+    for env_name in ("VERTEXAI_PROJECT", "VERTEX_PROJECT", "GOOGLE_CLOUD_PROJECT"):
+        value = _clean_optional_scalar(os.getenv(env_name))
+        if value:
+            return value
+    return None
+
+
+def _vertex_location_value(model_info: Dict[str, Any]) -> Optional[str]:
+    """Return the resolved Vertex location from CSV or supported env aliases."""
+    row_location = _clean_optional_scalar(model_info.get("location"))
+    if row_location:
+        return row_location
+    for env_name in ("VERTEXAI_LOCATION", "VERTEX_LOCATION"):
+        value = _clean_optional_scalar(os.getenv(env_name))
+        if value:
+            return value
+    return None
+
+
+_DEEPSWE_MANIFEST_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _load_deepswe_manifest() -> Dict[str, Any]:
+    """Load DeepSWE manifest metadata keyed by model and aliases."""
+    global _DEEPSWE_MANIFEST_CACHE
+    if _DEEPSWE_MANIFEST_CACHE is not None:
+        return _DEEPSWE_MANIFEST_CACHE
+
+    candidate_paths: List[Path] = []
+    try:
+        candidate_paths.append(Path.home() / ".pdd" / "deepswe_manifest.json")
+    except Exception:
+        pass
+    project_root = os.getenv("PDD_PATH") or os.getenv("PROJECT_ROOT")
+    if project_root:
+        candidate_paths.append(Path(project_root) / ".pdd" / "deepswe_manifest.json")
+    candidate_paths.append(Path.cwd() / ".pdd" / "deepswe_manifest.json")
+
+    data: Any = None
+    for path in candidate_paths:
+        try:
+            if path.is_file():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                break
+        except Exception:
+            continue
+    if data is None:
+        try:
+            with importlib.resources.files("pdd.data").joinpath("deepswe_manifest.json").open(
+                "r", encoding="utf-8"
+            ) as f:
+                data = json.load(f)
+        except Exception:
+            data = None
+
+    by_model: Dict[str, Any] = {}
+    entries = data.get("entries", data if isinstance(data, list) else []) if isinstance(data, (dict, list)) else []
+    if isinstance(entries, dict):
+        entries = list(entries.values())
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            keys = []
+            for key_name in ("model", "model_name", "catalog_model", "canonical_model"):
+                value = entry.get(key_name)
+                if isinstance(value, str) and value.strip():
+                    keys.append(value.strip())
+            aliases = entry.get("aliases")
+            if isinstance(aliases, list):
+                keys.extend(str(alias).strip() for alias in aliases if str(alias).strip())
+            raw_model_name = entry.get("raw_model_name")
+            if isinstance(raw_model_name, str) and raw_model_name.strip():
+                parts = raw_model_name.split()
+                keys.append(parts[0])
+            for key in keys:
+                by_model.setdefault(key, entry)
+
+    _DEEPSWE_MANIFEST_CACHE = by_model
+    return by_model
+
+
+def _manifest_effort(raw_model_name: Any) -> Optional[str]:
+    if not isinstance(raw_model_name, str):
+        return None
+    parts = raw_model_name.split()
+    if len(parts) < 2:
+        return None
+    effort = parts[-1].strip().lower()
+    return effort if effort in {"minimal", "low", "medium", "high", "xhigh", "max"} else None
+
+
+def _manifest_is_stale(retrieved_at: str) -> bool:
+    try:
+        max_age = int(os.getenv("PDD_DEEPSWE_MAX_AGE_DAYS", "30"))
+    except ValueError:
+        max_age = 30
+    try:
+        retrieved = date.fromisoformat(str(retrieved_at)[:10])
+    except Exception:
+        return False
+    return (date.today() - retrieved).days > max_age
+
+
 def _select_model_candidates(
     strength: float,
     base_model_name: str,
-    model_df: pd.DataFrame
+    model_df: pd.DataFrame,
+    manifest_by_model: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Selects and sorts candidate models based on strength and availability."""
 
@@ -928,6 +3525,40 @@ def _select_model_candidates(
     # The actual key value check happens later.
     # Allow models with empty api_key (e.g., Bedrock using AWS creds, local models)
     available_df = model_df[model_df['api_key'].notna()].copy()
+
+    # Older custom CSVs and a few tests only carry coding_arena_elo. Keep those
+    # usable by treating raw Arena ELO as the rank score fallback.
+    if 'model_rank_score' not in available_df.columns:
+        available_df['model_rank_score'] = available_df['coding_arena_elo']
+    else:
+        available_df['model_rank_score'] = available_df['model_rank_score'].fillna(
+            available_df['coding_arena_elo']
+        )
+    if 'model_rank_source' not in available_df.columns:
+        available_df['model_rank_source'] = 'legacy-coding-arena-elo'
+
+    # In CI / headless environments, exclude local models (lm_studio, ollama)
+    # that require a running local server — they hang on connection attempts.
+    if os.environ.get("PDD_SKIP_LOCAL_MODELS"):
+        local_providers = {"lm_studio", "ollama"}
+        available_df = available_df[~available_df['provider'].str.lower().isin(local_providers)]
+
+    # Generic interactive-only guard. Rows flagged interactive_only=True
+    # (github_copilot device-flow OAuth, lm_studio/ollama local servers, and
+    # any future provider so classified in llm_model.csv) require interactive
+    # human auth or a running local server, so they hang instead of fast-failing
+    # in non-interactive contexts (Cloud Run, CI, library import). Exclude them
+    # from the automatic candidate cascade unless PDD_ALLOW_INTERACTIVE is set
+    # (a real terminal opts back in). An explicitly configured base model is
+    # always honored even if it is interactive_only. This generalizes the
+    # surgical PDD_SKIP_LOCAL_MODELS / github_copilot checks, which remain as
+    # defense-in-depth.
+    if 'interactive_only' in available_df.columns and not _env_truthy("PDD_ALLOW_INTERACTIVE"):
+        is_interactive = available_df['interactive_only'].map(
+            lambda v: str(v).strip().lower() in ("true", "1", "yes")
+        )
+        keep_mask = ~is_interactive | (available_df['model'] == base_model_name)
+        available_df = available_df[keep_mask]
 
     # --- Check if the initial DataFrame itself was empty ---
     if model_df.empty:
@@ -944,27 +3575,72 @@ def _select_model_candidates(
     # 2. Find Base Model
     base_model_row = available_df[available_df['model'] == base_model_name]
     if base_model_row.empty:
-        # Try finding base model in the *original* df in case it was filtered out
-        original_base = model_df[model_df['model'] == base_model_name]
-        if not original_base.empty:
-            # Base exists but may be misconfigured (e.g., missing API key). Keep erroring loudly.
-            raise ValueError(
-                f"Base model '{base_model_name}' found in CSV but requires API key '{original_base.iloc[0]['api_key']}' which might be missing or invalid configuration."
+        # The bundled llm_model.csv has inconsistent provider-prefix conventions
+        # for Vertex AI models — most have a `vertex_ai/` prefix, but a few
+        # (notably gemini-3.1-pro-preview) are listed bare under
+        # provider="Google Vertex AI". Users who configure
+        # `PDD_MODEL_DEFAULT=vertex_ai/gemini-3.1-pro-preview` (the natural
+        # form expected by litellm.completion for Vertex routing) silently
+        # missed the lookup and fell into the surrogate-base branch below,
+        # which picks the first CSV row — typically claude-opus-4-6 — and
+        # routes every request to Opus regardless of strength.
+        #
+        # Before falling back, try provider-aware alternatives of the
+        # configured name. Each alternative is bound to the provider that
+        # the prefix implies, so prefix mismatches NEVER cross provider
+        # boundaries (which would silently change credentials and routing).
+        # Example: `vertex_ai/gemini-3.1-pro-preview` will only match rows
+        # where provider="Google Vertex AI" — it will not pick up a direct
+        # Gemini API or Anthropic row even if one happens to share the
+        # bare name.
+        alt_resolved = False
+        for alt_name, required_provider in _alternative_base_lookups(base_model_name):
+            alt_row = available_df[
+                (available_df['model'] == alt_name)
+                & (available_df['provider'] == required_provider)
+            ]
+            if not alt_row.empty:
+                base_model = alt_row.iloc[0]
+                alt_resolved = True
+                break
+        if not alt_resolved:
+            # Try finding base model in the *original* df in case it was filtered out
+            original_base = model_df[model_df['model'] == base_model_name]
+            if not original_base.empty:
+                # Base exists but may be misconfigured (e.g., missing API key). Keep erroring loudly.
+                raise ValueError(
+                    f"Base model '{base_model_name}' found in CSV but requires API key '{original_base.iloc[0]['api_key']}' which might be missing or invalid configuration."
+                )
+            explicit_provider = next(
+                (
+                    provider
+                    for prefix, provider in _PROVIDER_PREFIX_TO_PROVIDER.items()
+                    if str(base_model_name).startswith(prefix)
+                ),
+                None,
             )
-        # Option A': Soft fallback – choose a reasonable surrogate base and continue
-        # Strategy (simplified and deterministic): pick the first available model
-        # from the CSV as the surrogate base. This mirrors typical CSV ordering
-        # expectations and keeps behavior predictable across environments.
-        # Fix for issue #296: Don't warn when any base model (from env var or default) is not found in CSV
-        try:
-            base_model = available_df.iloc[0]
-            # Silently use the first available model from user's CSV without warning
-            # Users who intentionally customize their CSV shouldn't see warnings about removed models
-        except Exception:
-            # If any unexpected error occurs during fallback, raise a clear error
-            raise ValueError(
-                f"Specified base model '{base_model_name}' not found and fallback selection failed. Check your LLM model CSV."
-            )
+            if explicit_provider is not None:
+                raise ValueError(
+                    f"Provider-qualified base model '{base_model_name}' has no "
+                    f"matching row under provider '{explicit_provider}' in the "
+                    "active model catalog; refusing to select a surrogate under "
+                    "another provider. Update the catalog or choose an available "
+                    "model from that provider."
+                )
+            # Option A': Soft fallback – choose a reasonable surrogate base and continue
+            # Strategy (simplified and deterministic): pick the first available model
+            # from the CSV as the surrogate base. This mirrors typical CSV ordering
+            # expectations and keeps behavior predictable across environments.
+            # Fix for issue #296: Don't warn when any base model (from env var or default) is not found in CSV
+            try:
+                base_model = available_df.iloc[0]
+                # Silently use the first available model from user's CSV without warning
+                # Users who intentionally customize their CSV shouldn't see warnings about removed models
+            except Exception:
+                # If any unexpected error occurs during fallback, raise a clear error
+                raise ValueError(
+                    f"Specified base model '{base_model_name}' not found and fallback selection failed. Check your LLM model CSV."
+                )
     else:
         base_model = base_model_row.iloc[0]
 
@@ -974,14 +3650,17 @@ def _select_model_candidates(
 
     if strength == 0.5:
         # target_model = base_model
-        # Sort remaining by ELO descending as fallback
-        available_df['sort_metric'] = -available_df['coding_arena_elo'] # Negative for descending sort
+        # Sort remaining by rank score closest to base (continuity limit of the
+        # > 0.5 branch: as strength → 0.5 from above, the interpolated target
+        # rank collapses to the base model's rank score).
+        base_rank = base_model['model_rank_score']
+        available_df['sort_metric'] = abs(available_df['model_rank_score'] - base_rank)
         candidates = available_df.sort_values(by='sort_metric').to_dict('records')
         # Ensure effective base model is first if it exists (supports surrogate base)
         effective_base_name = str(base_model['model']) if isinstance(base_model, pd.Series) else base_model_name
         if any(c['model'] == effective_base_name for c in candidates):
             candidates.sort(key=lambda x: 0 if x['model'] == effective_base_name else 1)
-        target_metric_value = f"Base Model ELO: {base_model['coding_arena_elo']}"
+        target_metric_value = f"Base Model Rank: {base_model['model_rank_score']}"
 
     elif strength < 0.5:
         # Interpolate by Cost (downwards from base)
@@ -1000,10 +3679,10 @@ def _select_model_candidates(
         target_metric_value = f"Target Cost: {target_cost:.6f}"
 
     else: # strength > 0.5
-        # Interpolate by ELO (upwards from base)
-        base_elo = base_model['coding_arena_elo']
-        highest_elo_model = available_df.loc[available_df['coding_arena_elo'].idxmax()]
-        highest_elo = highest_elo_model['coding_arena_elo']
+        # Interpolate by DeepSWE-weighted rank score (upwards from base)
+        base_elo = base_model['model_rank_score']
+        highest_elo_model = available_df.loc[available_df['model_rank_score'].idxmax()]
+        highest_elo = highest_elo_model['model_rank_score']
 
         if highest_elo <= base_elo: # Handle edge case where base has highest ELO
             target_elo = base_elo + (strength - 0.5) * (highest_elo - base_elo) # Will be >= base_elo
@@ -1011,14 +3690,27 @@ def _select_model_candidates(
             # Interpolate between base and highest
             target_elo = base_elo + ((strength - 0.5) / 0.5) * (highest_elo - base_elo)
 
-        available_df['sort_metric'] = abs(available_df['coding_arena_elo'] - target_elo)
+        available_df['sort_metric'] = abs(available_df['model_rank_score'] - target_elo)
         candidates = available_df.sort_values(by='sort_metric').to_dict('records')
-        target_metric_value = f"Target ELO: {target_elo:.2f}"
+        target_metric_value = f"Target Rank: {target_elo:.2f}"
 
 
     if not candidates:
          # This should ideally not happen if available_df was not empty
          raise RuntimeError("Model selection resulted in an empty candidate list.")
+
+    manifest_by_model = manifest_by_model or {}
+    for candidate in candidates:
+        entry = manifest_by_model.get(str(candidate.get("model", ""))) or {}
+        candidate["target_effort_level"] = _manifest_effort(entry.get("raw_model_name"))
+        candidate["deepswe_manifest_date"] = str(entry.get("retrieved_at") or "")
+
+    if candidates:
+        first = candidates[0]
+        manifest_date = str(first.get("deepswe_manifest_date") or "")
+        if manifest_date and _manifest_is_stale(manifest_date):
+            first["model_rank_source"] = f"deepswe:stale:{manifest_date}"
+            logger.warning("DeepSWE manifest metadata for selected model is stale: %s", manifest_date)
 
     # --- DEBUGGING PRINT ---
     if os.getenv("PDD_DEBUG_SELECTOR"): # Add env var check for debug prints
@@ -1027,7 +3719,7 @@ def _select_model_candidates(
         logger.debug(f"Metric: {target_metric_value}")
         logger.debug("Available DF (Sorted by metric):")
         # Select columns relevant to the sorting metric
-        sort_cols = ['model', 'avg_cost', 'coding_arena_elo', 'sort_metric']
+        sort_cols = ['model', 'avg_cost', 'coding_arena_elo', 'model_rank_score', 'sort_metric']
         logger.debug(available_df.sort_values(by='sort_metric')[sort_cols])
         logger.debug("Final Candidates List (Model Names):")
         logger.debug([c['model'] for c in candidates])
@@ -1040,48 +3732,41 @@ def _select_model_candidates(
 def _sanitize_api_key(key_value: str) -> str:
     """
     Sanitize API key by removing whitespace and carriage returns.
-    
+
     This fixes WSL environment issues where API keys may contain trailing \r characters
     that make them invalid for HTTP headers.
-    
+
     Args:
         key_value: The raw API key value from environment
-        
+
     Returns:
         Sanitized API key with whitespace and carriage returns removed
-        
+
     Raises:
         ValueError: If the API key format is invalid after sanitization
     """
     if not key_value:
         return key_value
-    
+
     # Strip all whitespace including carriage returns, newlines, etc.
     sanitized = key_value.strip()
-    
+
     # Additional validation: ensure no remaining control characters
     if any(ord(c) < 32 for c in sanitized):
-        logger.warning("API key contains control characters that may cause issues")
+        logger.warning("Environment value contains control characters that may cause issues")
         # Remove any remaining control characters
         sanitized = ''.join(c for c in sanitized if ord(c) >= 32)
-    
+
     # Validate API key format (basic checks)
     if sanitized:
         # Check for common API key patterns
         if len(sanitized) < 10:
-            logger.warning(f"API key appears too short ({len(sanitized)} characters) - may be invalid")
-        
+            logger.warning(f"Environment value appears too short ({len(sanitized)} characters) - may be invalid")
+
         # Check for invalid characters in API keys (should be printable ASCII)
         if not all(32 <= ord(c) <= 126 for c in sanitized):
-            logger.warning("API key contains non-printable characters")
-            
-        # Check for WSL-specific issues (detect if original had carriage returns)
-        if key_value != sanitized and '\r' in key_value:
-            if _is_wsl_environment():
-                logger.info("Detected and fixed WSL line ending issue in API key")
-            else:
-                logger.info("Detected and fixed line ending issue in API key")
-    
+            logger.warning("Environment value contains non-printable characters")
+
     return sanitized
 
 
@@ -1125,65 +3810,181 @@ def _save_key_to_env_file(key_name: str, value: str, env_path: Path) -> None:
 
 
 def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, bool], verbose: bool) -> bool:
-    """Checks for API key in env, prompts user if missing, and updates .env."""
-    key_name = model_info.get('api_key')
+    """Checks for API key(s) in env, prompts user if missing, and updates .env.
 
-    if not key_name or key_name == "EXISTING_KEY":
+    Supports pipe-delimited api_key fields (e.g. ``VAR1|VAR2|VAR3``).
+    - Empty field → no auth needed (device flow / local model), always True.
+    - Single var  → existing interactive-prompt behaviour for simple providers.
+    - Multi var   → checks all vars; if any missing, directs user to ``pdd setup``.
+    """
+    from pdd.provider_manager import (
+        parse_api_key_vars,
+        resolve_api_key_from_env,
+    )
+
+    api_key_field = str(model_info.get('api_key', '') or '')
+    prompt_allowed = _interactive_credential_acquisition_allowed()
+
+    if not api_key_field.strip() or api_key_field == "EXISTING_KEY":
+        # github_copilot uses litellm-managed device-flow OAuth. If the
+        # cached token file is missing, litellm hangs waiting for a human
+        # to complete the device flow — never a viable code path in server
+        # / non-interactive contexts. Skip the model with a clear hint
+        # regardless of PDD_FORCE; CLI users who set up Copilot via
+        # ``pdd setup`` will have the token file present and proceed
+        # normally. Caller is _ensure_api_key in llm_invoke.py.
+        model_name = str(model_info.get('model', ''))
+        if model_name.startswith("chatgpt/"):
+            # chatgpt/ models authenticate with a ChatGPT subscription via the
+            # codex login token (issue #1269). Bridge the codex auth.json into
+            # the shape litellm's chatgpt provider expects and apply the
+            # empty-output workaround; skip cleanly in --force when no token
+            # exists so litellm never hangs on an interactive device login.
+            from pdd.codex_subscription import (
+                apply_litellm_chatgpt_output_patch,
+                bridge_codex_auth_for_litellm,
+            )
+            apply_litellm_chatgpt_output_patch()
+            if bridge_codex_auth_for_litellm():
+                if verbose:
+                    logger.info(f"[INFO] Using ChatGPT subscription auth for {model_name}.")
+                return True
+            if not prompt_allowed:
+                logger.warning(
+                    f"Skipping {model_name}: no ChatGPT subscription token found "
+                    "(run `codex login`) and running in a non-interactive force/cloud context."
+                )
+                return False
+            logger.warning(
+                f"No ChatGPT subscription token found for {model_name}; litellm may "
+                "prompt for device-flow authentication. Run `codex login` to avoid this."
+            )
+            return True
+        if model_name.startswith("github_copilot/"):
+            token_dir = Path(os.environ.get(
+                'GITHUB_COPILOT_TOKEN_DIR',
+                str(Path.home() / ".config" / "litellm" / "github_copilot"),
+            ))
+            api_key_file = os.environ.get('GITHUB_COPILOT_API_KEY_FILE', 'api-key.json')
+            token_path = token_dir / api_key_file
+            if not token_path.exists():
+                logger.warning(
+                    f"Skipping GitHub Copilot model '{model_name}': "
+                    f"no OAuth token at {token_path}. "
+                    f"Run 'pdd setup' to authenticate Copilot, or unset it to skip silently."
+                )
+                return False
         if verbose:
-            logger.info(f"Skipping API key check for model {model_info.get('model')} (key name: {key_name})")
-        return True # Assume key is handled elsewhere or not needed
+            logger.info(f"Skipping API key check for model {model_info.get('model')} (key field: {api_key_field!r})")
+        return True  # Device flow, local model, or handled elsewhere
 
-    key_value = os.getenv(key_name)
+    env_vars = parse_api_key_vars(api_key_field)
+
+    # --- Multi-credential provider (pipe-delimited) ---
+    if len(env_vars) > 1:
+        missing = [v for v in env_vars if not os.getenv(v)]
+        if not missing:
+            if verbose:
+                logger.info(f"All {len(env_vars)} env vars set for model {model_info.get('model')}.")
+            newly_acquired_keys[api_key_field] = False
+            return True
+
+        # Vertex AI fallback: resolve missing VERTEXAI_PROJECT from
+        # GOOGLE_CLOUD_PROJECT and missing VERTEXAI_LOCATION from CSV location column
+        # (the invocation code already reads CSV location).
+        if "GOOGLE_APPLICATION_CREDENTIALS" in env_vars:
+            if _vertex_project_value() and _vertex_location_value(model_info):
+                remaining = [
+                    v for v in missing
+                    if v not in ("GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT", "VERTEXAI_LOCATION")
+                ]
+                if not remaining:
+                    logger.info(
+                        "Using Vertex AI credentials (project=%s, location=%s).",
+                        _vertex_project_value(),
+                        _vertex_location_value(model_info),
+                    )
+                    newly_acquired_keys[api_key_field] = False
+                    return True
+
+        logger.warning(
+            f"Multi-credential provider for model '{model_info.get('model')}' "
+            f"is missing env vars: {', '.join(missing)}. "
+            f"Run 'pdd setup' to configure."
+        )
+        return False
+
+    # --- Single-credential provider (original behaviour) ---
+    key_name = env_vars[0]
+
+    key_value, resolved_key_name = resolve_api_key_from_env(
+        key_name,
+        include_llm_invoke_aliases=True,
+    )
     if key_value:
         key_value = _sanitize_api_key(key_value)
 
     if key_value:
         if verbose:
-            logger.info(f"API key '{key_name}' found in environment.")
-        newly_acquired_keys[key_name] = False # Mark as existing
+            logger.info("Required environment value found.")
+        newly_acquired_keys[resolved_key_name or key_name] = False  # Mark as existing
         return True
-    else:
-        logger.warning(f"API key environment variable '{key_name}' for model '{model_info.get('model')}' is not set.")
 
-        # Skip prompting if --force flag is set (non-interactive mode)
-        if os.environ.get('PDD_FORCE'):
-            logger.error(f"API key '{key_name}' not set. In --force mode, skipping interactive prompt.")
-            return False
+    logger.warning(f"Required environment value for model '{model_info.get('model')}' is not set.")
 
-        try:
-            # Interactive prompt
-            user_provided_key = input(f"Please enter the API key for {key_name}: ").strip()
-            if not user_provided_key:
-                logger.error("No API key provided. Cannot proceed with this model.")
-                return False
-
-            # Sanitize the user-provided key
-            user_provided_key = _sanitize_api_key(user_provided_key)
-            
-            # Set environment variable for the current process
-            os.environ[key_name] = user_provided_key
-            logger.info(f"API key '{key_name}' set for the current session.")
-            newly_acquired_keys[key_name] = True # Mark as newly acquired
-
-            # Update .env file
-            try:
-                _save_key_to_env_file(key_name, user_provided_key, ENV_PATH)
-                logger.info(f"API key '{key_name}' saved to {ENV_PATH}.")
-                logger.warning("SECURITY WARNING: The API key has been saved to your .env file. "
-                       "Ensure this file is kept secure and is included in your .gitignore.")
-
-            except IOError as e:
-                logger.error(f"Failed to update .env file at {ENV_PATH}: {e}")
-                # Continue since the key is set in the environment for this session
-
+    # Vertex AI ADC fallback: when VERTEX_CREDENTIALS is missing but a
+    # GCP project is configured, Application Default Credentials (e.g.
+    # Cloud Build, GCE metadata, `gcloud auth application-default login`)
+    # can authenticate without an explicit key.
+    if key_name == "VERTEX_CREDENTIALS":
+        project = _vertex_project_value()
+        if project:
+            logger.info(f"Using ADC for Vertex AI (project={project}).")
+            newly_acquired_keys[key_name] = False
             return True
 
-        except EOFError: # Handle non-interactive environments
-             logger.error(f"Cannot prompt for API key '{key_name}' in a non-interactive environment.")
-             return False
-        except Exception as e:
-             logger.error(f"An unexpected error occurred during API key acquisition: {e}")
-             return False
+    # Skip prompting if --force flag is set (non-interactive mode)
+    if not prompt_allowed:
+        logger.error(
+            "Required environment value not set. In non-interactive force/cloud mode, "
+            "skipping interactive prompt."
+        )
+        return False
+
+    try:
+        # Interactive prompt
+        user_provided_key = input(f"Please enter the API key for {key_name}: ").strip()
+        if not user_provided_key:
+            logger.error("No API key provided. Cannot proceed with this model.")
+            return False
+
+        # Sanitize the user-provided key
+        user_provided_key = _sanitize_api_key(user_provided_key)
+
+        # Set environment variable for the current process
+        os.environ[key_name] = user_provided_key
+        logger.info("Required value set for the current session.")
+        newly_acquired_keys[key_name] = True  # Mark as newly acquired
+
+        # Update .env file
+        try:
+            _save_key_to_env_file(key_name, user_provided_key, ENV_PATH)
+            logger.info(f"Required value saved to {ENV_PATH}.")
+            logger.warning("SECURITY WARNING: The value has been saved to your .env file. "
+                   "Ensure this file is kept secure and is included in your .gitignore.")
+
+        except IOError as e:
+            logger.error(f"Failed to update .env file at {ENV_PATH}: {e}")
+            # Continue since the key is set in the environment for this session
+
+        return True
+
+    except EOFError:  # Handle non-interactive environments
+         logger.error("Cannot prompt for a required value in a non-interactive environment.")
+         return False
+    except Exception as e:
+         logger.error(f"An unexpected error occurred during API key acquisition: {e}")
+         return False
 
 
 def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[str, Any]]], use_batch_mode: bool) -> Union[List[Dict[str, str]], List[List[Dict[str, str]]]]:
@@ -1209,8 +4010,27 @@ def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[st
     except Exception as e:
         raise ValueError(f"Error formatting prompt: {e}") from e
 
+
+def _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode,
+                                  model_name, output_pydantic, output_schema):
+    """Rebuild retry/repair messages, re-injecting the schema for chatgpt/ models.
+
+    The cache-bypass / malformed-JSON / invalid-code retry paths rebuild messages
+    from scratch via :func:`_format_messages`. For chatgpt/ subscription models the
+    backend ignores ``response_format`` (dropped on those calls), so the in-prompt
+    schema is the ONLY structured-output enforcement — it must be re-injected on
+    every retry or the retry returns prose (issue #1269). Non-chatgpt models and
+    non-structured calls are unaffected.
+    """
+    messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+    if not use_batch_mode and str(model_name).lower().startswith("chatgpt/"):
+        schema = output_pydantic.model_json_schema() if output_pydantic else output_schema
+        if schema is not None:
+            from pdd.codex_subscription import inject_chatgpt_schema_instruction
+            messages = inject_chatgpt_schema_instruction(messages, schema)
+    return messages
+
 # --- JSON Extraction Helpers ---
-import re
 
 def _extract_fenced_json_block(text: str) -> Optional[str]:
     try:
@@ -1616,6 +4436,239 @@ def _has_invalid_python_code(obj: Any, field_name: str = "") -> bool:
 
 # --- Main Function ---
 
+# =============================================================================
+# Per-task config routing (issue #1584)
+# -----------------------------------------------------------------------------
+# A static lookup table (pdd/data/task_routing.csv) maps a PDD task class to the
+# best (model, temperature, effort, shots) configuration measured offline. The
+# router scores each candidate row as ``pass_rate - lambda * avg_cost_usd`` and
+# the multi-shot loop samples N candidates with verifier-backed selection. The
+# entire feature is gated behind PDD_ENABLE_TASK_ROUTING=1; when the flag is
+# unset, llm_invoke behaves exactly as before and these helpers are never hit.
+# =============================================================================
+
+import contextvars
+from contextlib import contextmanager
+
+# Module-level cache for the routing table. None = not yet loaded.
+_TASK_ROUTING_TABLE: Optional[List[Dict[str, str]]] = None
+
+# Carries the router's exact-model selection into the recursive single-shot
+# calls made by _run_multishot, so llm_invoke's public signature stays in sync
+# with llm_invoke_python.prompt (no internal-only parameter). Default None.
+_ROUTER_MODEL_OVERRIDE: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "pdd_router_model_override", default=None
+)
+
+
+@contextmanager
+def model_override_scope(model: Optional[str]):
+    """Apply an exact model override to nested ``llm_invoke`` calls.
+
+    The override is request-local through ``ContextVar`` and therefore safe
+    for concurrent cloud requests. Blank values preserve normal model
+    selection. The previous value is always restored when the scope exits.
+    """
+    requested = str(model).strip() if model is not None else ""
+    token = _ROUTER_MODEL_OVERRIDE.set(requested or None)
+    try:
+        yield
+    finally:
+        _ROUTER_MODEL_OVERRIDE.reset(token)
+
+# Effort level -> llm_invoke's 0-1 ``time`` scale.
+_EFFORT_TO_TIME: Dict[str, float] = {
+    "low": 0.1,
+    "medium": 0.3,
+    "high": 0.5,
+    "xhigh": 0.75,
+    "max": 1.0,
+}
+
+
+def _effort_to_time(effort: Optional[str]) -> Optional[float]:
+    """Map a routing-table effort level to llm_invoke's 0-1 ``time`` scale.
+
+    Returns None for unknown/empty values so the caller keeps its own ``time``.
+    """
+    if effort is None:
+        return None
+    return _EFFORT_TO_TIME.get(str(effort).strip().lower())
+
+
+def _resolve_task_routing_csv() -> Optional[Path]:
+    """Resolve task_routing.csv via the same priority chain as llm_model.csv.
+
+    Order: user ``~/.pdd/`` -> project ``.pdd/`` (PDD_PATH then CWD) -> None
+    (the caller then falls back to the packaged ``pdd/data/`` copy).
+    """
+    user_csv = user_pdd_dir / "task_routing.csv"
+    if user_csv.is_file():
+        return user_csv
+    if PROJECT_ROOT_FROM_ENV:
+        env_csv = project_csv_from_env.parent / "task_routing.csv"
+        if env_csv.is_file():
+            return env_csv
+    cwd_csv = project_csv_from_cwd.parent / "task_routing.csv"
+    if cwd_csv.is_file():
+        return cwd_csv
+    return None
+
+
+def _load_task_routing_table(force_reload: bool = False) -> List[Dict[str, str]]:
+    """Load and cache the per-task routing table.
+
+    Returns a list of row dicts (possibly empty). Never raises: on a missing
+    file, unreadable CSV, or parse error it debug-logs and returns ``[]`` so the
+    router transparently falls through to the strength-interpolation baseline.
+    """
+    global _TASK_ROUTING_TABLE
+    if _TASK_ROUTING_TABLE is not None and not force_reload:
+        return _TASK_ROUTING_TABLE
+    rows: List[Dict[str, str]] = []
+    try:
+        csv_path = _resolve_task_routing_csv()
+        if csv_path is not None:
+            text = csv_path.read_text()
+        else:
+            text = importlib.resources.files('pdd').joinpath(
+                'data/task_routing.csv'
+            ).read_text()
+        import io
+        for row in csv.DictReader(io.StringIO(text)):
+            rows.append(dict(row))
+    except Exception as e:  # noqa: BLE001 - never break generation on routing
+        logger.debug(f"Task routing table unavailable, using baseline: {e}")
+        rows = []
+    _TASK_ROUTING_TABLE = rows
+    return rows
+
+
+def _select_task_route(task_class: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Pick the best routing row for ``task_class`` by ``pass_rate - lambda*cost``.
+
+    ``lambda`` comes from PDD_ROUTER_LAMBDA (default 1.0; invalid -> 1.0). Ties
+    break on lowest ``avg_cost_usd``. Returns a normalized override dict with any
+    of ``model``/``temperature``/``shots``/``effort`` present, or None when no
+    row matches (cold start) or on any evaluation error (baseline fallthrough).
+    """
+    if task_class is None:
+        return None
+    try:
+        lam_raw = os.environ.get("PDD_ROUTER_LAMBDA", "")
+        try:
+            lam = float(lam_raw) if str(lam_raw).strip() != "" else 1.0
+        except (TypeError, ValueError):
+            lam = 1.0
+        target = str(task_class).strip()
+        matching = [
+            r for r in _load_task_routing_table()
+            if str(r.get("task_class", "")).strip() == target
+        ]
+        if not matching:
+            return None
+        best: Optional[Dict[str, str]] = None
+        best_score: Optional[float] = None
+        best_cost: Optional[float] = None
+        for r in matching:
+            pass_rate = float(str(r.get("pass_rate", "")).strip() or 0.0)
+            avg_cost = float(str(r.get("avg_cost_usd", "")).strip() or 0.0)
+            score = pass_rate - lam * avg_cost
+            # Tolerant tie detection: float subtraction makes nominally-equal
+            # scores (e.g. 0.8-0.2 vs 0.7-0.1) differ in the last bit.
+            tie = best_score is not None and abs(score - best_score) <= 1e-9
+            if (
+                best_score is None
+                or (score > best_score and not tie)
+                or (tie and avg_cost < best_cost)
+            ):
+                best, best_score, best_cost = r, score, avg_cost
+        if best is None:
+            return None
+        override: Dict[str, Any] = {}
+        model = str(best.get("model", "")).strip()
+        if model:
+            override["model"] = model
+        temp_raw = str(best.get("temperature", "")).strip()
+        if temp_raw != "":
+            override["temperature"] = float(temp_raw)
+        shots_raw = str(best.get("shots", "")).strip()
+        if shots_raw != "":
+            override["shots"] = int(float(shots_raw))
+        effort = str(best.get("effort", "")).strip()
+        if effort:
+            override["effort"] = effort
+        return override
+    except Exception as e:  # noqa: BLE001 - never break generation on routing
+        logger.debug(f"Task routing evaluation failed, using baseline: {e}")
+        return None
+
+
+def _run_multishot(
+    *,
+    shots: int,
+    verifier: Optional[Callable[[str], bool]],
+    model_override: Optional[str],
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Run llm_invoke up to ``shots`` times and select a winning candidate.
+
+    Each attempt is a standard single-shot invocation (``shots=1``,
+    ``task_class=None``) so all per-call guards apply unchanged. Selection: the
+    first candidate accepted by ``verifier`` wins; otherwise self-consistency
+    returns the mode of the result strings (ties broken by first occurrence).
+    Costs are summed across every attempt.
+    """
+    results: List[Dict[str, Any]] = []
+    total_cost = 0.0
+    for _ in range(shots):
+        token = _ROUTER_MODEL_OVERRIDE.set(model_override)
+        try:
+            attempt = llm_invoke(
+                shots=1,
+                verifier=None,
+                task_class=None,
+                **kwargs,
+            )
+        finally:
+            _ROUTER_MODEL_OVERRIDE.reset(token)
+        if not isinstance(attempt, dict):
+            continue
+        results.append(attempt)
+        try:
+            total_cost += float(attempt.get("cost", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            pass
+        if verifier is not None:
+            try:
+                if verifier(attempt.get("result")):
+                    winner = dict(attempt)
+                    winner["cost"] = total_cost
+                    return winner
+            except Exception as e:  # noqa: BLE001 - a bad verifier must not crash
+                logger.debug(f"Verifier raised on a candidate: {e}")
+    if not results:
+        raise RuntimeError("Multi-shot generation produced no candidates.")
+
+    def _key(r: Dict[str, Any]) -> str:
+        res = r.get("result")
+        return res if isinstance(res, str) else repr(res)
+
+    counts: Dict[str, int] = {}
+    order: List[str] = []
+    for r in results:
+        k = _key(r)
+        if k not in counts:
+            counts[k] = 0
+            order.append(k)
+        counts[k] += 1
+    # Highest count wins; among ties the earliest-seen result string wins.
+    best_key = max(order, key=lambda k: (counts[k], -order.index(k)))
+    winner = next(dict(r) for r in results if _key(r) == best_key)
+    winner["cost"] = total_cost
+    return winner
+
+
 def llm_invoke(
     prompt: Optional[str] = None,
     input_json: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
@@ -1629,6 +4682,12 @@ def llm_invoke(
     messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]] = None,
     language: Optional[str] = None,
     use_cloud: Optional[bool] = None,
+    grounding_overrides: Optional[Dict[str, List[str]]] = None,
+    source_prompt: Optional[str] = None,
+    estimate_only: Optional[bool] = None,
+    shots: int = 1,
+    verifier: Optional[Callable[[str], bool]] = None,
+    task_class: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Runs a prompt with given input using LiteLLM, handling model selection,
@@ -1647,6 +4706,18 @@ def llm_invoke(
         use_batch_mode: Use batch completion if True.
         messages: Pre-formatted list of messages (or list of lists for batch). If provided, ignores prompt and input_json.
         use_cloud: None=auto-detect (cloud if enabled, local if PDD_FORCE_LOCAL=1), True=force cloud, False=force local.
+        estimate_only: If true, count the request and raise EstimateOnlyResult before provider calls.
+        shots: Number of candidate generations (default 1). When shots > 1 and
+            PDD_ENABLE_TASK_ROUTING=1, the multi-shot loop runs min(shots, 5)
+            generations. Mutually exclusive with use_batch_mode=True. Has no
+            effect when PDD_ENABLE_TASK_ROUTING is unset.
+        verifier: Optional callable (str) -> bool applied to each candidate. The
+            first candidate it accepts is returned immediately; otherwise the
+            mode (self-consistency) result is returned. None -> mode selection.
+        task_class: Optional PDD command name ("generate", "fix", "optimize",
+            "explain") used by the per-task router to look up the best
+            (model, temperature, effort, shots) row from task_routing.csv. Only
+            active when PDD_ENABLE_TASK_ROUTING=1; None skips the router.
 
     Returns:
         Dictionary containing 'result', 'cost', 'model_name', 'thinking_output'.
@@ -1660,7 +4731,8 @@ def llm_invoke(
     """
     # Set verbose logging if requested
     set_verbose_logging(verbose)
-    
+    estimate_mode = _estimate_mode_active(estimate_only)
+
     if verbose:
         logger.debug("llm_invoke start - Arguments received:")
         logger.debug(f"  prompt: {'provided' if prompt else 'None'}")
@@ -1673,61 +4745,11 @@ def llm_invoke(
         logger.debug(f"  use_batch_mode: {use_batch_mode}")
         logger.debug(f"  messages: {'provided' if messages else 'None'}")
         logger.debug(f"  use_cloud: {use_cloud}")
+        logger.debug(f"  estimate_only: {estimate_mode}")
 
-    # --- 0. Cloud Execution Path ---
-    # Determine cloud usage: explicit param > environment > default (local)
-    if use_cloud is None:
-        # Check environment for cloud preference
-        # PDD_FORCE_LOCAL=1 forces local execution
-        force_local = os.environ.get("PDD_FORCE_LOCAL", "").lower() in ("1", "true", "yes")
-        if force_local:
-            use_cloud = False
-        else:
-            # Try to use cloud if credentials are configured
-            try:
-                from pdd.core.cloud import CloudConfig
-                use_cloud = CloudConfig.is_cloud_enabled()
-            except ImportError:
-                use_cloud = False
-
-    if use_cloud:
-        from rich.console import Console
-        console = Console()
-
-        if verbose:
-            logger.debug("Attempting cloud execution...")
-
-        try:
-            return _llm_invoke_cloud(
-                prompt=prompt,
-                input_json=input_json,
-                strength=strength,
-                temperature=temperature,
-                verbose=verbose,
-                output_pydantic=output_pydantic,
-                output_schema=output_schema,
-                time=time,
-                use_batch_mode=use_batch_mode,
-                messages=messages,
-                language=language,
-            )
-        except CloudFallbackError as e:
-            # Notify user and fall back to local execution
-            console.print(f"[yellow]Cloud execution failed ({e}), falling back to local execution...[/yellow]")
-            logger.warning(f"Cloud fallback: {e}")
-            # Continue to local execution below
-        except InsufficientCreditsError:
-            # Re-raise credit errors - user needs to know
-            raise
-        except CloudInvocationError as e:
-            # Non-recoverable cloud error - notify and fall back
-            console.print(f"[yellow]Cloud error ({e}), falling back to local execution...[/yellow]")
-            logger.warning(f"Cloud invocation error: {e}")
-            # Continue to local execution below
-
-    # --- 1. Load Environment & Validate Inputs ---
-    # .env loading happens at module level
-
+    # --- 0. Validate Inputs (before any dispatch) ---
+    # Validation runs before cloud dispatch so the ValueError contract holds
+    # even when cloud returns a non-fallback error (e.g. InsufficientCreditsError).
     if messages:
         if verbose:
             logger.info("Using provided 'messages' input.")
@@ -1748,6 +4770,319 @@ def llm_invoke(
     else:
         raise ValueError("Either 'messages' or both 'prompt' and 'input_json' must be provided.")
 
+    if estimate_mode and use_batch_mode:
+        raise RuntimeError(
+            "Estimate mode supports one concrete llm_invoke call only; batch mode "
+            "or list-of-message batches are outside this dry-run cost contract."
+        )
+
+    # Hosted write-capable commands provide a provider-enforced ceiling through
+    # the environment. Parse it once before model selection so every candidate,
+    # retry, and nested call uses the same contract. The input ceiling is
+    # checked after tokenization below; invalid values fail before credentials
+    # or a provider are touched.
+    command_output_cap = _command_output_token_cap()
+    command_input_cap = _command_input_token_cap()
+    command_cost_cap = _command_cost_cap_usd()
+    hosted_reserved_usd, hosted_attempts = _hosted_budget_state(command_cost_cap)
+    # A cost-bounded invocation may not fan out through retries/fallback models:
+    # every provider request is independently billable. Nested invocations in
+    # the same command still share the process reservation and may proceed
+    # while budget remains.
+    command_single_attempt = command_cost_cap is not None
+    if command_single_attempt and use_batch_mode:
+        # ``batch_completion`` treats the output ceiling as a per-item limit,
+        # so one admitted batch can fan out beyond the command USD cap. A
+        # bounded command must therefore use one concrete provider request.
+        raise RuntimeError(
+            "PDD_COMMAND_MAX_COST_USD does not permit batch provider requests"
+        )
+
+    # --- Per-task config router + multi-shot (issue #1584) ---
+    # Gated entirely behind PDD_ENABLE_TASK_ROUTING=1. When unset, shots/verifier/
+    # task_class have no effect and the function behaves exactly as before.
+    # The router's exact-model choice for THIS call arrives either from a matched
+    # route below or, inside a multi-shot recursion, via _ROUTER_MODEL_OVERRIDE.
+    model_override: Optional[str] = _ROUTER_MODEL_OVERRIDE.get()
+    if _env_truthy("PDD_ENABLE_TASK_ROUTING"):
+        if use_batch_mode and isinstance(shots, int) and shots > 1:
+            raise ValueError(
+                "Multi-shot generation (shots > 1) is mutually exclusive with "
+                "use_batch_mode=True."
+            )
+        # Apply the static router's overrides before model resolution.
+        route = _select_task_route(task_class)
+        if route:
+            if route.get("model"):
+                model_override = route["model"]
+            if "temperature" in route:
+                temperature = route["temperature"]
+            if "shots" in route:
+                shots = route["shots"]
+            routed_time = _effort_to_time(route.get("effort"))
+            if routed_time is not None:
+                time = routed_time
+        # Clamp and normalize the effective shot count (silent clamp; no raise).
+        try:
+            shots = int(shots)
+        except (TypeError, ValueError):
+            shots = 1
+        shots = max(1, min(shots, 5))
+        # Multi-shot: run the single-invocation flow N times, then select.
+        if shots > 1:
+            return _run_multishot(
+                shots=shots,
+                verifier=verifier,
+                model_override=model_override,
+                prompt=prompt,
+                input_json=input_json,
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose,
+                output_pydantic=output_pydantic,
+                output_schema=output_schema,
+                time=time,
+                use_batch_mode=use_batch_mode,
+                messages=messages,
+                language=language,
+                use_cloud=use_cloud,
+                grounding_overrides=grounding_overrides,
+                source_prompt=source_prompt,
+                estimate_only=estimate_only,
+            )
+    else:
+        # Guard inactive: shots/verifier/task_class are inert.
+        shots = 1
+
+    resolved_grounding_overrides = resolve_grounding_overrides_for_invoke(
+        grounding_overrides, source_prompt
+    )
+
+    def _with_local_grounding(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if "grounding" not in payload:
+            payload["grounding"] = build_grounding_metadata(
+                mode="unavailable",
+                grounding_overrides=resolved_grounding_overrides,
+                reviewed=reviewed_from_click_ctx(),
+            )
+        return payload
+
+    # --- 1. Cloud Execution Path ---
+    # Determine cloud usage: explicit param > environment > default (local)
+    if use_cloud is None:
+        # Check environment for cloud preference
+        # PDD_FORCE_LOCAL=1 forces local execution
+        force_local = os.environ.get("PDD_FORCE_LOCAL", "").lower() in ("1", "true", "yes")
+        if force_local:
+            use_cloud = False
+        else:
+            # Try to use cloud if credentials are configured
+            try:
+                from pdd.core.cloud import CloudConfig
+                use_cloud = CloudConfig.is_cloud_enabled()
+            except ImportError:
+                use_cloud = False
+
+    attribution_context = _maybe_build_llm_attribution_context(
+        strength=strength,
+        temperature=temperature,
+        time_value=time,
+        use_batch_mode=use_batch_mode,
+        use_cloud=use_cloud,
+        output_pydantic=output_pydantic,
+        output_schema=output_schema,
+        language=language,
+    )
+    _emit_llm_attribution(
+        attribution_context,
+        "llm_invoke.start",
+        input_shape={
+            "messages_provided": bool(messages),
+            "prompt_provided": bool(prompt),
+            "input_json_provided": input_json is not None,
+        },
+    )
+
+    # Track chronological history of every model attempted across cloud and
+    # local fallback so callers (and `track_cost`) can record the full path.
+    attempted_models: List[str] = []
+
+    # Snapshot any attempts already accumulated on `ctx.obj` by earlier
+    # `llm_invoke` calls within the same tracked CLI command (e.g. `pdd
+    # generate` invoking code generation followed by postprocess). Each call
+    # contributes only its own attempts to `attempted_models`; we publish
+    # `_prior_ctx_attempts + list(attempted_models)` to ctx.obj so the
+    # cross-call audit log is the union and earlier-call fallbacks survive
+    # whatever track_cost ultimately reads.
+    #
+    # We intentionally do NOT rewind ctx.obj on failure. Issue #897 frames
+    # `attempted_models` as a chronological audit log of EVERY model the
+    # command tried, including ones that were "attempted and then
+    # abandoned" — that's the whole point of the column. Rewinding on
+    # exception would silently drop the very rows users opened the
+    # feature to investigate (a failed substep recovered by an outer
+    # catch, e.g. `auto_include` falling back to `summary_model` when
+    # the final auto_include_LLM call errors). The `model` column names
+    # the model that produced the output; `attempted_models` is the
+    # record of what was tried — they may legitimately diverge.
+    _prior_ctx_attempts: List[str] = []
+    try:
+        import click as _click_for_prior  # local import; llm_invoke must work without click
+        _ctx_for_prior = _click_for_prior.get_current_context(silent=True)
+        if (
+            _ctx_for_prior is not None
+            and isinstance(_ctx_for_prior.obj, dict)
+        ):
+            _existing = _ctx_for_prior.obj.get('attempted_models')
+            if isinstance(_existing, list):
+                _prior_ctx_attempts = list(_existing)
+    except Exception:
+        pass
+
+    def _publish_attempted_models() -> None:
+        """Best-effort: mirror attempted_models onto Click ctx.obj for track_cost.
+
+        Preserves attempts contributed by earlier llm_invoke calls within the
+        same tracked command by writing `_prior_ctx_attempts + list(attempted_models)`
+        rather than overwriting with just the current call's history.
+        """
+        try:
+            import click as _click  # local import; llm_invoke must work without click
+            click_ctx = _click.get_current_context(silent=True)
+        except Exception:
+            click_ctx = None
+        if click_ctx is None:
+            return
+        try:
+            if click_ctx.obj is None:
+                click_ctx.obj = {}
+            if isinstance(click_ctx.obj, dict):
+                click_ctx.obj['attempted_models'] = _prior_ctx_attempts + list(attempted_models)
+        except Exception:
+            pass
+
+    def _record_attempt(model_label: str) -> None:
+        """Append a model attempt and publish to Click context."""
+        attempted_models.append(model_label)
+        _publish_attempted_models()
+
+    def _publish_model_provenance(
+        *,
+        resolved_model: str = "",
+        outcome: str = "",
+        deepswe_manifest_date: str = "",
+    ) -> None:
+        """Best-effort: publish selected-model provenance for track_cost."""
+        try:
+            import click as _click
+            click_ctx = _click.get_current_context(silent=True)
+        except Exception:
+            click_ctx = None
+        if click_ctx is None:
+            return
+        try:
+            if click_ctx.obj is None:
+                click_ctx.obj = {}
+            if isinstance(click_ctx.obj, dict):
+                if resolved_model:
+                    click_ctx.obj["resolved_model"] = str(resolved_model)
+                if outcome:
+                    click_ctx.obj["model_selection_outcome"] = str(outcome)
+                if deepswe_manifest_date:
+                    click_ctx.obj["deepswe_manifest_date"] = str(deepswe_manifest_date)
+        except Exception:
+            pass
+
+    if use_cloud and not estimate_mode:
+        from rich.console import Console
+        console = Console()
+
+        if verbose:
+            logger.debug("Attempting cloud execution...")
+
+        try:
+            _emit_llm_attribution(attribution_context, "llm_invoke.cloud_dispatch")
+            # Record the cloud attempt BEFORE the request so cloud-then-local
+            # fallbacks preserve the cloud attempt in attempted_models even
+            # when the cloud raises before returning a model name.
+            _cloud_placeholder = f"cloud:{DEFAULT_BASE_MODEL}" if DEFAULT_BASE_MODEL else "cloud:default"
+            _record_attempt(_cloud_placeholder)
+            cloud_result = _llm_invoke_cloud(
+                prompt=prompt,
+                input_json=input_json,
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose,
+                output_pydantic=output_pydantic,
+                output_schema=output_schema,
+                time=time,
+                use_batch_mode=use_batch_mode,
+                messages=messages,
+                language=language,
+                grounding_overrides=grounding_overrides,
+                source_prompt=source_prompt,
+            )
+            # On success, replace the placeholder with the cloud-returned
+            # modelName so the history reflects the actual model used.
+            try:
+                cloud_model_name = cloud_result.get("model_name") if isinstance(cloud_result, dict) else None
+            except Exception:
+                cloud_model_name = None
+            if cloud_model_name and attempted_models:
+                attempted_models[-1] = str(cloud_model_name)
+                _publish_attempted_models()
+            if isinstance(cloud_result, dict):
+                cloud_result.setdefault("attempted_models", list(attempted_models))
+            return cloud_result
+        except CloudFallbackError as e:
+            # Notify user and fall back to local execution
+            console.print(f"[yellow]Cloud execution failed ({e}), falling back to local execution...[/yellow]")
+            logger.warning(f"Cloud fallback: {e}")
+            _emit_llm_attribution(
+                attribution_context,
+                "llm_invoke.cloud_fallback",
+                **_safe_error_fields(e),
+            )
+            # Continue to local execution below
+        except InsufficientCreditsError as exc:
+            # Re-raise credit errors - user needs to know. Attach the
+            # per-call attempts to the exception (parity with the terminal
+            # RuntimeError below) — worker threads (Click context is
+            # thread-local; workers can't read ctx.obj) recover the
+            # cloud attempt via getattr(e, "attempted_models", None).
+            # Main-thread callers see the same attempts already on
+            # ctx.obj because we don't rewind on failure.
+            _emit_llm_attribution(attribution_context, "llm_invoke.cloud_insufficient_credits")
+            try:
+                setattr(exc, "attempted_models", list(attempted_models))
+            except Exception:
+                pass
+            raise
+        except CloudInvocationError as e:
+            # Non-recoverable cloud error - notify and fall back
+            console.print(f"[yellow]Cloud error ({e}), falling back to local execution...[/yellow]")
+            logger.warning(f"Cloud invocation error: {e}")
+            _emit_llm_attribution(
+                attribution_context,
+                "llm_invoke.cloud_error",
+                **_safe_error_fields(e),
+            )
+            # Continue to local execution below
+
+    # --- 2. Local execution uses already-validated formatted_messages ---
+
+    # Best-effort: precompute a compact representation of the final messages.
+    # We'll record (messages, raw_response) after we receive the response.
+    trace_prompt_repr: Any = None
+    try:
+        if not use_batch_mode:
+            trace_prompt_repr = formatted_messages
+        else:
+            # Avoid huge traces for batch requests.
+            trace_prompt_repr = None
+    except Exception:
+        trace_prompt_repr = None
+
     # Handle None time (means "no reasoning requested")
     if time is None:
         time = 0.0
@@ -1762,25 +5097,150 @@ def llm_invoke(
     # --- 2. Load Model Data & Select Candidates ---
     try:
         model_df = _load_model_data(LLM_MODEL_CSV_PATH)
-        candidate_models = _select_model_candidates(strength, DEFAULT_BASE_MODEL, model_df)
+        # Resolve the base model from PDD_MODEL_DEFAULT at CALL time (not the
+        # import-frozen DEFAULT_BASE_MODEL) so an in-process override such as
+        # `pdd sync --model` takes effect this run (issue #1269).
+        _effective_default_model = os.getenv("PDD_MODEL_DEFAULT", DEFAULT_BASE_MODEL)
+        # Diagnostic for the CSV-shadowing trap (issue #1269): llm_invoke prefers
+        # ~/.pdd/llm_model.csv and project .pdd/llm_model.csv over the packaged
+        # catalog, so an existing install with an older user/project CSV will not
+        # contain the requested curated OpenAI ChatGPT (chatgpt/*) row. Without
+        # a clear message, `--model chatgpt/...` silently falls through to an
+        # older subscription model or another provider.
+        if str(_effective_default_model).lower().startswith("chatgpt/"):
+            try:
+                _catalog_models = model_df["model"].astype(str).str.strip().str.lower()
+                _has_family = _catalog_models.str.startswith("chatgpt/").any()
+                _has_exact_model = (
+                    _catalog_models == str(_effective_default_model).strip().lower()
+                ).any()
+            except Exception:
+                _has_family = True  # don't block on an unexpected df shape
+                _has_exact_model = True
+            if not _has_family:
+                logger.error(
+                    "Requested model %r but the active model catalog (%s) has no "
+                    "chatgpt/ rows. A user/project llm_model.csv is shadowing the "
+                    "packaged catalog. Add the 'OpenAI ChatGPT' family rows to that "
+                    "CSV (or remove the file to use the packaged catalog). See the "
+                    "README 'ChatGPT/Codex subscription' section.",
+                    _effective_default_model,
+                    LLM_MODEL_CSV_PATH if LLM_MODEL_CSV_PATH else "package default",
+                )
+            elif not _has_exact_model:
+                logger.error(
+                    "Requested ChatGPT subscription model %r but the active model "
+                    "catalog (%s) is missing that exact row. An older user/project "
+                    "llm_model.csv is shadowing the packaged catalog. PDD will refuse "
+                    "a cross-model/provider surrogate. Add the exact 'OpenAI "
+                    "ChatGPT' row to that CSV (or remove the file to use the packaged "
+                    "catalog). See the README 'ChatGPT/Codex subscription' section.",
+                    _effective_default_model,
+                    LLM_MODEL_CSV_PATH if LLM_MODEL_CSV_PATH else "package default",
+                )
+        manifest_by_model = _load_deepswe_manifest()
+        # Router exact-model override (issue #1584): bypass the strength
+        # cascade and select the routed model directly when it exists.
+        if model_override:
+            _effective_default_model = model_override
+        explicit_unranked_claude_model = _explicit_unranked_claude_5_model(
+            _effective_default_model
+        )
+        candidate_models = _select_model_candidates(
+            strength,
+            _effective_default_model,
+            model_df,
+            manifest_by_model=manifest_by_model,
+        )
+        if explicit_unranked_claude_model:
+            # An explicit unranked Claude selection is not merely a
+            # strength-routing base point. Keep normal candidates afterward
+            # so fallback starts only after the exact model was attempted.
+            candidate_models = _prioritize_explicit_unranked_claude_candidate(
+                candidate_models,
+                explicit_unranked_claude_model,
+            )
+        elif model_override:
+            _exact = [
+                c for c in candidate_models
+                if str(c.get("model")) == str(model_override)
+            ]
+            if _exact:
+                candidate_models = _exact
+            else:
+                logger.debug(
+                    f"Router model {model_override!r} not in candidate set; "
+                    "falling back to the strength cascade."
+                )
+        try:
+            import click as _click_for_provenance
+            _ctx_for_provenance = _click_for_provenance.get_current_context(silent=True)
+            if _ctx_for_provenance is not None:
+                if _ctx_for_provenance.obj is None:
+                    _ctx_for_provenance.obj = {}
+                if isinstance(_ctx_for_provenance.obj, dict):
+                    _ctx_for_provenance.obj["requested_model"] = str(candidate_models[0].get("model", "")) if candidate_models else ""
+                    _ctx_for_provenance.obj["strength_used"] = str(strength)
+                    _ctx_for_provenance.obj["target_effort_level"] = candidate_models[0].get("target_effort_level") if candidate_models else None
+        except Exception:
+            pass
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         logger.error(f"Failed during model loading or selection: {e}")
+        _emit_llm_attribution(
+            attribution_context,
+            "llm_invoke.model_selection_error",
+            **_safe_error_fields(e),
+        )
+        # Attach attempts to the exception so worker threads can recover
+        # the cloud placeholder (if cloud was attempted before local
+        # model loading failed) via getattr — parity with the terminal
+        # RuntimeError and InsufficientCreditsError paths. Main-thread
+        # callers see the same attempts already on ctx.obj.
+        try:
+            setattr(e, "attempted_models", list(attempted_models))
+        except Exception:
+            pass
         raise
+
+    _emit_llm_attribution(
+        attribution_context,
+        "llm_invoke.model_candidates",
+        candidate_models=[
+            {
+                "model": str(candidate.get("model")),
+                "provider": str(candidate.get("provider", "")),
+                "api_key_env_names": _api_key_field_names(candidate.get("api_key")),
+                "location": str(candidate.get("location", "")) if pd.notna(candidate.get("location", "")) else "",
+            }
+            for candidate in candidate_models[:10]
+        ],
+        candidate_count=len(candidate_models),
+    )
 
     if verbose:
         # This print statement is crucial for the verbose test
         # Calculate and print strength for each candidate model
-        # Find min/max for cost and ELO
-        min_cost = model_df['avg_cost'].min()
-        max_elo = model_df['coding_arena_elo'].max()
-        base_cost = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['avg_cost'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else min_cost
-        base_elo = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['coding_arena_elo'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else max_elo
-        
+        # Find min/max for cost and rank. Older custom CSVs and several tests only
+        # provide raw Arena ELO, so mirror the selection fallback here too.
+        verbose_model_df = model_df.copy()
+        if 'model_rank_score' not in verbose_model_df.columns:
+            verbose_model_df['model_rank_score'] = verbose_model_df['coding_arena_elo']
+        else:
+            verbose_model_df['model_rank_score'] = verbose_model_df['model_rank_score'].fillna(
+                verbose_model_df['coding_arena_elo']
+            )
+
+        min_cost = verbose_model_df['avg_cost'].min()
+        max_elo = verbose_model_df['model_rank_score'].max()
+        base_row = verbose_model_df[verbose_model_df['model'] == _effective_default_model]
+        base_cost = base_row['avg_cost'].iloc[0] if not base_row.empty else min_cost
+        base_elo = base_row['model_rank_score'].iloc[0] if not base_row.empty else max_elo
+
         def calc_strength(candidate):
             # If strength < 0.5, interpolate by cost (cheaper = 0, base = 0.5)
-            # If strength > 0.5, interpolate by ELO (base = 0.5, highest = 1.0)
+            # If strength > 0.5, interpolate by rank score (base = 0.5, highest = 1.0)
             avg_cost = candidate.get('avg_cost', min_cost)
-            elo = candidate.get('coding_arena_elo', base_elo)
+            elo = candidate.get('model_rank_score', candidate.get('coding_arena_elo', base_elo))
             if strength < 0.5:
                 # Map cost to [0, 0.5]
                 if base_cost == min_cost:
@@ -1788,14 +5248,14 @@ def llm_invoke(
                 rel = (avg_cost - min_cost) / (base_cost - min_cost)
                 return max(0.0, min(0.5, rel * 0.5))
             elif strength > 0.5:
-                # Map ELO to [0.5, 1.0]
+                # Map DeepSWE-weighted rank to [0.5, 1.0]
                 if max_elo == base_elo:
                     return 0.5 # Avoid div by zero
                 rel = (elo - base_elo) / (max_elo - base_elo)
                 return max(0.5, min(1.0, 0.5 + rel * 0.5))
             else:
                 return 0.5
-        
+
         model_strengths_formatted = [(c['model'], f"{float(calc_strength(c)):.3f}") for c in candidate_models]
         logger.info("Candidate models selected and ordered (with strength): %s", model_strengths_formatted) # CORRECTED
         logger.info(f"Strength: {strength}, Temperature: {temperature}, Time: {time}")
@@ -1807,21 +5267,20 @@ def llm_invoke(
             # Only print input_json if it was actually provided (not when messages were used)
             if input_json is not None:
                 logger.info("Input JSON:")
-                logger.info(input_json) 
+                logger.info(input_json)
             else:
                  logger.info("Input: Using pre-formatted 'messages'.")
         except Exception:
-            logger.info("Input JSON/Messages (fallback print):") 
+            logger.info("Input JSON/Messages (fallback print):")
             logger.info(input_json if input_json is not None else "[Messages provided directly]")
 
 
     # --- 3. Iterate Through Candidates and Invoke LLM ---
     last_exception = None
     newly_acquired_keys: Dict[str, bool] = {} # Track keys obtained in this run
-    
+
     # Initialize variables for retry section
     response_format = None
-    time_kwargs = {}
 
     # Update global rate map for callback cost fallback
     try:
@@ -1829,10 +5288,33 @@ def llm_invoke(
     except Exception:
         pass
 
+    attempt_counter = 0
+    provider_attempted_this_call = False
+
     for model_info in candidate_models:
-        model_name_litellm = model_info['model']
+        if command_single_attempt and provider_attempted_this_call:
+            break
+        model_name_litellm = model_info["model"]
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
+
+        # LiteLLM's ChatGPT subscription adapter only exposes the Codex
+        # Responses endpoint.  Its chat-completions batch endpoint is
+        # unsupported, so fail before credential setup or any provider call
+        # rather than silently routing chatgpt/* through batch_completion().
+        if use_batch_mode and str(model_name_litellm).lower().startswith("chatgpt/"):
+            raise ValueError(
+                "ChatGPT subscription models do not support batch invocations. "
+                "Set use_batch_mode=False and invoke each item individually; "
+                "PDD will not send chatgpt/* requests to LiteLLM's "
+                "chat-completions batch endpoint."
+            )
+
+        # Record this candidate before any pre-call validation/skip logic so
+        # models skipped mid-call (context window pre-check, missing api_key,
+        # github_copilot OAuth missing, auth-error skip, etc.) are still
+        # captured in the history.
+        _record_attempt(str(model_name_litellm))
 
         if verbose:
             logger.info(f"\n[ATTEMPT] Trying model: {model_name_litellm} (Provider: {provider})")
@@ -1841,12 +5323,27 @@ def llm_invoke(
         # Track per-model temperature adjustment attempt (avoid infinite loop)
         current_temperature = temperature
         temp_adjustment_done = False
+        force_temperature_on_retry = False
         while retry_with_same_model:
             retry_with_same_model = False # Assume success unless auth error on new key
+            attempt_counter += 1
+            time_kwargs: Dict[str, Any] = {}
+            request_id = attribution_context.get("request_id", "no-attribution") if attribution_context else "no-attribution"
+            attempt_id = f"{request_id}-{attempt_counter}"
 
             # --- 4. API Key Check & Acquisition ---
-            if not _ensure_api_key(model_info, newly_acquired_keys, verbose):
+            # Estimate mode must not prompt for credentials or touch providers.
+            if not estimate_mode and not _ensure_api_key(model_info, newly_acquired_keys, verbose):
                 # Problem getting key, break inner loop, try next model candidate
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.model_skipped",
+                    attempt_id=attempt_id,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    api_key_env_names=_api_key_field_names(api_key_name),
+                    reason="credential_check_failed",
+                )
                 if verbose:
                     logger.info(f"[SKIP] Skipping {model_name_litellm} due to API key/credentials issue after prompt.")
                 break # Breaks the 'while retry_with_same_model' loop
@@ -1854,101 +5351,72 @@ def llm_invoke(
             # --- 5. Prepare LiteLLM Arguments ---
             litellm_kwargs: Dict[str, Any] = {
                 "model": model_name_litellm,
-                "messages": formatted_messages,
-                # Use a local adjustable temperature to allow provider-specific fallbacks
-                "temperature": current_temperature,
+                "messages": copy.deepcopy(formatted_messages),
                 # Retry on transient network errors (APIError, TimeoutError, ServiceUnavailableError)
                 "num_retries": 2,
             }
+            if command_output_cap is not None:
+                # LiteLLM maps ``max_tokens`` to the provider-specific
+                # completion/output field. The OpenAI Responses path below
+                # receives the equivalent ``max_output_tokens`` explicitly.
+                litellm_kwargs["max_tokens"] = command_output_cap
+            effective_output_cap = command_output_cap
+            if command_cost_cap is not None:
+                # A cost cap is converted to a token ceiling using the
+                # selected model's catalog rates after input tokenization.
+                # This value is tightened below before the provider call.
+                litellm_kwargs["num_retries"] = 0
+            if (
+                _model_disallows_temperature(model_name_litellm)
+                and not force_temperature_on_retry
+            ):
+                if verbose:
+                    logger.info("[INFO] Skipping 'temperature' for this model; the provider rejects it.")
+            else:
+                # Use a local adjustable temperature to allow provider-specific fallbacks.
+                litellm_kwargs["temperature"] = current_temperature
 
-            api_key_name_from_csv = model_info.get('api_key') # From CSV
-            # Determine if it's a Vertex AI model for special handling
-            is_vertex_model = (provider.lower() == 'google') or \
-                              (provider.lower() == 'googlevertexai') or \
-                              (provider.lower() == 'vertex_ai') or \
-                              model_name_litellm.startswith('vertex_ai/')
+            # --- Resolve API key / credentials ---
+            # The CSV api_key field may be:
+            #   - Single env var (e.g. "ANTHROPIC_API_KEY") → pass as api_key=
+            #   - Pipe-delimited (e.g. "VAR1|VAR2|VAR3")   → litellm reads from env
+            #   - Empty (device flow / local)               → no api_key needed
+            from pdd.provider_manager import parse_api_key_vars, resolve_api_key_from_env
 
-            if is_vertex_model and api_key_name_from_csv == 'VERTEX_CREDENTIALS':
-                credentials_file_path = os.getenv("VERTEX_CREDENTIALS") # Path from env var
-                vertex_project_env = os.getenv("VERTEX_PROJECT")
-                # Check for per-model location override, fall back to env var
-                model_location = model_info.get('location')
-                if pd.notna(model_location) and str(model_location).strip():
-                    vertex_location_env = str(model_location).strip()
-                    if verbose:
-                        logger.info(f"[INFO] Using per-model location override: '{vertex_location_env}' for model '{model_name_litellm}'")
-                else:
-                    vertex_location_env = os.getenv("VERTEX_LOCATION")
+            api_key_field = str(model_info.get('api_key', '') or '')
+            env_vars = parse_api_key_vars(api_key_field)
 
-                if credentials_file_path and vertex_project_env and vertex_location_env:
-                    try:
-                        with open(credentials_file_path, 'r') as f:
-                            loaded_credentials = json.load(f)
-                        vertex_credentials_json_string = json.dumps(loaded_credentials)
-                        
-                        litellm_kwargs["vertex_credentials"] = vertex_credentials_json_string
-                        litellm_kwargs["vertex_project"] = vertex_project_env
-                        litellm_kwargs["vertex_location"] = vertex_location_env
-                        if verbose:
-                            logger.info(f"[INFO] For Vertex AI: using vertex_credentials from '{credentials_file_path}', project '{vertex_project_env}', location '{vertex_location_env}'.")
-                    except FileNotFoundError:
-                        # Still pass project and location so ADC can work
-                        litellm_kwargs["vertex_project"] = vertex_project_env
-                        litellm_kwargs["vertex_location"] = vertex_location_env
-                        if verbose:
-                            logger.warning(f"[WARN] Vertex credentials file not found at '{credentials_file_path}'. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
-                    except json.JSONDecodeError:
-                        # Still pass project and location so ADC can work
-                        litellm_kwargs["vertex_project"] = vertex_project_env
-                        litellm_kwargs["vertex_location"] = vertex_location_env
-                        if verbose:
-                            logger.error(f"[ERROR] Failed to decode JSON from Vertex credentials file: '{credentials_file_path}'. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
-                    except Exception as e:
-                        # Still pass project and location so ADC can work
-                        litellm_kwargs["vertex_project"] = vertex_project_env
-                        litellm_kwargs["vertex_location"] = vertex_location_env
-                        if verbose:
-                            logger.error(f"[ERROR] Failed to load Vertex credentials from '{credentials_file_path}': {e}. Using ADC with project '{vertex_project_env}', location '{vertex_location_env}'.")
-                else:
-                    if verbose:
-                        logger.warning(f"[WARN] For Vertex AI (using '{api_key_name_from_csv}'): One or more required environment variables (VERTEX_CREDENTIALS, VERTEX_PROJECT, VERTEX_LOCATION) are missing.")
-                        if not credentials_file_path: logger.warning(f"  Reason: VERTEX_CREDENTIALS (path to JSON file) env var not set or empty.")
-                        if not vertex_project_env: logger.warning(f"  Reason: VERTEX_PROJECT env var not set or empty.")
-                        if not vertex_location_env: logger.warning(f"  Reason: VERTEX_LOCATION env var not set or empty.")
-                        logger.warning(f"  LiteLLM may attempt to use Application Default Credentials or the call may fail.")
-
-            elif api_key_name_from_csv: # For other api_key_names specified in CSV (e.g., OPENAI_API_KEY, or a direct VERTEX_AI_API_KEY string)
-                key_value = os.getenv(api_key_name_from_csv)
+            if len(env_vars) == 1:
+                # Simple provider: pass env var value as api_key=
+                key_value = resolve_api_key_from_env(
+                    env_vars[0],
+                    include_llm_invoke_aliases=True,
+                )[0]
                 if key_value:
                     key_value = _sanitize_api_key(key_value)
                     litellm_kwargs["api_key"] = key_value
                     if verbose:
-                        logger.info(f"[INFO] Explicitly passing API key from env var '{api_key_name_from_csv}' as 'api_key' parameter to LiteLLM.")
-                    
-                    # If this model is Vertex AI AND uses a direct API key string (not VERTEX_CREDENTIALS from CSV),
-                    # also pass project and location from env vars.
-                    if is_vertex_model:
-                        vertex_project_env = os.getenv("VERTEX_PROJECT")
-                        # Check for per-model location override, fall back to env var
-                        model_location = model_info.get('location')
-                        if pd.notna(model_location) and str(model_location).strip():
-                            vertex_location_env = str(model_location).strip()
-                            if verbose:
-                                logger.info(f"[INFO] Using per-model location override: '{vertex_location_env}' for model '{model_name_litellm}'")
-                        else:
-                            vertex_location_env = os.getenv("VERTEX_LOCATION")
-                        if vertex_project_env and vertex_location_env:
-                            litellm_kwargs["vertex_project"] = vertex_project_env
-                            litellm_kwargs["vertex_location"] = vertex_location_env
-                            if verbose:
-                                logger.info(f"[INFO] For Vertex AI model (using direct API key '{api_key_name_from_csv}'), also passing vertex_project='{vertex_project_env}' and vertex_location='{vertex_location_env}' from env vars.")
-                        elif verbose:
-                             logger.warning(f"[WARN] For Vertex AI model (using direct API key '{api_key_name_from_csv}'), VERTEX_PROJECT or VERTEX_LOCATION env vars not set. This might be required by LiteLLM.")
-                elif verbose: # api_key_name_from_csv was in CSV, but corresponding env var was not set/empty
-                    logger.warning(f"[WARN] API key name '{api_key_name_from_csv}' found in CSV, but the environment variable '{api_key_name_from_csv}' is not set or empty. LiteLLM will use default authentication if applicable (e.g., other standard env vars or ADC).")
-            
-            elif verbose: # No api_key_name_from_csv in CSV for this model
-                logger.info(f"[INFO] No API key name specified in CSV for model '{model_name_litellm}'. LiteLLM will use its default authentication mechanisms (e.g., standard provider env vars or ADC for Vertex AI).")
+                        logger.info(
+                            "[INFO] Passing resolved provider setting to LiteLLM.",
+                        )
+                elif verbose:
+                    logger.warning(f"[WARN] Env var '{env_vars[0]}' not set. LiteLLM will use default auth.")
+            elif len(env_vars) > 1:
+                # Multi-credential provider (Bedrock, Azure, Vertex AI, etc.)
+                # litellm reads these env vars from os.environ automatically.
+                if verbose:
+                    logger.info(f"[INFO] Multi-credential provider; litellm reads env vars: {env_vars}")
+            else:
+                # Empty api_key — device flow (GitHub Copilot) or local model
+                if verbose:
+                    logger.info(f"[INFO] No API key for '{model_name_litellm}'; using device flow or default auth.")
+
+            # Pass an explicit vertex_location only when the catalog row pins one
+            # (for example "global"). Blank-location rows rely on LiteLLM reading
+            # VERTEXAI_LOCATION / legacy aliases from the environment.
+            location = _clean_optional_scalar(model_info.get("location"))
+            if location and "VERTEXAI_LOCATION" in env_vars:
+                litellm_kwargs["vertex_location"] = location
 
             # Add base_url/api_base override if present in CSV
             api_base = model_info.get('base_url')
@@ -1957,11 +5425,20 @@ def llm_invoke(
                 litellm_kwargs["base_url"] = str(api_base)
                 litellm_kwargs["api_base"] = str(api_base)
 
+            # Enable 1M context window for Claude models via Anthropic beta header.
+            # Safe to send for all prompt lengths — the API only charges premium rates
+            # when the request actually exceeds 200K tokens.
+            if "claude" in model_name_litellm.lower():
+                litellm_kwargs["extra_headers"] = {"anthropic-beta": "context-1m-2025-08-07"}
+                if verbose:
+                    logger.info("[INFO] Added anthropic-beta: context-1m-2025-08-07 header for Claude model.")
+
             # Provider-specific defaults (e.g., LM Studio)
             model_name_lower = str(model_name_litellm).lower()
             provider_lower_for_model = provider.lower()
             is_lm_studio = model_name_lower.startswith('lm_studio/') or provider_lower_for_model == 'lm_studio'
             is_groq = model_name_lower.startswith('groq/') or provider_lower_for_model == 'groq'
+            is_chatgpt_subscription = str(model_name_litellm).lower().startswith("chatgpt/")
             if is_lm_studio:
                 # Ensure base_url is set (fallback to env LM_STUDIO_API_BASE or localhost)
                 if not litellm_kwargs.get("base_url"):
@@ -2074,6 +5551,26 @@ def llm_invoke(
                         if verbose:
                             logger.info(f"[INFO] Using JSON object mode with schema in prompt for Groq (avoiding tool_use issues)")
 
+                    # ChatGPT subscription backend ignores response_format/json_schema
+                    # (it returns prose), so enforce the schema in-band and drop the
+                    # ignored response_format. Mirrors the Groq handling above. (#1269)
+                    if is_chatgpt_subscription:
+                        from pdd.codex_subscription import inject_chatgpt_schema_instruction
+                        _schema_dict = None
+                        if output_pydantic:
+                            _schema_dict = output_pydantic.model_json_schema()
+                        elif output_schema:
+                            _schema_dict = output_schema
+                        litellm_kwargs.pop("response_format", None)
+                        if _schema_dict is not None:
+                            # Shared helper — used here AND in the retry/repair paths
+                            # (via _build_chatgpt_retry_messages) so a chatgpt/ retry
+                            # never loses the schema instruction (issue #1269).
+                            litellm_kwargs["messages"] = inject_chatgpt_schema_instruction(
+                                litellm_kwargs.get("messages", []), _schema_dict
+                            )
+                            if verbose:
+                                logger.info("[INFO] ChatGPT subscription structured output via schema-in-prompt")
                     # As a fallback, one could use:
                     # litellm_kwargs["response_format"] = {"type": "json_object"}
                     # And potentially enable client-side validation:
@@ -2111,17 +5608,74 @@ def llm_invoke(
                         logger.warning(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but 'max_reasoning_tokens' is missing or zero in CSV. Reasoning parameter not sent.")
 
                 elif reasoning_type == 'effort':
-                    effort = "low"
-                    if time > 0.7:
-                        effort = "high"
-                    elif time > 0.3:
-                        effort = "medium"
+                    from .reasoning import time_to_effort_level
+                    effort = time_to_effort_level(time)
 
                     # Map effort parameter per-provider/model family
                     model_lower = str(model_name_litellm).lower()
                     provider_lower = str(provider).lower()
 
-                    if provider_lower == 'openai' and model_lower.startswith('gpt-5'):
+                    if _is_kimi_k3_model(model_name_litellm):
+                        requested_effort = os.environ.get(
+                            "PDD_REASONING_EFFORT", ""
+                        ).strip().lower()
+                        if requested_effort:
+                            if requested_effort not in {"low", "high", "max"}:
+                                raise ValueError(
+                                    f"PDD_REASONING_EFFORT={requested_effort!r} is not "
+                                    "supported by moonshot/kimi-k3; supported values: "
+                                    "high, low, max"
+                                )
+                            effort = requested_effort
+                        else:
+                            # PDD's generic scale is low/medium/high; K3 accepts
+                            # only low/high/max and defaults to max.
+                            effort = {
+                                "low": "low",
+                                "medium": "high",
+                                "high": "max",
+                            }[effort]
+                        kimi_extra_body = {"reasoning_effort": effort}
+                        for kwargs in (litellm_kwargs, time_kwargs):
+                            existing_extra_body = kwargs.get("extra_body")
+                            kwargs["extra_body"] = {
+                                **(
+                                    existing_extra_body
+                                    if isinstance(existing_extra_body, dict)
+                                    else {}
+                                ),
+                                **kimi_extra_body,
+                            }
+                        if verbose:
+                            logger.info(
+                                "[INFO] Requesting Kimi K3 reasoning_effort="
+                                f"'{effort}' via extra_body"
+                            )
+
+                    elif provider_lower == 'openai' and model_lower.startswith('gpt-5'):
+                        requested_effort = os.environ.get("PDD_REASONING_EFFORT", "").strip().lower()
+                        if requested_effort:
+                            effort = requested_effort
+                        if model_lower.startswith("gpt-5.6"):
+                            allowed_efforts = {"none", "low", "medium", "high", "xhigh", "max"}
+                        elif model_lower.startswith(("gpt-5.5-pro", "gpt-5.4-pro")):
+                            allowed_efforts = {"medium", "high", "xhigh"}
+                        elif model_lower.startswith(("gpt-5.5", "gpt-5.4", "gpt-5.2")):
+                            allowed_efforts = {"none", "low", "medium", "high", "xhigh"}
+                        elif model_lower.startswith("gpt-5.3-codex"):
+                            allowed_efforts = {"low", "medium", "high", "xhigh"}
+                        elif model_lower.startswith("gpt-5.1"):
+                            allowed_efforts = {"none", "low", "medium", "high"}
+                        elif model_lower.startswith("gpt-5-pro"):
+                            allowed_efforts = {"high"}
+                        else:
+                            allowed_efforts = {"minimal", "low", "medium", "high"}
+                        if effort not in allowed_efforts:
+                            allowed_text = ", ".join(sorted(allowed_efforts))
+                            raise ValueError(
+                                f"PDD_REASONING_EFFORT={effort!r} is not supported by "
+                                f"OpenAI model {model_name_litellm}; supported values: {allowed_text}"
+                            )
                         # OpenAI 5-series uses Responses API with nested 'reasoning'
                         reasoning_obj = {"effort": effort, "summary": "auto"}
                         litellm_kwargs["reasoning"] = reasoning_obj
@@ -2142,6 +5696,59 @@ def llm_invoke(
                         time_kwargs["reasoning_effort"] = effort
                         if verbose:
                             logger.info(f"[INFO] Requesting generic reasoning_effort='{effort}' for {model_name_litellm}")
+
+                elif reasoning_type == 'adaptive':
+                    # Claude Opus 4.7 (and onward) on Anthropic and Azure AI
+                    # removed the legacy
+                    # `thinking={"type":"enabled","budget_tokens":N}` shape and
+                    # only accepts the new adaptive thinking API:
+                    # `thinking={"type":"adaptive"}` + `output_config.effort`.
+                    # Anthropic accepts top-level `thinking` and
+                    # `reasoning_effort`; Azure AI's OpenAI-style optional-param
+                    # filter drops those keys, so Azure must use `extra_body`.
+                    from .reasoning import time_to_effort_level
+                    effort = time_to_effort_level(time)
+                    provider_lower = str(provider).strip().lower().replace('_', ' ')
+                    thinking_param = {"type": "adaptive", "display": "summarized"}
+                    if provider_lower == 'anthropic':
+                        litellm_kwargs["thinking"] = thinking_param
+                        time_kwargs["thinking"] = thinking_param
+                        litellm_kwargs["reasoning_effort"] = effort
+                        time_kwargs["reasoning_effort"] = effort
+                        if verbose:
+                            logger.info(
+                                "[INFO] Requesting Anthropic adaptive "
+                                f"thinking with effort='{effort}' for "
+                                f"{model_name_litellm}"
+                            )
+                    elif provider_lower == 'azure ai':
+                        azure_adaptive_body = {
+                            "thinking": thinking_param,
+                            "output_config": {"effort": effort},
+                        }
+                        for kwargs in (litellm_kwargs, time_kwargs):
+                            existing_extra_body = kwargs.get("extra_body")
+                            if isinstance(existing_extra_body, dict):
+                                kwargs["extra_body"] = {
+                                    **existing_extra_body,
+                                    **azure_adaptive_body,
+                                }
+                            else:
+                                kwargs["extra_body"] = dict(azure_adaptive_body)
+                        if verbose:
+                            logger.info(
+                                "[INFO] Requesting Azure AI adaptive thinking "
+                                f"via extra_body with effort='{effort}' for "
+                                f"{model_name_litellm}"
+                            )
+                    else:
+                        if verbose:
+                            logger.warning(
+                                "[WARN] reasoning_type='adaptive' but provider "
+                                f"'{provider}' is not Anthropic or Azure AI; "
+                                "reasoning parameter not sent for "
+                                f"{model_name_litellm}."
+                            )
 
                 elif reasoning_type == 'none':
                     if verbose:
@@ -2165,32 +5772,272 @@ def llm_invoke(
                 if litellm.cache is not None:
                     logger.debug(f"litellm.cache type: {type(litellm.cache)}, ID: {id(litellm.cache)}")
 
-                # Only add if litellm.cache is configured
-                if litellm.cache is not None:
+                # Only add if litellm.cache is configured.
+                # Skip caching for chatgpt/ subscription models (issue #1269):
+                # litellm's responses-API cache-key path raises (preset_cache_key
+                # bug), and flat-rate subscription responses must not be cached —
+                # a transient empty response would otherwise poison the prompt's
+                # cache entry and break it on every later run.
+                if litellm.cache is not None and not is_chatgpt_subscription:
                     litellm_kwargs["caching"] = True
+                    # Workaround for litellm bug where metadata=None causes AttributeError
+                    # in caching.py when it tries kwargs.get("metadata", {}).get("redis_namespace")
+                    if litellm_kwargs.get("metadata") is None:
+                        litellm_kwargs["metadata"] = {}
                     logger.debug("Caching enabled for this request")
+                elif is_chatgpt_subscription:
+                    litellm_kwargs["caching"] = False
+                    logger.debug("Caching disabled for chatgpt/ subscription model (#1269)")
                 else:
                     logger.debug("NOT ENABLING CACHING: litellm.cache is None at call time")
 
+                if estimate_mode:
+                    estimate_context_limit = _catalog_context_limit(model_info)
+                    if estimate_context_limit is None and _estimate_metadata_probe_is_safe(model_info, str(model_name_litellm)):
+                        try:
+                            estimate_context_limit = get_context_limit(model_name_litellm)
+                            extra_headers = litellm_kwargs.get("extra_headers", {})
+                            if (
+                                estimate_context_limit is not None
+                                and "anthropic-beta" in extra_headers
+                                and "context-1m" in extra_headers.get("anthropic-beta", "")
+                            ):
+                                estimate_context_limit = 1_000_000
+                        except Exception:
+                            estimate_context_limit = None
 
-                # Route OpenAI gpt-5* models through Responses API to support 'reasoning'
+                    call_type_for_estimate = (
+                        "batch_completion" if use_batch_mode else "completion"
+                    )
+                    estimate_payload = _build_estimate_payload(
+                        command_name=_current_estimate_command_name(),
+                        model_info=model_info,
+                        messages_for_count=litellm_kwargs.get("messages", []),
+                        model_name=str(model_name_litellm),
+                        context_limit=estimate_context_limit,
+                        attempted_models=attempted_models,
+                        call_type=call_type_for_estimate,
+                    )
+                    _accumulate_estimate_on_click_context(estimate_payload)
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.estimate_only",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        token_count=estimate_payload.get("input_tokens"),
+                        predicted_output_tokens=estimate_payload.get("predicted_output_tokens"),
+                        cost=estimate_payload.get("total_cost"),
+                    )
+                    raise EstimateOnlyResult(estimate_payload)
+
+
+                # Route OpenAI gpt-5* API models and ChatGPT subscription
+                # models through Responses.  LiteLLM's chatgpt provider is a
+                # Responses-only Codex backend; sending it through
+                # completion() targets /chat/completions and can return a
+                # browser-only Cloudflare challenge.
                 model_lower_for_call = str(model_name_litellm).lower()
                 provider_lower_for_call = str(provider).lower()
-
-                if (
+                use_responses_api = (
                     not use_batch_mode
-                    and provider_lower_for_call == 'openai'
-                    and model_lower_for_call.startswith('gpt-5')
-                ):
+                    and (
+                        (
+                            provider_lower_for_call == "openai"
+                            and model_lower_for_call.startswith("gpt-5")
+                        )
+                        or is_chatgpt_subscription
+                    )
+                )
+
+                # Responses calls bypass the chat-completions admission block
+                # below, so perform the same context and hosted-budget checks
+                # before dispatch.  Without this gate a GPT-5 Responses call
+                # could send an uncapped request even when the story-stage
+                # adapter supplied PDD_COMMAND_MAX_* limits.
+                responses_budget_admitted = False
+                if use_responses_api:
+                    token_count_for_attribution = None
+                    context_limit_for_attribution = None
+                    try:
+                        messages_for_count = litellm_kwargs.get("messages", [])
+                        token_count = count_tokens_for_messages(
+                            messages_for_count, model=model_name_litellm
+                        )
+                        context_limit = _catalog_context_limit(model_info)
+                        if context_limit is None:
+                            context_limit = get_context_limit(model_name_litellm)
+                        token_count_for_attribution = token_count
+                        context_limit_for_attribution = context_limit
+                        extra_headers = litellm_kwargs.get("extra_headers", {})
+                        if (
+                            context_limit is not None
+                            and "anthropic-beta" in extra_headers
+                            and "context-1m" in extra_headers.get("anthropic-beta", "")
+                        ):
+                            context_limit = 1_000_000
+                            context_limit_for_attribution = context_limit
+                        if command_input_cap is not None and token_count > command_input_cap:
+                            last_exception = RuntimeError(
+                                f"Prompt ({token_count:,} tokens) exceeds hosted command input ceiling "
+                                f"({command_input_cap:,} tokens)"
+                            )
+                            logger.error("[CONTEXT] %s", last_exception)
+                            break
+                        if context_limit is not None and token_count > context_limit:
+                            last_exception = RuntimeError(
+                                f"Prompt ({token_count:,} tokens) exceeds {model_name_litellm} "
+                                f"context limit ({context_limit:,} tokens)"
+                            )
+                            logger.error("[CONTEXT] %s", last_exception)
+                            break
+                    except Exception as ctx_err:
+                        # A hard command cap cannot be proven if tokenization
+                        # failed; fail closed rather than dispatching unknown
+                        # input usage.  Legacy, unbounded calls retain their
+                        # previous best-effort context behavior.
+                        if command_cost_cap is not None or command_input_cap is not None:
+                            last_exception = RuntimeError(
+                                f"Unable to count hosted command input for {model_name_litellm}"
+                            )
+                            logger.error("[CONTEXT] %s: %s", last_exception, ctx_err)
+                            break
+                        logger.debug("[CONTEXT] Token validation skipped: %s", ctx_err)
+                    if command_cost_cap is not None:
+                        try:
+                            input_rate = Decimal(str(_model_info_value(model_info, "input")))
+                            output_rate = Decimal(str(_model_info_value(model_info, "output")))
+                        except (InvalidOperation, TypeError, ValueError) as exc:
+                            last_exception = RuntimeError(
+                                f"Provider rates unavailable for hosted command model {model_name_litellm}"
+                            )
+                            logger.error("[BUDGET] Refusing uncapped provider rates: %s", exc)
+                            break
+                        if (
+                            not input_rate.is_finite()
+                            or not output_rate.is_finite()
+                            or input_rate < 0
+                            or output_rate <= 0
+                            or token_count_for_attribution is None
+                        ):
+                            last_exception = RuntimeError(
+                                f"Provider rates unavailable for hosted command model {model_name_litellm}"
+                            )
+                            break
+                        current_reserved, _attempts = _hosted_budget_state(command_cost_cap)
+                        input_cost = (
+                            Decimal(str(int(token_count_for_attribution)))
+                            * input_rate
+                            / Decimal(1_000_000)
+                        )
+                        remaining = command_cost_cap - current_reserved - input_cost
+                        if remaining <= 0:
+                            last_exception = RuntimeError(
+                                "Hosted command budget exhausted before provider invocation"
+                            )
+                            break
+                        max_by_cost = int((remaining * Decimal(1_000_000)) // output_rate)
+                        if max_by_cost <= 0:
+                            last_exception = RuntimeError(
+                                "Hosted command budget cannot fund one provider output token"
+                            )
+                            break
+                        if effective_output_cap is None:
+                            effective_output_cap = max_by_cost
+                        else:
+                            effective_output_cap = min(effective_output_cap, max_by_cost)
+                        if effective_output_cap <= 0:
+                            last_exception = RuntimeError(
+                                "Hosted command output token ceiling is exhausted"
+                            )
+                            break
+                        _reserve_hosted_budget(
+                            input_cost
+                            + Decimal(effective_output_cap) * output_rate / Decimal(1_000_000)
+                        )
+                        _record_hosted_attempt()
+                        provider_attempted_this_call = True
+                    responses_budget_admitted = True
+
+                if use_responses_api:
                     if verbose:
                         logger.info(f"[INFO] Calling LiteLLM Responses API for {model_name_litellm}...")
                     try:
-                        # Build input text from messages
-                        if isinstance(formatted_messages, list) and formatted_messages and isinstance(formatted_messages[0], dict):
-                            input_text = "\n\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in formatted_messages)
+                        # Build input from the final messages, after any schema
+                        # instruction has been injected.  The ChatGPT/Codex
+                        # backend requires list-form Responses input.
+                        messages_for_responses = litellm_kwargs.get(
+                            "messages", formatted_messages
+                        )
+                        if is_chatgpt_subscription:
+                            input_text = []
+                            for message in messages_for_responses:
+                                if not isinstance(message, dict):
+                                    message = {"role": "user", "content": str(message)}
+                                content = message.get("content", "")
+                                if isinstance(content, list):
+                                    response_content = []
+                                    for part in content:
+                                        if not isinstance(part, dict):
+                                            response_content.append({
+                                                "type": "input_text",
+                                                "text": str(part),
+                                            })
+                                            continue
+                                        part_type = part.get("type")
+                                        if part_type in {"text", "input_text"}:
+                                            response_content.append({
+                                                "type": "input_text",
+                                                "text": str(part.get("text", "")),
+                                            })
+                                        elif part_type in {"image_url", "input_image"}:
+                                            image_data = part.get("image_url", "")
+                                            if isinstance(image_data, dict):
+                                                image_url = image_data.get("url", "")
+                                                detail = image_data.get("detail")
+                                            else:
+                                                image_url = image_data
+                                                detail = part.get("detail")
+                                            if isinstance(image_url, str) and image_url:
+                                                image_part = {
+                                                    "type": "input_image",
+                                                    "image_url": image_url,
+                                                }
+                                                if detail:
+                                                    image_part["detail"] = detail
+                                                response_content.append(image_part)
+                                        else:
+                                            response_content.append({
+                                                "type": "input_text",
+                                                "text": json.dumps(part, default=str),
+                                            })
+                                else:
+                                    response_content = [{
+                                        "type": "input_text",
+                                        "text": (
+                                            content
+                                            if isinstance(content, str)
+                                            else json.dumps(content, default=str)
+                                        ),
+                                    }]
+                                input_text.append(
+                                    {
+                                        "role": message.get("role", "user"),
+                                        "content": response_content,
+                                    }
+                                )
+                        elif (
+                            isinstance(messages_for_responses, list)
+                            and messages_for_responses
+                            and isinstance(messages_for_responses[0], dict)
+                        ):
+                            input_text = "\n\n".join(
+                                f"{m.get('role', 'user')}: {m.get('content', '')}"
+                                for m in messages_for_responses
+                            )
                         else:
                             # Fallback: string cast
-                            input_text = str(formatted_messages)
+                            input_text = str(messages_for_responses)
 
                         # Derive effort mapping already computed in time_kwargs
                         reasoning_param = time_kwargs.get("reasoning")
@@ -2233,15 +6080,41 @@ def llm_invoke(
                         responses_kwargs = {
                             "model": model_name_litellm,
                             "input": input_text,
-                            "text": text_block,
                         }
+                        # The subscription backend ignores/strips Responses
+                        # text.format. Its structured-output contract is the
+                        # schema instruction already included in input.
+                        if not is_chatgpt_subscription:
+                            responses_kwargs["text"] = text_block
+                        if effective_output_cap is not None:
+                            # Responses API names the hard completion ceiling
+                            # differently from chat-completions.
+                            responses_kwargs["max_output_tokens"] = effective_output_cap
                         if verbose and temperature not in (None, 0, 0.0):
                             logger.info("[INFO] Skipping 'temperature' for OpenAI GPT-5 Responses call (unsupported by API).")
                         if reasoning_param is not None:
                             responses_kwargs["reasoning"] = reasoning_param
 
                         # Call litellm.responses() which handles the API interaction
-                        resp = litellm.responses(**responses_kwargs)
+                        call_start = time_module.time()
+                        _emit_llm_attribution(
+                            attribution_context,
+                            "llm_invoke.litellm_request",
+                            attempt_id=attempt_id,
+                            call_type="responses",
+                            model=str(model_name_litellm),
+                            provider=str(provider),
+                            api_key_env_names=_api_key_field_names(api_key_name),
+                            kwargs_summary={
+                                "model": responses_kwargs.get("model"),
+                                "has_reasoning": "reasoning" in responses_kwargs,
+                                "has_structured_text_format": text_block.get("format", {}).get("type") == "json_schema",
+                            },
+                        )
+                        resp = litellm.responses(
+                            **responses_kwargs, timeout=LLM_CALL_TIMEOUT
+                        )
+                        call_duration = time_module.time() - call_start
 
                         # Extract text result from response
                         result_text = None
@@ -2258,8 +6131,16 @@ def llm_invoke(
                         except Exception:
                             result_text = None
 
+                        if not result_text:
+                            result_text = getattr(resp, "output_text", None)
+                        if not isinstance(result_text, str) or not result_text.strip():
+                            raise ValueError(
+                                "Responses API returned no non-empty text output"
+                            )
+
                         # Calculate cost using usage + CSV rates
                         total_cost = 0.0
+                        finish_reason = getattr(resp, "status", None)
                         usage = getattr(resp, "usage", None)
                         if usage is not None:
                             in_tok = getattr(usage, "input_tokens", 0) or 0
@@ -2267,12 +6148,25 @@ def llm_invoke(
                             in_rate = model_info.get('input', 0.0) or 0.0
                             out_rate = model_info.get('output', 0.0) or 0.0
                             total_cost = (in_tok * in_rate + out_tok * out_rate) / 1_000_000.0
+                        _emit_llm_attribution(
+                            attribution_context,
+                            "llm_invoke.litellm_response",
+                            attempt_id=attempt_id,
+                            call_type="responses",
+                            model=str(model_name_litellm),
+                            duration_seconds=round(call_duration, 3),
+                            usage={
+                                "prompt_tokens": getattr(usage, "input_tokens", 0) if usage is not None else 0,
+                                "completion_tokens": getattr(usage, "output_tokens", 0) if usage is not None else 0,
+                            },
+                            cost=total_cost,
+                        )
 
                         # Parse result if Pydantic output requested
                         final_result = None
                         if output_pydantic and result_text:
                             try:
-                                final_result = output_pydantic.model_validate_json(result_text)
+                                final_result = _validate_pydantic_with_unwrap(result_text, output_pydantic)
                             except Exception as e:
                                 # With structured output, parsing should succeed
                                 # But if it fails, try JSON repair as fallback
@@ -2301,7 +6195,7 @@ def llm_invoke(
                                 parse_succeeded = False
                                 for cand in candidates:
                                     try:
-                                        final_result = output_pydantic.model_validate_json(cand)
+                                        final_result = _validate_pydantic_with_unwrap(cand, output_pydantic)
                                         parse_succeeded = True
                                         logger.info(f"[SUCCESS] JSON repair succeeded for Responses output")
                                         break
@@ -2318,15 +6212,54 @@ def llm_invoke(
                             logger.info(f"[RESULT] Model Used: {model_name_litellm}")
                             logger.info(f"[RESULT] Total Cost (estimated): ${total_cost:.6g}")
 
-                        return {
+                        _emit_llm_attribution(
+                            attribution_context,
+                            "llm_invoke.success",
+                            attempt_id=attempt_id,
+                            model=str(model_name_litellm),
+                            provider=str(provider),
+                            cost=total_cost,
+                            finish_reason=finish_reason,
+                            call_type="responses",
+                        )
+                        _publish_model_provenance(
+                            resolved_model=str(model_name_litellm),
+                            outcome="direct" if len(attempted_models) <= 1 else "fallback",
+                            deepswe_manifest_date=str(model_info.get("deepswe_manifest_date") or ""),
+                        )
+                        return _with_local_grounding({
                             'result': final_result,
                             'cost': total_cost,
                             'model_name': model_name_litellm,
                             'thinking_output': None,
-                        }
+                            'finish_reason': finish_reason,
+                            'attempted_models': list(attempted_models),
+                        })
                     except Exception as e:
                         last_exception = e
+                        _emit_llm_attribution(
+                            attribution_context,
+                            "llm_invoke.litellm_error",
+                            attempt_id=attempt_id,
+                            call_type="responses",
+                            model=str(model_name_litellm),
+                            provider=str(provider),
+                            **_safe_error_fields(e),
+                        )
                         logger.error(f"[ERROR] OpenAI Responses call failed for {model_name_litellm}: {e}")
+                        # A bounded command has already reserved the request
+                        # before this call. Do not fall through to a second
+                        # provider request (which would double-spend the
+                        # reservation); terminate this candidate and let the
+                        # outer single-attempt guard fail closed.
+                        if responses_budget_admitted and command_single_attempt:
+                            break
+                        # Never retry a ChatGPT subscription request through
+                        # completion(): that is a different, unsupported
+                        # endpoint and produces the Cloudflare HTML seen by
+                        # users. Move directly to the next candidate model.
+                        if is_chatgpt_subscription:
+                            break
                         # Remove 'reasoning' key to avoid OpenAI Chat API unknown param errors
                         if "reasoning" in litellm_kwargs:
                             try:
@@ -2335,6 +6268,174 @@ def llm_invoke(
                                 pass
                         # Fall through to LiteLLM path as a fallback
 
+                # --- Context Window Validation ---
+                token_count_for_attribution = None
+                context_limit_for_attribution = None
+                try:
+                    messages_for_count = litellm_kwargs.get("messages", [])
+                    # Use the hang-safe wrapper so a misrouted provider-detection
+                    # call (e.g. github_copilot device-code OAuth) can't wedge
+                    # the entire LLM invocation. See pdd/server/token_counter.py.
+                    token_count = count_tokens_for_messages(messages_for_count, model=model_name_litellm)
+                    context_limit = _catalog_context_limit(model_info)
+                    if context_limit is None:
+                        context_limit = get_context_limit(model_name_litellm)
+                    token_count_for_attribution = token_count
+                    context_limit_for_attribution = context_limit
+
+                    # If the Claude 1M beta header is active, honour it as the effective limit
+                    extra_headers = litellm_kwargs.get("extra_headers", {})
+                    if (context_limit is not None
+                            and "anthropic-beta" in extra_headers
+                            and "context-1m" in extra_headers.get("anthropic-beta", "")):
+                        context_limit = 1_000_000
+                        context_limit_for_attribution = context_limit
+
+                    if command_input_cap is not None and token_count > command_input_cap:
+                        logger.error(
+                            f"[CONTEXT] Prompt ({token_count:,} tokens) exceeds hosted command "
+                            f"input ceiling ({command_input_cap:,}); trying next model."
+                        )
+                        last_exception = RuntimeError(
+                            f"Prompt ({token_count:,} tokens) exceeds hosted command input ceiling "
+                            f"({command_input_cap:,} tokens)"
+                        )
+                        break
+
+                    if context_limit is None:
+                        if verbose:
+                            logger.debug(
+                                f"[CONTEXT] Context limit unknown for {model_name_litellm}; "
+                                f"skipping validation. Token count: {token_count:,}"
+                            )
+                    else:
+                        usage_pct = (token_count / context_limit) * 100
+                        if token_count > context_limit:
+                            logger.error(
+                                f"[CONTEXT] Prompt ({token_count:,} tokens) exceeds {model_name_litellm} "
+                                f"context limit ({context_limit:,} tokens, {usage_pct:.1f}% usage). "
+                                f"Trying next model."
+                            )
+                            last_exception = RuntimeError(
+                                f"Prompt ({token_count:,} tokens) exceeds {model_name_litellm} "
+                                f"context limit ({context_limit:,} tokens)"
+                            )
+                            break  # try next candidate model
+
+                        if verbose and usage_pct > 90:
+                            logger.warning(
+                                f"[CONTEXT] Prompt is {usage_pct:.1f}% of {model_name_litellm} context "
+                                f"({token_count:,}/{context_limit:,} tokens)"
+                            )
+                        elif verbose:
+                            logger.info(
+                                f"[CONTEXT] Token count: {token_count:,}/{context_limit:,} "
+                                f"({usage_pct:.1f}%) for {model_name_litellm}"
+                            )
+                except Exception as ctx_err:
+                    if verbose:
+                        logger.debug(f"[CONTEXT] Token validation skipped: {ctx_err}")
+
+                if command_cost_cap is not None:
+                    # Unknown pricing cannot prove a hard USD ceiling. Do not
+                    # dispatch to a provider when the catalog row is missing
+                    # either rate (or reports an invalid rate).
+                    try:
+                        input_rate = Decimal(str(_model_info_value(model_info, "input")))
+                        output_rate = Decimal(str(_model_info_value(model_info, "output")))
+                    except (InvalidOperation, TypeError, ValueError) as exc:
+                        last_exception = RuntimeError(
+                            f"Provider rates unavailable for hosted command model {model_name_litellm}"
+                        )
+                        logger.error("[BUDGET] Refusing uncapped provider rates: %s", exc)
+                        break
+                    if (
+                        not input_rate.is_finite()
+                        or not output_rate.is_finite()
+                        or input_rate < 0
+                        or output_rate <= 0
+                        or token_count_for_attribution is None
+                    ):
+                        last_exception = RuntimeError(
+                            f"Provider rates unavailable for hosted command model {model_name_litellm}"
+                        )
+                        break
+                    current_reserved, _attempts = _hosted_budget_state(command_cost_cap)
+                    input_cost = (
+                        Decimal(str(int(token_count_for_attribution))) * input_rate / Decimal(1_000_000)
+                    )
+                    remaining = command_cost_cap - current_reserved - input_cost
+                    if remaining <= 0:
+                        last_exception = RuntimeError(
+                            "Hosted command budget exhausted before provider invocation"
+                        )
+                        break
+                    max_by_cost = int((remaining * Decimal(1_000_000)) // output_rate)
+                    if max_by_cost <= 0:
+                        last_exception = RuntimeError(
+                            "Hosted command budget cannot fund one provider output token"
+                        )
+                        break
+                    if effective_output_cap is None:
+                        effective_output_cap = max_by_cost
+                    else:
+                        effective_output_cap = min(effective_output_cap, max_by_cost)
+                    if effective_output_cap <= 0:
+                        last_exception = RuntimeError(
+                            "Hosted command output token ceiling is exhausted"
+                        )
+                        break
+                    litellm_kwargs["max_tokens"] = effective_output_cap
+                    _reserve_hosted_budget(
+                        input_cost
+                        + Decimal(effective_output_cap) * output_rate / Decimal(1_000_000)
+                    )
+                    _record_hosted_attempt()
+                    provider_attempted_this_call = True
+
+                if effective_output_cap is not None:
+                    # Keep provider-specific reasoning budgets inside the same
+                    # hard output ceiling (Anthropic's thinking tokens are
+                    # billed output tokens too).
+                    for bounded_kwargs in (litellm_kwargs, time_kwargs):
+                        thinking = bounded_kwargs.get("thinking")
+                        if isinstance(thinking, dict) and "budget_tokens" in thinking:
+                            try:
+                                thinking["budget_tokens"] = min(
+                                    int(thinking["budget_tokens"]), effective_output_cap
+                                )
+                            except (TypeError, ValueError):
+                                thinking["budget_tokens"] = effective_output_cap
+
+                # Gemini 3.6 Flash and 3.5 Flash-Lite deprecate all sampling
+                # parameters. Filter immediately before the batch/single split
+                # so later request construction cannot reintroduce them. Older
+                # Gemini 3 models retain the existing temperature=1 clamp.
+                if not _drop_deprecated_gemini_sampling_parameters(
+                    litellm_kwargs, model_name_litellm, verbose
+                ):
+                    if _maybe_clamp_gemini_3_temperature(
+                        litellm_kwargs, model_name_litellm, verbose
+                    ):
+                        current_temperature = 1
+                _apply_kimi_k3_request_contract(
+                    litellm_kwargs, model_name_litellm
+                )
+
+                call_type_for_attribution = "batch_completion" if use_batch_mode else "completion"
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.litellm_request",
+                    attempt_id=attempt_id,
+                    call_type=call_type_for_attribution,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    api_key_env_names=_api_key_field_names(api_key_name),
+                    kwargs_summary=_summarize_litellm_kwargs(litellm_kwargs),
+                    token_count=token_count_for_attribution,
+                    context_limit=context_limit_for_attribution,
+                )
+
                 if use_batch_mode:
                     if verbose:
                         logger.info(f"[INFO] Calling litellm.batch_completion for {model_name_litellm}...")
@@ -2342,30 +6443,48 @@ def llm_invoke(
 
 
                 else:
-                    # Anthropic requirement: when 'thinking' is enabled, temperature must be 1
+                    # Claude requirement: when thinking/reasoning is enabled, temperature must be 1.
+                    # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.
+                    # Check top-level and extra_body payloads because LiteLLM
+                    # may route provider-specific thinking through either.
                     try:
-                        if provider.lower() == 'anthropic' and 'thinking' in litellm_kwargs:
+                        is_claude_model = 'claude' in model_name_litellm.lower()
+                        has_thinking_or_reasoning = _has_thinking_or_reasoning_payload(
+                            litellm_kwargs
+                        )
+                        if is_claude_model and has_thinking_or_reasoning and 'temperature' in litellm_kwargs:
                             if litellm_kwargs.get('temperature') != 1:
                                 if verbose:
-                                    logger.info("[INFO] Anthropic thinking enabled: forcing temperature=1 for compliance.")
+                                    logger.info("[INFO] Claude with thinking/reasoning enabled: forcing temperature=1 for compliance.")
                                 litellm_kwargs['temperature'] = 1
                                 current_temperature = 1
                     except Exception:
                         pass
+                    # Gemini sampling compatibility is applied once before the
+                    # batch/single split, so no per-call override is needed.
                     if verbose:
                         logger.info(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
-                    response = litellm.completion(**litellm_kwargs)
+                    response = litellm.completion(**litellm_kwargs, timeout=LLM_CALL_TIMEOUT)
 
                 end_time = time_module.time()
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.litellm_response",
+                    attempt_id=attempt_id,
+                    call_type=call_type_for_attribution,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    duration_seconds=round(end_time - start_time, 3),
+                    usage=_response_usage_summary(response),
+                )
 
                 if verbose:
                     logger.info(f"[SUCCESS] Invocation successful for {model_name_litellm} (took {end_time - start_time:.2f}s)")
 
                 # Build retry kwargs with provider credentials from litellm_kwargs
-                # Issue #185: Retry calls were missing vertex_location, vertex_project, etc.
                 retry_provider_kwargs = {k: v for k, v in litellm_kwargs.items()
-                                         if k in ('vertex_credentials', 'vertex_project', 'vertex_location',
-                                                  'api_key', 'base_url', 'api_base')}
+                                         if k in ('api_key', 'base_url', 'api_base',
+                                                  'api_version')}
 
                 # --- 7. Process Response ---
                 results = []
@@ -2400,30 +6519,80 @@ def llm_invoke(
                     # Result (String or Pydantic)
                     try:
                         raw_result = resp_item.choices[0].message.content
-                        
+                        # Record the last (prompt, raw response) pair for the current operation.
+                        if _record_llm_pair is not None and trace_prompt_repr is not None:
+                            try:
+                                _record_llm_pair(
+                                    prompt=trace_prompt_repr,
+                                    response=raw_result,
+                                    model=str(model_name_litellm),
+                                )
+                            except Exception:
+                                pass
+
                         # Check if raw_result is None (likely cached corrupted data)
                         if raw_result is None:
+                            if _response_was_refused(resp_item):
+                                raise ProviderRefusalError(
+                                    f"{model_name_litellm} refused response item {i}"
+                                )
                             logger.warning(f"[WARNING] LLM returned None content for item {i}, likely due to corrupted cache. Retrying with cache bypass...")
                             # Retry with cache bypass by modifying the prompt slightly
-                            if not use_batch_mode and prompt and input_json is not None:
+                            if (
+                                not command_single_attempt
+                                and not use_batch_mode
+                                and prompt
+                                and input_json is not None
+                            ):
                                 # Add a small space to bypass cache
                                 modified_prompt = prompt + " "
                                 try:
-                                    retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                    retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
                                     # Disable cache for retry
                                     litellm.cache = None
-                                    retry_response = litellm.completion(
-                                        model=model_name_litellm,
-                                        messages=retry_messages,
-                                        temperature=current_temperature,
-                                        response_format=response_format,
-                                        **time_kwargs,
-                                        **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
-                                    )
-                                    # Re-enable cache - restore original configured cache (restore to original state, even if None)
-                                    litellm.cache = configured_cache
+                                    # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
+                                    _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
+                                    _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
+                                    _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
+                                    try:
+                                        retry_kwargs = {
+                                            "model": model_name_litellm,
+                                            "messages": retry_messages,
+                                            "temperature": current_temperature,
+                                            **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
+                                            "timeout": LLM_CALL_TIMEOUT,
+                                            **time_kwargs,
+                                            **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
+                                        }
+                                        if _model_disallows_temperature(model_name_litellm):
+                                            retry_kwargs.pop("temperature", None)
+                                        retry_response = _completion_with_attribution(
+                                            context=attribution_context,
+                                            attempt_id=attempt_id,
+                                            call_type="completion_retry_cache_bypass",
+                                            model=str(model_name_litellm),
+                                            provider=str(provider),
+                                            api_key_name=api_key_name,
+                                            kwargs=retry_kwargs,
+                                        )
+                                    finally:
+                                        # Always restore cache, even if retry raises
+                                        litellm.cache = configured_cache
+                                    # Issue #509: Accumulate cost/tokens from original call + retry
+                                    _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
+                                    _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
+                                    _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
+                                    if _record_llm_pair is not None and trace_prompt_repr is not None:
+                                        try:
+                                            _record_llm_pair(
+                                                prompt=trace_prompt_repr,
+                                                response=retry_raw_result,
+                                                model=str(model_name_litellm),
+                                            )
+                                        except Exception:
+                                            pass
                                     if retry_raw_result is not None:
                                         logger.info(f"[SUCCESS] Cache bypass retry succeeded for item {i}")
                                         raw_result = retry_raw_result
@@ -2436,7 +6605,10 @@ def llm_invoke(
                                     results.append(f"ERROR: LLM returned None content and retry failed: {retry_e}")
                                     continue
                             else:
-                                logger.error(f"[ERROR] Cannot retry - batch mode or missing prompt/input_json")
+                                logger.error(
+                                    "[ERROR] Cannot retry - bounded hosted budget, batch mode, "
+                                    "or missing prompt/input_json"
+                                )
                                 results.append("ERROR: LLM returned None content and cannot retry")
                                 continue
 
@@ -2444,24 +6616,51 @@ def llm_invoke(
                         # This can happen when Gemini generates thousands of \n in JSON string values
                         if isinstance(raw_result, str) and _is_malformed_json_response(raw_result):
                             logger.warning(f"[WARNING] Detected malformed JSON response with excessive trailing newlines for item {i}. Retrying with cache bypass...")
-                            if not use_batch_mode and prompt and input_json is not None:
+                            if (
+                                not command_single_attempt
+                                and not use_batch_mode
+                                and prompt
+                                and input_json is not None
+                            ):
                                 # Add a small space to bypass cache
                                 modified_prompt = prompt + " "
                                 try:
-                                    retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                    retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
                                     # Disable cache for retry
                                     original_cache = litellm.cache
                                     litellm.cache = None
-                                    retry_response = litellm.completion(
-                                        model=model_name_litellm,
-                                        messages=retry_messages,
-                                        temperature=current_temperature,
-                                        response_format=response_format,
-                                        **time_kwargs,
-                                        **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
-                                    )
-                                    # Re-enable cache
-                                    litellm.cache = original_cache
+                                    # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
+                                    _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
+                                    _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
+                                    _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
+                                    try:
+                                        retry_kwargs = {
+                                            "model": model_name_litellm,
+                                            "messages": retry_messages,
+                                            "temperature": current_temperature,
+                                            **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
+                                            "timeout": LLM_CALL_TIMEOUT,
+                                            **time_kwargs,
+                                            **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
+                                        }
+                                        if _model_disallows_temperature(model_name_litellm):
+                                            retry_kwargs.pop("temperature", None)
+                                        retry_response = _completion_with_attribution(
+                                            context=attribution_context,
+                                            attempt_id=attempt_id,
+                                            call_type="completion_retry_malformed_json",
+                                            model=str(model_name_litellm),
+                                            provider=str(provider),
+                                            api_key_name=api_key_name,
+                                            kwargs=retry_kwargs,
+                                        )
+                                    finally:
+                                        # Always restore cache, even if retry raises
+                                        litellm.cache = original_cache
+                                    # Issue #509: Accumulate cost/tokens from original call + retry
+                                    _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
+                                    _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
+                                    _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
                                     if retry_raw_result is not None and not _is_malformed_json_response(retry_raw_result):
@@ -2473,7 +6672,10 @@ def llm_invoke(
                                 except Exception as retry_e:
                                     logger.warning(f"[WARNING] Cache bypass retry for malformed JSON failed for item {i}: {retry_e}, attempting repair...")
                             else:
-                                logger.warning(f"[WARNING] Cannot retry malformed JSON - batch mode or missing prompt/input_json, attempting repair...")
+                                logger.warning(
+                                    "[WARNING] Cannot retry malformed JSON - bounded hosted budget, "
+                                    "batch mode, or missing prompt/input_json; attempting repair..."
+                                )
 
                         if output_pydantic or output_schema:
                             parsed_result = None
@@ -2489,17 +6691,20 @@ def llm_invoke(
                                 # Attempt 2: Check if raw_result is dict-like and validate
                                 elif isinstance(raw_result, dict):
                                     if output_pydantic:
-                                        parsed_result = output_pydantic.model_validate(raw_result)
+                                        parsed_result = _validate_pydantic_with_unwrap(raw_result, output_pydantic)
                                     else:
-                                        # Validate against JSON schema
+                                        # Validate against JSON schema (with envelope unwrap for Vertex Anthropic).
+                                        # The helper returns the validated payload — either ``raw_result``
+                                        # itself or the inner dict when the ``{"parameter": {...}}`` envelope
+                                        # was peeled off. Serializing ``raw_result`` directly would leak the
+                                        # wrapper into the caller's response.
                                         try:
-                                            import jsonschema
-                                            jsonschema.validate(instance=raw_result, schema=output_schema)
-                                            parsed_result = json.dumps(raw_result) # Return as JSON string for consistency
+                                            validated = _validate_jsonschema_with_unwrap(raw_result, output_schema)
+                                            parsed_result = json.dumps(validated)  # Return as JSON string for consistency
                                         except ImportError:
                                             logger.warning("jsonschema not installed, skipping validation")
                                             parsed_result = json.dumps(raw_result)
-                                    
+
                                     if verbose:
                                         logger.debug("[DEBUG] Validated dictionary-like object directly.")
 
@@ -2524,18 +6729,22 @@ def llm_invoke(
                                             try:
                                                 if verbose:
                                                     logger.debug(f"[DEBUG] Attempting to parse candidate JSON block: {cand}")
-                                                
+
                                                 if output_pydantic:
-                                                    parsed_result = output_pydantic.model_validate_json(cand)
+                                                    parsed_result = _validate_pydantic_with_unwrap(cand, output_pydantic)
                                                 else:
-                                                    # Parse JSON and validate against schema
+                                                    # Parse JSON and validate against schema (with envelope unwrap).
+                                                    # Use the validated payload returned by the helper: when the
+                                                    # ``{"parameter": {...}}`` envelope was peeled, ``cand`` still
+                                                    # carries the wrapper, so we must re-serialize the unwrapped
+                                                    # form. When no unwrap was needed, keep ``cand`` byte-for-byte
+                                                    # to preserve the original whitespace/key order.
                                                     loaded = json.loads(cand)
                                                     try:
-                                                        import jsonschema
-                                                        jsonschema.validate(instance=loaded, schema=output_schema)
+                                                        validated = _validate_jsonschema_with_unwrap(loaded, output_schema)
+                                                        parsed_result = cand if validated is loaded else json.dumps(validated)
                                                     except ImportError:
-                                                        pass # Skip validation if lib missing
-                                                    parsed_result = cand # Return string if valid
+                                                        parsed_result = cand # Skip validation if lib missing
 
                                                 json_string_to_parse = cand
                                                 parse_err = None
@@ -2577,15 +6786,16 @@ def llm_invoke(
                                             json_string_to_parse = cleaned_result_str
 
                                             if output_pydantic:
-                                                parsed_result = output_pydantic.model_validate_json(json_string_to_parse)
+                                                parsed_result = _validate_pydantic_with_unwrap(json_string_to_parse, output_pydantic)
                                             else:
+                                                # Use the validated payload from the helper so the unwrapped
+                                                # form is what callers see — see helper docstring.
                                                 loaded = json.loads(json_string_to_parse)
                                                 try:
-                                                    import jsonschema
-                                                    jsonschema.validate(instance=loaded, schema=output_schema)
+                                                    validated = _validate_jsonschema_with_unwrap(loaded, output_schema)
+                                                    parsed_result = json_string_to_parse if validated is loaded else json.dumps(validated)
                                                 except ImportError:
-                                                    pass
-                                                parsed_result = json_string_to_parse
+                                                    parsed_result = json_string_to_parse
                                         elif cleaned_result_str.startswith('{') or cleaned_result_str.startswith('['):
                                             # Attempt to repair truncated JSON (e.g., missing closing braces)
                                             # This can happen when Gemini generates excessive trailing content
@@ -2631,15 +6841,17 @@ def llm_invoke(
                                                 for attempt in repair_attempts:
                                                     try:
                                                         if output_pydantic:
-                                                            parsed_result = output_pydantic.model_validate_json(attempt)
+                                                            parsed_result = _validate_pydantic_with_unwrap(attempt, output_pydantic)
                                                         else:
+                                                            # Use the validated payload from the helper — see
+                                                            # helper docstring on why ``attempt`` cannot be used
+                                                            # directly when an unwrap occurred.
                                                             loaded = json.loads(attempt)
                                                             try:
-                                                                import jsonschema
-                                                                jsonschema.validate(instance=loaded, schema=output_schema)
+                                                                validated = _validate_jsonschema_with_unwrap(loaded, output_schema)
+                                                                parsed_result = attempt if validated is loaded else json.dumps(validated)
                                                             except ImportError:
-                                                                pass
-                                                            parsed_result = attempt
+                                                                parsed_result = attempt
 
                                                         if verbose:
                                                             logger.info(f"[INFO] Successfully repaired truncated JSON response")
@@ -2682,24 +6894,51 @@ def llm_invoke(
                             # Skip validation for non-Python languages to avoid false positives
                             if language in (None, "python") and _has_invalid_python_code(parsed_result):
                                 logger.warning(f"[WARNING] Detected invalid Python syntax in code fields for item {i} after repair. Retrying with cache bypass...")
-                                if not use_batch_mode and prompt and input_json is not None:
+                                if (
+                                    not command_single_attempt
+                                    and not use_batch_mode
+                                    and prompt
+                                    and input_json is not None
+                                ):
                                     # Add a small variation to bypass cache
                                     modified_prompt = prompt + "  "  # Two spaces to differentiate from other retries
                                     try:
-                                        retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                        retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
                                         # Disable cache for retry
                                         original_cache = litellm.cache
                                         litellm.cache = None
-                                        retry_response = litellm.completion(
-                                            model=model_name_litellm,
-                                            messages=retry_messages,
-                                            temperature=current_temperature,
-                                            response_format=response_format,
-                                            **time_kwargs,
-                                            **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
-                                        )
-                                        # Re-enable cache
-                                        litellm.cache = original_cache
+                                        # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
+                                        _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
+                                        _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
+                                        _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
+                                        try:
+                                            retry_kwargs = {
+                                                "model": model_name_litellm,
+                                                "messages": retry_messages,
+                                                "temperature": current_temperature,
+                                                **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
+                                                "timeout": LLM_CALL_TIMEOUT,
+                                                **time_kwargs,
+                                                **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
+                                            }
+                                            if _model_disallows_temperature(model_name_litellm):
+                                                retry_kwargs.pop("temperature", None)
+                                            retry_response = _completion_with_attribution(
+                                                context=attribution_context,
+                                                attempt_id=attempt_id,
+                                                call_type="completion_retry_invalid_python",
+                                                model=str(model_name_litellm),
+                                                provider=str(provider),
+                                                api_key_name=api_key_name,
+                                                kwargs=retry_kwargs,
+                                            )
+                                        finally:
+                                            # Always restore cache, even if retry raises
+                                            litellm.cache = original_cache
+                                        # Issue #509: Accumulate cost/tokens from original call + retry
+                                        _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
+                                        _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
+                                        _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
                                         # Extract and re-parse the retry result
                                         retry_raw_result = retry_response.choices[0].message.content
                                         if retry_raw_result is not None:
@@ -2708,10 +6947,8 @@ def llm_invoke(
                                             if output_pydantic:
                                                 if isinstance(retry_raw_result, output_pydantic):
                                                     retry_parsed = retry_raw_result
-                                                elif isinstance(retry_raw_result, dict):
-                                                    retry_parsed = output_pydantic.model_validate(retry_raw_result)
-                                                elif isinstance(retry_raw_result, str):
-                                                    retry_parsed = output_pydantic.model_validate_json(retry_raw_result)
+                                                elif isinstance(retry_raw_result, (dict, str)):
+                                                    retry_parsed = _validate_pydantic_with_unwrap(retry_raw_result, output_pydantic)
                                             elif output_schema and isinstance(retry_raw_result, str):
                                                 retry_parsed = retry_raw_result  # Keep as string for schema validation
 
@@ -2729,7 +6966,10 @@ def llm_invoke(
                                     except Exception as retry_e:
                                         logger.warning(f"[WARNING] Cache bypass retry for invalid Python code failed for item {i}: {retry_e}")
                                 else:
-                                    logger.warning(f"[WARNING] Cannot retry invalid Python code - batch mode or missing prompt/input_json")
+                                    logger.warning(
+                                        "[WARNING] Cannot retry invalid Python code - bounded hosted "
+                                        "budget, batch mode, or missing prompt/input_json"
+                                    )
 
                             results.append(parsed_result)
 
@@ -2769,7 +7009,7 @@ def llm_invoke(
                     logger.info("[RESULT] Max Completion Tokens: Provider Default") # Indicate default limit
                     if final_thinking:
                         logger.info("[RESULT] Thinking Output:")
-                        logger.info(final_thinking) 
+                        logger.info(final_thinking)
 
                 # --- Print raw output before returning if verbose ---
                 if verbose:
@@ -2779,18 +7019,61 @@ def llm_invoke(
                     logger.debug("-" * 20) # Separator
 
                 # --- Return Success ---
-                return {
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.success",
+                    attempt_id=attempt_id,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    cost=total_cost,
+                    input_tokens=_LAST_CALLBACK_DATA.get("input_tokens", 0),
+                    output_tokens=_LAST_CALLBACK_DATA.get("output_tokens", 0),
+                    finish_reason=_LAST_CALLBACK_DATA.get("finish_reason"),
+                    call_type=call_type_for_attribution,
+                )
+                _publish_model_provenance(
+                    resolved_model=str(model_name_litellm),
+                    outcome="direct" if len(attempted_models) <= 1 else "fallback",
+                    deepswe_manifest_date=str(model_info.get("deepswe_manifest_date") or ""),
+                )
+                return _with_local_grounding({
                     'result': final_result,
                     'cost': total_cost,
                     'model_name': model_name_litellm, # Actual model used
-                    'thinking_output': final_thinking if final_thinking else None
-                }
+                    'thinking_output': final_thinking if final_thinking else None,
+                    'finish_reason': _LAST_CALLBACK_DATA.get("finish_reason"),
+                    'attempted_models': list(attempted_models),
+                })
 
             # --- 6b. Handle Invocation Errors ---
+            except EstimateOnlyResult:
+                raise
+
             except openai.AuthenticationError as e:
                 last_exception = e
                 error_message = str(e)
-                
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.litellm_error",
+                    attempt_id=attempt_id,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    **_safe_error_fields(e),
+                )
+
+                # The request was admitted and sent before LiteLLM surfaced
+                # this provider error.  A newly entered key normally gets one
+                # same-model re-prompt/retry below, but a command with a hard
+                # USD ceiling may buy only one concrete provider request.
+                # Do not let that interactive recovery path dispatch a second
+                # billable request after the reservation has been consumed.
+                if command_single_attempt and provider_attempted_this_call:
+                    logger.error(
+                        "[BUDGET] Provider authentication error consumed the "
+                        "single admitted command request; not retrying."
+                    )
+                    break
+
                 # Check for WSL-specific issues in authentication errors
                 if _is_wsl_environment() and ('Illegal header value' in error_message or '\r' in error_message):
                     logger.warning(f"[WSL AUTH ERROR] Authentication failed for {model_name_litellm} - detected WSL line ending issue")
@@ -2798,7 +7081,7 @@ def llm_invoke(
                     logger.warning("[WSL AUTH ERROR] Try setting your API key again or check your .env file for line ending issues")
                     env_info = _get_environment_info()
                     logger.debug(f"Environment info: {env_info}")
-                    
+
                 if newly_acquired_keys.get(api_key_name):
                     logger.warning(f"[AUTH ERROR] Authentication failed for {model_name_litellm} with the newly provided key for '{api_key_name}'. Please check the key and try again.")
                     # Invalidate the key in env for this session to force re-prompt on retry
@@ -2815,9 +7098,47 @@ def llm_invoke(
             except SchemaValidationError as e:
                 # Issue #168: Schema validation failures now trigger model fallback
                 last_exception = e
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.schema_validation_error",
+                    attempt_id=attempt_id,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    **_safe_error_fields(e),
+                    item_index=e.item_index,
+                )
                 logger.warning(f"[SCHEMA ERROR] Validation failed for {model_name_litellm}: {e}. Trying next model.")
                 if verbose:
                     logger.debug(f"Raw response that failed validation: {repr(e.raw_response)}")
+                break  # Break inner loop, try next model candidate
+
+            except ProviderRefusalError as e:
+                last_exception = e
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.provider_refusal",
+                    attempt_id=attempt_id,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                )
+                logger.warning("[REFUSAL] %s. Trying next model.", e)
+                break
+
+            except litellm.ContextWindowExceededError as e:
+                # Post-call safety net: model rejected prompt as too large after the pre-call
+                # check (e.g. tokenizer mismatch). Fall back to the next candidate.
+                last_exception = e
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.context_window_error",
+                    attempt_id=attempt_id,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    **_safe_error_fields(e),
+                )
+                logger.error(
+                    f"[CONTEXT] {model_name_litellm} rejected prompt as too large. Trying next model."
+                )
                 break  # Break inner loop, try next model candidate
 
             except (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError,
@@ -2827,19 +7148,45 @@ def llm_invoke(
                 error_type = type(e).__name__
                 error_str = str(e)
 
-                # Provider-specific handling for Anthropic temperature + thinking rules.
+                # Cost-capped commands reserve the entire admissible request
+                # before dispatch.  That reservation covers only this one
+                # concrete provider call: temperature/thinking correction is
+                # still a second billable request, so it must not re-enter the
+                # same model (or any fallback) after a provider exception.
+                # Interactive/unbounded calls keep the recovery behavior
+                # below.
+                if command_single_attempt and provider_attempted_this_call:
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.litellm_error",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        **_safe_error_fields(e),
+                    )
+                    logger.error(
+                        "[BUDGET] Provider error consumed the single admitted "
+                        "command request; not retrying."
+                    )
+                    break
+
+                # Claude-specific handling for temperature + thinking/reasoning rules.
+                # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.
                 # Two scenarios we auto-correct:
                 # 1) temperature==1 without thinking -> retry with 0.99
                 # 2) thinking enabled but temperature!=1 -> retry with 1
                 lower_err = error_str.lower()
                 if (not temp_adjustment_done) and ("temperature" in lower_err) and ("thinking" in lower_err):
-                    anthropic_thinking_sent = ('thinking' in litellm_kwargs) and (provider.lower() == 'anthropic')
+                    claude_thinking_sent = (
+                        _has_thinking_or_reasoning_payload(litellm_kwargs)
+                        and 'claude' in model_name_litellm.lower()
+                    )
                     # Decide direction of adjustment based on whether thinking was enabled in the call
-                    if anthropic_thinking_sent:
+                    if claude_thinking_sent:
                         # thinking enabled -> force temperature=1
                         adjusted_temp = 1
                         logger.warning(
-                            f"[WARN] {model_name_litellm}: Anthropic with thinking requires temperature=1. "
+                            f"[WARN] {model_name_litellm}: Claude with thinking requires temperature=1. "
                             f"Retrying with temperature={adjusted_temp}."
                         )
                     else:
@@ -2851,15 +7198,47 @@ def llm_invoke(
                         )
                     current_temperature = adjusted_temp
                     temp_adjustment_done = True
+                    force_temperature_on_retry = claude_thinking_sent and adjusted_temp == 1
                     retry_with_same_model = True
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.temperature_retry",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        adjusted_temperature=adjusted_temp,
+                        **_safe_error_fields(e),
+                    )
                     if verbose:
                         logger.debug(f"Retrying {model_name_litellm} with adjusted temperature {current_temperature}")
                     continue
 
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.litellm_error",
+                    attempt_id=attempt_id,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    **_safe_error_fields(e),
+                )
                 logger.error(f"[ERROR] Invocation failed for {model_name_litellm} ({error_type}): {e}. Trying next model.")
                 # Log more details in verbose mode
                 if verbose:
                     logger.debug(f"Detailed exception traceback for {model_name_litellm}:", exc_info=True)
+                # Fast-fail on permanent parameter errors: every other
+                # candidate that proxies the same model family will reject
+                # the same shape identically. Surface the root error
+                # instead of burying it under cascade noise (and avoid
+                # hanging on github_copilot device-flow OAuth deeper in
+                # the candidate list). See
+                # :func:`_is_permanent_invalid_request_error` for the
+                # conservative allow-list of phrases this matches.
+                if _is_permanent_invalid_request_error(e):
+                    logger.error(
+                        f"[FAST-FAIL] Permanent invalid_request_error from "
+                        f"{model_name_litellm}; not cascading through other candidates."
+                    )
+                    raise
                 break # Break inner loop, try next model candidate
 
         # If the inner loop was broken (not by success), continue to the next candidate model
@@ -2869,8 +7248,30 @@ def llm_invoke(
     error_message = "All candidate models failed."
     if last_exception:
         error_message += f" Last error ({type(last_exception).__name__}): {last_exception}"
+    if last_exception and "context limit" in str(last_exception):
+        error_message += (
+            " Hint: Try reducing prompt size, splitting into smaller prompts, "
+            "or using a model with a larger context window."
+        )
     logger.error(f"[FATAL] {error_message}")
-    raise RuntimeError(error_message) from last_exception
+    _emit_llm_attribution(
+        attribution_context,
+        "llm_invoke.failure",
+        failure_reason="all_candidate_models_failed",
+        last_error_type=type(last_exception).__name__ if last_exception else None,
+    )
+    # Attach the per-call attempts to the terminal exception so worker
+    # threads (Click context is thread-local; workers can't read ctx.obj)
+    # can recover the full history via getattr(exc, "attempted_models",
+    # None). Main-thread callers see the same attempts already on
+    # ctx.obj because we don't rewind on failure — `attempted_models`
+    # is a chronological audit log per issue #897.
+    terminal_error = RuntimeError(error_message)
+    try:
+        setattr(terminal_error, "attempted_models", list(attempted_models))
+    except Exception:
+        pass
+    raise terminal_error from last_exception
 
 # --- Example Usage (Optional) ---
 if __name__ == "__main__":
@@ -2886,7 +7287,7 @@ if __name__ == "__main__":
         response = llm_invoke(
             prompt="Tell me a short joke about {topic}.",
             input_json={"topic": "programmers"},
-            strength=0.5, # Use base model (gpt-5-nano)
+            strength=0.5, # Use base model (first available in CSV)
             temperature=0.7,
             verbose=True
         )
@@ -2967,7 +7368,7 @@ if __name__ == "__main__":
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "What is the capital of France?"}
         ]
-        # Strength 0.5 should select gpt-5-nano
+        # Strength 0.5 should select the base model (first available in CSV)
         response_messages = llm_invoke(
             messages=custom_messages,
             strength=0.5,

@@ -1,0 +1,30 @@
+You are a Frontend Engineer responsible for creating a reusable, accessible UI component library. Your task is to implement a Tooltip component that provides contextual information when a user hovers over a trigger element.
+
+### 1. Requirements
+1. **Functionality**: The component must wrap any React element (trigger) and display a tooltip containing the provided content.
+2. **Trigger Mechanism**: The tooltip must appear on hover and disappear when the mouse leaves the trigger area using CSS-based state management.
+3. **Positioning**: The tooltip should be positioned absolutely, centered horizontally relative to the trigger, and appearing directly below it.
+4. **Styling**: Use Tailwind CSS for styling. The tooltip should have a dark theme (`bg-gray-900`), small white text, rounded corners, a subtle ring/border, and a shadow.
+5. **Transitions**: Implement a smooth opacity transition (200ms) for the tooltip's appearance.
+6. **Interactivity**: The tooltip itself should not intercept pointer events (`pointer-events-none`) to prevent flickering or blocking interactions with underlying elements.
+7. **Type Safety**: Use TypeScript to define props, ensuring `content` and `children` are valid `React.ReactNode` types.
+
+### 2. Dependencies
+<react>
+  <include>context/react_example.tsx</include>
+</react>
+<tailwind_css>
+  <include>context/tailwind_config_example.js</include>
+</tailwind_css>
+
+### 3. Instructions
+1. Define a `TooltipProps` interface with `content` and `children`.
+2. Create a functional component `Tooltip` using `React.FC`.
+3. Use a wrapper `div` with the Tailwind `group` class to coordinate the hover state between the trigger and the tooltip.
+4. The tooltip container must use `absolute` positioning with `top-full` and a margin-top to sit below the trigger.
+5. Use `opacity-0` as the default state and `group-hover:opacity-100` to toggle visibility.
+6. Ensure the tooltip has a `z-index` high enough (`z-50`) to appear above other UI elements.
+7. Constrain the tooltip width using `w-max` and `max-w-xs` to ensure it handles longer text gracefully.
+
+### 4. Deliverables
+- A single TypeScript React file: `Tooltip.tsx` containing the component and its exported interface.

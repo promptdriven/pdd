@@ -1,0 +1,19 @@
+% Write `pdd/checkup_file_selection.py`, selecting source files for `pdd checkup simplify`.
+
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Selects bounded, code-only simplify targets without including generated, evidence, dependency, lock, or ignored files.</pdd-reason>
+
+% Public API
+- `discover_simplify_targets(*, path: Optional[Path] = None, since: Optional[str] = None, staged: bool = False, max_files: int = 20, cwd: Optional[Path] = None) -> tuple[Path, List[Path]]`
+
+% Contract
+- Resolve the enclosing git repository and return repo-relative source candidates as absolute `Path` objects.
+- `--since REF` selects paths from `git diff --name-only REF`; `--staged` selects from `git diff --cached --name-only`; reject their combination.
+- When neither diff selector is passed, prefer locally changed or unignored untracked files below `path`, or below the repository for an omitted path; fall back to tracked files only for a read-only scope preview with no local changes.
+- Select meaningful source code only, reusing PDD ignore and skip rules where possible.
+- Exclude `.pdd/evidence/`, `.pdd/meta/`, `.pdd/backups/`, build outputs, dependency directories, lockfiles, and prompt files.
+- Preserve deterministic input order and stop at `max_files`.
+
+% Code output
+- Code: `pdd/checkup_file_selection.py`

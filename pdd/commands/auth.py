@@ -119,7 +119,6 @@ def login(browser: Optional[bool]):
 
             if skip_browser:
                 console.print(f"[yellow]Note: {reason}[/yellow]")
-                console.print("[yellow]Please open the authentication URL manually in a browser.[/yellow]")
 
             # Pass no_browser parameter to get_jwt_token
             token = await get_jwt_token(
@@ -196,6 +195,16 @@ def status(verify: bool):
     auth_status = get_auth_status()
 
     if not auth_status.get("authenticated"):
+        if auth_status.get("refresh_token_error"):
+            console.print(
+                "[yellow]Authentication status could not be confirmed: "
+                f"{auth_status['refresh_token_error']}.[/yellow]"
+            )
+            console.print(
+                "Run: [bold]pdd auth login[/bold] after unlocking or "
+                "configuring your system keyring."
+            )
+            sys.exit(1)
         console.print("[yellow]Not authenticated.[/yellow]")
         console.print("Run: [bold]pdd auth login[/bold]")
         sys.exit(1)
@@ -268,6 +277,22 @@ def status(verify: bool):
 @auth_group.command("logout")
 def logout_cmd():
     """Log out of PDD Cloud."""
+    # Check if user is actually logged in first
+    auth_status = get_auth_status()
+
+    if not auth_status.get("authenticated"):
+        if auth_status.get("refresh_token_error"):
+            success, error = service_logout()
+            if success:
+                console.print("Logged out of PDD Cloud.")
+                return
+            if error:
+                console.print(f"[red]Failed to logout: {error}[/red]")
+                return
+        console.print("[yellow]Not authenticated.[/yellow]")
+        return
+
+    # User is authenticated, proceed with logout
     success, error = service_logout()
     if success:
         console.print("Logged out of PDD Cloud.")

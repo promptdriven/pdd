@@ -31,11 +31,11 @@
         Output: [Standard output text]
         Error: [Error message text]
       </verification>
-      
+
       <current_error>
         [Current error message to be fixed]
       </current_error>
-      
+
       <fixing>
         <llm_analysis>
           [Analysis from previous attempts in human-readable format]
@@ -46,7 +46,7 @@
         </decision>
       </fixing>
     </attempt>
- 
+
 % When analyzing errors, you should:
   1. Review the history of previous attempts to understand what has been tried
   2. Pay attention to which fixes worked partially or not at all
@@ -59,8 +59,11 @@
     Step 3. Explain in detail step by step why there might be an an error and why prior attempted fixes, if any, may not have worked. Write several paragraphs explaining the root cause of each of the errors.
     Step 4. Explain in detail step by step how to solve each of the errors. For each error, there should be several paragraphs description of the steps. Consider whether the fix requires:
         - Updating the code_module only
-        - Updating the calling program only  
+        - Updating the calling program only
         - Updating BOTH the code_module AND the calling program
         Sometimes logging or print statements can help debug the code_module or program.
     Step 5. Review the above steps and correct for any errors in the logic.
     Step 6. For ALL code that needs changes, write the corrected code_module and/or corrected program in their entirety. If both need fixes, provide both complete fixed versions.
+
+% Preservation of Existing Comments and Docstrings (issue #926)
+% When you emit the full corrected code_module and/or program in Step 6, you MUST preserve all inline comments (`# ...`) and docstrings (`"""..."""`) verbatim in every function, class, method, or block whose behavior is not changed by this fix. Comments and docstrings in this codebase frequently encode WHY-prose and references to prior issues (e.g. `# see #813`); stripping them destroys institutional memory that is not recoverable from `git blame`. Do NOT minify, collapse blank lines, downgrade type annotations (e.g. `set[str]` to `set`), wrap untouched imports in `try/except ImportError`, or rewrite any region you are not actively fixing. Reproduce untouched regions byte-for-byte. When a region MUST be edited, keep every still-applicable comment/docstring line verbatim and add new ones only for the new behavior.

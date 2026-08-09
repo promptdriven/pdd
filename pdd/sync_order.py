@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import re
+import shlex
 import stat
 import logging
 from datetime import datetime
@@ -12,6 +14,7 @@ from collections import deque, defaultdict
 from rich.console import Console
 
 from pdd.construct_paths import _is_known_language
+from pdd.sync_core.includes import include_paths
 
 # Initialize rich console
 console = Console()
@@ -22,7 +25,12 @@ logger = logging.getLogger(__name__)
 
 def extract_includes_from_file(file_path: Path) -> Set[str]:
     """
-    Parses <include> tags from a prompt file.
+    Parses <include> and <include-many> tags from a prompt file.
+
+    `<include>` carries a single path. `<include-many>` carries a
+    comma-OR-newline-separated list of paths — this matches the authoritative
+    splitter in ``pdd.preprocess.process_include_many_tags`` so sync_order
+    cannot disagree with the preprocessor on what a prompt's include graph is.
 
     Args:
         file_path: Path to the prompt file.
@@ -37,13 +45,7 @@ def extract_includes_from_file(file_path: Path) -> Set[str]:
 
     try:
         content = file_path.read_text(encoding="utf-8")
-        # Regex pattern matching <include>...</include> tags
-        pattern = r'<include>(.*?)</include>'
-        matches = re.findall(pattern, content, re.DOTALL)
-        
-        # Clean up matches (strip whitespace)
-        includes = {m.strip() for m in matches if m.strip()}
-        return includes
+        return include_paths(content)
     except Exception as e:
         logger.error(f"Error reading file {file_path}: {e}")
         return set()
@@ -245,6 +247,105 @@ def topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[
     return sorted_list, cycles
 
 
+def compute_sccs(graph: Dict[str, List[str]]) -> List[List[str]]:
+    """
+    Computes strongly connected components of a directed graph.
+
+    Args:
+        graph: Adjacency list (module -> dependencies). The graph is
+            normalized so every node referenced as a dependency is also
+            present as a key (mirrors ``topological_sort``).
+
+    Returns:
+        SCCs in deps-first order: with the input convention that
+        ``graph[A] == [B]`` means *A depends on B*, an SCC's external
+        dependencies are emitted before the SCC itself. This is Tarjan's
+        natural emission order (the reverse of a depender-first topological
+        sort of the condensation). Within each SCC, node names are sorted
+        alphabetically for determinism. Trivial SCCs (single node with no
+        self-loop) are returned as single-element lists. A self-loop on a
+        node is its own SCC (one-element list) — callers can distinguish
+        it from a non-self-loop singleton by inspecting ``graph[node]``.
+
+    Implementation: iterative Tarjan's algorithm, so deep cycle chains do
+    not blow the Python recursion limit.
+    """
+    # Normalize: include every referenced node as a key.
+    all_nodes: Set[str] = set(graph.keys())
+    for deps in graph.values():
+        all_nodes.update(deps)
+    # Sort each adjacency list so Tarjan's DFS discovery order depends only on
+    # graph structure, not the caller's dep-list ordering. The set of SCCs is
+    # invariant to neighbour order, but the order they're emitted in is not.
+    adj: Dict[str, List[str]] = {n: sorted(graph.get(n, [])) for n in all_nodes}
+
+    index_of: Dict[str, int] = {}
+    lowlink: Dict[str, int] = {}
+    on_stack: Set[str] = set()
+    stack: List[str] = []
+    sccs: List[List[str]] = []
+    next_index = 0
+
+    # Iterative Tarjan: each work-stack frame holds (node, iterator over
+    # neighbors, the neighbor we just recursed into — or None on first entry).
+    for start in sorted(all_nodes):  # sort for deterministic start order
+        if start in index_of:
+            continue
+        # Push initial frame.
+        work_stack: List[Tuple[str, "iter", Optional[str]]] = []
+        index_of[start] = next_index
+        lowlink[start] = next_index
+        next_index += 1
+        stack.append(start)
+        on_stack.add(start)
+        work_stack.append((start, iter(adj[start]), None))
+
+        while work_stack:
+            node, neighbors, just_returned = work_stack[-1]
+            if just_returned is not None:
+                # We're back from a recursion into `just_returned`; fold its
+                # lowlink into ours.
+                lowlink[node] = min(lowlink[node], lowlink[just_returned])
+                # Clear the marker so we resume iterating.
+                work_stack[-1] = (node, neighbors, None)
+
+            recursed = False
+            for nb in neighbors:
+                if nb not in index_of:
+                    # Tree edge: descend.
+                    index_of[nb] = next_index
+                    lowlink[nb] = next_index
+                    next_index += 1
+                    stack.append(nb)
+                    on_stack.add(nb)
+                    # Mark current frame so we know which neighbor to fold on return.
+                    work_stack[-1] = (node, neighbors, nb)
+                    work_stack.append((nb, iter(adj[nb]), None))
+                    recursed = True
+                    break
+                if nb in on_stack:
+                    # Back edge to a node still on the SCC stack.
+                    lowlink[node] = min(lowlink[node], index_of[nb])
+                # else: cross edge to a node already in a finished SCC; ignore.
+
+            if recursed:
+                continue
+
+            # All neighbors processed. If `node` is a root of an SCC, pop it.
+            if lowlink[node] == index_of[node]:
+                component: List[str] = []
+                while True:
+                    w = stack.pop()
+                    on_stack.discard(w)
+                    component.append(w)
+                    if w == node:
+                        break
+                sccs.append(sorted(component))
+            work_stack.pop()
+
+    return sccs
+
+
 def get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: Dict[str, List[str]], cyclic_modules: Optional[Set[str]] = None) -> List[str]:
     """
     Identifies modules that need syncing based on modified modules and dependencies.
@@ -333,21 +434,197 @@ def generate_sync_order_script(modules: List[str], output_path: Path, worktree_p
     total = len(modules)
     for i, module in enumerate(modules, 1):
         lines.append(f'echo "[{i}/{total}] Syncing {module}..."')
-        lines.append(f"pdd sync {module}")
+        lines.append(f"pdd sync {shlex.quote(module)}")
         lines.append("")
 
     script_content = "\n".join(lines)
 
     try:
         output_path.write_text(script_content, encoding="utf-8")
-        
+
         # Make executable (chmod +x)
         st = os.stat(output_path)
         os.chmod(output_path, st.st_mode | stat.S_IEXEC)
-        
+
         console.print(f"[green]Successfully generated sync script at: {output_path}[/green]")
     except Exception as e:
         console.print(f"[red]Failed to write sync script: {e}[/red]")
         raise
 
     return script_content
+
+
+_DOC_EXTENSIONS = {".md", ".rst", ".txt"}
+
+
+def _is_document_include(include_path: str) -> bool:
+    """True if the include path refers to a documentation file (.md/.rst/.txt)
+    and not a prompt or code file. Note that documentation files can
+    legitimately contain '_example' in their name (e.g. usage_example.md)."""
+    lowered = include_path.lower()
+    if lowered.endswith(".prompt"):
+        return False
+    # Only exclude _example if it's NOT a documentation extension
+    is_doc = any(lowered.endswith(ext) for ext in _DOC_EXTENSIONS)
+    if "_example." in lowered and not is_doc:
+        return False
+    return is_doc
+
+
+def discover_associated_documents(
+    modified_prompts: Set[Path],
+    prompts_dir: Path,
+    architecture_path: Optional[Path] = None,
+    max_depth: int = 3,
+) -> List[str]:
+    """Discover documentation files associated with a set of modified prompts.
+
+    Phase 1 parses each modified prompt's ``<include>`` tags for doc files
+    (``.md``/``.rst``/``.txt``). Phase 2 walks ``architecture.json`` in BFS
+    order up to ``max_depth`` levels, collecting includes from the prompts of
+    modules that transitively depend on any modified module.
+
+    Args:
+        modified_prompts: Prompt files that were modified in the current change.
+        prompts_dir: Directory containing the project's .prompt files.
+        architecture_path: Optional path to architecture.json for transitive
+            dependent discovery. Missing/malformed file is logged and skipped.
+        max_depth: Maximum BFS depth for architecture.json traversal.
+
+    Returns:
+        Deduplicated list of document paths (as they appear in ``<include>``
+        tags, typically project-root-relative). Empty if none found.
+    """
+    results: List[str] = []
+    seen: Set[str] = set()
+
+    def _add(path: str) -> None:
+        if path and path not in seen:
+            seen.add(path)
+            results.append(path)
+
+    # Phase 1: direct includes from each modified prompt
+    for prompt_path in modified_prompts:
+        if not prompt_path.exists():
+            logger.warning(f"Modified prompt not found, skipping: {prompt_path}")
+            continue
+        for include_path in extract_includes_from_file(prompt_path):
+            if _is_document_include(include_path):
+                _add(include_path)
+
+    # Phase 2: BFS traversal via architecture.json for transitive dependents
+    if architecture_path is not None and architecture_path.exists():
+        try:
+            arch_data = json.loads(architecture_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(f"Failed to read architecture.json at {architecture_path}: {exc}")
+            return results
+
+        # Reviewer 6th-pass (F4): use `extract_modules` so we accept BOTH
+        # the bare-array and the `{"modules": [...]}` object formats. The
+        # rest of the codebase uses this exact helper for the same
+        # tolerance (architecture_registry.py:21); rejecting non-list
+        # data here means object-format repos silently fall out of #739's
+        # transitive-doc safety net.
+        try:
+            from pdd.architecture_registry import extract_modules
+            arch_entries = extract_modules(arch_data)
+        except Exception as exc:
+            logger.warning(f"extract_modules failed on {architecture_path}: {exc}")
+            arch_entries = arch_data if isinstance(arch_data, list) else []
+
+        if not arch_entries:
+            logger.warning(
+                f"architecture.json at {architecture_path} has no module entries; skipping BFS."
+            )
+            return results
+
+        # Defensive check: BFS can bridge qualified filenames and bare basenames
+        # only when the basename is unique. When two arch entries share a
+        # basename (e.g. `core/cli_python.prompt` and `other/cli_python.prompt`),
+        # a basename-only edge is ambiguous; do not use it to fan out into
+        # unrelated dependents.
+        basename_to_filenames: Dict[str, Set[str]] = defaultdict(set)
+        for entry in arch_entries:
+            if isinstance(entry, dict):
+                fn = entry.get("filename")
+                if isinstance(fn, str) and fn:
+                    basename_to_filenames[fn.rsplit("/", 1)[-1]].add(fn)
+        collisions = {b: sorted(fns) for b, fns in basename_to_filenames.items() if len(fns) > 1}
+        ambiguous_basenames: Set[str] = set(collisions)
+        if collisions:
+            logger.warning(
+                f"discover_associated_documents: architecture.json contains "
+                f"basename collisions {collisions}; basename-only BFS matching "
+                f"is disabled for those names."
+            )
+
+        # Seed the frontier with both the bare basename AND the qualified
+        # relative-to-``prompts_dir`` path. architecture.json mixes the two
+        # forms (e.g. ``update_main_python.prompt`` vs
+        # ``core/cli_python.prompt``); without both forms in the frontier,
+        # nested-layout deps like ``"core/cli_python.prompt"`` would not
+        # match a basename-only seed and the dependent doc would be missed.
+        modified_filenames: Set[str] = set()
+        for p in modified_prompts:
+            try:
+                rel = p.relative_to(prompts_dir).as_posix()
+            except ValueError:
+                rel = ""
+            if rel:
+                modified_filenames.add(rel)
+            if p.name not in ambiguous_basenames or not rel or rel == p.name:
+                modified_filenames.add(p.name)
+
+        frontier: Set[str] = set(modified_filenames)
+        visited: Set[str] = set(frontier)
+        depth = 0
+
+        def _frontier_match(dep: str, fset: Set[str]) -> bool:
+            """A dep matches the frontier if it appears verbatim OR its
+            basename equals any frontier item OR any frontier item's basename
+            equals the dep. Basename bridging is disabled for ambiguous
+            basenames so `core/cli_python.prompt` does not match dependents of
+            `other/cli_python.prompt`.
+            """
+            if dep in fset:
+                return True
+            dep_base = dep.rsplit("/", 1)[-1]
+            if dep_base in ambiguous_basenames:
+                return False
+            if dep_base in fset:
+                return True
+            return any(item.rsplit("/", 1)[-1] == dep for item in fset)
+
+        while frontier and depth < max_depth:
+            next_frontier: Set[str] = set()
+            for entry in arch_entries:
+                if not isinstance(entry, dict):
+                    continue
+                deps = entry.get("dependencies") or []
+                if not isinstance(deps, list):
+                    continue
+                if not any(_frontier_match(dep, frontier) for dep in deps):
+                    continue
+
+                entry_filename = entry.get("filename")
+                if not entry_filename or entry_filename in visited:
+                    continue
+
+                visited.add(entry_filename)
+                next_frontier.add(entry_filename)
+
+                entry_prompt = prompts_dir / entry_filename
+                if entry_prompt.exists():
+                    for include_path in extract_includes_from_file(entry_prompt):
+                        if _is_document_include(include_path):
+                            _add(include_path)
+
+            frontier = next_frontier
+            depth += 1
+
+    # Sort the final list so the return order is deterministic regardless of
+    # modified_prompts iteration order or architecture BFS visitation order.
+    # The prompt/architecture contract (pdd/prompts/sync_order_python.prompt)
+    # declares a deterministic, sorted result.
+    return sorted(results)

@@ -1,0 +1,14 @@
+{
+  "_comment": "Pre-registered pilot arm (design §8.1/§8.1.1; values frozen per PREREGISTRATION.md). Changing ANY field is a new experiment. Consumed by harness.runner.register_env to emit the machine-bound registered_env_fingerprint.",
+  "pinned_cli_version": "codex-cli 0.142.4",
+  "cli_version_command": ["codex", "--version"],
+  "model_id": "gpt-5.1-codex-max",
+  "reasoning_effort": "medium",
+  "context_window_tokens": 272000,
+  "web_search_enabled": false,
+  "mcp_servers": [],
+  "env_allowlist": ["PATH", "LANG", "LC_ALL", "TERM", "TMPDIR"],
+  "api_key_env_var": "OPENAI_API_KEY",
+  "cache_policy": "disabled",
+  "home_dir_env_var": "CODEX_HOME"
+}

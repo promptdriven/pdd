@@ -1,0 +1,78 @@
+# Refund Payment Service
+
+This module handles refund requests for completed payment transactions.
+
+<contract_rules>
+R1 - Zero-amount refund rejection
+
+For every refund request,
+the system MUST reject requests where the refund amount is zero or negative
+when the amount field is provided.
+
+This rule is violated if a zero-amount refund is accepted and recorded.
+
+R2 - Over-refund prevention
+
+For every refund request,
+the system MUST NOT allow a refund amount to exceed the original charge amount
+when the original charge exists in the database.
+
+This rule is violated if a refund greater than the charge is processed.
+
+R3 - Provider call skipped for invalid requests
+
+For every invalid refund request (zero, negative, or over-refund),
+the system MUST NOT call the payment provider API
+when the validation check has already failed.
+
+R4 - Idempotency key on retry
+
+For every refund retry,
+the system MUST use the same idempotency key
+when the original refund ID is provided in the request.
+
+R5 - Audit log on completion
+
+For every successful refund,
+the system MUST write an audit log entry
+when the payment provider confirms the refund.
+
+R6 - Secret material isolation
+
+The service MUST NOT log or return any payment provider credentials
+when handling refund API responses.
+</contract_rules>
+
+<vocabulary>
+refund amount: the monetary value to be returned to the customer, must be positive
+original charge: the payment transaction that is being refunded
+idempotency key: a client-supplied unique token ensuring duplicate requests are safe
+payment provider: the external payment gateway (e.g. Stripe, Braintree)
+</vocabulary>
+
+<coverage>
+R1: story__refund_invalid.md, test_R1_rejects_zero_refund
+R2: story__refund_invalid.md
+R3: test_R3_no_provider_call_invalid
+R4: story__refund_idempotency.md
+R6: WAIVED W1
+</coverage>
+
+<waivers>
+W1:
+  Rule: R6
+  Approved by: Security team (2025-12-01)
+  Rationale: Provider credentials are handled entirely by the provider SDK;
+             this service never touches raw secrets. Verified 2025-12-01.
+  Expires: 2026-12-01
+</waivers>
+
+<capabilities>
+- The system MUST process refund requests within 5 seconds under normal load.
+- The system SHOULD provide a human-readable error message for rejected refunds.
+</capabilities>
+
+<non_responsibilities>
+- The service DOES NOT handle disputes or chargebacks.
+- The service DOES NOT store payment card data.
+</non_responsibilities>

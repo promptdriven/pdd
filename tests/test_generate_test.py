@@ -42,7 +42,59 @@ def valid_inputs():
 def mock_console():
     return Console()
 
+
+_SAMPLE_GENERATED_TEST = '''import sys
+from pathlib import Path
+_repo_root = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_repo_root))
+
+def test_example():
+    assert True
+'''
+
+
+@pytest.fixture(autouse=True)
+def _mock_generate_test_llm(monkeypatch, request):
+    """Avoid real LLM calls in tests that exercise generate_test end-to-end."""
+    if request.node.get_closest_marker("real_llm"):
+        return
+
+    def _sample_for_language(language: str) -> str:
+        if (language or "python").lower() != "python":
+            return (
+                "describe('add', () => {\n"
+                "  it('adds numbers', () => expect(add(1, 2)).toBe(3));\n"
+                "});\n"
+            )
+        return _SAMPLE_GENERATED_TEST
+
+    def fake_llm_invoke(**kwargs):
+        language = (kwargs.get("input_json") or {}).get("language", "python")
+        body = _sample_for_language(language)
+        return {
+            "result": f"```\n{body}\n```",
+            "cost": 0.01,
+            "model_name": "test-model",
+        }
+
+    def fake_postprocess(**kwargs):
+        language = kwargs.get("language", "python")
+        return (_sample_for_language(language), 0.0, "test-model")
+
+    monkeypatch.setattr("pdd.generate_test.llm_invoke", fake_llm_invoke)
+    monkeypatch.setattr(
+        "pdd.generate_test.unfinished_prompt",
+        lambda **kwargs: ("", True, 0.0, "test-model"),
+    )
+    monkeypatch.setattr("pdd.generate_test.postprocess", fake_postprocess)
+
+
 # Test successful generation
+# Per-test timeouts bound real-LLM calls so a stalled provider produces a fast
+# attributable test failure rather than a chunk-wide timeout (exit 124) that
+# kills hundreds of unrelated tests with it.
+
+@pytest.mark.timeout(180)
 def test_generate_test_successful(valid_inputs):
     result = generate_test(**valid_inputs)
     assert isinstance(result, tuple)
@@ -54,7 +106,23 @@ def test_generate_test_successful(valid_inputs):
     assert total_cost >= 0
     assert len(model_name) > 0
 
+
+def test_generate_test_propagates_temperature_to_postprocess(valid_inputs, monkeypatch):
+    captured = {}
+
+    def capture_postprocess(**kwargs):
+        captured.update(kwargs)
+        return (_SAMPLE_GENERATED_TEST, 0.0, "test-model")
+
+    monkeypatch.setattr("pdd.generate_test.postprocess", capture_postprocess)
+    generate_test(**valid_inputs)
+
+    assert captured["temperature"] == valid_inputs["temperature"]
+
+
 # Test verbose output
+
+@pytest.mark.timeout(180)
 def test_generate_test_verbose(valid_inputs):
     valid_inputs['verbose'] = True
     result = generate_test(**valid_inputs)
@@ -97,6 +165,8 @@ def test_generate_test_invalid_template(valid_inputs, monkeypatch):
         generate_test(**valid_inputs)
 
 # Test edge cases
+
+@pytest.mark.timeout(180)
 def test_generate_test_minimum_values(valid_inputs):
     valid_inputs['strength'] = 0.31
     valid_inputs['temperature'] = 0.0
@@ -105,6 +175,8 @@ def test_generate_test_minimum_values(valid_inputs):
     assert len(result) == 3
 
 
+
+@pytest.mark.timeout(300)
 def test_generate_test_maximum_values(valid_inputs):
     valid_inputs['strength'] = 1.0
     valid_inputs['temperature'] = 1.0
@@ -113,6 +185,7 @@ def test_generate_test_maximum_values(valid_inputs):
     assert len(result) == 3
 
 # Test different languages
+
 def test_generate_test_different_languages(monkeypatch):
     # Avoid dependence on structured output in continuation by stubbing continue_generation
     def _stub_continue(formatted_input_prompt, llm_output, strength, temperature, time=0.25, language=None, verbose=False):
@@ -189,6 +262,7 @@ class TestContextFileExists:
 
 
 # Tests for Issue #212: Example file support
+
 def test_generate_test_with_example_parameter(monkeypatch):
     """Test that generate_test works with example parameter instead of code."""
     def _stub_continue(formatted_input_prompt, llm_output, strength, temperature, time=0.25, language=None, verbose=False):
@@ -220,6 +294,7 @@ def test_generate_test_uses_example_template(mock_postprocess, mock_llm_invoke, 
     mock_load_template.assert_called_once_with("generate_test_from_example_LLM")
 
 
+@pytest.mark.usefixtures()
 class TestSysPathIsolation:
     """Tests for Issue #342: Verify generated tests include sys.path isolation preamble.
 
@@ -228,6 +303,7 @@ class TestSysPathIsolation:
     installed packages. This prevents tests from importing the wrong version of the
     code when the package is also installed in site-packages.
     """
+
 
     def test_generated_test_has_syspath_isolation(self):
         """Verify generated Python tests include sys.path.insert for local code isolation.
@@ -265,6 +341,7 @@ class TestSysPathIsolation:
             "Generated test must use sys.path.insert(0, ...) to prepend local repo path. "
             "This ensures local code takes precedence over installed packages."
         )
+
 
     def test_syspath_before_imports(self):
         """Verify sys.path isolation preamble appears BEFORE imports from code under test.
@@ -319,6 +396,7 @@ class TestSysPathIsolation:
                 "Otherwise Python may still resolve imports to site-packages."
             )
 
+
     def test_syspath_uses_pathlib_for_repo_root(self):
         """Verify sys.path isolation uses pathlib to calculate repository root.
 
@@ -349,6 +427,7 @@ class TestSysPathIsolation:
             "Generated test should use __file__ to calculate repository root "
             "relative to test file location."
         )
+
 
     def test_non_python_skips_syspath_preamble(self):
         """Verify non-Python tests don't include Python-specific sys.path preamble.

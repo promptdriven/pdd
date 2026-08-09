@@ -1,0 +1,8 @@
+# Core MCP Server SDK dependency
+# Includes base protocol handling, server/client classes, types,
+# and potentially CLI utilities needed for entry points defined in pyproject.toml.
+mcp[cli]
+
+# Note: The 'pdd-cli' tool itself is an external dependency
+# and must be installed separately on the system where this server runs.
+# It is not a Python package installable via pip.

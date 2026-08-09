@@ -33,7 +33,7 @@ pip install -r requirements.txt
 
 **Option 2: Manual installation**
 ```bash
-pip install typer==0.21.1 rich==14.2.0 pydantic==2.12.5 fastapi==0.128.0 uvicorn==0.40.0 streamlit==1.52.2 litellm==1.80.12 google-auth
+pip install typer==0.21.1 rich==14.2.0 pydantic==2.12.5 fastapi==0.128.0 uvicorn==0.40.0 streamlit==1.52.2 litellm==1.84.0 google-auth
 ```
 
 ## Usage
@@ -154,7 +154,6 @@ contexts:
       example_output_path: "examples/"
       default_language: "python"
       target_coverage: 90.0
-      auto_deps_csv_path: "project_dependencies.csv"
 
   cli:
     paths: ["*cli*"]
@@ -163,7 +162,6 @@ contexts:
       test_output_path: "tests/"
       example_output_path: "examples/"
       default_language: "python"
-      auto_deps_csv_path: "project_dependencies.csv"
 
   backend:
     paths: ["*backend*", "*api*"]
@@ -172,7 +170,6 @@ contexts:
       test_output_path: "tests/"
       example_output_path: "examples/"
       default_language: "python"
-      auto_deps_csv_path: "project_dependencies.csv"
 
   frontend:
     paths: ["*frontend*", "*streamlit*"]
@@ -181,7 +178,6 @@ contexts:
       test_output_path: "tests/"
       example_output_path: "examples/"
       default_language: "python"
-      auto_deps_csv_path: "project_dependencies.csv"
 
   default:
     defaults:
@@ -189,7 +185,6 @@ contexts:
       test_output_path: "tests/"
       example_output_path: "examples/"
       default_language: "python"
-      auto_deps_csv_path: "project_dependencies.csv"
 ```
 
 Create directory structure:

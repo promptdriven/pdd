@@ -1,5 +1,7 @@
 from typing import Tuple, Optional
 import ast
+import textwrap
+import warnings
 from pydantic import BaseModel, Field
 from rich import print as rprint
 from .load_prompt_template import load_prompt_template
@@ -47,10 +49,17 @@ def unfinished_prompt(
         if not 0 <= strength <= 1:
             raise ValueError("Strength must be between 0 and 1")
         
-        if not 0 <= temperature <= 1:
-            raise ValueError("Temperature must be between 0 and 1")
+        if not 0 <= temperature <= 2:
+            raise ValueError("Temperature must be between 0 and 2")
 
-        # Step 0: Fast syntactic completeness check for Python tails
+        # Step 0a: Strip trailing code fences (language-agnostic).
+        # Closing ``` is a markdown artifact, not part of any programming language.
+        clean_text = prompt_text
+        if clean_text.rstrip().endswith("```"):
+            clean_text = clean_text.rstrip()
+            clean_text = clean_text[:clean_text.rfind("```")].rstrip("\n")
+
+        # Step 0b: Fast syntactic completeness check for Python tails.
         # Apply when language explicitly 'python' or when the text likely looks like Python.
         def _looks_like_python(text: str) -> bool:
             lowered = text.strip().lower()
@@ -67,22 +76,33 @@ def unfinished_prompt(
                 return True
             return False
 
-        should_try_python_parse = (language or "").lower() == "python" or _looks_like_python(prompt_text)
+        should_try_python_parse = (language or "").lower() == "python" or _looks_like_python(clean_text)
         if should_try_python_parse:
-            try:
-                ast.parse(prompt_text)
-                reasoning = "Syntactic Python check passed (ast.parse succeeded); treating as finished."
-                if verbose:
-                    rprint("[green]" + reasoning + "[/green]")
-                return (
-                    reasoning,
-                    True,
-                    0.0,
-                    "syntactic_check"
+            dedented = textwrap.dedent(clean_text)
+            # Try parsing as-is, dedented, then wrapped in a function body
+            # (handles indented tails like "    return a + b" that are valid
+            # inside a function but fail ast.parse at module scope).
+            candidates = [clean_text, dedented]
+            if dedented.strip():
+                candidates.append(
+                    f"def _wrapper_():\n{textwrap.indent(dedented, '    ')}"
                 )
-            except SyntaxError:
-                # Fall through to LLM-based judgment
-                pass
+            for candidate in candidates:
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", SyntaxWarning)
+                        ast.parse(candidate)
+                    reasoning = "Syntactic Python check passed (ast.parse succeeded); treating as finished."
+                    if verbose:
+                        rprint("[green]" + reasoning + "[/green]")
+                    return (
+                        reasoning,
+                        True,
+                        0.0,
+                        "syntactic_check"
+                    )
+                except SyntaxError:
+                    continue
 
         # Step 1: Load the prompt template
         if verbose:
@@ -93,7 +113,7 @@ def unfinished_prompt(
             raise Exception("Failed to load prompt template")
 
         # Step 2: Prepare input and invoke LLM
-        input_json = {"PROMPT_TEXT": prompt_text}
+        input_json = {"PROMPT_TEXT": clean_text}
         # Optionally pass a language hint to the prompt
         if language:
             input_json["LANGUAGE"] = language

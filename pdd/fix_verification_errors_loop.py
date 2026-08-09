@@ -5,13 +5,14 @@ import subprocess
 import datetime
 import sys
 from pathlib import Path
-from typing import Dict, Tuple, Any, Optional
+from typing import Dict, Mapping, Tuple, Any, Optional
 from xml.sax.saxutils import escape
 import time
 
 import requests
 
 from rich.console import Console
+from rich.markup import escape as rich_escape
 
 # Use relative import assuming fix_verification_errors is in the same package
 try:
@@ -36,14 +37,24 @@ from .agentic_verify import run_agentic_verify
 
 # Cloud configuration
 try:
-    from .core.cloud import CloudConfig
+    from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
     CLOUD_AVAILABLE = True
 except ImportError:
     CLOUD_AVAILABLE = False
     CloudConfig = None
+    get_cloud_timeout = None
+    get_cloud_request_timeout = None
 
-# Cloud request timeout for verify fix
-CLOUD_REQUEST_TIMEOUT = 400  # seconds
+
+def _call_fix_verification_errors(
+    *,
+    compressed_context: Optional[Mapping[str, Any]] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Call fix_verification_errors, omitting compressed_context when unset."""
+    if compressed_context is not None:
+        kwargs["compressed_context"] = compressed_context
+    return fix_verification_errors(**kwargs)
 
 
 def cloud_verify_fix(
@@ -88,11 +99,12 @@ def cloud_verify_fix(
     }
     cloud_url = CloudConfig.get_endpoint_url("verifyCode")
 
+    timeout = get_cloud_request_timeout() if get_cloud_request_timeout else (30, 900)
     response = requests.post(
         cloud_url,
         json=payload,
         headers=headers,
-        timeout=CLOUD_REQUEST_TIMEOUT
+        timeout=timeout
     )
     response.raise_for_status()
 
@@ -127,7 +139,85 @@ def _normalize_agentic_result(result):
     # Fallback (shouldn't happen)
     return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
-def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verification_log_file, verbose=False, cwd=None):
+def _record_agentic_verify_fallback_event(
+    agentic_fallback_events: Optional[list[dict[str, Any]]],
+    *,
+    success: bool,
+    detail: str,
+) -> None:
+    """Append verify-phase agentic fallback telemetry when a list is provided."""
+    if agentic_fallback_events is not None:
+        agentic_fallback_events.append(
+            {
+                "phase": "verify",
+                "attempted": True,
+                "used": success,
+                "detail": detail,
+            }
+        )
+
+
+def _run_non_python_agentic_verify_fallback(
+    *,
+    agentic_fallback: bool,
+    prompt_file: str,
+    code_file: str,
+    verification_program: str,
+    verification_log_file: str,
+    verbose: bool,
+) -> tuple[bool, str, float, str | None, list[str]]:
+    """Invoke agentic verify for non-Python targets when fallback is enabled."""
+    if not agentic_fallback:
+        console.print(
+            "[yellow]Agentic verify fallback disabled; non-Python verify cannot "
+            "complete without it.[/yellow]"
+        )
+        return False, "agentic verify fallback disabled", 0.0, None, []
+
+    agent_cwd = Path(prompt_file).parent if prompt_file else None
+    console.print(
+        f"[cyan]Attempting agentic verify fallback "
+        f"(prompt_file={rich_escape(repr(prompt_file))})...[/cyan]"
+    )
+    success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
+        prompt_file=prompt_file,
+        code_file=code_file,
+        program_file=verification_program,
+        verification_log_file=verification_log_file,
+        verbose=verbose,
+        cwd=agent_cwd,
+    )
+    if not success:
+        console.print(
+            f"[bold red]Agentic verify fallback failed: {rich_escape(str(agent_msg))}[/bold red]"
+        )
+    if agent_changed_files:
+        console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+        for changed in agent_changed_files:
+            console.print(f"  • {changed}")
+    return success, agent_msg, agent_cost, agent_model, agent_changed_files
+
+
+def _read_non_python_final_artifacts(
+    verification_program: str,
+    code_file: str,
+) -> tuple[str, str]:
+    final_program = ""
+    final_code = ""
+    try:
+        with open(verification_program, "r", encoding="utf-8") as f:
+            final_program = f.read()
+    except Exception:
+        pass
+    try:
+        with open(code_file, "r", encoding="utf-8") as f:
+            final_code = f.read()
+    except Exception:
+        pass
+    return final_program, final_code
+
+
+def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verification_log_file, verbose=False, cwd=None, deadline=None):
     """
     Call (possibly monkeypatched) run_agentic_verify and normalize its return.
 
@@ -145,7 +235,7 @@ def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verificati
             verification_log_file=Path(verification_log_file),
             verbose=verbose,
             quiet=not verbose,
-            # Note: cwd is not passed - run_agentic_verify uses prompt_file.parent as project root
+            deadline=deadline,
         )
         return _normalize_agentic_result(res)
     except Exception as e:
@@ -212,7 +302,7 @@ def _write_log_entry(log_file_path: Path, xml_content: str):
         with open(log_file_path, "a", encoding="utf-8") as f:
             f.write(xml_content + "\n")
     except IOError as e:
-        console.print(f"[bold red]Error writing to log file {log_file_path}: {e}[/bold red]")
+        console.print(f"[bold red]Error writing to log file {rich_escape(str(log_file_path))}: {rich_escape(str(e))}[/bold red]")
 
 def fix_verification_errors_loop(
     program_file: str,
@@ -232,6 +322,8 @@ def fix_verification_errors_loop(
     llm_time: float = DEFAULT_TIME, # Add time parameter
     agentic_fallback: bool = True,
     use_cloud: bool = False,
+    compressed_context: Optional[Mapping[str, Any]] = None,
+    agentic_fallback_events: Optional[list[dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Attempts to fix errors in a code file based on program execution output
@@ -289,34 +381,29 @@ def fix_verification_errors_loop(
                     f.write(f"No verification command available for language: {lang}\n")
                     f.write("Agentic fix will attempt to resolve the issue.\n")
 
-            agent_cwd = Path(prompt_file).parent if prompt_file else None
-            console.print(f"[cyan]Attempting agentic verify fallback (prompt_file={prompt_file!r})...[/cyan]")
-            success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
-                prompt_file=prompt_file,
-                code_file=code_file,
-                program_file=verification_program,
-                verification_log_file=verification_log_file,
-                verbose=verbose,
-                cwd=agent_cwd,
+            success, _agent_msg, agent_cost, agent_model, _changed = (
+                _run_non_python_agentic_verify_fallback(
+                    agentic_fallback=agentic_fallback,
+                    prompt_file=prompt_file,
+                    code_file=code_file,
+                    verification_program=verification_program,
+                    verification_log_file=verification_log_file,
+                    verbose=verbose,
+                )
             )
-            if not success:
-                console.print(f"[bold red]Agentic verify fallback failed: {agent_msg}[/bold red]")
-            if agent_changed_files:
-                console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
-                for f in agent_changed_files:
-                    console.print(f"  • {f}")
-            final_program = ""
-            final_code = ""
-            try:
-                with open(verification_program, "r") as f:
-                    final_program = f.read()
-            except Exception:
-                pass
-            try:
-                with open(code_file, "r") as f:
-                    final_code = f.read()
-            except Exception:
-                pass
+            final_program, final_code = _read_non_python_final_artifacts(
+                verification_program, code_file
+            )
+            if agentic_fallback:
+                _record_agentic_verify_fallback_event(
+                    agentic_fallback_events,
+                    success=success,
+                    detail=(
+                        "agentic verify fallback succeeded (non-Python, no verify command)"
+                        if success
+                        else "agentic verify fallback failed (non-Python, no verify command)"
+                    ),
+                )
             return {
                 "success": success,
                 "final_program": final_program,
@@ -335,34 +422,29 @@ def fix_verification_errors_loop(
         with open(verification_log_path, "w") as f:
             f.write(pytest_output)
         
-        agent_cwd = Path(prompt_file).parent if prompt_file else None
-        console.print(f"[cyan]Attempting agentic verify fallback (prompt_file={prompt_file!r})...[/cyan]")
-        success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
-            prompt_file=prompt_file,
-            code_file=code_file,
-            program_file=verification_program,
-            verification_log_file=verification_log_file,
-            verbose=verbose,
-            cwd=agent_cwd,
+        success, _agent_msg, agent_cost, agent_model, _changed = (
+            _run_non_python_agentic_verify_fallback(
+                agentic_fallback=agentic_fallback,
+                prompt_file=prompt_file,
+                code_file=code_file,
+                verification_program=verification_program,
+                verification_log_file=verification_log_file,
+                verbose=verbose,
+            )
         )
-        if not success:
-            console.print(f"[bold red]Agentic verify fallback failed: {agent_msg}[/bold red]")
-        if agent_changed_files:
-            console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
-            for f in agent_changed_files:
-                console.print(f"  • {f}")
-        final_program = ""
-        final_code = ""
-        try:
-            with open(verification_program, "r") as f:
-                final_program = f.read()
-        except Exception:
-            pass
-        try:
-            with open(code_file, "r") as f:
-                final_code = f.read()
-        except Exception:
-            pass
+        final_program, final_code = _read_non_python_final_artifacts(
+            verification_program, code_file
+        )
+        if agentic_fallback:
+            _record_agentic_verify_fallback_event(
+                agentic_fallback_events,
+                success=success,
+                detail=(
+                    "agentic verify fallback succeeded (non-Python, after verify command)"
+                    if success
+                    else "agentic verify fallback failed (non-Python, after verify command)"
+                ),
+            )
         return {
             "success": success,
             "final_program": final_program,
@@ -454,7 +536,7 @@ def fix_verification_errors_loop(
         program_contents = initial_program_content # Initialize current contents
         code_contents = initial_code_content       # Initialize current contents
     except IOError as e:
-        console.print(f"[bold red]Error reading initial program/code files: {e}[/bold red]")
+        console.print(f"[bold red]Error reading initial program/code files: {rich_escape(str(e))}[/bold red]")
         stats['status_message'] = f'Error reading initial files: {e}' # Add status message
         return {"success": False, "final_program": "", "final_code": "", "total_attempts": 0, "total_cost": 0.0, "model_name": None, "statistics": stats}
 
@@ -496,25 +578,47 @@ def fix_verification_errors_loop(
     try:
         if skip_llm:
             # Skip initial LLM assessment when max_attempts=0
-            console.print("[bold cyan]max_attempts=0: Skipping LLM assessment, proceeding to agentic fallback.[/bold cyan]")
-            # Set up state for skipping the LLM loop
-            stats['initial_issues'] = -1  # Unknown since we skipped assessment
-            stats['final_issues'] = -1
-            stats['best_iteration_num'] = -1
-            stats['best_iteration_issues'] = float('inf')
-            stats['status_message'] = 'Skipped LLM (max_attempts=0)'
-            stats['improvement_issues'] = 'N/A'
-            stats['improvement_percent'] = 'N/A'
-            overall_success = False  # Trigger agentic fallback
-            final_program_content = initial_program_content
-            final_code_content = initial_code_content
-            # Write log entry for skipped LLM
-            final_log_entry = "<FinalActions>\n"
-            final_log_entry += f'  <Action>Skipped LLM assessment and loop (max_attempts=0), proceeding to agentic fallback.</Action>\n'
-            final_log_entry += "</FinalActions>"
-            _write_log_entry(log_path, final_log_entry)
-            # Skip to final stats (the while loop below will also be skipped since 0 < 0 is False)
-            initial_issues_count = -1  # Sentinel: unknown/not applicable when LLM assessment is skipped; kept numeric for downstream comparisons
+            # But first check if the initial run already passed — no need for agentic fallback
+            if initial_return_code == 0:
+                # Initial run passed! Code already works, skip agentic fallback
+                console.print("[bold green]max_attempts=0: Initial program run passed (exit code 0). Skipping agentic fallback.[/bold green]")
+                stats['initial_issues'] = 0
+                stats['final_issues'] = 0
+                stats['best_iteration_num'] = 0
+                stats['best_iteration_issues'] = 0
+                stats['status_message'] = 'Success - initial run passed (max_attempts=0)'
+                stats['improvement_issues'] = 0
+                stats['improvement_percent'] = 0.0
+                overall_success = True  # Success! No agentic fallback needed
+                final_program_content = initial_program_content
+                final_code_content = initial_code_content
+                initial_issues_count = 0
+                # Write log entry for success
+                final_log_entry = "<FinalActions>\n"
+                final_log_entry += f'  <Action>max_attempts=0: Initial run passed (exit code 0). No fixing needed.</Action>\n'
+                final_log_entry += "</FinalActions>"
+                _write_log_entry(log_path, final_log_entry)
+            else:
+                # Initial run failed, proceed to agentic fallback
+                console.print("[bold cyan]max_attempts=0: Initial run failed. Skipping LLM assessment, proceeding to agentic fallback.[/bold cyan]")
+                # Set up state for skipping the LLM loop
+                stats['initial_issues'] = -1  # Unknown since we skipped assessment
+                stats['final_issues'] = -1
+                stats['best_iteration_num'] = -1
+                stats['best_iteration_issues'] = float('inf')
+                stats['status_message'] = 'Skipped LLM (max_attempts=0)'
+                stats['improvement_issues'] = 'N/A'
+                stats['improvement_percent'] = 'N/A'
+                overall_success = False  # Trigger agentic fallback
+                final_program_content = initial_program_content
+                final_code_content = initial_code_content
+                # Write log entry for skipped LLM
+                final_log_entry = "<FinalActions>\n"
+                final_log_entry += f'  <Action>Skipped LLM assessment and loop (max_attempts=0), proceeding to agentic fallback.</Action>\n'
+                final_log_entry += "</FinalActions>"
+                _write_log_entry(log_path, final_log_entry)
+                # Skip to final stats (the while loop below will also be skipped since 0 < 0 is False)
+                initial_issues_count = -1  # Sentinel: unknown/not applicable when LLM assessment is skipped; kept numeric for downstream comparisons
         else:
             if verbose:
                 console.print("Running initial assessment with fix_verification_errors...")
@@ -538,7 +642,7 @@ def fix_verification_errors_loop(
                 except (requests.exceptions.RequestException, RuntimeError) as cloud_err:
                     # Cloud failed - fall back to local
                     console.print(f"[yellow]Cloud verify fix failed: {cloud_err}. Falling back to local.[/yellow]")
-                    initial_fix_result = fix_verification_errors(
+                    initial_fix_result = _call_fix_verification_errors(
                         program=initial_program_content,
                         prompt=prompt,
                         code=initial_code_content,
@@ -546,10 +650,11 @@ def fix_verification_errors_loop(
                         strength=strength,
                         temperature=temperature,
                         verbose=verbose,
-                        time=llm_time
+                        time=llm_time,
+                        compressed_context=compressed_context,
                     )
             else:
-                initial_fix_result = fix_verification_errors(
+                initial_fix_result = _call_fix_verification_errors(
                     program=initial_program_content,
                     prompt=prompt,
                     code=initial_code_content,
@@ -557,7 +662,8 @@ def fix_verification_errors_loop(
                     strength=strength,
                     temperature=temperature,
                     verbose=verbose,
-                    time=llm_time # Pass time
+                    time=llm_time,
+                    compressed_context=compressed_context,
                 )
             # 3e: Add cost
             initial_cost = initial_fix_result.get('total_cost', 0.0)
@@ -670,7 +776,7 @@ def fix_verification_errors_loop(
                 }
 
     except Exception as e:
-        console.print(f"[bold red]Error during initial assessment with fix_verification_errors: {e}[/bold red]")
+        console.print(f"[bold red]Error during initial assessment with fix_verification_errors: {rich_escape(str(e))}[/bold red]")
         stats['status_message'] = f'Error during initial assessment: {e}'
         # Cannot proceed without initial assessment
         return {"success": False, "final_program": initial_program_content, "final_code": initial_code_content, "total_attempts": 0, "total_cost": total_cost, "model_name": model_name, "statistics": stats}
@@ -734,7 +840,7 @@ def fix_verification_errors_loop(
             iteration_log_xml += f'    <Code>{escape(str(code_backup_path))}</Code>\n'
             iteration_log_xml += f'  </Backups>\n'
         except OSError as e:
-            console.print(f"[bold red]Error creating backup files during attempt {current_attempt}: {e}[/bold red]")
+            console.print(f"[bold red]Error creating backup files during attempt {current_attempt}: {rich_escape(str(e))}[/bold red]")
             iteration_log_xml += f'  <Status>Error Creating Backups</Status>\n</Iteration>'
             _write_log_entry(log_path, iteration_log_xml)
             stats['status_message'] = f'Error creating backups on attempt {current_attempt}'
@@ -771,7 +877,7 @@ def fix_verification_errors_loop(
                 except (requests.exceptions.RequestException, RuntimeError) as cloud_err:
                     # Cloud failed - fall back to local
                     console.print(f"[yellow]Cloud verify fix failed: {cloud_err}. Falling back to local.[/yellow]")
-                    fix_result = fix_verification_errors(
+                    fix_result = _call_fix_verification_errors(
                         program=program_contents,
                         prompt=prompt,
                         code=code_contents,
@@ -779,10 +885,11 @@ def fix_verification_errors_loop(
                         strength=strength,
                         temperature=temperature,
                         verbose=verbose,
-                        time=llm_time
+                        time=llm_time,
+                        compressed_context=compressed_context,
                     )
             else:
-                fix_result = fix_verification_errors(
+                fix_result = _call_fix_verification_errors(
                     program=program_contents,
                     prompt=prompt,
                     code=code_contents,
@@ -790,7 +897,8 @@ def fix_verification_errors_loop(
                     strength=strength,
                     temperature=temperature,
                     verbose=verbose,
-                    time=llm_time # Pass time
+                    time=llm_time,
+                    compressed_context=compressed_context,
                 )
 
             # 4f: Add cost
@@ -818,7 +926,7 @@ def fix_verification_errors_loop(
             iteration_log_xml += f'  </FixerResult>\n'
 
         except Exception as e:
-            console.print(f"[bold red]Error calling fix_verification_errors on attempt {current_attempt}: {e}[/bold red]")
+            console.print(f"[bold red]Error calling fix_verification_errors on attempt {current_attempt}: {rich_escape(str(e))}[/bold red]")
             iteration_log_xml += f'  <Status>Error in Fixer Call: {escape(str(e))}</Status>\n</Iteration>'
             _write_log_entry(log_path, iteration_log_xml)
             stats['status_message'] = f'Error in fixer call on attempt {current_attempt}'
@@ -902,7 +1010,7 @@ def fix_verification_errors_loop(
                         code_path.write_text(code_contents, encoding="utf-8") # Restore from memory state before this attempt
                 
                 except IOError as e:
-                    console.print(f"[bold red]Error during secondary verification I/O: {e}[/bold red]")
+                    console.print(f"[bold red]Error during secondary verification I/O: {rich_escape(str(e))}[/bold red]")
                     verify_output = f"Error during secondary verification I/O: {str(e)}"
                     secondary_verification_passed = False # Treat I/O error as failure
                     verify_ret_code = -1 # Indicate error
@@ -985,7 +1093,7 @@ def fix_verification_errors_loop(
                     break # Exit loop on verified success
 
             except IOError as e:
-                 console.print(f"[bold red]Error writing applied changes: {e}[/bold red]")
+                 console.print(f"[bold red]Error writing applied changes: {rich_escape(str(e))}[/bold red]")
                  iteration_log_xml += f'  <Action>Error writing applied changes: {escape(str(e))}</Action>\n'
                  iteration_log_xml += f'  <Status>Error Applying Changes</Status>\n'
                  # Continue loop if possible
@@ -1098,7 +1206,7 @@ def fix_verification_errors_loop(
                     stats['final_issues'] = -1 # Indicate uncertainty
 
             except (OSError, IOError) as e:
-                console.print(f"[bold red]Error restoring files from best iteration {best_iteration['attempt']}: {e}[/bold red]")
+                console.print(f"[bold red]Error restoring files from best iteration {best_iteration['attempt']}: {rich_escape(str(e))}[/bold red]")
                 final_log_entry += f'  <Error>Error restoring files from best iteration {best_iteration["attempt"]}: {escape(str(e))}</Error>\n'
                 stats['status_message'] += f' - Error restoring best iteration: {e}'
                 stats['final_issues'] = -1 # Indicate uncertainty
@@ -1130,7 +1238,7 @@ def fix_verification_errors_loop(
                      code_path.write_text(initial_code_content, encoding='utf-8')
                      code_contents = initial_code_content
              except IOError as e:
-                 console.print(f"[bold red]Error restoring initial files: {e}[/bold red]")
+                 console.print(f"[bold red]Error restoring initial files: {rich_escape(str(e))}[/bold red]")
                  final_log_entry += f'  <Error>Error restoring initial files: {escape(str(e))}</Error>\n'
                  stats['status_message'] += f' - Error restoring initial files: {e}'
                  stats['final_issues'] = -1 # State uncertain
@@ -1227,7 +1335,7 @@ def fix_verification_errors_loop(
         overall_success = False
 
     if not overall_success and agentic_fallback:
-        console.print(f"[bold yellow]Initiating agentic fallback (prompt_file={prompt_file!r})...[/bold yellow]")
+        console.print(f"[bold yellow]Initiating agentic fallback (prompt_file={rich_escape(repr(prompt_file))})...[/bold yellow]")
         agent_cwd = Path(prompt_file).parent if prompt_file else None
         agent_success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
             prompt_file=prompt_file,
@@ -1239,7 +1347,7 @@ def fix_verification_errors_loop(
         )
         total_cost += agent_cost
         if not agent_success:
-            console.print(f"[bold red]Agentic verify fallback failed: {agent_msg}[/bold red]")
+            console.print(f"[bold red]Agentic verify fallback failed: {rich_escape(str(agent_msg))}[/bold red]")
         if agent_changed_files:
             console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
             for f in agent_changed_files:
@@ -1252,9 +1360,18 @@ def fix_verification_errors_loop(
                 final_code_content = Path(code_file).read_text(encoding="utf-8")
                 final_program_content = Path(program_file).read_text(encoding="utf-8")
             except Exception as e:
-                console.print(f"[yellow]Warning: Could not read files after successful agentic fix: {e}[/yellow]")
+                console.print(f"[yellow]Warning: Could not read files after successful agentic fix: {rich_escape(str(e))}[/yellow]")
         else:
             console.print("[bold red]Agentic fallback failed.[/bold red]")
+        _record_agentic_verify_fallback_event(
+            agentic_fallback_events,
+            success=agent_success,
+            detail=(
+                "agentic verify fallback succeeded"
+                if agent_success
+                else "agentic verify fallback failed"
+            ),
+        )
 
     return {
         "success": overall_success,

@@ -1,0 +1,18 @@
+{
+  "pdd_version": "0.0.309.dev0",
+  "timestamp": "2026-07-24T23:44:59+00:00",
+  "command": "test",
+  "prompt_hash": "d379205ab7826fc8f02c1bc525f246bac51aad6d4aee834f7217adca18b15733",
+  "code_hash": "58b31273e32db25e01e7ec81332a7fb085f987ff7947204a3208395a2512207f",
+  "example_hash": "0f578adf2edf8f30b6baf564a1a44f9279249fbb65de6af2dd6516e9c92be0a4",
+  "test_hash": "fcac0765af959989addbae5bf1e7bde148ba283f87c4c9a0e0bce983df38bd15",
+  "test_files": {
+    "test_routing_policy.py": "fcac0765af959989addbae5bf1e7bde148ba283f87c4c9a0e0bce983df38bd15"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/data/deepswe_manifest.json": "8d1f4d658bc01cd579c0d367e4906244d9e143f54033dd694fa403ef7ed13eea",
+    "pdd/gate_policy.py": "110ad068b2e5f1d4c0aa0e8ace3c8da8acb05d48f3116b6229459ed258d69667",
+    "pdd/reasoning.py": "b75e2beac078d86bcbee0ceb2a44cd19b4fab7a456890eead6510cd2823efa39"
+  }
+}

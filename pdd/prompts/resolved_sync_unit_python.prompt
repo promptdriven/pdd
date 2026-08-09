@@ -1,0 +1,40 @@
+<include>context/python_preamble.prompt</include>
+<pdd-reason>Canonical per-module sync identity shared across agentic sync, runner, and durable worktree flows.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "classes": [
+      {"name": "ResolvedSyncUnit", "kind": "dataclass"}
+    ],
+    "functions": [
+      {"name": "ResolvedSyncUnit.relocate", "signature": "(old_root: Path, new_root: Path) -> ResolvedSyncUnit", "returns": "ResolvedSyncUnit"},
+      {"name": "resolve_sync_unit", "signature": "(key: str, target_basename: str, cwd: Path, *, requested_context: Optional[str] = None, architecture_path: Optional[Path] = None) -> ResolvedSyncUnit", "returns": "ResolvedSyncUnit"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>construct_paths_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/resolved_sync_unit.py`.
+
+% Role & Scope
+This module owns a frozen `ResolvedSyncUnit` dataclass and a non-throwing resolver used by agentic sync to carry one canonical module identity through dry-run validation, fingerprint filtering, child command construction, and durable checkpoint staging.
+
+% Requirements
+1. Define `ResolvedSyncUnit` as a frozen dataclass with fields: `key: str`, `target_basename: str`, `cwd: Path`, `pddrc_path: Optional[Path]`, `context: Optional[str]`, `prompts_dir: Path`, and optional advisory paths `architecture_path`, `generate_output_path`, `test_output_path`, and `meta_path`.
+2. Path fields are advisory. They describe where a child `pdd sync` is expected to read/write, but the child still computes real paths from its cwd and `.pddrc`. The unit's hard contract is that `cwd`, `pddrc_path`, `context`, and `target_basename` agree.
+3. Implement `ResolvedSyncUnit.relocate(old_root, new_root)` to return a copy with every path field rebased from `old_root` to `new_root` when the path is under `old_root`; paths outside `old_root` are preserved. Rebase relative to the repo root, not just cwd, so ancestor `.pddrc` paths relocate into durable per-module worktrees.
+4. Implement `resolve_sync_unit(key, target_basename, cwd, *, requested_context=None, architecture_path=None)`:
+   - Find the governing `.pddrc` from `cwd` via `construct_paths._find_pddrc_file`.
+   - Load it with `_load_pddrc_config`; if missing or malformed, return a unit with `context=None`, `prompts_dir=cwd / "prompts"`, and no exception.
+   - Resolve context with omit-not-fail semantics: use `requested_context` only if that context exists in the module's own `.pddrc`; otherwise use the specific non-default context assigned to `target_basename` by `_detect_context_from_basename(..., pddrc_path=pddrc_path)`; otherwise set `context=None`.
+   - Resolve `prompts_dir` and output defaults relative to `pddrc_path.parent` when those config values are relative.
+   - Set `meta_path` to `cwd / ".pdd" / "meta"` as an advisory default; durable metadata allowlisting separately uses `pddrc_path.parent` because operation logs anchor metadata at the governing `.pddrc` parent.
+5. Do not import from `agentic_sync` or `agentic_sync_runner`; this module must stay dependency-light to avoid cycles.
+
+% Deliverables
+- Code: `pdd/resolved_sync_unit.py`

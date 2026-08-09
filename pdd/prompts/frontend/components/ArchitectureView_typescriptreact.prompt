@@ -1,0 +1,70 @@
+% You are an expert TypeScript + React engineer. Implement `pdd/frontend/components/ArchitectureView.tsx` as the architecture workspace container that coordinates loading, graph editing, prompt generation, and sync workflows.
+
+% Requirements
+1. Export a pure helper `moduleNeedsSync(info?: PromptInfo): boolean` that returns `true` when prompt outputs are incomplete and uses `expected_outputs` when provided (fallback to `['code', 'test', 'example']`).
+2. Define `ArchitectureViewProps` with server status, execution mode (`local`/`remote`), prompt navigation callback, optional batch progress callbacks, optional remote job callback, optional queue/direct sync callbacks, and optional `syncCompletedCounter`.
+3. Manage local UI/data state for: architecture loading/mode, issue URL generation, architecture file loading, existing prompt metadata, prompt generation progress/results, edit mode and validation, sync-from-prompts modal, sync options modal with pending targets, batch filtering, mobile detection, and sidebar collapse.
+4. On mount (and reconnect), if connected: check whether architecture exists, load modules when present, switch to graph mode, and load prompt metadata; if missing or load fails, fall back to empty mode. If disconnected, stop loading gracefully.
+5. Provide `loadExistingPrompts()` that calls `api.listPrompts()`, stores full `promptsInfo`, and tracks filename-only prompt existence in a `Set<string>`.
+6. Support loading architecture JSON from both file browser selection and manual path input with user-facing parse/not-found error messages.
+7. In empty mode, provide two entry points:
+   - Generate architecture from a GitHub issue URL (validate URL format; support local direct execution and remote command submission).
+   - Load an existing architecture file.
+8. Compute connected-component batches from the displayed architecture and expose batch-filtered view state.
+9. For prompt generation:
+   - Open a prompt order modal from "Generate Prompts".
+   - On confirm, derive `{module, langOrFramework}` from filenames.
+   - Generate `.pddrc` first, then generate prompts.
+   - Support remote submission mode (submit jobs + forward job metadata callback) and local batch mode (`api.batchGeneratePrompts`).
+   - Track progress/results in modal state, support cancellation via `api.cancelCommand`, and invoke batch start/progress/complete callbacks.
+10. Track remaining sync work per module and per batch using prompt metadata and `moduleNeedsSync`.
+11. Implement sync options flow for single module, all remaining modules, or a selected batch:
+   - Open `SyncOptionsModal` with target-specific title/description.
+   - For direct-run mode (`onRunSync`), run first module immediately and queue remaining modules when queue callback is available.
+   - For queue-only mode, queue all selected modules.
+   - Build display commands with `buildDisplayCommand(CommandType.SYNC, ...)`.
+12. Integrate architecture edit mode via `useArchitectureHistory`:
+   - Toggle edit mode with unsaved-change confirmation.
+   - Support add/edit/delete module, add/remove dependency, node position updates, undo/redo.
+   - Validate before save (`api.validateArchitecture`), highlight modules mentioned in validation errors, persist with `api.saveArchitecture`, and only exit edit mode on successful save.
+13. Provide graph re-layout action using `api.rearrangeGraphLayout(path)` and merge returned positions into history state.
+14. Keep keyboard and lifecycle safeguards in edit mode:
+   - `Cmd/Ctrl+S` save, `Cmd/Ctrl+Z` undo, `Cmd/Ctrl+Shift+Z` redo, `N` open add-module modal, `Escape` close modal/discard/exit.
+   - Warn on browser unload when unsaved changes exist.
+15. Render three primary UI states:
+   - Loading spinner.
+   - Empty architecture onboarding card with generation/load controls.
+   - Main graph workspace with collapsible sidebar, toolbar, validation banner, mobile fallback module list, and desktop `DependencyViewer`.
+16. Render and wire all supporting modals: `FileBrowser`, `PromptOrderModal`, `GenerationProgressModal`, `ModuleEditModal`, `AddModuleModal`, `SyncFromPromptModal`, `SyncOptionsModal`.
+17. When `syncCompletedCounter` increases above zero, refresh prompt metadata so sync counts/UI badges update.
+
+% Dependencies
+<frontend_api_contract>
+  <include>pdd/frontend/api.ts</include>
+</frontend_api_contract>
+<architecture_history_hook_contract>
+  <include>pdd/frontend/hooks/useArchitectureHistory.ts</include>
+</architecture_history_hook_contract>
+<batch_utils_contract>
+  <include>pdd/frontend/lib/batchUtils.ts</include>
+</batch_utils_contract>
+<command_builder_contract>
+  <include>pdd/frontend/lib/commandBuilder.ts</include>
+</command_builder_contract>
+<prompt_order_modal_contract>
+  <include>pdd/frontend/components/PromptOrderModal.tsx</include>
+</prompt_order_modal_contract>
+<sync_options_modal_contract>
+  <include>pdd/frontend/components/SyncOptionsModal.tsx</include>
+</sync_options_modal_contract>
+
+% Instructions
+- Keep business logic in React hooks/callbacks with explicit loading/error handling for async API calls.
+- Preserve local vs remote execution behavior differences; remote mode reports submission success rather than immediate command completion.
+- Keep architecture graph interactions functional in both normal and edit mode, including dependency editing and position updates.
+- Pass all required props through to child components exactly as expected by their contracts.
+- Keep the module resilient to partial failures (show alerts/messages, keep UI usable, and always clear pending modal flags in completion paths).
+
+% Deliverables
+- Code: `pdd/frontend/components/ArchitectureView.tsx`
+- Export: default `ArchitectureView` and named `moduleNeedsSync`

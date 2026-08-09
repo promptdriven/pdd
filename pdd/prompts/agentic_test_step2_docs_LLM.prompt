@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 2 of 9 in an agentic test generation workflow. Previous step checked for duplicates.
+You are working on step 2 of 18 in an agentic test generation workflow. Previous step checked for duplicates.
 
 % Inputs
 
@@ -40,6 +40,15 @@ You are working on step 2 of 9 in an agentic test generation workflow. Previous 
    - Look for existing API client code or test patterns
    - Check for API documentation (OpenAPI/Swagger specs, Postman collections)
    - Note any environment-specific URLs (dev/staging/prod)
+   - Extract external service contracts from the source code:
+     - Find auth middleware/decorators and note their EXACT function signatures
+       (e.g., `verify_token(token: str) -> dict` returns `{"uid": str, "email": str}`)
+     - Find API client calls and note EXACT SDK methods used
+       (e.g., `stripe.charges.create(amount=int, currency=str)` returns `Charge(id, status, amount)`)
+     - Find database query patterns and note EXACT model/schema fields
+       (e.g., `User.query.get(id)` returns `User(id, email, name, created_at)`)
+     - Check for OpenAPI/Swagger specs, Pydantic models, TypeScript interfaces, or Zod schemas
+       that define the EXACT shape of request/response data
 
 4. **Document your findings**
    - List the files and components relevant to testing
@@ -80,6 +89,15 @@ Your comment should follow this format:
 - Base URL source: [e.g., `.env` variable `API_BASE_URL`, config file, hardcoded]
 - Authentication: [method found, e.g., "Bearer token from env var `API_KEY`"]
 - API docs: [path to OpenAPI spec, Postman collection, or "none found"]
+
+### External Service Contracts (for Mock Generation)
+| Service | Function/Method to Mock | Input Types | Return Shape (from source code) |
+|---------|------------------------|-------------|--------------------------------|
+| [e.g., Firebase Auth] | [auth.verify_id_token(token)] | [str] | [{"uid": str, "email": str, ...}] |
+| [e.g., Stripe] | [stripe.charges.create(**kwargs)] | [amount: int, currency: str] | [Charge(id=str, status=str)] |
+| [e.g., PostgreSQL] | [db.session.query(User).get(id)] | [int] | [User(id, email, name)] |
+
+**Source:** [file paths where these contracts were found]
 
 ### Notes
 [Any additional observations relevant to test generation]

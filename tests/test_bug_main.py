@@ -37,6 +37,14 @@ DEFAULT_MOCK_GENERATED_TEST = "def test_bug_fix():\n    assert True"
 DEFAULT_MOCK_COST = 0.01
 DEFAULT_MOCK_MODEL_NAME = "cloud_model"
 
+
+@pytest.fixture(autouse=True)
+def clear_cloud_only_overrides(monkeypatch):
+    """Keep local-mode unit tests independent of developer shell env vars."""
+    monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
+    monkeypatch.delenv("PDD_NO_LOCAL_FALLBACK", raising=False)
+
+
 @pytest.fixture
 def mock_ctx():
     """Fixture to create a mock context object.

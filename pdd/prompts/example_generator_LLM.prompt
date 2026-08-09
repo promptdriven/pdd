@@ -28,4 +28,4 @@
     - Use correct import statements based on the actual file structure
     - The example should be a complete, runnable script that imports from the actual module
     - Include proper file path handling and module discovery if needed
-<include>./context/example.prompt</include>
+<include optional>./context/example.prompt</include>

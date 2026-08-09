@@ -68,7 +68,7 @@ def test_code_generator_valid_input_complete(
     )
 
     # Assertions
-    mock_preprocess.assert_called_once_with("Generate a Python function to add two numbers.", recursive=False, double_curly_brackets=True)
+    mock_preprocess.assert_called_once_with("Generate a Python function to add two numbers.", recursive=False, double_curly_brackets=True, compress=False)
     mock_llm_invoke.assert_called_once_with(
         prompt=MOCK_PROCESSED_PROMPT,
         input_json={},
@@ -82,7 +82,7 @@ def test_code_generator_valid_input_complete(
     mock_unfinished_prompt.assert_called_once_with(
         prompt_text=MOCK_INITIAL_RESPONSE['result'][-600:],
         strength=0.5,
-        temperature=0.0,
+        temperature=0.5,
         time=None,
         language="python",
         verbose=True
@@ -92,7 +92,7 @@ def test_code_generator_valid_input_complete(
         llm_output=MOCK_INITIAL_RESPONSE['result'],
         language="python",
         strength=EXTRACTION_STRENGTH,
-        temperature=0.0,
+        temperature=0.5,
         time=None,
         verbose=True
     )
@@ -122,7 +122,7 @@ def test_code_generator_valid_input_incomplete(
     )
 
     # Assertions
-    mock_preprocess.assert_called_once_with("Generate a Python function to multiply two numbers.", recursive=False, double_curly_brackets=True)
+    mock_preprocess.assert_called_once_with("Generate a Python function to multiply two numbers.", recursive=False, double_curly_brackets=True, compress=False)
     mock_llm_invoke.assert_called_once_with(
         prompt=MOCK_PROCESSED_PROMPT,
         input_json={},
@@ -136,7 +136,7 @@ def test_code_generator_valid_input_incomplete(
     mock_unfinished_prompt.assert_called_once_with(
         prompt_text=MOCK_INITIAL_RESPONSE['result'][-600:],
         strength=0.5,
-        temperature=0.0,
+        temperature=0.7,
         time=None,
         language="python",
         verbose=False
@@ -154,7 +154,7 @@ def test_code_generator_valid_input_incomplete(
         llm_output=MOCK_FINAL_OUTPUT,
         language="python",
         strength=EXTRACTION_STRENGTH,
-        temperature=0.0,
+        temperature=0.7,
         time=None,
         verbose=False
     )
@@ -165,7 +165,7 @@ def test_code_generator_valid_input_incomplete(
         MOCK_CONTINUE_RESPONSE[1] +
         MOCK_POSTPROCESS_RESPONSE[1]
     )
-    assert model_name == MOCK_CONTINUE_RESPONSE[2]
+    assert model_name == MOCK_POSTPROCESS_RESPONSE[2]
 
 @pytest.mark.parametrize("prompt,language,strength,temperature,expected_error", [
     ("", "python", 0.5, 0.5, ValueError),
@@ -299,7 +299,7 @@ def test_code_generator_edge_case_exact_600_chars(
     mock_unfinished_prompt.assert_called_once_with(
         prompt_text='a' * 600,
         strength=0.5,
-        temperature=0.0,
+        temperature=0.5,
         time=None,
         language="python",
         verbose=False
@@ -309,7 +309,7 @@ def test_code_generator_edge_case_exact_600_chars(
         llm_output='a' * 600,
         language="python",
         strength=EXTRACTION_STRENGTH,
-        temperature=0.0,
+        temperature=0.5,
         time=None,
         verbose=False
     )
@@ -440,3 +440,195 @@ def test_generate_loops_when_unfinished_never_true(monkeypatch):
 
     # Assert: final code includes the continuation at least once (loop happened)
     assert "# cont" in final_code
+
+
+def test_provider_stop_with_complete_python_skips_unfinished_check_and_continuation(
+    mock_preprocess,
+    mock_llm_invoke,
+    mock_unfinished_prompt,
+    mock_continue_generation,
+    mock_postprocess,
+):
+    """
+    Regression for provider-complete generations whose last 600-character slice
+    can start mid-token. When the provider reports a normal stop and the full
+    generated Python parses, PDD should not ask the tail judge to continue.
+    """
+    body_prefix = "\n".join(f"VALUE_{i} = {i}" for i in range(80))
+    complete_python = (
+        "```python\n"
+        f"{body_prefix}\n"
+        "__all__ = [\n"
+        '    "clear_job_stop_request",\n'
+        '    "get_job_stop_requested",\n'
+        '    "release_cli_lock_sync",\n'
+        "]\n"
+        "```\n"
+    )
+    mock_llm_invoke.return_value = {
+        "result": complete_python,
+        "cost": 0.05,
+        "model_name": "qwen-local",
+        "finish_reason": "stop",
+    }
+
+    runnable_code, total_cost, model_name = code_generator(
+        prompt="Generate a complete Python module.",
+        language="python",
+        strength=0.8,
+        temperature=0.0,
+        verbose=False,
+    )
+
+    mock_unfinished_prompt.assert_not_called()
+    mock_continue_generation.assert_not_called()
+    mock_postprocess.assert_called_once_with(
+        llm_output=complete_python,
+        language="python",
+        strength=EXTRACTION_STRENGTH,
+        temperature=0.0,
+        time=None,
+        verbose=False,
+    )
+    assert runnable_code == "runnable_code_here"
+    assert total_cost == 0.05 + MOCK_POSTPROCESS_RESPONSE[1]
+    assert model_name == MOCK_POSTPROCESS_RESPONSE[2]
+
+
+def test_provider_length_finish_reason_still_uses_unfinished_check(
+    mock_preprocess,
+    mock_llm_invoke,
+    mock_unfinished_prompt,
+    mock_continue_generation,
+    mock_postprocess,
+):
+    """
+    A provider truncation signal must not bypass continuation just because the
+    current text happens to be parseable.
+    """
+    mock_llm_invoke.return_value = {
+        "result": "def add(a, b):\n    return a + b\n",
+        "cost": 0.05,
+        "model_name": "model_v1",
+        "finish_reason": "length",
+    }
+    mock_unfinished_prompt.return_value = MOCK_UNFINISHED_RESPONSE_INCOMPLETE
+
+    code_generator(
+        prompt="Generate a Python function.",
+        language="python",
+        strength=0.8,
+        temperature=0.0,
+        verbose=False,
+    )
+
+    mock_unfinished_prompt.assert_called_once()
+    mock_continue_generation.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Issue #687: code_generator returns wrong model name after postprocessing
+# ---------------------------------------------------------------------------
+
+# Distinct model names to detect when the wrong one is returned
+MOCK_POSTPROCESS_RESPONSE_DISTINCT = ("runnable_code_here", 0.02, "claude-3-5-sonnet")
+
+
+def test_postprocess_model_name_returned_when_postprocess_runs(
+    mock_preprocess,
+    mock_llm_invoke,
+    mock_unfinished_prompt,
+    mock_continue_generation,
+    mock_postprocess
+):
+    """
+    Issue #687: When postprocessing runs, the returned model_name should
+    be from postprocess (the last LLM step), not from initial generation.
+
+    This test uses a *distinct* postprocess model name so we can detect
+    whether the return value comes from postprocess or initial generation.
+    """
+    # Override postprocess mock to return a distinct model name
+    mock_postprocess.return_value = MOCK_POSTPROCESS_RESPONSE_DISTINCT
+
+    runnable_code, total_cost, model_name = code_generator(
+        prompt="Generate a Python function to add two numbers.",
+        language="python",
+        strength=0.8,
+        temperature=0.5,
+        verbose=False
+    )
+
+    assert runnable_code == "runnable_code_here"
+    # BUG: currently returns "model_v1" (initial generation) instead of
+    # "claude-3-5-sonnet" (postprocess model)
+    assert model_name == "claude-3-5-sonnet", (
+        f"Expected postprocess model 'claude-3-5-sonnet', got '{model_name}'. "
+        "code_generator returns the initial generation model instead of the "
+        "postprocess model (issue #687)."
+    )
+
+
+def test_continuation_plus_postprocess_returns_postprocess_model(
+    mock_preprocess,
+    mock_llm_invoke,
+    mock_unfinished_prompt,
+    mock_continue_generation,
+    mock_postprocess
+):
+    """
+    Issue #687: When both continuation AND postprocessing run, the returned
+    model_name should be from postprocess (the very last LLM step).
+
+    Pipeline: initial → continuation → postprocess
+    Expected model_name: postprocess model (last step)
+    """
+    # Trigger continuation by marking generation as incomplete
+    mock_unfinished_prompt.return_value = MOCK_UNFINISHED_RESPONSE_INCOMPLETE
+    # Continuation returns its own model
+    mock_continue_generation.return_value = ("completed LLM output", 0.05, "gpt-4o-continue")
+    # Postprocess returns yet another distinct model
+    mock_postprocess.return_value = ("final_runnable_code", 0.03, "claude-3-5-sonnet-postprocess")
+
+    runnable_code, total_cost, model_name = code_generator(
+        prompt="Generate a Python function to multiply two numbers.",
+        language="python",
+        strength=0.8,
+        temperature=0.5,
+        verbose=False
+    )
+
+    assert runnable_code == "final_runnable_code"
+    # BUG: currently returns "gpt-4o-continue" (continuation model) instead of
+    # "claude-3-5-sonnet-postprocess" (postprocess model)
+    assert model_name == "claude-3-5-sonnet-postprocess", (
+        f"Expected postprocess model 'claude-3-5-sonnet-postprocess', got '{model_name}'. "
+        "code_generator returns the continuation model instead of the "
+        "postprocess model (issue #687)."
+    )
+
+
+def test_json_language_skips_postprocess_returns_initial_model(
+    mock_preprocess,
+    mock_llm_invoke,
+    mock_unfinished_prompt,
+    mock_continue_generation,
+    mock_postprocess
+):
+    """
+    Issue #687 (negative test): When language is 'json', postprocessing is
+    skipped. model_name_post is set to model_name, so the initial model
+    should be returned. This verifies the fix doesn't break the JSON path.
+    """
+    runnable_code, total_cost, model_name = code_generator(
+        prompt="Generate a JSON schema.",
+        language="json",
+        strength=0.8,
+        temperature=0.5,
+        verbose=False
+    )
+
+    # Postprocess should NOT have been called for JSON
+    mock_postprocess.assert_not_called()
+    # model_name should be the initial generation model (no postprocess ran)
+    assert model_name == MOCK_INITIAL_RESPONSE['model_name']

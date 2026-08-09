@@ -1,0 +1,9 @@
+Create a Python module for a small command history buffer.
+
+It should expose:
+- `CommandHistory(max_items: int = 50)`
+- `append(command: str) -> None`
+- `recent(limit: int = 10) -> list[str]`
+- `clear() -> None`
+
+Keep ordering deterministic and avoid external dependencies.

@@ -60,14 +60,29 @@ Right after installation, let PDD bootstrap its configuration:
 pdd setup
 ```
 
-During the wizard:
-- Choose **Install tab completion** if you want shell helpers.
-- Pick **Google Gemini** when asked which providers to configure.
-- Paste your Gemini API key when prompted (you can create it in the next step if you haven’t already).
+The setup wizard runs these steps:
+  1.  Detects agentic CLI tools (Claude, Antigravity `agy` preferred / legacy Gemini `gemini` rollback, Codex, OpenCode) and offers installation and credential configuration if needed. The Google provider supports both the Antigravity CLI (installed via `curl -fsSL https://antigravity.google/cli/install.sh | bash`) and the legacy Gemini CLI (`npm install -g @google/gemini-cli`); Antigravity can use Google subscription sign-in, `ANTIGRAVITY_API_KEY`/`GOOGLE_API_KEY`, Vertex AI env auth, or PDD's compatibility bridge from `GEMINI_API_KEY`, while legacy Gemini uses its own OAuth store or `GEMINI_API_KEY`/`GOOGLE_API_KEY`. Set `PDD_AGENTIC_PROVIDER=antigravity` or `PDD_GOOGLE_CLI=agy|gemini|auto` to control selection. Google announced consumer-tier Gemini CLI cutoff on **2026-06-18**; use the legacy `gemini` binary only as the explicit rollback (`PDD_GOOGLE_CLI=gemini`).
+  2. Scans for API keys across `.env`, and `~/.pdd/api-env.*`, and the shell environment; prompts to add one if none are found
+  3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1400) across all LiteLLM-supported providers  based on your available keys
+  4. Optionally creates a `.pddrc` project config
+  5. Tests the first available model with a real LLM call 
+  6. Prints a structured summary (CLIs, keys, models, test result)
 
-The wizard writes your credentials to `~/.pdd/api-env`, seeds `~/.pdd/llm_model.csv` with Gemini entries, and reminds you to reload your shell (`source ~/.zshrc`, etc.) so completion and env hooks load.
+When adding your Gemini API key:
+- Select Antigravity `agy` or legacy Gemini `gemini` as one of the Google agentic CLI tools
+- The wizard prompts/saves `GOOGLE_API_KEY` for Google CLIs; existing `GEMINI_API_KEY` still works as a compatibility alias
+- Paste your Google/Gemini API key when prompted (you can create it in the next step if you haven't already)
+- The wizard tests it immediately and confirms it works
 
-If you prefer to configure everything manually—or you’re on an offline machine—skip the wizard and follow the manual instructions below.
+The wizard writes your credentials to `~/.pdd/api-env.zsh` (or `.bash`) and updates `llm_model.csv` with your selected models.
+
+> **Important:** After setup completes, source the API environment file so your keys take effect in the current terminal session:
+> ```bash
+> source ~/.pdd/api-env.zsh   # or api-env.bash, depending on your shell
+> ```
+> New terminal windows will load keys automatically.
+
+If you prefer to configure everything manually—or you're on an offline machine—skip the wizard and follow the manual instructions below.
 
 ---
 

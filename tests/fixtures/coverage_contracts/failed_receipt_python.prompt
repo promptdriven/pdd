@@ -1,0 +1,14 @@
+# Failed Coverage Fixture
+
+<contract_rules>
+R1 - Receipt event
+The system MUST emit a receipt event after a confirmed refund.
+
+R7 - Audit confirmation
+The system MUST write an audit confirmation after provider success.
+</contract_rules>
+
+<coverage>
+R1: story__receipt_missing_acceptance.md
+R7: test_R7_broken_syntax
+</coverage>

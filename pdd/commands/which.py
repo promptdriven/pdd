@@ -222,8 +222,15 @@ def which(
     tests_candidates_raw.append(str(_get_resolved_path("test_output_path") or ""))
     generate_candidates_raw.append(str(_get_resolved_path("generate_output_path") or ""))
 
-    # Conventional defaults (relative)
-    examples_candidates_raw.append("context")
+    # Conventional defaults (relative). Mirror construct_paths' resolver so the
+    # diagnostic matches the runtime: greenfield → 'examples', legacy populated
+    # context/ with *_example.* files → 'context'. Keep the alternate as a
+    # secondary candidate so users see both locations (#616).
+    from pdd.construct_paths import _resolve_default_examples_dir
+    _primary = _resolve_default_examples_dir(config_base)
+    _secondary = "context" if _primary == "examples" else "examples"
+    examples_candidates_raw.append(_primary)
+    examples_candidates_raw.append(_secondary)
     tests_candidates_raw.append("tests")
     generate_candidates_raw.append("pdd")
 

@@ -1,0 +1,34 @@
+Create a React component named `JobOutputPanel` that displays detailed, real-time output for a background job. This component serves as the primary monitoring interface for users to track the progress, logs, and status of long-running tasks within the system.
+
+### Requirements:
+1.  **Real-time Monitoring**: Display streaming output logs from the job. Implement auto-scroll functionality that automatically follows the latest output unless the user manually scrolls up.
+2.  **Status Visualization**: Show a status indicator (color-coded: running, queued, completed, failed) and a human-readable duration that updates every second while the job is active.
+3.  **Progress Tracking**: Display a progress bar when progress data (current/total) is available. If the job is active but no specific progress data exists, show an indeterminate loading state.
+4.  **Action Controls**:
+    *   **Copy**: Allow users to copy the entire log output to the clipboard with a temporary "Copied" success state.
+    *   **Cancel**: Provide a cancel action for active (queued/running) jobs.
+    *   **Close**: Provide a close action to dismiss the panel.
+5.  **Log Formatting**:
+    *   Differentiate log lines: use specific colors for stderr (red) and command echoes (accent color).
+    *   Ensure logs are displayed in a monospace font with proper line wrapping.
+6.  **Terminal States**: Display clear success messages for completed jobs and error messages (including the error string) for failed jobs.
+7.  **Styling**: Use Tailwind CSS for a dark-themed "surface" UI consistent with a terminal-like aesthetic.
+
+### Dependencies:
+<job_hooks>
+  <include>hooks/useJobs.ts</include>
+</job_hooks>
+
+### Instructions:
+1.  **Props**: The component should accept `job` (JobInfo), `onCancel` (callback), and `onClose` (callback).
+2.  **Duration Logic**: Implement a helper function `formatDuration` to calculate the time elapsed between `startedAt` and `completedAt` (or current time if still running).
+3.  **Auto-Scroll Logic**:
+    *   Use a `useRef` for the output container.
+    *   Use a `useEffect` to scroll to the bottom when `job.output` changes, but only if `autoScroll` is enabled.
+    *   Implement a `handleScroll` listener to disable `autoScroll` if the user scrolls up more than 50px from the bottom.
+    *   Show a "Scroll to bottom" floating button when `autoScroll` is disabled and there is output.
+4.  **Clipboard API**: Use `navigator.clipboard.writeText` for the copy functionality.
+5.  **Performance**: Ensure the interval for the duration timer is cleared when the component unmounts or the job status changes to a terminal state.
+
+### Deliverables:
+- A single TypeScript file `JobOutputPanel.tsx` containing the React functional component and necessary helper functions.

@@ -1,490 +1,1402 @@
-"""
-Test Plan:
+"""Tests for pdd.agentic_test_orchestrator module.
 
-1. Unit Tests (Pytest):
-    - test_orchestrator_happy_path: Mock all 9 steps returning success. Verify final tuple, cost accumulation, and context passing.
-    - test_hard_stop_duplicate: Mock step 1 returning "Duplicate of #". Verify early exit.
-    - test_hard_stop_needs_info: Mock step 3 returning "Needs More Info". Verify early exit.
-    - test_hard_stop_plan_blocked: Mock step 5 returning "PLAN_BLOCKED". Verify early exit.
-    - test_hard_stop_no_files: Mock step 6 returning no file list. Verify early exit.
-    - test_resume_from_state: Mock loading state where steps 1-4 are done. Verify execution starts at step 5.
-    - test_worktree_creation_failure: Mock _setup_worktree failure. Verify graceful exit.
-    - test_file_parsing_logic: Verify extraction of files from step 6 and 8 outputs.
-    - test_missing_template: Verify failure if load_prompt_template returns None.
-
-2. Formal Verification (Z3):
-    - test_z3_cost_accumulation: Prove that total_cost = initial_cost + sum(step_costs).
-    - test_z3_step_execution_logic: Prove that for any step N to run, start_step <= N, and no hard stop occurred at < N.
+Tests cover:
+  - Full 18-step happy path (non-web, skipping manual testing steps 6-11)
+  - Hard stop conditions (duplicate, needs info, plan blocked, no files at step 12)
+  - State resumption from cached workflow state
+  - Blind-resume validation (Issue #467)
+  - Worktree creation and failure handling
+  - File parsing from FILES_CREATED / FILES_MODIFIED output
+  - Conditional step execution (web + playwright-cli gating)
+  - Step 16 skip when step 15 produces no new files
+  - Missing prompt template handling
+  - Context accumulation (step5b_output alias, enhanced_test_plan, etc.)
+  - Cost accumulation across steps
+  - Z3 formal verification of cost and step-execution properties
 """
+from __future__ import annotations
 
 import pytest
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import patch, MagicMock
 from pathlib import Path
-import sys
-import os
 
-# Add the parent directory to sys.path to allow imports if running directly
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from pdd.agentic_test_orchestrator import (
+    run_agentic_test_orchestrator,
+    TEST_STEP_TIMEOUTS,
+    _setup_worktree,
+)
 
-from pdd.agentic_test_orchestrator import run_agentic_test_orchestrator
 
-# --- Fixtures ---
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 @pytest.fixture
-def mock_dependencies():
-    with patch('pdd.agentic_test_orchestrator.run_agentic_task') as mock_run, \
-         patch('pdd.agentic_test_orchestrator.load_workflow_state') as mock_load, \
-         patch('pdd.agentic_test_orchestrator.save_workflow_state') as mock_save, \
-         patch('pdd.agentic_test_orchestrator.clear_workflow_state') as mock_clear, \
-         patch('pdd.agentic_test_orchestrator.load_prompt_template') as mock_template, \
-         patch('pdd.agentic_test_orchestrator._setup_worktree') as mock_setup_wt, \
-         patch('pdd.agentic_test_orchestrator.Console') as mock_console, \
-         patch('pdd.agentic_test_orchestrator._get_git_root') as mock_git_root, \
-         patch('subprocess.run') as mock_subprocess:
-        
-        # Default behaviors
-        mock_load.return_value = (None, None)  # No existing state
-        mock_save.return_value = 12345  # Mock comment ID
-        
-        # Create a mock template object that has a format method
-        mock_template_obj = MagicMock()
-        mock_template_obj.format.return_value = "Formatted Prompt"
-        mock_template.return_value = mock_template_obj
-        
-        mock_setup_wt.return_value = (Path("/tmp/worktree"), None)
-        mock_git_root.return_value = Path("/repo/root")
-        
-        # Default run_agentic_task behavior: success, output, cost, model
-        mock_run.return_value = (True, "Step Output", 0.1, "gpt-4")
+def mock_deps():
+    """Patch all external dependencies of the orchestrator."""
+    with patch("pdd.agentic_test_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_test_orchestrator.drain_step_steers", return_value=[]), \
+         patch("pdd.agentic_test_orchestrator.load_workflow_state") as mock_load, \
+         patch("pdd.agentic_test_orchestrator.save_workflow_state") as mock_save, \
+         patch("pdd.agentic_test_orchestrator.clear_workflow_state") as mock_clear, \
+         patch("pdd.agentic_test_orchestrator.load_prompt_template") as mock_template, \
+         patch("pdd.agentic_test_orchestrator._setup_worktree") as mock_wt, \
+         patch("pdd.agentic_test_orchestrator.shutil") as mock_shutil, \
+         patch("subprocess.run") as mock_subprocess:
 
-        # Mock subprocess to avoid FileNotFoundError on /cwd
-        mock_subprocess.return_value.stdout = "main"
-        mock_subprocess.return_value.returncode = 0
-        
+        mock_load.return_value = (None, None)
+        mock_save.return_value = None
+        mock_template.return_value = "Mock prompt: {issue_content}"
+        mock_wt.return_value = (Path("/tmp/worktree"), None)
+        mock_shutil.which.return_value = None  # No playwright-cli
+        mock_subprocess.return_value = MagicMock(stdout="main\n", returncode=0)
+        mock_run.return_value = (True, "Step Output", 0.1, "anthropic")
+
         yield {
-            'run': mock_run,
-            'load': mock_load,
-            'save': mock_save,
-            'clear': mock_clear,
-            'template': mock_template,
-            'setup_wt': mock_setup_wt,
-            'console': mock_console,
-            'git_root': mock_git_root,
-            'subprocess': mock_subprocess
+            "run": mock_run,
+            "load": mock_load,
+            "save": mock_save,
+            "clear": mock_clear,
+            "template": mock_template,
+            "wt": mock_wt,
+            "shutil": mock_shutil,
+            "subprocess": mock_subprocess,
         }
 
+
 @pytest.fixture
-def default_args():
+def default_args(tmp_path):
+    """Default arguments for run_agentic_test_orchestrator."""
     return {
-        'issue_url': "http://github.com/o/r/issues/1",
-        'issue_content': "Fix bug",
-        'repo_owner': "owner",
-        'repo_name': "repo",
-        'issue_number': 1,
-        'issue_author': "user",
-        'issue_title': "Bug",
-        'cwd': Path("/cwd"),
-        'quiet': True
+        "issue_url": "https://github.com/o/r/issues/1",
+        "issue_content": "Add tests for the login page.",
+        "repo_owner": "owner",
+        "repo_name": "repo",
+        "issue_number": 1,
+        "issue_author": "user",
+        "issue_title": "Add login tests",
+        "cwd": tmp_path,
+        "quiet": True,
+        "use_github_state": False,
     }
 
-# --- Unit Tests ---
 
-def test_orchestrator_happy_path(mock_dependencies, default_args):
-    """Verify the full 9-step sequence runs successfully."""
-    mocks = mock_dependencies
-    
-    # Setup specific step outputs
-    def side_effect(*args, **kwargs):
-        label = kwargs.get('label', '')
-        if label == 'step6':
-            return (True, "FILES_CREATED: test_foo.py", 0.1, "gpt-4")
-        if label == 'step9':
-            return (True, "PR Created: https://github.com/o/r/pull/2", 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
-    
-    mocks['run'].side_effect = side_effect
+# ---------------------------------------------------------------------------
+# Mid-run steering (54.2)
+# ---------------------------------------------------------------------------
+
+def test_mid_run_steers_passed_to_run_agentic_task(mock_deps, default_args):
+    """Drained steers are forwarded to run_agentic_task; empty drain passes None."""
+    from pdd.agentic_common import SteerEntry
+
+    steer = SteerEntry(comment_id="99", author="alice", body="Prefer pytest markers")
+    with patch("pdd.agentic_test_orchestrator.drain_step_steers") as mock_drain:
+        mock_drain.side_effect = [[steer], []]
+        mocks = mock_deps
+
+        mocks["run"].side_effect = [
+            (True, "duplicate of #42", 0.1, "anthropic"),
+        ]
+
+        success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+        assert success is False
+        assert "duplicate" in msg.lower()
+        calls = mocks["run"].call_args_list
+        assert len(calls) == 1
+        assert calls[0].kwargs["steers"] == [steer]
+        assert mock_drain.call_count == 1
+        assert mocks["save"].call_count >= 1
+
+
+# ---------------------------------------------------------------------------
+# Happy path
+# ---------------------------------------------------------------------------
+
+def test_happy_path_non_web(mock_deps, default_args):
+    """Full 18-step run with non-web TEST_TYPE skips steps 6-11."""
+    mocks = mock_deps
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step4":
+            return (True, "TEST_TYPE: api\nTEST_FRAMEWORK: pytest", 0.1, "anthropic")
+        if label == "step12":
+            return (True, "FILES_CREATED: tests/test_api.py\nGenerated.", 0.1, "anthropic")
+        if label == "step17":
+            return (True, "PR Created: https://github.com/o/r/pull/10", 0.1, "anthropic")
+        return (True, f"Output for {label}", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
 
     success, msg, cost, model, files = run_agentic_test_orchestrator(**default_args)
 
     assert success is True
     assert "PR Created" in msg
-    assert cost == pytest.approx(0.9)  # 9 steps * 0.1
-    assert files == ["test_foo.py"]
-    assert mocks['run'].call_count == 9
-    assert mocks['clear'].called
+    assert "tests/test_api.py" in files
+    # Steps 1-5, 5.5, 12-17 = 12 steps (skipping 6-11 and 16)
+    executed_labels = [c.kwargs["label"] for c in mocks["run"].call_args_list]
+    assert "step1" in executed_labels
+    assert "step5.5" in executed_labels
+    assert "step12" in executed_labels
+    assert "step17" in executed_labels
+    # Steps 6-11 should NOT execute (non-web)
+    for s in ["step6", "step7", "step8", "step9", "step10", "step11"]:
+        assert s not in executed_labels
+    assert mocks["clear"].called
 
-def test_hard_stop_duplicate(mock_dependencies, default_args):
-    """Verify early exit when step 1 finds a duplicate."""
-    mocks = mock_dependencies
-    
-    # Step 1 returns duplicate message
-    mocks['run'].return_value = (True, "Duplicate of #42", 0.1, "gpt-4")
+
+def test_cost_accumulation(mock_deps, default_args):
+    """Total cost is sum of all step costs."""
+    mocks = mock_deps
+
+    call_count = 0
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.05, "anthropic")
+        return (True, f"Output for {label}", 0.05, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    _, _, cost, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    expected = call_count * 0.05
+    assert cost == pytest.approx(expected, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Hard stops
+# ---------------------------------------------------------------------------
+
+def test_hard_stop_duplicate(mock_deps, default_args):
+    """Step 1 duplicate detection stops the workflow."""
+    mocks = mock_deps
+    mocks["run"].return_value = (True, "Duplicate of #42", 0.1, "anthropic")
 
     success, msg, cost, _, _ = run_agentic_test_orchestrator(**default_args)
 
     assert success is False
     assert "Stopped at step 1" in msg
-    assert "Issue is a duplicate" in msg
-    assert cost == 0.1
-    assert mocks['run'].call_count == 1
-    assert not mocks['clear'].called  # State should be preserved
+    assert "duplicate" in msg.lower()
+    assert mocks["run"].call_count == 1
+    assert not mocks["clear"].called
 
-def test_hard_stop_needs_info(mock_dependencies, default_args):
-    """Verify early exit when step 3 needs more info."""
-    mocks = mock_dependencies
-    
-    def side_effect(*args, **kwargs):
-        label = kwargs.get('label', '')
-        if label == 'step3':
-            return (True, "Needs More Info from user", 0.1, "gpt-4")
-        return (True, "ok", 0.1, "gpt-4")
-    mocks['run'].side_effect = side_effect
 
-    success, msg, cost, _, _ = run_agentic_test_orchestrator(**default_args)
+def test_hard_stop_needs_info(mock_deps, default_args):
+    """Step 3 'Needs More Info' requires STOP_CONDITION tag (Bug #784)."""
+    mocks = mock_deps
 
-    assert success is False
-    assert "Stopped at step 3" in msg
-    assert "Needs more info" in msg
-    assert mocks['run'].call_count == 3
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step3":
+            return (True, "STOP_CONDITION: Needs More Info from author", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
 
-def test_hard_stop_no_files_step6(mock_dependencies, default_args):
-    """Verify early exit when step 6 generates no files."""
-    mocks = mock_dependencies
-    
-    def side_effect(*args, **kwargs):
-        label = kwargs.get('label', '')
-        if label == 'step6':
-            return (True, "No files created here.", 0.1, "gpt-4")
-        return (True, "ok", 0.1, "gpt-4")
-    mocks['run'].side_effect = side_effect
+    mocks["run"].side_effect = side_effect
 
     success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
 
     assert success is False
-    assert "Stopped at step 6" in msg
-    assert "No test file generated" in msg
-    # Should stop at step 6
-    assert mocks['run'].call_count == 6
+    assert "Stopped at step 3" in msg
+    assert mocks["run"].call_count == 3
+    save_calls = mocks["save"].call_args_list
+    assert len(save_calls) > 0
+    last_save = save_calls[-1]
+    saved_state = last_save[0][3]  # 4th positional arg is the state dict
+    assert saved_state["last_completed_step"] == 2, (
+        "Bug #784: Clarification step 3 should save last_completed_step=2 "
+        "so step 3 re-runs on resume"
+    )
 
-def test_resume_from_state(mock_dependencies, default_args):
-    """Verify resuming from saved state (skipping steps 1-4)."""
-    mocks = mock_dependencies
-    
-    # Mock existing state
+
+def test_hard_stop_plan_blocked(mock_deps, default_args):
+    """Step 5 PLAN_BLOCKED stops the workflow."""
+    mocks = mock_deps
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step5":
+            return (True, "PLAN_BLOCKED: Cannot test without environment", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    assert success is False
+    assert "Stopped at step 5" in msg
+    assert "not achievable" in msg.lower()
+    assert mocks["run"].call_count == 5
+
+
+def test_hard_stop_no_files_step12(mock_deps, default_args):
+    """Step 12 with no FILES_CREATED/FILES_MODIFIED stops the workflow."""
+    mocks = mock_deps
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step12":
+            return (True, "Generated tests but forgot to list files.", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    assert success is False
+    assert "Stopped at step 12" in msg
+    assert "No test file" in msg
+
+
+# ---------------------------------------------------------------------------
+# State persistence and resumption
+# ---------------------------------------------------------------------------
+
+def test_resume_from_cached_state(mock_deps, default_args):
+    """Resuming from cached state skips completed steps."""
+    mocks = mock_deps
+
     state = {
         "last_completed_step": 4,
         "step_outputs": {
-            "1": "out1", "2": "out2", "3": "out3", "4": "out4"
+            "1": "out1", "2": "out2", "3": "out3", "4": "out4",
         },
-        "total_cost": 0.5,
-        "model_used": "gpt-3.5"
+        "total_cost": 0.4,
+        "model_used": "anthropic",
     }
-    mocks['load'].return_value = (state, 100)
+    mocks["load"].return_value = (state, 100)
 
-    # Mock step 6 output to ensure files are found
-    def side_effect(*args, **kwargs):
-        label = kwargs.get('label', '')
-        if label == 'step6':
-            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
-        return (True, "ok", 0.1, "gpt-4")
-    mocks['run'].side_effect = side_effect
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
 
     success, _, cost, _, _ = run_agentic_test_orchestrator(**default_args)
 
     assert success is True
-    # Should run steps 5, 6, 7, 8, 9 (5 steps)
-    assert mocks['run'].call_count == 5
-    # Total cost = 0.5 (initial) + 5 * 0.1 = 1.0
-    assert cost == pytest.approx(1.0)
-    
-    # Verify context passed to step 5 included previous outputs
-    # mocks['template'] is the mock for load_prompt_template
-    # mocks['template'].return_value is the mock template object
-    # mocks['template'].return_value.format is the mock format method
-    call_args = mocks['template'].return_value.format.call_args[1]
-    assert call_args['step1_output'] == "out1"
+    executed = [c.kwargs["label"] for c in mocks["run"].call_args_list]
+    # Steps 1-4 skipped
+    assert "step1" not in executed
+    assert "step4" not in executed
+    # Step 5 and beyond executed
+    assert "step5" in executed
 
-def test_worktree_creation_failure(mock_dependencies, default_args):
-    """Verify behavior when worktree creation fails."""
-    mocks = mock_dependencies
-    mocks['setup_wt'].return_value = (None, "Git error")
-    
-    # We need to reach step 6 for worktree creation to trigger
-    # Or resume from step >= 6 without existing worktree
-    
-    # Let's simulate reaching step 6 normally
-    def side_effect(*args, **kwargs):
-        label = kwargs.get('label', '')
-        if label == 'step6':
-            # This won't be reached because setup_wt is called before step 6 loop body
-            return (True, "ok", 0.1, "gpt-4")
-        return (True, "ok", 0.1, "gpt-4")
-    mocks['run'].side_effect = side_effect
+
+def test_clean_restart_clears_state_and_skips_load(mock_deps, default_args):
+    """clean_restart should clear durable state and start from step 1."""
+    mocks = mock_deps
+    default_args["clean_restart"] = True
+    mocks["template"].side_effect = (
+        lambda name: "clean={clean_restart}"
+        if name == "agentic_test_step9_submit_pr_LLM"
+        else "Mock prompt: {issue_content}"
+    )
+
+    stale_state = {
+        "last_completed_step": 4,
+        "step_outputs": {"1": "old", "2": "old", "3": "old", "4": "old"},
+        "total_cost": 0.4,
+        "model_used": "anthropic",
+    }
+    mocks["load"].return_value = (stale_state, 100)
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    with patch("pdd.agentic_test_orchestrator.post_step_comment_once") as mock_post_once:
+        success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    assert success is True
+    assert mocks["clear"].call_count >= 1
+    mocks["load"].assert_not_called()
+    assert "step1" in [c.kwargs["label"] for c in mocks["run"].call_args_list]
+    assert mocks["wt"].call_args.kwargs.get("clean_restart") is True
+    assert any(c.args[3].get("clean_restart") is True for c in mocks["save"].call_args_list)
+    step17_calls = [
+        c for c in mocks["run"].call_args_list
+        if c.kwargs.get("label") == "step17"
+    ]
+    assert step17_calls
+    assert "clean=true" in step17_calls[0].kwargs["instruction"]
+    assert any(
+        c.kwargs.get("step_num") == 0 and "Mode**: Clean restart" in c.kwargs.get("body", "")
+        for c in mock_post_once.call_args_list
+    )
+    # Issue #1306: the Step 0 banner must not advertise a model.
+    assert all(
+        "**Model**" not in c.kwargs.get("body", "")
+        for c in mock_post_once.call_args_list
+        if c.kwargs.get("step_num") == 0
+    )
+
+
+def test_resume_inherits_persisted_clean_restart_for_worktree_and_pr(
+    mock_deps, default_args
+):
+    """A normal resume after clean restart keeps clean worktree and PR behavior."""
+    mocks = mock_deps
+    mocks["template"].side_effect = (
+        lambda name: "clean={clean_restart}"
+        if name == "agentic_test_step9_submit_pr_LLM"
+        else "Mock prompt: {issue_content}"
+    )
+    step_outputs = {str(step): f"cached step {step}" for step in range(1, 12)}
+    step_outputs["5.5"] = "cached enhanced plan"
+    mocks["load"].return_value = (
+        {
+            "last_completed_step": 11,
+            "step_outputs": step_outputs,
+            "total_cost": 1.1,
+            "model_used": "anthropic",
+            "clean_restart": True,
+        },
+        None,
+    )
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    assert success is True
+    assert mocks["wt"].call_args.kwargs.get("clean_restart") is True
+    step17_calls = [
+        c for c in mocks["run"].call_args_list
+        if c.kwargs.get("label") == "step17"
+    ]
+    assert step17_calls
+    assert "clean=true" in step17_calls[0].kwargs["instruction"]
+    assert any(c.args[3].get("clean_restart") is True for c in mocks["save"].call_args_list)
+
+
+def test_resume_all_failed_reruns_from_step1(mock_deps, default_args):
+    """Issue #467: All-failed state should re-run from step 1."""
+    mocks = mock_deps
+
+    corrupted_state = {
+        "last_completed_step": 5,
+        "step_outputs": {
+            "1": "FAILED: error", "2": "FAILED: error",
+            "3": "FAILED: error", "4": "FAILED: error", "5": "FAILED: error",
+        },
+        "total_cost": 0.0,
+        "model_used": "unknown",
+    }
+    mocks["load"].return_value = (corrupted_state, None)
+
+    executed_labels = []
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        executed_labels.append(label)
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    run_agentic_test_orchestrator(**default_args)
+
+    assert "step1" in executed_labels, (
+        f"Step 1 should be re-executed (blind-resume fix). Got: {executed_labels}"
+    )
+
+
+def test_resume_partial_failure_reruns_from_failed_step(mock_deps, default_args):
+    """Issue #467: Steps 1-3 ok, 4-5 failed -> resume from step 4."""
+    mocks = mock_deps
+
+    state = {
+        "last_completed_step": 5,
+        "step_outputs": {
+            "1": "ok", "2": "ok", "3": "ok",
+            "4": "FAILED: error", "5": "FAILED: error",
+        },
+        "total_cost": 0.3,
+        "model_used": "anthropic",
+    }
+    mocks["load"].return_value = (state, None)
+
+    executed_labels = []
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        executed_labels.append(label)
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    run_agentic_test_orchestrator(**default_args)
+
+    assert "step1" not in executed_labels
+    assert "step3" not in executed_labels
+    assert "step4" in executed_labels
+
+
+# ---------------------------------------------------------------------------
+# Worktree
+# ---------------------------------------------------------------------------
+
+def test_worktree_creation_failure(mock_deps, default_args):
+    """Worktree failure returns early with error message."""
+    mocks = mock_deps
+    mocks["wt"].return_value = (None, "Git error: lock exists")
 
     success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
 
     assert success is False
     assert "Failed to create worktree" in msg
-    # Should have run steps 1-5
-    assert mocks['run'].call_count == 5
 
-def test_file_parsing_logic(mock_dependencies, default_args):
-    """Verify file parsing from step 6 and step 8."""
-    mocks = mock_dependencies
-    
-    def side_effect(*args, **kwargs):
-        label = kwargs.get('label', '')
-        if label == 'step6':
-            return (True, "FILES_CREATED: a.py, b.py", 0.1, "gpt-4")
-        if label == 'step8':
-            return (True, "FILES_MODIFIED: b.py, c.py", 0.1, "gpt-4")
-        return (True, "ok", 0.1, "gpt-4")
-    mocks['run'].side_effect = side_effect
+
+def test_setup_worktree_clean_restart_uses_default_ref(tmp_path):
+    """clean_restart must not base the test worktree on current HEAD."""
+    calls = []
+
+    def run_side_effect(args, **kwargs):
+        cmd = list(args)
+        calls.append(cmd)
+        result = MagicMock(returncode=0, stdout="", stderr="")
+        if cmd[:2] == ["git", "rev-parse"] and "--verify" in cmd:
+            if "origin/main" in cmd:
+                result.stdout = "abc123\n"
+                return result
+            result.returncode = 128
+            return result
+        return result
+
+    with patch("pdd.agentic_test_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_test_orchestrator._worktree_exists", return_value=False), \
+         patch("pdd.agentic_test_orchestrator._branch_exists", return_value=False), \
+         patch("pdd.agentic_test_orchestrator.subprocess.run", side_effect=run_side_effect):
+        wt_path, err = _setup_worktree(
+            tmp_path,
+            1,
+            quiet=True,
+            console=MagicMock(),
+            clean_restart=True,
+        )
+
+    assert err is None
+    assert wt_path == tmp_path / ".pdd" / "worktrees" / "test-issue-1"
+    assert [
+        "git",
+        "fetch",
+        "origin",
+        "+refs/heads/test/issue-1:refs/remotes/origin/test/issue-1",
+    ] in calls
+    adds = [c for c in calls if c[:3] == ["git", "worktree", "add"]]
+    assert adds, "expected git worktree add"
+    assert adds[-1][-1] == "abc123"
+    assert adds[-1][-1] != "HEAD"
+
+
+def _test_init_repo_with_origin(tmp_path):
+    """Create a real git repo whose ``origin`` remote resolves ``origin/main``."""
+    import subprocess as _sp
+
+    origin_repo = tmp_path / "origin_repo"
+    origin_repo.mkdir()
+    _sp.run(["git", "init", "-b", "main"], cwd=origin_repo, check=True, capture_output=True)
+    _sp.run(["git", "config", "user.email", "test@example.com"], cwd=origin_repo, check=True, capture_output=True)
+    _sp.run(["git", "config", "user.name", "Test User"], cwd=origin_repo, check=True, capture_output=True)
+    (origin_repo / "README.md").write_text("Initial commit")
+    _sp.run(["git", "add", "README.md"], cwd=origin_repo, check=True, capture_output=True)
+    _sp.run(["git", "commit", "-m", "Initial commit"], cwd=origin_repo, check=True, capture_output=True)
+
+    work_repo = tmp_path / "work_repo"
+    _sp.run(["git", "clone", str(origin_repo), str(work_repo)], cwd=tmp_path, check=True, capture_output=True)
+    _sp.run(["git", "config", "user.email", "test@example.com"], cwd=work_repo, check=True, capture_output=True)
+    _sp.run(["git", "config", "user.name", "Test User"], cwd=work_repo, check=True, capture_output=True)
+    return work_repo
+
+
+def test_clean_restart_locked_branch_uses_fallback_worktree(tmp_path, monkeypatch):
+    """Issue #1596: under clean_restart, when ``test/issue-N`` is checked out in
+    another live worktree, ``git branch -D`` genuinely fails. We must create a
+    fresh unique fallback branch from ``origin/main`` (not reuse the locked
+    branch) and leave the locked worktree untouched. Real git + a real second
+    worktree reproduce the lock."""
+    import subprocess as _sp
+
+    monkeypatch.setenv("JOB_ID", "abc12345xyz")
+    work_repo = _test_init_repo_with_origin(tmp_path)
+    issue_number = 1596
+    branch_name = f"test/issue-{issue_number}"
+
+    _sp.run(["git", "branch", branch_name, "origin/main"], cwd=work_repo, check=True, capture_output=True)
+    locked_dir = tmp_path / "locked"
+    _sp.run(["git", "worktree", "add", str(locked_dir), branch_name], cwd=work_repo, check=True, capture_output=True)
+    (locked_dir / "LEAKED.txt").write_text("should not appear in fallback")
+    _sp.run(["git", "add", "LEAKED.txt"], cwd=locked_dir, check=True, capture_output=True)
+    _sp.run(["git", "commit", "-m", "divergent commit"], cwd=locked_dir, check=True, capture_output=True)
+
+    wt, err = _setup_worktree(
+        work_repo, issue_number, quiet=True, console=MagicMock(), clean_restart=True,
+    )
+
+    assert err is None, f"expected no error, got: {err}"
+    assert wt is not None and wt.exists()
+
+    head = _sp.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=wt, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head == f"{branch_name}-job-abc12345", f"unexpected fallback branch: {head}"
+
+    origin_main = _sp.run(
+        ["git", "rev-parse", "origin/main"], cwd=work_repo, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    fallback_base = _sp.run(
+        ["git", "rev-parse", "HEAD"], cwd=wt, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert fallback_base == origin_main, "fallback worktree must be based on origin/main HEAD"
+    assert not (wt / "LEAKED.txt").exists(), "locked branch's divergent commit leaked into fallback"
+
+    assert locked_dir.exists()
+    locked_head = _sp.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=locked_dir, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert locked_head == branch_name, "locked worktree must not be touched"
+
+    _sp.run(["git", "worktree", "remove", "--force", str(wt)], cwd=work_repo, capture_output=True)
+    _sp.run(["git", "worktree", "remove", "--force", str(locked_dir)], cwd=work_repo, capture_output=True)
+
+
+def test_non_clean_restart_delete_failure_still_hard_fails(tmp_path):
+    """Non-clean-restart byte-for-byte behavior: when ``_delete_branch`` fails
+    and clean_restart is False, keep the original 'Failed to delete existing
+    branch' error (the #1596 fallback must NOT change this path)."""
+    calls = []
+
+    def run_side_effect(args, **kwargs):
+        calls.append(list(args))
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("pdd.agentic_test_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_test_orchestrator._worktree_exists", return_value=False), \
+         patch("pdd.agentic_test_orchestrator._branch_exists", return_value=True), \
+         patch("pdd.agentic_test_orchestrator._delete_branch", return_value=(False, "boom")), \
+         patch("pdd.agentic_test_orchestrator.subprocess.run", side_effect=run_side_effect):
+        wt, err = _setup_worktree(
+            tmp_path, 1, quiet=True, console=MagicMock(), clean_restart=False,
+        )
+
+    assert wt is None
+    assert err == "Failed to delete existing branch test/issue-1: boom"
+
+
+def _render_test_pr_prompt(head_branch):
+    """Render the test Step 17 submit-PR prompt the way the orchestrator does."""
+    from pdd.load_prompt_template import load_prompt_template
+    from pdd.agentic_test_orchestrator import _format_prompt
+
+    context = {
+        "issue_number": "1596",
+        "head_branch": head_branch,
+        "clean_restart": "true",
+        "repo_owner": "owner",
+        "repo_name": "repo",
+    }
+    template = load_prompt_template("agentic_test_step9_submit_pr_LLM")
+    return _format_prompt(template, context)
+
+
+def test_test_pr_prompt_head_branch_non_fallback_preserves_canonical():
+    """No-fallback path: head_branch == canonical name → rendered push/pr
+    commands match the old hardcoded behavior (#1596)."""
+    rendered = _render_test_pr_prompt("test/issue-1596")
+    assert "git push --force-with-lease -u origin test/issue-1596" in rendered
+    assert "git push -u origin test/issue-1596" in rendered
+    assert "gh pr list --head test/issue-1596" in rendered
+
+
+def test_test_pr_prompt_head_branch_fallback_uses_fallback_branch():
+    """Fallback path: head_branch == fallback name → push/pr-head use the
+    fallback branch; no bare canonical branch token in those positions."""
+    rendered = _render_test_pr_prompt("test/issue-1596-job-deadbeef")
+    assert "git push --force-with-lease -u origin test/issue-1596-job-deadbeef" in rendered
+    assert "gh pr list --head test/issue-1596-job-deadbeef" in rendered
+    assert "origin test/issue-1596\n" not in rendered
+    assert "--head test/issue-1596\n" not in rendered
+    assert "--head test/issue-1596 " not in rendered
+    assert "#1596" in rendered
+
+
+def test_submit_pr_prompt_uses_clean_restart_push_and_pr_update():
+    """Step 17 must handle old remote test branches during clean restart, using
+    {head_branch} so a #1596 fallback branch is honored."""
+    prompt = Path("pdd/prompts/agentic_test_step9_submit_pr_LLM.prompt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "git push --force-with-lease -u origin {head_branch}" in prompt
+    assert "gh pr list --head {head_branch}" in prompt
+    assert "gh pr edit <number>" in prompt
+    assert "origin test/issue-{issue_number}" not in prompt
+    assert "--head test/issue-{issue_number}" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# File parsing
+# ---------------------------------------------------------------------------
+
+def test_file_parsing_deduplication(mock_deps, default_args):
+    """FILES_CREATED and FILES_MODIFIED results are deduplicated."""
+    mocks = mock_deps
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step12":
+            return (True, "FILES_CREATED: a.py, b.py", 0.1, "anthropic")
+        if label == "step14":
+            return (True, "FILES_MODIFIED: b.py, c.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    _, _, _, _, files = run_agentic_test_orchestrator(**default_args)
+
+    assert set(files) == {"a.py", "b.py", "c.py"}
+
+
+# ---------------------------------------------------------------------------
+# Missing template
+# ---------------------------------------------------------------------------
+
+def test_missing_template_returns_failure(mock_deps, default_args):
+    """If load_prompt_template returns None, the step fails gracefully."""
+    mocks = mock_deps
+    mocks["template"].return_value = None
+
+    success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    # Step 1 gets None template -> run_step returns failure -> hard stop check not matched
+    # But run_agentic_task is never called
+    assert mocks["run"].call_count == 0
+    # With no template, run_step returns (False, "Missing prompt template: ...", 0.0, "unknown")
+    # The output has no hard stop pattern, so the orchestrator continues but
+    # eventually every step fails the same way. The workflow should still return.
+    # Due to step 12 having no FILES_CREATED in the empty output, it hard-stops.
+    assert success is False
+
+
+# ---------------------------------------------------------------------------
+# Step 16 skip logic
+# ---------------------------------------------------------------------------
+
+def test_step16_skipped_when_step15_has_no_new_files(mock_deps, default_args):
+    """Step 16 is skipped when step 15 output has no FILES_CREATED."""
+    mocks = mock_deps
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        if label == "step15":
+            return (True, "All tests cover the plan. No new files needed.", 0.1, "anthropic")
+        if label == "step17":
+            return (True, "PR Created: https://github.com/o/r/pull/5", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    assert success is True
+    executed = [c.kwargs["label"] for c in mocks["run"].call_args_list]
+    assert "step16" not in executed
+    assert "step17" in executed
+
+
+def test_step16_runs_when_step15_creates_files(mock_deps, default_args):
+    """Step 16 runs when step 15 output contains FILES_CREATED."""
+    mocks = mock_deps
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        if label == "step15":
+            return (True, "FILES_CREATED: tests/test_missing.py\nGenerated missing tests.", 0.1, "anthropic")
+        if label == "step17":
+            return (True, "PR Created: https://github.com/o/r/pull/6", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
 
     success, _, _, _, files = run_agentic_test_orchestrator(**default_args)
 
     assert success is True
-    # Should contain a, b, c (deduplicated)
-    assert set(files) == {"a.py", "b.py", "c.py"}
+    executed = [c.kwargs["label"] for c in mocks["run"].call_args_list]
+    assert "step16" in executed
+    assert "tests/test_missing.py" in files
 
-def test_missing_template(mock_dependencies, default_args):
-    """Verify failure if a prompt template cannot be loaded."""
-    mocks = mock_dependencies
-    mocks['template'].return_value = None
 
-    success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
+# ---------------------------------------------------------------------------
+# likely_ci_cwd detection — resume and cross-subproject (#1174)
+# ---------------------------------------------------------------------------
 
-    assert success is False
-    assert "Missing prompt template" in msg
-    assert mocks['run'].call_count == 0
+def test_resume_populates_likely_ci_cwd_from_cached_step12(mock_deps, default_args, tmp_path):
+    """Resume from step 13: likely_ci_cwd must be populated from cached Step 12 output.
 
-# --- Z3 Formal Verification ---
+    Greg's bug #1: on resume, context['likely_ci_cwd'] was reset to '' and the
+    Step 12 detection block was skipped, so Step 13 received an empty cwd.
+    """
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    subproject = worktree / "extensions" / "app"
+    subproject.mkdir(parents=True)
+    (subproject / ".pddrc").write_text("")
+    (subproject / "tests").mkdir()
+    (subproject / "tests" / "test_smoke.py").write_text("")
+
+    mocks = mock_deps
+    mocks["wt"].return_value = (worktree, None)
+
+    state = {
+        "last_completed_step": 12,
+        "step_outputs": {
+            "12": "FILES_CREATED: extensions/app/tests/test_smoke.py",
+        },
+        "total_cost": 0.5,
+        "model_used": "anthropic",
+        "worktree_path": str(worktree),
+    }
+    mocks["load"].return_value = (state, None)
+
+    rendered: dict = {}
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        rendered[label] = instruction
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+    mocks["template"].return_value = "LCWD={likely_ci_cwd}"
+
+    run_agentic_test_orchestrator(**default_args)
+
+    assert "step13" in rendered, "Step 13 should have run on resume from step 12"
+    assert str(subproject) in rendered["step13"], (
+        f"likely_ci_cwd blank on resume — Step 13 got: {rendered['step13']!r}"
+    )
+
+
+def test_step16_uses_step15_subproject_not_step12(mock_deps, default_args, tmp_path):
+    """Step 16 must validate from Step 15's subproject, not Step 12's.
+
+    Greg's bug #2: when Step 15 creates tests in extensions/b/ and Step 12 created
+    tests in extensions/a/, Step 16 kept the stale likely_ci_cwd from extensions/a/.
+    """
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    # Two separate subprojects with .pddrc
+    for sub in ("extensions/a", "extensions/b"):
+        p = worktree / sub
+        p.mkdir(parents=True)
+        (p / ".pddrc").write_text("")
+        (p / "tests").mkdir()
+        (p / "tests" / "test_x.py").write_text("")
+
+    mocks = mock_deps
+    mocks["wt"].return_value = (worktree, None)
+
+    rendered: dict = {}
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        rendered[label] = instruction
+        if label == "step12":
+            return (True, "FILES_CREATED: extensions/a/tests/test_x.py", 0.1, "anthropic")
+        if label == "step15":
+            return (True, "FILES_CREATED: extensions/b/tests/test_x.py", 0.1, "anthropic")
+        if label == "step17":
+            return (True, "PR Created: https://github.com/o/r/pull/9", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+    mocks["template"].return_value = "LCWD={likely_ci_cwd}"
+
+    run_agentic_test_orchestrator(**default_args)
+
+    subproject_b = str(worktree / "extensions" / "b")
+    assert "step13" in rendered
+    assert "step16" in rendered, "Step 16 should have run"
+    assert subproject_b in rendered["step16"], (
+        f"Step 16 should use extensions/b cwd (Step 15's subproject), got: {rendered['step16']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Context accumulation
+# ---------------------------------------------------------------------------
+
+def test_context_passes_step_outputs(mock_deps, default_args):
+    """Later steps receive context from earlier steps via template formatting."""
+    mocks = mock_deps
+    mocks["template"].return_value = "Context: {step1_output} | {issue_content}"
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step1":
+            return (True, "No duplicates found.", 0.1, "anthropic")
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    run_agentic_test_orchestrator(**default_args)
+
+    # Step 2 should have step1_output in its instruction
+    step2_calls = [c for c in mocks["run"].call_args_list if c.kwargs.get("label") == "step2"]
+    assert len(step2_calls) == 1
+    instruction = step2_calls[0].kwargs["instruction"]
+    assert "No duplicates found." in instruction
+
+
+def test_step5b_output_alias_in_context(mock_deps, default_args):
+    """Step 5.5 output is available as both step5.5_output and step5b_output."""
+    mocks = mock_deps
+    mocks["template"].return_value = "Plan: {step5b_output}"
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step5.5":
+            return (True, "Enhanced plan with contracts.", 0.1, "anthropic")
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    run_agentic_test_orchestrator(**default_args)
+
+    # Step 12 should have step5b_output in its formatted instruction
+    step12_calls = [c for c in mocks["run"].call_args_list if c.kwargs.get("label") == "step12"]
+    assert len(step12_calls) == 1
+    instruction = step12_calls[0].kwargs["instruction"]
+    assert "Enhanced plan with contracts." in instruction
+
+
+# ---------------------------------------------------------------------------
+# TEST_STEP_TIMEOUTS
+# ---------------------------------------------------------------------------
+
+def test_step_timeouts_defined():
+    """All expected step timeouts are defined with correct values."""
+    assert TEST_STEP_TIMEOUTS[1] == 240.0
+    assert TEST_STEP_TIMEOUTS[5.5] == 400.0
+    assert TEST_STEP_TIMEOUTS[8] == 1800.0
+    assert TEST_STEP_TIMEOUTS[12] == 1000.0
+    assert TEST_STEP_TIMEOUTS[17] == 240.0
+    # 18 entries total (17 integer steps + step 5.5)
+    assert len(TEST_STEP_TIMEOUTS) == 18
+
+
+def test_timeout_adder_extends_timeouts(mock_deps, default_args):
+    """timeout_adder is added to each step's timeout."""
+    mocks = mock_deps
+    default_args["timeout_adder"] = 60.0
+
+    mocks["run"].return_value = (True, "Duplicate of #1", 0.1, "anthropic")
+
+    run_agentic_test_orchestrator(**default_args)
+
+    # Step 1 timeout should be 240.0 + 60.0 = 300.0
+    assert mocks["run"].call_count >= 1
+    call = mocks["run"].call_args_list[0]
+    assert call.kwargs["timeout"] == 300.0
+
+
+# ---------------------------------------------------------------------------
+# Soft failure (continue)
+# ---------------------------------------------------------------------------
+
+def test_soft_failure_continues(mock_deps, default_args):
+    """A step returning (False, ...) without a hard stop pattern continues."""
+    mocks = mock_deps
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step2":
+            return (False, "Partial failure, no hard stop", 0.1, "anthropic")
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    # Despite step 2 failing, workflow continues and completes
+    assert success is True
+    executed = [c.kwargs["label"] for c in mocks["run"].call_args_list]
+    assert "step3" in executed
+
+
+# ---------------------------------------------------------------------------
+# Return tuple structure
+# ---------------------------------------------------------------------------
+
+def test_return_tuple_structure(mock_deps, default_args):
+    """Return value is a 5-tuple with correct types."""
+    mocks = mock_deps
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    result = run_agentic_test_orchestrator(**default_args)
+
+    assert isinstance(result, tuple)
+    assert len(result) == 5
+    success, msg, cost, model, files = result
+    assert isinstance(success, bool)
+    assert isinstance(msg, str)
+    assert isinstance(cost, float)
+    assert isinstance(model, str)
+    assert isinstance(files, list)
+
+
+# ---------------------------------------------------------------------------
+# Step 4 extracts TEST_TYPE and TARGET_URL
+# ---------------------------------------------------------------------------
+
+def test_step4_extracts_test_type_and_target_url(mock_deps, default_args):
+    """Step 4 output with TEST_TYPE and TARGET_URL is parsed into context."""
+    mocks = mock_deps
+    mocks["template"].return_value = "Type: {frontend_type} URL: {target_url}"
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step4":
+            return (True, "TEST_TYPE: web\nTARGET_URL: http://localhost:3000", 0.1, "anthropic")
+        if label == "step12":
+            return (True, "FILES_CREATED: test.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    run_agentic_test_orchestrator(**default_args)
+
+    # Step 5 should see the extracted values in the prompt
+    step5_calls = [c for c in mocks["run"].call_args_list if c.kwargs.get("label") == "step5"]
+    if step5_calls:
+        instruction = step5_calls[0].kwargs["instruction"]
+        assert "web" in instruction
+        assert "http://localhost:3000" in instruction
+
+
+# ---------------------------------------------------------------------------
+# Z3 formal verification
+# ---------------------------------------------------------------------------
 
 def test_z3_cost_accumulation():
-    """
-    Formal verification using Z3 to prove cost accumulation logic.
-    Property: Final Cost = Initial Cost + Sum(Step Costs)
-    """
+    """Z3: Prove total_cost = initial_cost + sum(step_costs)."""
     try:
         import z3
     except ImportError:
         pytest.skip("z3-solver not installed")
 
     s = z3.Solver()
+    initial_cost = z3.Real("initial_cost")
+    step_costs = [z3.Real(f"cost_{i}") for i in range(18)]
+    steps_run = [z3.Bool(f"run_{i}") for i in range(18)]
+    final_cost = z3.Real("final_cost")
 
-    # Variables
-    initial_cost = z3.Real('initial_cost')
-    step_costs = [z3.Real(f'cost_{i}') for i in range(1, 10)]
-    steps_run = [z3.Bool(f'run_{i}') for i in range(1, 10)]
-    final_cost = z3.Real('final_cost')
-
-    # Constraints
     s.add(initial_cost >= 0)
     for c in step_costs:
         s.add(c >= 0)
 
-    # Logic model of the cost accumulation in the code
-    # accumulated_cost starts at initial_cost
-    # if step i runs, add cost_i
     accumulated = initial_cost
-    for i in range(9):
+    for i in range(18):
         accumulated = z3.If(steps_run[i], accumulated + step_costs[i], accumulated)
-    
-    s.add(final_cost == accumulated)
 
-    # Verification Goal: Prove that final_cost is always >= initial_cost
-    # We negate the goal and check for unsat
+    s.add(final_cost == accumulated)
     s.add(z3.Not(final_cost >= initial_cost))
 
-    result = s.check()
-    # If unsat, it means there is no case where final_cost < initial_cost, so the property holds.
-    assert result == z3.unsat, f"Counter-example found: {s.model()}"
+    assert s.check() == z3.unsat, f"Counter-example: {s.model()}"
 
-def test_z3_step_execution_logic():
-    """
-    Formal verification of step execution sequence.
-    Property: If step N runs, then start_step <= N AND no hard stop occurred at any step K where start_step <= K < N.
-    """
+
+def test_z3_step_execution_order():
+    """Z3: Prove that a later step cannot run if an earlier step hard-stopped."""
     try:
         import z3
     except ImportError:
         pytest.skip("z3-solver not installed")
 
     s = z3.Solver()
+    start_step = z3.Int("start_step")
+    hard_stop = [z3.Bool(f"stop_{i}") for i in range(18)]
+    step_runs = [z3.Bool(f"run_{i}") for i in range(18)]
 
-    # Variables
-    start_step = z3.Int('start_step')
-    # hard_stop[i] is true if step i triggers a hard stop
-    hard_stop = [z3.Bool(f'stop_{i}') for i in range(1, 10)]
-    # step_runs[i] is true if step i is executed
-    step_runs = [z3.Bool(f'run_{i}') for i in range(1, 10)]
+    s.add(start_step >= 0, start_step <= 18)
 
-    # Constraints on inputs
-    s.add(start_step >= 1)
-    s.add(start_step <= 10) # 10 means all done
-
-    # Logic model of the loop
-    # For each step i from 1 to 9:
-    # It runs IF (i >= start_step) AND (no previous step caused a hard stop)
-    
-    # Recursive definition of "can run"
-    # can_run_1 = (1 >= start_step)
-    # can_run_2 = (2 >= start_step) AND (NOT (step_runs[1] AND hard_stop[1]))
-    # ...
-    
-    for i in range(1, 10):
-        idx = i - 1 # 0-based index for lists
-        
+    for i in range(18):
         condition = (i >= start_step)
-        
-        # Check all previous steps k < i
-        # If any previous step k ran AND triggered a hard stop, then i cannot run
-        for k in range(1, i):
-            k_idx = k - 1
-            # If step k ran and stopped, we abort
-            condition = z3.And(condition, z3.Not(z3.And(step_runs[k_idx], hard_stop[k_idx])))
-            
-        s.add(step_runs[idx] == condition)
+        for k in range(i):
+            condition = z3.And(condition, z3.Not(z3.And(step_runs[k], hard_stop[k])))
+        s.add(step_runs[i] == condition)
 
-    # Verification Goal: Prove that if step 5 runs, step 4 must not have hard-stopped (if it ran).
-    # Specifically: step_runs[4] => NOT (step_runs[3] AND hard_stop[3])
-    # Let's verify a specific case: If step 6 runs, verify step 5 did not hard stop.
-    
-    # Negate the goal: Step 6 runs AND (Step 5 ran AND Step 5 hard stopped)
-    s.add(step_runs[5]) # Step 6 (index 5)
-    s.add(step_runs[4]) # Step 5 (index 4)
-    s.add(hard_stop[4]) # Step 5 hard stopped
+    # Try to prove: step 12 cannot run if step 5 ran and hard-stopped
+    s.add(step_runs[12])
+    s.add(step_runs[5])
+    s.add(hard_stop[5])
 
-    result = s.check()
-    # Should be unsat because the code logic prevents step 6 from running if step 5 stops
-    assert result == z3.unsat, f"Counter-example found: {s.model()}"
+    assert s.check() == z3.unsat, f"Counter-example: {s.model()}"
 
 
-# --- Template Formatting Tests (Real Templates) ---
+# ---------------------------------------------------------------------------
+# Bug #784: _check_hard_stop improvements
+# ---------------------------------------------------------------------------
 
-@pytest.fixture
-def full_context():
-    """Context dict with all keys the orchestrator would provide through step 8."""
-    return {
-        "issue_url": "http://github.com/o/r/issues/1",
-        "issue_content": "Fix the bug",
-        "repo_owner": "owner",
-        "repo_name": "repo",
-        "issue_number": "1",
-        "issue_author": "user",
-        "issue_title": "Bug title",
-        "step1_output": "No duplicates found.",
-        "step2_output": "Codebase reviewed.",
-        "step3_output": "Enough info available.",
-        "step4_output": "Test type: API (pytest).",
-        "step5_output": "Test plan ready.",
-        "step6_output": "FILES_CREATED: tests/test_api.py",
-        "step7_output": "TEST_RESULTS: PASS\nTESTS_PASSED: 3\nTESTS_FAILED: 0",
-        "step8_output": "FIX_STATUS: COMPLETE",
-        "worktree_path": "/tmp/worktree",
-        "files_to_stage": "tests/test_api.py",
-        "test_files": "- tests/test_api.py",
-        "test_results": "TEST_RESULTS: PASS\nTESTS_PASSED: 3\nTESTS_FAILED: 0",
-    }
+def test_check_hard_stop_step3_requires_stop_condition_tag():
+    """Bug #784: Step 3 'Needs More Info' requires STOP_CONDITION tag, no substring fallback."""
+    from pdd.agentic_test_orchestrator import _check_hard_stop
+
+    # Casual mention should NOT trigger hard stop
+    result = _check_hard_stop(3, "Needs More Info mentioned casually in reasoning.")
+    assert result is None, (
+        "Bug #784: _check_hard_stop falsely triggers on casual 'Needs More Info' "
+        "without STOP_CONDITION tag"
+    )
+
+    # STOP_CONDITION tag SHOULD trigger hard stop
+    result = _check_hard_stop(3, "STOP_CONDITION: Needs More Info from author")
+    assert result is not None
+    assert "needs more info" in result.lower()
 
 
-def _load_real_template(step_num: int, name: str) -> str:
-    """Load a real prompt template file from the prompts directory."""
-    prompts_dir = Path(__file__).parent.parent / "prompts"
-    template_path = prompts_dir / f"agentic_test_step{step_num}_{name}_LLM.prompt"
-    assert template_path.exists(), f"Template not found: {template_path}"
-    return template_path.read_text()
+def test_check_hard_stop_empty_and_none_output():
+    """_check_hard_stop handles empty and None output without error."""
+    from pdd.agentic_test_orchestrator import _check_hard_stop
+
+    assert _check_hard_stop(1, "") is None
+    assert _check_hard_stop(1, None) is None
+    assert _check_hard_stop(3, "") is None
+    assert _check_hard_stop(3, None) is None
 
 
-def test_step6_template_formats_without_error(full_context):
-    """Step 6 template must format without KeyError (curly braces in code examples must be escaped)."""
-    template = _load_real_template(6, "generate_tests")
-    # This should NOT raise KeyError - currently fails on '{ test, expect }'
-    formatted = template.format(**full_context)
-    assert "import" in formatted
-    assert "playwright" in formatted.lower() or "pytest" in formatted.lower()
+def test_check_hard_stop_universal_stop_condition_tag():
+    """Any step can trigger via STOP_CONDITION: tag as a universal fallback."""
+    from pdd.agentic_test_orchestrator import _check_hard_stop
+
+    # Step 2 has no specific handler — universal fallback should catch it
+    result = _check_hard_stop(2, "STOP_CONDITION: Custom reason for stopping")
+    assert result == "Custom reason for stopping"
 
 
-def test_step7_template_formats_without_error(full_context):
-    """Step 7 template must format without KeyError (requires test_files in context)."""
-    template = _load_real_template(7, "run_tests")
-    # This should NOT raise KeyError on 'test_files'
-    formatted = template.format(**full_context)
-    assert "tests/test_api.py" in formatted
+def test_clarification_step3_saves_previous_step(mock_deps, default_args):
+    """Bug #784: Step 3 clarification stop saves last_completed_step = previous step."""
+    mocks = mock_deps
 
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step3":
+            return (True, "STOP_CONDITION: Needs More Info", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
 
-def test_step8_template_formats_without_error(full_context):
-    """Step 8 template must format without KeyError (requires test_files and test_results)."""
-    template = _load_real_template(8, "fix_iterate")
-    # This should NOT raise KeyError on 'test_files' or 'test_results'
-    formatted = template.format(**full_context)
-    assert "tests/test_api.py" in formatted
-    assert "PASS" in formatted
-
-
-def test_orchestrator_provides_test_files_context(mock_dependencies, default_args):
-    """After step 6, orchestrator must add 'test_files' to context for step 7."""
-    mocks = mock_dependencies
-
-    # Use real string templates so we can verify context keys
-    def template_side_effect(name):
-        # Return a simple template that uses the relevant keys
-        if "step7" in name:
-            return "Step7: test_files={test_files}"
-        if "step6" in name:
-            return "Step6: worktree={worktree_path}"
-        # Other steps: minimal template
-        return "step"
-
-    mocks['template'].side_effect = template_side_effect
-
-    def run_side_effect(*args, **kwargs):
-        label = kwargs.get('label', '')
-        if label == 'step6':
-            return (True, "FILES_CREATED: tests/test_api.py, tests/test_auth.py", 0.1, "gpt-4")
-        return (True, "ok", 0.1, "gpt-4")
-
-    mocks['run'].side_effect = run_side_effect
+    mocks["run"].side_effect = side_effect
 
     success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
 
-    assert success is True
-    # Verify step 7 was called with instruction containing test_files content
-    step7_call = [c for c in mocks['run'].call_args_list if c[1].get('label') == 'step7']
-    assert len(step7_call) == 1
-    instruction = step7_call[0][1]['instruction']
-    assert "tests/test_api.py" in instruction
-    assert "tests/test_auth.py" in instruction
+    assert success is False
+    assert "Stopped at step 3" in msg
+    assert mocks["run"].call_count == 3
 
 
-def test_orchestrator_provides_test_results_context(mock_dependencies, default_args):
-    """After step 7, orchestrator must add 'test_results' to context for step 8."""
-    mocks = mock_dependencies
+def test_check_hard_stop_stop_condition_universal_test_orch():
+    """STOP_CONDITION: tag should work on any step in test orchestrator."""
+    from pdd.agentic_test_orchestrator import _check_hard_stop
 
-    def template_side_effect(name):
-        if "step8" in name:
-            return "Step8: results={test_results} files={test_files}"
-        if "step6" in name:
-            return "Step6: worktree={worktree_path}"
-        return "step"
+    assert _check_hard_stop(1, "STOP_CONDITION: Duplicate found") is not None
+    assert _check_hard_stop(3, "STOP_CONDITION: Needs more info") is not None
+    assert _check_hard_stop(5, "STOP_CONDITION: Blocked") is not None
 
-    mocks['template'].side_effect = template_side_effect
 
-    def run_side_effect(*args, **kwargs):
-        label = kwargs.get('label', '')
-        if label == 'step6':
-            return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
-        if label == 'step7':
-            return (True, "TEST_RESULTS: FAIL\nTESTS_PASSED: 2\nTESTS_FAILED: 1", 0.1, "gpt-4")
-        return (True, "ok", 0.1, "gpt-4")
+def test_check_hard_stop_empty_output_test_orch():
+    """_check_hard_stop returns None for empty/None output."""
+    from pdd.agentic_test_orchestrator import _check_hard_stop
 
-    mocks['run'].side_effect = run_side_effect
+    assert _check_hard_stop(3, "") is None
+    assert _check_hard_stop(3, None) is None
+
+
+def test_check_hard_stop_step3_no_substring_fallback():
+    """Step 3 clarification should NOT stop on casual 'needs more info' — requires STOP_CONDITION tag."""
+    from pdd.agentic_test_orchestrator import _check_hard_stop
+
+    # Casual mentions should NOT trigger stop (Issue #769)
+    assert _check_hard_stop(3, "needs more info") is None
+    assert _check_hard_stop(3, "NEEDS MORE INFO") is None
+    assert _check_hard_stop(3, "Needs More Info") is None
+    # STOP_CONDITION tag SHOULD trigger stop
+    assert _check_hard_stop(3, "STOP_CONDITION: Needs more info") is not None
+
+
+def test_step3_prompt_has_stop_condition_instruction():
+    """Step 3 prompt must instruct LLM to output STOP_CONDITION line prefix."""
+    prompt_path = Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_test_step3_clarify_LLM.prompt"
+    prompt_content = prompt_path.read_text()
+    assert "STOP_CONDITION: Needs more info" in prompt_content
+    assert "CRITICAL" in prompt_content
+
+
+def test_no_false_positive_casual_needs_more_info(mock_deps, default_args):
+    """Bug #784: Casual mention of 'Needs More Info' should NOT stop workflow."""
+    mocks = mock_deps
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, steers=None, **kwargs):
+        if label == "step3":
+            # Casual mention without STOP_CONDITION tag
+            return (True, "The issue already has enough info. Needs More Info is not required.", 0.1, "anthropic")
+        if label == "step12":
+            return (True, "FILES_CREATED: tests/test_new.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
 
     success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
 
-    assert success is True
-    step8_call = [c for c in mocks['run'].call_args_list if c[1].get('label') == 'step8']
-    assert len(step8_call) == 1
-    instruction = step8_call[0][1]['instruction']
-    assert "TEST_RESULTS: FAIL" in instruction
-    assert "test.py" in instruction
+    # Should NOT have stopped at step 3
+    assert "Stopped at step 3" not in msg, (
+        "Bug #784: Casual 'Needs More Info' mention should not trigger hard stop"
+    )
+
+
+# ============================================================================
+# Issue #865: Test orchestrator uses shared detect_control_token
+# ============================================================================
+
+
+class TestTestOrchestratorSharedDetection:
+    """Test orchestrator should use shared detect_control_token from agentic_common."""
+
+    def test_step3_semantic_needs_more_info(self):
+        """Step 3 paraphrased 'needs more info' should be detected via STOP_CONDITION
+        semantic patterns when using the shared detect_control_token."""
+        from pdd.agentic_common import detect_control_token
+        output = "I need clarification from the author before I can proceed."
+        result = detect_control_token(output, "STOP_CONDITION")
+        assert result is not None, (
+            "Shared detect_control_token should catch 'need clarification from' "
+            "as a STOP_CONDITION semantic pattern."
+        )
+
+    def test_check_hard_stop_step1_case_insensitive(self):
+        """Step 1 duplicate check should be case-insensitive."""
+        from pdd.agentic_test_orchestrator import _check_hard_stop
+        result = _check_hard_stop(1, "this is a Duplicate Of #42")
+        assert result is not None, "Duplicate check should be case-insensitive"
+
+    def test_check_hard_stop_step5_case_insensitive(self):
+        """Step 5 plan_blocked check should be case-insensitive."""
+        from pdd.agentic_test_orchestrator import _check_hard_stop
+        result = _check_hard_stop(5, "PLAN_BLOCKED: insufficient coverage data")
+        assert result is not None, "plan_blocked check should be case-insensitive"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1263: Test orchestrator call-boundary verification
+# ---------------------------------------------------------------------------
+
+def test_test_orchestrator_check_hard_stop_patterns_functional():
+    """Test orchestrator's _check_hard_stop patterns remain functional and are not
+    inadvertently broken by parallel changes to the change orchestrator's version.
+
+    Confirms the boundary between the two orchestrators' _check_hard_stop implementations.
+    """
+    from pdd.agentic_test_orchestrator import _check_hard_stop
+
+    # Step 1: duplicate detection still works via substring
+    result = _check_hard_stop(1, "This appears to be a Duplicate of #42 based on the description.")
+    assert result is not None, (
+        "Test orchestrator step 1 duplicate detection should still work"
+    )
+
+    # Step 5: PLAN_BLOCKED detection still works
+    result = _check_hard_stop(5, "PLAN_BLOCKED: insufficient test coverage data")
+    assert result is not None, (
+        "Test orchestrator step 5 PLAN_BLOCKED detection should still work"
+    )
+
+    # Step 3: STOP_CONDITION tag detection works
+    result = _check_hard_stop(3, "STOP_CONDITION: Needs More Info")
+    assert result is not None, (
+        "Test orchestrator step 3 STOP_CONDITION detection should still work"
+    )
+
+    # Step 3: casual mention without STOP_CONDITION tag must NOT trigger
+    result = _check_hard_stop(3, "needs more info mentioned casually")
+    assert result is None, (
+        "Test orchestrator step 3 casual mention must not trigger without STOP_CONDITION tag"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Trusted step-comment wiring
+# ---------------------------------------------------------------------------
+
+
+class TestTrustedStepCommentPosting:
+    """The test orchestrator must extract <step_report> from each successful
+    step's output and post via post_step_comment_once with a composite-key
+    encoding (fractional step 5.5 and iterated manual-testing loop)."""
+
+    def test_success_path_posts_step_comment_once(self, mock_deps, default_args):
+        mocks = mock_deps
+
+        def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                        timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                        use_playwright=False, steers=None, **kwargs):
+            if label == "step4":
+                return (
+                    True,
+                    "<step_report>step 4</step_report>\nTEST_TYPE: api\nTEST_FRAMEWORK: pytest",
+                    0.1, "anthropic",
+                )
+            if label == "step12":
+                return (
+                    True,
+                    "<step_report>step 12</step_report>\nFILES_CREATED: tests/test_api.py",
+                    0.1, "anthropic",
+                )
+            if label == "step17":
+                return (
+                    True,
+                    "<step_report>step 17</step_report>\nPR Created: https://github.com/o/r/pull/10",
+                    0.1, "anthropic",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "anthropic")
+
+        mocks["run"].side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_test_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+        assert success is True
+        assert mock_post_once.call_count >= 10
+        for c in mock_post_once.call_args_list:
+            assert "step_num" in c.kwargs
+            assert isinstance(c.kwargs["step_num"], int)
+            assert "posted_steps" in c.kwargs
+
+    def test_step_report_missing_posts_fallback_comment(
+        self, mock_deps, default_args
+    ):
+        """Steps that omit <step_report> still get a visible fallback comment."""
+        mocks = mock_deps
+
+        def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                        timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                        use_playwright=False, steers=None, **kwargs):
+            if label == "step4":
+                return (True, "TEST_TYPE: api", 0.1, "anthropic")
+            if label == "step12":
+                return (True, "FILES_CREATED: tests/test_api.py", 0.1, "anthropic")
+            if label == "step17":
+                return (True, "PR Created: https://github.com/o/r/pull/10", 0.1, "anthropic")
+            return (True, f"Output for {label} (no report block)", 0.1, "anthropic")
+
+        mocks["run"].side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_test_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+        assert success is True
+        assert mock_post_once.call_count >= 10
+        assert any(
+            "no `<step_report>` block returned by agent" in c.kwargs["body"]
+            and "Raw output retained in workflow state" in c.kwargs["body"]
+            for c in mock_post_once.call_args_list
+        )
+
+    def test_post_exception_does_not_break_run(self, mock_deps, default_args):
+        """Exceptions raised by the helper must be log-and-continue."""
+        mocks = mock_deps
+
+        def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                        timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                        use_playwright=False, steers=None, **kwargs):
+            if label == "step4":
+                return (
+                    True,
+                    "<step_report>step 4</step_report>\nTEST_TYPE: api",
+                    0.1, "anthropic",
+                )
+            if label == "step12":
+                return (
+                    True,
+                    "<step_report>step 12</step_report>\nFILES_CREATED: tests/test_api.py",
+                    0.1, "anthropic",
+                )
+            if label == "step17":
+                return (
+                    True,
+                    "<step_report>step 17</step_report>\nPR Created: https://github.com/o/r/pull/10",
+                    0.1, "anthropic",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "anthropic")
+
+        mocks["run"].side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_test_orchestrator.post_step_comment_once",
+            side_effect=RuntimeError("simulated gh failure"),
+        ):
+            success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+        assert success is True

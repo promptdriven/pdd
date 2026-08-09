@@ -29,7 +29,7 @@ COMMAND_OUTPUT_KEYS: Dict[str, List[str]] = {
     'crash': ['output', 'output_program'],
     'trace': ['output'],
     'bug': ['output'],
-    'auto-deps': ['output'],
+    'auto-deps': ['output', 'csv'],
     'verify': ['output_results', 'output_code', 'output_program'],
     'sync': ['generate_output_path', 'test_output_path', 'example_output_path'],
 }
@@ -63,7 +63,10 @@ DEFAULT_FILENAMES: Dict[str, Dict[str, str]] = {
     },
     'trace': {'output': '{basename}_trace_results.log'},
     'bug': {'output': 'test_{basename}_bug{ext}'},
-    'auto-deps': {'output': '{basename}_with_deps.prompt'},
+    'auto-deps': {
+        'output': '{basename}_with_deps.prompt',
+        'csv': 'project_dependencies.csv',
+    },
     'verify': {
         'output_results': '{basename}_verify_results.log',
         'output_code': '{basename}_verified{ext}',
@@ -101,7 +104,10 @@ ENV_VAR_MAP: Dict[str, Dict[str, str]] = {
     },
     'trace': {'output': 'PDD_TRACE_OUTPUT_PATH'},
     'bug': {'output': 'PDD_BUG_OUTPUT_PATH'},
-    'auto-deps': {'output': 'PDD_AUTO_DEPS_OUTPUT_PATH'},
+    'auto-deps': {
+        'output': 'PDD_AUTO_DEPS_OUTPUT_PATH',
+        'csv': 'PDD_AUTO_DEPS_CSV_PATH',
+    },
     'verify': {
         'output_results': 'PDD_VERIFY_RESULTS_OUTPUT_PATH',
         'output_code': 'PDD_VERIFY_CODE_OUTPUT_PATH',
@@ -145,7 +151,10 @@ CONTEXT_CONFIG_MAP: Dict[str, Dict[str, str]] = {
     },
     'trace': {'output': 'generate_output_path'},
     'bug': {'output': 'test_output_path'},
-    'auto-deps': {'output': 'generate_output_path'},
+    'auto-deps': {
+        'output': 'generate_output_path',
+        'csv': 'auto_deps_csv_path',
+    },
     'verify': {
         'output_results': 'generate_output_path',
         'output_code': 'generate_output_path',
@@ -328,7 +337,32 @@ def generate_output_paths(
                 logger.debug(f"User path '{user_path}' identified as a specific file path.")
                 final_path = user_path # Assume it's a full path or filename
 
-        # 2. Check Context Configuration Path (.pddrc)
+        # 1b. For fix and auto-deps commands, input_file_dirs takes priority over context config
+        # This ensures fix outputs stay next to the original input files instead of
+        # being redirected to the context's generate_output_path root directory.
+        # Only apply this override when context_path exists (to preserve env/default behavior otherwise)
+        elif command in ["fix", "auto-deps"] and context_path and (input_file_dirs.get(output_key) or (output_key == "output" and input_file_dir)):
+            source = "input_file_dirs"
+            # For auto-deps, the 'output' key might not be in input_file_dirs, so fallback to input_file_dir
+            specific_dir = input_file_dirs.get(output_key) or input_file_dir
+            # Issue #1211: when the basename carries a subdir chain (from a
+            # nested prompt under prompts/...), `specific_dir` already roots
+            # the output at the existing code/test file's directory. Joining
+            # `specific_dir` with `default_filename` would prepend that subdir
+            # chain a second time (e.g. src/routers/src/routers/foo.py).
+            # Use the filename-only form so the subdir chain is contributed
+            # exactly once — by `specific_dir`.
+            if '/' in basename:
+                _, name_part = basename.rsplit('/', 1)
+                filename_only = _get_default_filename(
+                    command, output_key, name_part, language, file_extension
+                )
+            else:
+                filename_only = default_filename
+            final_path = os.path.join(specific_dir, filename_only)
+            logger.debug(f"{command.title()} command: using input file directory '{specific_dir}' for '{output_key}'")
+
+        # 2. Check Context Configuration Path (.pddrc) - Note: for fix/auto-deps, input_file_dirs checked first above
         elif context_path:
             source = "context"
 
@@ -445,7 +479,9 @@ def generate_output_paths(
             try:
                 absolute_path = os.path.abspath(final_path)
                 result_paths[output_key] = absolute_path
-                logger.info(f"Determined path for '{output_key}' ({source}): {absolute_path}")
+                # Use DEBUG level since these paths may be overridden by outputs.code.path config
+                # in sync_determine_operation._generate_paths_from_templates()
+                logger.debug(f"Determined path for '{output_key}' ({source}): {absolute_path}")
             except Exception as e:
                  logger.error(f"Failed to resolve path '{final_path}' to absolute path: {e}")
                  # Decide how to handle: skip, use relative, raise error? Using relative for now.

@@ -109,7 +109,9 @@ def fix_errors_from_unit_tests(
     temperature: float = 0.0,
     time: float = DEFAULT_TIME,
     verbose: bool = False,
-    protect_tests: bool = False
+    protect_tests: bool = False,
+    language: Optional[str] = None,
+    failure_classification: Optional[str] = None,
 ) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Fix errors in unit tests using LLM models and log the process.
@@ -126,6 +128,8 @@ def fix_errors_from_unit_tests(
         time (float): Time parameter for llm_invoke
         verbose (bool): Whether to print detailed output
         protect_tests (bool): If True, prevents LLM from modifying unit tests
+        language (Optional[str]): Programming language of the code (e.g., "python", "typescript")
+        failure_classification (Optional[str]): Heuristic hint for this fix attempt (syntax/import, timeout, etc.)
 
     Returns:
         Tuple containing update flags, fixed code/tests, total cost, and model name
@@ -165,7 +169,13 @@ def fix_errors_from_unit_tests(
             fix_errors_prompt,
             recursive=False,
             double_curly_brackets=True,
-            exclude_keys=['unit_test', 'code', 'errors', 'prompt']
+            exclude=['unit_test', 'code', 'errors', 'prompt', 'failure_classification']
+        )
+
+        fc_text = (
+            failure_classification
+            if failure_classification
+            else "Not classified (treat as a general test failure; use errors below)."
         )
 
         if verbose:
@@ -178,12 +188,14 @@ def fix_errors_from_unit_tests(
                 "code": code,
                 "prompt": processed_prompt,
                 "errors": error,
-                "protect_tests": "true" if protect_tests else "false"
+                "protect_tests": "true" if protect_tests else "false",
+                "failure_classification": fc_text,
             },
             strength=strength,
             temperature=temperature,
             verbose=verbose,
-            time=time
+            time=time,
+            language=language
         )
 
         total_cost += response1['cost']
@@ -202,7 +214,7 @@ def fix_errors_from_unit_tests(
             extract_fix_prompt,
             recursive=False,
             double_curly_brackets=True,
-            exclude_keys=['unit_test', 'code', 'unit_test_fix']
+            exclude=['unit_test', 'code', 'unit_test_fix']
         )
 
         # Step 6: Run second prompt through llm_invoke with fixed strength
@@ -220,11 +232,31 @@ def fix_errors_from_unit_tests(
             temperature=temperature,
             output_pydantic=CodeFix,
             verbose=verbose,
-            time=time
+            time=time,
+            language=language
         )
 
         total_cost += response2['cost']
         result2: CodeFix = response2['result']
+
+        # Guard against malformed structured output of any non-``CodeFix`` shape
+        # (``None``, a raw string, or a raw ``dict`` that survives the cloud
+        # validation-failure ``pass`` in ``llm_invoke``). Return a clean
+        # "no fix applied" result instead of crashing with an AttributeError
+        # that the outer handler would mask as model_name='Error: AttributeError'
+        # (issue #1612).
+        if not isinstance(result2, CodeFix):
+            if verbose:
+                console.print(
+                    "[yellow]fix_errors_from_unit_tests received a malformed "
+                    "extraction result; no fix applied.[/yellow]"
+                )
+            write_to_error_file(
+                error_file,
+                "fix_errors_from_unit_tests received a malformed CodeFix "
+                "result; no fix applied.",
+            )
+            return False, False, "", "", result1, total_cost, model_name
 
         if verbose:
             console.print(f"Total cost: ${total_cost:.6f}")

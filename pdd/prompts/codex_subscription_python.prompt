@@ -1,0 +1,71 @@
+% You are an expert Python engineer. Generate the module `pdd/codex_subscription.py`.
+
+% Purpose
+Provide ChatGPT/Codex **subscription** support for PDD's inner `llm_invoke` path
+(issue #1269). The subscription is reached through litellm's `chatgpt/` provider,
+which calls `https://chatgpt.com/backend-api/codex` using the OAuth token the
+`codex` CLI writes on `codex login` (ChatGPT sign-in). This lets `pdd sync` and
+every `llm_invoke` caller fall back to a flat-rate ChatGPT subscription when no
+API-key provider is usable (e.g. `ANTHROPIC_API_KEY` missing or rate-limited),
+fixing the `--force` failure class in #1254 / #1135.
+
+Bring-your-own-subscription only: each user authenticates their own ChatGPT
+account; never pool or share one subscription across users.
+
+% Module constants
+- `CHATGPT_MODEL_PREFIX = "chatgpt/"` — litellm routes any model with this prefix
+  through the subscription backend.
+- `_TOKEN_FIELDS = ("access_token", "refresh_token", "id_token", "account_id")` —
+  the OAuth fields litellm's ChatGPT authenticator consumes from `auth.json`.
+
+% Auth-shape reconciliation
+The `codex` CLI stores its token at `$CODEX_HOME/auth.json` (default
+`~/.codex/auth.json`) with the OAuth fields **nested** under a `"tokens"` object,
+while litellm's authenticator reads `$CHATGPT_TOKEN_DIR/auth.json` (default
+`~/.config/litellm/chatgpt`) and expects them at the **top level**. The bridge
+flattens the former into the latter so a user (or the cloud worker) supplies the
+codex `auth.json` once.
+
+% Public functions
+- `is_chatgpt_subscription_model(model_name) -> bool`: True when the model name
+  starts with `chatgpt/` (case-insensitive; tolerate None).
+- `bridge_codex_auth_for_litellm() -> bool`: idempotent, best-effort, never
+  raises. Returns True when a usable token is staged.
+  1. If `CHATGPT_TOKEN_DIR` points at a directory OTHER than PDD's own bridged
+     dir and it holds a usable `auth.json`, respect it untouched.
+  2. Otherwise read `$CODEX_HOME/auth.json` (honor `CODEX_HOME`; default
+     `~/.codex`), flatten the nested `tokens` to top level, and write it 0600 in
+     a 0700 private dir (`PDD_CHATGPT_TOKEN_DIR` override, else
+     `~/.cache/pdd/chatgpt`), exporting `CHATGPT_TOKEN_DIR` to that dir.
+  Refresh the bridged copy only when the codex source is newer (rotation-aware),
+  so a long-running worker picks up `codex`-rotated tokens.
+- `has_codex_subscription_auth() -> bool`: True when a usable subscription token
+  exists (explicit `CHATGPT_TOKEN_DIR` first, then `$CODEX_HOME/auth.json`).
+  Used by the credential check so a `chatgpt/` model is skipped cleanly in
+  `PDD_FORCE` mode instead of hanging litellm on an interactive device login.
+- `apply_litellm_chatgpt_output_patch() -> bool`: work around litellm returning
+  empty output for `chatgpt/` non-streaming Responses (upstream
+  BerriAI/litellm#25429). The Codex backend streams content via
+  `response.output_item.done` SSE events and an empty `response.completed.output`;
+  litellm's non-stream parser misses it. Wrap
+  `ChatGPTResponsesAPIConfig.transform_response_api_response` to splice the
+  collected `output_item.done` items into the completed event before delegating
+  to litellm's own (version-correct) transform. Idempotent, version-gated, never
+  raises; no-op if the class/method is absent.
+- `build_chatgpt_schema_instruction(schema) -> str`: the subscription backend
+  ignores `response_format`/`json_schema`, so return a prompt instruction that
+  coerces a single JSON object matching `schema` (no prose, no fences), injected
+  in-band by `llm_invoke` (mirrors the Groq handling). This same constraint means
+  `llm_invoke` must NOT send `response_format` for `chatgpt/` models on the
+  initial call OR on any retry/repair path.
+
+% Helpers (private)
+`_codex_home`, `_codex_auth_path`, `_flatten_codex_tokens` (accept nested or
+already-flat; return None without a usable `access_token`), `_bridged_token_dir`,
+`_write_private_json` (0700 dir / 0600 file). A `_RawResponseProxy` wraps an
+httpx-style response overriding only `.text` for the output patch.
+
+% Constraints
+- Standard library + litellm only. Never raise into callers — every public
+  function degrades to "subscription unavailable" on error and logs at debug.
+- Do not import `pdd.llm_invoke` (avoid a cycle); `llm_invoke` imports this.

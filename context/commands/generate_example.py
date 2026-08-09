@@ -192,7 +192,21 @@ def example_example_command():
     
     Options:
         --output PATH: Where to save the generated example code
-        --format FORMAT: Output format (default: code). Valid values: code (uses language extension), md (markdown)
+        --format FORMAT: Output format (default: code). Valid values:
+            - code: Honors any non-empty suffix on --output verbatim; when --output has no
+                    suffix (or is omitted) the language extension is synthesized from the
+                    canonical language_format.csv via get_extension (the same table
+                    construct_paths uses), falling back to BUILTIN_EXT_MAP only when the CSV
+                    is unavailable. An empty CSV extension (e.g. Makefile) leaves a bare name
+                    unchanged.
+            - md:   Forces a lowercase .md suffix on the resolved output path, replacing any
+                    other suffix (including .MD) on --output.
+            When the wrapper overrides an extension the user explicitly supplied (e.g. --format
+            md turning --output foo.yml into foo.md), a warning naming BOTH the requested and
+            the resolved path is emitted even when no overwrite collision exists (respecting
+            --quiet). Completing a bare --output name with the language extension is the
+            documented default and stays silent. If the rewritten file already exists, the user
+            is also prompted to confirm the overwrite unless --force is set.
     
     Returns:
         Tuple[str, float, str]: (example_code, total_cost_in_dollars, model_name)
@@ -387,17 +401,63 @@ def example_template_usage():
     print("The template is loaded from the pdd package's template directory.")
 
 
+def example_project_root_usage():
+    """
+    Demonstrate the --project-root override for agentic and incremental PRD modes.
+
+    For most layouts you do NOT need this flag — automatic marker-based
+    detection (`.pddrc`/`.pdd/` Tier A or `sources/` + PRD/spec markdown
+    Tier B, both treated as a single innermost-wins pool, with `.git` as
+    fallback) already finds the right root, including the nested-project
+    case (a self-contained pdd project under an unrelated outer git repo).
+
+    Use --project-root when:
+      - cwd has no PDD marker and you want to force a specific root.
+      - CI / scripted runs where you'd rather pin the root explicitly than
+        rely on cwd-walk semantics.
+      - You're targeting a project root that differs from what the marker
+        walk would find (rare).
+
+    The flag is only valid in:
+      - agentic-issue mode:    pdd generate --project-root <path> <issue-url>
+      - incremental PRD mode:  pdd generate --incremental --experimental-prd
+                                    --project-root <path> <prd-or-issue>
+
+    Passing --project-root to a standard prompt-file invocation raises a
+    click.UsageError so the user learns the flag is mode-specific instead of
+    silently no-opping.
+    """
+    print("\n" + "=" * 60)
+    print("Example 6: --project-root explicit override")
+    print("=" * 60)
+
+    print("\nAgentic-issue mode (issue URL):")
+    print("  pdd generate --project-root /path/to/inner-project \\\n"
+          "      https://github.com/owner/repo/issues/42")
+
+    print("\nIncremental PRD mode (local PRD):")
+    print("  pdd generate --incremental --experimental-prd \\\n"
+          "      --project-root /path/to/inner-project \\\n"
+          "      docs/prd.md")
+
+    print("\nStandard prompt-file mode REJECTS --project-root:")
+    print("  pdd generate --project-root /any/path prompts/foo.prompt")
+    print("  Error: --project-root is only supported in agentic-issue mode")
+    print("         (GitHub issue URL) or --incremental --experimental-prd mode.")
+
+
 def main():
     """
     Run all examples demonstrating the pdd.commands.generate module.
-    
+
     This script demonstrates:
     1. The 'generate' command for creating code from prompts
     2. The 'example' command for generating usage examples
     3. The 'test' command for generating unit tests
     4. Programmatic invocation using Click context
     5. Template usage with variable substitution
-    
+    6. --project-root override for nested pdd projects
+
     Note: These examples show command structure and options.
     Actual execution would require valid LLM API credentials
     and would incur API costs tracked by the @track_cost decorator.
@@ -417,6 +477,7 @@ def main():
     example_test_command()
     example_programmatic_invocation()
     example_template_usage()
+    example_project_root_usage()
     
     print("\n" + "=" * 60)
     print("Examples complete!")

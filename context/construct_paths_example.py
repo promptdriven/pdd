@@ -1,81 +1,78 @@
-"""
-demo_construct_paths.py
-~~~~~~~~~~~~~~~~~~~~~~~
-Tiny end‑to‑end demo for pdd.construct_paths.construct_paths.
-
-What it shows
--------------
-1. Creates a toy prompt file in the current directory.
-2. Calls `construct_paths` with the arguments normally supplied by the CLI.
-3. Prints the three return values:
-      • input_strings      –  the file contents that were just read
-      • output_file_paths  –  where PDD will write its results
-      • language           –  language detected for the operation
-4. Removes the temporary file afterwards so the directory is left clean.
-
-Run it:
-    python demo_construct_paths.py
-"""
+from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+from typing import Any, Dict
+
+# Ensure pdd package is discoverable relative to the workspace root
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pdd.construct_paths import construct_paths
 
-# ---------------------------------------------------------------------------
-# 1. Prepare a minimal prompt file so the function has something to read
-# ---------------------------------------------------------------------------
-prompt_path = Path("Makefile_makefile.prompt").resolve()
-prompt_path.write_text(
-    "Prompt‑Driven Development example\n\n"
-    "Task: Write a function `hello()` that returns the string 'Hello, world!'",
-    encoding="utf-8",
-)
 
-# ---------------------------------------------------------------------------
-# 2. Build the arguments expected by `construct_paths`
-# ---------------------------------------------------------------------------
-# The CLI layer normally supplies these.  We mimic that here.
-input_file_paths = {
-    "prompt_file": str(prompt_path),  # key name depends on the command
-    # Optional: you could also add an 'error_file': "errors.log", etc.
-}
+def main() -> None:
+    # All created files should be placed in the './output' directory
+    output_dir = Path("./output")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-force = True          # overwrite outputs if they already exist
-quiet = False         # print nice Rich tables to the terminal
-command = "generate"  # the PDD command we are emulating
-command_options = {}  # '--output', '--language', … would land here
+    # 1. Create a mock prompt file needed for the path construction.
+    # Note: construct_paths strictly resolves input files, so they must exist on disk.
+    prompt_file = output_dir / "render_button_python.prompt"
+    prompt_file.write_text(
+        "Generate a simple button component in Python.", encoding="utf-8"
+    )
 
-# ---------------------------------------------------------------------------
-# 3. Invoke the helper – exactly what the CLI does internally
-# ---------------------------------------------------------------------------
-resolved_config, input_strings, output_file_paths, language = construct_paths(
-    input_file_paths=input_file_paths,
-    force=force,
-    quiet=quiet,
-    command=command,
-    command_options=command_options,
-)
+    # Create an empty error file (construct_paths can generate this automatically if configured)
+    error_file = output_dir / "generation_errors.log"
+    if error_file.exists():
+        error_file.unlink()
 
-# ---------------------------------------------------------------------------
-# 4. Show the returned structures so you see what to expect
-# ---------------------------------------------------------------------------
-print("\nReturned values --------------------------------------------------")
-print("input_strings:")
-for key, value in input_strings.items():
-    print(f"  {key}:")
-    # Format multiline strings with proper indentation for better readability
-    value_lines = value.split('\n')
-    for line in value_lines:
-        print(f"    {line}")
+    # 2. Define the input files dict
+    input_file_paths = {
+        "prompt_file": str(prompt_file),
+        "error_file": str(error_file),
+    }
 
-print("\noutput_file_paths:")
-for key, value in output_file_paths.items():
-    print(f"  {key}: {value}")
+    # 3. Define command-specific options (CLI options)
+    # This matches the schema and keys parsed by PDD.
+    command_options: Dict[str, Any] = {
+        "language": "python",
+        "temperature": 0.2,
+        "max_attempts": 3,
+        # We can also supply explicit output overrides if wanted, e.g.:
+        # "output_code": str(output_dir / "button.py")
+    }
 
-print(f"\nlanguage: {language}")
+    print("--- Executing construct_paths ---")
 
-# ---------------------------------------------------------------------------
-# 5. (Optional) Clean‑up – remove the temporary prompt so it doesn't litter
-# ---------------------------------------------------------------------------
-prompt_path.unlink(missing_ok=True)
+    # 4. Call the orchestrator
+    # We pass force=True to ensure it runs completely non-interactively
+    resolved_config, input_strings, output_file_paths, language = construct_paths(
+        input_file_paths=input_file_paths,
+        force=True,  # Bypass overwrite confirmation prompt
+        quiet=False,  # Let it print standard diagnostic summaries
+        command="generate",
+        command_options=command_options,
+        create_error_file=True,
+        context_override=None,
+        confirm_callback=None,
+        path_resolution_mode="config_base",
+    )
+
+    print("\n--- Results Summary ---")
+    print(f"Detected Language: {language}")
+    print(f"Resolved Basename: {resolved_config.get('basename', 'N/A')}")
+    print(f"Prompt Content Loaded: '{input_strings.get('prompt_file', '').strip()}'")
+    print("\nResolved Output File Paths:")
+    for key, path in output_file_paths.items():
+        print(f"  • {key}: {path}")
+
+    print("\nResolved Directory Configurations:")
+    print(f"  • Code Dir: {resolved_config.get('code_dir')}")
+    print(f"  • Tests Dir: {resolved_config.get('tests_dir')}")
+    print(f"  • Examples Dir: {resolved_config.get('examples_dir')}")
+
+
+if __name__ == "__main__":
+    main()

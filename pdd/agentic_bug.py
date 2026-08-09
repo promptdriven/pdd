@@ -115,8 +115,8 @@ def _fetch_comments(comments_url: str) -> str:
     """
     # The comments_url from API is full URL like https://api.github.com/repos/...
     # gh api expects path relative to api root or full URL.
-    cmd = ["gh", "api", comments_url]
-    
+    cmd = ["gh", "api", comments_url, "--paginate"]
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         comments_data = json.loads(result.stdout)
@@ -178,6 +178,8 @@ def run_agentic_bug(
     quiet: bool = False,
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
+    reasoning_time: Optional[float] = None,
+    clean_restart: bool = False,
     # Legacy/Manual mode arguments (handled via *args in a real CLI, but here explicit for type safety if called directly)
     manual_args: Optional[Tuple[str, str, str, str, str]] = None
 ) -> Tuple[bool, str, float, str, List[str]]:
@@ -195,6 +197,7 @@ def run_agentic_bug(
         quiet: Suppress informational logging.
         timeout_adder: Additional time to add to step timeouts.
         use_github_state: Whether to use GitHub state (comments, PRs) during orchestration.
+        clean_restart: Discard saved workflow state before starting.
         manual_args: Optional tuple of (prompt_file, code_file, program_file, current_out, desired_out)
                      to trigger legacy manual mode.
 
@@ -305,11 +308,14 @@ def run_agentic_bug(
             issue_number=issue_number,
             issue_author=issue_author,
             issue_title=issue_title,
+            issue_updated_at=issue_data.get("updated_at", "") or "",
             cwd=cwd,
             verbose=verbose,
             quiet=quiet,
             timeout_adder=timeout_adder,
-            use_github_state=use_github_state
+            use_github_state=use_github_state,
+            reasoning_time=reasoning_time,
+            clean_restart=clean_restart,
         )
         return success, message, cost, model, changed_files
 

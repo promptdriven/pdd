@@ -1,0 +1,108 @@
+# PDD MCP Server - Tool Definitions Module
+
+This module defines the tool schemas for all PDD commands that will be exposed through the MCP server. Each tool corresponds to a specific command in the PDD CLI.
+
+## Purpose
+
+The `definitions.py` module should:
+1. Define each PDD command as an MCP tool with its full schema
+2. Specify all parameters for each tool, including types, requirements, and descriptions
+3. Create a collection of all available tools that can be registered with the server
+4. Provide clear, comprehensive documentation to guide client usage
+
+## Implementation
+
+Create the `definitions.py` file with the following specifications:
+
+- Import the necessary modules from the MCP SDK, particularly `mcp.types.Tool`
+- Define each tool as a constant with its name, description, and input schema
+- Create a comprehensive list or dictionary of all tools for easier registration
+- Ensure each parameter is properly typed and documented according to the PDD CLI
+- Include detailed docstrings explaining each tool's purpose and usage
+
+## Code Structure
+
+```python
+"""
+Tool definitions for PDD MCP Server.
+
+This module defines the tools that will be exposed by the MCP server, corresponding
+to commands supported by the PDD CLI. Each tool has a name, description, and a JSON
+schema that defines its input parameters.
+"""
+
+import mcp.types as types
+from typing import Dict, List
+
+# Generate Command Tool
+#----------------------
+PDD_GENERATE = types.Tool(
+    name="pdd-generate",
+    description="Generate code from a prompt file",
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "prompt_file": {
+                "type": "string",
+                "description": "The filename of the prompt file used to generate the code"
+            },
+            "output": {
+                "type": "string",
+                "description": "Specify where to save the generated code. If not provided, uses default naming based on the prompt file"
+            },
+            "strength": {
+                "type": "number",
+                "description": "Set the strength of the AI model (0.0 to 1.0, default is 0.5)"
+            },
+            "temperature": {
+                "type": "number",
+                "description": "Set the temperature of the AI model (default is 0.0)"
+            },
+            "local": {
+                "type": "boolean",
+                "description": "Run the generation locally instead of in the cloud"
+            },
+            "force": {
+                "type": "boolean",
+                "description": "Overwrite existing files without asking for confirmation"
+            },
+            "verbose": {
+                "type": "boolean",
+                "description": "Increase output verbosity for more detailed information"
+            },
+            "quiet": {
+                "type": "boolean",
+                "description": "Decrease output verbosity for minimal information"
+            }
+        },
+        "required": ["prompt_file"]
+    }
+)
+
+# Additional tools would be defined here following the same structure.
+
+# Collection of all PDD tools
+PDD_TOOLS = [
+    PDD_GENERATE
+    # Add other tools here
+]
+
+# Dictionary mapping tool names to tool objects for easy lookup
+PDD_TOOLS_DICT: Dict[str, types.Tool] = {tool.name: tool for tool in PDD_TOOLS}
+
+def get_tool_by_name(name: str) -> types.Tool:
+    """
+    Get a tool definition by name.
+    
+    Args:
+        name: The name of the tool to retrieve
+        
+    Returns:
+        The tool object matching the given name
+        
+    Raises:
+        KeyError: If no tool with the given name exists
+    """
+    if name in PDD_TOOLS_DICT:
+        return PDD_TOOLS_DICT[name]
+    raise KeyError(f"No tool defined with name: {name}")

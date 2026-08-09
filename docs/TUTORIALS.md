@@ -15,9 +15,11 @@ This tutorial walks through implementing a GitHub issue using PDD.
 - **PDD installed**: `pdd --version`
 - **GitHub CLI**: `brew install gh && gh auth login`
 - **One Agentic CLI** - Install at least one:
-  - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
-  - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY`)
-  - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
+  - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (Claude Max/Pro OAuth via `claude auth login` recommended, or `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
+  - **Antigravity CLI (`agy`, preferred)**: `curl -fsSL https://antigravity.google/cli/install.sh | bash` (Antigravity OAuth or keyring-backed Google subscription sign-in, `ANTIGRAVITY_API_KEY`/`GOOGLE_API_KEY`, Vertex AI env auth, or PDD's `GEMINI_API_KEY` compatibility bridge; pin with `PDD_AGENTIC_PROVIDER=antigravity` or `PDD_GOOGLE_CLI=agy`)
+  - **Gemini CLI (legacy, rollback)**: `npm install -g @google/gemini-cli` (`~/.gemini` OAuth, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`). Google consumer-tier Gemini CLI cutoff: **2026-06-18**; set `PDD_GOOGLE_CLI=gemini` only when you intentionally need the old binary.
+  - **Codex CLI**: `npm install -g @openai/codex` (`codex login` ChatGPT account or `OPENAI_API_KEY`)
+  - **OpenCode CLI**: `npm install -g opencode-ai` (`opencode auth login`, OpenCode JSON config, or provider env vars; set `OPENCODE_MODEL=provider/model`)
 
 ### Method 1: Using the Web Interface
 
@@ -69,10 +71,14 @@ This tutorial walks through implementing a GitHub issue using PDD.
    ```bash
    pdd fix https://github.com/myorg/myrepo/issues/456
    ```
-   This iteratively fixes the code until tests pass.
+   This orchestrates an 11-step iterative workflow that fixes the code until all tests pass locally, followed by post-push CI validation and code cleanup.
 
-3. **Review and Merge**
-   - The PR is updated with the fix
+3. **Configure CI Validation (Optional)**
+   - Use `--ci-retries INT` to set maximum post-push fix attempts (default: 3)
+   - Use `--skip-ci` to skip the CI validation stage entirely
+
+4. **Review and Merge**
+   - The PR is updated with the fix and verified against external CI
    - Review and merge when ready
 
 ### Method 4: Generating Tests (UI, CLI, or API)
@@ -84,12 +90,17 @@ This tutorial walks through implementing a GitHub issue using PDD.
      - **API**: Endpoints to test, HTTP methods, expected responses
    - Include examples of expected behavior
    - Specify what elements/interactions/responses should be verified
+   - If you have an OpenAPI/Swagger spec, mention its location for contract validation
 
 2. **Generate Tests**
    ```bash
    pdd test https://github.com/myorg/myrepo/issues/789
    ```
-   This analyzes the target and creates comprehensive tests (Playwright for web, pytest for CLI, pytest+requests for API).
+   This runs an 18-step workflow that analyzes the target and creates comprehensive tests:
+   - Behavioral tests (Playwright for web, pytest for CLI, pytest+requests for API)
+   - Contract/schema validation tests (when OpenAPI/Swagger spec is found)
+   - Accessibility tests (for web apps, using `@axe-core/playwright` at WCAG 2.1 AA)
+   - Manual/exploratory tests via `playwright-cli` (for web apps, optional)
 
 3. **Handle Clarifying Questions**
    - If PDD needs more information (e.g., credentials, test environment setup, API authentication), it posts questions to the issue
@@ -98,9 +109,10 @@ This tutorial walks through implementing a GitHub issue using PDD.
 
 4. **Review the Generated Tests**
    - The PR contains tests for the specified target:
-     - **Web UI**: Playwright tests
+     - **Web UI**: Playwright tests + accessibility audits + optional regression tests from exploratory testing
      - **CLI**: pytest with subprocess
-     - **API**: pytest with requests/httpx
+     - **API**: pytest with requests/httpx + contract validation tests
+   - The PR description includes test plan coverage ratio and summaries
    - Review and adjust tests as needed
 
 5. **Fix Any Issues Found**
@@ -109,9 +121,14 @@ This tutorial walks through implementing a GitHub issue using PDD.
    ```
    Use this if tests reveal bugs that need fixing.
 
+**Optional prerequisites for manual testing:**
+- Install `playwright-cli` to enable browser-based exploratory testing (Steps 6-11). Without it, these steps are skipped with a warning.
+- Set `PDD_CLOUD_RUN=true` for parallel execution via Cloud Batch (GitHub App mode).
+
 ### Tips
 
 - **Resume from anywhere**: Workflow state is saved to GitHub, so you can continue on any machine
+- **Step status comments**: A GitHub step comment marked `DEGRADED - workflow continuing` means that step hit a recoverable failure and PDD is continuing with fallback/default behavior. A comment marked `FAILED - workflow aborting` means the workflow stopped and needs intervention.
 - **Cost budgeting**: Use `--budget` flag to limit spending on complex issues
 - **Skip steps**: If a step hangs, check the GitHub issue for clarifying questions
 
@@ -120,6 +137,11 @@ This tutorial walks through implementing a GitHub issue using PDD.
 ## How to Create a New Test Case
 
 Adding a new test case is a great way to improve the robustness of PDD. This guide will walk you through the process of creating **unit tests** - low-level tests that focus on testing individual functions and modules for robustness and functionality.
+
+> **Tip**: When using `pdd generate` or `pdd fix`, you can use the `pytest:` selector (Python only) to include only relevant tests and their dependencies from an existing test file. This is more token-efficient than including the whole file:
+> ```xml
+> <include select="pytest:test_my_feature">tests/test_existing.py</include>
+> ```
 
 > **Note**: This section covers unit tests. For high-level integration testing that validates entire workflows, see the [regression tests section](#how-to-create-a-new-regression-test) below.
 
@@ -462,7 +484,7 @@ Remember: Regression tests are crucial for maintaining system stability. They sh
 
 ## Method 4: Generating Architecture from a PRD (GitHub Issue)
 
-Instead of manually writing `architecture.json`, you can point `pdd generate` at a GitHub issue containing your PRD. An 8-step agentic workflow will analyze the PRD, research the tech stack, and produce a validated `architecture.json`.
+Instead of manually writing `architecture.json`, you can point `pdd generate` at a GitHub issue containing your PRD. An 11-step agentic workflow will analyze the PRD, research the tech stack, generate `architecture.json`, create `.pddrc` configuration, and produce prompt files for each module.
 
 ### Prerequisites
 
@@ -484,18 +506,19 @@ Instead of manually writing `architecture.json`, you can point `pdd generate` at
    - Analyzes your PRD for features and tech stack
    - Researches documentation and best practices
    - Designs the module breakdown with dependency ordering
-   - Generates and validates `architecture.json`
+   - Generates `architecture.json` and `.pddrc` configuration
+   - Creates prompt files for each module
+   - Validates completeness, sync configuration, and dependencies
 
 4. **Review the output**: The workflow produces:
    - `architecture.json` - Module definitions with priorities and dependencies
    - `architecture_diagram.html` - Interactive Mermaid visualization
+   - `.pddrc` - Project configuration with context-specific paths
+   - `prompts/*.prompt` - Prompt files for each module (unless `--skip-prompts`)
 
-5. **Generate prompts from architecture**:
+5. **Run sync on generated prompts** (prompts are already generated):
    ```bash
-   pdd generate --template generic/generate_prompt \
-     -e MODULE=orders_api -e LANG_OR_FRAMEWORK=Python \
-     -e ARCHITECTURE_FILE=architecture.json \
-     --output prompts/orders_api_Python.prompt
+   pdd sync my_module
    ```
 
 ### Resuming a Failed Run
@@ -510,3 +533,29 @@ If the workflow stops (e.g., PRD needs clarification):
 - Include tech stack preferences explicitly (e.g., "FastAPI + PostgreSQL" vs. leaving it ambiguous)
 - Review the generated `architecture.json` before generating individual module prompts
 - The `context_urls` field in each module entry provides documentation links for code generation
+
+---
+
+## Advanced Sync and Context Compression
+
+For large-scale projects, `pdd sync` supports advanced options to manage context window size and optimize costs.
+
+### Context Compression
+
+When working with complex dependency graphs, you can enable automated compression to reduce the token count of included files while maintaining their behavioral integrity:
+
+- **`--compress-examples`**: Automatically applies `mode="interface"` to example files.
+- **`--compress-test-context`**: Slices test context to include only what's necessary for fixing failures.
+- **`--context-compression contracts`**: Extracts contract rules and architecture metadata from prompt and documentation files.
+- **`--context-compression all`**: Enables all available compression modes.
+
+These flags are particularly useful when you encounter "context window exceeded" errors or want to reduce the cost of large synchronization operations.
+
+### Example: Advanced Sync
+
+```bash
+# Sync with full compression and a higher budget
+# Global flags must precede the subcommand, or use sync-local options:
+pdd --context-compression all --force sync --budget 15.0 my_complex_module
+# pdd sync --context-compression all --force --budget 15.0 my_complex_module
+```

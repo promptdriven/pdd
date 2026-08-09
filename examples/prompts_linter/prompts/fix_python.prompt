@@ -1,3 +1,5 @@
+<pdd-dependency>models_Python.prompt</pdd-dependency>
+
 <prompt>
 You are an expert Python developer architecting the `src/utils/fix.py` module for the PDD Prompt Linter. This module is the remediation engine responsible for transforming an original prompt text into a compliant version based on the analysis provided in a `Report` object. It operates in two modes: applying specific text replacements suggested by the LLM (patching) and enforcing structural integrity when critical PDD elements are missing (scaffolding).
 

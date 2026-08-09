@@ -1,0 +1,42 @@
+% You are an expert TypeScript React engineer. Generate `pdd/frontend/components/TaskQueuePanel.tsx`, a draggable floating panel for queue execution control and task ordering.
+
+Requirements
+1. Export default `TaskQueuePanel` as `React.FC<TaskQueuePanelProps>`.
+2. `TaskQueuePanelProps` must include:
+   - `tasks: TaskItem[]`, `executionMode: ExecutionMode`, `isQueueRunning`, `isPaused`
+   - `progress: { total: number; completed: number; pending: number; running: number }`
+   - callbacks: `onSetExecutionMode`, `onStartQueue`, `onPauseQueue`, `onResumeQueue`, `onRunNextTask`, `onRemoveTask`, `onSkipTask`, `onRetryTask`, `onReorderTasks`, `onClearCompleted`, `onClearAll`
+3. Import `TaskQueueItem as TaskItem` and `ExecutionMode` from `../hooks/useTaskQueue`, plus `TaskQueueItemComponent` and `TaskQueueControls`.
+4. Persist panel position in localStorage key `pdd-task-queue-position`:
+   - default `{ x: window.innerWidth - 380 - 16, y: 64 }`
+   - load/save with `try/catch` and `console.warn`
+   - accept numeric `x/y` only, clamp to `0..window.innerWidth-100` and `0..window.innerHeight-100`
+   - reclamp on `window.resize`
+5. Panel drag behavior:
+   - keep `position`, `isDraggingPanel`, and drag ref `{ mouseX, mouseY, panelX, panelY }`
+   - start drag only when mousedown target/ancestor matches `[data-drag-handle]`
+   - while dragging, use document `mousemove` to update clamped position
+   - on `mouseup`, clear drag state/ref and persist final position
+   - reset-position action restores default, persists it, and reset button stops propagation
+6. Keep hooks unconditional; early returns only after hooks/handlers exist.
+7. Safety/derived state:
+   - if `tasks` is not an array, `console.error` and return `null`
+   - derive `hasPendingTasks`, `hasCompletedTasks` (`completed|failed|skipped`), `hasAnyTasks`
+   - return `null` when `hasAnyTasks` is false
+8. Pending-only task reordering:
+   - block drag start/over/drop for non-pending tasks
+   - use `dataTransfer.effectAllowed = 'move'` and `dropEffect = 'move'`
+   - on valid drop, call `onReorderTasks(fromIndex, toIndex)` and clear dragged index
+   - clear dragged index on drag end
+9. Render:
+   - fixed panel width `380px`, positioned by `left/top` from `position`
+   - outer container `pointer-events-none`; inner container `pointer-events-auto`
+   - dark glass/surface styling with collapse animation (`max-h-14` collapsed, `max-h-[70vh]` expanded)
+10. Header must include drag handle (`data-drag-handle`), collapse toggle, title/icon, running spinner badge, paused badge, pending badge (`progress.pending`), execution-mode badge (`Auto`/`Manual`), and reset-position button.
+11. Expanded content:
+   - render `TaskQueueControls` wired to queue state, derived flags, progress, and callbacks
+   - render scrollable task list of `TaskQueueItemComponent`, skipping null/missing-id tasks
+   - per-item handlers: remove/skip/retry by `task.id`, `onRunNow={onRunNextTask}`, and index-based drag handlers
+
+Deliverable
+- Output only `pdd/frontend/components/TaskQueuePanel.tsx`.

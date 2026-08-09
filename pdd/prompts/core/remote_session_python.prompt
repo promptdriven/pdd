@@ -1,0 +1,22 @@
+% Write `pdd/core/remote_session.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Scope
+  Provide small, pure helpers for remote/headless session detection and browser-skip policy.
+
+% Requirements
+  1. Export:
+     - `is_remote_session() -> Tuple[bool, str]`
+     - `should_skip_browser(explicit_flag: Optional[bool] = None) -> Tuple[bool, str]`
+  2. `is_remote_session()` detection order (first match wins):
+     - SSH env vars: `SSH_CONNECTION`, `SSH_CLIENT`, `SSH_TTY`
+     - Unix headless check: platform in `linux`, `linux2`, or `darwin` and `DISPLAY` is unset
+     - WSL without WSLg: `WSL_DISTRO_NAME` set and `WAYLAND_DISPLAY` unset
+     - Otherwise local
+  3. Both functions return `(bool, reason)` with concise user-facing reasons that name the trigger/cause.
+  4. `should_skip_browser()` behavior:
+     - `explicit_flag is True` => force browser (`skip=False`)
+     - `explicit_flag is False` => force no-browser (`skip=True`)
+     - `explicit_flag is None` => auto-detect from `is_remote_session()`, with an auto-detect remote reason and a local-open reason
+  5. Keep the module side-effect free and stdlib-only (env/platform inspection).

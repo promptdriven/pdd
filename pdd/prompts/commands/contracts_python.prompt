@@ -1,0 +1,17 @@
+<pdd-reason>Defines the `pdd contracts check` CLI group for deterministic contract checks.</pdd-reason>
+
+<pdd-dependency>contract_check_python.prompt</pdd-dependency>
+
+% Write `pdd/commands/contracts.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+- Implement `@click.group(name="contracts")` with a `check` subcommand.
+- `contracts check TARGET` accepts file or directory, plus optional `--stories` directory.
+- Support `--json` output and `--strict` warning escalation.
+- Exit codes: 0 clean, 1 warnings, 2 errors or strict warnings.
+- Use `pdd.contract_check` public API for evaluation (no LLM calls).
+
+% Deliverables
+- Code: `pdd/commands/contracts.py`

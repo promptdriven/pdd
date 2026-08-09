@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="40" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <g stroke="#00e3ff"
+     stroke-width="60"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     fill="none"
+     filter="url(#glow)">
+
+    <!-- speech-bubble "P" outline -->
+    <path d="
+      M 260 180
+      H 600
+      A 230 230 0 0 1 600 660
+      H 480
+      L 260 880
+      V 180
+      Z"/>
+
+    <!-- chevron shifted +15 px -->
+    <polyline points="505 340 585 420 505 500"/>
+  </g>
+</svg>

@@ -1,0 +1,3 @@
+% This prompt will generate Python code for a function called 'continue_generation'. The goal of the prompt is finish the generation from a LLM. The inputs will be the formatted input_prompt with all the variables substituted in and the llm_output of this prompt.  This function will use the continue_generation prompt: <include>prompts/continue_generation_LLM.prompt</include>
+
+% This will detect using the unfinished_prompt function whether the LLM generation has to continue. If it does, it will run the continue_generation prompt and loop through until the generation is complete. It will continue to append the output of the continue_generation prompt to LLM_OUTPUT. 

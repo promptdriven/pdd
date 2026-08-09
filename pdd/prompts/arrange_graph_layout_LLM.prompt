@@ -1,0 +1,203 @@
+<pdd-reason>Agentic instruction for assigning logical graph positions to modules in an
+architecture file. The agent reads the file and an optional PRD/README, reasons about the
+logical structure of the system, groups modules into functional swimlanes, and writes the
+updated file in-place so pdd connect shows a graph that makes the architecture easy to
+understand at a glance.</pdd-reason>
+<pdd-interface>{{
+  "type": "prompt",
+  "inputs": {
+    "project_root": "Absolute path to the project root directory",
+    "architecture_path": "Absolute path to the architecture JSON file to update"
+  },
+  "output": "Writes updated architecture file in-place with position (x, y integers) on every module. Outputs one-line summary."
+}}</pdd-interface>
+
+% ============================================================================
+% AGENTIC GRAPH LAYOUT TASK
+% ============================================================================
+%
+% You are an agent with file-system access. Your goal is to make this software
+% project's architecture EASY FOR A HUMAN TO UNDERSTAND at a glance by
+% assigning logical x/y positions to every module in the architecture file.
+%
+% The result should tell a clear visual story: what are the major stages or
+% subsystems? Which modules are foundations? How does data or control flow?
+% A good layout lets someone new to the codebase immediately grasp the structure.
+%
+% WIRE-LENGTH PRINCIPLE (most important layout rule):
+%   A good layout minimizes total wire length. Nodes that are connected to each
+%   other should be placed CLOSE together. Shared nodes that many others depend
+%   on should sit BETWEEN their consumers — not at a fixed canvas position.
+%   Avoid layouts where a central hub fans out to clusters spread thousands of
+%   pixels apart; instead, pull those clusters toward the hub.
+%
+% Architecture file: {architecture_path}
+% Project root:      {project_root}
+
+% ============================================================================
+% STEP 1 — Read and understand the system
+% ============================================================================
+%
+% Read: {architecture_path}  (required)
+% Read: PRD.md, README.md, or prd.md from {project_root} if any exists (optional)
+%
+% Before positioning anything, understand the system:
+%   - What does this software do?
+%   - What are the major functional areas or pipeline stages?
+%   - Which modules are foundations (heavily used by others)?
+%   - Which modules are endpoints / outputs / entry points?
+%   - What is the natural flow of data or control through the system?
+
+% ============================================================================
+% STEP 2 — Identify logical groupings (swimlane columns)
+% ============================================================================
+%
+% Identify 3–8 meaningful columns. Good columns correspond to:
+%   * Major pipeline stages from the PRD (e.g. "Script → TTS → Render → Review")
+%   * Functional subsystems (e.g. "Audio", "Visual", "Storage", "UI")
+%   * Roles (e.g. "Config/Setup", "Shared Infrastructure", "Review Loop")
+%
+% Use tags, filenames, descriptions, and the PRD to assign each module to
+% the column where it most clearly belongs.
+%
+% Special rules:
+%   - Modules matching no single stage (shared libs, types, utils, config) →
+%     "Shared Infrastructure" column. Place this column at the column index
+%     closest to the GRAVITY CENTER of its consumers (see gravity rule below),
+%     not at a fixed canvas center.
+%   - Hub nodes (depended on by ≥30% of all modules) →
+%     "Shared Infrastructure" column, placed by gravity center rule.
+%   - Review / audit / annotation / feedback-loop modules →
+%     rightmost column
+%
+% Gravity center rule for shared/hub columns:
+%   gravity_col = round(average column_index of all modules that directly
+%                       depend on the shared/hub modules)
+%   Place the Shared Infrastructure column at gravity_col. If gravity_col
+%   would conflict with another column, place it at gravity_col ± 1.
+%
+% Disconnected subgraph rule:
+%   If the graph has multiple connected components (subgraphs with no edges
+%   between them), do NOT spread them horizontally. Instead, keep them in
+%   roughly the same x range and stack them vertically:
+%     y_offset(component k) = k × (tallest_component_height + 400)
+%   This keeps isolated clusters from creating phantom long-distance lines.
+%
+% Column-split rule:
+%   If a column would contain MORE THAN 8 modules, split it into two adjacent
+%   sub-columns (e.g. "Stage A" at index c, "Stage B" at index c+1). No single
+%   column should exceed 8 modules total.
+
+% ============================================================================
+% STEP 2.5 — Reorder columns to minimize cross-column edges
+% ============================================================================
+%
+% After assigning every module to a column, optimize the left-to-right column
+% order to put heavily-connected columns next to each other:
+%
+%   1. Build a connection-weight matrix:
+%        W[a][b] = number of dependency edges that cross from column a to column b
+%   2. Greedy reorder: repeatedly swap adjacent columns if the swap reduces the
+%      sum of W[a][b] × |a − b| (penalizes distant crossings more than adjacent).
+%   3. Hard anchors (do not move):
+%        - Config/setup columns stay leftmost
+%        - Review/feedback columns stay rightmost
+%   4. After reordering, reassign column indices 0, 1, 2, … left to right.
+%
+% This step ensures that subsystems which talk to each other are side-by-side,
+% not separated by unrelated columns.
+
+% ============================================================================
+% STEP 3 — Compute dependency depth for y-axis ordering
+% ============================================================================
+%
+%   depth 0 = no dependencies (foundation/root nodes)
+%   depth N = 1 + max depth of all direct dependencies
+%   Use topological sort. If cycles exist, assign cyclic nodes depth 0.
+
+% ============================================================================
+% STEP 4 — Assign positions using the wrapping formula
+% ============================================================================
+%
+% Node dimensions (hard-coded in the React viewer):
+%   NODE_WIDTH  = 200 px
+%   NODE_HEIGHT =  85 px
+%
+% Layout constants:
+%   LANE_WIDTH  =  600 px   (horizontal gap between column base-x values)
+%   NODE_X_STEP =  280 px   (horizontal spacing within a sub-row; 200 node + 80 gap)
+%   MAX_PER_ROW =    3      (max nodes per horizontal sub-row before wrapping down)
+%   ROW_STEP    =  220 px   (vertical spacing between sub-rows; 85 node + 135 gap)
+%   TIER_GAP    =  400 px   (vertical gap between depth tiers)
+%
+% Column order (after Step 2.5 reordering):
+%   column_BASE_X(c) = c × LANE_WIDTH
+%   "Shared Infra" column BASE_X = gravity_col × LANE_WIDTH  (not fixed center)
+%
+% For each module at (column_index=c, depth=d, slot_in_bucket=s)
+%   where s is the 0-based rank of the module within its (column, depth) group:
+%
+%   subrow   = floor(s / MAX_PER_ROW)   % which sub-row within this depth tier
+%   col_slot = s mod MAX_PER_ROW        % position within the sub-row
+%
+%   x = c × LANE_WIDTH + col_slot × NODE_X_STEP
+%   y = d × TIER_GAP  + subrow × ROW_STEP
+%
+% This guarantees:
+%   - Nodes in one column never exceed LANE_WIDTH (3 × 280 = 840 < 900)
+%   - Large groups wrap downward rather than bleeding rightward
+%   - Adjacent depth tiers are always visually separated
+
+% ============================================================================
+% STEP 4.5 — Gravity refinement pass
+% ============================================================================
+%
+% After computing initial x/y positions, run one refinement pass to pull
+% nodes toward their neighbors:
+%
+%   For each module M:
+%     connected = all modules M depends on + all modules that depend on M
+%     gravity_x = average x of all modules in connected  (skip if connected is empty)
+%
+%     If |M.x − gravity_x| > LANE_WIDTH / 2:
+%       candidate_col = column index whose BASE_X is closest to gravity_x
+%       If moving M to candidate_col would NOT cause overlap with more than
+%       2 existing nodes already placed in that column at the same depth tier:
+%         Move M to candidate_col (recompute x using the same slot formula)
+%
+% This pass reduces long-distance fan-out without disrupting the overall
+% column structure. Run it once — no iteration.
+
+% ============================================================================
+% STEP 5 — Overlap detection and correction
+% ============================================================================
+%
+% Before writing the file, scan every PAIR of assigned positions and check:
+%   Two nodes overlap if: |Δx| < 300 AND |Δy| < 200
+%
+% If any pair overlaps:
+%   1. Increment the y of the later-placed node by ROW_STEP (220 px)
+%   2. Re-check that node against all others
+%   3. Repeat until no overlaps remain
+%
+% This pass ensures the output is guaranteed non-overlapping even if the
+% formula above produces edge cases (e.g. two modules sharing the same depth
+% across adjacent columns with close BASE_X values).
+
+% ============================================================================
+% STEP 6 — Write the updated file
+% ============================================================================
+%
+% Write the updated JSON array back to {architecture_path}:
+%   - Add or update a "position" key on EVERY module with integer x and y values
+%   - Preserve ALL other fields exactly as found
+%   - Round x and y to nearest integer
+%   - Keep 2-space JSON indentation
+
+% ============================================================================
+% STEP 7 — Output summary (one line only)
+% ============================================================================
+%
+%   "Updated positions for <N> modules across <M> swimlanes: <lane1>, <lane2>, …"
+%
+% Do not output the JSON. Do not explain further.

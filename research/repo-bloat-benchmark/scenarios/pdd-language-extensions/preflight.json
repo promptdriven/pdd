@@ -1,0 +1,9 @@
+{
+  "scenario_dir": "scenarios/pdd-language-extensions",
+  "distractors_dir": "distractors/pdd-language-extensions",
+  "reports_dir": "reports/pdd-language-extensions",
+  "work_root": "/tmp/rb-preflight-pdd-language-extensions",
+  "arm": "mock",
+  "sizes": [1, 2, 5, 10, 20, 50],
+  "trials": 1
+}

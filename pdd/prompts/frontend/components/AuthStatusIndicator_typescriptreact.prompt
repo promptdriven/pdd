@@ -1,0 +1,24 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/components/AuthStatusIndicator.tsx`, a compact auth-status pill that polls cloud auth state and triggers re-authentication.
+
+<auth_status_dependencies>
+  <include>pdd/frontend/api.ts</include>
+</auth_status_dependencies>
+
+Requirements
+1. Define `AuthStatusIndicatorProps` as `{ onReauth: () => void }`; export default `AuthStatusIndicator` as `React.FC<AuthStatusIndicatorProps>`. Import `React`, `useEffect`, `useState`, and `{ api, AuthStatus }` from `../api`.
+2. Keep `status: AuthStatus | null` (initial `null`) and `loading` (initial `true`). In `useEffect([])`, define `checkStatus()` that calls `api.getAuthStatus()`, falls back to `{ authenticated: false, cached: false, expires_at: null }` on error, and always sets `loading` to `false`; run it immediately, then poll every 30s via `setInterval(checkStatus, 30000)` with cleanup.
+3. While loading, render a non-button rounded badge (`flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-full bg-surface-800/50`) with a pulsing key SVG (`w-3.5 h-3.5 sm:w-4 sm:h-4 text-surface-500 animate-pulse`) and `Auth...` text (`text-xs text-surface-400 hidden sm:inline`).
+4. After loading, derive `isAuthenticated = status?.authenticated` and render a button that always calls `onReauth`, with base classes `flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1.5 rounded-full transition-colors`, and switches styles:
+   - authenticated: `bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20`
+   - unauthenticated: `bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20`
+5. Use exact status copy for both `title` and screen-reader text:
+   - authenticated: `Cloud Authenticated - Click to manage authentication`
+   - unauthenticated: `Not authenticated - Click to login`
+6. Button children, in order:
+   - key SVG icon (`w-3.5 h-3.5 sm:w-4 sm:h-4`) with inline JSX comment for the icon section
+   - `<span className="sr-only">` with full status text
+   - `<span className="hidden xs:inline" aria-hidden="true">` with `Logged In` or `Login`, with inline JSX comment for the text section
+   - status dot span (`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full`) that is blue when authenticated and yellow + `animate-pulse` when unauthenticated, with inline JSX comment for the dot section
+
+Deliverable
+- Output only `pdd/frontend/components/AuthStatusIndicator.tsx`.

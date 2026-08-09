@@ -8,7 +8,13 @@ from typing import Any, Iterable, Mapping
 
 from rich.console import Console
 
-from .agentic_common import get_available_agents, run_agentic_task, DEFAULT_MAX_RETRIES
+from .agentic_common import (
+    get_available_agents,
+    run_agentic_task,
+    DEFAULT_MAX_RETRIES,
+    AGENTIC_STEP_TIMEOUT_SECONDS,
+    _revert_out_of_scope_changes,
+)
 from .get_run_command import get_run_command_for_file
 from .load_prompt_template import load_prompt_template
 
@@ -287,7 +293,14 @@ def _run_program_file(
             cwd=project_root,
             capture_output=True,
             text=True,
+            stdin=subprocess.DEVNULL,  # Prevent blocking on input()
+            timeout=120,  # 2 minute timeout to prevent infinite hangs
         )
+    except subprocess.TimeoutExpired:
+        msg = f"Program '{program_path}' timed out after 120 seconds (may be waiting for input or stuck in infinite loop)"
+        if not quiet:
+            console.print(f"[red]{msg}[/red]")
+        return False, msg
     except OSError as exc:
         msg = f"Failed to execute program '{program_path}': {exc}"
         if not quiet:
@@ -397,7 +410,9 @@ def run_agentic_crash(
                 f"'{crash_log_path}': {exc}"
             )
 
-    project_root = prompt_path.parent
+    # Use cwd as project root (consistent with agentic_test_generate.py and agentic_verify.py)
+    # Bug fix: Previously used prompt_path.parent which was wrong when prompt is in prompts/ subdir
+    project_root = Path.cwd()
 
     if verbose and not quiet:
         console.print("[cyan]Starting agentic crash fallback (explore mode)...[/cyan]")
@@ -458,6 +473,7 @@ def run_agentic_crash(
             verbose=verbose,
             quiet=quiet,
             label="agentic_crash_explore",
+            timeout=AGENTIC_STEP_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
             max_retries=DEFAULT_MAX_RETRIES,
         )
     except Exception as exc:  # noqa: BLE001
@@ -466,6 +482,9 @@ def run_agentic_crash(
             console.print(f"[red]{msg}[/red]")
         # No JSON to parse; no changes we can reliably detect beyond this point.
         return False, msg, 0.0, None, []
+
+    # 2b) Scope guard: revert out-of-scope file changes
+    _revert_out_of_scope_changes(project_root, {code_path.resolve(), program_path.resolve()})
 
     # 3) Snapshot mtimes after the agent completes
     after_mtimes = _snapshot_mtimes(project_root)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, List, Literal, Optional
@@ -27,6 +28,7 @@ except ImportError:
 
 from ..models import FileContent, FileMetadata, FileTreeNode, WriteFileRequest, WriteResult
 from ..security import PathValidator, SecurityError
+from ...construct_paths import get_language_outputs
 
 # Binary file extensions
 BINARY_EXTENSIONS = {
@@ -355,7 +357,11 @@ LANGUAGE_EXTENSIONS = {
     "glsl": [".glsl"],
     "wgsl": [".wgsl"],
     "starlark": [".bzl"],
-    "dockerfile": [".dockerfile"],
+    "dockerfile": [".dockerfile", "Dockerfile"],
+    # Web languages
+    "html": [".html", ".htm"],
+    "css": [".css"],
+    "makefile": ["Makefile", ".mk"],
 }
 
 
@@ -522,86 +528,163 @@ async def list_prompt_files(
         extensions = LANGUAGE_EXTENSIONS.get(language, [".py", ".ts", ".js", ".java"]) if language else [".py", ".ts", ".tsx", ".js", ".jsx", ".java"]
 
         # Try to find related files (code, test, example)
+        # Include prompt_subdir in sync_basename so pdd sync can find the correct prompt
+        # when there are multiple prompts with the same name in different subdirectories
+        full_sync_basename = f"{prompt_subdir}/{sync_basename}" if prompt_subdir else sync_basename
+        # Determine expected outputs for this language
+        outputs = get_language_outputs(language) if language else {'code', 'test', 'example'}
+
         related = {
             "prompt": relative_path,
-            "sync_basename": sync_basename,  # For sync command: "calculator"
+            "sync_basename": full_sync_basename,  # For sync command: "frontend/app/admin/page"
             "language": language,            # Detected language: "python"
             "context": context_name,         # Matched .pddrc context name
+            "expected_outputs": sorted(outputs),  # e.g., ["code"] or ["code", "example", "test"]
         }
 
+        # Helper to substitute placeholders in path templates
+        def substitute_path_template(template: str) -> str:
+            """Replace all placeholders in path template."""
+            result = template.replace("{name}", sync_basename)
+            result = result.replace("{category}", prompt_subdir)
+            result = result.replace("{dir_prefix}", f"{prompt_subdir}/" if prompt_subdir else "")
+            if language:
+                result = result.replace("{language}", language)
+            # Handle {ext} - extract from extensions list
+            ext = extensions[0].lstrip(".") if extensions else "tsx"
+            result = result.replace("{ext}", ext)
+            return result
+
         # ===== CODE FILE DETECTION =====
-        # Use generate_output_path from .pddrc if available
+        # Use outputs.code.path or generate_output_path from .pddrc if available
         code_dirs = []
+        explicit_code_path = None
 
-        # Priority 1: .pddrc generate_output_path
-        pddrc_code_dir = context_defaults.get("generate_output_path")
-        if pddrc_code_dir:
-            # Strip trailing slash
-            pddrc_code_dir = pddrc_code_dir.rstrip("/")
-            code_dirs.append(pddrc_code_dir)
+        # Priority 0: Check new 'outputs' format (Issue #237)
+        # Format: outputs: { code: { path: "app/layout.tsx" } }
+        outputs_config = context_defaults.get("outputs", {})
+        if outputs_config and isinstance(outputs_config, dict):
+            code_output = outputs_config.get("code", {})
+            if code_output and isinstance(code_output, dict):
+                explicit_code_path = code_output.get("path")
 
-        # Priority 2: Default locations
-        code_dirs.extend(["src", ""])  # Empty string for project root
+        # If explicit path is set, substitute placeholders and check it directly
+        if explicit_code_path:
+            resolved_code_path = substitute_path_template(explicit_code_path)
+            code_path = project_root / resolved_code_path
+            if code_path.exists():
+                related["code"] = str(code_path.relative_to(project_root))
 
-        for code_dir in code_dirs:
-            for ext in extensions:
-                # Try with subdirectory first, then without
-                paths_to_try = []
-                if code_dir:
-                    if prompt_subdir:
-                        paths_to_try.append(project_root / code_dir / prompt_subdir / f"{sync_basename}{ext}")
-                    paths_to_try.append(project_root / code_dir / f"{sync_basename}{ext}")
-                else:
-                    if prompt_subdir:
-                        paths_to_try.append(project_root / prompt_subdir / f"{sync_basename}{ext}")
-                    paths_to_try.append(project_root / f"{sync_basename}{ext}")
+        # Priority 1: .pddrc generate_output_path (legacy format)
+        if "code" not in related:
+            pddrc_code_dir = context_defaults.get("generate_output_path")
+            if pddrc_code_dir:
+                # Strip trailing slash
+                pddrc_code_dir = pddrc_code_dir.rstrip("/")
+                code_dirs.append(pddrc_code_dir)
 
-                for code_path in paths_to_try:
-                    if code_path.exists():
-                        related["code"] = str(code_path.relative_to(project_root))
+            # Priority 2: Default locations
+            code_dirs.extend(["src", ""])  # Empty string for project root
+
+            for code_dir in code_dirs:
+                for ext in extensions:
+                    # Try with subdirectory first, then without
+                    paths_to_try = []
+                    if code_dir:
+                        if prompt_subdir:
+                            paths_to_try.append(project_root / code_dir / prompt_subdir / f"{sync_basename}{ext}")
+                        paths_to_try.append(project_root / code_dir / f"{sync_basename}{ext}")
+                    else:
+                        if prompt_subdir:
+                            paths_to_try.append(project_root / prompt_subdir / f"{sync_basename}{ext}")
+                        paths_to_try.append(project_root / f"{sync_basename}{ext}")
+
+                    for code_path in paths_to_try:
+                        if code_path.exists():
+                            related["code"] = str(code_path.relative_to(project_root))
+                            break
+                    if "code" in related:
                         break
                 if "code" in related:
                     break
-            if "code" in related:
-                break
 
         # ===== TEST FILE DETECTION =====
-        # Use test_output_path from .pddrc if available
+        # Use outputs.test.path or test_output_path from .pddrc if available
         test_dirs = []
+        explicit_test_path = None
 
-        pddrc_test_dir = context_defaults.get("test_output_path")
-        if pddrc_test_dir:
-            pddrc_test_dir = pddrc_test_dir.rstrip("/")
-            test_dirs.append(pddrc_test_dir)
+        # Check new 'outputs' format first (Issue #237)
+        if outputs_config and isinstance(outputs_config, dict):
+            test_output = outputs_config.get("test", {})
+            if test_output and isinstance(test_output, dict):
+                explicit_test_path = test_output.get("path")
 
-        test_dirs.extend(["tests", "test", ""])  # Empty string for project root
-        test_prefixes = ["test_", ""]
-        test_suffixes = ["", "_test"]
+        # If explicit path is set, substitute placeholders and check it directly
+        if explicit_test_path:
+            resolved_test_path = substitute_path_template(explicit_test_path)
+            test_path = project_root / resolved_test_path
+            if test_path.exists():
+                related["test"] = str(test_path.relative_to(project_root))
 
-        for test_dir in test_dirs:
-            found = False
-            for prefix in test_prefixes:
-                for suffix in test_suffixes:
-                    # Skip invalid combination (no prefix and no suffix with just basename)
-                    if not prefix and not suffix:
-                        continue
-                    for ext in extensions:
-                        test_name = f"{prefix}{sync_basename}{suffix}{ext}"
-                        # Try with subdirectory first, then without
-                        paths_to_try = []
-                        if test_dir:
-                            if prompt_subdir:
-                                paths_to_try.append(project_root / test_dir / prompt_subdir / test_name)
-                            paths_to_try.append(project_root / test_dir / test_name)
-                        else:
-                            if prompt_subdir:
-                                paths_to_try.append(project_root / prompt_subdir / test_name)
-                            paths_to_try.append(project_root / test_name)
+        # Legacy format: test_output_path
+        if "test" not in related:
+            pddrc_test_dir = context_defaults.get("test_output_path")
+            if pddrc_test_dir:
+                pddrc_test_dir = pddrc_test_dir.rstrip("/")
+                test_dirs.append(pddrc_test_dir)
 
-                        for test_path in paths_to_try:
-                            if test_path.exists():
-                                related["test"] = str(test_path.relative_to(project_root))
-                                found = True
+            test_dirs.extend(["tests", "test", ""])  # Empty string for project root
+            test_prefixes = ["test_", ""]
+            # Include .test and .spec suffixes common in Jest/TypeScript projects
+            test_suffixes = [".test", ".spec", "", "_test"]
+
+            # For non-executable languages (schema/config), tests are usually in Python/TS
+            # These languages don't have native test frameworks, so tests are written in
+            # general-purpose languages like Python or TypeScript
+            NON_EXECUTABLE_LANGUAGES = {
+                "prisma", "sql", "graphql", "protobuf", "terraform", "hcl",
+                "html", "css", "makefile", "dockerfile", "nix", "starlark",
+                "glsl", "wgsl", "scss", "sass", "less", "pug", "ejs", "twig",
+                "handlebars", "jinja",
+            }
+
+            # Determine test file extensions to search
+            if language and language.lower() in NON_EXECUTABLE_LANGUAGES:
+                # For config/schema languages, search for Python and TypeScript test files
+                test_extensions = [".py", ".ts", ".tsx", ".js", ".jsx"]
+            else:
+                # For executable languages, use language-specific extensions first,
+                # then add Python/TypeScript as fallbacks
+                test_extensions = list(extensions) + [".py", ".ts"]
+                # Dedupe while preserving order
+                test_extensions = list(dict.fromkeys(test_extensions))
+
+            for test_dir in test_dirs:
+                found = False
+                for prefix in test_prefixes:
+                    for suffix in test_suffixes:
+                        # Skip invalid combination (no prefix and no suffix with just basename)
+                        if not prefix and not suffix:
+                            continue
+                        for ext in test_extensions:
+                            test_name = f"{prefix}{sync_basename}{suffix}{ext}"
+                            # Try with subdirectory first, then without
+                            paths_to_try = []
+                            if test_dir:
+                                if prompt_subdir:
+                                    paths_to_try.append(project_root / test_dir / prompt_subdir / test_name)
+                                paths_to_try.append(project_root / test_dir / test_name)
+                            else:
+                                if prompt_subdir:
+                                    paths_to_try.append(project_root / prompt_subdir / test_name)
+                                paths_to_try.append(project_root / test_name)
+
+                            for test_path in paths_to_try:
+                                if test_path.exists():
+                                    related["test"] = str(test_path.relative_to(project_root))
+                                    found = True
+                                    break
+                            if found:
                                 break
                         if found:
                             break
@@ -609,42 +692,56 @@ async def list_prompt_files(
                         break
                 if found:
                     break
-            if found:
-                break
 
         # ===== EXAMPLE FILE DETECTION =====
-        # Use example_output_path from .pddrc if available
+        # Use outputs.example.path or example_output_path from .pddrc if available
         example_dirs = []
+        explicit_example_path = None
 
-        pddrc_example_dir = context_defaults.get("example_output_path")
-        if pddrc_example_dir:
-            pddrc_example_dir = pddrc_example_dir.rstrip("/")
-            example_dirs.append(pddrc_example_dir)
+        # Check new 'outputs' format first (Issue #237)
+        if outputs_config and isinstance(outputs_config, dict):
+            example_output = outputs_config.get("example", {})
+            if example_output and isinstance(example_output, dict):
+                explicit_example_path = example_output.get("path")
 
-        example_dirs.extend(["examples", ""])  # Empty string for project root
+        # If explicit path is set, substitute placeholders and check it directly
+        if explicit_example_path:
+            resolved_example_path = substitute_path_template(explicit_example_path)
+            example_path = project_root / resolved_example_path
+            if example_path.exists():
+                related["example"] = str(example_path.relative_to(project_root))
 
-        for example_dir in example_dirs:
-            for ext in extensions:
-                example_name = f"{sync_basename}_example{ext}"
-                # Try with subdirectory first, then without
-                paths_to_try = []
-                if example_dir:
-                    if prompt_subdir:
-                        paths_to_try.append(project_root / example_dir / prompt_subdir / example_name)
-                    paths_to_try.append(project_root / example_dir / example_name)
-                else:
-                    if prompt_subdir:
-                        paths_to_try.append(project_root / prompt_subdir / example_name)
-                    paths_to_try.append(project_root / example_name)
+        # Legacy format: example_output_path
+        if "example" not in related:
+            pddrc_example_dir = context_defaults.get("example_output_path")
+            if pddrc_example_dir:
+                pddrc_example_dir = pddrc_example_dir.rstrip("/")
+                example_dirs.append(pddrc_example_dir)
 
-                for example_path in paths_to_try:
-                    if example_path.exists():
-                        related["example"] = str(example_path.relative_to(project_root))
+            example_dirs.extend(["examples", ""])  # Empty string for project root
+
+            for example_dir in example_dirs:
+                for ext in extensions:
+                    example_name = f"{sync_basename}_example{ext}"
+                    # Try with subdirectory first, then without
+                    paths_to_try = []
+                    if example_dir:
+                        if prompt_subdir:
+                            paths_to_try.append(project_root / example_dir / prompt_subdir / example_name)
+                        paths_to_try.append(project_root / example_dir / example_name)
+                    else:
+                        if prompt_subdir:
+                            paths_to_try.append(project_root / prompt_subdir / example_name)
+                        paths_to_try.append(project_root / example_name)
+
+                    for example_path in paths_to_try:
+                        if example_path.exists():
+                            related["example"] = str(example_path.relative_to(project_root))
+                            break
+                    if "example" in related:
                         break
                 if "example" in related:
                     break
-            if "example" in related:
-                break
 
         results.append(related)
 
@@ -683,46 +780,82 @@ async def list_changed_prompt_files(
         else:
             merge_base = merge_base_result.stdout.strip()
 
-        # Get list of changed files (including added, modified)
+        # Get list of changed files (including added, modified, renamed,
+        # copied, typechange). Use ``--name-status -z`` so paths with
+        # spaces, embedded quotes, backslashes, or non-ASCII bytes
+        # round-trip verbatim. ``--name-only`` would emit C-style quoted
+        # paths (e.g. ``"prompts/quote\"name.prompt"``) for shell-special
+        # characters, and an ``.endswith('.prompt')`` filter would then
+        # miss the trailing quote (issue #1080).
         diff_result = subprocess.run(
-            ["git", "diff", "--name-only", "--diff-filter=ACMR", merge_base, "HEAD"],
+            ["git", "diff", "--name-status", "-z",
+             "--diff-filter=ACMR", merge_base, "HEAD"],
             cwd=project_root,
             capture_output=True,
-            text=True,
         )
 
         if diff_result.returncode != 0:
+            stderr_text = diff_result.stderr.decode("utf-8", errors="replace")
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to get git diff: {diff_result.stderr}"
+                detail=f"Failed to get git diff: {stderr_text}"
             )
 
-        # Also get staged and unstaged changes (for uncommitted work)
+        # Also get staged and unstaged changes (for uncommitted work).
+        # Use ``--porcelain=v1 -z`` so renamed/space-containing prompt
+        # paths round-trip verbatim (see issue #1080). The structured
+        # parser exposes the new-side path with no quoting artifacts.
+        from pdd.git_porcelain import parse_porcelain_z
         status_result = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain=v1", "-z"],
             cwd=project_root,
             capture_output=True,
-            text=True,
         )
 
         changed_files = set()
 
-        # Parse committed changes
-        for line in diff_result.stdout.strip().split("\n"):
-            if line and line.endswith(".prompt"):
-                changed_files.add(line)
+        # Parse committed changes from ``git diff --name-status -z``.
+        # Record layout per file (NUL-separated, no C-quoting):
+        #   ACMT records: ``<status>\0<path>``
+        #   R/C records:  ``<status><similarity>\0<old_path>\0<new_path>``
+        # We only ever report the NEW path:
+        #   - A/M/T/C: the path on the current side is the only/new path.
+        #   - R: the new path is the rename destination; the old path
+        #     is no longer present in HEAD and is intentionally omitted
+        #     (the endpoint reports the current set of prompt files
+        #     touched by the diff).
+        #   - D is excluded by ``--diff-filter`` because a deleted file
+        #     cannot be a current prompt source.
+        diff_records = [r for r in diff_result.stdout.split(b"\x00") if r]
+        i = 0
+        while i < len(diff_records):
+            raw_status = diff_records[i]
+            if not raw_status:
+                i += 1
+                continue
+            status_char = chr(raw_status[0]) if raw_status else ""
+            if status_char in ("R", "C") and i + 2 < len(diff_records):
+                # R/C consume two path records: old then new.
+                new_path = os.fsdecode(diff_records[i + 2])
+                if new_path.endswith(".prompt"):
+                    changed_files.add(new_path)
+                i += 3
+            elif status_char in ("A", "M", "T") and i + 1 < len(diff_records):
+                path = os.fsdecode(diff_records[i + 1])
+                if path.endswith(".prompt"):
+                    changed_files.add(path)
+                i += 2
+            else:
+                # Unknown shape — advance one record so we don't loop.
+                i += 1
 
         # Parse uncommitted changes (staged and unstaged)
         if status_result.returncode == 0:
-            for line in status_result.stdout.strip().split("\n"):
-                if line and len(line) > 3:
-                    # Format: XY filename (X=staged, Y=unstaged)
-                    file_path = line[3:].strip()
-                    # Handle renamed files (format: "old -> new")
-                    if " -> " in file_path:
-                        file_path = file_path.split(" -> ")[1]
-                    if file_path.endswith(".prompt"):
-                        changed_files.add(file_path)
+            for entry in parse_porcelain_z(status_result.stdout):
+                # Endpoint reports the current (new) prompt path only.
+                file_path = entry.path
+                if file_path.endswith(".prompt"):
+                    changed_files.add(file_path)
 
         return {"changed_prompts": sorted(changed_files), "base_branch": base_branch}
 

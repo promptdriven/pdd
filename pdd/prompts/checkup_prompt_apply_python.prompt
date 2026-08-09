@@ -1,0 +1,42 @@
+<pdd-reason>Deterministic validator and applicator for approved interactive checkup prompt patches.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "classes": [
+      {"name": "ApplyFindingRecord", "kind": "dataclass"},
+      {"name": "ApplyRunResult", "kind": "dataclass"}
+    ],
+    "functions": [
+      {"name": "apply_approved_patches", "signature": "(patches: Sequence[ApprovedPatch], *, repo_root: Path, original_target: str, dry_run: bool = False, interactive: bool = True, strict: bool = False, choices_by_finding: Mapping[str, int] | None = None) -> ApplyRunResult", "returns": "ApplyRunResult"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>checkup_interactive_session_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_prompt_main_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/checkup_prompt_apply.py`.
+
+% Requirements
+- Validate approved patch kind and target path before any write.
+- Allow prompt source targets including `pdd/prompts/**/*.prompt`, excluding `*_LLM.prompt`.
+- Continue forbidding tests, generated/context paths, implementation files under `pdd/`, absolute paths, and traversal outside the repository root.
+- In `--dry-run`, record accepted/rejected patches and write the apply log, but do not mutate files or create backups.
+- For real applies, create backups under `.pdd/evidence/checkups/backups/<run_id>/`, write atomically, then run a deterministic postflight checkup.
+- Any rejected approved patch must remain inspectable with `status="rejected"`, include a reason, return a non-zero exit code, and must not report `postflight_status="pass"` unless all approved patches were valid and postflight passed.
+
+<contract_rules>
+R1 - Rejected approvals fail honestly
+If any approved patch is rejected, `ApplyRunResult.exit_code` MUST be non-zero and `postflight_status` MUST NOT be `pass`.
+
+R2 - Prompt source allowlist
+`pdd/prompts/**/*.prompt` MAY be repaired, while `pdd/**/*.py`, `tests/**`, generated artifacts, absolute paths, and traversal targets MUST be rejected.
+
+R3 - Dry-run is read-only
+When `dry_run=True`, no prompt bytes or backup files may be written.
+</contract_rules>
+
+% Deliverables
+- Code: `pdd/checkup_prompt_apply.py`

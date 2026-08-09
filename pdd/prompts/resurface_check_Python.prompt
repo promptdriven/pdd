@@ -1,0 +1,80 @@
+This module implements the daily Rising Stars resurface check Cloud Function. It is a Cloud Scheduler-triggered function that scans contribution thresholds to identify high-potential nurtured candidates for resurfacing and detects churned candidates who have gone inactive. It is the automated pipeline for promoting engaged candidates and cleaning up inactive ones.
+
+Requirements
+1. Implement a Cloud Function entry point recruiting_resurface_check(request) triggered by HTTP POST from Cloud Scheduler (daily). Return JSON { scanned: int, resurfaced: int, churned: int, reasons: dict }.
+2. Scan all recruiting/candidates with crmFunnelStage in ("nurture", "contributing"). Evaluate each candidate against four resurface criteria from config thresholds.
+3. Resurface criterion 1 — merged_prs: if ContributionSummary.merged_pr_count >= config threshold (e.g., 3 merged PRs).
+4. Resurface criterion 2 — hackathon_score: if candidate hackathon_score >= config threshold (e.g., top 25% percentile or absolute score).
+5. Resurface criterion 3 — power_user: if ContributionSummary.platform_usage_days >= config threshold (e.g., 30 days).
+6. Resurface criterion 4 — marketplace_contributor: if ContributionSummary.marketplace_examples >= config threshold (e.g., 2 published examples).
+7. Candidates meeting ANY criterion are marked: resurfaced=True with the appropriate ResurfaceReason, CrmFunnelStage updated to "resurfaced", and CRM GitHub Issue label updated from "recruiting-nurture" to "recruiting-resurfaced".
+8. Detect churned candidates: if last_activity_at > 60 days ago (from config) and no contributions in that period, set crmFunnelStage="churned" and update CRM GitHub Issue label to "recruiting-churned".
+9. Verify merged PR counts via GitHub API to prevent gaming: for candidates meeting the merged_prs criterion, cross-check the PR count against the GitHub REST API for the organization.
+10. Update CRM GitHub Issue labels via the GitHub Issues API: remove the old label and add the new label for resurfaced or churned candidates.
+11. Log all resurface and churn transitions at INFO level with candidate uid, reason, and metric values.
+12. Return summary counts: total scanned, resurfaced (with breakdown by reason), and churned.
+
+Dependencies
+
+<candidate_models>
+  <include>examples/candidate_models_example.py</include>
+</candidate_models>
+
+<nurture_models>
+  <include>examples/nurture_models_example.py</include>
+</nurture_models>
+
+<config_loader>
+  <include>examples/config_loader_example.py</include>
+</config_loader>
+
+<contribution_tracking>
+  <include>examples/contribution_tracking_example.py</include>
+</contribution_tracking>
+
+<cloud_scheduler_daily_job_configuration>
+  <web>https://cloud.google.com/scheduler/docs/creating</web>
+</cloud_scheduler_daily_job_configuration>
+
+<firestore_compound_queries_for_contribution_threshold_scanning>
+  <web>https://firebase.google.com/docs/firestore/query-data/queries</web>
+</firestore_compound_queries_for_contribution_threshold_scanning>
+
+<github_api_for_merged_pr_count_verification>
+  <web>https://docs.github.com/en/rest/pulls/pulls#list-pull-requests</web>
+</github_api_for_merged_pr_count_verification>
+
+<cloud_functions_http_entry_point_for_scheduler_triggers>
+  <web>https://cloud.google.com/functions/docs/writing/write-http-functions</web>
+</cloud_functions_http_entry_point_for_scheduler_triggers>
+
+Prompt Dependencies:
+- candidate_models_Python.prompt (CandidateDocument for candidate data)
+- nurture_models_Python.prompt (CrmFunnelStage, ContributionSummary, ResurfaceReason, ResurfaceResult)
+- config_loader_Python.prompt (get_config for resurface thresholds and churn window)
+- contribution_tracking_Python.prompt (reference for contribution data structure)
+
+Instructions
+- Place the implementation in extensions/recruiting/resurface_check.py.
+- Import CandidateDocument from extensions.recruiting.models.
+- Import CrmFunnelStage, ContributionSummary, ResurfaceReason, ResurfaceResult from extensions.recruiting.nurture_models.
+- Import get_config from extensions.recruiting.config_loader.
+- For the Firestore query: use where("crmFunnelStage", "in", ["nurture", "contributing"]) to fetch all candidates in the nurture funnel.
+- For each candidate, evaluate all four criteria. If any criterion is met, create a ResurfaceResult and mark the candidate as resurfaced. Use the first matching reason as the primary ResurfaceReason (or the highest-value criterion if multiple match).
+- For GitHub PR verification: use the GitHub REST API to list merged PRs by the candidate's github_login in the organization's repositories. Compare against the stored merged_pr_count. If the verified count is significantly lower, log a warning and skip resurfacing for that candidate.
+- For CRM label updates: use the GitHub Issues API to add/remove labels on the candidate's CRM issue (by crmIssueNumber). The GitHub token should come from config or environment variables.
+- For churn detection: compute days since last_activity_at (or created_at if last_activity_at is None). If exceeding the config churn_window_days (default 60), mark as churned.
+- Handle GitHub API rate limits: if rate limited, skip PR verification but still process other criteria. Log the rate limit hit.
+- Testing note: Mock Firestore and GitHub API. Test each resurface criterion independently, multi-criteria candidates, churn detection, GitHub PR verification (count match vs mismatch), rate limit handling, and empty candidate list.
+
+Deliverable
+- A single Python file at extensions/recruiting/resurface_check.py with the recruiting_resurface_check Cloud Function entry point and supporting functions for threshold evaluation, GitHub verification, and CRM label updates.
+- All functions must have type hints and docstrings.
+
+Implementation assumptions (explicit)
+- Cloud Functions 2nd gen with Flask request/response pattern for Cloud Scheduler HTTP triggers.
+- The GitHub token has issues:write scope and read access to organization repositories.
+- Resurface thresholds are defined in config.yaml under a "resurface_thresholds" key.
+- The churn window is configurable (default 60 days) in config.yaml.
+- Firestore composite index exists for crmFunnelStage queries.
+- GitHub API rate limits are 5000 requests/hour for authenticated requests; the daily check should stay well within this limit.

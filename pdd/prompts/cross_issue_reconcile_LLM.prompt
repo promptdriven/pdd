@@ -1,0 +1,105 @@
+<pdd-reason>Cross-sub-issue reconciliation: audits shared types, API contracts, and enum values across related sub-issues to prevent inconsistencies.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "reconcile_sub_issues", "signature": "(architecture_json: str, related_issues: str)", "returns": "str ('RECONCILE_RESULT: CONSISTENT' or 'RECONCILE_RESULT: CONFLICTS_FIXED' with FILES_MODIFIED)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+% You are an expert software architect. Your task is to audit the current architecture and prompt files for consistency across related sub-issues.
+
+% Context
+
+You are working on step 9c of the agentic architecture workflow. This step only runs when the current issue has related sub-issues. Your job is to ensure shared types, API contracts, and enum values are consistent across all sub-issues.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Related Issues: {related_issues}
+
+% Current Architecture
+<architecture_json>
+{step7_output}
+</architecture_json>
+
+% Sibling Architectures (from related sub-issues)
+
+{sibling_architectures}
+
+% Your Task
+
+**Step 0: Read sibling context documents from disk (MANDATORY)**
+
+The sibling architecture summary above includes context documents inline. However, you MUST
+also verify by reading the actual files from disk to ensure you have the latest versions:
+
+```bash
+# Find all sibling context directories
+find . -path "*/prompts/_context/data_dictionary.yaml" -not -path "./{target_dir}/*" 2>/dev/null
+find . -path "*/prompts/_context/api_contracts.yaml" -not -path "./{target_dir}/*" 2>/dev/null
+```
+
+Read each file found. These are the canonical data model definitions from sibling sub-issues.
+
+1. **Build a unified type registry across all sub-issues:**
+   - Extract all data types, interfaces, and models from the current architecture and sibling architectures
+   - Extract all entities from BOTH your `prompts/_context/data_dictionary.yaml` AND sibling data dictionaries
+   - Group types by canonical name (e.g., `User`, `Order`, `Event`)
+   - Note which sub-issue defines each type
+
+2. **For shared types, compare field lists field-by-field:**
+   - If two sub-issues define the same type (e.g., both have a `User` model), verify:
+     - Field names match exactly
+     - Field types are compatible
+     - Required/optional status is consistent
+   - Use the sibling's data_dictionary.yaml as the authoritative source
+   - Flag any discrepancy
+
+3. **For cross-language pairs (Python dataclass ↔ TypeScript interface):**
+   - Verify field-for-field mapping between language implementations
+   - Check that snake_case ↔ camelCase conversions are documented
+   - Verify enum string values are identical
+
+4. **For API contracts:**
+   - Read sibling `api_contracts.yaml` files and compare with yours
+   - Verify that API endpoints consumed by one sub-issue match the API endpoints produced by another
+   - Check request/response schemas match between producer and consumer
+
+5. **Fix any conflicts found:**
+   - Update YOUR `prompts/_context/data_dictionary.yaml` to match sibling definitions
+   - Update YOUR `prompts/_context/api_contracts.yaml` to match sibling definitions
+   - Update prompt files to use consistent type definitions
+   - Update architecture.json interface entries if needed
+   - Document the resolution in the output
+
+% Output
+
+If all types and contracts are consistent across sub-issues, output:
+```
+RECONCILE_RESULT: CONSISTENT
+```
+
+If conflicts were found and fixed, output:
+```
+RECONCILE_RESULT: CONFLICTS_FIXED
+FILES_MODIFIED: [list of modified files]
+```
+
+Followed by details of each conflict and its resolution.
+
+Post your findings as a GitHub comment:
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+% Important
+
+- Only run when related_issues is non-empty
+- Do not modify types that are defined in sibling architectures — flag conflicts for manual resolution
+- Prefer the definition from the lower-numbered issue as the canonical source when resolving conflicts
+- Always output either RECONCILE_RESULT: CONSISTENT or RECONCILE_RESULT: CONFLICTS_FIXED

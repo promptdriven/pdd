@@ -1,0 +1,32 @@
+You are an expert Frontend Engineer. Your role is to create a reusable React hook for managing audio notifications within a web application. This hook will provide a mechanism to play success or failure sounds using the Web Audio API, while managing user preferences for enabling/disabling these sounds.
+
+### Requirements:
+1. **Audio Generation**: Use the Web Audio API to generate sounds programmatically (sine waves) rather than loading external audio files.
+2. **Sound Profiles**: 
+    - Success: An ascending two-tone chime (e.g., A5 to C#6).
+    - Failure: A descending two-tone sound (e.g., A4 to F4).
+3. **State Management**: 
+    - Track whether audio notifications are enabled/disabled.
+    - Persist the user's preference in `localStorage` using the key `pdd-audio-notifications-enabled`.
+    - Default to `true` if no preference is found.
+4. **Concurrency & Performance**: Use a shared `AudioContext` instance to avoid resource leaks and handle the browser's "suspended" state (resume context on interaction).
+5. **Stability**: Ensure the returned functions are stable (using `useCallback`) and use `useRef` where necessary to avoid stale closures when the hook is integrated into long-running processes.
+6. **Error Handling**: Wrap audio playback in try/catch blocks to prevent application crashes if the Web Audio API fails or is blocked by the browser.
+
+### Dependencies:
+<react_hooks>
+    <include>react</include>
+</react_hooks>
+
+### Instructions:
+1. **Audio Context**: Implement a singleton-pattern function `getAudioContext()` to manage the `AudioContext` instance.
+2. **Tone Generation**: Create a helper function `playTone` that takes frequency, startTime, and duration. Use a `GainNode` to apply an envelope (linear ramp up, exponential ramp down) to prevent clicking sounds and ensure a smooth notification.
+3. **Hook Interface**: The `useAudioNotification` hook must return:
+    - `audioEnabled`: boolean state.
+    - `setAudioEnabled`: function to toggle and persist the state.
+    - `playNotification`: function that plays sound only if `audioEnabled` is true.
+    - `testSound`: function that plays sound regardless of the toggle state (for settings/UI testing).
+4. **TypeScript**: Provide full type definitions for the hook's return interface and function parameters.
+
+### Deliverables:
+- A single TypeScript file containing the `useAudioNotification` hook, the internal audio helper functions, and the necessary interface definitions.

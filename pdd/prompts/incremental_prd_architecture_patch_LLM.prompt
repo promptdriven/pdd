@@ -1,0 +1,84 @@
+% You are a senior software architect performing incremental PRD impact analysis.
+% Produce a minimal structured patch for architecture.json. Do not regenerate the full architecture.
+
+% Goal
+
+Given a PRD diff and the current architecture.json, identify the smallest safe set of architecture changes needed to reflect the PRD change.
+
+% Inputs
+
+PRD source:
+{PRD_SOURCE}
+
+PRD diff:
+<prd_diff>
+{PRD_DIFF}
+</prd_diff>
+
+Current architecture.json:
+<current_architecture>
+{CURRENT_ARCHITECTURE}
+</current_architecture>
+
+Previous validation errors, if any:
+<validation_errors>
+{VALIDATION_ERRORS}
+</validation_errors>
+
+% Required behavior
+
+Act like a senior engineer doing manual impact analysis:
+
+1. Read the PRD diff only. Do not redesign unrelated modules.
+2. Prefer modifying existing modules when the new requirement is clearly part of an existing responsibility.
+3. Add a module only for a new standalone responsibility.
+4. Remove a module only when the PRD diff explicitly removes the feature. Include a clear removal justification.
+5. Change dependencies only when a real runtime/build-time relationship is introduced or removed.
+6. Preserve existing manual architecture decisions. Do not rewrite unrelated reasons, descriptions, priorities, tags, filepaths, or interfaces.
+7. Use exact existing architecture filenames for dependencies. New dependencies must point to either an existing module filename or a module added in this same patch.
+8. If the PRD diff is too broad, ambiguous, or conflicts with existing architecture, set requires_full_regeneration or conflicts instead of guessing.
+9. If validation errors are present, repair the patch specifically to satisfy them. Do not repeat a patch that violates a listed invariant.
+
+% Output contract
+
+Return only data matching this schema:
+
+- requires_full_regeneration: boolean
+- rationale: short string
+- modules_to_add: list of complete new module entries:
+  - filename: string ending in .prompt
+  - reason: string
+  - description: optional string
+  - dependencies: list of .prompt filenames
+  - interface: object
+  - filepath: optional string
+  - tags: list of strings
+  - priority: optional integer
+  - requirements: concrete Requirements bullets for the new prompt
+- modules_to_remove: list of:
+  - filename: existing .prompt filename
+  - justification: why the PRD explicitly removes it
+- modules_to_modify: list of:
+  - filename: existing .prompt filename
+  - changes: object containing only changed fields from this allowlist:
+    reason, description, interface, filepath, tags, priority
+  - justification: why the change is needed
+- dependency_updates: list of:
+  - source: existing .prompt filename
+  - add: list of .prompt filenames
+  - remove: list of .prompt filenames
+  - justification: why the dependency edge changed
+- conflicts: list of:
+  - filename: optional .prompt filename
+  - field: optional field name
+  - reason: why a human must review it
+
+% Hard constraints
+
+- Do not return full architecture.json.
+- Do not include unchanged modules.
+- Do not include dependencies inside modules_to_modify.changes; use dependency_updates.
+- Do not invent source filenames.
+- Do not add speculative modules.
+- Do not remove modules because they look unused; removals require explicit PRD removal language.
+- If no architecture change is needed, return all patch lists empty with requires_full_regeneration=false.

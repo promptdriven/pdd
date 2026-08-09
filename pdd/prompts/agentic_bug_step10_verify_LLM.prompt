@@ -1,0 +1,167 @@
+<pdd-reason>Verifies unit test correctness and classifies whether E2E testing is needed.</pdd-reason>
+
+% You are an expert software engineer investigating a bug report. Your task is to verify that the generated test successfully detects the bug.
+
+% Context
+
+You are working on step 10 of 12 in an agentic bug investigation workflow. Previous steps have generated a test to detect the bug.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+<step7_output>
+{step7_output}
+</step7_output>
+
+<step8_output>
+{step8_output}
+</step8_output>
+
+<step9_output>
+{step9_output}
+</step9_output>
+
+<step9_test_verification>
+{step9_test_verification}
+</step9_test_verification>
+
+% Your Task
+
+1. **Run the generated test**
+   - Execute the test against the current codebase
+   - Capture the full test output including any error messages
+   - Verify it fails as expected (not for unrelated reasons)
+
+2. **Validate the failure**
+   - Confirm the test fails for the right reason (the bug)
+   - Check that the assertion message is clear and helpful
+   - Ensure the failure points to the actual bug location
+
+3. **Check for structural/non-behavioral test patterns**
+
+   **BLOCKED:** Any test that uses reflection, introspection, source code scanning, or existence checks to verify that a function, method, parameter, or property *exists* — rather than verifying what *happens* when it's used. This includes (but is not limited to): `inspect.getsource`, `inspect.signature`, source string matching (e.g., `assert "keyword" in source`), `hasattr` as an assertion, reading source files with `Path.read_text()` or `open().read()` and asserting keyword presence, attribute/method existence checks, and parameter counting.
+
+   If ANY test in the generated file uses these patterns, report: **FAIL: Test does not work as expected — uses structural/source code scanning assertions instead of behavioral assertions.** Structural tests can pass when a fix adds dead code (e.g., a signal handler that sets an event nobody checks), so they do not validate that the bug is actually fixed.
+
+   **Self-check:** For each assertion, ask: "Could this test pass if someone added an empty stub, a dead-code variable, or a comment containing the keyword — without implementing any actual behavior?" If yes, the test is structural and must be rewritten.
+
+4. **Cross-validate test assumptions against investigation**
+   - Re-read Steps 4-6 (API Research, Reproduction, Root Cause)
+   - For each mock in the test, verify it models real system behavior as described in those steps
+   - If any mock assumes behavior that contradicts the investigation findings, report: FAIL: Test does not work as expected — mock assumptions contradict investigation findings
+   - This prevents "green tests, broken fix" scenarios where mocks encode incorrect assumptions
+
+5. **Scope completeness verification**
+   Step 6's expansion items (injected by the orchestrator): `{step6_expansion_items}`
+   - If the value is not `none`, verify that the generated tests cover every listed item
+   - If any listed item lacks dedicated test coverage, note: "WARNING: Tests may have incomplete scope — the following expansion items lack coverage: [list items]." This is informational for reviewers, not a workflow-stopping condition.
+
+6. **Classify E2E test necessity**
+   Determine whether an E2E test would add value beyond the unit test created in Step 9.
+   - Answer: "Is there a user-facing behavior or integration path NOT already covered by the unit test?"
+   - Output `E2E_NEEDED: yes` if the bug has user-facing symptoms (CLI output, API response, UI behavior) that the unit test cannot verify because it mocks the integration boundary.
+   - Output `E2E_NEEDED: no` if the unit test already covers the behavioral fix end-to-end, or if the bug is purely internal with no distinct integration path.
+   - Include a one-line justification after the marker (e.g., `E2E_NEEDED: no — unit test covers the full code path from input to output with no mocked boundaries`).
+
+7. **Summarize the investigation**
+   - Recap the bug, root cause, and test created
+   - Provide next steps for fixing the bug
+   - Note any additional observations
+
+% Output
+
+Return your findings between `<step_report>` and `</step_report>` tags. The PDD orchestrator will sanitize, truncate, and post the contents as a GitHub comment using trusted credentials. **Do NOT run `gh issue comment` yourself** — model subprocesses cannot reliably authenticate.
+
+<step_report>
+## Step 10: Verification Complete
+
+### Test Execution
+```
+{{test_output}}
+```
+
+### Verification Status
+**[PASS: Test correctly detects the bug | FAIL: Test does not work as expected]**
+
+### Summary
+
+| Step | Result |
+|------|--------|
+| Duplicate Check | {{step1_status}} |
+| Documentation | {{step2_status}} |
+| Triage | {{step3_status}} |
+| API Research | {{step4_status}} |
+| Reproduction | {{step5_status}} |
+| Root Cause | {{step6_status}} |
+| Prompt Classification | {{step7_status}} |
+| Test Plan | {{step8_status}} |
+| Test Generation | {{step9_status}} |
+| Verification | {{step10_status}} |
+
+### Bug Details
+- **Location:** `{{file_path}}:{{line_number}}`
+- **Root Cause:** {{one_line_summary}}
+- **Test File:** `{{test_file_path}}`
+
+### Next Steps
+1. Fix the bug at the identified location
+2. Run the test to confirm the fix
+3. Run full test suite to check for regressions
+4. Submit PR with fix and test
+
+---
+*Proceeding to {{Step 11: E2E Tests | Step 12: Create Draft PR}} based on E2E classification (emitted after this report).*
+</step_report>
+
+After the closing `</step_report>` tag, emit the E2E classification marker on its own line (parsed from raw output — MUST live OUTSIDE the report block). The marker literal `E2E_NEEDED:` must never appear inside the report body because the orchestrator parses raw `step_output` for it.
+
+Choose one of:
+```
+E2E_NEEDED: yes — [one-line justification why a user-facing E2E test is needed]
+E2E_NEEDED: no  — [one-line justification why the unit test covers it end-to-end]
+```
+
+% Important — MANDATORY
+
+- Provide a complete summary of the investigation so far inside the `<step_report>` block.
+- The test must actually fail when run (verify this).
+- If the test doesn't fail, go back and fix the test.
+- The report should serve as documentation for anyone fixing the bug.
+- Place your findings inside the `<step_report>` block — the orchestrator will post it to GitHub for you.
+- **MANDATORY E2E CLASSIFICATION (OUTSIDE THE REPORT BLOCK):** After the `</step_report>` tag, your very last output line MUST be exactly one of:
+  - `E2E_NEEDED: yes — [justification]` — if the bug has user-facing symptoms that the unit test cannot verify because it mocks the integration boundary
+  - `E2E_NEEDED: no — [justification]` — if the unit test already covers the behavioral fix end-to-end, or if the bug is purely internal with no distinct integration path
+  The orchestrator parses this marker from raw output to decide whether to run Step 11. If you omit it, Step 11 runs unconditionally (wasting time and cost).

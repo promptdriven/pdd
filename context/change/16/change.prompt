@@ -1,0 +1,7 @@
+% Change this prompt: <fix_error_loop><include>context/change/16/fix_error_loop_python.prompt</include></fix_error_loop>.
+
+% Instead of calling fix_errors_from_units_tests: <fix_errors><include>context/change/16/fix_errors_from_unit_tests_example.py</include></fix_errors>.
+
+% It should be calling fix_code_module_errors: <fix_code_module_errors><include>context/change/16/fix_code_module_errors_example.py</include></fix_code_module_errors>.
+
+% Here is the prommpt for fix_code_module_errors: <fix_code_module_errors_prompt><include>context/change/16/fix_code_module_errors_python.prompt</include></fix_code_module_errors_prompt>.

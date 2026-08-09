@@ -63,7 +63,7 @@ def split(
             split_prompt,
             recursive=False,
             double_curly_brackets=True,
-            exclude_keys=['input_prompt', 'input_code', 'example_code']
+            exclude=['input_prompt', 'input_code', 'example_code']
         )
         
         processed_extract_prompt = preprocess(

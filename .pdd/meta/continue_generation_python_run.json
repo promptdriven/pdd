@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-07-25T09:15:01.422976+00:00",
+  "exit_code": 0,
+  "tests_passed": 7,
+  "tests_failed": 0,
+  "coverage": 88.0,
+  "test_hash": "6d46ec28fe4fa10d635344a83e9b48a05437ec78aa59cfaf2523b533507a4120",
+  "test_files": {
+    "test_continue_generation.py": "6d46ec28fe4fa10d635344a83e9b48a05437ec78aa59cfaf2523b533507a4120"
+  }
+}

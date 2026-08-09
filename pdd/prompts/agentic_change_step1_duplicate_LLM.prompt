@@ -2,13 +2,14 @@
 
 % Context
 
-You are working on step 1 of 12 in an agentic change workflow. Your findings will be posted as a comment on the GitHub issue.
+You are working on step 1 of 13 in an agentic change workflow. Your findings will be posted as a comment on the GitHub issue.
 
 % Inputs
 
 - GitHub Issue URL: {issue_url}
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
+- Artifacts Directory: {artifacts_dir}
 
 % Issue Content
 <issue_content>
@@ -28,26 +29,54 @@ You are working on step 1 of 12 in an agentic change workflow. Your findings wil
    - Consider: same feature request? same affected modules? same desired outcome?
    - A true duplicate requests the same change, not just uses similar keywords
 
-3. **Handle duplicates**
-   If duplicates are found:
+3. **Verify original issue resolution status**
+   For each potential duplicate, check if the original issue was actually resolved:
+   - Use `gh issue view <number> --repo {repo_owner}/{repo_name}` to check the original issue's state
+   - Check the workflow state comment for step outcomes (look for "FAILED" in step_outputs)
+   - An issue is considered **unresolved** if: it is still open, all workflow steps failed, or no fix was merged
+   - An issue is considered **resolved** if: it is closed with a merged fix, or workflow steps completed successfully
+
+4. **Handle duplicates**
+   If duplicates are found AND the original issue was **resolved**:
    - Merge any unique information from this issue into the original
    - Add a comment to the original issue noting the additional context
    - Close this issue with a comment linking to the original
    - Report which issue is the canonical one
 
+   If duplicates are found BUT the original issue is **unresolved**:
+   - Note the relationship to the original issue but DO NOT close this issue
+   - Report that the original was not resolved and this issue should proceed
+   - Treat as a new change request for investigation purposes
+
    If no duplicates:
    - Report that this appears to be a new change request
    - Proceed with investigation
 
+% Structured Output Artifacts (REQUIRED — source of truth)
+
+Before finishing, write TWO files into the artifacts directory `{artifacts_dir}` (already created for you). The orchestrator reads the JSON `status` to decide whether to stop or proceed; the prose `**Status:**` line below is now a FALLBACK only.
+
+1. `{artifacts_dir}/01_duplicate.json` — the machine-readable decision. Emit valid JSON:
+   ```json
+   {{
+     "status": "proceed",
+     "duplicates": ["#123"],
+     "rationale": "no resolved duplicate found"
+   }}
+   ```
+   - `status`: `"duplicate"` ONLY when this issue duplicates an already-RESOLVED issue (the hard stop that closes this issue). Use `"proceed"` otherwise — including when duplicates exist but the original is UNRESOLVED.
+   - `duplicates`: related issue refs like `"#123"` (empty list if none).
+   - `rationale`: one-line reason.
+
+2. `{artifacts_dir}/01_duplicate.md` — the exact Markdown comment body (the same content you place inside the `<step_report>` block below), posted verbatim as the `## Step 1/13` issue comment.
+
+Still emit the `<step_report>` block (including the `Duplicate of #XXX` status text when applicable) UNCHANGED below — it is the orchestrator's fallback when these files are missing.
+
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+After completing your analysis, return your findings in your final response. Do not post GitHub issue comments yourself; the orchestrator extracts the `<step_report>` block and posts it with trusted credentials when GitHub state is enabled.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
+Your final response must include exactly one `<step_report>...</step_report>` block. The report should follow this format:
 
 ```markdown
 ## Step 1: Duplicate Check
@@ -68,6 +97,6 @@ Your comment should follow this format:
 
 % Important
 
-- Always post your findings as a GitHub comment before completing
+- Always include exactly one `<step_report>...</step_report>` block before completing
 - If this is a duplicate, still post a comment explaining the closure
 - Be thorough but efficient in your search

@@ -1,0 +1,11 @@
+{"schema":"pdd.checkup_interactive_session_pi_sample.v1","backend":"pi_agent_session","decision":"hybrid","artifact_note":"Sanitized Pi spike reproduction record from createAgentSession with explicit tool allowlist. Menus, choice validation, and apply gating remain Python-owned; Pi exercised QA and propose_repair_options only.","created_date":"2026-06-09","reproduction":{"command":"node spike/checkup_interactive_session_pi_prototype.mjs","node_version":"v22.19.0","package":"@earendil-works/pi-coding-agent@0.78.1","session_manager":"inMemory","turns_requested":3}}
+{"event":"session_created","tools":["read","grep","propose_repair_options"],"custom_tools":["propose_repair_options"],"disabled_defaults":["write","edit","bash"],"write_edit_bash_enabled":false}
+{"event":"seed_report","schema":"pdd.prompt_source_set_report.v1","finding_id":"F-001","check":"prompt-source-set","status":"failed"}
+{"event":"turn","turn":1,"role":"user","content":"why?"}
+{"event":"turn","turn":1,"role":"assistant","content":"Because #1423 needs an interactive repair session that can answer follow-up questions without losing finding and proposal context. A session backend must persist finding IDs, proposals, and user choices across conversational turns."}
+{"event":"turn","turn":2,"role":"user","content":"what check failed?"}
+{"event":"turn","turn":2,"role":"assistant","content":"Finding F-001 failed the prompt-source-set check because no backend decision had been recorded for session persistence, tool control, UX control, and packaging."}
+{"event":"turn","turn":3,"role":"user","content":"tradeoff?"}
+{"event":"turn","turn":3,"role":"assistant","content":"Pi provides stronger session and QA primitives with built-in JSONL persistence and tool allowlisting, but adds Node >=22.19.0. Python TTY is simpler to package; Hybrid captures Pi when available with Python TTY fallback."}
+{"event":"tool_call","name":"propose_repair_options","finding_id":"F-001","proposal_ids":["P-001","P-002","P-003","P-004"],"recommended_proposal_id":"P-003"}
+{"event":"session_state_retained","finding_ids":["F-001"],"proposal_ids":["P-001","P-002","P-003","P-004"],"turn_count":3,"menus_rendered_by":"python","apply_gating_owner":"python"}

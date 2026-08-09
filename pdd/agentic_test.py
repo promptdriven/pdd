@@ -90,7 +90,7 @@ def _fetch_issue_data(owner: str, repo: str, number: int) -> Tuple[Optional[Dict
         comments_text = ""
         if comments_url:
             # The comments_url is a full URL. gh api accepts full URLs.
-            cmd_comments = ["gh", "api", comments_url]
+            cmd_comments = ["gh", "api", comments_url, "--paginate"]
             # We don't check=True here because comment fetching failure shouldn't block the whole process
             res_comments = subprocess.run(cmd_comments, capture_output=True, text=True, check=False)
             if res_comments.returncode == 0:
@@ -169,7 +169,8 @@ def run_agentic_test(
     verbose: bool = False,
     quiet: bool = False,
     timeout_adder: float = 0.0,
-    use_github_state: bool = True
+    use_github_state: bool = True,
+    clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Main entry point for agentic test generation.
@@ -180,6 +181,7 @@ def run_agentic_test(
         quiet: Suppress non-error output
         timeout_adder: Additional seconds to add to step timeouts
         use_github_state: Whether to persist state to GitHub comments
+        clean_restart: Discard saved workflow state before starting
         
     Returns:
         (success, message, total_cost, model_used, changed_files)
@@ -239,11 +241,13 @@ def run_agentic_test(
             issue_number=issue_number,
             issue_author=issue_author,
             issue_title=issue_title,
+            issue_updated_at=issue_data.get("updated_at", "") or "",
             cwd=repo_path,
             verbose=verbose,
             quiet=quiet,
             timeout_adder=timeout_adder,
-            use_github_state=use_github_state
+            use_github_state=use_github_state,
+            clean_restart=clean_restart,
         )
     except Exception as e:
         import traceback

@@ -1,0 +1,185 @@
+<include>context/python_preamble.prompt</include>
+<pdd-reason>Owns the normalized pdd.prompt_source_set_report.v1 report and the deterministic per-engine clarification heuristics that route findings to interactive vs. automated repair.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "constants": [
+      {"name": "REPORT_SCHEMA", "value": "pdd.prompt_source_set_report.v1"}
+    ],
+    "classes": [
+      {"name": "SourceSetFinding", "kind": "dataclass"},
+      {"name": "PromptSourceSetReport", "kind": "dataclass"}
+    ],
+    "functions": [
+      {"name": "build_prompt_source_set_report", "signature": "(prompt_path: Path, *, target: str, project_root: Optional[Path] = None, strict: bool = False, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> PromptSourceSetReport", "returns": "PromptSourceSetReport"},
+      {"name": "run_checkup_prompt", "signature": "(target: str, *, explain: bool = False, as_json: bool = False, quiet: bool = False, strict: bool = False, project_root: Optional[Path] = None) -> tuple[bool, str, float, str, int]", "returns": "tuple[bool, str, float, str, int]"},
+      {"name": "run_checkup_prompt_paths", "signature": "(prompt_paths: Sequence[Path], *, target: str = '', project_root: Optional[Path] = None, strict: bool = False) -> tuple[list[PromptSourceSetReport], int]", "returns": "tuple[list[PromptSourceSetReport], int]"},
+      {"name": "render_prompt_source_set_report", "signature": "(report: PromptSourceSetReport, *, quiet: bool = False) -> None", "returns": "None"},
+      {"name": "render_automatic_gate_summary", "signature": "(reports: Sequence[PromptSourceSetReport], *, mode: str, quiet: bool = False) -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>prompt_lint_python.prompt</pdd-dependency>
+<pdd-dependency>contract_check_python.prompt</pdd-dependency>
+<pdd-dependency>coverage_contracts_python.prompt</pdd-dependency>
+<pdd-dependency>gate_python.prompt</pdd-dependency>
+<pdd-dependency>construct_paths_python.prompt</pdd-dependency>
+<pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
+<pdd-dependency>evidence_store_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/checkup_prompt_main.py`.
+
+% Role & Scope
+This module is the single owner of the normalized `pdd.prompt_source_set_report.v1`
+report consumed by `pdd checkup` prompt targets and by downstream interactive
+(#1423) and non-interactive (#1422) prompt repair. It orchestrates the existing
+deterministic engines (lint, contract, coverage, gate, snapshot, drift), aggregates
+their results into one `PromptSourceSetReport` of `SourceSetFinding` objects, and
+owns the `as_dict()` serialization point. It reuses the engine modules and MUST NOT
+re-implement lint / contract / coverage / gate logic, call an LLM, or mutate source
+files.
+
+% Vocabulary
+- `requires_clarification` finding: a finding a human must resolve before automated
+  repair, detected by a deterministic, code/status-driven heuristic — never by LLM
+  classification.
+- `clarification_reason`: a compact, machine-parseable string holding only metadata
+  (term, rule ID, status, path, line) that explains why clarification is required.
+
+% Requirements
+1. Expose the public API: `REPORT_SCHEMA = "pdd.prompt_source_set_report.v1"`,
+   the `SourceSetFinding` and `PromptSourceSetReport` dataclasses, and the functions
+   `build_prompt_source_set_report`, `run_checkup_prompt`, `run_checkup_prompt_paths`,
+   `render_prompt_source_set_report`, and `render_automatic_gate_summary`.
+2. `build_prompt_source_set_report` runs each engine for one prompt and collects
+   `SourceSetFinding` objects plus a per-engine `checks[]` status summary:
+   - lint via `scan_prompt`; contract via `check_prompt`; coverage via `build_coverage`;
+     gate via `run_gate_policy` only when an evidence manifest exists for the dev unit;
+     snapshot via `check_snapshot_policy`; an informational drift readiness note when a
+     manifest is present.
+   - Resolve `stories_dir` (honoring `PDD_USER_STORIES_DIR` via `_resolve_stories_dir`)
+     and `tests_dir` against the resolved `project_root` so the report is correct when
+     `pdd checkup` is invoked from outside the project.
+3. `SourceSetFinding` carries: `finding_id`, `source_check`, `severity`, `file`,
+   `line`, `message`, `evidence`, `recommended_action`, `fix_command`, `code`,
+   `rule_id`, `requires_clarification`, `clarification_reason`, and optional
+   `confidence`. `as_dict()` emits keys `id` (from `finding_id`), `source_check`,
+   `severity`, `file` (as `str`), `line`, `message`, `evidence`, `recommended_action`,
+   `fix_command`, `code`, `rule_id`, `requires_clarification`, and
+   `clarification_reason`; `confidence` is included only when not `None`.
+
+% Contract rules
+R1 — `requires_clarification` default & type
+For every finding emitted by `as_dict()`, `requires_clarification` MUST default to
+`False` and MUST serialize as a real JSON boolean.
+This rule is violated if the key is missing or serialized as `"true"`/`0`/`1`.
+
+R2 — `clarification_reason` always present
+For every finding, `clarification_reason` is a `str` defaulting to `""` and MUST
+always be serialized as a string key in `as_dict()` (empty `""` when no clarification
+is required), matching the module's always-emit-string convention.
+This rule is violated if the key is absent or non-string for any finding.
+
+R3 — reason non-empty when flagged
+For every finding where `requires_clarification` is `True`, `clarification_reason`
+MUST be non-empty; when no explicit reason was supplied, the dataclass MUST derive a
+compact code-based reason in `__post_init__`.
+This rule is violated if a flagged finding serializes an empty `clarification_reason`.
+
+R4 — lint vague-term heuristic
+For every lint finding whose `code` contains `VAGUE`, the module MUST set
+`requires_clarification=True`; when `term` metadata is available the reason MUST name
+the term and only compact metadata.
+This rule is violated if a `VAGUE` lint finding is left unflagged.
+
+R5 — contract `DUPLICATE_ID` heuristic
+For every contract finding with code `DUPLICATE_ID` (rule-ID collision), the module
+MUST set `requires_clarification=True` for all colliding findings, with a reason
+naming the `rule_id` when available.
+This rule is violated if any `DUPLICATE_ID` finding is left unflagged.
+
+R6 — contract vague-term heuristic
+For every contract finding whose `code` contains `VAGUE`, the module MUST set
+`requires_clarification=True`, with a term-based reason when `term` metadata exists.
+This rule is violated if a `VAGUE` contract finding is left unflagged.
+
+R7 — coverage story-only multi-target heuristic
+For every coverage rule with status `story-only` (`STATUS_STORY_ONLY`) that matched
+more than one story (`len(rule.stories) > 1`), the module MUST emit a `warn`-level
+finding with `code="story_only_ambiguous"` and `requires_clarification=True`; rules
+with one or zero matched stories MUST remain unflagged.
+This rule is violated if a single-target story-only rule is flagged, or a multi-target
+one is not.
+
+R8 — gate ambiguous-waiver heuristic
+For every gate finding whose waiver/policy decision is ambiguous (e.g. an
+unknown-rule or malformed waiver, code containing `UNKNOWN`, `MALFORMED`, or
+`AMBIGUOUS`), the module MUST set `requires_clarification=True` with a reason naming
+the gate `code`; unambiguous gate failures (missing/expired evidence) MUST remain
+unflagged.
+This rule is violated if an ambiguous waiver/policy gate finding is left unflagged.
+
+R9 — privacy of reasons
+For every finding, `clarification_reason` MUST contain only compact metadata (term,
+rule ID, status, path, line) and MUST NOT embed prompt excerpts or sensitive prose.
+This rule is violated if a reason contains raw prompt body text.
+
+R10 — deterministic, no LLM, no mutation
+The module MUST NOT call an LLM, preprocess or execute prompt directives, or modify
+any source file; every clarification decision MUST be derived from engine codes and
+status values.
+This rule is violated if any heuristic depends on a model call or writes to disk.
+
+R11 — additive compatibility
+The change is additive: all existing report and finding keys and the per-engine
+schemas are unchanged, and consumers that ignore the new fields MUST be unaffected.
+This rule is violated if any pre-existing report key is removed or renamed.
+
+% Report and rendering behavior
+- `PromptSourceSetReport` exposes `error_count`, `warn_count`, `passed`, `status`
+  (`pass`/`warn`/`fail`), `recommended_actions()`, `deterministic_exit_code(*, strict=False)`
+  (0 clean, 1 warnings, 2 errors or strict warnings), and `as_dict(*, strict=False)`
+  emitting `schema`, `status`, `target`, `prompt`, `checks`, `findings`, `actions`,
+  and `deterministic_exit_code`.
+- `run_checkup_prompt` resolves targets with `resolve_prompt_targets`, builds a report
+  per prompt, prints human-readable output unless `as_json`, supports a read-only
+  `--explain` listing, and on `--json` prints a `sort_keys=True` payload with `schema`,
+  `target`, `status`, `reports[]`, and `deterministic_exit_code`. It returns
+  `(passed, message, 0.0, "", exit_code)`.
+- `run_checkup_prompt_paths` builds reports for explicit prompt paths and returns the
+  reports plus the aggregate deterministic exit code.
+
+% Dependencies
+<pdd.prompt_lint>
+    <include select="def:scan_prompt,class:LintResult,class:LintIssue" mode="interface">pdd/prompt_lint.py</include>
+</pdd.prompt_lint>
+<pdd.contract_check>
+    <include select="def:check_prompt,class:ContractResult,class:ContractIssue" mode="interface">pdd/contract_check.py</include>
+</pdd.contract_check>
+<pdd.coverage_contracts>
+    <include select="def:build_coverage,class:CoverageResult,class:RuleCoverage,const:STATUS_STORY_ONLY,const:STATUS_FAILED,const:STATUS_UNCHECKED" mode="interface">pdd/coverage_contracts.py</include>
+</pdd.coverage_contracts>
+<pdd.gate_main>
+    <include select="def:run_gate_policy,class:GateResult,class:GateFailure" mode="interface">pdd/gate_main.py</include>
+</pdd.gate_main>
+<pdd.source_set_model>
+    <include select="def:resolve_prompt_targets" mode="interface">pdd/source_set_model.py</include>
+</pdd.source_set_model>
+<pdd.context_snapshot_policy>
+    <include select="def:check_snapshot_policy" mode="interface">pdd/context_snapshot_policy.py</include>
+</pdd.context_snapshot_policy>
+<pdd.construct_paths>
+    <include select="def:_strip_language_suffix" mode="interface">pdd/construct_paths.py</include>
+</pdd.construct_paths>
+<pdd.user_story_tests>
+    <include select="def:_resolve_stories_dir" mode="interface">pdd/user_story_tests.py</include>
+</pdd.user_story_tests>
+<pdd.evidence_store>
+    <include select="def:devunits_dir,def:resolve_prompt_path" mode="interface">pdd/evidence_store.py</include>
+</pdd.evidence_store>
+
+% Deliverables
+- Code: `pdd/checkup_prompt_main.py`

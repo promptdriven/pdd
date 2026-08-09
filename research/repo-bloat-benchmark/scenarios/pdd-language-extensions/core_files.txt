@@ -1,0 +1,6 @@
+# Core membership for scenario pdd-language-extensions (design §4.1.1 step 3).
+src/pdd/__init__.py          # slicing stub — upstream __init__ re-exports the CLI surface and is outside the closure
+src/pdd/language_extensions.py       # target (seeded); sliced from upstream pdd/language_extensions.py
+src/pdd/data/language_format.csv     # verbatim upstream package data — part of the dependency closure
+tests/visible/test_language_extensions.py  # subset of upstream tests (duplicate-row cases withheld → hidden)
+pytest.ini                  # local pytest config — isolates verification from the surrounding repo (§4.1.2)

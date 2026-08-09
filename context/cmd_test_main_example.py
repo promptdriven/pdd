@@ -68,7 +68,9 @@ def subtract(a, b):
 
     # 5. Call the function
     # This will generate the test code, save it to output_test_file, and return details
-    unit_test_code, total_cost, model_name = cmd_test_main(
+    # Returns 4-tuple: (generated_code, cost, model_name, agentic_success)
+    # For Python, agentic_success is None; for non-Python languages it's True/False
+    unit_test_code, total_cost, model_name, agentic_success = cmd_test_main(
         ctx=ctx,
         prompt_file=str(prompt_file),
         code_file=str(code_file),
@@ -86,6 +88,7 @@ def subtract(a, b):
     console.print("\n[bold green]Execution Complete![/bold green]")
     console.print(f"Model Used: {model_name}")
     console.print(f"Estimated Cost: ${total_cost:.6f}")
+    console.print(f"Agentic Success: {agentic_success}  (None for Python, True/False for non-Python)")
     console.print(f"Test file saved to: {output_test_file}")
     
     console.print("\n[bold]Generated Test Code Preview (first 5 lines):[/bold]")

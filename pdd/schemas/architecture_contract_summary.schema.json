@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptdriven.dev/schemas/architecture_contract_summary.schema.json",
+  "title": "PDD Architecture contract_summary",
+  "description": "Per-module contract and evidence summary written by architecture sync.",
+  "type": "object",
+  "required": [
+    "rules",
+    "critical",
+    "stories",
+    "capabilities",
+    "coverage_status",
+    "evidence_status",
+    "waived",
+    "unchecked"
+  ],
+  "properties": {
+    "rules": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Contract rule IDs declared in the prompt."
+    },
+    "critical": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Rule IDs whose title line contains the CRITICAL marker."
+    },
+    "stories": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "User story paths (project-relative) linked to this prompt."
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "coverage_status": {
+      "enum": ["none", "partial", "story-only", "full", "error"]
+    },
+    "evidence_status": {
+      "enum": ["missing", "fresh", "stale", "error"]
+    },
+    "waived": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Waiver IDs applying to this module."
+    },
+    "unchecked": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Rule IDs with no story or test evidence."
+    },
+    "rules_detail": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["rule_id", "status", "stories", "tests"],
+        "properties": {
+          "rule_id": { "type": "string" },
+          "status": { "type": "string" },
+          "stories": { "type": "array", "items": { "type": "string" } },
+          "tests": { "type": "array", "items": { "type": "string" } },
+          "waiver": { "type": ["string", "null"] },
+          "failures": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "error": {
+      "type": "string",
+      "description": "Present when summary extraction failed."
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,39 @@
+Create a React functional component named `GraphToolbar` that serves as the primary control interface for a graph-based architecture editor. This component manages the state transitions between viewing and editing modes, provides history controls (undo/redo), and handles persistence actions (save/discard).
+
+### Requirements:
+1.  **Mode Management**:
+    *   Support a toggle between "View" and "Edit" modes.
+    *   In "View" mode, display a "Sync from Prompts" button (if the callback is provided) to synchronize architecture from metadata.
+    *   In "Edit" mode, display actions for "Add Module", "Re-arrange", "Undo", and "Redo".
+2.  **State Indicators**:
+    *   Show a "Unsaved changes" warning with an icon when changes are detected.
+    *   Display loading states (spinners) for "Saving" and "Rearranging" operations.
+    *   Disable buttons (Undo, Redo, Save, Rearrange) based on their respective boolean flags or availability of callbacks.
+3.  **Visual Feedback**:
+    *   Use a dark-themed, semi-transparent background (`bg-surface-800/80`) with a bottom border.
+    *   Wrap all buttons in a `Tooltip` component to provide keyboard shortcut hints and descriptions.
+    *   Use consistent spacing (gap-2) and vertical separators (dividers) between logical groups of actions.
+4.  **Interactions**:
+    *   "Sync from Prompts" and "Re-arrange" should use a purple color scheme.
+    *   "Add Module" should use an emerald color scheme.
+    *   "Save" should use a blue color scheme.
+    *   "Edit" toggle should change color based on active state (accent color when editing).
+
+### Dependencies:
+<tooltip_component>
+  <include>./Tooltip</include>
+</tooltip_component>
+<react_icons>
+  <include>lucide-react or standard SVG paths for: Sync, Edit, Plus, Layout, Undo, Redo, Warning, Save, X</include>
+</react_icons>
+
+### Instructions:
+*   **Props Interface**: Define `GraphToolbarProps` including:
+    *   `editMode`, `hasUnsavedChanges`, `canUndo`, `canRedo`, `isSaving`, `isRearranging` (booleans).
+    *   Callbacks: `onToggleEditMode`, `onAddModule`, `onSave`, `onDiscard`, `onUndo`, `onRedo`, `onSyncFromPrompts`, `onRearrange`.
+*   **Styling**: Use Tailwind CSS for layout and styling. Ensure the toolbar is responsive and items are vertically centered.
+*   **Conditional Rendering**: Carefully gate the visibility of the "Sync" button to view-mode only, and the "Add/Rearrange/History" buttons to edit-mode only. The "Save/Discard" actions should only appear if `hasUnsavedChanges` is true.
+*   **Accessibility**: Ensure buttons have appropriate `disabled` attributes and tooltips for screen readers.
+
+### Deliverables:
+*   A single file `GraphToolbar.tsx` containing the TypeScript interface and the functional component as the default export.

@@ -1,0 +1,19 @@
+{
+  "pdd_version": "0.0.228",
+  "timestamp": "2026-05-06T03:28:21.485952+00:00",
+  "command": "regenerate-public",
+  "prompt_hash": "947f0f0d054800b620cc2174bf96a8658fa4687190e9e4e50f23e39d1f91c1d0",
+  "code_hash": "3bff0fb82111513ed5aa32c33bd80578c7178e871f818be1b01635b7a2b185b1",
+  "example_hash": null,
+  "test_hash": "bc1f4f81af211623bcb2539cc4761f7e5ccb6926aebf86cc6aefa3b152557400",
+  "test_files": {
+    "test_fix_code_loop.py": "bc1f4f81af211623bcb2539cc4761f7e5ccb6926aebf86cc6aefa3b152557400"
+  },
+  "include_deps": {
+    "context/agentic_crash_example.py": "4a79b152db522063ccf099eca0419b419a656f168839d197f85781ae4fe1b5f6",
+    "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
+    "context/fix_code_module_errors_example.py": "f35244d6e920711044fee92ade984f3e820a0fbfe766fd3d49718cbcfe793e60",
+    "context/get_language_example.py": "8b09af25b96fa49e2dcf5ff307bbeb0bc83e84b64618971d393397772a2fafab",
+    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
+  }
+}

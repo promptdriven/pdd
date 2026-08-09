@@ -1,0 +1,427 @@
+<pdd-reason>Provides unified LLM invocation with provider retries, context checks, and dry-run cost estimates.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "llm_invoke", "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud, grounding_overrides=None, source_prompt=None, estimate_only=None, shots=1, verifier=None, task_class=None)", "returns": "Dict[str, Any]"},
+      {"name": "model_override_scope", "signature": "(model: Optional[str])", "returns": "Iterator[None]"},
+      {"name": "setup_file_logging", "signature": "(log_file_path=None)", "returns": "None"},
+      {"name": "set_verbose_logging", "signature": "(verbose=False)", "returns": "None"},
+      {"name": "set_quiet_logging", "signature": "()", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+<pdd-dependency>server/token_counter_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write a python function, "llm_invoke", that will run a prompt with a given input using the LiteLLM library. The function will also handle fetching and saving missing API keys interactively. The entire code needed for this will be in a single file called llm_invoke.py.
+
+<include>context/python_preamble.prompt</include>
+
+% Dependencies:
+    - `python-dotenv` for managing environment variables from a `.env` file.
+    - `litellm` for LLM provider abstraction.
+    - `pandas` for reading the model CSV.
+    - `pydantic` for structured output validation.
+
+% Internal module examples:
+<path_resolution_example><include>context/path_resolution_example.py</include></path_resolution_example>
+<utils.anthropic_thinking>
+    <include>context/anthropic_thinking_test.py</include>
+</utils.anthropic_thinking>
+<utils.auth_service>
+    <include select="def:clear_jwt_cache,class:AuthService">context/auth_service_example.py</include>
+</utils.auth_service>
+<pdd.core.path_resolver>
+    <include>pdd/core/path_resolver.py</include>
+</pdd.core.path_resolver>
+<pdd.server.token_counter>
+    <include select="def:count_tokens_for_messages,def:get_context_limit,class:CompletionCostEstimate,def:estimate_completion_cost">pdd/server/token_counter.py</include>
+</pdd.server.token_counter>
+<pdd.core.provider_manager>
+    <include>pdd/core/provider_manager.py</include>
+</pdd.core.provider_manager>
+<pdd.core.cloud>
+    <include select="def:get_cloud_request_timeout,class:CloudConfig">pdd/core/cloud.py</include>
+</pdd.core.cloud>
+
+% Startup Behavior:
+    - Load environment variables from a `.env` file located at the project root.
+    - Project root detection: use PathResolver.resolve_project_root (profile "pdd_path_then_marker_then_cwd").
+      This must ignore PDD_PATH if it points inside the installed package path, then
+      search upward from CWD for markers (.git, pyproject.toml, data/, .env), and
+      fall back to CWD if none found.
+    - Resolve `llm_model.csv` in priority order: (a) `~/.pdd/llm_model.csv`; (b) `<PROJECT_ROOT>/.pdd/llm_model.csv` if `$PDD_PATH` points to a real project; (c) `<cwd>/.pdd/llm_model.csv`; (d) packaged `pdd/data/llm_model.csv`.
+
+% Logging Configuration:
+    - Use Python's standard logging module with a hierarchical logger named "pdd.llm_invoke".
+    - Configure a separate logger for LiteLLM named "litellm".
+    - Suppress LiteLLM debug noise at module init: set `litellm.set_verbose = False` and `litellm.suppress_debug_info = True` to prevent "Give Feedback / Get Help" messages.
+    - Environment variables: PDD_LOG_LEVEL (default: "INFO"), LITELLM_LOG_LEVEL (default: "WARNING" in production), PDD_ENVIRONMENT ("production" reduces to WARNING), PDD_VERBOSE_LOGGING=1 enables DEBUG.
+    - Hosted write-capable commands may set PDD_COMMAND_MAX_COST_USD together
+      with PDD_COMMAND_BUDGET_ID. When present, parse the finite USD ceiling,
+      require known positive model rates, reserve input plus max output cost
+      before dispatch, set the provider's max_tokens/max_output_tokens field,
+      disable provider retries/fallback fan-out, reject batch requests (a batch
+      cap is per item), and fail closed rather than redispatching after None,
+      malformed-JSON, invalid-Python, or provider-error outcomes. A provider
+      error includes same-model recovery paths such as Claude
+      temperature/thinking correction and re-prompting a newly acquired API
+      key: output-token slack does not authorize a second dispatch. Fail closed
+      when no token can be funded. PDD_COMMAND_MAX_OUTPUT_TOKENS and
+      PDD_COMMAND_MAX_INPUT_TOKENS are optional tighter bounds. Nested
+      llm_invoke calls share the process reservation; a fresh budget id is
+      required for a new bounded subprocess. These controls are absent for
+      normal interactive calls and must never be inferred from ledger totals.
+    - Provide `setup_file_logging()` for rotating file handlers (10MB, 5 backups) and `set_verbose_logging()` to toggle DEBUG level (also re-enables `litellm.set_verbose` and disables `suppress_debug_info` when verbose).
+    - Provide `set_quiet_logging()` to raise all loggers to ERROR level. Apply automatically at import time if `PDD_QUIET` env var is set.
+    - Set `litellm.drop_params` based on `LITELLM_DROP_PARAMS` env var (default: true) to ignore unsupported provider parameters.
+    - When verbose=True, always log token count and context window limit for each model attempt.
+      When token usage exceeds 90% of the context limit, log a capacity warning regardless
+      of verbose setting.
+
+% Function Signature:
+    llm_invoke(
+        prompt: Optional[str] = None,
+        input_json: Optional[Union[Dict, List[Dict]]] = None,
+        strength: float = 0.5,
+        temperature: float = 0.1,
+        verbose: bool = False,
+        output_pydantic: Optional[Type[BaseModel]] = None,
+        output_schema: Optional[Dict] = None,
+        time: float = 0.25,
+        use_batch_mode: bool = False,
+        messages: Optional[Union[List[Dict], List[List[Dict]]]] = None,
+        language: Optional[str] = None,
+        use_cloud: Optional[bool] = None,
+        grounding_overrides: Optional[Dict[str, List[str]]] = None,
+        source_prompt: Optional[str] = None,
+        estimate_only: Optional[bool] = None,
+        shots: int = 1,
+        verifier: Optional[Callable[[str], bool]] = None,
+        task_class: Optional[str] = None,
+    ) -> Dict[str, Any]
+
+% Inputs:
+    - 'prompt': String prompt template with {variable} placeholders.
+    - 'input_json': Dict or list of dicts for template variables. List triggers batch mode.
+    - 'strength': 0=cheapest model, 0.5=base model, 1=highest DeepSWE-first rank score.
+    - 'temperature': LLM temperature.
+    - 'verbose': Enable detailed logging.
+    - 'output_pydantic': Pydantic model class for structured output.
+    - 'output_schema': Raw JSON schema dict (alternative to output_pydantic).
+    - 'time': Thinking effort (0-1, default 0.25). Interpreted per model's reasoning_type in CSV.
+    - 'use_batch_mode': Use litellm.batch_completion if True, except that ChatGPT subscription (`chatgpt/*`) models must fail closed before any provider call because their Codex backend supports only the Responses endpoint, not chat-completions batching. Tell callers to set `use_batch_mode=False` and invoke items individually.
+    - 'messages': Pre-formatted messages (ignores prompt/input_json if provided).
+    - 'language': Language hint (e.g., "python", "javascript"). Skip Python-specific validation when not "python" or None.
+    - 'use_cloud': None=auto-detect (cloud if enabled, local if PDD_FORCE_LOCAL=1), True=force cloud, False=force local.
+    - 'grounding_overrides': Optional dict carrying `<pin>` / `<exclude>` slugs that the caller (typically the preprocessor) extracted from the source prompt text BEFORE preprocessing stripped the tags. Shape: `{"pinned": List[str], "excluded": List[str]}`. Both keys are optional; missing keys default to `[]`. `llm_invoke` MUST NOT attempt to re-parse `<pin>` / `<exclude>` from the (already-preprocessed) `prompt` string — the tags are gone by the time the prompt reaches this function. This kwarg is the only audit channel for pin/exclude provenance on the call boundary.
+    - 'estimate_only': Optional explicit dry-run cost mode. `None` means auto-detect from the active Click context (`ctx.obj["estimate"]`) or `PDD_ESTIMATE=1`; `True` forces estimate mode; `False` disables estimate mode for library callers.
+    - 'shots': Number of candidate generations to produce (default 1). When `shots > 1` and `PDD_ENABLE_TASK_ROUTING=1`, the multi-shot loop runs up to `min(shots, 5)` generations. Mutually exclusive with `use_batch_mode=True` (raises `ValueError` if both are active). Has no effect when `PDD_ENABLE_TASK_ROUTING` is unset.
+    - 'verifier': Optional callable `(str) -> bool` applied to each candidate result. The first candidate for which `verifier` returns `True` is returned immediately; when no candidate passes, the mode (most frequent) result is returned (self-consistency fallback). When `verifier` is None, mode selection is used directly.
+    - 'task_class': Optional PDD command name (`"generate"`, `"fix"`, `"optimize"`, `"explain"`) used by the per-task config router to look up the best `(model, temperature, effort, shots)` row from `pdd/data/task_routing.csv`. Only active when `PDD_ENABLE_TASK_ROUTING=1`. When None, the router is skipped and the existing strength-interpolation cascade applies.
+    - `model_override_scope(model)` is a request-local context manager backed by the router `ContextVar`. It applies one exact model to every nested `llm_invoke` call in the scope, strips blank values to None, supports nesting, and always restores the prior value. Cloud handlers use this instead of mutating `PDD_MODEL_DEFAULT`, so concurrent requests cannot leak model choices.
+
+% Output (dictionary):
+    - 'result': String or Pydantic object (or list if batch mode).
+    - 'cost': Total accumulated cost across all attempts (original + retries) via LiteLLM callback and litellm.completion_cost, with CSV rate fallback.
+    - 'model_name': Name of the selected model.
+    - 'thinking_output': Reasoning output if available.
+    - 'finish_reason': Provider completion reason when available. For litellm.completion/batch_completion, use the LiteLLM callback's `completion_response.choices[0].finish_reason`; for OpenAI Responses API, use the response status (for example "completed"). Return None when unavailable.
+    - 'grounding': Optional dict describing grounding provenance for this call (see "Grounding Provenance" below). Always present when cloud execution was attempted; may be `{"mode": "unavailable", ...}` on local-only paths.
+    - 'attempted_models': Chronological list[str] of every model name that was attempted during this `llm_invoke` call, in the order attempted, ending with the successful model. Includes (1) any cloud attempt that recoverably failed via `CloudFallbackError` / `CloudInvocationError` and fell back to local, recorded as the cloud-routed model name (e.g. `"cloud:<base_model>"` or the cloud-reported model when known), and (2) every local candidate model that was tried, whether it succeeded or was skipped due to context-window overflow, schema validation failure, or other fallback-eligible errors. For a single-attempt successful call this is a one-element list containing the successful model. The successful model is always the LAST entry and equals `model_name`. Never empty on success; always present in the return dict.
+    - Estimate-only mode is a single-`llm_invoke` primitive. It raises `EstimateOnlyResult(payload)` before any provider/cloud/API-key operation for the one invocation whose messages are available. The payload includes `estimate: true`, `model`, `input_tokens`, `predicted_output_tokens`, `input_rate_per_million`, `output_rate_per_million`, `estimated_cost` (or None), `unknown_cost`, `currency`, `context_limit`, `context_usage_percent`, `command`, and `attempted_models`. It does not include prompt text, messages, API keys, or provider secrets.
+
+% Model Selection:
+    - Base model: `$PDD_MODEL_DEFAULT` env var, or None (first available model in CSV used as surrogate). Preserve this existing default; Opus 5 is not an implicit default for the ordinary `llm_invoke` path. Explicit `claude-fable-5` and `claude-opus-5` selections remain exact and distinct.
+    - CSV columns: model, provider, input/output costs ($/M tokens), raw coding_arena_elo, model_rank_score, model_rank_source, api_key, structured_output, reasoning_type, max_reasoning_tokens, optional 'location' for Vertex AI override, optional 'base_url' for custom API endpoints, optional 'interactive_only' boolean, optional 'context_limit' integer (per-model context window override; when present and > 0, takes precedence over litellm's built-in model info for context window validation and estimate reporting; leave blank for most models).
+    - In `_load_model_data`, include `'context_limit'` in the `numeric_cols` list (alongside `max_reasoning_tokens`, etc.) so that `pd.to_numeric(errors='coerce')` is applied; NaN values remain NaN (do NOT fill with 0 — an empty context_limit means "use litellm default", not "zero tokens").
+    - 'interactive_only' parsing: providers like `github_copilot/*`, `chatgpt/*`, `lm_studio/*`, and `ollama/*` require interactive human auth (device-flow OAuth, or a ChatGPT subscription / `codex login` token) or a running local server and hang in non-interactive contexts. Parse the column as a string-aware boolean (do NOT use a plain `.astype(bool)` cast, which would misread the string "False" as truthy): treat the literal strings "true"/"1" (case-insensitive, after stripping whitespace) as `True`; treat "false"/"0"/"" (case-insensitive), NaN, and a missing column all as `False`.
+    - Filter by api_key presence. Skip interactive check if api_key is empty or "EXISTING_KEY".
+    - interactive_only filter: In `_select_model_candidates`, exclude rows where `interactive_only` is True from the automatic candidate cascade UNLESS `PDD_ALLOW_INTERACTIVE` is truthy (use the existing `_env_truthy` helper). Default behavior (env unset) is to skip them, so server/CI/library contexts fast-fail instead of hanging. Apply this beside the existing `PDD_SKIP_LOCAL_MODELS` provider-exclusion block. An explicitly configured base model (`$PDD_MODEL_DEFAULT`) is still honored even if it is interactive_only. Keep the surgical filters (`PDD_FORCE`, `PDD_SKIP_LOCAL_MODELS`, and the `github_copilot/` OAuth token-file check) in place as defense-in-depth.
+    - strength < 0.5: Interpolate by cost from base down to cheapest.
+    - strength > 0.5: Interpolate by `model_rank_score` from base up to highest. `model_rank_score` is DeepSWE-first; raw `coding_arena_elo` is metadata/fallback only.
+    - strength = 0.5: Use base model, fallback to candidates with rank score closest to base on failure — sort remaining candidates ascending by `abs(model_rank_score - base_rank)`. This is the continuity limit of the `> 0.5` branch: as strength → 0.5 from above, the interpolated target rank collapses to `base_rank`, so the correct ordering at exactly 0.5 is closest-rank-to-base, not highest rank.
+    - Soft fallback: If an unqualified base model is not in CSV, use first available model as surrogate (silently, no warning). Never apply this fallback to a model with a recognized provider prefix.
+    - Provider-aware alternative lookup: if the configured base model is not found literally, try only alternatives that preserve the provider boundary implied by the model string. Recognize at least `openai/` → `OpenAI`, `azure/` → `Azure OpenAI`, `chatgpt/` → `OpenAI ChatGPT`, `vertex_ai/` → `Google Vertex AI`, `gemini/` → `Google Gemini`, `anthropic/` → `Anthropic`, and `azure_ai/` → `Azure AI`. Known provider prefixes may strip or add their prefix, but each alternative must be constrained to its matching CSV `provider` so a prefixed model never silently resolves to a row with different credentials. If a provider-qualified model has no literal or same-provider alternative, raise an actionable `ValueError` that names the requested model/provider and refuses a cross-provider surrogate. For Z.AI first-party GLM rows (issue #1827), treat bare `glm-5.2`, `glm-5-turbo`, `glm-5.1`, `glm-5`, and `glm-4.7` as OpenAI-compatible Z.AI model IDs: try `openai/<model>` under provider `Z.AI Coding Plan` first, then provider `Z.AI`. This makes `PDD_MODEL_DEFAULT=glm-5.2` select the ZCode/Coding Plan endpoint when available while still allowing a general Z.AI row to resolve when it is the configured catalog row.
+    - An explicit `claude-fable-5`, `anthropic/claude-fable-5`, `claude-opus-5`, or `anthropic/claude-opus-5` selection (from `PDD_MODEL_DEFAULT` or the invocation override) must place the exact matching bare catalog candidate first even though both Claude 5 models are intentionally unranked. Never canonicalize Opus 5 to Fable 5 or Fable 5 to Opus 5. Retain the ordinary candidate list after the exact model so a real authentication, refusal, or provider failure can use normal fallback; if the active catalog has no exact requested row, raise an actionable `ValueError` rather than silently choosing a different model.
+    - **DeepSWE Manifest Loading**: Add a `_load_deepswe_manifest()` helper in this section. It loads `pdd/data/deepswe_manifest.json` using the same path-resolution priority chain as `llm_model.csv`. Returns a `Dict[str, Any]` keyed by both `model` name and each entry in `aliases`, mapping to the full manifest entry dict (which includes `raw_model_name`, `retrieved_at`, `rating_lower`, `rating_upper`, `solve_rate`). Returns `{}` on any read/parse error (graceful degradation — treat as if no manifest data is available). Cache the result at module level with the same lazy-load pattern used for model data.
+    - **`_select_model_candidates` signature**: Accept an optional parameter `manifest_by_model: Optional[Dict[str, Any]] = None` (the lookup dict from `_load_deepswe_manifest()`). At the `llm_invoke` call site, load the manifest and pass it. Callers that omit it continue to work unchanged; manifest-derived enrichments are gracefully skipped when `manifest_by_model` is None or empty.
+    - **CI-bound tiebreaking**: Applied in `_select_model_candidates` after the primary sort, before returning `candidates`. For each pair of adjacent candidates where `manifest_by_model` contains entries for both: check whether the higher-ranked candidate's `rating_lower` ≤ the lower-ranked candidate's `rating_upper` (overlapping confidence intervals). Within such overlap groups, secondary-sort by average cost ascending, reusing the `avg_cost` value already present on each candidate dict (computed in `_load_model_data` as the mean of the `input` and `output` columns from `llm_model.csv`); prefer cheaper when models are statistically tied. Skip silently for candidates not in the manifest. This tiebreaking never changes the primary ranking for non-overlapping confidence intervals.
+    - **`target_effort_level` field**: Add to each candidate dict. Extract the effort qualifier from the manifest's `raw_model_name` for that model by splitting on whitespace and taking the last token (e.g. `"gpt-5.5 xhigh"` → `"xhigh"`; `"claude-opus-4.7 max"` → `"max"`). Set to `None` when the model has no manifest entry or `raw_model_name` has no whitespace.
+    - **`deepswe_manifest_date` field**: Add to each candidate dict. Set to the manifest entry's `retrieved_at` string for that model, or `''` if not in the manifest.
+    - **Staleness guard**: After sorting candidates, if the first candidate has a `deepswe_manifest_date` that parses to a date older than `PDD_DEEPSWE_MAX_AGE_DAYS` days (default 30, configurable via env var), overwrite that candidate's `model_rank_source` value with `f"deepswe:stale:{retrieved_at}"` and emit a WARNING-level log message. This is advisory-only and does not change the candidate ranking.
+    - **Provenance publishing to `ctx.obj`**: After a candidate succeeds in the local retry loop, publish the following keys using the same best-effort try/except pattern used for `attempted_models` (never raise from the publication step):
+      - `requested_model`: snapshot of the first candidate's model name from `_select_model_candidates` output, taken once before the retry loop begins.
+      - `model_selection_outcome`: `"direct"` if the first candidate succeeded; `"fallback"` if a subsequent candidate was used; `"unconfirmed"` for the cloud execution path (when cloud response's `modelName` differs from the base model or is unavailable).
+      - `strength_used`: `str(strength)` (the strength parameter value for this call).
+      - `deepswe_manifest_date`: `deepswe_manifest_date` field from the successfully selected candidate dict.
+
+% API Key Management:
+    - The CSV `api_key` column may be pipe-delimited (e.g. "VAR1|VAR2|VAR3").
+    - Use `parse_api_key_vars()` from provider_manager to split into individual env var names.
+    - Single var: resolve the env value via `resolve_api_key_from_env()` from provider_manager so accepted aliases work (e.g. a `GEMINI_API_KEY` row is satisfied by `GOOGLE_API_KEY`, and cloud-injected `PDD_LLM_INVOKE_<KEY>` aliases satisfy the matching base key). Pass that resolved value as `api_key=` to litellm as well — do not re-read only the literal CSV env name in the invocation path. If missing, prompt interactively using `preferred_api_key_name()` so the saved env key matches the canonical prompt/setup name.
+    - Multi var (pipe-delimited): check all env vars. Do NOT pass `api_key=` to litellm — it reads them from os.environ automatically. For Vertex rows, resolve project/location through shared helpers so blank CSV values are not treated as usable: prefer a non-blank CSV `location` override, otherwise allow env aliases (`VERTEXAI_LOCATION` / legacy `VERTEX_LOCATION`), and similarly honor `VERTEXAI_PROJECT`, legacy `VERTEX_PROJECT`, or `GOOGLE_CLOUD_PROJECT`. If any required Vertex value is still missing, the row must be treated as unusable. Only pass `vertex_location=` to litellm when the catalog row itself pins a non-blank location such as `global`; blank-location rows should rely on the env vars LiteLLM already reads.
+    - Empty: device flow or local model — no key needed, skip check. Exception: `github_copilot/` models in `PDD_FORCE` mode must check for an existing OAuth token at the path resolved from `GITHUB_COPILOT_TOKEN_DIR` (default `~/.config/litellm/github_copilot`) / `GITHUB_COPILOT_API_KEY_FILE` (default `api-key.json`). If the token file does not exist, skip the model to prevent litellm from hanging on an interactive device flow.
+   - `chatgpt/` models authenticate with a ChatGPT subscription via the `codex login` token (issue #1269), enabling a flat-rate fallback when `ANTHROPIC_API_KEY` is missing or rate-limited. In `_ensure_api_key`, bridge the codex `auth.json` (`$CODEX_HOME/auth.json`, default `~/.codex/auth.json`; its OAuth fields are nested under `tokens` and must be flattened to the top level into a private `CHATGPT_TOKEN_DIR`) and apply the litellm `chatgpt/` empty-output workaround (upstream BerriAI/litellm#25429 / PR #27562) before the call. Treat the model as usable in force/cloud contexts only when the bridge actually succeeds in the current process; mere source-token detection is not enough. In non-interactive force/cloud contexts, skip the model when the bridge/token is unavailable so litellm never blocks on an interactive device-login flow. The subscription backend ignores `response_format`/`json_schema`, so for `chatgpt/` models requesting structured output, drop `response_format` and instead inject the JSON schema as an in-band system-message instruction (mirroring the Groq handling). This auth/patch/coercion logic lives in `pdd/codex_subscription.py`. The ChatGPT subscription is a first-class provider FAMILY (CSV provider `OpenAI ChatGPT`): multiple `chatgpt/*` model rows (e.g. `chatgpt/gpt-5.6-sol`, `chatgpt/gpt-5.5`, `chatgpt/gpt-5.4`, `chatgpt/gpt-5.3-codex`, `chatgpt/gpt-5.2`) with empty `api_key`, raw ELOs mirrored to their API-keyed twins, and `model_rank_score` mirrored to the DeepSWE-first rank policy, so `--strength` interpolates within the family like Anthropic's models. These are distinct from the API-keyed `OpenAI` provider rows (which need `OPENAI_API_KEY`) — litellm routes the subscription rows by the `chatgpt/` prefix. When an explicitly requested `chatgpt/*` model is absent from the active catalog, log an actionable error even if older family rows exist: identify the exact missing model, explain that a stale user/project CSV shadows the packaged catalog, refuse the provider-qualified surrogate, and tell the user to add the exact row or remove the override. Bring-your-own-subscription only — never pool one subscription across users.
+    - If missing and the run is non-interactive (`PDD_FORCE` or cloud runtime), skip the model instead of calling `input()`.
+    - For single-var: prompt user via `input()`, sanitize key, set env var, save to .env file.
+    - .env save: Replace key in-place (no comment + append). Remove old commented versions of the same key. Preserve all other content.
+    - Mark key as newly acquired for retry logic on auth errors.
+
+% Reasoning Parameters:
+    - CSV columns: reasoning_type ('budget', 'effort', 'adaptive', 'none'), max_reasoning_tokens.
+    - 'budget': Calculate budget_tokens = int(time * max_reasoning_tokens), pass provider-specific thinking parameters (e.g., Anthropic 'thinking' param with type="enabled").
+    - 'effort': Map time to "low"/"medium"/"high". For OpenAI gpt-5* only, an explicit `PDD_REASONING_EFFORT` overrides that mapping, then validate the final value against the selected model's actual contract: GPT-5.6 supports `{none, low, medium, high, xhigh, max}`; GPT-5.5 and GPT-5.4 non-Pro families support `{none, low, medium, high, xhigh}`; their Pro variants support `{medium, high, xhigh}`; GPT-5.3-Codex supports `{low, medium, high, xhigh}`; GPT-5.2 supports `{none, low, medium, high, xhigh}`; GPT-5.1 supports `{none, low, medium, high}`; legacy GPT-5 supports `{minimal, low, medium, high}` and GPT-5 Pro only `{high}`. Reject unsupported values with the selected model and allowed set in the error rather than forwarding a backend-invalid identity. Pass reasoning={effort, summary:"auto"} for the Responses API. Other models continue to use the time-derived reasoning_effort.
+    - 'adaptive': Anthropic and Azure AI Claude Opus 4.7+. Normalize provider labels by stripping/lowercasing and treating underscores as spaces, so both bundled `Azure AI` and custom/project `azure_ai` rows trigger the Azure branch. Map time to effort. Anthropic rows send top-level thinking={type:"adaptive", display:"summarized"} plus reasoning_effort so LiteLLM maps effort into output_config.effort. Azure AI rows must send extra_body={thinking:{type:"adaptive", display:"summarized"}, output_config:{effort}} because AzureAIStudioConfig's OpenAI-style optional-param filtering drops top-level thinking/reasoning_effort before transform_request; LiteLLM preserves extra_body and forwards that wire payload. Legacy thinking.type="enabled" 400s on these models.
+    - Claude Fable 5 uses this same `adaptive` branch on the direct Anthropic route. It has no fixed thinking budget (`max_reasoning_tokens=0`): map `time` to effort and never synthesize legacy `thinking={type:"enabled", budget_tokens: ...}` for Fable.
+    - 'none': No reasoning parameters.
+
+% LLM Invocation:
+    - For direct OpenAI gpt-5* API models: Call litellm.responses() to support the `reasoning` parameter. Build a `text.format` block for structured output (type=json_schema when output_pydantic/output_schema, else type=text). Skip temperature for Responses API.
+    - For ChatGPT subscription `chatgpt/*` models: always use `litellm.responses()` for single invocations. Build list-form Responses input from the final messages, preserving supported multimodal content: a text/input_text message part becomes `{"type":"input_text","text":...}`, and an OpenAI chat-completions `image_url` part (including a data URL from code_generator) becomes `{"type":"input_image","image_url":...}`. The subscription backend ignores Responses `text.format` and chat-completions `response_format`/`json_schema`; when structured output is requested, omit those fields and inject the JSON schema as an in-band system-message instruction. Never fall back to `litellm.completion()` after a Responses error. Batch invocation is unsupported: fail closed before auth/provider dispatch with an actionable error rather than calling `litellm.completion()` or `litellm.batch_completion()`.
+    - For other models: Call litellm.completion() or litellm.batch_completion().
+    - Pass: model, messages, temperature, num_retries=2, timeout=LLM_CALL_TIMEOUT (600s).
+    - Claude Fable 5 and adaptive Claude Opus models reject `temperature`; remove that parameter before the provider call. Preserve Anthropic `stop_reason="refusal"` when LiteLLM would otherwise map it to generic `stop` with empty content. Treat that response as a provider refusal and continue to the next candidate, never as a corrupted-cache result that retries the same model with cache bypass.
+    - For normal interactive calls with no `PDD_COMMAND_MAX_*` environment contract, rely on provider defaults for max_tokens/max_completion_tokens. Hosted write-capable commands are the exception: derive a finite output ceiling from the USD/token budget and pass it as `max_tokens` for LiteLLM completion or `max_output_tokens` for the OpenAI Responses API; never dispatch a bounded request without this admission.
+    - Claude models: Auto-add `anthropic-beta: context-1m-2025-08-07` extra header to enable 1M context window. Safe for all prompt sizes (API only charges premium rates above 200K).
+    - Pass CSV `location` column as `vertex_location` kwarg (e.g., "global" for Vertex AI models).
+    - Pass CSV `base_url` column as both `base_url` and `api_base` kwargs for custom API endpoints.
+    - Anthropic with thinking enabled: Force temperature=1.
+    - Gemini 3 family: When the caller-supplied temperature is below 1.0, clamp it up to temperature=1 (callers that explicitly pass temperature>=1.0 are left untouched) for any resolved model in the Gemini 3 family (matches `gemini-3`, `gemini-3.x` with any routing prefix such as `gemini/`, `vertex_ai/`, `gmi/google/`, `github_copilot/`, or the bare Vertex AI name like `gemini-3.1-pro-preview`; does NOT match `gemini-2.x`, `gemini-1.5`, etc.). litellm warns that temperature < 1.0 for Gemini 3 models can cause infinite loops and degraded reasoning, so apply the clamp BEFORE the batch/single completion split to protect both `litellm.completion` and `litellm.batch_completion` paths. Only fire when temperature is actually present in kwargs (skip when `_model_disallows_temperature` already removed it). The model-family classifier must require an actual string (reject lists, dicts, ints, etc.) and treat empty strings as non-matches via an explicit guard rather than relying on the regex returning no match.
+    - Claude models: Add `extra_headers={"anthropic-beta": "context-1m-2025-08-07"}` to enable 1M context window. Safe for all prompt lengths — API only charges premium rates when exceeding 200K tokens.
+    - Vertex AI: Pass `vertex_location` from the CSV's `location` column when present.
+    - LM Studio: Set base_url from LM_STUDIO_API_BASE env (default http://localhost:1234/v1) and api_key placeholder "lm-studio".
+
+% Context Window Validation:
+    - Before calling litellm.completion()/batch_completion()/responses(), validate the assembled prompt's
+      token count against the model's context window limit within the per-model candidate loop.
+    - Use litellm.token_counter(model, messages) for model-aware token counting.
+    - Determine the context limit with a catalog-first lookup: call `_catalog_context_limit(model_info)`
+      (reads `context_limit` from the CSV catalog row via the candidate's model_info dict, checking
+      keys `max_input_tokens`, `context_limit`, `context_window`, `max_tokens` in that order).
+      Only if that returns None, fall back to `get_context_limit(model_name_litellm)` from
+      `pdd.server.token_counter`. This ensures models unknown to LiteLLM (e.g. `openai/glm-5.2`)
+      still honour their catalog-declared limit.
+    - Claude context override: When the anthropic-beta context-1m header is set for Claude models,
+      use 1,000,000 as the effective context limit instead of litellm's default (200K).
+    - Graceful fallback: If context limit is None (model not found or info unavailable),
+      skip context window validation for that model and proceed with the LLM call normally.
+      Log a debug message noting validation was skipped. Do not block the request.
+    - If prompt tokens exceed the context limit, skip to the next candidate model (consistent with
+      existing fallback pattern). Log a warning with: token count, model context limit, usage percentage,
+      and model name.
+
+% Estimate-Only Invocation:
+    - Define a lightweight `EstimateOnlyResult(Exception)` carrying public `estimate` and `payload` attributes that both reference the same `Dict[str, Any]`. Command wrappers catch this exception and return the payload before output files or evidence manifests are written.
+    - Estimate-only mode estimates exactly one concrete `llm_invoke` call and the CLI exposes it only for the standard `pdd generate` path in this first version. It is NOT a planner for helper stacks that need real output from one LLM call to assemble later LLM calls (for example continuation checks, postprocess/extraction calls, fix extraction, conflict extraction, update extraction, sync, or external agentic workflows). Non-generate CLI commands MUST reject estimate mode before dispatch. The human/JSON output must make clear that no provider call, command output write, or cost row occurred.
+    - Determine estimate mode at the top of `llm_invoke`: explicit `estimate_only` wins; otherwise read the active Click context if available (`ctx.obj["estimate"]`) and fall back to `PDD_ESTIMATE=1`. `PDD_ESTIMATE_JSON` affects rendering in the CLI layer only.
+    - Estimate mode MUST assemble the exact single-call messages that would be sent for the selected prompt/input/messages. Batch mode and list-of-message batches are outside this issue; raise a clear `RuntimeError` or `click.UsageError` before provider calls if a batch estimate is requested.
+    - Select the same first model candidate the normal local route would attempt, based on CSV/model/strength/time inputs, but do not call cloud, do not call provider APIs, do not call LiteLLM completion/responses/batch APIs, do not prompt for API keys, and do not invoke cost callbacks or success callbacks.
+    - Count input tokens with `count_tokens_for_messages(messages, model=model_name)` and compute the context limit with `get_context_limit(model_name)`. Apply the same Claude 1M context override when the estimate would use that extra header.
+    - Predict output tokens for `generate` with a calibrated generate-only heuristic based on prompt-size bucket, prompt text/language, `<pdd-interface>`, `<pdd-reason>`, include markers, and requests for tests/examples/docs/code-heavy output. Return `predicted_output_tokens`, `output_tokens_low`, `output_tokens_high`, and an uncertainty label. Ignore invalid ratio env values and fall back to the generate heuristic/default.
+    - Determine command name from the active Click context (`ctx.command.name`), then `PDD_ESTIMATE_COMMAND`, then `"unknown"`.
+    - Call the sibling token-counter API `estimate_completion_cost(input_tokens, predicted_output_tokens, model, pricing_csv)` from `pdd.server.token_counter`. Do not reimplement pricing lookup in `llm_invoke`. When it returns a `CompletionCostEstimate`, copy `total_cost` into both payload fields `estimated_cost` and `total_cost`, and copy `input_rate_per_million`, `output_rate_per_million`, `input_cost`, `output_cost`, `currency`, and the matched `model` as estimate metadata. Unknown pricing must set `estimated_cost=None`, `total_cost=None`, and `unknown_cost=True` while still returning token and context metrics.
+    - **Quota/subscription provider pricing**: Before calling `estimate_completion_cost`, check whether the selected model's `provider` column (from model_info) contains the substring `"coding plan"` (case-insensitive, stripped). If it does, the provider is subscription/quota-backed and has no per-token list price — skip the pricing API entirely and leave all cost fields null (`estimated_cost=None`, `total_cost=None`, `unknown_cost=True`). This prevents a $0.00 entry from appearing as "known" pricing for flat-rate providers like Z.AI Coding Plan.
+    - Append the estimate payload to `ctx.obj["estimate_results"]` (aliased by the CLI to `estimate_records`) when a Click context exists, and update aggregate token/cost totals only from records with known cost. Also publish `ctx.obj["attempted_models"]` with the selected model so cost/summary surfaces can report the would-be model without implying a provider call succeeded.
+    - Raise `EstimateOnlyResult(payload)` immediately after building the payload. The normal returned dictionary, grounding provenance, retry/fallback loop, provider calls, API-key prompts, and LiteLLM callbacks MUST NOT run in estimate mode.
+    - The local invocation error handlers MUST re-raise `EstimateOnlyResult` before authentication, schema, context-window, generic provider-error, retry, fallback, or all-candidates-failed handling. Estimate mode is a successful dry-run result, not a provider failure.
+
+% Structured Output:
+    - Check 'structured_output' CSV flag.
+    - Use response_format with type='json_schema', json_schema containing name, schema, and strict=True to enforce all required fields.
+    - Recursively ensure ALL properties are in required arrays (_ensure_all_properties_required) and add additionalProperties: false on ALL object schemas (_add_additional_properties_false), including nested objects, array items, anyOf/oneOf/allOf, and $defs.
+    - LM Studio: Use extra_body to bypass drop_params stripping the schema.
+    - Groq: Use simple json_object mode with schema instruction in system prompt.
+    - If model doesn't support structured output, parse response as JSON and validate.
+
+% Response Processing:
+    - Extract result from response.choices[0].message.content.
+    - Handle None content: Retry with cache bypass (modify prompt slightly).
+    - Handle malformed JSON (excessive trailing newlines causing truncation): Retry with cache bypass.
+    - Parse JSON strings: Try fenced ```json blocks first, then balanced JSON object extraction, then fence cleaning.
+    - Repair truncated JSON by attempting various closures.
+    - Unescape double-escaped newlines in code fields (_smart_unescape_code preserves \n inside string literals).
+    - Repair Python syntax errors (trailing quotes, etc.) via _repair_python_syntax.
+    - Skip known prose field names (reasoning, explanation, analysis, etc.) during Python validation.
+    - If invalid Python code remains after repair and language is "python" or None, retry with cache bypass.
+    - Extract thinking output from response._hidden_params['thinking'] or response.choices[0].message.reasoning_content.
+    - Vertex AI Anthropic envelope unwrap (issue #1364): Vertex routes Anthropic Claude structured
+      outputs through tool-calling, which returns the schema fields wrapped as
+      `{"parameter": {<schema fields>}}`. Every `model_validate*` and `jsonschema.validate` call
+      site MUST go through `_validate_pydantic_with_unwrap` / `_validate_jsonschema_with_unwrap`,
+      which try direct validation first and then retry once after stripping the single-key
+      `"parameter"` envelope. On second failure they re-raise the **original** error so existing
+      diagnostics keep pointing at real schema fields. Without this, every Vertex Anthropic
+      structured-output call walks the entire Opus → Sonnet fallback chain (4–8 minutes per failed
+      sync) hitting the identical wrap on every model.
+
+% Retry Cost Accumulation:
+    - On cache-bypass retries (None content, malformed JSON, invalid Python), save the accumulated
+      cost and token counts from _LAST_CALLBACK_DATA before the retry call. After the retry,
+      add the retry's cost/tokens to the saved values. This ensures the final reported cost
+      reflects all API calls, not just the last one.
+    - Keep retry reasoning kwargs candidate-local so provider-specific payloads (e.g. Azure AI adaptive extra_body) cannot leak into later fallback candidates.
+
+% Retry and Fallback:
+    - Define SchemaValidationError exception that triggers model fallback.
+    - On auth error with newly acquired key: Re-prompt for same key and retry.
+    - On schema validation failure: Raise SchemaValidationError to trigger fallback to next model.
+    - Preserve provider credentials in retries: Pass api_key, base_url, api_version from original call.
+    - Anthropic temperature auto-adjustment: If error mentions temperature+thinking, adjust and retry. Treat top-level thinking/reasoning_effort and extra_body.thinking as thinking being sent.
+      Two directions: (1) thinking enabled but temperature≠1 → force temperature=1;
+      (2) temperature=1 without thinking → retry with 0.99. Track adjustment to avoid infinite loop.
+      When direction (1) selects temperature=1, the same-model retry must send temperature=1 even if that model normally strips temperature.
+    - Catch litellm.ContextWindowExceededError as a post-call safety net (for cases where
+      approximate pre-call token counting underestimates). Treat as model overflow: log warning
+      and skip to next candidate model.
+    - When all candidate models are exhausted due to context window overflow (either pre-call
+      validation or post-call ContextWindowExceededError), include actionable details in the
+      RuntimeError: token count, model context limits attempted, usage percentage, and guidance
+      to reduce prompt size or use a model with a larger context window.
+    - After exhausting all candidates: Raise RuntimeError.
+
+% Attempted-Models History:
+    - Maintain a per-call chronological `attempted_models: list[str]` initialized to `[]` at the
+      top of `llm_invoke`. Append each candidate model name BEFORE the LLM call (so models skipped
+      mid-call due to context-window pre-validation or auth-error skip are still recorded).
+    - Cloud path: When cloud execution is attempted, append the cloud-routed model name (use the
+      cloud response's `modelName` when available, otherwise the base model from
+      `$PDD_MODEL_DEFAULT` prefixed with `"cloud:"`). Do this BEFORE raising/catching
+      CloudFallbackError or CloudInvocationError so cloud→local fallbacks preserve the cloud
+      attempt in the history.
+    - Local fallback loop: Append each local candidate model when its iteration begins, regardless
+      of whether it ultimately succeeds, is skipped (context window overflow, missing api_key with
+      PDD_FORCE, github_copilot OAuth token missing), or fails with a fallback-eligible error
+      (SchemaValidationError, ContextWindowExceededError, recoverable API errors).
+    - Include `attempted_models` (a copy of the list) in the returned dictionary on success.
+    - On every exception path that raises after `_record_attempt` has run at least once,
+      attach the per-call attempt list to the raised exception via
+      `setattr(exc, "attempted_models", list(attempted_models))`. This includes the
+      terminal `RuntimeError` (all candidates exhausted), the cloud `InsufficientCreditsError`
+      re-raise, and the model-loading/selection re-raise
+      (`_load_model_data` / `_select_model_candidates` FileNotFoundError, ValueError,
+      RuntimeError). Worker threads (Click context is thread-local; workers cannot read
+      ctx.obj) rely on this attribute as their only recovery channel; main-thread callers
+      can also read it for explicit recovery logic.
+    - Do NOT rewind `ctx.obj['attempted_models']` on failure. `attempted_models` is a
+      chronological audit log of every model the command tried — issue #897 frames it
+      explicitly as "models that were attempted and then abandoned." Rewinding would silently
+      drop the exact rows users opened the feature to investigate (e.g. `auto_include`
+      catching a final auto_include_LLM failure and recovering with `summary_model`: the
+      failed selector-stage attempts must remain visible in `attempted_models` even though
+      the `model` column shows the recovered model). The `model` column names the success
+      identity; `attempted_models` is the record of what was tried — they may legitimately
+      differ. Earlier rewind designs (PR #1056 rounds 4-6) defended an "ends with model
+      column" invariant that has since been relaxed in the README; do not re-introduce
+      rewind machinery without re-arguing that invariant.
+    - Publish progress to the Click context for non-LLM consumers (e.g. `track_cost`):
+      attempt to read `click.get_current_context(silent=True)`; if a context is returned and
+      `ctx.obj` is a dict (initialize an empty dict on `ctx.obj` only if `ctx.obj is None`,
+      never overwrite a non-dict). At the top of `llm_invoke`, snapshot any existing
+      `ctx.obj['attempted_models']` ONCE as `prior_ctx_attempts` (a copy of the list, or `[]`
+      when missing or non-list). After each `attempted_models.append(...)` set
+      `ctx.obj['attempted_models'] = prior_ctx_attempts + list(attempted_models)`. This
+      accumulates the running history across multiple `llm_invoke` calls inside a single
+      tracked CLI command (e.g. `pdd generate` invoking generation followed by postprocess);
+      overwriting with just `list(attempted_models)` would hide an earlier call's fallback in
+      the cost CSV. When no Click context exists (library usage, tests), this is a silent
+      no-op — never raise from the context publication step.
+
+% Multi-Shot Generation:
+    - Guard: active only when `shots > 1` AND `PDD_ENABLE_TASK_ROUTING=1`. When the guard is inactive, the function behaves identically to `shots=1`.
+    - Hard cap: clamp the effective shot count to `min(shots, 5)`. Silently clamp; do not raise.
+    - Mutual exclusion: if `use_batch_mode=True` and the guard is active, raise `ValueError` before any provider call.
+    - Candidate loop: run the standard single-invocation flow (model selection, context validation, LLM call, response processing, retry) N times sequentially, collecting each successful result string. All existing per-call guards (`_model_disallows_temperature`, Gemini 3 clamping, `interactive_only` exclusion, context-window validation, schema validation) apply inside each iteration.
+    - Reasoning parameters for `reasoning_type="adaptive"` models inside the loop: pass `thinking={"type": "adaptive"}` and `output_config={"effort": level}` (mirroring the `adaptive` branch). Other `reasoning_type` values follow their existing parameter paths unchanged.
+    - Candidate selection:
+      1. If `verifier` is provided, return the first candidate for which `verifier(result)` is `True`.
+      2. If no candidate passes (or `verifier` is None), use self-consistency: return the mode of all candidate results (most frequent string); break ties by first occurrence.
+    - Cost accumulation: sum costs across all N calls; report the total in the returned `'cost'` key.
+    - The returned dictionary uses the last attempted model (or the model that produced the selected result) as `model_name`.
+
+% Per-Task Config Router:
+    - Guard: active only when `PDD_ENABLE_TASK_ROUTING=1`. When unset, skip the router entirely and use the existing strength-interpolation cascade.
+    - CSV loading: load `pdd/data/task_routing.csv` using the same `PathResolver` priority chain as `llm_model.csv` (user `~/.pdd/`, project `.pdd/`, packaged `pdd/data/`). Cache after first load (module-level). On missing file, unreadable CSV, or parse error: emit a debug-level log line and fall through to the existing baseline without raising.
+    - Columns: `task_class, model, temperature, effort, shots, pass_rate, avg_cost_usd`.
+    - Row filtering: select rows where `task_class` matches the `task_class` kwarg. If no rows match (including when `task_class` is None): cold-start fallback — use the existing strength-interpolation cascade.
+    - Scoring: for each matching row compute `score = pass_rate − λ × avg_cost_usd`. λ is read from the `PDD_ROUTER_LAMBDA` env var (default 1.0); invalid (non-numeric) values silently fall back to 1.0. Select the row with the highest score; break ties by lowest `avg_cost_usd`.
+    - Override application: the winning row's `model`, `temperature`, `effort`, and `shots` values override the caller-supplied equivalents. `effort` → `time` mapping: `"low"`→0.1, `"medium"`→0.3, `"high"`→0.5, `"xhigh"`→0.75, `"max"`→1.0. The `model` override bypasses the strength-interpolation cascade (the router selects the exact model directly). Unknown `effort` values fall through to the caller-supplied `time`.
+    - Post-override guards: apply `_model_disallows_temperature` and Gemini 3 clamping to the router-overridden temperature, exactly as in the normal path.
+    - On any failure during router evaluation (missing column, type error, etc.): debug-log and fall through to the existing baseline.
+
+% Cloud Execution:
+    - Define three cloud-related exceptions:
+      - CloudFallbackError: Raised for recoverable errors (network, timeout, auth, 5xx). Triggers fallback to local. On 401/403, clear JWT cache.
+      - CloudInvocationError: Raised for non-recoverable cloud errors.
+      - InsufficientCreditsError: Raised for 402 Payment Required. Does NOT fall back to local.
+    - Helper functions:
+      - `_pydantic_to_json_schema(pydantic_class)`: Convert Pydantic model to JSON Schema for cloud transport. Calls _ensure_all_properties_required. Include `__pydantic_class_name__` for debugging.
+      - `_unwrap_parameter_envelope(obj)`: Return `obj["parameter"]` only when `obj` is a dict with exactly one key `"parameter"` whose value is itself a dict; otherwise return `obj` unchanged. Used by both Pydantic and jsonschema validation helpers to peel Vertex AI Anthropic's tool-call envelope. Caller-side gates (below) decide whether the unwrap retry is safe for a given target schema.
+      - `_pydantic_schema_accepts_parameter_key(cls)`: Return True if `cls` could validate a top-level `"parameter"` key — by field name, `Field(alias=...)`, or `Field(validation_alias=...)` (string, `AliasChoices`, or first segment of `AliasPath`). Used as the gate predicate for `_validate_pydantic_with_unwrap`.
+      - `_jsonschema_eligible_for_envelope_unwrap(schema)`: Return True only when `schema` is an explicit object schema whose top-level `properties` map exists and does not contain `parameter`. Composed schemas (`allOf`/`anyOf`/`oneOf`/`$ref`) and flexible schemas (no top-level `properties` map, e.g. `additionalProperties` only) return False so the unwrap retry is skipped.
+      - `_validate_pydantic_with_unwrap(payload, pydantic_class)`: Validate `payload` against `pydantic_class`. Try direct validation; on `ValidationError`, retry once after `_unwrap_parameter_envelope`; on second failure, re-raise the **original** error. **Gating (PR #1365 review):** if `_pydantic_schema_accepts_parameter_key(pydantic_class)` is True (declared field name OR any alias / validation_alias maps `"parameter"` at the top level), the unwrap retry is skipped entirely so legitimate user payloads that legitimately use `parameter` aren't silently reshaped — the direct-validation error propagates unchanged.
+      - `_validate_jsonschema_with_unwrap(instance, schema)`: Mirror of the above for the raw `output_schema` path. Try `jsonschema.validate(instance, schema)`; on `jsonschema.ValidationError`, retry once after `_unwrap_parameter_envelope(instance)`; on second failure, re-raise the **original** error. Returns the validated payload (the original `instance` when direct validation succeeds, or the unwrapped inner dict when the envelope-unwrap retry succeeds). Callers MUST serialize the returned value, never the original `instance`, otherwise the `{"parameter": {...}}` wrapper leaks back to the user. Both helpers must wrap every `model_validate*` and `jsonschema.validate` call site in this file. **Gating (PR #1365 review):** the unwrap retry only runs when `_jsonschema_eligible_for_envelope_unwrap(schema)` is True — explicit object schema, top-level `properties` map without `parameter`, no `allOf`/`anyOf`/`oneOf`/`$ref`. Composed and flexible schemas keep their direct-validation error so they aren't silently reshaped.
+      - `_validate_with_pydantic(result, pydantic_class)`: Validate cloud response (dict or str) using the Pydantic model — delegates to `_validate_pydantic_with_unwrap` so the cloud path also benefits from the envelope unwrap.
+      - `_llm_invoke_cloud(...)`: Execute llm_invoke via cloud endpoint `llmInvoke`. The `requests.post` call MUST pass `timeout=get_cloud_request_timeout()` (imported from `pdd.core.cloud`). Do NOT hardcode a literal value (e.g. `timeout=300`) — the helper derives a `(connect, read)` tuple from the `PDD_CLOUD_TIMEOUT` env var documented in the README so operators can tune it without editing code. Hardcoding silently ignores the env var and was one of the four non-compliant sites that contributed to #1272.
+
+    - Cloud execution path (at start of llm_invoke, before local validation):
+      - If use_cloud is None: Check `PDD_FORCE_LOCAL` env var. If not set, check `CloudConfig.is_cloud_enabled()`.
+      - If use_cloud is True: Attempt cloud execution.
+      - On success: Return cloud result (validate with output_pydantic if specified).
+      - On CloudFallbackError: Print warning message via rich console, log warning, fall back to local.
+      - On InsufficientCreditsError: Re-raise (no fallback).
+      - On CloudInvocationError: Print warning, fall back to local.
+    - Cloud request payload: prompt, inputJson, messages, strength, temperature, time, verbose, outputSchema, useBatchMode, language.
+    - Cloud response: {result, totalCost, modelName, thinkingOutput, optionally examplesUsed}.
+
+% Grounding Provenance:
+    - When the cloud response includes an `examplesUsed` (or equivalent) array describing the few-shot examples the cloud injected, surface a `grounding` key on the returned dictionary so downstream evidence-manifest writers can record selection provenance. Shape:
+      `{"mode": "cloud" | "local" | "unavailable", "selected_examples": [{"module": str, "prompt_sha256": Optional[str], "code_sha256": Optional[str], "similarity": Optional[float], "source": Optional[str]}], "pinned": [str], "excluded": [str]}`.
+    - Populate `pinned`/`excluded` from the `grounding_overrides` kwarg (`{"pinned": [...], "excluded": [...]}`). The preprocessor strips `<pin>` / `<exclude>` tags before the prompt reaches `llm_invoke`, so re-parsing the prompt text would silently produce empty lists. The caller (preprocessor / generate command) MUST collect these slugs from the source prompt and pass them through `grounding_overrides`. When `grounding_overrides` is None or missing keys, default to `[]`. Omit `selected_examples` fields that are not available; never invent SHA-256 hashes or similarity scores.
+    - Local (no-cloud) path: include `grounding={"mode": "unavailable", "selected_examples": [], "pinned": [...], "excluded": [...]}` rather than omitting the key (`pinned`/`excluded` still sourced from `grounding_overrides`), so the evidence manifest records "grounding not available" instead of silently dropping the field.
+    - Never raise from grounding-metadata extraction — wrap in a best-effort try/except and degrade to `mode: "unavailable"` on extraction failure.
+
+% Cloud API Documentation:
+   <cloud_api_documentation>
+      <include>../docs/api-documentation.md</include>
+   </cloud_api_documentation>
+
+% Multi-Credential Providers:
+    - Providers like AWS Bedrock, Azure OpenAI, Google Vertex AI use pipe-delimited api_key fields.
+    - litellm reads their env vars automatically by model prefix (bedrock/, azure/, vertex_ai/).
+    - Do NOT pass api_key= for multi-credential providers.
+    - Vertex AI uses GOOGLE_APPLICATION_CREDENTIALS, VERTEXAI_PROJECT, VERTEXAI_LOCATION env vars.
+    - AWS Bedrock uses AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION_NAME env vars.
+    - Azure OpenAI uses AZURE_API_KEY, AZURE_API_BASE, AZURE_API_VERSION env vars.
+    - GitHub Copilot has empty api_key — uses OAuth device flow auth handled by litellm at runtime. Token is cached at `GITHUB_COPILOT_TOKEN_DIR/GITHUB_COPILOT_API_KEY_FILE` (defaults: `~/.config/litellm/github_copilot/api-key.json`). In `PDD_FORCE` mode, skip the model if the token file does not exist.
+
+% LiteLLM Caching:
+    - Prefer S3-compatible cache targeting GCS using HMAC keys (GCS_HMAC_ACCESS_KEY_ID, GCS_HMAC_SECRET_ACCESS_KEY, GCS_BUCKET_NAME).
+    - Fall back to disk-based SQLite cache at <PROJECT_ROOT>/litellm_cache.sqlite.
+    - Respect LITELLM_CACHE_DISABLE=1 to disable caching entirely.
+    - Restore cache state after retries.
+
+% LiteLLM Callback:
+    - Register a success callback with litellm.success_callback.
+    - Extract token usage and finish reason.
+    - Calculate cost using litellm.completion_cost(); fall back to CSV rates (_MODEL_RATE_MAP) if LiteLLM fails.
+    - When registering CSV-only models with LiteLLM (litellm.register_model) so completion_cost works, derive litellm_provider from the model id prefix when present (e.g. 'vertex_ai/...'), otherwise map the CSV 'provider' column to the litellm provider token for the known direct/relay providers (e.g. Anthropic -> 'anthropic', AWS Bedrock -> 'bedrock'), keeping 'openai' only as the residual fallback for providers not in the mapping. The point is to not let a litellm-unknown bare-named non-OpenAI model (e.g. a new direct-Anthropic or Bedrock Opus) fall through to OpenAI, which would misroute it (wrong provider + wrong key -> auth failure -> silent fallback).
+    - Store in module-level _LAST_CALLBACK_DATA and include finish_reason in the returned dictionary.
+
+% WSL Diagnostics:
+    - Detect WSL via /proc/version or WSL_DISTRO_NAME env var.
+    - Sanitize API keys by trimming whitespace and control characters.
+    - On auth errors in WSL, warn about carriage returns in API keys.
+
+% CSV Example: <llm_model_example><shell>head -6 data/llm_model.csv</shell></llm_model_example>
+% LiteLLM References:
+    <litellm_thinking_example><web>https://docs.litellm.ai/docs/reasoning_content</web></litellm_thinking_example>
+    <litellm_json_mode_example><web>https://docs.litellm.ai/docs/completion/json_mode</web></litellm_json_mode_example>
+    <litellm_batch_mode_example><web>https://docs.litellm.ai/docs/completion/batching</web></litellm_batch_mode_example>
+    <litellm_exception_mapping_example><web>https://docs.litellm.ai/docs/exception_mapping</web></litellm_exception_mapping_example>
+    <litellm_context_window_example><web>https://docs.litellm.ai/docs/exception_mapping#context-window-errors</web></litellm_context_window_example>

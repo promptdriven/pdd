@@ -1,0 +1,27 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/components/InputField.tsx`, a reusable single-line form input with an optional browse action.
+
+Requirements
+1. Export `InputFieldProps` and default `InputField` (`React.FC<InputFieldProps>`).
+2. `InputFieldProps`:
+   - `label`, `name`, `value`, `placeholder`, `description`: `string`
+   - `onChange: (e: React.ChangeEvent<HTMLInputElement>) => void`
+   - `required?: boolean`
+   - `onBrowse?: () => void`
+3. Render a wrapper with:
+   - label linked to `name` (`htmlFor={name}`), showing `label` and a red `*` only when `required`
+   - controlled text input (`type="text"`) using `name`, `id`, `value`, `onChange`, `placeholder`
+   - description text below the field
+4. Use a `flex gap-2` row for the input area. If `onBrowse` exists, render a browse button (`type="button"`, `title="Browse files"`) that calls `onBrowse` and renders `FolderOpenIcon` with `className="w-4 h-4"`.
+5. Preserve the existing dark Tailwind look used by sibling form fields:
+   - label uses gray helper text + `capitalize`
+   - input uses translucent dark background with white text and blue focus ring
+   - browse button uses gray background/text with lighter hover state
+   - description uses small muted gray text
+
+Dependencies
+<icons>
+  <include>./Icon</include>
+</icons>
+
+Deliverable
+- Output only `pdd/frontend/components/InputField.tsx`.

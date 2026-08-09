@@ -1,0 +1,22 @@
+{
+  "pdd_version": "0.0.309.dev0",
+  "timestamp": "2026-07-25T08:53:10.927316+00:00",
+  "command": "test",
+  "prompt_hash": "a22c85249cd06724cc13dc287023ea42175ae68724fc007d68a870d156ff4a0f",
+  "code_hash": "ffff82dbe9b6569885391dd3e9f8cbdb75919a3338311bfaccec2ada58baa349",
+  "example_hash": "44d0c9172db01bd645d48a11a7afa527a7e509f5aac911fa41ed091d3f982096",
+  "test_hash": "ebc693889c886a69051fe4ab9528e85a12ddbc32c62202b2b784b5c76fbec899",
+  "test_files": {
+    "test_detect_change.py": "ebc693889c886a69051fe4ab9528e85a12ddbc32c62202b2b784b5c76fbec899",
+    "test_detect_change_main.py": "59bf5094d1970406c4a1d4da3666532ad64bb71b8a15063172bd18626196a0e6"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/preprocess.py": "3539ebbfbdae48f0c606451dd400879e010c539fa992aed52d9b30c3d4d18ac9",
+    "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
+    "pdd/llm_invoke.py": "935089c964b9d458db8a5d03f9aef25822ff6765cf82d55e373a96b4716c89a8",
+    "context/unfinished_prompt_example.py": "5d4d74064e5b845391f035fb8631903ec2f39a54a90713f9c13dc24d2eb73c4f",
+    "context/continue_generation_example.py": "1adff3be7267ea71d5b89d01aabe661258519dac141644cff74cc7292fd8c1ac",
+    "pdd/postprocess.py": "628880a68346c3c1bd8326b4d1b495452578937ed97b27234ad56ba332c4c2ed"
+  }
+}

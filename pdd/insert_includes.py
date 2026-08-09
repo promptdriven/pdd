@@ -1,5 +1,9 @@
 from __future__ import annotations
-from typing import Callable, Optional, Tuple
+import difflib
+import math
+import os
+import re
+from typing import Callable, List, Optional, Tuple
 from pathlib import Path
 from rich import print
 from pydantic import BaseModel, Field
@@ -10,8 +14,101 @@ from .auto_include import auto_include
 from .preprocess import preprocess
 from . import DEFAULT_TIME, DEFAULT_STRENGTH
 
+from rich.console import Console
+
+console = Console()
+
+
 class InsertIncludesOutput(BaseModel):
     output_prompt: str = Field(description="The prompt with dependencies inserted")
+
+
+def _remove_redundant_content(
+    prompt: str,
+    inserted_includes: List[str],
+    *,
+    coverage: float = 0.75,
+    min_block: int = 4,
+) -> str:
+    """Remove a single large inline copy of each included file from the prompt.
+
+    For each included file, finds the longest contiguous run of lines that
+    appears identically in both the prompt and the file. The run is removed
+    when it is large enough relative to the file:
+
+      - Small files (size <= ``ceil(min_block / coverage)``): the entire file
+        content must appear contiguously. This guards short files against
+        coincidental overlap — at these sizes the coverage-based threshold
+        would collapse to ``min_block`` and let any min_block-line generic
+        match trigger removal (e.g. with the defaults a 5-line file would
+        otherwise allow a 4-of-5 generic overlap to delete the block).
+      - Larger files: the run must cover at least ``coverage`` of the file's
+        lines (default 75%, rounded up).
+
+    ``min_block`` plays two roles here: the absolute floor on any match the
+    coverage rule will accept, and (via ``ceil(min_block / coverage)``) the
+    cutoff below which a full-file match is required. Coupling these is
+    intentional for now — it keeps the algorithm a single derived constant.
+
+    This is exact contiguous line matching, not fuzzy similarity. A copied
+    block split by an inserted line will not be removed, because the longest
+    contiguous match shrinks below the coverage threshold. The conservative
+    bias is intentional: a false positive (over-removal) corrupts the prompt
+    and breaks downstream steps, while a false negative only wastes some
+    context tokens. Only the single longest match per file is considered;
+    multiple separate inline copies of the same file are not handled.
+    """
+    if not inserted_includes:
+        return prompt
+
+    # Paths may be project-root-relative; resolve against project root so
+    # dedup works regardless of CWD.
+    from .path_resolution import find_project_root_from_path
+    _found = find_project_root_from_path(".")
+    _project_root = Path(_found).resolve() if _found else Path(".").resolve()
+
+    included_contents: List[str] = []
+    for file_path in inserted_includes:
+        try:
+            path = Path(file_path)
+            if not path.is_absolute():
+                path = _project_root / path
+            if path.is_file():
+                included_contents.append(path.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            continue
+
+    if not included_contents:
+        return prompt
+
+    prompt_lines = prompt.splitlines(keepends=True)
+    keep = [True] * len(prompt_lines)
+
+    # For files where ``coverage * size`` would fall to or below ``min_block``,
+    # the coverage rule is too lax: a generic ``min_block``-line overlap could
+    # trigger removal. Require a full-file match for files at or below this
+    # cutoff. For larger files, the coverage threshold dominates and is
+    # guaranteed to exceed ``min_block`` by construction.
+    small_file_cutoff = math.ceil(min_block / coverage)
+
+    for content in included_contents:
+        content_lines = content.splitlines(keepends=True)
+        if not content_lines:
+            continue
+        sm = difflib.SequenceMatcher(
+            None, prompt_lines, content_lines, autojunk=False
+        )
+        m = sm.find_longest_match(0, len(prompt_lines), 0, len(content_lines))
+        if len(content_lines) <= small_file_cutoff:
+            threshold = len(content_lines)
+        else:
+            threshold = math.ceil(coverage * len(content_lines))
+        if m.size >= threshold:
+            for j in range(m.a, m.a + m.size):
+                keep[j] = False
+
+    return "".join(line for line, k in zip(prompt_lines, keep) if k)
+
 
 def insert_includes(
     input_prompt: str,
@@ -22,7 +119,11 @@ def insert_includes(
     temperature: float = 0.0,
     time: float = DEFAULT_TIME,
     verbose: bool = False,
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    include_docs: bool = False,
+    max_workers: int = 1,
+    dedup: bool = True,
+    compress: bool = False,
 ) -> Tuple[str, str, float, str]:
     """
     Determine needed dependencies and insert them into a prompt.
@@ -39,6 +140,14 @@ def insert_includes(
         verbose (bool, optional): Whether to print detailed information. Defaults to False.
         progress_callback (Optional[Callable[[int, int], None]]): Callback for progress updates.
             Called with (current, total) for each file processed.
+        include_docs (bool, optional): Whether to include documentation files in
+            dependency discovery. Defaults to False. Passed through to auto_include.
+        max_workers (int, optional): Number of parallel workers for file
+            summarization. Defaults to 1. Passed through to auto_include.
+        dedup (bool, optional): Whether to remove redundant inline content after
+            inserting includes. Defaults to True.
+        compress (bool, optional): When True, tag new Python includes with
+            ``mode="compressed"``. Defaults to False.
 
     Returns:
         Tuple[str, str, float, str]: Tuple containing:
@@ -48,36 +157,32 @@ def insert_includes(
             - model_name: Name of the LLM model used
     """
     try:
-        # Step 1: Load the prompt template
+        # Step 1: Load and preprocess the prompt template
         insert_includes_prompt = load_prompt_template("insert_includes_LLM")
         if not insert_includes_prompt:
             raise ValueError("Failed to load insert_includes_LLM.prompt template")
 
-        if verbose:
-            print("[blue]Loaded insert_includes_LLM prompt template[/blue]")
+        processed_prompt = preprocess(
+            insert_includes_prompt,
+            recursive=False,
+            double_curly_brackets=True,
+            exclude=["actual_prompt_to_update", "actual_dependencies_to_insert"]
+        )
 
-        # Step 2: Read the CSV file
+        if verbose:
+            console.print("[blue]Loaded and preprocessed insert_includes_LLM prompt template[/blue]")
+
+        # Step 2: Read the CSV file (create with header if missing)
         try:
             with open(csv_filename, 'r') as file:
                 csv_content = file.read()
         except FileNotFoundError:
             if verbose:
-                print(f"[yellow]CSV file {csv_filename} not found. Creating empty CSV.[/yellow]")
-            csv_content = "full_path,file_summary,content_hash\n"
+                console.print(f"[yellow]CSV file {csv_filename} not found. Creating empty CSV.[/yellow]")
+            csv_content = "full_path,file_summary,key_exports,dependencies,content_hash\n"
             Path(csv_filename).write_text(csv_content)
 
-        # Step 3: Preprocess the prompt template
-        processed_prompt = preprocess(
-            insert_includes_prompt,
-            recursive=False,
-            double_curly_brackets=True,
-            exclude_keys=["actual_prompt_to_update", "actual_dependencies_to_insert"]
-        )
-
-        if verbose:
-            print("[blue]Preprocessed prompt template[/blue]")
-
-        # Step 4: Get dependencies using auto_include
+        # Step 3: Get dependencies using auto_include
         dependencies, csv_output, auto_include_cost, auto_include_model = auto_include(
             input_prompt=input_prompt,
             directory_path=directory_path,
@@ -87,49 +192,130 @@ def insert_includes(
             temperature=temperature,
             time=time,
             verbose=verbose,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            csv_path=csv_filename,
+            include_docs=include_docs,
+            max_workers=max_workers,
+            compress=compress,
         )
 
         if verbose:
-            print("[blue]Retrieved dependencies using auto_include[/blue]")
-            print(f"Dependencies found: {dependencies}")
+            console.print("[blue]Retrieved dependencies using auto_include[/blue]")
+            console.print(f"Dependencies found: {dependencies}")
 
-        # Step 5: Run llm_invoke with the insert includes prompt
-        response = llm_invoke(
-            prompt=processed_prompt,
-            input_json={
-                "actual_prompt_to_update": input_prompt,
-                "actual_dependencies_to_insert": dependencies
-            },
-            strength=strength,
-            temperature=temperature,
-            time=time,
-            verbose=verbose,
-            output_pydantic=InsertIncludesOutput
-        )
+        # Step 4: Apply <update> blocks deterministically
+        update_blocks = re.findall(r'<update>(.*?)</update>', dependencies, re.DOTALL)
+        new_blocks = re.findall(r'<new>(.*?)</new>', dependencies, re.DOTALL)
 
-        if not response or 'result' not in response:
-            raise ValueError("Failed to get valid response from LLM model")
+        output_prompt = input_prompt
+        for update_block in update_blocks:
+            match = re.search(r'<include[^>]*>(.*?)</include>', update_block, re.DOTALL)
+            if match:
+                file_path = match.group(1).strip()
+                # Extract only the <include>...</include> tag from the update block,
+                # ignoring any surrounding content (comments, whitespace, etc.)
+                include_tag_match = re.search(r'<include[^>]*>.*?</include>', update_block, re.DOTALL)
+                replacement = include_tag_match.group(0) if include_tag_match else update_block.strip()
+                escaped_path = re.escape(file_path)
+                pattern = r'<include[^>]*>\s*' + escaped_path + r'\s*</include>'
+                new_prompt = re.sub(pattern, replacement, output_prompt)
+                # If the full path didn't match, try matching by basename.
+                # This handles cases where the prompt has a bare filename
+                # (e.g. "file.py") but the update block has a qualified path
+                # (e.g. "dir/file.py"), or vice-versa.
+                # Only apply basename fallback when it uniquely matches a single
+                # include in the prompt, to avoid nondeterministic replacements
+                # when multiple files share the same basename (e.g. a/utils.py
+                # vs b/utils.py).
+                if new_prompt == output_prompt:
+                    basename = os.path.basename(file_path)
+                    escaped_basename = re.escape(basename)
+                    pattern = r'<include[^>]*>\s*(?:[^\s<]*/)*' + escaped_basename + r'\s*</include>'
+                    matches = re.findall(pattern, output_prompt)
+                    if len(matches) == 1:
+                        new_prompt = re.sub(pattern, replacement, output_prompt)
+                    elif len(matches) > 1 and verbose:
+                        console.print(f"[yellow]Warning: basename '{basename}' matches {len(matches)} includes; skipping ambiguous update[/yellow]")
+                output_prompt = new_prompt
 
-        result: InsertIncludesOutput = response['result']
-        model_name = response['model_name']
-        total_cost = response['cost'] + auto_include_cost
+        if not update_blocks and not new_blocks and dependencies.strip():
+            new_dependencies_str = dependencies
+            has_new = True
+        else:
+            new_dependencies_str = "\n".join([f"<new>{block}</new>" for block in new_blocks])
+            has_new = bool(new_blocks)
 
-        if verbose:
-            print("[green]Successfully inserted includes into prompt[/green]")
-            print(f"Total cost: ${total_cost:.6f}")
-            print(f"Model used: {model_name}")
+        # Steps 5 & 6: Invoke LLM if <new> blocks exist, otherwise skip
+        if has_new:
+            response = llm_invoke(
+                prompt=processed_prompt,
+                input_json={
+                    "actual_prompt_to_update": output_prompt,
+                    "actual_dependencies_to_insert": new_dependencies_str
+                },
+                strength=strength,
+                temperature=temperature,
+                time=time,
+                verbose=verbose,
+                output_pydantic=InsertIncludesOutput
+            )
+
+            if not response or 'result' not in response:
+                raise ValueError("Failed to get valid response from LLM model")
+
+            result: InsertIncludesOutput = response['result']
+            # Guard against malformed structured output of any non-``InsertIncludesOutput``
+            # shape (``None``, a raw string, or a raw ``dict`` that survives the
+            # cloud validation-failure ``pass`` in ``llm_invoke``). The
+            # ``'result' not in response`` check above does not catch a
+            # present-but-malformed value, so verify the type before accessing
+            # ``.output_prompt`` (issue #1612).
+            if not isinstance(result, InsertIncludesOutput):
+                raise ValueError(
+                    "insert_includes received a malformed LLM result "
+                    f"(expected InsertIncludesOutput, got "
+                    f"{type(result).__name__})."
+                )
+            model_name = response['model_name']
+            total_cost = response['cost'] + auto_include_cost
+            output_prompt = result.output_prompt
+
+            if verbose:
+                console.print("[green]Successfully inserted includes into prompt[/green]")
+                console.print(f"Total cost: ${total_cost:.6f}")
+                console.print(f"Model used: {model_name}")
+        else:
+            model_name = auto_include_model
+            total_cost = auto_include_cost
+            if verbose:
+                console.print("[green]No new includes to insert, skipping LLM call[/green]")
+
+        # Step 6: Dedup — remove inline content that duplicates included documents
+        if dedup and dependencies.strip():
+            # Extract all <include>...</include> file paths from the dependencies
+            include_paths = re.findall(
+                r'<include[^>]*>(.*?)</include>', dependencies, re.DOTALL
+            )
+            include_paths = [p.strip() for p in include_paths if p.strip()]
+            if include_paths:
+                output_prompt = _remove_redundant_content(output_prompt, include_paths)
+                if verbose:
+                    console.print(
+                        f"[blue]Dedup: checked {len(include_paths)} included file(s) "
+                        f"for redundant inline content[/blue]"
+                    )
 
         return (
-            result.output_prompt,
+            output_prompt,
             csv_output,
             total_cost,
             model_name
         )
 
     except Exception as e:
-        print(f"[red]Error in insert_includes: {str(e)}[/red]")
+        console.print(f"[red]Error in insert_includes: {str(e)}[/red]")
         raise
+
 
 def main():
     """Example usage of the insert_includes function."""
@@ -153,14 +339,14 @@ def main():
             verbose=True
         )
 
-        print("\n[bold green]Results:[/bold green]")
-        print(f"[white]Output Prompt:[/white]\n{output_prompt}")
-        print(f"\n[white]CSV Output:[/white]\n{csv_output}")
-        print(f"[white]Total Cost: ${total_cost:.6f}[/white]")
-        print(f"[white]Model Used: {model_name}[/white]")
+        console.print("\n[bold green]Results:[/bold green]")
+        console.print(f"[white]Output Prompt:[/white]\n{output_prompt}")
+        console.print(f"\n[white]CSV Output:[/white]\n{csv_output}")
+        console.print(f"[white]Total Cost: ${total_cost:.6f}[/white]")
+        console.print(f"[white]Model Used: {model_name}[/white]")
 
     except Exception as e:
-        print(f"[red]Error in main: {str(e)}[/red]")
+        console.print(f"[red]Error in main: {str(e)}[/red]")
 
 if __name__ == "__main__":
     main()

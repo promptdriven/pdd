@@ -1,0 +1,8 @@
+flowchart LR
+    A["GitHub Issue\n+ label"] --> B["Bot classifies issue,\npicks commands"]
+    B --> C["Bot runs appropriate\nPDD commands"]
+    C --> D["Bot verifies PR\nsolves the issue"]
+    D --> E["PR ready\nfor review"]
+
+    style A fill:#f0f7ff,stroke:#0366d6,stroke-width:2px,color:#0366d6
+    style E fill:#d4edda,stroke:#155724,stroke-width:2px,color:#155724

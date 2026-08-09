@@ -1,0 +1,7 @@
+contexts:
+  default:
+    paths:
+      - "**"
+    defaults:
+      generate_output_path: pdd/
+      default_language: python

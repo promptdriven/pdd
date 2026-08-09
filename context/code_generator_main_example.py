@@ -1,208 +1,174 @@
-import click
+"""
+Example demonstrating how to use the code_generator_main module.
+
+This script sets up a mock environment containing a prompt file and then calls
+`code_generator_main` to generate code, simulating both full generation and
+architectural conformance checks.
+"""
+
+from __future__ import annotations
+
+import json
 import os
+import sys
 import pathlib
-import shutil
-from unittest.mock import patch
+import click
+from typing import Any, Dict
 
-# Assuming 'pdd' package is installed and pdd.code_generator_main is accessible.
-# If pdd.code_generator_main is the name of the file, and it's in a 'pdd' directory
-# that is in PYTHONPATH or installed.
-from pdd.code_generator_main import code_generator_main 
+# Ensure absolute reference for pdd package
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-# --- Mocked constants (normally from pdd.__init__) ---
-# These are needed because code_generator_main uses them as defaults
-# or for its logic, and the example script is standalone.
-DEFAULT_STRENGTH = 0.5
-DEFAULT_TIME = 0.25
-EXTRACTION_STRENGTH = 0.7 # Example value
-FIREBASE_API_KEY_ENV_VAR = "NEXT_PUBLIC_FIREBASE_API_KEY" 
-GITHUB_CLIENT_ID_ENV_VAR = "GITHUB_CLIENT_ID"
+from pdd.code_generator_main import (
+    code_generator_main,
+    ArchitectureConformanceError,
+    PublicSurfaceRegressionError,
+    TestChurnError,
+)
 
-# --- Mocked internal generator functions ---
-# These prevent actual LLM calls, making the example self-contained,
-# predictable, and fast, without requiring real API keys to run.
-def mock_local_code_generator_func(prompt: str, language: str, strength: float, temperature: float, verbose: bool):
-    """Mocks the local_code_generator function."""
-    if verbose:
-        print(f"[Mock] Called local_code_generator_func for lang '{language}' with prompt: '{prompt[:30]}...'")
-    generated_code = f"// Mock local code for: {language}\n"
-    generated_code += f"// Prompt: {prompt[:70]}...\n"
-    generated_code += f"// Strength: {strength}, Temp: {temperature}\n"
-    generated_code += "public class Main { public static void main(String[] args) { System.out.println(\"Hello from Mock Local!\"); } }"
-    return generated_code, 0.001, "mock_local_model_v1"
+# Define output directory relative to this script
+OUTPUT_DIR = pathlib.Path(__file__).resolve().parent / "output"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-def mock_incremental_code_generator_func(original_prompt: str, new_prompt: str, existing_code: str, language: str, strength: float, temperature: float, time: float, force_incremental: bool, verbose: bool, preprocess_prompt: bool):
-    """Mocks the incremental_code_generator function."""
-    if verbose:
-        print(f"[Mock] Called incremental_code_generator_func for lang '{language}' with new_prompt: '{new_prompt[:30]}...'")
-    
-    # Simulate a scenario where incremental generation decides full regeneration is better
-    if "very_significant_change" in new_prompt and not force_incremental:
-        if verbose:
-            print("[Mock] Incremental decided full regeneration is better for this change.")
-        return existing_code, False, 0.0005, "mock_inc_model_suggests_full"
-
-    updated_code = f"// Mock incrementally updated code for: {language}\n"
-    updated_code += f"// Original Prompt Hint: {original_prompt[:50]}...\n"
-    updated_code += f"// New Prompt Hint: {new_prompt[:50]}...\n"
-    updated_code += f"// --- Appended to existing code ---\n{existing_code}\n"
-    updated_code += "// Change: Added a new comment and method.\n"
-    updated_code += "public void newMethod() { System.out.println(\"New method from incremental update!\"); }"
-    return updated_code, True, 0.002, "mock_inc_model_v1_diff"
-
-class MockContext:
-    """A simple mock for click.Context."""
-    def __init__(self, params: dict):
-        self.obj = params if params is not None else {}
-
-def print_generation_results(scenario_name: str, code: str, incremental: bool, cost: float, model: str, output_file: pathlib.Path = None):
-    """Helper to print results."""
-    print(f"\n--- Results for {scenario_name} ---")
-    print(f"Generated/Updated Code (first 150 chars): \n{code[:150]}...")
-    if output_file and output_file.exists():
-        print(f"Full content in: {output_file.resolve()}")
-    elif output_file:
-        print(f"Output file {output_file.resolve()} was NOT created (as expected if no output path or error).")
-    print(f"Was Incremental: {incremental}")
-    print(f"Total Cost: ${cost:.6f}")
-    print(f"Model Name: {model}")
-    print("--------------------------------------")
-
-def main_example():
+def setup_mock_files() -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
     """
-    Demonstrates how to use the code_generator_main function from the PDD CLI.
-    This example covers:
-    1. Full code generation with local execution.
-    2. Incremental code generation (using explicit original prompt) with local execution.
-    3. Forced incremental code generation.
-    4. Attempted cloud code generation (which will fall back to local due to mocked auth/network).
-    
-    It uses mocked versions of the actual code generator functions (local_code_generator_func
-    and incremental_code_generator_func) to avoid real LLM calls and API key requirements,
-    making the example self-contained and predictable.
+    Creates mock prompt, architecture.json, and existing code files inside the output directory
+    to prepare for the code generator execution.
     """
-    base_output_dir = pathlib.Path("./output/code_generator_main_example_output")
-    # Clean up previous run's output
-    if base_output_dir.exists():
-        shutil.rmtree(base_output_dir)
-    base_output_dir.mkdir(parents=True, exist_ok=True)
-
-    # --- Scenario 1: Full code generation (local execution) ---
-    scenario1_name = "Scenario 1: Full Generation (Local)"
-    print(f"\nRunning {scenario1_name}...")
-    s1_prompt_content = "Create a simple Java program that prints 'Hello, World!'."
-    s1_prompt_file = base_output_dir / "s1_hello_java.prompt"
-    s1_prompt_file.write_text(s1_prompt_content)
-    s1_output_file = base_output_dir / "s1_HelloWorld.java"
-
-    s1_cli_params = {
-        'local': True, 'strength': DEFAULT_STRENGTH, 'temperature': 0.1, 
-        'time': DEFAULT_TIME, 'verbose': True, 'force': False, 'quiet': False
+    # 1. Create architecture.json describing a module and its exported functions
+    arch_file = OUTPUT_DIR / "architecture.json"
+    arch_content = {
+        "modules": [
+            {
+                "filename": "math_helper_Python.prompt",
+                "filepath": str(OUTPUT_DIR / "math_helper.py"),
+                "reason": "Helper module for math operations",
+                "dependencies": [],
+                "tags": ["module", "python"],
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {
+                                "name": "calculate_factorial",
+                                "signature": "(n: int) -> int"
+                            }
+                        ]
+                    }
+                }
+            }
+        ]
     }
-    s1_ctx = MockContext(s1_cli_params)
+    arch_file.write_text(json.dumps(arch_content, indent=2), encoding="utf-8")
 
-    code, incremental, cost, model = code_generator_main(
-        ctx=s1_ctx,
-        prompt_file=str(s1_prompt_file),
-        output=str(s1_output_file),
-        original_prompt_file_path=None,
-        force_incremental_flag=False
-    )
-    print_generation_results(scenario1_name, code, incremental, cost, model, s1_output_file)
+    # 2. Create math_helper_Python.prompt with pdd-interface tags
+    prompt_file = OUTPUT_DIR / "math_helper_Python.prompt"
+    prompt_content = """---
+name: math_helper_Python
+language: Python
+---
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "calculate_factorial", "signature": "(n: int) -> int"}
+    ]
+  }
+}
+</pdd-interface>
 
-    # --- Scenario 2: Incremental code generation (explicit original prompt, local) ---
-    scenario2_name = "Scenario 2: Incremental Generation (Explicit Original, Local)"
-    print(f"\nRunning {scenario2_name}...")
-    s2_original_prompt_content = "Create a basic Python function `greet()` that returns 'Hello'."
-    s2_new_prompt_content = "Modify the Python function `greet()` to accept a name and return 'Hello, [name]!'."
-    s2_existing_code_content = "def greet():\n    return \"Hello\""
-    
-    s2_original_prompt_file = base_output_dir / "s2_original_greet_python.prompt"
-    s2_new_prompt_file = base_output_dir / "s2_new_greet_python.prompt"
-    s2_output_code_file = base_output_dir / "s2_greet.py"
+Generate a python function called calculate_factorial that calculates the factorial of n.
+"""
+    prompt_file.write_text(prompt_content, encoding="utf-8")
 
-    s2_original_prompt_file.write_text(s2_original_prompt_content)
-    s2_new_prompt_file.write_text(s2_new_prompt_content)
-    s2_output_code_file.write_text(s2_existing_code_content)
+    # 3. Create a sibling mock test file to bypass test churn gates if test files are modified
+    test_file = OUTPUT_DIR / "test_math_helper.py"
+    test_file.write_text("""def test_factorial():
+    from math_helper import calculate_factorial
+    assert calculate_factorial(5) == 120
+""", encoding="utf-8")
 
-    s2_cli_params = {
-        'local': True, 'strength': 0.6, 'temperature': 0.2, 
-        'time': 0.3, 'verbose': True, 'force': False, 'quiet': False
+    return prompt_file, arch_file, test_file
+
+def main() -> None:
+    print("=== PDD Code Generator Main Orchestrator Example ===\n")
+
+    # Setup mock files for the generator to run against
+    prompt_file, arch_file, test_file = setup_mock_files()
+    output_code_path = OUTPUT_DIR / "math_helper.py"
+
+    print(f"Mock environment setup:")
+    print(f"  Prompt File: {prompt_file.name}")
+    print(f"  Architecture Config: {arch_file.name}")
+    print(f"  Output Code Destination: {output_code_path.name}\n")
+
+    # Initialize a mock Click Context to carry cli parameters
+    # code_generator_main expects this structure to parse cli configuration values
+    ctx = click.Context(click.Command('generate'))
+    ctx.obj = {
+        "local": True,           # Instructs generator to run locally rather than querying the cloud
+        "strength": 0.7,         # LLM reasoning strength (0.0 to 1.0)
+        "temperature": 0.0,      # LLM sampling temperature
+        "time": 0.25,            # LLM thinking budget / timeout scaling
+        "verbose": True,         # Print internal logging and step status
+        "force": True,           # Overwrite output files without prompting
+        "quiet": False           # Do not suppress console panel updates
     }
-    s2_ctx = MockContext(s2_cli_params)
 
-    code, incremental, cost, model = code_generator_main(
-        ctx=s2_ctx,
-        prompt_file=str(s2_new_prompt_file),
-        output=str(s2_output_code_file),
-        original_prompt_file_path=str(s2_original_prompt_file),
-        force_incremental_flag=False
-    )
-    print_generation_results(scenario2_name, code, incremental, cost, model, s2_output_code_file)
+    # We need to temporarily point architecture.json parsing to our mock location
+    # code_generator_main defaults to looking at "architecture.json" in current working directory.
+    # For this example, we mock the current working directory or ensure our env is clean.
+    orig_cwd = os.getcwd()
+    os.chdir(str(OUTPUT_DIR))
 
-    # --- Scenario 2b: Forced Incremental (even if model suggests full) ---
-    scenario2b_name = "Scenario 2b: Forced Incremental Generation"
-    print(f"\nRunning {scenario2b_name}...")
-    # Use a prompt that the mock would normally suggest full regen for
-    s2b_new_prompt_content = "very_significant_change: Rewrite the Python function `greet()` entirely to be a class `Greeter`."
-    s2_new_prompt_file.write_text(s2b_new_prompt_content) # Overwrite s2_new_prompt_file for this sub-scenario
+    print("Executing code_generator_main...")
+    try:
+        # Inputs:
+        #   - ctx: Click Context holding CLI parameter overrides
+        #   - prompt_file: Filepath of the source .prompt template
+        #   - output: Overriding destination filepath (None defaults to front-matter/config paths)
+        #   - original_prompt_file_path: Used for incremental diff comparisons
+        #   - force_incremental_flag: Forces incremental diff update if True
+        #   - env_vars: Optional environment variables to substitute into prompt template placeholders
+        #
+        # Outputs:
+        #   - generated_code: The parsed, generated output string
+        #   - was_incremental: Boolean indicating if a patch was applied instead of full overwrite
+        #   - total_cost: Estimated monetary cost of the LLM generation (in USD)
+        #   - model_name: Name of the LLM model that performed the generation
+        generated_code, was_incremental, total_cost, model_name = code_generator_main(
+            ctx=ctx,
+            prompt_file=prompt_file.name,
+            output=str(output_code_path),
+            original_prompt_file_path=None,
+            force_incremental_flag=False,
+            env_vars={},
+            language="python"
+        )
 
-    # s2_output_code_file already exists with content from previous step
-    
-    code, incremental, cost, model = code_generator_main(
-        ctx=s2_ctx, # Re-use context from s2
-        prompt_file=str(s2_new_prompt_file),
-        output=str(s2_output_code_file),
-        original_prompt_file_path=str(s2_original_prompt_file),
-        force_incremental_flag=True # Force incremental
-    )
-    print_generation_results(scenario2b_name, code, incremental, cost, model, s2_output_code_file)
+        print("\n--- Generation Output ---")
+        print(f"Model Used: {model_name}")
+        print(f"Generation Cost: ${total_cost:.6f}")
+        print(f"Incremental Patch Applied: {was_incremental}")
+        print(f"Generated Code Content:\n{generated_code}")
 
+    except ArchitectureConformanceError as e:
+        print(f"\n[Conformance Error] Generated code violated the interface contract:")
+        print(f"  Missing symbols: {e.missing_symbols}")
+        print(f"  Repair Directive:")
+        print(e.repair_directive)
+    except PublicSurfaceRegressionError as e:
+        print(f"\n[Regression Error] Public API surface was shrunk without BREAKING-CHANGE:")
+        print(f"  Removed: {e.removed_symbols}")
+        print(f"  Signatures Changed: {e.changed_signatures}")
+    except TestChurnError as e:
+        print(f"\n[Churn Error] Sibling test file was rewritten past the allowed threshold:")
+        print(f"  Churn Ratio: {e.churn_ratio:.2f} (Threshold: {e.threshold:.2f})")
+    finally:
+        # Restore original working directory
+        os.chdir(orig_cwd)
 
-    # --- Scenario 3: Cloud generation attempt (will fallback to local) ---
-    scenario3_name = "Scenario 3: Cloud Generation Attempt (Fallback to Local)"
-    print(f"\nRunning {scenario3_name}...")
-    # Set dummy env vars required for cloud auth attempt
-    os.environ[FIREBASE_API_KEY_ENV_VAR] = "dummy_firebase_api_key"
-    os.environ[GITHUB_CLIENT_ID_ENV_VAR] = "dummy_github_client_id"
-
-    s3_prompt_content = "Generate a C# snippet to read a file."
-    s3_prompt_file = base_output_dir / "s3_readfile_c#.prompt"
-    s3_prompt_file.write_text(s3_prompt_content)
-    s3_output_file = base_output_dir / "s3_FileReader.cs"
-
-    s3_cli_params = {
-        'local': False, # Attempt cloud
-        'strength': 0.7, 'temperature': 0.3, 
-        'time': 0.4, 'verbose': True, 'force': False, 'quiet': False
-    }
-    s3_ctx = MockContext(s3_cli_params)
-    
-    # Note: The actual cloud call will likely fail due to dummy keys or network isolation
-    # and the function is designed to fall back to local execution.
-    # Our mock_local_code_generator_func will then be hit.
-    code, incremental, cost, model = code_generator_main(
-        ctx=s3_ctx,
-        prompt_file=str(s3_prompt_file),
-        output=str(s3_output_file),
-        original_prompt_file_path=None,
-        force_incremental_flag=False
-    )
-    print_generation_results(scenario3_name, code, incremental, cost, model, s3_output_file)
-
-    # Clean up dummy env vars
-    del os.environ[FIREBASE_API_KEY_ENV_VAR]
-    del os.environ[GITHUB_CLIENT_ID_ENV_VAR]
-
-    print("\nExample execution finished. Check the './output/code_generator_main_example_output' directory.")
+    print("\nExample execution completed successfully.")
 
 if __name__ == "__main__":
-    # Apply patches globally for the main_example execution.
-    # This ensures that the code_generator_main function, when it internally calls
-    # local_code_generator_func or incremental_code_generator_func, will use our mocks.
-    # The paths to patch are relative to where code_generator_main *thinks* these functions are.
-    # If code_generator_main.py has "from .code_generator import code_generator as local_code_generator_func",
-    # then the path to patch is 'pdd.code_generator_main.local_code_generator_func'.
-    with patch('pdd.code_generator_main.local_code_generator_func', new=mock_local_code_generator_func), \
-         patch('pdd.code_generator_main.incremental_code_generator_func', new=mock_incremental_code_generator_func):
-        main_example()
+    main()

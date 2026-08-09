@@ -19,6 +19,7 @@ from ..get_jwt_token import (
     RateLimitError,
     TokenError,
     UserCancelledError,
+    FirebaseAuthenticator,
     get_jwt_token as device_flow_get_token,
     _get_cached_jwt,
 )
@@ -34,6 +35,7 @@ PDD_CLOUD_TIMEOUT_ENV = "PDD_CLOUD_TIMEOUT"
 
 # Default cloud request timeout (seconds)
 DEFAULT_CLOUD_TIMEOUT = 900  # 15 minutes
+CLOUD_CONNECT_TIMEOUT = 30  # seconds — fail fast if server is unreachable
 
 
 def get_cloud_timeout() -> int:
@@ -56,6 +58,19 @@ def get_cloud_timeout() -> int:
         return int(os.environ.get(PDD_CLOUD_TIMEOUT_ENV, str(DEFAULT_CLOUD_TIMEOUT)))
     except ValueError:
         return DEFAULT_CLOUD_TIMEOUT
+
+
+def get_cloud_request_timeout() -> tuple[int, int]:
+    """Get cloud request timeout as (connect, read) tuple for the requests library.
+
+    Separates connect timeout (short — fail fast if unreachable) from read timeout
+    (long — server needs time to process LLM calls before sending a response).
+
+    Returns:
+        Tuple of (connect_timeout, read_timeout) in seconds.
+    """
+    return (CLOUD_CONNECT_TIMEOUT, get_cloud_timeout())
+
 
 # Default cloud endpoints
 DEFAULT_BASE_URL = "https://us-central1-prompt-driven-development.cloudfunctions.net"
@@ -83,6 +98,7 @@ CLOUD_ENDPOINTS = {
     "getCommandStatus": "/getCommandStatus",
     "updateCommand": "/updateCommand",
     "cancelCommand": "/cancelCommand",
+    "submitExample": "/submitExample",
 }
 
 
@@ -90,15 +106,17 @@ class CloudConfig:
     """Centralized cloud configuration for all PDD commands."""
 
     @staticmethod
-    def _ensure_default_env() -> None:
+    def ensure_default_env() -> None:
         """Default PDD_ENV for CLI usage when unset."""
         if os.environ.get("PDD_ENV"):
             return
 
         # Local/emulator signals should keep PDD_ENV local.
-        if (os.environ.get("FUNCTIONS_EMULATOR") or
-                os.environ.get("FIREBASE_AUTH_EMULATOR_HOST") or
-                os.environ.get("FIREBASE_EMULATOR_HUB")):
+        if (
+            os.environ.get("FUNCTIONS_EMULATOR")
+            or os.environ.get("FIREBASE_AUTH_EMULATOR_HOST")
+            or os.environ.get("FIREBASE_EMULATOR_HUB")
+        ):
             os.environ["PDD_ENV"] = "local"
             return
 
@@ -113,6 +131,11 @@ class CloudConfig:
 
         # Default to production for typical CLI usage.
         os.environ["PDD_ENV"] = "prod"
+
+    @staticmethod
+    def _ensure_default_env() -> None:
+        """Backward-compatible alias for ensure_default_env()."""
+        CloudConfig.ensure_default_env()
 
     @staticmethod
     def get_base_url() -> str:
@@ -152,8 +175,7 @@ class CloudConfig:
 
     @staticmethod
     def get_jwt_token(
-        verbose: bool = False,
-        app_name: str = "PDD Code Generator"
+        verbose: bool = False, app_name: str = "PDD Code Generator"
     ) -> Optional[str]:
         """Get JWT token for cloud authentication.
 
@@ -171,13 +193,15 @@ class CloudConfig:
             Callers should handle None return by falling back to local execution.
         """
         # Default env to prod for typical CLI usage (unless emulator/custom URL says otherwise).
-        CloudConfig._ensure_default_env()
+        CloudConfig.ensure_default_env()
 
         # Check for pre-injected token (testing/CI)
         injected_token = os.environ.get(PDD_JWT_TOKEN_ENV)
         if injected_token:
             if verbose:
-                console.print(f"[info]Using injected JWT token from {PDD_JWT_TOKEN_ENV}[/info]")
+                console.print(
+                    f"[info]Using injected JWT token from {PDD_JWT_TOKEN_ENV}[/info]"
+                )
             return injected_token
 
         # Check file cache first (synchronous - works in async contexts)
@@ -188,9 +212,34 @@ class CloudConfig:
                 console.print("[info]Using cached JWT token[/info]")
             return cached_jwt
 
+        # Explicit machine-mode flags suppress device flow while preserving a
+        # silent keyring refresh. The async helper performs the actual refresh;
+        # this preflight only avoids invoking it when no refresh credential is
+        # available. Ambient CI is intentionally handled by the helper itself.
+        machine_mode = (
+            os.environ.get("PDD_FORCE", "").lower() in {"1", "true", "yes", "on"}
+            or os.environ.get("PDD_NO_INTERACTIVE", "").lower()
+            in {"1", "true", "yes", "on"}
+            or os.environ.get("PDD_ALLOW_INTERACTIVE", "").lower()
+            in {"0", "false", "no", "off"}
+        )
+        if machine_mode:
+            firebase_api_key = os.environ.get(FIREBASE_API_KEY_ENV)
+            try:
+                has_refresh = bool(
+                    firebase_api_key
+                    and FirebaseAuthenticator(
+                        firebase_api_key, app_name
+                    )._get_stored_refresh_token()
+                )
+            except Exception:
+                has_refresh = False
+            if not has_refresh:
+                return None
+
         # Standard device flow authentication (requires asyncio.run)
         # Note: This will fail if called from within a running event loop
-        # In that case, the cached JWT should be used (user should run pdd login first)
+        # In that case, the cached JWT should be used (user should run pdd auth login first)
         try:
             firebase_api_key = os.environ.get(FIREBASE_API_KEY_ENV)
             github_client_id = os.environ.get(GITHUB_CLIENT_ID_ENV)
@@ -204,21 +253,29 @@ class CloudConfig:
             try:
                 loop = asyncio.get_running_loop()
                 # We're in an async context - can't use asyncio.run()
-                # User needs to run 'pdd login' first to cache credentials
+                # User needs to run 'pdd auth login' first to cache credentials
                 raise AuthError(
                     "Cannot authenticate interactively from async context. "
-                    "Please run 'pdd login' first to cache credentials."
+                    "Please run 'pdd auth login' first to cache credentials."
                 )
             except RuntimeError:
                 # No running event loop - safe to use asyncio.run()
                 pass
 
-            return asyncio.run(device_flow_get_token(
-                firebase_api_key=firebase_api_key,
-                github_client_id=github_client_id,
-                app_name=app_name
-            ))
-        except (AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError) as e:
+            return asyncio.run(
+                device_flow_get_token(
+                    firebase_api_key=firebase_api_key,
+                    github_client_id=github_client_id,
+                    app_name=app_name,
+                )
+            )
+        except (
+            AuthError,
+            NetworkError,
+            TokenError,
+            UserCancelledError,
+            RateLimitError,
+        ) as e:
             # Always display auth errors (both these expected ones and the unexpected ones handled below) - critical for debugging auth issues
             console.print(f"[yellow]Cloud authentication error: {e}[/yellow]")
             return None
@@ -235,10 +292,7 @@ class CloudConfig:
         or local emulator via FUNCTIONS_EMULATOR. This prevents infinite
         loops when cloud endpoints call the CLI internally.
         """
-        return bool(
-            os.environ.get("K_SERVICE") or
-            os.environ.get("FUNCTIONS_EMULATOR")
-        )
+        return bool(os.environ.get("K_SERVICE") or os.environ.get("FUNCTIONS_EMULATOR"))
 
     @staticmethod
     def is_cloud_enabled() -> bool:
@@ -265,26 +319,28 @@ class CloudConfig:
             return True
         # Check for device flow auth credentials
         return bool(
-            os.environ.get(FIREBASE_API_KEY_ENV) and
-            os.environ.get(GITHUB_CLIENT_ID_ENV)
+            os.environ.get(FIREBASE_API_KEY_ENV)
+            and os.environ.get(GITHUB_CLIENT_ID_ENV)
         )
 
 
 # Re-export exception classes for convenience
 __all__ = [
-    'CloudConfig',
-    'AuthError',
-    'NetworkError',
-    'TokenError',
-    'UserCancelledError',
-    'RateLimitError',
-    'FIREBASE_API_KEY_ENV',
-    'GITHUB_CLIENT_ID_ENV',
-    'PDD_CLOUD_URL_ENV',
-    'PDD_JWT_TOKEN_ENV',
-    'PDD_CLOUD_TIMEOUT_ENV',
-    'DEFAULT_BASE_URL',
-    'DEFAULT_CLOUD_TIMEOUT',
-    'CLOUD_ENDPOINTS',
-    'get_cloud_timeout',
+    "CloudConfig",
+    "AuthError",
+    "NetworkError",
+    "TokenError",
+    "UserCancelledError",
+    "RateLimitError",
+    "FIREBASE_API_KEY_ENV",
+    "GITHUB_CLIENT_ID_ENV",
+    "PDD_CLOUD_URL_ENV",
+    "PDD_JWT_TOKEN_ENV",
+    "PDD_CLOUD_TIMEOUT_ENV",
+    "DEFAULT_BASE_URL",
+    "DEFAULT_CLOUD_TIMEOUT",
+    "CLOUD_ENDPOINTS",
+    "get_cloud_timeout",
+    "get_cloud_request_timeout",
+    "CLOUD_CONNECT_TIMEOUT",
 ]

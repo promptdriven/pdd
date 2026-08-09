@@ -55,7 +55,7 @@ def detect_change(
             detect_change_prompt,
             recursive=False,
             double_curly_brackets=True,
-            exclude_keys=["PROMPT_LIST", "CHANGE_DESCRIPTION"]
+            exclude=["PROMPT_LIST", "CHANGE_DESCRIPTION"]
         )
 
         # Step 2: Create prompt list and process change description
@@ -106,7 +106,7 @@ def detect_change(
             prompt=extract_prompt,
             input_json={"llm_output": detect_response['result']},
             strength=EXTRACTION_STRENGTH,
-            temperature=0.0,
+            temperature=temperature,
             time=time,
             verbose=verbose,
             output_pydantic=ChangesList
@@ -118,6 +118,22 @@ def detect_change(
             console.print("[bold blue]Extraction Results:[/bold blue]")
             console.print(f"Token count: {extract_response.get('token_count', 0)}")
             console.print(f"Cost: ${extract_response.get('cost', 0):.6f}")
+
+        # Guard against malformed structured output of any non-``ChangesList``
+        # shape (``None``, a raw string, or a raw ``dict`` that survives the
+        # cloud validation-failure ``pass`` in ``llm_invoke``). Raise a typed
+        # error rather than silently returning an empty list: a malformed
+        # response is a failure, and returning ``[]`` would let callers (e.g.
+        # incremental PRD propagation, which treats no changes as a no-op)
+        # proceed with stale prompt Requirements. A genuinely empty result is a
+        # real ``ChangesList`` that passes the isinstance check and still
+        # returns ``[]`` (issue #1612).
+        if not isinstance(extract_response['result'], ChangesList):
+            raise ValueError(
+                "detect_change received a malformed extraction result "
+                f"(expected ChangesList, got "
+                f"{type(extract_response['result']).__name__})."
+            )
 
         # Step 4: Format and display results
         changes_list = extract_response['result'].changes_list
@@ -142,6 +158,8 @@ def detect_change(
             for change in changes_list
         ], total_cost, model_name
 
-    except Exception as e:
-        console.print(f"[red]Error in detect_change: {str(e)}[/red]")
+    except Exception:
+        # Classification and recovery guidance belong to the command/caller.
+        # Exception messages can contain credentials, provider payloads, or
+        # prompt text, so this low-level detector must not print or log them.
         raise

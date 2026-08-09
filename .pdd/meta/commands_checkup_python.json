@@ -1,0 +1,22 @@
+{
+  "pdd_version": "0.0.307.dev0",
+  "timestamp": "2026-07-21T21:00:00+00:00",
+  "command": "fix",
+  "prompt_hash": "2e21dab257906d51e8bc9037b70040cfca2f69b5fc5b284ec5f66bd451dd28af",
+  "code_hash": "b1dcf89c8d7bbccfa0b0c1ae5a2ff3ff96dc3fdab0371fcdfde7f482fc142d6f",
+  "example_hash": "847008502198ff360190831172d5d6cc6de6e5e76d3782d2b53823297a5b1349",
+  "test_hash": "1550d2a6275603bb7fd35178f7d150b893434105d645639b720db4b19eb02bb0",
+  "test_files": {
+    "test_checkup.py": "1550d2a6275603bb7fd35178f7d150b893434105d645639b720db4b19eb02bb0",
+    "test_checkup_contracts.py": "084bbe8a423e7b2aa151bc5138837ade7f8e77790e8f7222baa4b37ba0dd6279",
+    "test_checkup_interactive_demo.py": "77a9127e209175c38189e1cfd6476994493dc428bdf0054412e7476ba782cfb6",
+    "test_checkup_simplify.py": "2a80956f21f2873e3eb48a113c6f756019db9e9b74b8a5e91e9052648caf8707"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
+    "context/architecture_sync_example.py": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
+    "context/agentic_checkup_orchestrator_example.py": "295a9ae294e22224d3c447f13c462854bfe4e526cebc89bcbba417ea514c7ef2",
+    "context/agentic_sync_example.py": "aa9683f1a26841f3cae854e72cce38636f0859d8dd2f7672fa14e412afdef884"
+  }
+}

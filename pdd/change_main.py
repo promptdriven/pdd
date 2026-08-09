@@ -22,6 +22,13 @@ from .construct_paths import construct_paths
 from .change import change as change_func
 from .process_csv_change import process_csv_change
 from .get_extension import get_extension
+from .user_story_tests import run_user_story_tests, discover_prompt_files
+from .validate_prompt_includes import sanitize_prompt_output
+from .prompt_gate import (
+    maybe_run_workflow_prompt_gate,
+    prompt_gate_block_message,
+    resolve_prompt_gate_project_root,
+)
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -316,6 +323,7 @@ def change_main(
                 return msg, 0.0, ""
 
         # --- 4. Save Results ---
+        saved_prompt_paths: List[Path] = []
         # Determine output path object using the potentially normalized 'output'
         output_path_obj: Optional[Path] = None
         if output:
@@ -432,10 +440,20 @@ def change_main(
 
                         try:
                             logger.debug("Attempting to save file to: %s", individual_output_path)
+                            modified_content, invalid_includes = sanitize_prompt_output(
+                                modified_content,
+                                individual_output_path,
+                            )
+                            if invalid_includes and not quiet:
+                                rprint(
+                                    "[yellow]Warning: Cleaned invalid <include> tag(s) "
+                                    f"before saving {individual_output_path}.[/yellow]"
+                                )
                             with open(individual_output_path, 'w', encoding='utf-8') as output_file:
                                 output_file.write(modified_content)
                             logger.debug("Saved modified prompt to: %s", individual_output_path)
                             saved_files_count += 1
+                            saved_prompt_paths.append(individual_output_path.resolve())
                         except IOError as io_error:
                             msg = f"Failed to write output file '{individual_output_path}': {io_error}"
                             if not quiet:
@@ -466,8 +484,18 @@ def change_main(
                 try:
                     output_path_obj.parent.mkdir(parents=True, exist_ok=True)  # Uses Path.mkdir, OK here
                     # Use open() for writing as expected by tests
+                    result_message, invalid_includes = sanitize_prompt_output(
+                        result_message,
+                        output_path_obj,
+                    )
+                    if invalid_includes and not quiet:
+                        rprint(
+                            "[yellow]Warning: Cleaned invalid <include> tag(s) "
+                            f"before saving {output_path_obj}.[/yellow]"
+                        )
                     with open(output_path_obj, 'w', encoding='utf-8') as output_file:
                         output_file.write(result_message)  # result_message contains the modified content here
+                    saved_prompt_paths.append(output_path_obj.resolve())
                     if not quiet:
                         rprint(f"[green]Modified prompt saved to:[/green] {output_path_obj}")
                         rprint(Panel(result_message, title="Modified Prompt Content", expand=False))
@@ -487,7 +515,91 @@ def change_main(
                     logger.error(msg, exc_info=True)
                     return msg, total_cost, model_name or ""
 
-        # --- 5. Final User Feedback ---
+        if saved_prompt_paths:
+            should_continue, gate_exit = maybe_run_workflow_prompt_gate(
+                saved_prompt_paths,
+                cli_prompt_checkup=ctx.obj.get("prompt_checkup"),
+                no_prompt_checkup=ctx.obj.get("no_prompt_checkup", False),
+                project_root=resolve_prompt_gate_project_root(saved_prompt_paths),
+                quiet=quiet,
+                interactive=ctx.obj.get("interactive", False),
+                apply=ctx.obj.get("apply", False),
+            )
+            if not should_continue:
+                msg = prompt_gate_block_message(gate_exit)
+                if not quiet:
+                    rprint(f"[bold red]{msg}[/bold red]")
+                return msg, total_cost, model_name or ""
+
+        # --- 5. User Story Validation (Optional) ---
+        # CSV mode without an explicit output path writes individual prompt files
+        # to CWD; skip story validation in that scenario to avoid failing on a
+        # missing default prompts directory.
+        skip_user_stories_for_csv_no_output = use_csv and output_path_obj is None
+        if (use_csv or success) and not ctx.obj.get("skip_user_stories", False) and not skip_user_stories_for_csv_no_output:
+            prompts_dir = resolved_config.get("prompts_dir") or os.environ.get("PDD_PROMPTS_DIR") or "prompts"
+            stories_dir = os.environ.get("PDD_USER_STORIES_DIR") or "user_stories"
+            validation_prompt_files = None
+            validation_prompts_dir = Path(prompts_dir)
+            output_is_csv = False
+
+            if use_csv and output_path_obj:
+                output_is_csv = output_path_obj.suffix.lower() == ".csv"
+
+            if output_is_csv:
+                if not quiet:
+                    rprint("[yellow]Skipping user story validation: output is CSV, no prompt files written.[/yellow]")
+                passed = True
+                story_cost = 0.0
+                story_model = ""
+            else:
+                override_dir = None
+                if use_csv:
+                    if "output_dir" in locals():
+                        override_dir = output_dir
+                    elif output_path_obj:
+                        if output_path_obj.is_dir() or (not output_path_obj.exists() and not output_path_obj.suffix):
+                            override_dir = output_path_obj
+                        else:
+                            override_dir = output_path_obj.parent
+                else:
+                    if output_path_obj:
+                        override_dir = output_path_obj.parent
+
+                if override_dir:
+                    override_prompts = discover_prompt_files(str(override_dir))
+                    base_prompts = discover_prompt_files(str(validation_prompts_dir))
+                    merged: List[Path] = []
+                    seen = set()
+                    for pf in override_prompts + base_prompts:
+                        key = str(pf.resolve()).lower()
+                        if key in seen:
+                            continue
+                        merged.append(pf)
+                        seen.add(key)
+                    validation_prompt_files = merged
+
+                passed, _, story_cost, story_model = run_user_story_tests(
+                    prompts_dir=str(validation_prompts_dir) if validation_prompt_files is None else None,
+                    prompt_files=validation_prompt_files,
+                    stories_dir=stories_dir,
+                    strength=strength,
+                    temperature=temperature,
+                    time=time_budget,
+                    verbose=ctx.obj.get("verbose", False),
+                    quiet=quiet,
+                    fail_fast=True,
+                )
+            total_cost += story_cost
+            if story_model:
+                model_name = model_name or story_model
+            if not passed:
+                msg = "User story validation failed. Review detect results for details."
+                if not quiet:
+                    rprint(f"[bold red]Error:[/bold red] {msg}")
+                return msg, total_cost, model_name or ""
+
+        # --- 6. Final User Feedback ---
         # Show summary if not quiet AND (it was CSV mode OR non-CSV mode succeeded)
         if not quiet and (use_csv or success):
             rprint("[bold green]Prompt modification completed successfully.[/bold green]")

@@ -2,11 +2,15 @@
 Example usage of the pdd.sync_order module.
 
 This script demonstrates how to:
-1. Create a temporary directory with mock prompt files.
+1. Create a temporary directory with mock prompt files (including both
+   <include> and <include-many> forms, and a documentation file).
 2. Build a dependency graph from those prompts.
 3. Perform a topological sort to determine the correct sync order.
 4. Identify affected modules given a set of changes.
 5. Generate a shell script to execute the sync commands.
+6. Discover documentation files associated with a set of modified prompts
+   (the pdd.sync_order.discover_associated_documents entry point used by
+   agentic_change_orchestrator's Step 10.5 doc-sync contract, issue #739).
 """
 
 import os
@@ -21,7 +25,8 @@ try:
         build_dependency_graph,
         topological_sort,
         get_affected_modules,
-        generate_sync_order_script
+        generate_sync_order_script,
+        discover_associated_documents,
     )
 except ImportError:
     # Fallback or mock for demonstration if the package is not installed
@@ -29,6 +34,7 @@ except ImportError:
     def topological_sort(g): return [], []
     def get_affected_modules(s, m, g): return []
     def generate_sync_order_script(s, p): pass
+    def discover_associated_documents(m, p, **_): return []
 
 console = Console()
 
@@ -58,14 +64,28 @@ def create_mock_prompts(base_dir: Path) -> Path:
         """, encoding="utf-8"
     )
 
-    # 4. api (Depends on database and logger)
+    # 4. api (Depends on database and logger, also declares doc dependencies)
+    # Note <include-many>: single tag, comma-separated paths. The
+    # discover_associated_documents helper below expands it to a set of three.
     (prompts_dir / "api_python.prompt").write_text(
         """
         This is the API layer.
         <include>prompts/database_python.prompt</include>
         <include>prompts/logger_python.prompt</include>
+        <include>README.md</include>
+        <include-many>docs/api.md, docs/schema.md</include-many>
         """, encoding="utf-8"
     )
+
+    # Also drop a minimal README + docs so the discovery traversal can
+    # resolve the include targets. discover_associated_documents does NOT
+    # require the referenced files to exist, but the worktree layout in a
+    # real repo will always have them.
+    (base_dir / "README.md").write_text("# Example README\n", encoding="utf-8")
+    docs_dir = base_dir / "docs"
+    docs_dir.mkdir(exist_ok=True)
+    (docs_dir / "api.md").write_text("# API contract\n", encoding="utf-8")
+    (docs_dir / "schema.md").write_text("# Schema\n", encoding="utf-8")
 
     return prompts_dir
 
@@ -124,6 +144,32 @@ def main() -> None:
         if script_path.exists():
             console.print("[dim]Script content preview:[/dim]")
             console.print(script_path.read_text())
+
+        # ---------------------------------------------------------
+        # Step 6: Discover Associated Documents (issue #739)
+        # ---------------------------------------------------------
+        # This is the entry point the agentic_change_orchestrator calls
+        # BEFORE Step 10 to populate context["associated_documents"], so
+        # Step 10's LLM knows which README/docs/*.md files it is responsible
+        # for updating. Step 10.5 then verifies that every discovered doc
+        # was addressed.
+        console.print(
+            "\n[bold blue]6. Discovering associated documents for modified prompts...[/bold blue]"
+        )
+        modified_prompts = {prompts_dir / "api_python.prompt"}
+        associated_docs = discover_associated_documents(
+            modified_prompts=modified_prompts,
+            prompts_dir=prompts_dir,
+            # No architecture.json here → Phase 2 BFS is a no-op; Phase 1
+            # direct-include discovery still runs and picks up README +
+            # the two paths inside <include-many>.
+            architecture_path=None,
+            max_depth=3,
+        )
+        console.print(
+            f"Associated docs for 'api_python.prompt': [yellow]{associated_docs}[/yellow]"
+        )
+        # Expected output: ['README.md', 'docs/api.md', 'docs/schema.md']
 
     finally:
         # Cleanup

@@ -23,6 +23,7 @@ def test_real_fix_command(create_dummy_files, tmp_path, monkeypatch):
             "Real LLM integration tests require network/API access; set "
             "PDD_RUN_REAL_LLM_TESTS=1 or use --run-all / PDD_RUN_ALL_TESTS=1."
         )
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
 
     import sys
     import click
@@ -318,6 +319,11 @@ def test_cli_fix_multiple_test_files(tmp_path):
         ])
         assert result.exit_code == 0
         assert mock_fix_main.call_count == 2
+        compression_kwargs = {
+            "compress_test_context": None,
+            "context_compression": None,
+            "compression_fallback": None,
+        }
         mock_fix_main.assert_any_call(
             ctx=ANY,
             prompt_file=str(prompt_file),
@@ -336,6 +342,8 @@ def test_cli_fix_multiple_test_files(tmp_path):
             strength=None,
             temperature=None,
             protect_tests=False,
+            failure_aware_retries=True,
+            **compression_kwargs,
         )
         mock_fix_main.assert_any_call(
             ctx=ANY,
@@ -355,6 +363,8 @@ def test_cli_fix_multiple_test_files(tmp_path):
             strength=None,
             temperature=None,
             protect_tests=False,
+            failure_aware_retries=True,
+            **compression_kwargs,
         )
 
 @pytest.mark.parametrize("num_test_files", [1, 2])

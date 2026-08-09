@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 
 # PDD CLI Bash Completion Script
-# Version: 0.0.5
 # Supports all PDD commands and options with filename completion
 
 _pdd() {
     local cur prev words cword
-    
+
     # Replace _init_completion with manual initialization
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
@@ -18,10 +17,10 @@ _pdd() {
     local global_opts="--force --strength --time --temperature --verbose --quiet --output-cost --review-examples --local --context --list-contexts --help --version"
 
     # Commands
-    local commands="generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify sync setup install_completion pytest-output"
+    local commands="generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify sync checkup setup install_completion pytest-output"
 
     # Command-specific options
-    local generate_opts="--output --original-prompt --incremental --env -e"
+    local generate_opts="--output --original-prompt --incremental --experimental-prd --dry-run --no-github-state --output-dir --force-single --skip-prompts --template --unit-test --exclude-tests --env -e"
     local example_opts="--output"
     local test_opts="--output --language --coverage-report --existing-tests --target-coverage --merge"
     local preprocess_opts="--output --xml --recursive --double --exclude"
@@ -36,7 +35,10 @@ _pdd() {
     local bug_opts="--output --language"
     local auto_deps_opts="--output --csv --force-scan"
     local verify_opts="--output-results --output-code --output-program --max-attempts --budget"
-    local sync_opts="--max-attempts --budget --skip-verify --skip-tests --target-coverage --log"
+    local sync_opts="--max-attempts --budget --skip-verify --skip-tests --target-coverage --dry-run --log --no-steer --steer-timeout --agentic --timeout-adder --no-github-state --one-session --no-one-session --durable --durable-branch --no-resume --durable-max-parallel"
+    local checkup_opts="--validate-arch-includes --project-root --strict --no-fix --timeout-adder --start-step --no-github-state --pr --issue --review-loop --final-gate --terra-sol --review-only --reviewers --reviewer --fixer --reviewer-fallback --fixer-fallback --allow-same-reviewer-fixer --max-review-rounds --max-review-cost --max-review-minutes --require-all-reviewers-clean --no-require-all-reviewers-clean --continue-on-reviewer-limit --fallback-reviewer-on-failure --require-final-fresh-review --no-require-final-fresh-review --blocking-severities --clean-reviewer-states --test-scope --no-gates --gate-timeout --gate-allow"
+    local checkup_gate_opts="--policy --stories-dir --tests-dir --json"
+    local checkup_simplify_opts="--apply --since --staged --max-files --attempts --engine --evidence --verify --no-format"
     local pytest_output_opts="--json-only"
 
     # Complete global options before command
@@ -144,8 +146,22 @@ _pdd() {
             COMPREPLY+=($(compgen -W "$verify_opts" -- "$cur"))
             ;;
         sync)
-            # BASENAME (not a file), offer options
+            # Optional BASENAME/GitHub issue URL; offer options.
             COMPREPLY+=($(compgen -W "$sync_opts" -- "$cur"))
+            ;;
+        checkup)
+            if [[ $cword -ge 3 && ${words[2]} == gate ]]; then
+                COMPREPLY+=($(compgen -W "$checkup_gate_opts" -- "$cur"))
+                return
+            fi
+            if [[ ${words[2]} == simplify ]]; then
+                COMPREPLY+=($(compgen -W "$checkup_simplify_opts" -- "$cur"))
+            else
+                if [[ $cword -eq 2 && "$cur" != -* ]]; then
+                    COMPREPLY+=($(compgen -W "simplify lint contract contracts coverage gate" -- "$cur"))
+                fi
+                COMPREPLY+=($(compgen -W "$checkup_opts" -- "$cur"))
+            fi
             ;;
         setup)
             # no command-specific options

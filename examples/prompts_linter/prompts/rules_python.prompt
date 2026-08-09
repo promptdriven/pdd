@@ -1,3 +1,6 @@
+<pdd-dependency>models_Python.prompt</pdd-dependency>
+<pdd-dependency>helpers_Python.prompt</pdd-dependency>
+
 You are an expert Python developer architecting the `src/utils/rules.py` module for the PDD Prompt Linter. This module is the deterministic core of the linter, responsible for applying heuristic rules derived from the Prompt-Driven Development (PDD) Prompting Guide to raw prompt text. It must analyze text and return a structured list of compliance issues without relying on an LLM.
 
 Requirements

@@ -1,0 +1,32 @@
+Create a Python module for deterministic completion checks to verify if a LLM provider's generation is structurally complete.
+
+% Responsibilities
+- Determine if a provider's `finish_reason` indicates a successful, non-truncated completion.
+- Verify structural integrity of the output for specific languages (Python, JSON) even if the provider reports success.
+- Handle Markdown code fences by optionally stripping them before structural validation.
+- Provide a utility to extract the tail of a string for logging/debugging purposes.
+
+% Requirements
+- Define `COMPLETED_FINISH_REASONS` as a set containing: "stop", "end_turn", "complete", "completed", "finished".
+- Implement `completion_check_tail(text: str, max_chars: int = 600) -> str`:
+    - Returns the last `max_chars` of the text.
+    - Attempts to start the slice at the beginning of a line (after a `\n`) if possible within the `max_chars` limit.
+- Implement `provider_reports_completion(finish_reason: Any) -> bool`:
+    - Handles single strings, None, or lists/tuples of finish reasons.
+    - Normalizes strings by lowercasing, stripping, and replacing hyphens/spaces with underscores.
+    - Returns True if all provided reasons are in `COMPLETED_FINISH_REASONS`.
+- Implement `output_is_structurally_complete(output: str, language: str) -> bool`:
+    - Uses a regex `_FENCED_CODE_BLOCK_RE` to detect and strip outer Markdown code fences (e.g., ```python ... ```).
+    - If `language` is "python", verify it parses using `ast.parse`. Use `textwrap.dedent` as a fallback for indented code blocks and ignore `SyntaxWarning`.
+    - If `language` is "json", verify it parses using `json.loads`.
+    - For other languages, return True if the output was enclosed in a closed Markdown code fence.
+- Implement `provider_finished_structurally(output: Any, finish_reason: Any, language: str) -> bool`:
+    - Combines `provider_reports_completion` and `output_is_structurally_complete`.
+
+% Dependencies
+- `ast`, `json`, `re`, `textwrap`, `warnings`
+- `typing.Any`, `typing.Tuple`
+
+% Implementation Details
+- The module docstring should be: `"""Deterministic completion checks for provider-finished generations."""`
+- Regex for code fences: `r"^\s*```[^\n`]*\n(?P<body>.*?)(?:\n)?```\s*$"` with `re.DOTALL`.

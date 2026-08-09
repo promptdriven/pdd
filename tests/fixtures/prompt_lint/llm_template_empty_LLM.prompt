@@ -1,0 +1,3 @@
+% LLM instruction template with no contract sections for lint scaffold test.
+
+% Analyze verification errors and return JSON.

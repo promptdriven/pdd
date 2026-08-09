@@ -270,6 +270,46 @@ def test_no_log_file(mock_load, mock_run, mock_env):
 
 @patch("pdd.agentic_verify.run_agentic_task")
 @patch("pdd.agentic_verify.load_prompt_template")
+def test_deadline_forwarded_to_run_agentic_task(mock_load, mock_run, mock_env):
+    """
+    Test that run_agentic_verify forwards the deadline parameter to run_agentic_task.
+    """
+    mock_load.return_value = "Template"
+    mock_run.return_value = (True, '{"success": true, "message": "ok"}', 0.1, "claude")
+
+    run_agentic_verify(
+        mock_env["prompt"], mock_env["code"], mock_env["program"], mock_env["log"],
+        quiet=True,
+        deadline=1700000000.0,
+    )
+
+    # Assert run_agentic_task was called with deadline=1700000000.0
+    call_kwargs = mock_run.call_args.kwargs
+    assert call_kwargs.get("deadline") == 1700000000.0
+
+
+@patch("pdd.agentic_verify.run_agentic_task")
+@patch("pdd.agentic_verify.load_prompt_template")
+def test_deadline_from_env_forwarded(mock_load, mock_run, mock_env):
+    """
+    Test that run_agentic_verify reads PDD_JOB_DEADLINE from env when deadline param not passed.
+    """
+    mock_load.return_value = "Template"
+    mock_run.return_value = (True, '{"success": true, "message": "ok"}', 0.1, "claude")
+
+    with patch.dict(os.environ, {"PDD_JOB_DEADLINE": "1700000000.0"}):
+        run_agentic_verify(
+            mock_env["prompt"], mock_env["code"], mock_env["program"], mock_env["log"],
+            quiet=True,
+            # No deadline param
+        )
+
+    call_kwargs = mock_run.call_args.kwargs
+    assert call_kwargs.get("deadline") == 1700000000.0
+
+
+@patch("pdd.agentic_verify.run_agentic_task")
+@patch("pdd.agentic_verify.load_prompt_template")
 def test_ignore_directories(mock_load, mock_run, mock_env):
     """
     Test that changes in ignored directories (e.g. __pycache__) are not reported.

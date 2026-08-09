@@ -13,7 +13,7 @@ from rich.panel import Panel
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import construct_paths
 from .bug_to_unit_test import bug_to_unit_test
-from .core.cloud import CloudConfig, get_cloud_timeout
+from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 
 console = Console()
 
@@ -141,7 +141,7 @@ def bug_main(
                         cloud_url,
                         json=payload,
                         headers=headers,
-                        timeout=get_cloud_timeout()
+                        timeout=get_cloud_request_timeout()
                     )
                     response.raise_for_status()
 

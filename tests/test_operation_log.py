@@ -1,10 +1,12 @@
 import os
 import json
+import inspect
 import pytest
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from datetime import datetime
+from click.testing import CliRunner
 
 # Import the module under test
 from pdd import operation_log
@@ -98,21 +100,53 @@ def test_get_paths(temp_pdd_env):
 def test_infer_module_identity_valid():
     """Test inferring identity from valid paths."""
     # Pattern: prompts/{basename}_{language}.prompt
-    
-    # Standard case
+
+    # Standard case (file directly in prompts/)
     b, l = operation_log.infer_module_identity("prompts/my_module_python.prompt")
     assert b == "my_module"
     assert l == "python"
-    
+
     # Path object
     b, l = operation_log.infer_module_identity(Path("prompts/complex_name_go.prompt"))
     assert b == "complex_name"
     assert l == "go"
-    
+
     # Underscores in basename
     b, l = operation_log.infer_module_identity("prompts/foo_bar_baz_rust.prompt")
     assert b == "foo_bar_baz"
     assert l == "rust"
+
+
+def test_infer_module_identity_with_subdirectory():
+    """Test inferring identity from prompt paths with subdirectory structure."""
+    # Prompt in subdirectory under prompts/
+    b, l = operation_log.infer_module_identity(
+        "prompts/frontend/page_typescriptreact.prompt"
+    )
+    assert b == "frontend/page"
+    assert l == "typescriptreact"
+
+    # Deeply nested prompt path
+    b, l = operation_log.infer_module_identity(
+        "/repo/prompts/frontend/src/app/settings/page_typescriptreact.prompt"
+    )
+    assert b == "frontend/src/app/settings/page"
+    assert l == "typescriptreact"
+
+    # Subdirectory with underscores in filename
+    b, l = operation_log.infer_module_identity(
+        "prompts/backend/commands/my_module_python.prompt"
+    )
+    assert b == "backend/commands/my_module"
+    assert l == "python"
+
+
+def test_infer_module_identity_no_prompts_dir():
+    """Test that paths without a prompts/ ancestor fall back to filename-only."""
+    b, l = operation_log.infer_module_identity("other_dir/my_module_python.prompt")
+    assert b == "my_module"
+    assert l == "python"
+
 
 def test_infer_module_identity_invalid():
     """Test inferring identity from invalid paths."""
@@ -120,7 +154,7 @@ def test_infer_module_identity_invalid():
     b, l = operation_log.infer_module_identity("prompts/simple.prompt")
     assert b is None
     assert l is None
-    
+
     # Empty string
     b, l = operation_log.infer_module_identity("")
     assert b is None
@@ -247,6 +281,63 @@ def test_log_event(temp_pdd_env):
     assert entries[0]["type"] == "event"
     assert entries[0]["event_type"] == "lock_acquired"
     assert entries[0]["details"]["pid"] == 123
+    assert entries[0]["invocation_mode"] == "manual"
+
+
+def test_log_event_public_interface_matches_prompt_and_architecture():
+    """Keep lifecycle-event callers, prompt metadata, and architecture in lockstep."""
+    import ast
+    import re
+
+    runtime_signature = inspect.signature(operation_log.log_event)
+    runtime_names = list(runtime_signature.parameters)
+    assert runtime_names == [
+        "basename",
+        "language",
+        "event_type",
+        "details",
+        "invocation_mode",
+        "paths",
+        "compression",
+        "agentic_fallback",
+    ]
+    assert runtime_signature.parameters["details"].default is inspect.Parameter.empty
+    assert runtime_signature.parameters["invocation_mode"].default == "manual"
+    for parameter_name in ("paths", "compression", "agentic_fallback"):
+        assert runtime_signature.parameters[parameter_name].default is None
+
+    repo_root = Path(__file__).resolve().parents[1]
+    prompt_text = (repo_root / "pdd/prompts/operation_log_python.prompt").read_text()
+    interface_match = re.search(
+        r"<pdd-interface>\s*(\{.*?\})\s*</pdd-interface>",
+        prompt_text,
+        re.DOTALL,
+    )
+    assert interface_match is not None
+    interface = json.loads(interface_match.group(1))
+    log_event_interface = next(
+        function
+        for function in interface["module"]["functions"]
+        if function["name"] == "log_event"
+    )
+    interface_signature = log_event_interface["signature"]
+    interface_function = ast.parse(
+        f"def log_event{interface_signature}:\n    pass\n"
+    ).body[0]
+    assert [argument.arg for argument in interface_function.args.args] == runtime_names
+    assert "project_root" not in interface_signature
+    assert "event_type" in interface_signature
+    assert "details: Any" in interface_signature
+    assert interface_signature in prompt_text
+
+    architecture = json.loads((repo_root / "architecture.json").read_text())
+    entry = next(item for item in architecture if item.get("filepath") == "pdd/operation_log.py")
+    architecture_function = next(
+        function
+        for function in entry["interface"]["module"]["functions"]
+        if function["name"] == "log_event"
+    )
+    assert architecture_function["signature"] == interface_signature
 
 # --------------------------------------------------------------------------------
 # DECORATOR TESTS
@@ -338,6 +429,113 @@ def test_log_operation_decorator_failure(temp_pdd_env):
     assert len(entries) == 1
     assert entries[0]["success"] is False
     assert entries[0]["error"] == "Boom"
+
+def test_log_operation_decorator_failure_preserves_run_report(temp_pdd_env):
+    """Regression for issue #1057: ``clears_run_report=True`` must NOT erase the
+    existing run report when the decorated function raises.
+
+    Prior implementation cleared the report *before* invoking the wrapped
+    function, so a failed ``pdd example`` (and other commands that pass
+    ``clears_run_report=True``) silently destroyed prior runtime verification
+    state even though no new example output was produced.
+    """
+    basename, lang = "foo", "python"
+
+    # Pre-seed a run report describing the pre-mutation runtime state.
+    operation_log.ensure_meta_dir()
+    rr_path = operation_log.get_run_report_path(basename, lang)
+    with open(rr_path, "w", encoding="utf-8") as f:
+        f.write('{"tests": "previous-pass"}')
+    assert rr_path.exists()
+
+    @operation_log.log_operation(
+        operation="example",
+        updates_fingerprint=True,
+        clears_run_report=True,
+    )
+    def failing_example(prompt_file: str):
+        raise RuntimeError("generation failed")
+
+    prompt_path = f"prompts/{basename}_{lang}.prompt"
+    with pytest.raises(RuntimeError, match="generation failed"):
+        failing_example(prompt_file=prompt_path)
+
+    # The existing run report must remain intact because no new example
+    # output was produced. clears_run_report fires only on success.
+    assert rr_path.exists(), (
+        "clears_run_report must not erase runtime verification state on failure"
+    )
+    with open(rr_path, encoding="utf-8") as f:
+        assert '"previous-pass"' in f.read()
+
+    # Fingerprint must also NOT be written for a failed run.
+    fp_path = operation_log.get_fingerprint_path(basename, lang)
+    assert not fp_path.exists(), (
+        "updates_fingerprint must not run on failure"
+    )
+
+
+def test_example_command_failure_preserves_run_report_and_fingerprint(temp_pdd_env):
+    """Regression for issue #1057: failed pdd example must not finalize metadata."""
+    import importlib
+
+    generate_module = importlib.import_module("pdd.commands.generate")
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        os.makedirs("prompts")
+        with open("prompts/foo_python.prompt", "w", encoding="utf-8") as f:
+            f.write("p")
+        with open("foo.py", "w", encoding="utf-8") as f:
+            f.write("c")
+
+        operation_log.save_run_report("foo", "python", {"tests": "previous-pass"})
+        rr_path = operation_log.get_run_report_path("foo", "python")
+        fp_path = operation_log.get_fingerprint_path("foo", "python")
+
+        with patch.object(
+            generate_module,
+            "context_generator_main",
+            side_effect=RuntimeError("example generation failed"),
+        ), patch.object(generate_module, "handle_error"):
+            result = runner.invoke(
+                generate_module.example,
+                ["prompts/foo_python.prompt", "foo.py"],
+                obj={"quiet": True},
+            )
+
+    assert result.exit_code == 1
+    assert rr_path.exists()
+    assert not fp_path.exists()
+
+
+def test_log_operation_decorator_success_clears_run_report(temp_pdd_env):
+    """Successful commands with ``clears_run_report=True`` must still remove a
+    pre-existing run report so a fresh fingerprint never coexists with a stale
+    per-module run report (issue #1057)."""
+    basename, lang = "bar", "python"
+
+    operation_log.ensure_meta_dir()
+    rr_path = operation_log.get_run_report_path(basename, lang)
+    with open(rr_path, "w", encoding="utf-8") as f:
+        f.write('{"tests": "stale"}')
+    assert rr_path.exists()
+
+    @operation_log.log_operation(
+        operation="example",
+        updates_fingerprint=True,
+        clears_run_report=True,
+    )
+    def ok_example(prompt_file: str):
+        return "ok", 0.0, "mock"
+
+    prompt_path = f"prompts/{basename}_{lang}.prompt"
+    ok_example(prompt_file=prompt_path)
+
+    assert not rr_path.exists(), (
+        "clears_run_report must remove the stale run report on success"
+    )
+
 
 def test_log_operation_decorator_no_identity(temp_pdd_env):
     """Test decorator when module identity cannot be inferred."""
@@ -624,3 +822,745 @@ def test_fingerprint_hash_compatibility_with_sync(tmp_path):
 
         # Verify pdd_version is set
         assert result.pdd_version is not None, "pdd_version should be set"
+
+
+# --------------------------------------------------------------------------------
+# REGRESSION TEST: Issue #237 - Subdirectory basename handling
+# --------------------------------------------------------------------------------
+
+def test_get_paths_with_subdirectory_basename(temp_pdd_env):
+    """
+    Regression test for Issue #237: Basenames with slashes should be sanitized.
+
+    When basename contains path separators (e.g., 'frontend/app/admin/discount-codes/page'),
+    the resulting metadata filenames should use underscores instead of slashes to create
+    flat filenames in .pdd/meta/, following the _safe_basename pattern from commit 0d27e561.
+
+    Bug: .pdd/meta/frontend/app/.../page_lang_sync.log was being created, but the
+    nested directories don't exist, causing "No such file or directory" errors.
+    """
+    basename = "frontend/app/admin/discount-codes/page"
+    lang = "typescriptreact"
+
+    log_path = operation_log.get_log_path(basename, lang)
+    fp_path = operation_log.get_fingerprint_path(basename, lang)
+    rr_path = operation_log.get_run_report_path(basename, lang)
+
+    # Paths should use underscores instead of slashes (sanitized)
+    expected_safe_basename = "frontend_app_admin_discount-codes_page"
+
+    assert log_path == Path(temp_pdd_env) / f"{expected_safe_basename}_{lang}_sync.log", \
+        f"Log path should be flat with sanitized basename, got: {log_path}"
+    assert fp_path == Path(temp_pdd_env) / f"{expected_safe_basename}_{lang}.json", \
+        f"Fingerprint path should be flat with sanitized basename, got: {fp_path}"
+    assert rr_path == Path(temp_pdd_env) / f"{expected_safe_basename}_{lang}_run.json", \
+        f"Run report path should be flat with sanitized basename, got: {rr_path}"
+
+    # Verify path is flat (no nested directories beyond .pdd/meta/)
+    assert log_path.parent == Path(temp_pdd_env), \
+        f"Log path should be directly in meta dir, not nested: {log_path}"
+
+
+def test_basename_sanitization_deeply_nested(temp_pdd_env):
+    """Edge case: deeply nested subdirectory basenames should be fully sanitized."""
+    basename = "a/b/c/d/e"
+    lang = "python"
+
+    log_path = operation_log.get_log_path(basename, lang)
+    fp_path = operation_log.get_fingerprint_path(basename, lang)
+    rr_path = operation_log.get_run_report_path(basename, lang)
+
+    expected_safe = "a_b_c_d_e"
+    assert log_path.name == f"{expected_safe}_{lang}_sync.log"
+    assert fp_path.name == f"{expected_safe}_{lang}.json"
+    assert rr_path.name == f"{expected_safe}_{lang}_run.json"
+
+    # Verify no nested directories created
+    assert log_path.parent == Path(temp_pdd_env)
+
+
+# --------------------------------------------------------------------------------
+# REGRESSION TESTS: Issue #983 - save_fingerprint resolves paths when None
+# --------------------------------------------------------------------------------
+
+def test_save_fingerprint_resolves_paths_when_none_issue_983(temp_pdd_env, tmp_path):
+    """
+    Regression test for Issue #983: save_fingerprint() must resolve paths via
+    get_pdd_file_paths() when called without paths, producing non-null hashes.
+
+    Bug: When paths=None, calculate_current_hashes() was skipped entirely,
+    making all hash fields null.
+
+    Fix: save_fingerprint now calls get_pdd_file_paths(basename, language)
+    internally when paths is not provided.
+    """
+    # Create real files so hashes can be computed
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "hashmod_python.prompt"
+    prompt_file.write_text("% Hash Module\nCreate a hash utility.\n")
+
+    code_file = tmp_path / "hashmod.py"
+    code_file.write_text("def compute_hash(): pass\n")
+
+    mock_paths = {"prompt": prompt_file, "code": code_file}
+
+    with patch(
+        "pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths
+    ), patch(
+        "pdd.sync_determine_operation.get_meta_dir",
+        return_value=Path(temp_pdd_env),
+    ):
+        # Call WITHOUT paths — the old bug
+        operation_log.save_fingerprint("hashmod", "python", operation="generate")
+
+    fp_path = operation_log.get_fingerprint_path("hashmod", "python")
+    assert fp_path.exists(), "Fingerprint file should be created"
+
+    with open(fp_path) as f:
+        fp_data = json.load(f)
+
+    # THE BUG: With issue #983, these were all null
+    assert fp_data["prompt_hash"] is not None, (
+        "Issue #983: prompt_hash is null — save_fingerprint must resolve paths when None"
+    )
+    assert fp_data["code_hash"] is not None, (
+        "Issue #983: code_hash is null — save_fingerprint must resolve paths when None"
+    )
+
+    # Verify SHA-256 format
+    for field in ["prompt_hash", "code_hash"]:
+        val = fp_data[field]
+        assert len(val) == 64 and all(c in "0123456789abcdef" for c in val), (
+            f"{field} should be a 64-char hex SHA-256 hash, got: {val}"
+        )
+
+
+def test_save_fingerprint_skips_resolution_when_paths_provided_issue_983(temp_pdd_env, tmp_path):
+    """
+    Issue #983: When paths is explicitly provided, save_fingerprint should use
+    them directly and NOT call get_pdd_file_paths.
+    """
+    prompt_file = tmp_path / "prompts" / "mymod_python.prompt"
+    prompt_file.parent.mkdir(parents=True)
+    prompt_file.write_text("% My Module\nDo stuff.\n")
+
+    explicit_paths = {"prompt": prompt_file}
+
+    with patch(
+        "pdd.sync_determine_operation.get_pdd_file_paths"
+    ) as mock_get_paths:
+        operation_log.save_fingerprint(
+            "mymod", "python", operation="generate", paths=explicit_paths
+        )
+
+        mock_get_paths.assert_not_called()
+
+
+def test_save_fingerprint_warns_on_path_resolution_failure_issue_983(temp_pdd_env):
+    """
+    Issue #983: If get_pdd_file_paths raises a recoverable error during
+    path resolution, save_fingerprint should warn and produce null hashes
+    (graceful degradation) rather than crashing.
+    """
+    with patch(
+        "pdd.sync_determine_operation.get_pdd_file_paths",
+        side_effect=OSError("prompts dir not found"),
+    ), patch("pdd.operation_log.logger") as mock_logger:
+        # Should NOT raise
+        operation_log.save_fingerprint("badmod", "python", operation="generate")
+
+        mock_logger.warning.assert_called_once()
+        warning_args = str(mock_logger.warning.call_args)
+        assert "badmod" in warning_args
+        assert "python" in warning_args
+
+
+def test_log_operation_decorator_skips_fingerprint_when_clear_silently_fails(temp_pdd_env):
+    """
+    Regression for issue #1057: if a stale run report survives clear_run_report(),
+    the decorator must not write a fresh fingerprint next to stale runtime state.
+    """
+    operation_log.save_run_report("demo", "python", {"success": True})
+    run_report_path = operation_log.get_run_report_path("demo", "python")
+    assert run_report_path.exists()
+
+    @operation_log.log_operation(
+        operation="generate",
+        clears_run_report=True,
+        updates_fingerprint=True,
+    )
+    def successful_command(prompt_file):
+        return "ok", False, 0.0, "model"
+
+    with patch("pdd.operation_log.os.remove", lambda _path: None), patch(
+        "pdd.operation_log.save_fingerprint"
+    ) as mock_save_fingerprint:
+        successful_command(prompt_file="prompts/demo_python.prompt")
+
+    assert run_report_path.exists()
+    mock_save_fingerprint.assert_not_called()
+
+
+# --------------------------------------------------------------------------------
+# REGRESSION TESTS: Issue #1305 - @log_operation must write REAL (non-null)
+# fingerprint hashes for example/generate so CI auto-heal converges.
+#
+# Bug: log_operation() built `log_paths = {"prompt": <str>}` (a plain string,
+# single key) and fed it straight into save_fingerprint(). calculate_current_hashes()
+# only hashes values that are Path instances, so the string prompt value was
+# skipped and the absent code/example/test keys yielded all-null hashes. That
+# null fingerprint never matches the files on disk, so CI auto-heal re-runs
+# `pdd example`/`generate` on every pass (the PR #1243 loop), rewriting the
+# generated example and overwriting maintainer cleanup.
+#
+# Fix: the decorator resolves the authoritative, complete file-path set via
+# get_pdd_file_paths(basename, language) — Path objects keyed by
+# prompt/code/example/test — for the save_fingerprint call (falling back to a
+# Path-coerced {"prompt": Path(prompt_file)} hint on resolution failure).
+# --------------------------------------------------------------------------------
+
+
+def _setup_pdd_module_files(tmp_path, basename, language="python"):
+    """Create a real prompt/code/test/example file set under tmp_path and
+    return (meta_dir, paths_dict) where paths_dict maps PDD file roles to the
+    on-disk Path objects (the shape get_pdd_file_paths returns)."""
+    meta_dir = tmp_path / ".pdd" / "meta"
+    prompts_dir = tmp_path / "prompts"
+    src_dir = tmp_path / "src"
+    tests_dir = tmp_path / "tests"
+    examples_dir = tmp_path / "examples"
+    for d in (meta_dir, prompts_dir, src_dir, tests_dir, examples_dir):
+        d.mkdir(parents=True, exist_ok=True)
+
+    prompt_file = prompts_dir / f"{basename}_{language}.prompt"
+    code_file = src_dir / f"{basename}.py"
+    test_file = tests_dir / f"test_{basename}.py"
+    example_file = examples_dir / f"{basename}_example.py"
+
+    prompt_file.write_text("% Prompt for issue 1305 regression\nDo a thing.\n")
+    code_file.write_text("def thing():\n    return 42\n")
+    test_file.write_text("def test_thing():\n    assert True\n")
+    example_file.write_text(f"from src.{basename} import thing\nthing()\n")
+
+    paths = {
+        "prompt": prompt_file,
+        "code": code_file,
+        "test": test_file,
+        "example": example_file,
+    }
+    return meta_dir, paths
+
+
+def _is_hex_sha256(value):
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(c in "0123456789abcdef" for c in value)
+    )
+
+
+def test_log_operation_example_writes_real_hashes_issue_1305(tmp_path):
+    """Issue #1305 (Test 1): a `pdd example` run through @log_operation must
+    write a fingerprint with REAL (non-null) prompt/code/example hashes.
+
+    On buggy code the decorator passes {"prompt": <str>} to save_fingerprint;
+    the string prompt is skipped and code/example keys are absent, so every
+    hash is null and these assertions fail.
+    """
+    basename, language = "examplemod", "python"
+    meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
+
+    @operation_log.log_operation(operation="example", updates_fingerprint=True)
+    def run_example(prompt_file):
+        return {"status": "ok"}, 0.1, "gpt-4"
+
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir), \
+         patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths):
+        run_example(prompt_file=f"prompts/{basename}_{language}.prompt")
+
+    fp_path = operation_log.get_fingerprint_path(basename, language, project_root=tmp_path)
+    assert fp_path.exists(), "example run must write a fingerprint file"
+    with open(fp_path) as f:
+        fp_data = json.load(f)
+
+    assert fp_data["command"] == "example"
+    # The crux of the bug: these were all null before the fix.
+    assert fp_data["prompt_hash"] is not None, "prompt_hash must not be null after example"
+    assert fp_data["code_hash"] is not None, "code_hash must not be null after example"
+    assert fp_data["example_hash"] is not None, "example_hash must not be null after example"
+    for field in ("prompt_hash", "code_hash", "example_hash"):
+        assert _is_hex_sha256(fp_data[field]), (
+            f"{field} should be a 64-char hex SHA-256, got: {fp_data[field]!r}"
+        )
+
+
+def test_log_operation_generate_writes_real_hashes_issue_1305(tmp_path):
+    """Issue #1305 (Test 2 / Step 6 sibling): `pdd generate` shares the exact
+    same @log_operation(updates_fingerprint=True) line as `pdd example`, so it
+    is affected identically and must also write non-null hashes.
+
+    # Scope addition: covers expansion item "operation:generate — pdd generate
+    # also writes all-null fingerprints via the same operation_log.py:596 line"
+    # identified by Step 6 (this is a SIBLING_PATTERN expansion of the issue,
+    # which only named `pdd example`).
+    """
+    basename, language = "generatemod", "python"
+    meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
+
+    @operation_log.log_operation(operation="generate", updates_fingerprint=True)
+    def run_generate(prompt_file):
+        return {"status": "ok"}, 0.2, "gpt-4"
+
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir), \
+         patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths):
+        run_generate(prompt_file=f"prompts/{basename}_{language}.prompt")
+
+    fp_path = operation_log.get_fingerprint_path(basename, language, project_root=tmp_path)
+    assert fp_path.exists(), "generate run must write a fingerprint file"
+    with open(fp_path) as f:
+        fp_data = json.load(f)
+
+    assert fp_data["command"] == "generate"
+    assert fp_data["prompt_hash"] is not None, "prompt_hash must not be null after generate"
+    assert fp_data["code_hash"] is not None, "code_hash must not be null after generate"
+    for field in ("prompt_hash", "code_hash"):
+        assert _is_hex_sha256(fp_data[field]), (
+            f"{field} should be a 64-char hex SHA-256, got: {fp_data[field]!r}"
+        )
+
+
+def test_log_operation_fingerprint_converges_no_drift_issue_1305(tmp_path):
+    """Issue #1305 (Test 3): the fingerprint written by an example run through
+    @log_operation must equal the hashes a fresh sync pass would compute from
+    the same on-disk files. If they match, a second auto-heal pass sees NO drift
+    and does not rewrite the example (breaking the PR #1243 loop).
+
+    On buggy code the saved hashes are null while the recomputed hashes are real,
+    so the equality assertions fail — exactly the non-converging state.
+    """
+    from pdd.sync_determine_operation import read_fingerprint, calculate_current_hashes
+
+    basename, language = "convergemod", "python"
+    meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
+
+    @operation_log.log_operation(operation="example", updates_fingerprint=True)
+    def run_example(prompt_file):
+        return {"status": "ok"}, 0.1, "gpt-4"
+
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir), \
+         patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths):
+        run_example(prompt_file=f"prompts/{basename}_{language}.prompt")
+
+        # What a second sync/auto-heal pass would compute from the unchanged files.
+        expected = calculate_current_hashes(paths)
+        saved = read_fingerprint(basename, language)
+
+    assert saved is not None, "read_fingerprint must parse the saved fingerprint"
+    # Convergence: saved hashes equal freshly-recomputed hashes -> no drift.
+    assert saved.prompt_hash == expected.get("prompt_hash"), "prompt_hash diverges -> auto-heal loop"
+    assert saved.code_hash == expected.get("code_hash"), "code_hash diverges -> auto-heal loop"
+    assert saved.example_hash == expected.get("example_hash"), "example_hash diverges -> auto-heal loop"
+    # Guard against a vacuous match where both sides are null.
+    assert saved.example_hash is not None, "example_hash must be a real value, not null"
+
+
+def test_log_operation_passes_full_path_dict_to_save_fingerprint_issue_1305(tmp_path):
+    """Issue #1305 (Test 4): the caller side of the decorator -> save_fingerprint
+    boundary. The decorator must hand save_fingerprint a `paths` dict whose values
+    are Path objects (not str) and that includes the code/example/test keys, not
+    just a bare {"prompt": <str>}.
+
+    This is a behavioral interaction test on the ARGUMENT VALUES the caller passes,
+    not a signature/structure check. On buggy code save_fingerprint receives
+    {"prompt": <str>} (a single str value), so the assertions fail.
+    """
+    basename, language = "boundarymod", "python"
+    meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
+
+    @operation_log.log_operation(operation="example", updates_fingerprint=True)
+    def run_example(prompt_file):
+        return {"status": "ok"}, 0.1, "gpt-4"
+
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths), \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fingerprint:
+        run_example(prompt_file=f"prompts/{basename}_{language}.prompt")
+
+    mock_save_fingerprint.assert_called_once()
+    passed_paths = mock_save_fingerprint.call_args.kwargs.get("paths")
+    assert passed_paths is not None, "save_fingerprint must receive a paths argument"
+
+    # Must carry the full key set so code/example/test hashes can be computed.
+    for key in ("prompt", "code", "example", "test"):
+        assert key in passed_paths, (
+            f"save_fingerprint paths is missing '{key}' key (got keys: {list(passed_paths)})"
+        )
+    # Every value must be a Path (calculate_current_hashes only hashes Path values).
+    for key, value in passed_paths.items():
+        assert isinstance(value, Path), (
+            f"save_fingerprint paths['{key}'] must be a Path, got {type(value).__name__}: {value!r}"
+        )
+
+
+def test_log_operation_fallback_coerces_prompt_to_path_issue_1305(tmp_path):
+    """Issue #1305 (Test 5): when get_pdd_file_paths resolution fails, the
+    decorator must fall back to {"prompt": Path(prompt_file)} — a COERCED Path,
+    never a raw string — so prompt_hash is still real and the command does not
+    crash.
+
+    On buggy code (or a naive raw-string fallback) the prompt value stays a str,
+    calculate_current_hashes skips it, and prompt_hash is null -> assertion fails.
+    """
+    basename, language = "fallbackmod", "python"
+    meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
+    real_prompt_path = paths["prompt"]  # absolute path to the real prompt file on disk
+
+    @operation_log.log_operation(operation="example", updates_fingerprint=True)
+    def run_example(prompt_file):
+        return {"status": "ok"}, 0.1, "gpt-4"
+
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir), \
+         patch(
+             "pdd.sync_determine_operation.get_pdd_file_paths",
+             side_effect=OSError("prompts dir not found"),
+         ):
+        # Must not raise even though path resolution failed.
+        result = run_example(prompt_file=str(real_prompt_path))
+
+    assert result == ({"status": "ok"}, 0.1, "gpt-4"), "decorator must still return the result"
+
+    fp_path = operation_log.get_fingerprint_path(basename, language, project_root=tmp_path)
+    assert fp_path.exists(), "fallback path must still write a fingerprint file"
+    with open(fp_path) as f:
+        fp_data = json.load(f)
+
+    # Fallback coerces the prompt string to a Path, so prompt_hash is real.
+    assert fp_data["prompt_hash"] is not None, (
+        "fallback must pass Path(prompt_file) (not a raw str) so prompt_hash is non-null"
+    )
+    assert _is_hex_sha256(fp_data["prompt_hash"]), (
+        f"prompt_hash should be a 64-char hex SHA-256, got: {fp_data['prompt_hash']!r}"
+    )
+
+
+def test_log_operation_example_writes_test_hash_issue_1305(tmp_path):
+    """Issue #1305 (Cycle 2, Test 6): a `pdd example` run through @log_operation
+    must also populate `test_hash` — not just prompt/code/example.
+
+    The resolved Path dict includes a `test` key, so once the decorator passes the
+    full get_pdd_file_paths() set, calculate_current_hashes() hashes the on-disk
+    test file too. No existing issue_1305 test asserts test_hash, leaving a gap:
+    a fix that forgot the `test` key would still pass Tests 1-5 yet leave a null
+    test_hash, so a later sync that tracks the test file would re-detect drift.
+
+    On buggy code the decorator passes {"prompt": <str>}, so test_hash is null and
+    this assertion fails.
+    """
+    basename, language = "testhashmod", "python"
+    meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
+
+    @operation_log.log_operation(operation="example", updates_fingerprint=True)
+    def run_example(prompt_file):
+        return {"status": "ok"}, 0.1, "gpt-4"
+
+    with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir), \
+         patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths):
+        run_example(prompt_file=f"prompts/{basename}_{language}.prompt")
+
+    fp_path = operation_log.get_fingerprint_path(basename, language, project_root=tmp_path)
+    assert fp_path.exists(), "example run must write a fingerprint file"
+    with open(fp_path) as f:
+        fp_data = json.load(f)
+
+    assert fp_data["test_hash"] is not None, "test_hash must not be null after example"
+    assert _is_hex_sha256(fp_data["test_hash"]), (
+        f"test_hash should be a 64-char hex SHA-256, got: {fp_data['test_hash']!r}"
+    )
+
+
+def test_log_operation_second_pass_is_idempotent_issue_1305(tmp_path):
+    """Issue #1305 (Cycle 2, Test 7): the acceptance criterion that a SECOND
+    auto-heal pass on an unchanged tree produces no example rewrite.
+
+    Running the @log_operation-decorated command twice on the same unchanged files
+    must write the SAME non-null hashes both times. Equal, non-null hashes mean a
+    second sync/auto-heal pass sees no drift and does not rewrite the generated
+    example (the PR #1243 loop never starts).
+
+    On buggy code both passes write null hashes; the non-null guard fails (a bare
+    null==null equality would otherwise pass vacuously), so this test still catches
+    the bug.
+    """
+    basename, language = "idempotentmod", "python"
+    meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
+
+    @operation_log.log_operation(operation="example", updates_fingerprint=True)
+    def run_example(prompt_file):
+        return {"status": "ok"}, 0.1, "gpt-4"
+
+    def _run_and_read():
+        with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+             patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths):
+            run_example(prompt_file=f"prompts/{basename}_{language}.prompt")
+        fp_path = operation_log.get_fingerprint_path(basename, language, project_root=tmp_path)
+        with open(fp_path) as f:
+            return json.load(f)
+
+    first = _run_and_read()
+    second = _run_and_read()
+
+    hash_fields = ("prompt_hash", "code_hash", "example_hash", "test_hash")
+    # Non-null guard: a vacuous null==null match must not let the bug through.
+    for field in hash_fields:
+        assert first[field] is not None, f"first pass {field} must not be null"
+        assert second[field] is not None, f"second pass {field} must not be null"
+    # Idempotence: unchanged files -> identical hashes -> no drift -> no rewrite.
+    for field in hash_fields:
+        assert first[field] == second[field], (
+            f"{field} changed between passes ({first[field]} -> {second[field]}); "
+            "a second auto-heal pass would rewrite the example (PR #1243 loop)"
+        )
+
+
+def test_log_operation_nested_subproject_from_parent_cwd_issue_1305_1211(
+    tmp_path, monkeypatch
+):
+    """Issue #1305 + #1211 regression: a decorated command run from a PARENT CWD
+    for a nested subproject must write a REAL, converged fingerprint to the
+    SUBPROJECT's .pdd/meta — not an all-null one to the parent.
+
+    This closes the gap the other issue_1305 tests leave open: every one of them
+    `patch(...get_pdd_file_paths, return_value=<already-correct dict>)`, which
+    bypasses the exact CWD-relative resolution that breaks here. This test uses
+    the REAL get_pdd_file_paths (NO mock) against a context-configured subproject
+    whose .pddrc lives BELOW the run CWD.
+
+    Before the fix, get_pdd_file_paths(basename, language) re-resolved the prompts
+    root from the parent CWD: the prompt was not found, code/example/test paths
+    pointed at non-existent parent files (so every hash was null), and the
+    fingerprint landed in the PARENT .pdd/meta — split from the sync log/run
+    report that log_paths still anchored at the subproject. The fix anchors
+    resolution at the prompt file's subproject (absolute prompts_dir).
+    """
+    from pdd.sync_determine_operation import calculate_current_hashes
+
+    parent = tmp_path / "monorepo"
+    sub = parent / "service"
+    for d in ("prompts/api", "api/src", "api/examples", "api/tests"):
+        (sub / d).mkdir(parents=True)
+    # Subproject .pddrc with a custom context: non-default output dirs + paths
+    # patterns, so real context/template resolution is exercised (not just the
+    # default layout, which would mask residual CWD-anchored resolution).
+    (sub / ".pddrc").write_text(
+        'version: "1.0"\n'
+        "contexts:\n"
+        "  backendctx:\n"
+        '    paths: ["api/**", "prompts/api/**"]\n'
+        "    defaults:\n"
+        '      generate_output_path: "api/src/"\n'
+        '      example_output_path: "api/examples/"\n'
+        '      test_output_path: "api/tests/"\n'
+        '      prompts_dir: "prompts/api"\n'
+        '      default_language: "python"\n'
+    )
+    prompt_file = sub / "prompts" / "api" / "widget_python.prompt"
+    code_file = sub / "api" / "src" / "widget.py"
+    example_file = sub / "api" / "examples" / "widget_example.py"
+    test_file = sub / "api" / "tests" / "test_widget.py"
+    prompt_file.write_text("% prompt\nMake a widget.\n")
+    code_file.write_text("def widget():\n    return 7\n")
+    example_file.write_text("from api.src.widget import widget\nwidget()\n")
+    test_file.write_text("def test_widget():\n    assert True\n")
+
+    # Run from the PARENT, above the subproject's .pddrc (the #1211 scenario).
+    monkeypatch.chdir(parent)
+    prompt_rel = os.path.join("service", "prompts", "api", "widget_python.prompt")
+
+    @operation_log.log_operation(operation="example", updates_fingerprint=True)
+    def run_example(prompt_file):
+        return {"status": "ok"}, 0.1, "gpt-4"
+
+    # Deliberately NO patch of get_pdd_file_paths / get_meta_dir / META_DIR:
+    # real resolution must decide where the fingerprint lands and what it hashes.
+    run_example(prompt_file=prompt_rel)
+
+    basename, language = operation_log.infer_module_identity(prompt_rel)
+    assert basename and language
+
+    # 1. The fingerprint must NOT leak to the parent root.
+    parent_fp = operation_log.get_fingerprint_path(
+        basename, language, project_root=parent
+    )
+    assert not parent_fp.exists(), (
+        f"fingerprint leaked to the PARENT root {parent_fp} (issue #1211 regression)"
+    )
+
+    # 2. It must be anchored at the subproject root, with real (non-null) hashes.
+    sub_fp = operation_log.get_fingerprint_path(
+        basename, language, project_root=sub
+    )
+    assert sub_fp.exists(), f"fingerprint not anchored at subproject: {sub_fp}"
+    fp_data = json.loads(sub_fp.read_text())
+
+    # 2b. Finding 2 (no metadata split): the sync log the decorator writes via the
+    #     prompt-path hint must land in the SAME subproject meta dir as the
+    #     fingerprint — before the fix the fingerprint diverged to the parent.
+    assert operation_log.get_log_path(
+        basename, language, project_root=sub
+    ).exists(), "sync log not anchored at subproject"
+    assert not operation_log.get_log_path(
+        basename, language, project_root=parent
+    ).exists(), "sync log leaked to the parent root (metadata split)"
+
+    # 3. Convergence: the saved hashes equal what a fresh sync pass computes from
+    #    the real subproject files, so a second auto-heal pass sees no drift.
+    expected = calculate_current_hashes(
+        {
+            "prompt": prompt_file,
+            "code": code_file,
+            "example": example_file,
+            "test": test_file,
+        }
+    )
+    for field in ("prompt_hash", "code_hash", "example_hash", "test_hash"):
+        assert _is_hex_sha256(fp_data[field]), (
+            f"{field} must be a real SHA-256, got {fp_data[field]!r} "
+            "(null + parent-anchored before the fix)"
+        )
+        assert fp_data[field] == expected.get(field), (
+            f"{field} diverges from the on-disk subproject files -> auto-heal loop"
+        )
+
+
+def test_prompts_root_for_fingerprint_uses_base_prompts_dir_issue_1305(tmp_path):
+    """`_prompts_root_for_fingerprint` must return the BASE prompts dir (the
+    outermost 'prompts' component), NOT a configured-deeper dir like
+    `prompts/commands`.
+
+    get_pdd_file_paths keys architecture.json lookups *relative to* this root, so
+    a deeper root changes the key (`checkup_python.prompt` instead of
+    `commands/checkup_python.prompt`) and silently breaks filepath resolution for
+    subdir-context modules — e.g. `pdd/commands/checkup.py` mis-resolves to
+    `pdd/checkup.py`, yielding null code/example/test hashes. This locks the
+    base-not-deep contract that distinction relies on.
+    """
+    # Subdir-context prompt: base root is '.../prompts', not '.../prompts/commands'.
+    base = operation_log._prompts_root_for_fingerprint(
+        "prompts/commands/checkup_python.prompt"
+    )
+    assert base.name == "prompts", f"expected base 'prompts' root, got {base}"
+    assert base.parts[-2:] != ("prompts", "commands"), (
+        f"must not return the configured-deep prompts_dir: {base}"
+    )
+    assert base.is_absolute()
+
+    # Nested subproject below CWD: base root is the subproject's own prompts dir.
+    nested = operation_log._prompts_root_for_fingerprint(
+        os.path.join("service", "prompts", "api", "widget_python.prompt")
+    )
+    assert nested.parts[-2:] == ("service", "prompts"), (
+        f"expected the subproject's base prompts root, got {nested}"
+    )
+    assert nested.is_absolute()
+
+    # No 'prompts' component anywhere: fall back to the prompt file's directory.
+    bare = operation_log._prompts_root_for_fingerprint(
+        str(tmp_path / "weird" / "foo_python.prompt")
+    )
+    assert bare == (tmp_path / "weird").resolve()
+
+    # An ancestor directory literally named 'prompts' (e.g. the repo checked out
+    # under ~/prompts/myrepo) must not mis-anchor: use the 'prompts' NEAREST the
+    # file, not the outermost one.
+    ancestor = tmp_path / "prompts" / "repo" / "prompts" / "commands" / "x_python.prompt"
+    ancestor.parent.mkdir(parents=True)
+    got = operation_log._prompts_root_for_fingerprint(str(ancestor))
+    assert got == (tmp_path / "prompts" / "repo" / "prompts").resolve(), (
+        f"must anchor at the 'prompts' nearest the file, got {got}"
+    )
+
+
+def test_operation_log_sanitizes_compression_and_fallback_metadata(temp_pdd_env):
+    """Compression telemetry must be metadata-only when written to sync logs."""
+    entry = operation_log.create_log_entry(
+        operation="sync",
+        reason="compressed context enabled",
+        compression={
+            "enabled": True,
+            "used": True,
+            "phase": "generate",
+            "content": "raw prompt/test/example context",
+            "nested": {"raw_context": "secret", "source_count": 2},
+        },
+        agentic_fallback={
+            "attempted": True,
+            "used": False,
+            "raw_context": "raw fallback context",
+        },
+    )
+    operation_log.update_log_entry(
+        entry,
+        success=True,
+        cost=0.1,
+        model="mock",
+        duration=0.2,
+        compression={"compressed_context": "raw", "compressed_sha256": "abc"},
+    )
+
+    operation_log.append_log_entry("telemetry", "python", entry)
+    operation_log.log_event(
+        "telemetry",
+        "python",
+        "sync_phase",
+        {"phase": "fix"},
+        compression={"phase": "fix", "compressed_content": "raw"},
+    )
+
+    entries = operation_log.load_operation_log("telemetry", "python")
+    assert entries[0]["compression"] == {"compressed_sha256": "abc"}
+    assert entries[0]["agentic_fallback"] == {"attempted": True, "used": False}
+    assert entries[1]["compression"] == {"phase": "fix"}
+
+
+def test_aggregate_agentic_fallback_metadata_merges_language_results() -> None:
+    from pdd.operation_log import aggregate_agentic_fallback_metadata
+
+    aggregated = aggregate_agentic_fallback_metadata(
+        language_results=[
+            {
+                "agentic_fallback": {
+                    "phases": [
+                        {"phase": "fix", "attempted": True, "used": True},
+                    ],
+                },
+            },
+            {"agentic_fallback": {"phases": []}},
+        ],
+        agentic_sync_mode=False,
+    )
+
+    assert aggregated["attempted"] is True
+    assert aggregated["used"] is True
+    assert len(aggregated["phases"]) == 1
+    assert aggregated["agentic_sync_mode"] is False
+    assert "agentic fallback invoked" in aggregated["reason"]
+
+
+def test_aggregate_agentic_fallback_metadata_does_not_equate_sync_mode_with_used() -> None:
+    from pdd.operation_log import aggregate_agentic_fallback_metadata
+
+    aggregated = aggregate_agentic_fallback_metadata(
+        language_results=[{"agentic_fallback": {"phases": []}}],
+        agentic_sync_mode=True,
+    )
+
+    assert aggregated["used"] is False
+    assert aggregated["agentic_sync_mode"] is True
+    assert "agentic sync mode enabled" in aggregated["reason"]

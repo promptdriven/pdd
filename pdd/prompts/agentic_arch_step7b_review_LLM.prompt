@@ -1,0 +1,128 @@
+<pdd-reason>Reviews architecture.json against PRD and naming registry, fixing naming inconsistencies, missing dependencies, and structural issues before prompt generation.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "review_architecture", "signature": "(architecture_json: str, step1_output: str, step2_output: str, step4_output: str)", "returns": "str ('REVIEW_RESULT: CLEAN' or 'REVIEW_RESULT: FIXED (N issues)')"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step7_generate_LLM.prompt</pdd-dependency>
+% You are an expert software architect performing a SELF-REVIEW of a generated architecture.json. Your role is to act as a fresh pair of eyes — re-read the architecture from scratch and catch issues that single-pass generation missed.
+
+% Context
+
+You are working on step 7b of the agentic architecture workflow. Step 7 just generated architecture.json and scaffolding files. Before proceeding to .pddrc generation (Step 8) and prompt generation (Step 9), you must review the architecture for consistency, completeness, and correctness.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Original PRD (Source of Truth)
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Step 1: PRD Analysis
+<step1_output>
+{step1_output}
+</step1_output>
+
+% Step 2: Deep Analysis (includes Naming Registry)
+<step2_output>
+{step2_output}
+</step2_output>
+
+% Step 4: Data Model Design
+<step4_output>
+{step4_output}
+</step4_output>
+
+% Your Task
+
+Read the `architecture.json` file from disk (it was created by Step 7). Then perform the following checks.
+
+CRITICAL: `architecture.json` is a SHARED file across ALL sibling sub-issues. It may contain modules from other issues (different `origin.issue_number`). You MUST review ONLY the modules belonging to issue #{issue_number}. Leave all other modules UNTOUCHED — do not remove, reorder, or modify them.
+
+**Scope:** Only review modules where `origin.issue_number` equals {issue_number}, or modules without an `origin` field that were referenced by this issue's design steps. Modules from other issues are NOT your concern.
+
+**1. Naming Consistency**
+
+Cross-reference EVERY identifier in the in-scope modules against the Step 2 naming registry:
+- Collection/table names must match the registry exactly
+- API endpoint paths must match the registry exactly
+- Type/class names must match the registry exactly
+- Env var names must match the registry exactly
+- Hook/utility function names must match the registry exactly
+
+**2. Dependency Completeness**
+
+For each in-scope module:
+- If the module references shared types (User, Task, etc.), verify the types module is in its `dependencies` list
+- If the module calls functions from another module, verify that module is in its `dependencies` list
+- If a module imports from another module in its `interface`, that module MUST be in `dependencies`
+
+**3. Priority / Topological Sort Correctness**
+
+Verify the priority ordering of in-scope modules forms a valid topological sort:
+- No module should have a lower priority number than any of its dependencies
+- Dependencies must be built before dependents (lower priority = built first)
+
+**4. Interface Completeness**
+
+For each in-scope module:
+- Every API module must have `endpoints` defined in its interface (method, path, request/response types)
+- Every data module must have CRUD function signatures defined
+- Every service module must have its public methods defined
+- If any interface is empty or missing key functions, add them based on the PRD and data model
+
+**5. Missing Modules**
+
+Cross-check PRD features against the in-scope module list:
+- Every user-facing feature in the PRD must have at least one corresponding module
+- If a feature has no module, add it to the review output
+
+**6. Duplicate / Overlapping Modules**
+
+Check for in-scope modules with overlapping responsibility:
+- Two modules that handle the same entity or feature
+- If duplicates found, merge them in the review output
+
+% Output
+
+CRITICAL: Do NOT write to `architecture.json`. Write your fixes to a SEPARATE file called `architecture_review.json`.
+
+After completing your review:
+
+1. If you found ANY issues: Write ONLY the fixed in-scope modules (a JSON array) to `architecture_review.json`, then output:
+```
+REVIEW_RESULT: FIXED (N issues)
+
+Issues fixed:
+1. [description of fix]
+2. [description of fix]
+...
+```
+
+2. If the architecture is clean: Do NOT create any files. Output:
+```
+REVIEW_RESULT: CLEAN
+
+Architecture verified against PRD and naming registry. No issues found.
+```
+
+% Important
+
+- Read `architecture.json` from disk — do NOT rely on the step 7 output text
+- NEVER write to `architecture.json` — it is a shared cross-issue file and you MUST NOT overwrite it
+- If fixes are needed, write ONLY the corrected in-scope modules to `architecture_review.json`
+- `architecture_review.json` must be a valid JSON array containing ONLY the modules you reviewed and fixed
+- Do NOT include modules from other issues in `architecture_review.json`
+- Do NOT remove modules from other issues — they belong to sibling sub-issues and are correct
+- Do NOT add modules that aren't justified by PRD requirements
+- Keep the review focused — this is a consistency and completeness check, not a redesign
+- Always output `REVIEW_RESULT: CLEAN` or `REVIEW_RESULT: FIXED (N issues)`

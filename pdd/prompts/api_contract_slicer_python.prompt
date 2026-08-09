@@ -1,0 +1,31 @@
+<pdd-reason>AST-based API/dependency contract slicing for compressed generation context (#875).</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "ApiContractSlicer.__init__", "signature": "(source: str, file_path: str | None = None)", "returns": "None"},
+      {"name": "ApiContractSlicer.slice", "signature": "(seeds: List[str], *, extra_seeds: Iterable[str] | None = None)", "returns": "Tuple[str, ContractManifest]"},
+      {"name": "ApiContractSlicer.seeds_from_test", "signature": "(test_source: str, module_qualname: str)", "returns": "List[str]"},
+      {"name": "ApiContractSlicer.verify_contract", "signature": "(output_source: str, required_symbols: Iterable[str], *, file_path: str | None = None)", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write `pdd/api_contract_slicer.py` for deterministic dependency/API contract slicing during compressed PDD context.
+
+% Requirements
+1. Class `ApiContractSlicer(source, file_path=None)` and dataclass `ContractManifest` (`seeds`, `included_symbols`, `included_imports`, `source_hash`).
+2. `slice(seeds)` returns compressed source plus manifest; transitively includes local helpers/constants/classes referenced by seeds (including underscore-prefixed helpers).
+3. `seeds_from_test(test_source, module_qualname)` extracts imported symbols and `unittest.mock.patch` targets for that module.
+4. `verify_contract(output, required_symbols)` raises `ContractSlicerError` when required symbols are absent (fail fast).
+5. Deterministic ordering; prepend manifest comment block with seeds, included symbols, and source hash.
+6. Include only imports used by preserved snippets.
+
+% Deliverables
+- Code: `pdd/api_contract_slicer.py`

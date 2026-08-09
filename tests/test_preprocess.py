@@ -22,6 +22,23 @@ def set_pdd_path(path: str) -> None:
     """Set the PDD_PATH environment variable to the specified path."""
     os.environ['PDD_PATH'] = path
 
+# Fixture to reset Firecrawl cache singleton for test isolation
+@pytest.fixture
+def reset_firecrawl_cache():
+    """
+    Reset the Firecrawl cache singleton before each test.
+
+    This ensures that when tests set FIRECRAWL_CACHE_ENABLE=false,
+    a fresh cache instance is created that respects the env var.
+    Without this, the singleton created by an earlier test would persist.
+    """
+    import pdd.firecrawl_cache
+    original_instance = pdd.firecrawl_cache._cache_instance
+    pdd.firecrawl_cache._cache_instance = None
+    yield
+    # Restore after test
+    pdd.firecrawl_cache._cache_instance = original_instance
+
 # Test for processing includes in triple backticks
 def test_process_backtick_includes() -> None:
     """Test processing of includes within triple backticks."""
@@ -243,19 +260,19 @@ def test_include_js_doubles_curly_braces() -> None:
     assert result == expected
 
 # Test for excluding keys from doubling curly brackets
-def test_exclude_keys_from_doubling() -> None:
+def test_exclude_from_doubling() -> None:
     """Test excluding specific keys from doubling curly brackets."""
     prompt = "This is a test {key} and {exclude} {}"
     expected_output = "This is a test {{key}} and {exclude} {{}}"
 
-    assert preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=['exclude']) == expected_output
+    assert preprocess(prompt, recursive=False, double_curly_brackets=True, exclude=['exclude']) == expected_output
 
 
-def test_exclude_keys_requires_exact_match() -> None:
+def test_exclude_requires_exact_match() -> None:
     """Exclude list should only skip doubling when the inner text is an exact match."""
     prompt = "Values {exclude_suffix} and {exclude}"
     expected = "Values {{exclude_suffix}} and {exclude}"
-    result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=['exclude'])
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude=['exclude'])
     assert result == expected
 
 # Test for recursive processing
@@ -298,6 +315,17 @@ def test_file_not_found() -> None:
     with patch('builtins.open', side_effect=FileNotFoundError):
         assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output
 
+
+def test_optional_context_example_missing_is_silent() -> None:
+    """Optional context/example.prompt should not leak a [File not found: ...] marker into prompts."""
+    prompt = "<include optional>./context/example.prompt</include>"
+
+    # Simulate missing file; include should resolve to empty string (but still warn on console).
+    with patch('builtins.open', side_effect=FileNotFoundError):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert result == ""
+
 # Test for handling shell command error
 def test_shell_command_error() -> None:
     """Test handling of shell command error."""
@@ -324,14 +352,14 @@ def test_recursive_web_defers_scrape() -> None:
     assert result == prompt
 
 
-def test_web_second_pass_executes_after_deferral() -> None:
+def test_web_second_pass_executes_after_deferral(reset_firecrawl_cache) -> None:
     """Second pass without recursion should execute the deferred web scrape."""
     prompt = "Start <web>https://example.com</web> End"
     mock_firecrawl = MagicMock()
     mock_firecrawl.Firecrawl.return_value.scrape.return_value = {'markdown': "# Content"}
 
     with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
-        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key'}):
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
             result = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
     assert result == "Start # Content End"
@@ -540,7 +568,7 @@ def test_preprocess_double_curly_brackets():
     assert processed == desired_output, "The preprocess function did not double the curly brackets as expected."
 
 # Test for processing XML-like web tags
-def test_process_xml_web_tag() -> None:
+def test_process_xml_web_tag(reset_firecrawl_cache) -> None:
     """Test processing of XML-like web tags."""
     mock_markdown_content = "# Webpage Content\n\nThis is the scraped content."
     prompt = "This is a test <web>https://example.com</web>"
@@ -554,13 +582,50 @@ def test_process_xml_web_tag() -> None:
 
     # Patch the import at the module level
     with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
-        # Mock the environment variable for API key
-        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key'}):
+        # Mock the environment variable for API key and disable cache
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
             result = preprocess(prompt, recursive=False, double_curly_brackets=False)
             assert result == expected_output
 
+def test_process_xml_web_tag_firecrawl_app_fallback(reset_firecrawl_cache) -> None:
+    """The pinned firecrawl-py SDK exposes FirecrawlApp rather than Firecrawl."""
+    mock_markdown_content = "# Webpage Content from FirecrawlApp"
+    prompt = "This is a test <web>https://example.com</web>"
+    expected_output = f"This is a test {mock_markdown_content}"
+
+    mock_app = MagicMock()
+    mock_app.scrape.return_value = {'markdown': mock_markdown_content}
+    mock_firecrawl = MagicMock()
+    del mock_firecrawl.Firecrawl
+    mock_firecrawl.FirecrawlApp.return_value = mock_app
+
+    with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+            assert result == expected_output
+            mock_firecrawl.FirecrawlApp.assert_called_once_with(api_key='fake_api_key')
+
+
+def test_process_xml_web_tag_legacy_scrape_url_fallback(reset_firecrawl_cache) -> None:
+    """Pre-v4 firecrawl-py clients exposed scrape_url() only; preprocess should fall back."""
+    mock_markdown_content = "# Legacy scrape_url content"
+    prompt = "This is a test <web>https://example.com</web>"
+    expected_output = f"This is a test {mock_markdown_content}"
+
+    mock_app = MagicMock(spec=['scrape_url'])  # no scrape attribute
+    mock_app.scrape_url.return_value = {'markdown': mock_markdown_content}
+    mock_firecrawl = MagicMock()
+    mock_firecrawl.Firecrawl.return_value = mock_app
+
+    with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+            assert result == expected_output
+            mock_app.scrape_url.assert_called_once()
+
+
 # Test for handling missing Firecrawl API key
-def test_process_xml_web_tag_missing_api_key() -> None:
+def test_process_xml_web_tag_missing_api_key(reset_firecrawl_cache) -> None:
     """Test handling of missing Firecrawl API key."""
     prompt = "This is a test <web>https://example.com</web>"
     expected_output = "This is a test [Error: FIRECRAWL_API_KEY not set. Cannot scrape https://example.com]"
@@ -572,28 +637,29 @@ def test_process_xml_web_tag_missing_api_key() -> None:
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
         with patch('builtins.__import__', side_effect=lambda name, *args:
               MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
-            # Ensure the API key environment variable is not set
-            with patch.dict('os.environ', {}, clear=True):
+            # Ensure the API key environment variable is not set and disable cache
+            with patch.dict('os.environ', {'FIRECRAWL_CACHE_ENABLE': 'false'}, clear=True):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
 
 # Test for handling Firecrawl import error
-def test_process_xml_web_tag_import_error() -> None:
+def test_process_xml_web_tag_import_error(reset_firecrawl_cache) -> None:
     """Test handling of Firecrawl import error."""
     prompt = "This is a test <web>https://example.com</web>"
     expected_output = "This is a test [Error: firecrawl-py package not installed. Cannot scrape https://example.com]"
 
-    # Patch the import to raise ImportError
-    with patch('builtins.__import__', side_effect=lambda name, *args: 
-          raise_import_error(name) if name == 'firecrawl' else importlib.__import__(name, *args)):
-        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
-        assert result == expected_output
+    # Patch the import to raise ImportError and disable cache
+    with patch.dict('os.environ', {'FIRECRAWL_CACHE_ENABLE': 'false'}):
+        with patch('builtins.__import__', side_effect=lambda name, *args:
+              raise_import_error(name) if name == 'firecrawl' else importlib.__import__(name, *args)):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+            assert result == expected_output
 
 def raise_import_error(name):
     raise ImportError(f"No module named '{name}'")
 
 # Test for handling empty markdown content
-def test_process_xml_web_tag_empty_content() -> None:
+def test_process_xml_web_tag_empty_content(reset_firecrawl_cache) -> None:
     """Test handling of empty markdown content from Firecrawl."""
     prompt = "This is a test <web>https://example.com</web>"
     expected_output = "This is a test [No content available for https://example.com]"
@@ -607,12 +673,12 @@ def test_process_xml_web_tag_empty_content() -> None:
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
         with patch('builtins.__import__', side_effect=lambda name, *args:
               MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
-            with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key'}):
+            with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
 
 # Test for handling Firecrawl API error
-def test_process_xml_web_tag_scraping_error() -> None:
+def test_process_xml_web_tag_scraping_error(reset_firecrawl_cache) -> None:
     """Test handling of Firecrawl API error."""
     prompt = "This is a test <web>https://example.com</web>"
     error_message = "API request failed"
@@ -627,9 +693,34 @@ def test_process_xml_web_tag_scraping_error() -> None:
     with patch.dict('sys.modules', {'firecrawl': MagicMock()}):
         with patch('builtins.__import__', side_effect=lambda name, *args:
               MagicMock(Firecrawl=mock_firecrawl_class) if name == 'firecrawl' else importlib.__import__(name, *args)):
-            with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key'}):
+            with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
                 result = preprocess(prompt, recursive=False, double_curly_brackets=False)
                 assert result == expected_output
+
+def test_process_web_tag_invalid_ttl_env_no_crash(reset_firecrawl_cache) -> None:
+    """Regression: invalid FIRECRAWL_CACHE_TTL_HOURS should not crash process_web_tags.
+
+    The cache module handles TTL parsing internally with proper error handling.
+    preprocess.py should not duplicate this parsing with a bare int() call.
+    """
+    mock_markdown_content = "# Test Content"
+    prompt = "Test <web>https://example.com</web>"
+
+    mock_firecrawl = MagicMock()
+    mock_app = MagicMock()
+    mock_app.scrape.return_value = {'markdown': mock_markdown_content}
+    mock_firecrawl.Firecrawl.return_value = mock_app
+
+    with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
+        with patch.dict('os.environ', {
+            'FIRECRAWL_API_KEY': 'fake_api_key',
+            'FIRECRAWL_CACHE_TTL_HOURS': 'not_a_number',
+            'FIRECRAWL_CACHE_ENABLE': 'false',
+        }):
+            # Should NOT raise ValueError
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+            assert mock_markdown_content in result
+
 
 # NEW TESTS FROM test_preprocess2.py
 
@@ -679,10 +770,25 @@ def test_get_file_path() -> None:
     path = get_file_path(filename)
     assert path == "./test.txt"
     
-    # Test with absolute path
+    # Legacy preprocessing accepts explicit local paths. Canonical sync graph
+    # construction enforces repository-relative managed paths separately.
     abs_path = "/absolute/path/test.txt"
-    path = get_file_path(abs_path)
-    assert path == abs_path
+    assert get_file_path(abs_path) == abs_path
+
+
+def test_preprocess_resolves_bundled_prompting_guide_outside_checkout(
+    tmp_path, monkeypatch
+) -> None:
+    """Bundled docs remain available when preprocessing from an empty project."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PDD_PATH", raising=False)
+
+    processed = preprocess(
+        "<include>docs/prompting_guide.md</include>",
+        double_curly_brackets=False,
+    )
+
+    assert "PDD Mental Model" in processed
 
 # Test for nested XML tags
 def test_nested_xml_tags() -> None:
@@ -746,10 +852,16 @@ def test_circular_includes() -> None:
 
 # Test for mix of excluded and nested brackets
 def test_mixed_excluded_nested_brackets() -> None:
-    """Test mix of excluded and nested brackets."""
+    """Test mix of excluded and nested brackets.
+
+    exclude protects exact {key} matches only. Nested patterns like
+    {excluded{inner}} don't match the {excluded} regex, so all braces
+    are doubled uniformly.
+    """
     prompt = "Mix of {excluded{inner}} nesting"
-    result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=["excluded"])
-    assert result == "Mix of {excluded{{inner}}} nesting"
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude=["excluded"])
+    # {excluded{inner}} doesn't match \{(excluded)\} regex, so all braces double
+    assert result == "Mix of {{excluded{{inner}}}} nesting"
 
 # Z3 FORMAL VERIFICATION TESTS
 #############################
@@ -832,9 +944,9 @@ def test_z3_double_curly_brackets():
         concrete_output = preprocess(concrete_input, recursive=False, double_curly_brackets=True)
         assert concrete_output == concrete_expected, f"Concrete test case {i} failed"
 
-def test_z3_exclude_keys():
+def test_z3_exclude():
     """
-    Test that exclude_keys are properly handled when doubling curly brackets.
+    Test that exclude are properly handled when doubling curly brackets.
     """
     solver = create_solver()
     
@@ -859,7 +971,7 @@ def test_z3_exclude_keys():
     
     # Verify with concrete example
     concrete_input = "This is {key} with {excluded}"
-    concrete_output = preprocess(concrete_input, recursive=False, double_curly_brackets=True, exclude_keys=["excluded"])
+    concrete_output = preprocess(concrete_input, recursive=False, double_curly_brackets=True, exclude=["excluded"])
     assert concrete_output == "This is {{key}} with {excluded}", "Concrete exclude keys test failed"
 
 def test_z3_code_block_handling():
@@ -1061,10 +1173,10 @@ def test_fstring_curly_brackets_outside_code_blocks() -> None:
     print(f"Output Cost per Million Tokens: {output_cost}")
 
     # Example usage of the token counter function
-    sample_text: str = "This is a sample text to count tokens."
-    token_count: int = token_counter(sample_text)
-    print(f"Token Count for Sample Text: {token_count}")
-    print(f"model_name: {model_name}")'''
+sample_text: str = "This is a sample text to count tokens."
+token_count: int = token_counter(sample_text)
+print(f"Token Count for Sample Text: {token_count}")
+print(f"model_name: {model_name}")'''
 
     # Expected output after preprocessing
     expected_output = '''    # Print the details of the selected LLM model
@@ -1073,10 +1185,10 @@ def test_fstring_curly_brackets_outside_code_blocks() -> None:
     print(f"Output Cost per Million Tokens: {{output_cost}}")
 
     # Example usage of the token counter function
-    sample_text: str = "This is a sample text to count tokens."
-    token_count: int = token_counter(sample_text)
-    print(f"Token Count for Sample Text: {{token_count}}")
-    print(f"model_name: {{model_name}}")'''
+sample_text: str = "This is a sample text to count tokens."
+token_count: int = token_counter(sample_text)
+print(f"Token Count for Sample Text: {{token_count}}")
+print(f"model_name: {{model_name}}")'''
 
     # Process the test string
     result = preprocess(test_string, recursive=False, double_curly_brackets=True)
@@ -1619,7 +1731,7 @@ Optional Docs: {DOC_FILES}
     assert len(matches) == 0, f"Found single-brace variables: {matches}"
 
 
-def test_get_file_path_repo_root_fallback(monkeypatch, tmp_path):
+def test_get_file_path_does_not_fallback_outside_active_project(monkeypatch, tmp_path):
     """
     Verifies that get_file_path correctly falls back to the repository root
     when run from a worktree where import shadowing occurs.
@@ -1629,7 +1741,7 @@ def test_get_file_path_repo_root_fallback(monkeypatch, tmp_path):
     2. The 'package_dir' (local pdd/pdd) does not contain the target file.
     3. The file *does* exist in the repository root (parent of pdd/pdd).
 
-    Bug: https://github.com/gltanaka/pdd/issues/240
+    Bug: https://github.com/promptdriven/pdd/issues/240
     """
     mock_file_name = "context/insert/1/prompt_to_update.prompt"
 
@@ -1665,8 +1777,1664 @@ def test_get_file_path_repo_root_fallback(monkeypatch, tmp_path):
     # This is crucial for simulating the 'package_root' calculation in get_default_resolver()
     monkeypatch.setattr('pdd.path_resolution.__file__', str(mock_path_resolution_file))
 
-    # Expectation: get_file_path should find the file in the mock_repo_root
+    # Protected path policy keeps resolution rooted at the active project.
     found_path = get_file_path(mock_file_name)
 
-    # Assert that the found path is the one in the mock repository root
-    assert found_path == str(expected_file_path)
+    assert found_path == f"./{mock_file_name}"
+    assert found_path != str(expected_file_path)
+
+
+# ============================================================================
+# Tests for Issue #375: Malformed JSON in PDD metadata tags
+# https://github.com/promptdriven/pdd/issues/375
+#
+# Issue #410 fix: double_curly() must double ALL braces uniformly, including
+# inside PDD metadata tags (<pdd-interface>, <pdd-reason>, <pdd-dependency>).
+# architecture_sync.py reads raw files (never preprocessed), so PDD tags don't
+# need protection. The fallback parser in parse_prompt_tags() handles doubled
+# braces as a safety net. The critical requirement is that .format() succeeds.
+# ============================================================================
+
+def test_double_curly_doubles_pdd_interface_json() -> None:
+    """
+    Test that JSON in <pdd-interface> tags is doubled by double_curly(),
+    and that .format() correctly undoubles it back to valid JSON.
+
+    Issue #410: PDD tag protection caused .format() to raise KeyError
+    because single-braced JSON was interpreted as format placeholders.
+    """
+    import json
+
+    prompt = '''<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "fix_architecture", "signature": "(arch: str)", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+% This is a template with {variable} placeholder.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # All braces should be doubled (including inside PDD tags)
+    assert "{{variable}}" in processed, "Template variables should be doubled"
+    assert '{{' in processed, "Braces inside PDD tags should also be doubled"
+    # JSON opening brace is on its own line, so check for {{ at start of line
+    assert '"type": "module"' not in processed or '{{' in processed, \
+        "JSON braces inside PDD tags should be doubled"
+
+    # After .format(**{}), the JSON should be valid again (undoubled back)
+    # In production, llm_invoke calls prompt.format(**input_data) where input_data={}
+    formatted = processed.format()
+    import re
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', formatted, re.DOTALL)
+    assert interface_match is not None
+    parsed = json.loads(interface_match.group(1).strip())
+    assert parsed['type'] == 'module'
+    assert len(parsed['module']['functions']) == 1
+
+
+def test_double_curly_doubles_pdd_reason_braces() -> None:
+    """
+    Test that braces in <pdd-reason> tags are doubled like all other braces.
+
+    Issue #410: All braces must be doubled so .format() can undouble them.
+    """
+    prompt = '''<pdd-reason>Handles JSON objects like {"key": "value"}</pdd-reason>
+Normal text with {placeholder}.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # All braces should be doubled
+    import re
+    reason_match = re.search(r'<pdd-reason>(.*?)</pdd-reason>', processed, re.DOTALL)
+    assert reason_match is not None
+    reason_content = reason_match.group(1)
+    assert '{{' in reason_content, "Braces in <pdd-reason> should be doubled"
+
+    assert "{{placeholder}}" in processed
+
+    # After .format(), content is undoubled back to original
+    formatted = processed.format()
+    reason_match2 = re.search(r'<pdd-reason>(.*?)</pdd-reason>', formatted, re.DOTALL)
+    assert '{"key": "value"}' in reason_match2.group(1)
+
+
+def test_double_curly_doubles_pdd_dependency_content() -> None:
+    """
+    Test that <pdd-dependency> content is processed by double_curly().
+
+    Dependencies typically contain filenames (no braces), so doubling
+    has no visible effect, but the tag structure is preserved.
+    """
+    prompt = '''<pdd-dependency>some_module.prompt</pdd-dependency>
+Text with {variable}.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # Dependency tag content has no braces, so it's unchanged
+    assert '<pdd-dependency>some_module.prompt</pdd-dependency>' in processed
+
+    # Variable outside should be doubled
+    assert "{{variable}}" in processed
+
+
+def test_double_curly_doubles_multiple_pdd_tags() -> None:
+    """
+    Test that all PDD tags have their braces doubled uniformly.
+
+    Issue #410: All braces everywhere must be doubled for .format() safety.
+    """
+    prompt = '''<pdd-reason>Provides unified LLM invocation with {options}</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {"functions": [{"name": "invoke", "returns": "str"}]}
+}
+</pdd-interface>
+<pdd-dependency>base_module.prompt</pdd-dependency>
+% Template with {input} and {output} variables.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # All braces doubled
+    import re
+    reason_match = re.search(r'<pdd-reason>(.*?)</pdd-reason>', processed, re.DOTALL)
+    assert reason_match is not None
+    assert '{{options}}' in reason_match.group(1), "Braces in <pdd-reason> should be doubled"
+
+    assert "{{input}}" in processed
+    assert "{{output}}" in processed
+
+    # After .format(), everything undoubles correctly
+    formatted = processed.format()
+    import json
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', formatted, re.DOTALL)
+    assert interface_match is not None
+    parsed = json.loads(interface_match.group(1).strip())
+    assert parsed['type'] == 'module'
+
+
+def test_double_curly_doubles_nested_json_in_pdd_interface() -> None:
+    """
+    Test that deeply nested JSON in <pdd-interface> is doubled and
+    survives the .format() round-trip.
+
+    Issue #410: Nested JSON structures must survive double_curly → .format().
+    """
+    import json
+
+    nested_json = {
+        "type": "module",
+        "module": {
+            "functions": [
+                {
+                    "name": "process",
+                    "signature": "(data: Dict[str, Any])",
+                    "returns": "Dict[str, List[Dict[str, str]]]"
+                }
+            ],
+            "classes": [
+                {
+                    "name": "Handler",
+                    "methods": [{"name": "handle", "args": "{}"}]
+                }
+            ]
+        }
+    }
+
+    prompt = f'''<pdd-interface>
+{json.dumps(nested_json, indent=2)}
+</pdd-interface>
+% Use this with {{already_escaped}} and {{variable}}.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # After .format(), nested JSON should be intact
+    formatted = processed.format()
+    import re
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', formatted, re.DOTALL)
+    assert interface_match is not None
+    parsed = json.loads(interface_match.group(1).strip())
+    assert parsed == nested_json, "Nested JSON structure was altered after round-trip"
+
+
+def test_double_curly_still_doubles_outside_pdd_tags() -> None:
+    """
+    Regression test: Ensure normal brace doubling still works outside PDD tags.
+
+    double_curly() must escape all braces for safe use with .format().
+    """
+    prompt = '''<pdd-interface>{"valid": "json"}</pdd-interface>
+Normal text with {variable1} and {variable2}.
+Code example: const obj = {key: value};
+Template literal ${FOO} should become ${{FOO}}.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # All braces doubled (including PDD tag content)
+    assert '{{"valid": "json"}}' in processed, "PDD tag JSON braces should be doubled"
+
+    # Variables outside should be doubled
+    assert "{{variable1}}" in processed
+    assert "{{variable2}}" in processed
+
+    # Code braces outside PDD tags should be doubled
+    assert "{{key: value}}" in processed
+
+    # Template literals should become ${{...}}
+    assert "${{FOO}}" in processed
+
+
+def test_double_curly_integration_with_parse_prompt_tags() -> None:
+    """
+    Integration test: parse_prompt_tags() can handle preprocessed content
+    via its fallback double-brace parser.
+
+    In production, architecture_sync.py reads raw files. But the fallback
+    parser (commit 6a1d77c4) can also handle doubled braces as a safety net.
+    """
+    from pdd.architecture_sync import parse_prompt_tags
+
+    prompt = '''<pdd-reason>Handles authentication flows</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "authenticate", "signature": "(user: str, pass: str)", "returns": "bool"},
+      {"name": "validate_token", "signature": "(token: str)", "returns": "Dict"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>base_auth.prompt</pdd-dependency>
+% Template with {user_input} placeholder.'''
+
+    # parse_prompt_tags on RAW content (the production path)
+    raw_result = parse_prompt_tags(prompt)
+    assert raw_result['interface']['type'] == 'module'
+    assert len(raw_result['interface']['module']['functions']) == 2
+
+    # parse_prompt_tags on PREPROCESSED content (safety net via fallback parser)
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+    processed_result = parse_prompt_tags(processed)
+    assert processed_result['interface'] is not None, \
+        f"Fallback parser should handle doubled braces: {processed_result.get('interface_parse_error')}"
+    assert processed_result['interface']['type'] == 'module'
+
+    # Verify dependencies were extracted in both cases
+    assert 'base_auth.prompt' in raw_result.get('dependencies', [])
+
+
+def test_double_curly_real_world_prompt_format_roundtrip() -> None:
+    """
+    Test with a real-world prompt: double_curly → .format() round-trip.
+
+    Issue #410: This is the exact flow that was broken. The prompt has PDD
+    metadata tags with JSON AND template variables. After preprocessing,
+    .format(**input_data) must work without KeyError.
+    """
+    import json
+
+    prompt = '''<pdd-reason>Fixes validation errors in architecture.json: resolves circular deps, priority violations, missing fields.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "fix_architecture", "signature": "(current_architecture: str, step7_output: str)", "returns": "str (corrected JSON array)"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step7_validate_LLM.prompt</pdd-dependency>
+% You are an expert software architect. Your task is to fix validation errors.
+
+% Inputs
+- Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Current Architecture
+<architecture_json>
+{current_architecture}
+</architecture_json>'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # Template variables outside PDD tags SHOULD be doubled
+    assert "{{issue_url}}" in processed
+    assert "{{repo_owner}}" in processed
+    assert "{{current_architecture}}" in processed
+
+    # .format(**{}) should succeed (issue #410) — this is the production call
+    # In production, llm_invoke calls prompt.format(**input_data) where
+    # input_data is typically {} for pdd sync. All {{...}} get undoubled to {...}.
+    formatted = processed.format()
+
+    # After formatting, PDD tags should contain valid JSON (undoubled back)
+    import re
+    interface_match = re.search(r'<pdd-interface>(.*?)</pdd-interface>', formatted, re.DOTALL)
+    assert interface_match is not None, "Lost <pdd-interface> tag"
+    interface_json = json.loads(interface_match.group(1).strip())
+    assert interface_json['type'] == 'module'
+    assert interface_json['module']['functions'][0]['name'] == 'fix_architecture'
+
+    # Template variables should be undoubled back to original single-brace form
+    assert "{issue_url}" in formatted
+    assert "{repo_owner}" in formatted
+    assert "{current_architecture}" in formatted
+
+
+# ============================================================================
+# Issue #410: Preprocessed prompts with PDD tags must survive str.format()
+# The double_curly() → .format() pipeline is how all prompts reach the LLM.
+# PDD tags containing JSON must be doubled so .format() undoubles them safely.
+# ============================================================================
+
+def test_pdd_tags_survive_format() -> None:
+    """
+    Regression test for issue #410: pdd sync fails with KeyError when prompts
+    contain <pdd-interface> tags with JSON.
+
+    The preprocessing pipeline is:
+      1. double_curly() doubles all { → {{
+      2. llm_invoke calls prompt.format(**input_data) which undoubles {{ → {
+
+    If PDD tag content is protected from doubling (step 1), .format() in step 2
+    interprets the single braces as format placeholders and raises KeyError.
+    """
+    prompt = '''<pdd-reason>Defines the User data model with Firestore serialization.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "User", "signature": "@dataclass class", "returns": "User"},
+      {"name": "User.to_dict", "signature": "(self) -> Dict[str, Any]", "returns": "Dict[str, Any]"},
+      {"name": "User.from_dict", "signature": "(cls, data: Dict[str, Any]) -> User", "returns": "User"}
+    ]
+  }
+}
+</pdd-interface>
+
+You are an expert Python engineer. Write the User data model.'''
+
+    processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
+
+    # This is the exact operation that llm_invoke.py:1238 performs.
+    # It must not raise KeyError.
+    try:
+        formatted = processed.format()
+    except KeyError as e:
+        pytest.fail(
+            f"Issue #410: preprocessed prompt with PDD tags failed .format(): {e}\n"
+            f"This means double_curly() did not escape braces inside PDD tags.\n"
+            f"Preprocessed content (first 500 chars):\n{processed[:500]}"
+        )
+
+    # After .format() undoubles {{ → {, the JSON should be valid
+    assert '"type": "module"' in formatted
+    assert '{"name": "User"' in formatted
+    assert '<pdd-interface>' in formatted
+    assert '</pdd-interface>' in formatted
+
+
+# ============================================================================
+# DETAILED TEST PLAN
+# ============================================================================
+# 1. Attribute Parsing (_parse_attrs):
+#    - Unit test: Verify that `_parse_attrs` correctly extracts key-value pairs
+#      from XML-like attribute strings, handling both single and double quotes.
+# 2. Semantic Query Extraction (<include query="...">):
+#    - Unit test: Mock `IncludeQueryExtractor` to verify that when the `query`
+#      attribute is present, the extraction is delegated to the extractor and
+#      bypasses standard file reading.
+# 3. Content Selection (<include select="..." lines="...">):
+#    - Unit test: Mock `ContentSelector` to verify that `select`, `lines`, and
+#      `mode` attributes are correctly parsed and passed to the selector.
+# 4. Self-Closing Include Tags (<include path="..." />):
+#    - Unit test: Verify that self-closing tags are correctly matched and processed
+#      using the `path` attribute.
+# 5. Debug Report Generation (_write_debug_report):
+#    - Unit test: Set `PDD_PREPROCESS_DEBUG` and `PDD_PREPROCESS_DEBUG_FILE` env
+#      vars, run preprocess, and verify the debug file is written to disk.
+#
+# Note on Z3 Formal Verification:
+# The core string manipulation properties (PDD tag removal, curly brace doubling,
+# exclude keys) are already covered by Z3 tests in the existing suite. The new
+# features being tested here (attribute parsing, delegating to external classes
+# like ContentSelector/IncludeQueryExtractor) involve side-effects, mocking, and
+# dictionary manipulations which are better suited for standard unit tests rather
+# than symbolic execution.
+# ============================================================================
+
+
+def test_parse_attrs_internal() -> None:
+    """Test the internal _parse_attrs function for correct attribute extraction."""
+    from pdd.preprocess import _parse_attrs
+    
+    # Test empty string
+    assert _parse_attrs("") == {}
+    
+    # Test double quotes
+    assert _parse_attrs('path="file.txt" select="def:main"') == {'path': 'file.txt', 'select': 'def:main'}
+    
+    # Test single quotes
+    assert _parse_attrs("path='file.txt' mode='interface'") == {'path': 'file.txt', 'mode': 'interface'}
+    
+    # Test mixed quotes and spacing
+    assert _parse_attrs('  path="a.txt"   query=\'find stuff\' ') == {'path': 'a.txt', 'query': 'find stuff'}
+
+def test_process_include_with_semantic_query(monkeypatch) -> None:
+    """Test that <include query="..."> delegates to IncludeQueryExtractor."""
+    prompt = '<include query="extract the main logic">source.py</include>'
+    expected_output = "Extracted semantic content"
+    
+    # Create a mock extractor class
+    class MockExtractor:
+        def extract(self, file_path, query):
+            assert query == "extract the main logic"
+            assert "source.py" in file_path
+            return expected_output
+            
+    # Mock the import of IncludeQueryExtractor
+    mock_module = MagicMock()
+    mock_module.IncludeQueryExtractor = MockExtractor
+    monkeypatch.setitem(sys.modules, 'pdd.include_query_extractor', mock_module)
+    
+    # Mock get_file_path to just return the filename
+    monkeypatch.setattr(sys.modules['pdd.preprocess'], 'get_file_path', lambda x: x)
+    
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == expected_output
+
+def test_process_include_with_content_selector(monkeypatch) -> None:
+    """Test that <include select="..." lines="..."> delegates to ContentSelector."""
+    prompt = '<include select="def:main,class:App" lines="10-20" mode="interface">source.py</include>'
+    mock_file_content = "Full file content"
+    expected_output = "Selected content only"
+    
+    # Create a mock selector class
+    class MockSelector:
+        def select(self, content, selectors, file_path, mode, expand_dependencies=False):
+            assert content == mock_file_content
+            assert "def:main" in selectors
+            assert "class:App" in selectors
+            assert "lines:10-20" in selectors
+            assert mode == "interface"
+            assert expand_dependencies is False
+            return expected_output
+            
+    # Mock the import of ContentSelector
+    mock_module = MagicMock()
+    mock_module.ContentSelector = MockSelector
+    monkeypatch.setitem(sys.modules, 'pdd.content_selector', mock_module)
+    
+    # Mock file reading
+    monkeypatch.setattr('builtins.open', mock_open(read_data=mock_file_content))
+    monkeypatch.setattr(sys.modules['pdd.preprocess'], 'get_file_path', lambda x: x)
+    monkeypatch.setattr('os.path.realpath', lambda x: x)
+    
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == expected_output
+
+def test_process_self_closing_include_tag(monkeypatch) -> None:
+    """Test that self-closing <include path="..." /> tags are processed correctly."""
+    prompt = 'Prefix <include path="target.txt" /> Suffix'
+    mock_file_content = "Target Content"
+    
+    monkeypatch.setattr('builtins.open', mock_open(read_data=mock_file_content))
+    monkeypatch.setattr(sys.modules['pdd.preprocess'], 'get_file_path', lambda x: x)
+    monkeypatch.setattr('os.path.realpath', lambda x: x)
+    
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == f"Prefix {mock_file_content} Suffix"
+
+def test_debug_report_generation(monkeypatch, tmp_path) -> None:
+    """Test that setting debug environment variables generates a debug report file."""
+    debug_file = tmp_path / "preprocess_debug.log"
+    
+    # Enable debug mode and set output file
+    monkeypatch.setenv("PDD_PREPROCESS_DEBUG", "1")
+    monkeypatch.setenv("PDD_PREPROCESS_DEBUG_FILE", str(debug_file))
+    
+    prompt = "Simple prompt with {var}"
+    
+    # Run preprocess
+    preprocess(prompt, recursive=False, double_curly_brackets=True)
+    
+    # Verify the debug file was created and contains expected content
+    assert debug_file.exists()
+    content = debug_file.read_text(encoding="utf-8")
+    assert "Preprocess Debug Report" in content
+    assert "Start preprocess" in content
+    assert "Initial length" in content
+    assert "Final length" in content
+
+
+# ===================================================================
+# Tests for <include select="..." mode="..."> (ContentSelector)
+# ===================================================================
+
+def test_include_select_delegates_to_content_selector(tmp_path, monkeypatch) -> None:
+    """<include select="def:foo"> should delegate to ContentSelector.select()."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "module.py"
+    src.write_text("def foo():\n    return 42\n\ndef bar():\n    return 99\n")
+
+    prompt = '<include select="def:foo">module.py</include>'
+
+    with patch('pdd.content_selector.ContentSelector') as MockCS:
+        MockCS.return_value.select.return_value = "def foo():\n    return 42"
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    MockCS.return_value.select.assert_called_once()
+    call_kwargs = MockCS.return_value.select.call_args
+    assert call_kwargs.kwargs['selectors'] == ['def:foo']
+    assert call_kwargs.kwargs['mode'] == 'full'
+    assert result == "def foo():\n    return 42"
+
+
+def test_include_select_with_mode_interface(tmp_path, monkeypatch) -> None:
+    """<include select="class:Foo" mode="interface"> should pass mode to ContentSelector."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "module.py"
+    src.write_text("class Foo:\n    def method(self): ...\n")
+
+    prompt = '<include select="class:Foo" mode="interface">module.py</include>'
+
+    with patch('pdd.content_selector.ContentSelector') as MockCS:
+        MockCS.return_value.select.return_value = "class Foo:\n    def method(self): ..."
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    call_kwargs = MockCS.return_value.select.call_args
+    assert call_kwargs.kwargs['mode'] == 'interface'
+
+
+def test_include_select_multiple_selectors(tmp_path, monkeypatch) -> None:
+    """Comma-separated selectors should all be passed to ContentSelector."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "module.py"
+    src.write_text("def a(): ...\ndef b(): ...\n")
+
+    prompt = '<include select="def:a,def:b">module.py</include>'
+
+    with patch('pdd.content_selector.ContentSelector') as MockCS:
+        MockCS.return_value.select.return_value = "def a(): ...\ndef b(): ..."
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    call_kwargs = MockCS.return_value.select.call_args
+    assert call_kwargs.kwargs['selectors'] == ['def:a', 'def:b']
+
+
+def test_include_select_pytest_comma_separated(tmp_path, monkeypatch) -> None:
+    """pytest:test_one,test_two must stay one selector (not split on the comma)."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "tests/test_sample.py"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(
+        "def helper():\n    return 1\n\n"
+        "def test_one():\n    assert helper() == 1\n\n"
+        "def test_two():\n    assert True\n"
+    )
+    prompt = '<include select="pytest:test_one,test_two">tests/test_sample.py</include>'
+
+    with patch('pdd.content_selector.ContentSelector') as MockCS:
+        MockCS.return_value.select.return_value = "sliced"
+        preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    call_kwargs = MockCS.return_value.select.call_args
+    assert call_kwargs.kwargs['selectors'] == ['pytest:test_one,test_two']
+
+
+def test_preprocess_contract_include_real(tmp_path, monkeypatch) -> None:
+    """E2E: preprocess + contract: keeps transitive helpers (no ContentSelector mock)."""
+    monkeypatch.chdir(tmp_path)
+    module = tmp_path / "worker.py"
+    module.write_text(
+        "def _get_job_secrets(job_id):\n"
+        "    return {'id': job_id}\n\n"
+        "def run_worker(job_id):\n"
+        "    return _get_job_secrets(job_id)\n",
+        encoding="utf-8",
+    )
+    prompt = '<include select="contract:run_worker">worker.py</include>'
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert "API Contract Slice" in result
+    assert "def run_worker" in result
+    assert "def _get_job_secrets" in result
+    assert "def test_" not in result
+
+
+def test_preprocess_pytest_include_real(tmp_path, monkeypatch) -> None:
+    """E2E: preprocess + pytest: with comma-grouped test names."""
+    monkeypatch.chdir(tmp_path)
+    test_file = tmp_path / "tests" / "test_sample.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "def helper():\n    return 1\n\n"
+        "def test_one():\n    assert helper() == 1\n\n"
+        "def test_two():\n    assert True\n",
+        encoding="utf-8",
+    )
+    prompt = '<include select="pytest:test_one,test_two">tests/test_sample.py</include>'
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert "def test_one" in result
+    assert "def test_two" in result
+    assert "def helper" in result
+
+
+def test_include_select_fallback_on_import_error(tmp_path, monkeypatch) -> None:
+    """If ContentSelector can't be imported, fall back to full file content with a warning."""
+    monkeypatch.delenv("PDD_COMPRESSION_FALLBACK", raising=False)
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "module.py"
+    full_content = "def foo():\n    return 42\n"
+    src.write_text(full_content)
+
+    prompt = '<include select="def:foo">module.py</include>'
+
+    with patch.dict('sys.modules', {'pdd.content_selector': None}):
+        with pytest.warns(UserWarning, match="ContentSelector not importable.*def:foo.*module.py"):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert result == full_content
+
+
+def test_include_select_fallback_on_selector_error(tmp_path, monkeypatch) -> None:
+    """If ContentSelector raises, fall back to full file content with a warning."""
+    monkeypatch.delenv("PDD_COMPRESSION_FALLBACK", raising=False)
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "module.py"
+    full_content = "def foo():\n    return 42\n"
+    src.write_text(full_content)
+
+    prompt = '<include select="def:nonexistent">module.py</include>'
+
+    with patch('pdd.content_selector.ContentSelector') as MockCS:
+        MockCS.return_value.select.side_effect = ValueError("function 'nonexistent' not found")
+        with pytest.warns(UserWarning, match="ContentSelector failed.*def:nonexistent.*module.py"):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert result == full_content
+
+
+def test_include_select_inside_code_block_not_processed(tmp_path, monkeypatch) -> None:
+    """<include select=...> inside a fenced code block should NOT be processed."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "module.py"
+    src.write_text("content")
+
+    prompt = '```xml\n<include select="def:foo">module.py</include>\n```'
+
+    with patch('pdd.content_selector.ContentSelector') as MockCS:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    MockCS.assert_not_called()
+    assert result == prompt
+
+
+# ===================================================================
+# Tests for <include query="..."> (IncludeQueryExtractor)
+# ===================================================================
+
+def test_include_query_delegates_to_extractor(tmp_path, monkeypatch) -> None:
+    """<include query="...">file</include> should delegate to IncludeQueryExtractor.extract()."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "data.py"
+    src.write_text("x = 1\n")
+
+    prompt = '<include query="What does x do?">data.py</include>'
+
+    with patch('pdd.include_query_extractor.IncludeQueryExtractor') as MockExt:
+        MockExt.return_value.extract.return_value = "x is set to 1."
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    MockExt.return_value.extract.assert_called_once()
+    call_kwargs = MockExt.return_value.extract.call_args
+    assert call_kwargs.kwargs['query'] == 'What does x do?'
+    assert 'data.py' in call_kwargs.kwargs['file_path']
+    assert result == "x is set to 1."
+
+
+def test_include_query_deferred_when_recursive(tmp_path, monkeypatch) -> None:
+    """When recursive=True, <include query=...> should be left intact (deferred)."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "data.py"
+    src.write_text("x = 1\n")
+
+    prompt = '<include query="What does x do?">data.py</include>'
+
+    with patch('pdd.include_query_extractor.IncludeQueryExtractor') as MockExt:
+        result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+
+    MockExt.return_value.extract.assert_not_called()
+    assert result == prompt
+
+
+def test_include_query_executed_on_second_pass(tmp_path, monkeypatch) -> None:
+    """Deferred query tag should execute on the non-recursive second pass."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "data.py"
+    src.write_text("x = 1\n")
+
+    prompt = '<include query="What does x do?">data.py</include>'
+
+    with patch('pdd.include_query_extractor.IncludeQueryExtractor') as MockExt:
+        MockExt.return_value.extract.return_value = "x is set to 1."
+        first = preprocess(prompt, recursive=True, double_curly_brackets=False)
+        assert first == prompt
+        second = preprocess(first, recursive=False, double_curly_brackets=False)
+
+    assert second == "x is set to 1."
+    MockExt.return_value.extract.assert_called_once()
+
+
+def test_include_query_import_error_returns_error_message(tmp_path, monkeypatch) -> None:
+    """If IncludeQueryExtractor can't be imported, return an error placeholder."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "data.py"
+    src.write_text("x = 1\n")
+
+    prompt = '<include query="What is x?">data.py</include>'
+
+    with patch.dict('sys.modules', {'pdd.include_query_extractor': None}):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert "Error" in result
+    assert "include_query_extractor" in result
+
+
+def test_include_query_extractor_exception_returns_error(tmp_path, monkeypatch) -> None:
+    """If IncludeQueryExtractor.extract() raises, return an error placeholder."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "data.py"
+    src.write_text("x = 1\n")
+
+    prompt = '<include query="What is x?">data.py</include>'
+
+    with patch('pdd.include_query_extractor.IncludeQueryExtractor') as MockExt:
+        MockExt.return_value.extract.side_effect = RuntimeError("LLM unavailable")
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert "Error" in result
+    assert "LLM unavailable" in result
+
+
+def test_include_query_inside_code_block_not_processed(tmp_path, monkeypatch) -> None:
+    """<include query=...> inside a fenced code block should NOT be processed."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "data.py"
+    src.write_text("x = 1\n")
+
+    prompt = '```xml\n<include query="What is x?">data.py</include>\n```'
+
+    with patch('pdd.include_query_extractor.IncludeQueryExtractor') as MockExt:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    MockExt.assert_not_called()
+    assert result == prompt
+
+
+# ===================================================================
+# Tests for processing order (pdd → include → include-many → shell → web)
+# ===================================================================
+
+def test_pdd_tags_processed_before_includes(tmp_path, monkeypatch) -> None:
+    """PDD tags should be stripped before include tags are resolved."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "file.txt"
+    src.write_text("included content")
+
+    # The pdd tag wraps an include — the include should NOT be processed
+    prompt = "<pdd><include>file.txt</include></pdd>After"
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == "After"
+
+
+def test_includes_processed_before_shell(tmp_path, monkeypatch) -> None:
+    """Include tags are resolved before shell tags execute."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "cmd.txt"
+    src.write_text("echo included")
+
+    prompt = "<shell><include>cmd.txt</include></shell>"
+    with patch('subprocess.run') as mock_run:
+        mock_run.return_value.stdout = "included\n"
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    # The include should resolve first, then shell should execute the result
+    # (Though shell sees "echo included" as the command after include resolves)
+    mock_run.assert_called_once()
+    assert "included" in result
+
+
+# =============================================================================
+# Issue #1261: Exception handlers missing recursive guard
+#
+# The FileNotFoundError handler in process_include_tags correctly preserves
+# original text when recursive=True (return match.group(0)), but the ValueError
+# (non-circular) and generic Exception handlers unconditionally replace the
+# matched span with "[Error processing include: ...]" error markers — even
+# during the recursive pass where unresolved tags should be left intact.
+# The same bug exists in process_backtick_includes.
+# =============================================================================
+
+
+def test_xml_include_oserror_recursive_preserves_tag() -> None:
+    """OSError during recursive pass should preserve the original XML include tag.
+
+    This is the primary bug from issue #1261: when a bare <include> in prose
+    causes the regex to capture >255 bytes as a 'filename', open() raises
+    OSError('File name too long'). The generic Exception handler (line 427-430)
+    unconditionally replaces the match with an error marker instead of
+    preserving the original text like the FileNotFoundError handler does.
+    """
+    prompt = "<include>somefile.txt</include>"
+    with patch('builtins.open', side_effect=OSError(36, "File name too long")):
+        result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    # BUG: returns "[Error processing include: somefile.txt]"
+    # FIX: should return original text when recursive=True
+    assert result == prompt
+
+
+# Scope addition: covers expansion item "process_include_tags ValueError
+# non-circular handler (line 426) missing recursive guard" identified by Step 6
+def test_xml_include_valueerror_non_circular_recursive_preserves_tag() -> None:
+    """Non-circular ValueError during recursive pass should preserve the original XML include tag.
+
+    The ValueError handler at line 421-426 re-raises circular-include errors but
+    unconditionally returns an error marker for all other ValueErrors, even when
+    recursive=True. It should preserve the original tag like FileNotFoundError does.
+    """
+    prompt = "<include>somefile.txt</include>"
+    with patch('pdd.preprocess.get_file_path', side_effect=ValueError("Invalid path encoding")):
+        result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    # BUG: returns "[Error processing include: somefile.txt]"
+    # FIX: should return original text when recursive=True
+    assert result == prompt
+
+
+# Scope addition: covers expansion item "process_backtick_includes Exception
+# handler (line 216) missing recursive guard" identified by Step 6
+def test_backtick_include_oserror_recursive_preserves_tag() -> None:
+    """OSError during recursive pass should preserve the original backtick include tag.
+
+    The generic Exception handler in process_backtick_includes (line 213-216)
+    unconditionally returns an error marker instead of preserving the original
+    text when recursive=True.
+    """
+    prompt = "```<somefile.txt>```"
+    with patch('builtins.open', side_effect=OSError(36, "File name too long")):
+        result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    # BUG: returns "```[Error processing include: somefile.txt]```"
+    # FIX: should return original text when recursive=True
+    assert result == prompt
+
+
+# Scope addition: covers expansion item "process_backtick_includes ValueError
+# non-circular handler (line 212) missing recursive guard" identified by Step 6
+def test_backtick_include_valueerror_non_circular_recursive_preserves_tag() -> None:
+    """Non-circular ValueError during recursive pass should preserve the original backtick include tag.
+
+    The ValueError handler in process_backtick_includes (line 207-212) re-raises
+    circular-include errors but unconditionally returns an error marker for all
+    other ValueErrors, even when recursive=True.
+    """
+    prompt = "```<somefile.txt>```"
+    with patch('pdd.preprocess.get_file_path', side_effect=ValueError("Invalid path encoding")):
+        result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    # BUG: returns "```[Error processing include: somefile.txt]```"
+    # FIX: should return original text when recursive=True
+    assert result == prompt
+
+
+def test_bare_include_in_prose_over_255_bytes_preserves_content(tmp_path, monkeypatch) -> None:
+    """Realistic reproduction: bare <include> in prose with >255 bytes to next </include>.
+
+    This is the exact scenario from issue #1261. A prompt mentions <include> in
+    prose text (without backtick escaping). The preprocessing regex captures the
+    text between the bare <include> and the next real </include> as a 'filename'.
+    When that text exceeds 255 bytes, open() raises OSError('File name too long'),
+    and the generic Exception handler destructively replaces the entire matched
+    span with an error marker — eating all the requirement text in between.
+    """
+    monkeypatch.chdir(tmp_path)
+    padding = "A" * 300
+    # The regex will match from <include> to </include>, capturing the 300+ byte
+    # "filename" (the prose text + padding). open() raises OSError for the
+    # overlong filename component.
+    prompt = f"The system parses <include> tags from files {padding}</include> and more text."
+    result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    # BUG: the error marker replaces the entire matched span, eating the padding
+    # FIX: recursive=True should preserve the original text
+    assert "[Error processing include:" not in result
+    assert padding in result
+
+
+def test_two_pass_xml_include_oserror_preserves_content(tmp_path, monkeypatch) -> None:
+    """Two-pass pipeline: bare <include> in prose survives both passes.
+
+    Exercises the real code_generator_main.py flow: pass 1 (recursive=True)
+    then pass 2 (recursive=False). Both passes must preserve the original text
+    when the regex false-matches prose as a filename.
+    """
+    monkeypatch.chdir(tmp_path)
+    padding = "A" * 300
+    prompt = f"The system parses <include> tags from files {padding}</include> and more text."
+    pass1 = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    pass2 = preprocess(pass1, recursive=False, double_curly_brackets=False)
+    assert "[Error processing include:" not in pass2
+    assert padding in pass2
+    assert "and more text." in pass2
+
+
+def test_two_pass_backtick_include_oserror_preserves_content(tmp_path, monkeypatch) -> None:
+    """Two-pass pipeline: backtick-escaped prose survives both passes."""
+    monkeypatch.chdir(tmp_path)
+    padding = "B" * 300
+    prompt = f"Use regex `r'<include>(.*?)</include>'` to parse {padding} from files."
+    pass1 = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    pass2 = preprocess(pass1, recursive=False, double_curly_brackets=False)
+    assert "[Error processing include:" not in pass2
+    assert padding in pass2
+
+
+# ---------------------------------------------------------------------------
+# Issue #616 — unresolved-include surfacing (loud-failure)
+# ---------------------------------------------------------------------------
+
+
+def test_unresolved_include_warning_surfaced(tmp_path, monkeypatch, capsys) -> None:
+    """Final non-recursive pass: [File not found:] placeholders trigger a loud
+    warning naming each unresolved path."""
+    monkeypatch.chdir(tmp_path)
+    out = preprocess(
+        "<x><include>context/missing_example.py</include></x>",
+        recursive=False, double_curly_brackets=False,
+    )
+    assert "[File not found: context/missing_example.py]" in out
+    captured = capsys.readouterr().out
+    assert "Unresolved include" in captured
+    assert "context/missing_example.py" in captured
+    assert "example_output_path" in captured
+
+
+def _normalize(s: str) -> str:
+    """Collapse whitespace — Rich console may wrap long lines mid-word."""
+    return " ".join(s.split())
+
+
+def test_unresolved_include_warning_includes_actionable_alt_location(tmp_path, monkeypatch, capsys) -> None:
+    """When the missing file's first component is context/examples and the swap
+    location has the file, the warning names that alternative path."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "examples" / "prisma").mkdir(parents=True)
+    (tmp_path / "examples" / "prisma" / "schema_example.prisma").write_text("// here\n")
+    preprocess(
+        "<x><include>context/prisma/schema_example.prisma</include></x>",
+        recursive=False, double_curly_brackets=False,
+    )
+    captured = _normalize(capsys.readouterr().out)
+    assert "Unresolved include" in captured
+    assert "Found at:" in captured
+    assert "examples/prisma/schema_example.prisma" in captured
+
+
+def test_unresolved_include_actionable_inverse(tmp_path, monkeypatch, capsys) -> None:
+    """Inverse: <include>examples/...</include> missing, file under context/."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context" / "shared").mkdir(parents=True)
+    (tmp_path / "context" / "shared" / "thing.py").write_text("# here\n")
+    preprocess(
+        "<x><include>examples/shared/thing.py</include></x>",
+        recursive=False, double_curly_brackets=False,
+    )
+    captured = _normalize(capsys.readouterr().out)
+    assert "Found at:" in captured
+    assert "context/shared/thing.py" in captured
+
+
+def test_unresolved_include_warning_not_emitted_when_resolved(tmp_path, monkeypatch, capsys) -> None:
+    """When the include file exists, no unresolved-include warning fires."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "examples" / "real.py").write_text("# real\n")
+    out = preprocess(
+        "<x><include>examples/real.py</include></x>",
+        recursive=False, double_curly_brackets=False,
+    )
+    assert "[File not found:" not in out
+    assert "Unresolved include" not in capsys.readouterr().out
+
+
+def test_unresolved_include_warning_silenced_in_quiet_mode(tmp_path, monkeypatch, capsys) -> None:
+    """PDD_QUIET=1 suppresses the unresolved-include console warning."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_QUIET", "1")
+    preprocess(
+        "<x><include>context/missing.py</include></x>",
+        recursive=False, double_curly_brackets=False,
+    )
+    assert "Unresolved include" not in capsys.readouterr().out
+
+
+def test_unresolved_include_no_warning_on_recursive_pass(tmp_path, monkeypatch, capsys) -> None:
+    """Recursive passes must not warn — placeholders may resolve later."""
+    monkeypatch.chdir(tmp_path)
+    preprocess(
+        "<x><include>context/missing.py</include></x>",
+        recursive=True, double_curly_brackets=False,
+    )
+    assert "Unresolved include" not in capsys.readouterr().out
+
+
+def test_unresolved_include_warning_emits_via_logger(tmp_path, monkeypatch, caplog) -> None:
+    """The unresolved-include warning must also reach the standard logger so
+    callers that capture logs (CI, log-aggregation pipelines) see the signal,
+    not just Rich console output (#616)."""
+    import logging
+    monkeypatch.chdir(tmp_path)
+    with caplog.at_level(logging.WARNING, logger="pdd.preprocess"):
+        preprocess(
+            "<x><include>context/missing_example.py</include></x>",
+            recursive=False, double_curly_brackets=False,
+        )
+    matches = [r for r in caplog.records if "Unresolved include" in r.getMessage()]
+    assert matches, "expected logger.warning for unresolved include"
+    assert matches[0].levelno == logging.WARNING
+    assert "context/missing_example.py" in matches[0].getMessage()
+
+
+def test_unresolved_include_warning_logger_fires_in_quiet_mode(tmp_path, monkeypatch, caplog, capsys) -> None:
+    """PDD_QUIET=1 silences Rich console output but the logger warning still
+    fires — quiet mode is for terminal noise, not for hiding signals from
+    log capture."""
+    import logging
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_QUIET", "1")
+    with caplog.at_level(logging.WARNING, logger="pdd.preprocess"):
+        preprocess(
+            "<x><include>context/missing.py</include></x>",
+            recursive=False, double_curly_brackets=False,
+        )
+    assert "Unresolved include" not in capsys.readouterr().out
+    assert any("Unresolved include" in r.getMessage() for r in caplog.records)
+
+
+def test_unresolved_include_warning_no_false_positive_on_documentation(tmp_path, monkeypatch, caplog, capsys) -> None:
+    """The unresolved-include warning must NOT fire when the literal text
+    `[File not found: ...]` appears in documentation, prompt specs, or other
+    non-include content. Greg's #1354 review repro: running preprocess on
+    `pdd/prompts/preprocess_python.prompt` (which documents the warning's
+    behavior using `[File not found: path]` and `[File not found: ...]` as
+    illustrative examples) used to emit false-positive warnings for `path`
+    and `...`. The fix tracks include-processor failures directly rather
+    than regex-scanning the final prompt."""
+    import logging
+    monkeypatch.chdir(tmp_path)
+    # A prompt that documents the warning marker as content, with no actual
+    # failing <include>/<include-many> tags. This must NOT trip the warning.
+    doc_prompt = (
+        "Documentation example:\n"
+        "When an include fails, preprocess emits a placeholder like\n"
+        "`[File not found: path]` or `[File not found: ...]` for missing files.\n"
+        "End of doc.\n"
+    )
+    with caplog.at_level(logging.WARNING, logger="pdd.preprocess"):
+        out = preprocess(doc_prompt, recursive=False, double_curly_brackets=False)
+    captured = capsys.readouterr().out
+    assert "Unresolved include" not in captured, (
+        f"False-positive warning fired on documentation content. Output:\n{captured}"
+    )
+    assert not any("Unresolved include" in r.getMessage() for r in caplog.records), (
+        "False-positive warning logged on documentation content."
+    )
+    # The documentation text must pass through unchanged (no mutation).
+    assert "[File not found: path]" in out
+    assert "[File not found: ...]" in out
+
+
+def test_unresolved_include_warning_no_false_positive_on_real_prompt_spec(tmp_path, monkeypatch, capsys) -> None:
+    """End-to-end repro of Greg's #1354 review: preprocess the actual
+    preprocess_python.prompt spec — which contains documented `[File not
+    found: ...]` examples in its Error Handling section — and assert no
+    Unresolved-include warnings fire on its non-include content."""
+    monkeypatch.chdir(tmp_path)
+    from pathlib import Path as _P
+    spec_path = _P(__file__).resolve().parent.parent / "pdd" / "prompts" / "preprocess_python.prompt"
+    if not spec_path.exists():
+        import pytest
+        pytest.skip(f"spec not present at {spec_path}")
+    text = spec_path.read_text(encoding="utf-8")
+    preprocess(text, recursive=False, double_curly_brackets=False)
+    captured = capsys.readouterr().out
+    # The spec genuinely <include>s context/python_preamble.prompt etc; those
+    # may fail when run from tmp_path. We assert specifically that the
+    # documented placeholder examples (`path`, `...`) do NOT generate warnings.
+    for fake in ("Unresolved include in preprocessed prompt: path.",
+                 "Unresolved include in preprocessed prompt: ...."):
+        assert fake not in captured, (
+            f"False-positive warning fired for documented example '{fake}'. "
+            f"Output:\n{captured}"
+        )
+
+
+def test_split_prompt_include_selectors_resolve_without_fallback(monkeypatch, capsys, recwarn) -> None:
+    """The split prompt's selected includes must resolve cleanly.
+
+    Regression for Greg's #1354 review: `split_python.prompt` selected
+    `def:preprocess` from `context/preprocess_example.py`, which only defines
+    `main()`. The failed selector fell back to full-file inclusion and caused
+    literal example `<include>` / `<shell>` tags in that source to be processed.
+    """
+    from pathlib import Path as _P
+
+    repo_root = _P(__file__).resolve().parent.parent
+    monkeypatch.chdir(repo_root)
+    text = (repo_root / "pdd" / "prompts" / "split_python.prompt").read_text(
+        encoding="utf-8"
+    )
+    preprocess(text, recursive=False, double_curly_brackets=False)
+    captured = capsys.readouterr().out
+    selector_warnings = [
+        warning for warning in recwarn if "ContentSelector failed" in str(warning.message)
+    ]
+    assert selector_warnings == []
+    assert "ContentSelector failed" not in captured
+    assert "Executing shell command" not in captured
+
+
+def test_prompt_files_do_not_select_implementation_symbols_from_example_files() -> None:
+    """Symbol selectors must target files that actually define the symbol.
+
+    The original `forbidden_selectors` list pinned the case from Greg's #1354
+    review where prompts selected symbols not present in the example files.
+    A selector is only forbidden as long as the named example file does not
+    define a matching top-level `def`/`class`. We resolve each tuple at test
+    time so adding a real `def preprocess(...)` wrapper to
+    `context/preprocess_example.py` (Issue #814 codex iter-7 fix) lifts the
+    ban automatically — selectors that DO resolve are not regressions.
+    """
+    from pathlib import Path as _P
+    import ast as _ast
+
+    repo_root = _P(__file__).resolve().parent.parent
+
+    candidate_selectors = (
+        ("def:preprocess", "context/preprocess_example.py", "preprocess", "def"),
+        ("def:llm_invoke", "context/llm_invoke_example.py", "llm_invoke", "def"),
+        (
+            "class:ContentSelector",
+            "context/content_selector_example.py",
+            "ContentSelector",
+            "class",
+        ),
+        (
+            "class:IncludeQueryExtractor",
+            "context/include_query_extractor_example.py",
+            "IncludeQueryExtractor",
+            "class",
+        ),
+    )
+
+    def _has_top_level_symbol(file_path: _P, name: str, kind: str) -> bool:
+        try:
+            tree = _ast.parse(file_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, SyntaxError):
+            return False
+        node_type = _ast.FunctionDef if kind == "def" else _ast.ClassDef
+        return any(
+            isinstance(node, node_type) and node.name == name
+            for node in tree.body
+        )
+
+    forbidden_selectors = tuple(
+        f'<include select="{selector}">{example_rel}'
+        for selector, example_rel, name, kind in candidate_selectors
+        if not _has_top_level_symbol(repo_root / example_rel, name, kind)
+    )
+
+    offenders = [
+        str(path.relative_to(repo_root))
+        for path in (repo_root / "pdd" / "prompts").glob("*.prompt")
+        if any(
+            forbidden in path.read_text(encoding="utf-8")
+            for forbidden in forbidden_selectors
+        )
+    ]
+
+    assert offenders == []
+
+
+def test_changed_prompt_selected_includes_resolve() -> None:
+    """Selected includes in touched prompt specs must not fall back to full files."""
+    from pathlib import Path as _P
+
+    from pdd.content_selector import ContentSelector
+
+    repo_root = _P(__file__).resolve().parent.parent
+    prompt_paths = [
+        "pdd/prompts/agentic_change_orchestrator_python.prompt",
+        "pdd/prompts/agentic_common_python.prompt",
+        "pdd/prompts/agentic_split_orchestrator_python.prompt",
+        "pdd/prompts/change_python.prompt",
+        "pdd/prompts/code_generator_main_python.prompt",
+        "pdd/prompts/commands/which_python.prompt",
+        "pdd/prompts/construct_paths_python.prompt",
+        "pdd/prompts/context_generator_main_python.prompt",
+        "pdd/prompts/detect_change_python.prompt",
+        "pdd/prompts/fix_errors_from_unit_tests_python.prompt",
+        "pdd/prompts/generate_output_paths_python.prompt",
+        "pdd/prompts/generate_test_python.prompt",
+        "pdd/prompts/include_query_extractor_python.prompt",
+        "pdd/prompts/insert_includes_python.prompt",
+        "pdd/prompts/main_gen_prompt.prompt",
+        "pdd/prompts/one_session_sync_python.prompt",
+        "pdd/prompts/preprocess_main_python.prompt",
+        "pdd/prompts/preprocess_python.prompt",
+        "pdd/prompts/split_python.prompt",
+        "pdd/prompts/sync_determine_operation_python.prompt",
+        "pdd/prompts/trace_python.prompt",
+        "pdd/prompts/update_prompt_python.prompt",
+    ]
+    include_pattern = re.compile(r'<include\s+([^>]*)>(.*?)</include>', re.DOTALL)
+    select_pattern = re.compile(r'select="([^"]+)"')
+    failures: list[str] = []
+
+    for prompt_rel in prompt_paths:
+        prompt_text = (repo_root / prompt_rel).read_text(encoding="utf-8")
+        for match in include_pattern.finditer(prompt_text):
+            select_match = select_pattern.search(match.group(1))
+            if select_match is None:
+                continue
+            include_target = match.group(2).strip()
+            if include_target in {"file", "..."} or "{" in include_target:
+                continue
+            include_path = (repo_root / include_target).resolve()
+            selectors = [
+                selector.strip()
+                for selector in select_match.group(1).split(",")
+                if selector.strip()
+            ]
+            try:
+                include_text = include_path.read_text(encoding="utf-8")
+                ContentSelector.select(
+                    include_text,
+                    selectors,
+                    file_path=str(include_path),
+                )
+            except Exception as exc:  # noqa: BLE001 - report all selector failures together
+                failures.append(
+                    f"{prompt_rel}: {include_target} select={selectors!r}: {exc}"
+                )
+
+    assert failures == []
+
+
+def test_unresolved_include_warning_still_fires_on_real_failure(tmp_path, monkeypatch, capsys) -> None:
+    """Sanity check that direct-failure tracking didn't break the positive
+    case: the warning MUST still fire when an include genuinely fails."""
+    monkeypatch.chdir(tmp_path)
+    preprocess(
+        "<x><include>context/genuinely_missing_example.py</include></x>",
+        recursive=False, double_curly_brackets=False,
+    )
+    captured = capsys.readouterr().out
+    assert "Unresolved include" in captured
+    assert "context/genuinely_missing_example.py" in captured
+
+
+def test_unresolved_include_no_false_positive_on_included_source_with_literal_tags(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Regression for #1354 codex pass-2: when an include resolves to a Python
+    source file that contains literal `<include>` syntax in docstrings, regex
+    patterns, or comments, those nested matches must NOT be reported as
+    unresolved-include failures. Only user-intent includes from the original
+    prompt should trigger warnings.
+    """
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "decoy.py"
+    src.write_text(
+        '"""Module docstring referencing literal <include>some/path.py</include>.\n'
+        "Pattern: r'<include(?P<attrs>\\\\s+[^>]*?)?>(?P<content>.*?)</include>'\n"
+        "Backtick: ```<another/path.py>``` and <include-many>blob</include-many>.\n"
+        '"""\n'
+        "x = 1\n"
+    )
+    preprocess(
+        f"<wrap><include>{src.name}</include></wrap>",
+        recursive=False, double_curly_brackets=False,
+    )
+    captured_out = capsys.readouterr().out
+    assert "Unresolved include" not in captured_out
+    assert "File not found: some/path.py" not in captured_out
+    assert "File not found: another/path.py" not in captured_out
+    assert "File not found: blob" not in captured_out
+
+
+def test_optional_include_missing_file_is_silent(tmp_path, monkeypatch, capsys) -> None:
+    """Regression for #1354 codex pass-2: <include optional="true"> with a
+    missing path must NOT print a `File not found` console warning, must NOT
+    leak a `[File not found: ...]` marker into the output, and must NOT
+    surface as an unresolved-include warning.
+    """
+    monkeypatch.chdir(tmp_path)
+    out = preprocess(
+        '<wrap><include optional="true">${UNSET_OPTIONAL_FILE}</include></wrap>',
+        recursive=False, double_curly_brackets=False,
+    )
+    captured = capsys.readouterr().out
+    assert "File not found" not in captured
+    assert "Unresolved include" not in captured
+    assert "[File not found:" not in out
+
+
+def test_optional_include_many_missing_files_are_silent(tmp_path, monkeypatch, capsys) -> None:
+    """Regression for #1354 codex pass-2: <include-many optional="true"> with
+    paths that don't resolve (e.g. an unset ${VAR} placeholder) must be silent
+    and must not leak `[File not found: ...]` markers.
+    """
+    monkeypatch.chdir(tmp_path)
+    out = preprocess(
+        '<wrap><include-many optional="true">${UNSET_LIST}</include-many></wrap>',
+        recursive=False, double_curly_brackets=False,
+    )
+    captured = capsys.readouterr().out
+    assert "File not found" not in captured
+    assert "Unresolved include" not in captured
+    assert "[File not found:" not in out
+
+
+def test_required_include_missing_still_warns(tmp_path, monkeypatch, capsys) -> None:
+    """Sanity: removing the optional flag must still produce a real
+    File-not-found warning so users notice required-but-missing includes."""
+    monkeypatch.chdir(tmp_path)
+    preprocess(
+        '<wrap><include>required_but_missing.txt</include></wrap>',
+        recursive=False, double_curly_brackets=False,
+    )
+    captured = capsys.readouterr().out
+    assert "File not found: required_but_missing.txt" in captured
+
+
+def test_unresolved_include_no_false_positive_in_two_pass_production_flow(
+    tmp_path, monkeypatch, capsys, caplog
+) -> None:
+    """Regression for #1354 codex pass-3: production callers (e.g.
+    `code_generator_main`) preprocess in two passes — `recursive=True`,
+    then variable expansion, then `recursive=False`. When pass 1 expands
+    a raw `.py` source whose docstrings or regex strings contain literal
+    `<include>` syntax, pass 2 sees those as iteration-0 matches in its
+    own input. The path-shape heuristic must keep the warning silent for
+    those parser artifacts.
+    """
+    monkeypatch.chdir(tmp_path)
+    decoy = tmp_path / "decoy_source.py"
+    decoy.write_text(
+        '"""Module that documents include syntax in its docstring.\n'
+        "Pattern: r'<include(?P<attrs>\\\\s+[^>]*?)?>(?P<content>.*?)</include>'\n"
+        "Examples:\n"
+        "    <include>some/example.py</include>\n"
+        "    <include path=\"explicit/path.py\" />\n"
+        "    <include-many>list, of, things</include-many>\n"
+        '"""\n'
+        "x = 1\n"
+    )
+    original_prompt = f"<wrap><include>{decoy.name}</include></wrap>"
+
+    from pdd.preprocess import compute_user_intent_paths
+    intent = compute_user_intent_paths(original_prompt)
+    pass1 = preprocess(original_prompt, recursive=True, double_curly_brackets=False)
+    # No env var expansion needed — the decoy include resolved fully on pass 1.
+    pass2 = preprocess(pass1, recursive=False, double_curly_brackets=True, _user_intent_paths=intent)
+
+    captured_out = capsys.readouterr().out
+    # No false positives from the decoy's docstring contents.
+    for fragment in (
+        "some/example.py",
+        "explicit/path.py",
+        "list",
+        "of",
+        "things",
+    ):
+        assert f"File not found: {fragment}" not in captured_out, (
+            f"unexpected warning for parser-artifact '{fragment}' in two-pass output"
+        )
+    assert "Unresolved include in preprocessed prompt" not in captured_out, (
+        "unresolved-include warning leaked from expanded source"
+    )
+    # logger.warning path also clean.
+    assert not any(
+        rec.levelname == "WARNING" and "Unresolved include" in rec.message
+        for rec in caplog.records
+    )
+    # Sanity: the decoy contents made it through (proves we processed, not skipped).
+    assert "x = 1" in pass2
+
+
+def test_compute_user_intent_paths_handles_path_attribute_and_self_closing(
+    tmp_path,
+) -> None:
+    """Regression for #1354 codex pass-4 finding 1: `compute_user_intent_paths`
+    must walk the same `<include>` grammar that `process_include_tags` accepts —
+    body form, body form with `path=`, and self-closing `<include path="..." />`.
+    Otherwise pass-2 silently swallows real failures of `path=`-style includes
+    because the user-intent set is empty.
+    """
+    from pdd.preprocess import compute_user_intent_paths
+    text = (
+        '<a><include>body_only.py</include></a>\n'
+        '<b><include path="attr_with_body.py">ignored</include></b>\n'
+        '<c><include path="self_closing.py" /></c>\n'
+        '<d><include-many>list_a.py, list_b.py</include-many></d>\n'
+        '<e>```<backtick.py>```</e>\n'
+    )
+    paths = compute_user_intent_paths(text)
+    assert paths == {
+        "body_only.py",
+        "attr_with_body.py",
+        "self_closing.py",
+        "list_a.py",
+        "list_b.py",
+        "backtick.py",
+    }
+
+
+def test_path_attribute_missing_file_warns_in_two_pass_flow(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Regression for #1354 codex pass-4 finding 1: a real missing
+    `<include path="..." />` in user-authored prompt content must still
+    produce a `File not found` warning when the caller supplies an intent
+    set computed via `compute_user_intent_paths()`.
+    """
+    from pdd.preprocess import compute_user_intent_paths
+    monkeypatch.chdir(tmp_path)
+    original = '<wrap><include path="user_authored_missing.py" /></wrap>'
+    intent = compute_user_intent_paths(original)
+    assert "user_authored_missing.py" in intent, (
+        "compute_user_intent_paths must extract path= attribute"
+    )
+    pass1 = preprocess(original, recursive=True, double_curly_brackets=False)
+    pass2 = preprocess(
+        pass1, recursive=False, double_curly_brackets=False, _user_intent_paths=intent
+    )
+    captured = capsys.readouterr().out
+    assert "File not found: user_authored_missing.py" in captured
+    assert "[File not found: user_authored_missing.py]" in pass2
+
+
+def test_extensionless_required_include_warns_with_intent_set(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Regression for #1354 codex pass-4 finding 2: when the caller supplies
+    an authoritative `_user_intent_paths` set, extensionless filenames like
+    `Makefile`, `Dockerfile`, `LICENSE` must still fail loudly when the user
+    authored them and they're missing. The path-shape heuristic must NOT
+    layer on top of the caller-supplied set.
+    """
+    from pdd.preprocess import compute_user_intent_paths
+    # Use clearly synthetic extensionless names that don't exist in the repo or
+    # any well-known location. Real names like `Makefile` collide with files in
+    # the package/repo root that PathResolver finds.
+    monkeypatch.chdir(tmp_path)
+    for bare in (
+        "DefinitelyMissingMakefile",
+        "BogusDockerfile",
+        "NonexistentLICENSE",
+    ):
+        original = f'<wrap><include>{bare}</include></wrap>'
+        intent = compute_user_intent_paths(original)
+        assert bare in intent, (
+            f"compute_user_intent_paths must extract bare name {bare!r}"
+        )
+        out = preprocess(
+            original,
+            recursive=False,
+            double_curly_brackets=False,
+            _user_intent_paths=intent,
+        )
+        captured = capsys.readouterr().out
+        assert f"File not found: {bare}" in captured, (
+            f"required missing extensionless include {bare!r} must warn loudly "
+            f"when caller supplied an authoritative intent set"
+        )
+        assert f"[File not found: {bare}]" in out
+
+
+def test_looks_like_user_intent_path_heuristic() -> None:
+    """Direct unit-test of the heuristic that gates warning emission for
+    parser-artifact include matches.
+    """
+    from pdd.preprocess import _looks_like_user_intent_path as f
+    # Real paths
+    assert f("context/foo_example.py")
+    assert f("README.md")
+    assert f("pdd/preprocess.py")
+    assert f("${PRD_FILE}")
+    assert f("./relative/path.txt")
+    # Parser artifacts that have appeared in real false-positive reports
+    assert not f("path")  # bare word, no path-y characters
+    assert not f("blob")
+    assert not f("path set from the original prompt")  # has spaces
+    assert not f("# comment line that mentions <include>x</include>")  # starts with #
+    assert not f("in a docstring).")  # has space
+    assert not f("")
+    assert not f("\n")
+    assert not f("a" * 300)  # too long
+
+
+# =============================================================================
+# Additional tests (appended) — focus on uncovered behaviors
+# =============================================================================
+
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+def test_compute_user_intent_paths_includes_all_grammars() -> None:
+    """compute_user_intent_paths should capture body, path=, self-closing, include-many, backtick."""
+    from pdd.preprocess import compute_user_intent_paths
+    text = (
+        '<include>body.py</include>\n'
+        '<include path="attr.py">ignored</include>\n'
+        '<include path="self.py" />\n'
+        '<include-many>a.py, b.py\nc.py</include-many>\n'
+        '```<bt.py>```\n'
+    )
+    paths = compute_user_intent_paths(text)
+    assert {"body.py", "attr.py", "self.py", "a.py", "b.py", "c.py", "bt.py"} <= paths
+
+
+def test_compute_user_intent_paths_empty_input() -> None:
+    from pdd.preprocess import compute_user_intent_paths
+    assert compute_user_intent_paths("") == set()
+    assert compute_user_intent_paths(None) == set()  # type: ignore[arg-type]
+
+
+def test_preprocess_non_string_input_returns_str() -> None:
+    """Non-string inputs should be coerced to str without raising."""
+    class Dummy:
+        def __str__(self) -> str:
+            return "dummy-content"
+    result = preprocess(Dummy(), recursive=False, double_curly_brackets=False)
+    assert result == "dummy-content"
+
+
+def test_preprocess_empty_string_returns_empty() -> None:
+    assert preprocess("", recursive=False, double_curly_brackets=False) == ""
+
+
+def test_circular_include_raises_value_error(tmp_path, monkeypatch) -> None:
+    """A→A self-include should raise ValueError mentioning circular."""
+    monkeypatch.chdir(tmp_path)
+    f = tmp_path / "self.txt"
+    f.write_text("<include>self.txt</include>")
+    with pytest.raises(ValueError, match=r"[Cc]ircular"):
+        preprocess("<include>self.txt</include>", recursive=False, double_curly_brackets=False)
+
+
+def test_circular_include_a_b_a_raises(tmp_path, monkeypatch) -> None:
+    """A→B→A cycle should raise ValueError."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "a.txt").write_text("<include>b.txt</include>")
+    (tmp_path / "b.txt").write_text("<include>a.txt</include>")
+    with pytest.raises(ValueError, match=r"[Cc]ircular"):
+        preprocess("<include>a.txt</include>", recursive=False, double_curly_brackets=False)
+
+
+def test_shell_timeout_inserts_marker(monkeypatch) -> None:
+    """TimeoutExpired in <shell> should produce a visible timeout marker, not hang."""
+    prompt = "X <shell>sleep 999</shell> Y"
+    def raise_timeout(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="sleep 999", timeout=1)
+    with patch("subprocess.run", side_effect=raise_timeout):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert "timed out" in result
+    assert "sleep 999" in result
+
+
+def test_shell_respects_pdd_shell_timeout_env(monkeypatch) -> None:
+    """PDD_SHELL_TIMEOUT env var should be honored when invoking subprocess.run."""
+    monkeypatch.setenv("PDD_SHELL_TIMEOUT", "7")
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.stdout = "ok"
+        mock_run.return_value.returncode = 0
+        preprocess("<shell>echo ok</shell>", recursive=False, double_curly_brackets=False)
+    _, kwargs = mock_run.call_args
+    assert kwargs.get("timeout") == 7
+
+
+def test_double_curly_preserves_excluded_exact_key_only() -> None:
+    """Exclude list: exact-match {key} stays, but {key_x} is still doubled."""
+    out = preprocess("{key} and {key2}", recursive=False,
+                     double_curly_brackets=True, exclude_keys=["key"])
+    assert "{key}" in out and "{{key2}}" in out
+
+
+def test_quiet_mode_suppresses_panels(monkeypatch, capsys) -> None:
+    """PDD_QUIET=1 should suppress the start/complete preprocessing panels."""
+    monkeypatch.setenv("PDD_QUIET", "1")
+    preprocess("Hello {x}", recursive=False, double_curly_brackets=True)
+    captured = capsys.readouterr().out
+    assert "Starting prompt preprocessing" not in captured
+    assert "Preprocessing complete" not in captured
+
+
+def test_include_many_optional_attribute_silences_missing(tmp_path, monkeypatch, capsys) -> None:
+    """include-many with optional='true' should silently drop missing entries."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "present.txt").write_text("HERE")
+    prompt = '<include-many optional="true">present.txt, missing.txt</include-many>'
+    out = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert out == "HERE"
+    assert "File not found" not in capsys.readouterr().out
+
+
+def test_get_file_path_absolute_returned_unchanged(tmp_path) -> None:
+    """Legacy preprocessing preserves explicit absolute local include paths."""
+    p = str(tmp_path / "abs.txt")
+    assert get_file_path(p) == p
+
+
+def test_web_tag_inside_code_block_not_processed() -> None:
+    """<web> inside a fenced block should not trigger fetching."""
+    prompt = "```\n<web>https://example.com</web>\n```"
+    with patch.dict("sys.modules", {"firecrawl": MagicMock()}):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+
+
+def test_include_max_iterations_guard(tmp_path, monkeypatch) -> None:
+    """Self-referential include should hit the circular detection rather than infinite-loop."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "loop.txt").write_text("<include>loop.txt</include>")
+    with pytest.raises(ValueError, match=r"[Cc]ircular"):
+        preprocess("<include>loop.txt</include>", recursive=False, double_curly_brackets=False)
+
+
+def test_xml_include_with_lines_attribute(tmp_path, monkeypatch) -> None:
+    """lines='N-M' should be passed as a selector to ContentSelector."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "f.py"
+    src.write_text("a\nb\nc\nd\n")
+    prompt = '<include lines="2-3">f.py</include>'
+    with patch("pdd.content_selector.ContentSelector") as MockCS:
+        MockCS.return_value.select.return_value = "b\nc"
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    selectors = MockCS.return_value.select.call_args.kwargs["selectors"]
+    assert "lines:2-3" in selectors
+    assert result == "b\nc"

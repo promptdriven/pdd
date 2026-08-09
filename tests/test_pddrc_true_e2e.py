@@ -10,6 +10,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 from click.testing import CliRunner
+import git
 
 from pdd import cli
 
@@ -249,3 +250,198 @@ contexts:
             strength_arg = call_args[4]  # strength is 5th positional arg
             assert strength_arg == 0.77, \
                 f"PDDRC VALUE NOT USED: Expected strength=0.77, got {strength_arg}"
+
+
+class TestPddrcUpdateCommandE2E:
+    """TRUE end-to-end tests for the update command."""
+
+    def test_update_uses_pddrc_strength_for_direct_update(self, tmp_path, monkeypatch):
+        """Direct update should use the active context's .pddrc strength."""
+        pddrc_content = '''version: "1.0"
+contexts:
+  update-ctx:
+    paths: ["**"]
+    defaults:
+      strength: 0.83
+'''
+        (tmp_path / ".pddrc").write_text(pddrc_content)
+        (tmp_path / "feature_python.prompt").write_text("Existing prompt")
+        (tmp_path / "original.py").write_text("def foo():\n    return 1\n")
+        (tmp_path / "modified.py").write_text("def foo():\n    return 2\n")
+
+        monkeypatch.chdir(tmp_path)
+
+        with patch("pdd.update_main.get_available_agents", return_value=[]), \
+             patch("pdd.update_main.update_prompt") as mock_update_prompt:
+            mock_update_prompt.return_value = ("updated prompt", 0.01, "test-model")
+
+            result = CliRunner().invoke(
+                cli.cli,
+                [
+                    "--local",
+                    "--context",
+                    "update-ctx",
+                    "update",
+                    "feature_python.prompt",
+                    "modified.py",
+                    "original.py",
+                    "--output",
+                    "out.prompt",
+                ],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert mock_update_prompt.called, "update_prompt was not called"
+        assert mock_update_prompt.call_args.kwargs["strength"] == 0.83, \
+            f"PDDRC VALUE NOT USED: Expected strength=0.83, got {mock_update_prompt.call_args.kwargs['strength']}"
+
+    def test_update_uses_pddrc_strength_for_git_mode(self, tmp_path, monkeypatch):
+        """Git-backed update should use the active context's .pddrc strength."""
+        pddrc_content = '''version: "1.0"
+contexts:
+  update-ctx:
+    paths: ["**"]
+    defaults:
+      strength: 0.67
+'''
+        (tmp_path / ".pddrc").write_text(pddrc_content)
+        (tmp_path / "feature_python.prompt").write_text("Existing prompt")
+        (tmp_path / "modified.py").write_text("def foo():\n    return 2\n")
+
+        monkeypatch.chdir(tmp_path)
+
+        with patch("pdd.update_main.get_available_agents", return_value=[]), \
+             patch("pdd.update_main.git_update") as mock_git_update:
+            mock_git_update.return_value = ("updated prompt", 0.01, "test-model")
+
+            result = CliRunner().invoke(
+                cli.cli,
+                [
+                    "--local",
+                    "--context",
+                    "update-ctx",
+                    "update",
+                    "--git",
+                    "feature_python.prompt",
+                    "modified.py",
+                    "--output",
+                    "out.prompt",
+                ],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert mock_git_update.called, "git_update was not called"
+        assert mock_git_update.call_args.kwargs["strength"] == 0.67, \
+            f"PDDRC VALUE NOT USED: Expected strength=0.67, got {mock_git_update.call_args.kwargs['strength']}"
+
+    def test_update_regeneration_uses_pddrc_strength(self, tmp_path, monkeypatch):
+        """Regeneration mode should use the target file context's .pddrc strength."""
+        pddrc_content = '''version: "1.0"
+contexts:
+  backend:
+    paths: ["backend/**"]
+    defaults:
+      prompts_dir: "prompts/backend"
+      generate_output_path: "backend"
+      strength: 0.91
+'''
+        (tmp_path / ".pddrc").write_text(pddrc_content)
+        (tmp_path / "backend").mkdir()
+        (tmp_path / "backend" / "module.py").write_text("def foo():\n    return 1\n")
+        (tmp_path / "prompts" / "backend").mkdir(parents=True)
+
+        monkeypatch.chdir(tmp_path)
+        git.Repo.init(tmp_path)
+
+        with patch("pdd.update_main.get_available_agents", return_value=[]), \
+             patch("pdd.update_main.update_prompt") as mock_update_prompt:
+            mock_update_prompt.return_value = ("generated prompt", 0.01, "test-model")
+
+            result = CliRunner().invoke(
+                cli.cli,
+                [
+                    "--local",
+                    "--context",
+                    "backend",
+                    "update",
+                    "backend/module.py",
+                ],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert mock_update_prompt.called, "update_prompt was not called"
+        assert mock_update_prompt.call_args.kwargs["strength"] == 0.91, \
+            f"PDDRC VALUE NOT USED: Expected strength=0.91, got {mock_update_prompt.call_args.kwargs['strength']}"
+
+    def test_repo_update_uses_per_file_pddrc_strength_across_contexts(self, tmp_path, monkeypatch):
+        """Repo-wide update must resolve strength per matched file context, not once per command."""
+        pddrc_content = '''version: "1.0"
+contexts:
+  api:
+    paths: ["api/**"]
+    defaults:
+      prompts_dir: "prompts/api"
+      generate_output_path: "api"
+      strength: 0.21
+  worker:
+    paths: ["worker/**"]
+    defaults:
+      prompts_dir: "prompts/worker"
+      generate_output_path: "worker"
+      strength: 0.89
+'''
+        (tmp_path / ".pddrc").write_text(pddrc_content)
+
+        (tmp_path / "api").mkdir()
+        (tmp_path / "worker").mkdir()
+        (tmp_path / "api" / "users.py").write_text("def list_users():\n    return []\n")
+        (tmp_path / "worker" / "jobs.py").write_text("def run_jobs():\n    return []\n")
+        (tmp_path / "prompts" / "api").mkdir(parents=True)
+        (tmp_path / "prompts" / "worker").mkdir(parents=True)
+        (tmp_path / "prompts" / "api" / "users_python.prompt").write_text("Existing API prompt\n")
+        (tmp_path / "prompts" / "worker" / "jobs_python.prompt").write_text("Existing worker prompt\n")
+
+        repo = git.Repo.init(tmp_path)
+        repo.index.add(
+            [
+                ".pddrc",
+                "api/users.py",
+                "worker/jobs.py",
+                "prompts/api/users_python.prompt",
+                "prompts/worker/jobs_python.prompt",
+            ]
+        )
+        repo.index.commit("init")
+        repo.git.branch("-M", "main")
+
+        monkeypatch.chdir(tmp_path)
+
+        captured_strengths = {}
+
+        def fake_git_update(*, input_prompt, modified_code_file, strength, temperature, verbose, time, simple, quiet, prompt_file):
+            captured_strengths[Path(prompt_file).name] = strength
+            return (f"updated {Path(prompt_file).name}", 0.01, "test-model")
+
+        with patch("pdd.update_main.get_available_agents", return_value=[]), \
+             patch("pdd.update_main.is_code_changed", return_value=(True, "changed")), \
+             patch("pdd.update_main.git_update", side_effect=fake_git_update), \
+             patch("pdd.pddrc_initializer.ensure_pddrc_for_scan"), \
+             patch("pdd.operation_log.save_fingerprint"):
+
+            result = CliRunner().invoke(
+                cli.cli,
+                [
+                    "--local",
+                    "update",
+                ],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert captured_strengths == {
+            "users_python.prompt": 0.21,
+            "jobs_python.prompt": 0.89,
+        }, f"Per-context strengths were not used in repo mode: {captured_strengths}"

@@ -1,0 +1,190 @@
+% You are an expert software engineer investigating a bug report. Your task is to classify whether the bug is in the code implementation or in the prompt specification.
+
+% Context
+
+You are working on step 7 of 12 in an agentic bug investigation workflow. Step 6 (Root Cause Analysis) has identified the root cause. Now you must determine: is the bug in the code, or in the prompt specification itself?
+
+% PDD Background
+
+This project uses Prompt-Driven Development (PDD). In PDD:
+- Prompts are the source of truth; code is generated from prompts
+- When a prompt is defective, fixing the code would be wrong - the prompt must be fixed first
+- The prompting guide below explains the methodology:
+
+<pdd_prompting_guide>
+<include>docs/prompting_guide.md</include>
+</pdd_prompting_guide>
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+% Your Task
+
+1. **Analyze the defect type**
+   - Review the root cause from Step 6
+   - Compare the user's expected behavior (from the issue) with the prompt specification
+   - Determine if the code correctly implements the prompt
+
+2. **Classify the defect**
+   - **Code Bug**: The code does NOT correctly implement what the prompt specifies
+   - **Prompt Defect**: The code correctly implements the prompt, but the prompt itself is wrong (doesn't match the user's intended behavior)
+
+3. **Default to Code Bug when uncertain**
+   - If classification is ambiguous, default to "Code Bug"
+   - Only classify as "Prompt Defect" when you have clear evidence that the prompt specification itself is incorrect
+
+4. **If Prompt Defect: Auto-fix the prompt**
+   - Locate the relevant `.prompt` file in the `prompts/` directory
+   - Read the current prompt content
+   - Identify the specific requirement or constraint that is incorrect
+   - Edit the prompt file to fix the defective specification
+   - Do NOT create a backup file
+
+5. **If unclear: Request human review**
+   - If the classification is truly ambiguous and defaulting feels wrong
+   - Output `PROMPT_REVIEW:` marker with explanation
+
+% Output
+
+Return your findings between `<step_report>` and `</step_report>` tags. The PDD orchestrator will sanitize, truncate, and post the contents as a GitHub comment using trusted credentials. **Do NOT run `gh issue comment` yourself** — model subprocesses cannot reliably authenticate.
+
+Pick exactly ONE of the three templates below and place it inside the tags.
+
+**For Code Bug (most common):**
+<step_report>
+## Step 7: Prompt Classification
+
+**Classification:** Code Bug
+
+### Analysis
+[Brief explanation of why this is a code bug - the code doesn't match the prompt]
+
+### Evidence
+- **Prompt specifies:** [what the prompt says]
+- **Code implements:** [what the code actually does]
+- **User expects:** [what the user expects - matches the prompt]
+
+### Conclusion
+The code does not correctly implement the prompt specification. Proceeding with test generation.
+
+---
+*Proceeding to Step 8: Test Plan*
+</step_report>
+
+After the `</step_report>` closing tag, emit the orchestrator marker on its own line (parsed from raw output — MUST live OUTSIDE the report block):
+```
+DEFECT_TYPE: code
+```
+
+**For Prompt Defect:**
+<step_report>
+## Step 7: Prompt Classification
+
+**Classification:** Prompt Defect
+
+### Analysis
+[Brief explanation of why the prompt itself is defective]
+
+### Evidence
+- **Prompt specifies:** [what the prompt says]
+- **Code implements:** [what the code does - matches prompt]
+- **User expects:** [what the user expects - contradicts prompt]
+
+### Prompt Change Made
+**File:** `prompts/module_name_python.prompt`
+
+**Before:**
+```
+[relevant prompt section before change]
+```
+
+**After:**
+```
+[relevant prompt section after change]
+```
+
+### Conclusion
+The prompt specification was incorrect. The prompt has been fixed. Proceeding with test generation based on the corrected specification.
+
+---
+*Proceeding to Step 8: Test Plan*
+</step_report>
+
+After the `</step_report>` closing tag, emit BOTH orchestrator markers on their own lines (parsed from raw output — MUST live OUTSIDE the report block):
+```
+DEFECT_TYPE: prompt
+PROMPT_FIXED: prompts/module_name_python.prompt
+```
+
+**For Ambiguous Cases (hard stop):**
+<step_report>
+## Step 7: Prompt Classification
+
+**Classification:** Needs Human Review
+
+### Analysis
+[Explanation of the ambiguity]
+
+### Evidence
+- **Prompt specifies:** [what the prompt says]
+- **Code implements:** [what the code does]
+- **User expects:** [what the user expects]
+
+### Conflict
+[Explain why it's unclear whether to fix the prompt or code]
+
+### Recommendation
+Please clarify in the issue:
+1. [Question 1]
+2. [Question 2]
+
+---
+*Investigation paused - awaiting clarification on whether this is a prompt defect or code bug.*
+</step_report>
+
+After the `</step_report>` closing tag, emit the orchestrator marker on its own line (parsed from raw output — MUST live OUTSIDE the report block):
+```
+PROMPT_REVIEW: [reason for uncertainty]
+```
+
+% Important
+
+- Default to "Code Bug" when uncertain - this preserves backward compatibility
+- Only modify prompt files, never code files
+- When fixing a prompt, make minimal changes to address the specific defect
+- Always include the `DEFECT_TYPE:` marker AFTER the `</step_report>` tag (either `code` or `prompt`) so the orchestrator can parse it
+- If you fix a prompt, include the `PROMPT_FIXED:` marker (also outside the report block) with the file path
+- Place your narrative findings inside the `<step_report>` block — the orchestrator will post it to GitHub for you.

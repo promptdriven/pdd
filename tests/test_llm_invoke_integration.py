@@ -24,15 +24,23 @@ class SimpleOutput(BaseModel):
 
 
 def has_vertex_credentials() -> bool:
-    """Check if Vertex AI credentials are available."""
-    creds_path = os.environ.get('VERTEX_CREDENTIALS', '')
-    if not creds_path:
+    """Check if Vertex AI credentials are available.
+
+    Checks both VERTEX_CREDENTIALS (service account JSON path) and the
+    env vars that llm_invoke actually needs for multi-credential Vertex AI
+    providers: VERTEXAI_PROJECT and VERTEXAI_LOCATION.
+    """
+    # llm_invoke checks these env vars for vertex_ai models (pipe-delimited in CSV)
+    project = os.environ.get('VERTEXAI_PROJECT', '')
+    location = os.environ.get('VERTEXAI_LOCATION', '')
+    if not project or not location:
         return False
-    # Check if it's a file path that exists, or if it looks like JSON
-    if os.path.isfile(creds_path):
+    # Also check for service account credentials or ADC
+    creds_path = os.environ.get('VERTEX_CREDENTIALS', '')
+    if creds_path and os.path.isfile(creds_path):
         return True
-    # Could be inline JSON or ADC - assume available if set
-    return bool(creds_path)
+    # VERTEXAI_PROJECT + VERTEXAI_LOCATION are set; assume ADC or gcloud auth is available
+    return True
 
 
 @pytest.mark.skipif(
@@ -55,7 +63,7 @@ def test_vertex_ai_claude_opus_structured_output_integration():
 
     # Filter to only include Vertex AI Claude Opus
     real_data = _load_model_data(None)
-    opus_data = real_data[real_data['model'] == 'vertex_ai/claude-opus-4-5'].copy()
+    opus_data = real_data[real_data['model'] == 'vertex_ai/claude-opus-4-6'].copy()
 
     if len(opus_data) == 0:
         pytest.skip("Vertex AI Claude Opus model not found in CSV")
@@ -130,16 +138,21 @@ def test_vertex_ai_deepseek_structured_output_integration():
     if len(deepseek_data) == 0:
         pytest.skip("DeepSeek MaaS model not found in CSV")
 
-    with patch('pdd.llm_invoke._load_model_data', return_value=deepseek_data):
-        response = llm_invoke(
-            prompt="What is 2 + 2? Respond with the answer and your confidence level (0-100).",
-            input_json={"question": "2 + 2"},
-            strength=0.5,
-            temperature=0.1,
-            output_pydantic=SimpleOutput,
-            verbose=True,
-            use_cloud=False,  # Force local execution to test Vertex AI directly
-        )
+    try:
+        with patch('pdd.llm_invoke._load_model_data', return_value=deepseek_data):
+            response = llm_invoke(
+                prompt="What is 2 + 2? Respond with the answer and your confidence level (0-100).",
+                input_json={"question": "2 + 2"},
+                strength=0.5,
+                temperature=0.1,
+                output_pydantic=SimpleOutput,
+                verbose=True,
+                use_cloud=False,  # Force local execution to test Vertex AI directly
+            )
+    except Exception as e:
+        if "403" in str(e) or "Permission" in str(e) or "PERMISSION_DENIED" in str(e):
+            pytest.skip(f"DeepSeek endpoint not available in this project: {e}")
+        raise
 
     # Verify we got a valid response
     assert 'result' in response, f"Expected 'result' in response, got: {response.keys()}"
@@ -194,8 +207,8 @@ def test_opus_validation_failure_triggers_fallback_integration():
     # Filter to include both Opus (primary) and Sonnet (fallback)
     opus_and_sonnet = real_data[
         real_data['model'].isin([
-            'vertex_ai/claude-opus-4-5',
-            'vertex_ai/claude-sonnet-4-5'
+            'vertex_ai/claude-opus-4-6',
+            'vertex_ai/claude-sonnet-4-6'
         ])
     ].copy()
 

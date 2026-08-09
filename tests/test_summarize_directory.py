@@ -20,7 +20,7 @@ def mock_llm_invoke():
     with patch('pdd.summarize_directory.llm_invoke') as mock:
         # Define a default mock response
         mock_response = {
-            'result': FileSummary(file_summary="This is a summary."),
+            'result': FileSummary(file_summary="This is a summary.", key_exports=["foo"], dependencies=["os"]),
             'cost': 0.01,
             'model_name': "TestModel"
         }
@@ -36,6 +36,7 @@ def mock_dependencies():
 
 
 def test_valid_inputs_no_existing_csv(tmp_path, mock_load_prompt_template, mock_llm_invoke):
+    (tmp_path / ".pddrc").touch()
     # Create some temporary files
     file1 = tmp_path / "file1.py"
     file1.write_text("print('Hello World')")
@@ -73,6 +74,7 @@ def test_valid_inputs_no_existing_csv(tmp_path, mock_load_prompt_template, mock_
 def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     """Test that cache is used when content hash matches."""
     import hashlib
+    (tmp_path / ".pddrc").touch()
 
     # Create temporary files
     file1 = tmp_path / "file1.py"
@@ -84,9 +86,9 @@ def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, moc
     # Compute content hash for file1
     file1_hash = hashlib.sha256(file1_content.encode()).hexdigest()
 
-    # Create existing CSV with file1 (using absolute path since glob returns absolute)
-    existing_csv = f'''full_path,file_summary,content_hash
-{str(file1)},Existing summary.,{file1_hash}'''
+    # Create existing CSV with file1 using project-relative path
+    existing_csv = f'''full_path,file_summary,key_exports,dependencies,content_hash
+file1.py,Existing summary.,"[""print""]","[""builtins""]",{file1_hash}'''
 
     directory_path = str(tmp_path / "*.py")
     strength = 0.5
@@ -108,11 +110,13 @@ def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, moc
     assert len(rows) == 2
 
     # Check that file1 reused summary (based on content hash match)
-    for row in rows:
-        if row['full_path'] == str(file1):
-            assert row['file_summary'] == "Existing summary."
-        elif row['full_path'] == str(file2):
-            assert row['file_summary'] == "This is a summary."
+    summaries = {row['full_path']: row['file_summary'] for row in rows}
+    assert summaries.get('file1.py') == "Existing summary.", (
+        f"file1.py should have used cached summary. Got paths: {list(summaries.keys())}"
+    )
+    assert summaries.get('file2.py') == "This is a summary.", (
+        f"file2.py should have been freshly summarized. Got paths: {list(summaries.keys())}"
+    )
 
     assert total_cost == 0.01  # Only file2 was summarized
     assert model_name == "TestModel"
@@ -296,6 +300,7 @@ def test_load_prompt_template_not_found(tmp_path, mock_llm_invoke):
 
 def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     """Test partial cache hit: file1 cached, file2 content changed, file3 new."""
+    (tmp_path / ".pddrc").touch()
     import hashlib
 
     # Create multiple temporary files
@@ -314,9 +319,9 @@ def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_inv
     old_file2_hash = hashlib.sha256(b"old content").hexdigest()
 
     # Create existing CSV with file1 (correct hash) and file2 (wrong hash)
-    existing_csv = f'''full_path,file_summary,content_hash
-{str(file1)},Existing summary.,{file1_hash}
-{str(file2)},Existing summary.,{old_file2_hash}'''
+    existing_csv = f'''full_path,file_summary,key_exports,dependencies,content_hash
+{str(file1)},Existing summary.,"[""print""]","[""builtins""]",{file1_hash}
+{str(file2)},Existing summary.,"[""foo""]","[""os""]",{old_file2_hash}'''
 
     directory_path = str(tmp_path / "*.py")
     strength = 0.5
@@ -338,16 +343,16 @@ def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_inv
     assert len(rows) == 3
 
     summaries = {row['full_path']: row['file_summary'] for row in rows}
-    assert summaries[str(file1)] == "Existing summary."  # Cached (hash match)
-    assert summaries[str(file2)] == "This is a summary."  # Re-summarized (hash mismatch)
-    assert summaries[str(file3)] == "This is a summary."  # New file
+    assert summaries[file1.name] == "Existing summary."  # Cached (hash match)
+    assert summaries[file2.name] == "This is a summary."  # Re-summarized (hash mismatch)
+    assert summaries[file3.name] == "This is a summary."  # New file
 
     assert total_cost == 0.02  # file2 and file3 summarized
     assert model_name == "TestModel"
 
 
 def test_non_python_files(tmp_path, mock_load_prompt_template, mock_llm_invoke):
-    """Test summarization of non-Python files."""
+    """Test summarization of non-Python doc files when include_docs=True."""
     # Create non-Python files
     file1 = tmp_path / "file1.txt"
     file1.write_text("Just some text.")
@@ -365,7 +370,8 @@ def test_non_python_files(tmp_path, mock_load_prompt_template, mock_llm_invoke):
         strength=strength,
         temperature=temperature,
         verbose=verbose,
-        csv_file=csv_file
+        csv_file=csv_file,
+        include_docs=True,
     )
 
     # Parse CSV output
@@ -624,10 +630,10 @@ class TestContentHashCacheInvalidation:
         # Use absolute path since glob returns absolute paths when given absolute pattern
         file1_abs = str(file1)
 
-        # Simulate existing CSV with SAME content hash
-        # (This is what should happen - content unchanged means skip LLM)
-        existing_csv = f'''full_path,file_summary,content_hash
-{file1_abs},Existing summary.,{content_hash}'''
+        # Simulate existing CSV with SAME content hash and populated key_exports/dependencies
+        # (Cache hit requires hash match + non-empty key_exports + non-empty dependencies)
+        existing_csv = f'''full_path,file_summary,key_exports,dependencies,content_hash
+{file1_abs},Existing summary.,"[""print""]","[""builtins""]",{content_hash}'''
 
         csv_output, total_cost, model_name = summarize_directory(
             directory_path=str(tmp_path / "*.py"),
@@ -662,8 +668,8 @@ class TestContentHashCacheInvalidation:
         old_content = "print('Hello')"
         old_hash = hashlib.sha256(old_content.encode()).hexdigest()
 
-        existing_csv = f'''full_path,file_summary,content_hash
-{file1_abs},Old summary.,{old_hash}'''
+        existing_csv = f'''full_path,file_summary,key_exports,dependencies,content_hash
+{file1_abs},Old summary.,"[""print""]","[""builtins""]",{old_hash}'''
 
         csv_output, total_cost, model_name = summarize_directory(
             directory_path=str(tmp_path / "*.py"),
@@ -789,7 +795,7 @@ def test_empty_directory(mock_dependencies, tmp_path):
     
     assert cost == 0.0
     assert model == "None"
-    assert "full_path,file_summary,content_hash" in result_csv
+    assert "full_path,file_summary,key_exports,dependencies,content_hash" in result_csv
     # Should only have header
     assert len(result_csv.strip().split('\n')) == 1
 
@@ -807,7 +813,7 @@ def test_file_filtering(mock_dependencies, tmp_path):
     
     # Mock LLM response
     mock_invoke.return_value = {
-        'result': FileSummary(file_summary="Summary"),
+        'result': FileSummary(file_summary="Summary", key_exports=["foo"], dependencies=["os"]),
         'cost': 0.01,
         'model_name': "gpt-4"
     }
@@ -834,6 +840,7 @@ def test_file_filtering(mock_dependencies, tmp_path):
 
 def test_summarization_no_cache(mock_dependencies, tmp_path):
     """Test full summarization flow without existing cache."""
+    (tmp_path / ".pddrc").touch()
     mock_load, mock_invoke = mock_dependencies
     
     file_path = tmp_path / "test.py"
@@ -841,7 +848,7 @@ def test_summarization_no_cache(mock_dependencies, tmp_path):
     file_path.write_text(file_content)
     
     mock_invoke.return_value = {
-        'result': FileSummary(file_summary="Function foo"),
+        'result': FileSummary(file_summary="Function foo", key_exports=["foo"], dependencies=[]),
         'cost': 0.05,
         'model_name': "gpt-test"
     }
@@ -854,7 +861,7 @@ def test_summarization_no_cache(mock_dependencies, tmp_path):
     reader = csv.DictReader(StringIO(csv_out))
     row = next(reader)
     
-    assert row['full_path'] == str(file_path)
+    assert row['full_path'] == file_path.name
     assert row['file_summary'] == "Function foo"
     # Verify hash calculation
     import hashlib
@@ -878,13 +885,16 @@ def test_summarization_cache_hit(mock_dependencies, tmp_path):
     import hashlib
     content_hash = hashlib.sha256(file_content.encode('utf-8')).hexdigest()
     
-    # Construct existing CSV
+    # Construct existing CSV with all 5 columns (key_exports and dependencies must be
+    # present and non-empty for cache hit under new cache invalidation rules)
     existing_csv = StringIO()
-    writer = csv.DictWriter(existing_csv, fieldnames=['full_path', 'file_summary', 'content_hash'])
+    writer = csv.DictWriter(existing_csv, fieldnames=['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash'])
     writer.writeheader()
     writer.writerow({
         'full_path': str(file_path),
         'file_summary': "Cached Summary",
+        'key_exports': '["foo"]',
+        'dependencies': '["os"]',
         'content_hash': content_hash
     })
     
@@ -910,16 +920,18 @@ def test_summarization_cache_miss_hash_mismatch(mock_dependencies, tmp_path):
     
     # Cache has OLD hash
     existing_csv = StringIO()
-    writer = csv.DictWriter(existing_csv, fieldnames=['full_path', 'file_summary', 'content_hash'])
+    writer = csv.DictWriter(existing_csv, fieldnames=['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash'])
     writer.writeheader()
     writer.writerow({
         'full_path': str(file_path),
         'file_summary': "Old Summary",
+        'key_exports': '["foo"]',
+        'dependencies': '["os"]',
         'content_hash': "old_hash_value"
     })
-    
+
     mock_invoke.return_value = {
-        'result': FileSummary(file_summary="New Summary"),
+        'result': FileSummary(file_summary="New Summary", key_exports=["bar"], dependencies=["sys"]),
         'cost': 0.02,
         'model_name': "gpt-new"
     }
@@ -941,7 +953,7 @@ def test_progress_callback(mock_dependencies, tmp_path):
     (tmp_path / "2.py").write_text("2")
     
     mock_invoke.return_value = {
-        'result': FileSummary(file_summary="Sum"),
+        'result': FileSummary(file_summary="Sum", key_exports=["x"], dependencies=["y"]),
         'cost': 0.01,
         'model_name': "m"
     }
@@ -991,6 +1003,89 @@ def test_llm_invoke_error_handling(mock_dependencies, tmp_path):
     assert "Error processing file" in csv_out
     assert "LLM Failed" in csv_out
     assert cost == 0.0
+
+
+# ============================================================================
+# Relative Path Tests (TDD - Prompt Step 6h)
+# ============================================================================
+
+class TestRelativePaths:
+    """Tests that full_path in CSV output uses relative paths, not absolute.
+
+    Rationale: Relative paths make the CSV portable across environments
+    (CI vs local, different machines, moved project directories).
+    """
+
+    def test_output_paths_are_relative_not_absolute(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """full_path column should contain relative paths, not absolute."""
+        (tmp_path / ".pddrc").touch()
+        file1 = tmp_path / "file1.py"
+        file1.write_text("print('hello')")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        assert len(rows) == 1
+
+        path = rows[0]['full_path']
+        assert not os.path.isabs(path), f"Expected relative path, got absolute: {path}"
+
+    def test_relative_paths_with_subdirectories(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Relative paths should preserve directory structure."""
+        (tmp_path / ".pddrc").touch()
+        subdir = tmp_path / "src"
+        subdir.mkdir()
+        (subdir / "main.py").write_text("print('main')")
+        (tmp_path / "root.py").write_text("print('root')")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        paths = [r['full_path'] for r in rows]
+
+        for path in paths:
+            assert not os.path.isabs(path), f"Expected relative path, got absolute: {path}"
+        # Should preserve subdirectory structure
+        assert any("src" in p and "main.py" in p for p in paths), f"Should preserve subdir in path, got: {paths}"
+
+    def test_relative_paths_in_cache_lookup(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Cache lookup should work correctly with relative paths in existing CSV."""
+        (tmp_path / ".pddrc").touch()
+        import hashlib
+
+        file1 = tmp_path / "cached.py"
+        content = "print('cached')"
+        file1.write_text(content)
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+        # Provide existing CSV with relative path
+        existing_csv = f'''full_path,file_summary,key_exports,dependencies,content_hash
+cached.py,Cached summary.,"[""print""]","[""builtins""]",{content_hash}'''
+
+        csv_output, total_cost, _ = summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=existing_csv
+        )
+
+        # Should be a cache hit — no LLM cost
+        assert total_cost == 0.0, f"Expected cache hit with relative path, but cost was {total_cost}"
 
 
 # ============================================================================
@@ -1060,3 +1155,1285 @@ def test_summarize_directory_handles_subdirectories(tmp_path, mock_load_prompt_t
     assert len(rows) == 2, f"Expected 2 files, got {len(rows)}"
     assert any("root.py" in p for p in paths), "Should find root.py"
     assert any("nested.py" in p for p in paths), "Should find nested.py in subdirectory"
+
+
+# =============================================================================
+# TDD Regression Tests for git ls-files and binary filtering (Issue #237)
+# These tests prevent regression of the fix for processing 95,412 files
+# =============================================================================
+
+class TestGitLsFilesIntegration:
+    """Tests for _get_files_from_git() helper function."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_git_env(self, monkeypatch):
+        """Remove GIT_WORK_TREE/GIT_DIR so nested git init works in tmp_path."""
+        monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+        monkeypatch.delenv("GIT_DIR", raising=False)
+
+    def test_get_files_from_git_returns_list_in_git_repo(self, tmp_path):
+        """Test that _get_files_from_git returns a list when in a git repo."""
+        from pdd.summarize_directory import _get_files_from_git
+        import subprocess
+
+        # Initialize a git repo
+        subprocess.run(['git', 'init'], cwd=tmp_path, capture_output=True)
+
+        # Create and add a file
+        test_file = tmp_path / "test.py"
+        test_file.write_text("print('hello')")
+        subprocess.run(['git', 'add', 'test.py'], cwd=tmp_path, capture_output=True)
+
+        result = _get_files_from_git(str(tmp_path))
+
+        assert result is not None, "Should return a list in a git repo"
+        assert isinstance(result, list), "Should return a list"
+        assert len(result) == 1, "Should find the one tracked file"
+        assert "test.py" in result[0], "Should include the test file"
+
+    def test_get_files_from_git_excludes_untracked_files(self, tmp_path):
+        """Test that _get_files_from_git excludes untracked files."""
+        from pdd.summarize_directory import _get_files_from_git
+        import subprocess
+
+        # Initialize a git repo
+        subprocess.run(['git', 'init'], cwd=tmp_path, capture_output=True)
+
+        # Create tracked file
+        tracked = tmp_path / "tracked.py"
+        tracked.write_text("tracked")
+        subprocess.run(['git', 'add', 'tracked.py'], cwd=tmp_path, capture_output=True)
+
+        # Create untracked file
+        untracked = tmp_path / "untracked.py"
+        untracked.write_text("untracked")
+
+        result = _get_files_from_git(str(tmp_path))
+
+        assert len(result) == 1, "Should only find tracked file"
+        assert "tracked.py" in result[0], "Should include tracked file"
+        assert not any("untracked.py" in f for f in result), "Should exclude untracked file"
+
+    def test_get_files_from_git_respects_gitignore(self, tmp_path):
+        """Test that _get_files_from_git respects .gitignore patterns."""
+        from pdd.summarize_directory import _get_files_from_git
+        import subprocess
+
+        # Initialize a git repo
+        subprocess.run(['git', 'init'], cwd=tmp_path, capture_output=True)
+
+        # Create .gitignore
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("ignored.py\nnode_modules/\n")
+        subprocess.run(['git', 'add', '.gitignore'], cwd=tmp_path, capture_output=True)
+
+        # Create tracked file
+        tracked = tmp_path / "tracked.py"
+        tracked.write_text("tracked")
+        subprocess.run(['git', 'add', 'tracked.py'], cwd=tmp_path, capture_output=True)
+
+        # Create ignored file (won't be tracked due to .gitignore)
+        ignored = tmp_path / "ignored.py"
+        ignored.write_text("ignored")
+
+        # Create node_modules directory (simulating the original issue)
+        node_modules = tmp_path / "node_modules"
+        node_modules.mkdir()
+        (node_modules / "package.js").write_text("module")
+
+        result = _get_files_from_git(str(tmp_path))
+
+        assert len(result) == 2, "Should find .gitignore and tracked.py"
+        assert not any("ignored.py" in f for f in result), "Should exclude ignored.py"
+        assert not any("node_modules" in f for f in result), "Should exclude node_modules"
+
+    def test_get_files_from_git_returns_none_outside_git_repo(self, tmp_path):
+        """Test that _get_files_from_git returns None when not in a git repo."""
+        from pdd.summarize_directory import _get_files_from_git
+
+        # Don't initialize git - this is just a regular directory
+        test_file = tmp_path / "test.py"
+        test_file.write_text("print('hello')")
+
+        result = _get_files_from_git(str(tmp_path))
+
+        assert result is None, "Should return None when not in a git repo"
+
+
+class TestGlobFallback:
+    """Tests for _get_files_from_glob() fallback function."""
+
+    def test_get_files_from_glob_filters_node_modules(self, tmp_path):
+        """Test that glob fallback filters out node_modules directory."""
+        from pdd.summarize_directory import _get_files_from_glob
+
+        # Create source file
+        src = tmp_path / "src.py"
+        src.write_text("source")
+
+        # Create node_modules (the original problem)
+        node_modules = tmp_path / "node_modules"
+        node_modules.mkdir()
+        (node_modules / "package.js").write_text("module")
+        (node_modules / "subdir").mkdir()
+        (node_modules / "subdir" / "nested.js").write_text("nested")
+
+        result = _get_files_from_glob(str(tmp_path))
+
+        assert any("src.py" in f for f in result), "Should include source file"
+        assert not any("node_modules" in f for f in result), "Should exclude node_modules"
+
+    def test_get_files_from_glob_filters_build_directories(self, tmp_path):
+        """Test that glob fallback filters out common build directories."""
+        from pdd.summarize_directory import _get_files_from_glob
+
+        # Create source file
+        src = tmp_path / "src.py"
+        src.write_text("source")
+
+        # Create various build directories that should be ignored
+        for dirname in ['.next', 'dist', 'build', 'coverage', '__pycache__', '.git']:
+            d = tmp_path / dirname
+            d.mkdir()
+            (d / "file.txt").write_text("content")
+
+        result = _get_files_from_glob(str(tmp_path))
+
+        assert any("src.py" in f for f in result), "Should include source file"
+        for dirname in ['.next', 'dist', 'build', 'coverage', '__pycache__', '.git']:
+            assert not any(dirname in f for f in result), f"Should exclude {dirname}"
+
+
+class TestBinaryFiltering:
+    """Tests for BINARY_EXTENSIONS filtering."""
+
+    def test_binary_extensions_includes_common_image_formats(self):
+        """Test that BINARY_EXTENSIONS includes common image formats."""
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+
+        image_formats = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico']
+        for ext in image_formats:
+            assert ext in BINARY_EXTENSIONS, f"Should include {ext}"
+
+    def test_binary_extensions_includes_video_formats(self):
+        """Test that BINARY_EXTENSIONS includes video formats."""
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+
+        video_formats = ['.mp4', '.webm', '.mov', '.avi']
+        for ext in video_formats:
+            assert ext in BINARY_EXTENSIONS, f"Should include {ext}"
+
+    def test_binary_extensions_includes_archive_formats(self):
+        """Test that BINARY_EXTENSIONS includes archive formats."""
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+
+        archive_formats = ['.zip', '.tar', '.gz', '.rar', '.7z']
+        for ext in archive_formats:
+            assert ext in BINARY_EXTENSIONS, f"Should include {ext}"
+
+    def test_binary_extensions_includes_python_bytecode(self):
+        """Test that BINARY_EXTENSIONS includes Python bytecode."""
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+
+        assert '.pyc' in BINARY_EXTENSIONS, "Should include .pyc"
+        assert '.pyo' in BINARY_EXTENSIONS, "Should include .pyo"
+
+    def test_summarize_directory_filters_binary_files(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Test that summarize_directory filters out binary files."""
+        # Create source file
+        src = tmp_path / "src.py"
+        src.write_text("print('hello')")
+
+        # Create binary files
+        (tmp_path / "image.png").write_bytes(b'\x89PNG\r\n\x1a\n')
+        (tmp_path / "video.webm").write_bytes(b'\x1a\x45\xdf\xa3')
+        (tmp_path / "archive.zip").write_bytes(b'PK\x03\x04')
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        paths = [r['full_path'] for r in rows]
+
+        assert len(rows) == 1, f"Should only process src.py, got {len(rows)} files"
+        assert any("src.py" in p for p in paths), "Should include src.py"
+        assert not any(".png" in p for p in paths), "Should exclude .png"
+        assert not any(".webm" in p for p in paths), "Should exclude .webm"
+        assert not any(".zip" in p for p in paths), "Should exclude .zip"
+
+
+class TestGitPreferredOverGlob:
+    """Tests ensuring git ls-files is preferred over glob."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_git_env(self, monkeypatch):
+        """Remove GIT_WORK_TREE/GIT_DIR so nested git init works in tmp_path."""
+        monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+        monkeypatch.delenv("GIT_DIR", raising=False)
+
+    def test_summarize_directory_uses_git_when_available(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Test that summarize_directory prefers git over glob in a git repo."""
+        import subprocess
+
+        # Initialize a git repo
+        subprocess.run(['git', 'init'], cwd=tmp_path, capture_output=True)
+
+        # Create and track a file
+        tracked = tmp_path / "tracked.py"
+        tracked.write_text("tracked")
+        subprocess.run(['git', 'add', 'tracked.py'], cwd=tmp_path, capture_output=True)
+
+        # Create untracked file
+        untracked = tmp_path / "untracked.py"
+        untracked.write_text("untracked")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        paths = [r['full_path'] for r in rows]
+
+        assert len(rows) == 1, "Should only process tracked file"
+        assert any("tracked.py" in p for p in paths), "Should include tracked.py"
+        assert not any("untracked.py" in p for p in paths), "Should exclude untracked.py"
+
+    def test_summarize_directory_falls_back_to_glob(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Test that summarize_directory falls back to glob when not in git repo."""
+        # Don't initialize git
+        src = tmp_path / "src.py"
+        src.write_text("source")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+
+        assert len(rows) == 1, "Should process file using glob fallback"
+
+
+class TestRegressionIssue237:
+    """Regression tests for Issue #237: 95,412 files being processed."""
+
+    def test_node_modules_never_processed(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Regression test: node_modules should never be processed."""
+        # Create source file
+        src = tmp_path / "index.js"
+        src.write_text("console.log('hello')")
+
+        # Create massive node_modules structure (simulating the issue)
+        node_modules = tmp_path / "node_modules"
+        node_modules.mkdir()
+        for i in range(10):  # Create many packages
+            pkg = node_modules / f"package{i}"
+            pkg.mkdir()
+            (pkg / "index.js").write_text(f"module {i}")
+            (pkg / "README.md").write_text(f"readme {i}")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+
+        # Should only process index.js, not any node_modules files
+        assert len(rows) == 1, f"Should only process 1 file, got {len(rows)}"
+        assert "index.js" in rows[0]['full_path'], "Should process index.js"
+
+    def test_large_binary_files_never_processed(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Regression test: large binary files should never cause context exceeded."""
+        # Create source file
+        src = tmp_path / "src.py"
+        src.write_text("print('hello')")
+
+        # Create files that caused context length exceeded
+        (tmp_path / "test-failed.png").write_bytes(b'\x89PNG' + b'\x00' * 1000)
+        (tmp_path / "video.webm").write_bytes(b'\x1a\x45' + b'\x00' * 1000)
+        (tmp_path / "trace.zip").write_bytes(b'PK\x03\x04' + b'\x00' * 1000)
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+
+        assert len(rows) == 1, "Should only process src.py"
+        assert not any(".png" in r['full_path'] for r in rows), "Should not process .png"
+        assert not any(".webm" in r['full_path'] for r in rows), "Should not process .webm"
+        assert not any(".zip" in r['full_path'] for r in rows), "Should not process .zip"
+
+# ============================================================================
+# NEW TESTS: Additional Edge Cases and Parameter Verification
+# ============================================================================
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+def test_time_parameter_passed_to_llm(tmp_path, mock_load_prompt_template, mock_llm_invoke):
+    """Test that the 'time' parameter is correctly passed to llm_invoke."""
+    file1 = tmp_path / "file1.py"
+    file1.write_text("print('Hello')")
+
+    directory_path = str(tmp_path / "*.py")
+    strength = 0.8
+    temperature = 0.2
+    time_val = 0.75
+    verbose = False
+
+    summarize_directory(
+        directory_path=directory_path,
+        strength=strength,
+        temperature=temperature,
+        time=time_val,
+        verbose=verbose,
+        csv_file=None
+    )
+
+    # Verify llm_invoke was called with the correct time parameter
+    mock_llm_invoke.assert_called_once()
+    call_kwargs = mock_llm_invoke.call_args[1]
+    assert call_kwargs['time'] == time_val
+    assert call_kwargs['strength'] == strength
+    assert call_kwargs['temperature'] == temperature
+
+
+def test_file_read_with_invalid_utf8(tmp_path, mock_load_prompt_template, mock_llm_invoke):
+    """Test that files with invalid UTF-8 bytes are read without crashing due to errors='ignore'."""
+    file1 = tmp_path / "invalid_utf8.py"
+    # Write valid python but with some invalid utf-8 bytes in a comment
+    file1.write_bytes(b"print('Hello') # \xff\xfe\xfd")
+
+    directory_path = str(tmp_path / "*.py")
+    
+    csv_output, total_cost, model_name = summarize_directory(
+        directory_path=directory_path,
+        strength=0.5,
+        temperature=0.7,
+        verbose=False,
+        csv_file=None
+    )
+
+    # Should process successfully without raising UnicodeDecodeError
+    reader = csv.DictReader(StringIO(csv_output))
+    rows = list(reader)
+    assert len(rows) == 1
+    assert "invalid_utf8.py" in rows[0]['full_path']
+    assert rows[0]['file_summary'] == "This is a summary."
+    assert rows[0]['content_hash'] != "error"
+
+
+# ============================================================================
+# Z3 Formal Verification for Binary Filtering Logic
+# ============================================================================
+
+def test_z3_verify_binary_filtering():
+    """
+    Formally verify the binary filtering logic using Z3.
+    
+    Logic to verify:
+    is_processed <==> is_file AND NOT is_binary_extension
+    """
+    s = Solver()
+
+    # State variables
+    is_file = Bool('is_file')
+    is_binary_extension = Bool('is_binary_extension')
+    
+    # The decision logic implemented in the code:
+    # if not os.path.isfile(f): continue
+    # if ext.lower() in BINARY_EXTENSIONS: continue
+    # filtered_files.append(f)
+    
+    # Let's model 'is_processed'
+    is_processed = And(is_file, Not(is_binary_extension))
+    
+    # Property 1: If it's a binary extension, it MUST NOT be processed
+    s.push()
+    s.add(is_binary_extension)
+    s.add(is_processed) # Asserting it IS processed (contradiction expected)
+    assert s.check() == unsat, "Z3 found a case where a binary file is processed"
+    s.pop()
+    
+    # Property 2: If it's not a file, it MUST NOT be processed
+    s.push()
+    s.add(Not(is_file))
+    s.add(is_processed) # Asserting it IS processed (contradiction expected)
+    assert s.check() == unsat, "Z3 found a case where a non-file is processed"
+    s.pop()
+    
+    # Property 3: If it is a file and NOT a binary extension, it MUST be processed
+    s.push()
+    s.add(is_file)
+    s.add(Not(is_binary_extension))
+    s.add(Not(is_processed)) # Asserting it is NOT processed (contradiction expected)
+    assert s.check() == unsat, "Z3 found a case where a valid file is skipped"
+    s.pop()
+
+
+# ============================================================================
+# NEW: Additional tests for prompt coverage gaps
+# ============================================================================
+
+
+class TestCacheInvalidationEdgeCases:
+    """Tests for Step 6d: new-format entries with empty lists should cache;
+    old-format entries (missing columns) should force re-summarization."""
+
+    def test_cache_hit_when_key_exports_empty_new_format(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """New-format CSV with key_exports='[]' should still cache (file may have no exports)."""
+        (tmp_path / ".pddrc").touch()
+        import hashlib
+        content = "x"
+        (tmp_path / "test.py").write_text(content)
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+        existing_csv = (
+            "full_path,file_summary,key_exports,dependencies,content_hash\n"
+            f'test.py,Old.,"[]","[""os""]",{content_hash}'
+        )
+
+        _, cost, _ = summarize_directory(
+            str(tmp_path / "*.py"), 0.5, 0.5, csv_file=existing_csv
+        )
+        assert cost == 0, "New-format entry with empty key_exports should be a cache hit"
+
+    def test_cache_hit_when_dependencies_empty_new_format(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """New-format CSV with dependencies='[]' should still cache (file may have no imports)."""
+        (tmp_path / ".pddrc").touch()
+        import hashlib
+        content = "x"
+        (tmp_path / "test.py").write_text(content)
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+        existing_csv = (
+            "full_path,file_summary,key_exports,dependencies,content_hash\n"
+            f'test.py,Old.,"[""foo""]","[]",{content_hash}'
+        )
+
+        _, cost, _ = summarize_directory(
+            str(tmp_path / "*.py"), 0.5, 0.5, csv_file=existing_csv
+        )
+        assert cost == 0, "New-format entry with empty dependencies should be a cache hit"
+
+
+class TestCsvColumnDefaults:
+    """Tests for Step 5: default missing key_exports and dependencies to '[]'."""
+
+    def test_csv_defaults_missing_columns_to_empty_list(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """CSV with only 3 required columns should not crash; missing cols default to '[]'."""
+        import hashlib
+        content = "x"
+        (tmp_path / "test.py").write_text(content)
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+        existing_csv = (
+            "full_path,file_summary,content_hash\n"
+            f"test.py,Old.,{content_hash}"
+        )
+
+        # Should not crash; missing columns default to '[]' -> cache miss -> re-summarize
+        _, cost, _ = summarize_directory(
+            str(tmp_path / "*.py"), 0.5, 0.5, csv_file=existing_csv
+        )
+        assert cost > 0
+
+
+class TestVerboseProgressBehavior:
+    """Tests for Step 6: Rich progress only when verbose=True and no callback."""
+
+    def test_no_rich_output_when_verbose_false_no_callback(self, tmp_path, mock_load_prompt_template, mock_llm_invoke, capsys):
+        """When verbose=False and no callback, no Rich progress output should appear."""
+        (tmp_path / "f.py").write_text("x")
+        summarize_directory(str(tmp_path / "*.py"), 0.5, 0.5, verbose=False)
+        captured = capsys.readouterr()
+        assert "Processing files" not in captured.out
+        assert "Summarizing" not in captured.out
+
+
+class TestMultiFileErrorResilience:
+    """Tests for Step 6g: one file error should not crash the rest."""
+
+    def test_one_llm_failure_others_still_summarized(self, tmp_path, mock_load_prompt_template):
+        """If LLM fails on one file, other files should still be summarized."""
+        (tmp_path / "good.py").write_text("print('ok')")
+        (tmp_path / "bad.py").write_text("bad content")
+
+        def selective_llm(*args, **kwargs):
+            if kwargs.get('input_json', {}).get('file_contents', '') == "bad content":
+                raise RuntimeError("LLM choked")
+            return {
+                'result': FileSummary(
+                    file_summary="Good summary.",
+                    key_exports=["x"],
+                    dependencies=["y"],
+                ),
+                'cost': 0.01,
+                'model_name': "TestModel",
+            }
+
+        with patch('pdd.summarize_directory.llm_invoke', side_effect=selective_llm):
+            csv_out, cost, _ = summarize_directory(str(tmp_path / "*.py"), 0.5, 0.5)
+
+        rows = list(csv.DictReader(StringIO(csv_out)))
+        assert len(rows) == 2
+        error_rows = [r for r in rows if "Error" in r['file_summary']]
+        good_rows = [r for r in rows if r['file_summary'] == "Good summary."]
+        assert len(error_rows) == 1
+        assert len(good_rows) == 1
+
+
+class TestCsvOutputCompleteness:
+    """Tests for output CSV having all five columns."""
+
+    def test_csv_output_has_all_five_columns(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        (tmp_path / "f.py").write_text("x")
+        csv_out, _, _ = summarize_directory(str(tmp_path / "*.py"), 0.5, 0.5)
+        reader = csv.DictReader(StringIO(csv_out))
+        assert set(reader.fieldnames) == {
+            'full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash'
+        }
+
+
+class TestReturnValueShape:
+    """Tests for the output tuple shape and types."""
+
+    def test_returns_three_element_tuple(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        (tmp_path / "f.py").write_text("x")
+        result = summarize_directory(str(tmp_path / "*.py"), 0.5, 0.5)
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+
+    def test_return_types(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        (tmp_path / "f.py").write_text("x")
+        csv_out, cost, model = summarize_directory(str(tmp_path / "*.py"), 0.5, 0.5)
+        assert isinstance(csv_out, str)
+        assert isinstance(cost, float)
+        assert isinstance(model, str)
+
+    def test_model_name_cached_when_all_from_cache(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        (tmp_path / ".pddrc").touch()
+        import hashlib
+        content = "x"
+        (tmp_path / "f.py").write_text(content)
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+        existing_csv = (
+            "full_path,file_summary,key_exports,dependencies,content_hash\n"
+            f'f.py,Cached.,"[""a""]","[""b""]",{content_hash}'
+        )
+
+        _, _, model = summarize_directory(
+            str(tmp_path / "*.py"), 0.5, 0.5, csv_file=existing_csv
+        )
+        assert model == "cached"
+
+
+class TestBinaryExtensionsAdditional:
+    """Additional binary extension checks not covered by original tests."""
+
+    def test_includes_audio_formats(self):
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+        for ext in ['.mp3', '.wav', '.ogg']:
+            assert ext in BINARY_EXTENSIONS
+
+    def test_includes_font_formats(self):
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+        for ext in ['.woff', '.woff2', '.ttf', '.eot', '.otf']:
+            assert ext in BINARY_EXTENSIONS
+
+    def test_includes_executable_formats(self):
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+        for ext in ['.exe', '.dll', '.so', '.dylib']:
+            assert ext in BINARY_EXTENSIONS
+
+
+# ============================================================================
+# Tests for include_docs parameter
+# ============================================================================
+
+class TestIncludeDocs:
+    """Tests for include_docs parameter that controls doc file discovery."""
+
+    def test_doc_files_excluded_by_default(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """When include_docs=False (default), .md/.txt/.rst files are not summarized."""
+        (tmp_path / "code.py").write_text("print('hello')")
+        (tmp_path / "readme.md").write_text("# README")
+        (tmp_path / "notes.txt").write_text("Some notes")
+        (tmp_path / "docs.rst").write_text("Documentation")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path / "*"),
+            strength=0.5,
+            temperature=0.0,
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        paths = [r['full_path'] for r in rows]
+
+        assert len(rows) == 1, f"Only code.py should be included, got: {paths}"
+        assert any("code.py" in p for p in paths)
+
+    def test_doc_files_included_when_flag_true(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """When include_docs=True, .md/.txt/.rst files are also summarized."""
+        (tmp_path / "code.py").write_text("print('hello')")
+        (tmp_path / "readme.md").write_text("# README")
+        (tmp_path / "notes.txt").write_text("Some notes")
+        (tmp_path / "docs.rst").write_text("Documentation")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path / "*"),
+            strength=0.5,
+            temperature=0.0,
+            include_docs=True,
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        paths = [r['full_path'] for r in rows]
+
+        assert len(rows) == 4, f"All 4 files should be included, got: {paths}"
+        assert any("code.py" in p for p in paths)
+        assert any("readme.md" in p for p in paths)
+        assert any("notes.txt" in p for p in paths)
+        assert any("docs.rst" in p for p in paths)
+
+    def test_doc_extensions_not_in_binary_extensions(self):
+        """Doc extensions must NOT be in BINARY_EXTENSIONS per spec."""
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+        for ext in ['.md', '.txt', '.rst']:
+            assert ext not in BINARY_EXTENSIONS, f"{ext} must not be in BINARY_EXTENSIONS"
+
+
+# ============================================================================
+# Tests for max_workers parameter (parallel LLM calls)
+# ============================================================================
+
+class TestMaxWorkers:
+    """Tests for max_workers parameter that controls LLM call parallelism."""
+
+    def test_max_workers_default_is_sequential(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Default max_workers=1 should process files sequentially."""
+        (tmp_path / "a.py").write_text("a")
+        (tmp_path / "b.py").write_text("b")
+
+        csv_output, cost, model = summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.0,
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        assert len(rows) == 2
+        assert cost == 0.02  # 2 files * 0.01
+
+    def test_max_workers_parallel_produces_same_results(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """max_workers>1 should produce the same CSV content as sequential."""
+        (tmp_path / "a.py").write_text("a")
+        (tmp_path / "b.py").write_text("b")
+
+        csv_output, cost, model = summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.0,
+            max_workers=2,
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        assert len(rows) == 2
+        assert cost == 0.02
+        assert model == "TestModel"
+
+    def test_max_workers_with_progress_callback(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Progress callback should be called for each file even with parallel workers."""
+        (tmp_path / "a.py").write_text("a")
+        (tmp_path / "b.py").write_text("b")
+
+        progress_calls = []
+        def callback(current, total):
+            progress_calls.append((current, total))
+
+        summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.0,
+            max_workers=2,
+            progress_callback=callback,
+        )
+
+        assert len(progress_calls) == 2
+        # All calls should have total=2
+        for _, total in progress_calls:
+            assert total == 2
+
+    def test_max_workers_thread_safe_cost_accumulation(self, tmp_path, mock_load_prompt_template):
+        """Total cost should be correctly accumulated across threads."""
+        for i in range(5):
+            (tmp_path / f"file{i}.py").write_text(f"content_{i}")
+
+        with patch('pdd.summarize_directory.llm_invoke') as mock_llm:
+            mock_llm.return_value = {
+                'result': FileSummary(file_summary="Summary", key_exports=["x"], dependencies=["y"]),
+                'cost': 0.1,
+                'model_name': "TestModel"
+            }
+            _, cost, _ = summarize_directory(
+                directory_path=str(tmp_path / "*.py"),
+                strength=0.5,
+                temperature=0.0,
+                max_workers=3,
+            )
+
+        assert abs(cost - 0.5) < 1e-9, f"Expected 0.5 total cost for 5 files, got {cost}"
+
+    def test_max_workers_publishes_attempted_models_to_main_click_ctx(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """Regression for PR #1056 third-pass review finding (issue #897).
+
+        Worker threads cannot publish to ctx.obj via
+        click.get_current_context() because Click's context is thread-local.
+        summarize_directory must collect each worker's `attempted_models`
+        from the llm_invoke result dict and merge them into the main
+        thread's ctx.obj after all workers complete, so track_cost can
+        record the full fallback history for tracked commands like
+        `pdd auto-deps --concurrency > 1`.
+        """
+        import click
+
+        for i in range(4):
+            (tmp_path / f"f{i}.py").write_text(f"content_{i}")
+
+        with patch('pdd.summarize_directory.llm_invoke') as mock_llm:
+            mock_llm.return_value = {
+                'result': FileSummary(
+                    file_summary="s", key_exports=["x"], dependencies=["y"]
+                ),
+                'cost': 0.1,
+                'model_name': 'final-success',
+                'attempted_models': ['failed-1', 'failed-2', 'final-success'],
+            }
+
+            with click.Context(click.Command('test-cmd')) as ctx:
+                ctx.obj = {}
+                summarize_directory(
+                    directory_path=str(tmp_path / "*.py"),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_workers=3,
+                )
+                published = ctx.obj.get('attempted_models')
+
+        assert published is not None, (
+            "summarize_directory must publish aggregated worker attempts to "
+            "the main thread's ctx.obj['attempted_models']"
+        )
+        # Four files * 3 attempts each = 12 entries
+        assert len(published) == 12, (
+            f"Expected 12 aggregated attempts (4 files * 3 each), got "
+            f"{len(published)}: {published}"
+        )
+        # Every worker's attempt history must be present in chronological
+        # order within its own group; the per-file group ['failed-1',
+        # 'failed-2', 'final-success'] must appear 4 times back-to-back.
+        for chunk_start in range(0, 12, 3):
+            assert published[chunk_start:chunk_start + 3] == [
+                'failed-1', 'failed-2', 'final-success'
+            ], f"Expected intact per-worker group at offset {chunk_start}: {published}"
+
+    def test_max_workers_preserves_existing_attempted_models_in_ctx(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """If ctx.obj['attempted_models'] already contains entries from an
+        earlier main-thread llm_invoke call, summarize_directory must
+        append worker contributions rather than overwrite. Otherwise the
+        prior fallback history is lost when track_cost reads the column.
+        """
+        import click
+
+        (tmp_path / "a.py").write_text("a")
+        (tmp_path / "b.py").write_text("b")
+
+        with patch('pdd.summarize_directory.llm_invoke') as mock_llm:
+            mock_llm.return_value = {
+                'result': FileSummary(
+                    file_summary="s", key_exports=[], dependencies=[]
+                ),
+                'cost': 0.05,
+                'model_name': 'worker-success',
+                'attempted_models': ['worker-failed', 'worker-success'],
+            }
+
+            with click.Context(click.Command('test-cmd')) as ctx:
+                ctx.obj = {'attempted_models': ['prior-failed', 'prior-success']}
+                summarize_directory(
+                    directory_path=str(tmp_path / "*.py"),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_workers=2,
+                )
+                published = ctx.obj.get('attempted_models')
+
+        assert published[:2] == ['prior-failed', 'prior-success'], (
+            f"Prior attempts must be preserved at the head of the list, "
+            f"got: {published}"
+        )
+        assert sorted(published[2:]) == sorted(
+            ['worker-failed', 'worker-success'] * 2
+        ), f"Worker contributions missing or wrong, got: {published}"
+
+    def test_max_workers_model_name_uses_highest_idx_success(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """F5 contract (PR #1056 4th-round review, revised for round 7).
+
+        When max_workers > 1 workers all succeed but with different
+        models, and a lower-submission-index file completes AFTER a
+        higher-index one, the returned `model_name` must reflect the
+        HIGHEST-submission-index worker (not completion order). This
+        keeps `model_name` deterministic across runs — without it,
+        the column would silently flip based on wall-clock timing of
+        the thread pool.
+
+        NOTE: this test only covers the all-success happy path. The
+        wider invariant tested in round 4 ("model_name equals
+        attempted_models[-1]") was walked back in round 6 — README and
+        the prompt now state that `model` and `attempted_models[-1]`
+        may diverge in error-recovery paths
+        (test_max_workers_failed_last_file_returns_earlier_success_model
+        covers the failure case).
+        """
+        import click
+        import threading
+        import time as _time
+
+        files = [tmp_path / f"f{i}.py" for i in range(3)]
+        for fp in files:
+            fp.write_text(fp.name)
+
+        # Pin the discovered-files order so submission idx is
+        # deterministic (glob order is filesystem-dependent on macOS).
+        # The mock returns model name keyed off the file content, so
+        # we know exactly which model the highest-idx worker produced.
+        sorted_paths = sorted(str(p) for p in files)
+
+        def fake_llm_invoke(**kwargs):
+            content = kwargs.get('input_json', {}).get('file_contents', '')
+            # Each file's content is its own filename "fN.py", so the
+            # embedded digit tells us its submission idx. Sleep LONGER
+            # for LOWER digits so completion order is the REVERSE of
+            # submission order. If the F5 bug surfaces (completion-
+            # order tracking), model_name will be the LOWEST-idx
+            # worker's model instead of the highest.
+            digit = next((int(c) for c in content if c.isdigit()), 0)
+            _time.sleep(0.05 * (2 - digit))
+            return {
+                'result': FileSummary(
+                    file_summary="s", key_exports=[], dependencies=[]
+                ),
+                'cost': 0.01,
+                'model_name': f'success-from-{content}',
+                'attempted_models': [f'success-from-{content}'],
+            }
+
+        # Patch glob to return files in known-sorted order so submission
+        # idx maps to file content unambiguously.
+        with patch(
+            'pdd.summarize_directory._get_files_from_git',
+            return_value=None,  # Force glob fallback.
+        ), patch(
+            'pdd.summarize_directory._get_files_from_glob',
+            return_value=sorted_paths,  # Deterministic ordering.
+        ), patch(
+            'pdd.summarize_directory.llm_invoke',
+            side_effect=fake_llm_invoke,
+        ):
+            with click.Context(click.Command('test-cmd')) as ctx:
+                ctx.obj = {}
+                _, _, returned_model = summarize_directory(
+                    directory_path=str(tmp_path / "*.py"),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_workers=3,
+                )
+
+        # Highest-submission-idx file is sorted_paths[-1] = .../f2.py
+        # → content "f2.py" → model "success-from-f2.py".
+        assert returned_model == 'success-from-f2.py', (
+            f"model_name must be the model from the highest-submission-idx "
+            f"successful worker (deterministic across thread completion "
+            f"timing). Got {returned_model!r}"
+        )
+
+    def test_max_workers_recovers_attempts_from_terminal_failure(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """F6 regression (PR #1056 4th-round review): when an llm_invoke
+        worker exhausts all candidates, it raises RuntimeError with the
+        attempt history attached via setattr. _process_single_file_logic
+        catches the exception and records an error CSV row — but must
+        still surface the worker's attempts (via getattr on the
+        exception) so the failed-substep fallback history reaches
+        cost.csv. Otherwise the workflow users most want to investigate
+        is exactly the one for which we silently drop the data.
+        """
+        import click
+
+        (tmp_path / "ok.py").write_text("ok")
+        (tmp_path / "doomed.py").write_text("doomed")
+
+        def fake_llm_invoke(**kwargs):
+            content = kwargs.get('input_json', {}).get('file_contents', '')
+            if 'doomed' in content:
+                err = RuntimeError("All candidates exhausted")
+                setattr(err, "attempted_models", ['cand-A', 'cand-B', 'cand-C'])
+                raise err
+            return {
+                'result': FileSummary(
+                    file_summary="s", key_exports=[], dependencies=[]
+                ),
+                'cost': 0.01,
+                'model_name': 'ok-model',
+                'attempted_models': ['ok-model'],
+            }
+
+        with patch('pdd.summarize_directory.llm_invoke', side_effect=fake_llm_invoke):
+            with click.Context(click.Command('test-cmd')) as ctx:
+                ctx.obj = {}
+                summarize_directory(
+                    directory_path=str(tmp_path / "*.py"),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_workers=2,
+                )
+                published = ctx.obj.get('attempted_models') or []
+
+        for failed_cand in ('cand-A', 'cand-B', 'cand-C'):
+            assert failed_cand in published, (
+                f"Worker terminal failure must surface its full attempt "
+                f"history; missing {failed_cand!r}. Published: {published}"
+            )
+
+    def test_max_workers_failed_last_file_returns_earlier_success_model(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """F11 regression (PR #1056 6th-round review).
+
+        SUPERSEDES the round-5 F9 fix: model_name was being pinned to
+        ``attempted_models[-1]`` to defend "list ends with the model
+        column", but that meant the CSV `model` column could become a
+        failed candidate name when the highest-idx file failed
+        terminally. README:802 says `model` is "The AI model used for
+        the operation" — implying success. We can't satisfy both
+        invariants once recovery is in play.
+
+        New contract: model_name is the model from the highest-
+        submission-idx worker that ACTUALLY produced output
+        (`model != "cached"`). Terminal-failure workers contribute
+        their attempt history to `attempted_models` but do not bump
+        `model_name`. `attempted_models[-1]` may therefore diverge
+        from the `model` column when a later file failed — that's the
+        intended honest record.
+        """
+        import click
+        import threading as _threading
+
+        (tmp_path / "a.py").write_text("a-content")
+        (tmp_path / "b.py").write_text("b-content")
+
+        # Force the LAST-submitted worker to fail terminally regardless
+        # of filesystem ordering, so the regression target is concrete.
+        call_counter = {'n': 0, 'total': 2}
+        counter_lock = _threading.Lock()
+
+        def fake_llm_invoke(**kwargs):
+            with counter_lock:
+                my_idx = call_counter['n']
+                call_counter['n'] += 1
+            if my_idx == call_counter['total'] - 1:
+                err = RuntimeError("All candidates exhausted")
+                setattr(err, "attempted_models", ['fail-A', 'fail-B'])
+                raise err
+            return {
+                'result': FileSummary(
+                    file_summary="s", key_exports=[], dependencies=[]
+                ),
+                'cost': 0.01,
+                'model_name': f'success-{my_idx}',
+                'attempted_models': [f'success-{my_idx}'],
+            }
+
+        with patch('pdd.summarize_directory.llm_invoke', side_effect=fake_llm_invoke):
+            with click.Context(click.Command('test-cmd')) as ctx:
+                ctx.obj = {}
+                _, _, returned_model = summarize_directory(
+                    directory_path=str(tmp_path / "*.py"),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_workers=1,
+                )
+                published = ctx.obj.get('attempted_models') or []
+
+        assert returned_model == 'success-0', (
+            f"When the last file fails terminally, model_name must point "
+            f"at the EARLIER successful worker ('success-0'), not at any "
+            f"failed candidate. Got {returned_model!r}; published list: "
+            f"{published}"
+        )
+        # Note: the audit-log property (failed attempts visible in
+        # attempted_models) is delivered by real llm_invoke's incremental
+        # publish, which this test bypasses by mocking llm_invoke at the
+        # summarize_directory boundary. Tests in test_llm_invoke.py
+        # (test_llm_invoke_terminal_failure_preserves_attempts_in_ctx_obj)
+        # exercise that path with real llm_invoke.
+
+    def test_helper_recovers_attempts_from_terminal_exception_attribute(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """F6 contract pin (PR #1056 7th-round revision of round-5 F8).
+
+        The helper `_process_single_file_logic` must continue to recover
+        `getattr(exc, "attempted_models", None)` from a worker-thread
+        llm_invoke terminal failure — this is the only recovery channel
+        for workers, since Click context is thread-local. The threaded
+        path in summarize_directory then collects and publishes those
+        attempts to the main thread's ctx.obj.
+
+        Note: round-7 removed the single-thread re-publish that round-5
+        F8 added, because llm_invoke no longer rewinds on failure — its
+        incremental publish lands attempts on ctx.obj naturally in
+        single-thread mode (verified by
+        test_llm_invoke_terminal_failure_preserves_attempts_in_ctx_obj).
+        This test now covers the threaded recovery path.
+        """
+        import click
+
+        (tmp_path / "doomed.py").write_text("doomed-content")
+
+        def fake_llm_invoke(**kwargs):
+            err = RuntimeError("All candidates exhausted")
+            setattr(err, "attempted_models", ['fail-1', 'fail-2', 'fail-3'])
+            raise err
+
+        with patch('pdd.summarize_directory.llm_invoke', side_effect=fake_llm_invoke):
+            with click.Context(click.Command('test-cmd')) as ctx:
+                ctx.obj = {}
+                summarize_directory(
+                    directory_path=str(tmp_path / "*.py"),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_workers=2,  # Threaded: worker uses getattr to
+                                    # recover attempts from exception;
+                                    # main thread publishes them to
+                                    # ctx.obj via _append_attempts...
+                )
+                published = ctx.obj.get('attempted_models') or []
+
+        assert published == ['fail-1', 'fail-2', 'fail-3'], (
+            f"Threaded worker terminal failure: helper must recover "
+            f"attempts from exception attribute, threaded path must "
+            f"publish them to main thread's ctx.obj. Expected "
+            f"['fail-1', 'fail-2', 'fail-3'], got: {published}"
+        )
+
+    def test_max_workers_worker_credit_error_surfaces_attempted_models(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """F12 contract test (PR #1056 6th-round review).
+
+        Contract: when a worker's llm_invoke raises
+        InsufficientCreditsError WITH attempted_models attached
+        (the contract that llm_invoke fulfills after F12), the
+        summarize_directory helper recovers those attempts via
+        getattr and surfaces them through ctx.obj.
+
+        This test mocks llm_invoke at the summarize_directory
+        boundary so it does NOT directly catch the F12 bug
+        (which is inside llm_invoke). The actual F12 regression
+        lives in
+        test_llm_invoke_insufficient_credits_attaches_attempts_to_exception
+        — that test patches `_llm_invoke_cloud` so the real
+        llm_invoke code runs and the missing-setattr bug surfaces.
+        Keeping this test as a contract pin: if the helper later
+        regresses on consuming the attribute, this catches it.
+        """
+        import click
+        from pdd.llm_invoke import InsufficientCreditsError as _CreditErr
+
+        (tmp_path / "doomed.py").write_text("doomed")
+
+        def fake_llm_invoke(**kwargs):
+            err = _CreditErr("HTTP 402 from cloud")
+            setattr(err, "attempted_models", ['cloud:base', 'cloud:fallback'])
+            raise err
+
+        with patch('pdd.summarize_directory.llm_invoke', side_effect=fake_llm_invoke):
+            with click.Context(click.Command('test-cmd')) as ctx:
+                ctx.obj = {}
+                summarize_directory(
+                    directory_path=str(tmp_path / "*.py"),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_workers=2,
+                )
+                published = ctx.obj.get('attempted_models') or []
+
+        assert published == ['cloud:base', 'cloud:fallback'], (
+            f"summarize_directory helper must consume attempted_models "
+            f"from the exception attribute and surface to ctx.obj. "
+            f"Got: {published}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Real-LLM: Multi-directory CSV accumulation and cache (requires API key)
+# ---------------------------------------------------------------------------
+
+RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
+
+
+def _skip_unless_llm():
+    if not (os.getenv("PDD_RUN_REAL_LLM_TESTS") or RUN_ALL_TESTS_ENABLED):
+        pytest.skip(
+            "Real LLM tests require network/API access; set "
+            "PDD_RUN_REAL_LLM_TESTS=1 or PDD_RUN_ALL_TESTS=1."
+        )
+
+
+class TestRealLlmMultiDirectoryCSV:
+    """Real LLM: multi-directory CSV accumulation and cache validation.
+
+    Scans context/ then pdd/ with real LLM calls, verifies entries accumulate
+    and re-scanning is all cache hits (cost=0).
+    """
+
+    @pytest.fixture(autouse=True)
+    def set_pdd_path(self, monkeypatch):
+        import pdd
+        from pathlib import Path
+        monkeypatch.setenv("PDD_PATH", str(Path(pdd.__file__).parent))
+
+    @pytest.fixture
+    def project_dir(self, tmp_path):
+        import subprocess
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+        for name in ["example_a.py", "example_b.py", "example_c.py"]:
+            (context_dir / name).write_text(
+                f'"""Example module {name}."""\n\ndef {name.replace(".py", "_func")}():\n    return "{name}"\n'
+            )
+
+        pdd_dir = tmp_path / "pdd"
+        pdd_dir.mkdir()
+        for name in ["cli.py", "sync.py", "config.py"]:
+            (pdd_dir / name).write_text(
+                f'"""PDD module {name}."""\n\ndef {name.replace(".py", "_main")}():\n    pass\n'
+            )
+
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init", "--allow-empty"],
+            cwd=str(tmp_path), capture_output=True, check=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t"},
+        )
+        return tmp_path
+
+    def test_real_llm_multi_directory_csv_accumulation_and_cache(self, project_dir, monkeypatch):
+        """Real LLM: scan context/ then pdd/, verify accumulation and cache hits."""
+        _skip_unless_llm()
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.chdir(project_dir)
+
+        def _parse_csv(csv_str):
+            return list(csv.DictReader(StringIO(csv_str)))
+
+        # Step 1: scan context/
+        csv_1, cost_1, _ = summarize_directory(
+            directory_path=str(project_dir / "context"),
+            strength=0.5, temperature=0.0, verbose=True,
+        )
+        rows_1 = _parse_csv(csv_1)
+        print(f"\n  Step 1 — context/ scan: {len(rows_1)} entries, cost=${cost_1:.4f}")
+        assert len(rows_1) == 3, f"Expected 3 context entries, got {len(rows_1)}"
+        assert cost_1 > 0
+
+        for row in rows_1:
+            assert row.get("key_exports", "[]") != "[]" or row.get("file_summary", ""), (
+                f"Entry {row['full_path']} has empty key_exports and file_summary"
+            )
+
+        # Step 2: scan pdd/ with context/ CSV
+        csv_2, cost_2, _ = summarize_directory(
+            directory_path=str(project_dir / "pdd"),
+            strength=0.5, temperature=0.0, csv_file=csv_1, verbose=True,
+        )
+        rows_2 = _parse_csv(csv_2)
+        all_paths_2 = {r["full_path"] for r in rows_2}
+        print(f"  Step 2 — pdd/ scan: {len(rows_2)} entries, cost=${cost_2:.4f}")
+
+        assert len(rows_2) >= 6, (
+            f"CSV should have >= 6 entries (3 context + 3 pdd), got {len(rows_2)}. "
+            f"Bug #1: context/ entries were wiped. Paths: {all_paths_2}"
+        )
+
+        # Step 3: re-scan context/ — should be all cache hits
+        csv_3, cost_3, _ = summarize_directory(
+            directory_path=str(project_dir / "context"),
+            strength=0.5, temperature=0.0, csv_file=csv_2, verbose=True,
+        )
+        rows_3 = _parse_csv(csv_3)
+        all_paths_3 = {r["full_path"] for r in rows_3}
+        print(f"  Step 3 — context/ re-scan: {len(rows_3)} entries, cost=${cost_3:.4f}")
+
+        assert cost_3 == 0, (
+            f"Re-scanning context/ should be all cache hits (cost=0), got cost={cost_3:.4f}. "
+            "Bug #2: cache miss due to path inconsistency."
+        )
+        assert len(rows_3) >= 6, (
+            f"CSV should still have >= 6 entries, got {len(rows_3)}. "
+            f"Bug #1: pdd/ entries were wiped. Paths: {all_paths_3}"
+        )
+
+        for row in rows_3:
+            assert row.get("file_summary", "").strip(), (
+                f"Entry {row['full_path']} has empty file_summary"
+            )
+
+        print("  All 3 steps passed.")

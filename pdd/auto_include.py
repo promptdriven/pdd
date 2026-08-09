@@ -1,7 +1,8 @@
 """
 This module provides the `auto_include` function to automatically find and
-insert dependencies into a prompt.
+generate proper dependencies with selective extraction attributes.
 """
+import os
 import re
 from io import StringIO
 from pathlib import Path
@@ -13,194 +14,255 @@ from rich.console import Console
 from rich.panel import Panel
 
 from . import DEFAULT_TIME, DEFAULT_STRENGTH
+from .embed_retrieve import embed_and_retrieve
 from .llm_invoke import llm_invoke
 from .load_prompt_template import load_prompt_template
 from .summarize_directory import summarize_directory
 
 console = Console()
 
-class AutoIncludeOutput(BaseModel):
-    """
-    Pydantic model for the output of the auto_include extraction.
-    """
-    string_of_includes: str = Field(description="The string of includes to be added to the prompt")
+_INCLUDE_TAG_RE = re.compile(
+    r"<include(?P<attrs>[^>]*)>(?P<path>[^<]+)</include>",
+    re.DOTALL,
+)
 
 
-def _validate_input(input_prompt: str, directory_path: str, strength: float, temperature: float):
-    """Validate the inputs for the auto_include function."""
-    if not input_prompt:
-        raise ValueError("Input prompt cannot be empty")
-    if not directory_path:
-        raise ValueError("Invalid 'directory_path'.")
+def _apply_compress_to_include_tags(text: str, *, compress: bool) -> str:
+    """Add mode=\"compressed\" to Python include tags when *compress* is True."""
+    if not compress:
+        return text
+
+    def _repl(match: re.Match[str]) -> str:
+        attrs = match.group("attrs") or ""
+        if re.search(r"\bmode\s*=", attrs, re.IGNORECASE):
+            return match.group(0)
+        path = match.group("path").strip()
+        if not path.lower().endswith(".py"):
+            return match.group(0)
+        return f'<include{attrs} mode="compressed">{path}</include>'
+
+    return _INCLUDE_TAG_RE.sub(_repl, text)
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models for structured LLM output
+# ---------------------------------------------------------------------------
+
+class NewInclude(BaseModel):
+    """A new include to add to the prompt."""
+    file: str
+    module: str
+    select: Optional[str] = None
+    query: Optional[str] = None
+
+
+class IncludeAnnotation(BaseModel):
+    """An annotation for an existing include already in the prompt."""
+    file: str
+    select: Optional[str] = None
+    query: Optional[str] = None
+
+
+class AutoIncludeResult(BaseModel):
+    """Structured output from the auto_include_LLM prompt."""
+    reasoning: str = Field(description="Chain-of-thought reasoning (discarded after parsing)")
+    new_includes: List[NewInclude] = Field(default_factory=list)
+    existing_include_annotations: List[IncludeAnnotation] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _validate_input(strength: float, temperature: float) -> None:
+    """Validate strength and temperature are between 0 and 1."""
     if not 0 <= strength <= 1:
         raise ValueError("Strength must be between 0 and 1")
     if not 0 <= temperature <= 1:
         raise ValueError("Temperature must be between 0 and 1")
 
 
-def _get_available_includes_from_csv(csv_output: str) -> list[str]:
-    """Parse the CSV output and return a list of available includes."""
+def _format_csv_rows_for_llm(csv_output: str) -> str:
+    """Format CSV rows as structured metadata for the LLM.
+
+    Each row becomes:
+        File: {full_path}
+        Purpose: {file_summary}
+        Key Exports: {key_exports}
+        Dependencies: {dependencies}
+
+    CSV paths are stored relative to the project root (or absolute when no
+    project marker exists), so no further qualification is needed.
+    """
     if not csv_output:
-        return []
+        return ""
     try:
-        # pylint: disable=invalid-name
         dataframe = pd.read_csv(StringIO(csv_output))
-        return dataframe.apply(
-            lambda row: f"File: {row['full_path']}\nSummary: {row['file_summary']}",
-            axis=1
-        ).tolist()
+        entries = []
+        for _, row in dataframe.iterrows():
+            full_path = row.get('full_path', '')
+            file_summary = row.get('file_summary', '')
+            key_exports = row.get('key_exports', '[]')
+            dependencies = row.get('dependencies', '[]')
+            entry = (
+                f"File: {full_path}\n"
+                f"Purpose: {file_summary}\n"
+                f"Key Exports: {key_exports}\n"
+                f"Dependencies: {dependencies}"
+            )
+            entries.append(entry)
+        return "\n".join(entries)
     except Exception as ex:
-        console.print(f"[red]Error parsing CSV: {str(ex)}[/red]")
-        return []
+        console.print(f"[red]Error parsing CSV: {ex}[/red]")
+        return ""
 
 
-def _load_prompts() -> tuple[str, str]:
-    """Load the prompt templates."""
-    auto_include_prompt = load_prompt_template("auto_include_LLM")
-    extract_prompt = load_prompt_template("extract_auto_include_LLM")
-    if not auto_include_prompt or not extract_prompt:
-        raise ValueError("Failed to load prompt templates")
-    return auto_include_prompt, extract_prompt
+def _embed_and_rank(input_prompt: str, candidates: List[str], top_n: int = 50) -> List[str]:
+    """Pre-filter candidates by cosine similarity using embed_and_retrieve.
 
+    When the number of candidates exceeds a threshold, this function uses
+    embedding-based retrieval to select the top-N most relevant candidates
+    before passing them to the LLM.
 
-def _summarize(
-    directory_path: str,
-    csv_file: Optional[str],
-    llm_kwargs: dict,
-    progress_callback: Optional[Callable[[int, int], None]] = None
-) -> tuple[str, float, str]:
-    """Summarize the directory."""
-    return summarize_directory(
-        directory_path=directory_path,
-        csv_file=csv_file,
-        progress_callback=progress_callback,
-        **llm_kwargs
-    )
-
-
-def _run_llm_and_extract(
-    auto_include_prompt: str,
-    extract_prompt: str,
-    input_prompt: str,
-    available_includes: list[str],
-    llm_kwargs: dict,
-) -> tuple[str, float, str]:
-    """Run the LLM prompts and extract the dependencies."""
-    # pylint: disable=broad-except
-    # Run auto_include_LLM prompt
-    auto_include_response = llm_invoke(
-        prompt=auto_include_prompt,
-        input_json={
-            "input_prompt": input_prompt,
-            "available_includes": "\n".join(available_includes)
-        },
-        **llm_kwargs
-    )
-    total_cost = auto_include_response["cost"]
-    model_name = auto_include_response["model_name"]
-
-    # Run extract_auto_include_LLM prompt
+    Falls back to returning all candidates if the embedding call fails.
+    """
     try:
-        extract_response = llm_invoke(
-            prompt=extract_prompt,
-            input_json={"llm_output": auto_include_response["result"]},
-            output_pydantic=AutoIncludeOutput,
-            **llm_kwargs
-        )
-        total_cost += extract_response["cost"]
-        model_name = extract_response["model_name"]
-        dependencies = extract_response["result"].string_of_includes
+        ranked = embed_and_retrieve(query=input_prompt, candidates=candidates, top_n=top_n)
+        # Extract just the candidate texts (drop scores)
+        return [text for text, _score in ranked]
     except Exception as ex:
-        console.print(f"[red]Error extracting dependencies: {str(ex)}[/red]")
-        dependencies = ""
-    return dependencies, total_cost, model_name
+        console.print(f"[yellow]Warning: embed_and_rank fallback – {ex}[/yellow]")
+        return candidates
+
+
+def _enforce_select_query_exclusivity(result: AutoIncludeResult) -> None:
+    """Drop redundant ``query=`` attributes when ``select=`` is also set.
+
+    For file types that support structural selectors (.py, .md, .json,
+    .yaml, .yml), ``select=`` is deterministic and should win over
+    ``query=``. The LLM occasionally produces both; this normalizes the
+    result in-place.
+    """
+    if not isinstance(result, AutoIncludeResult):
+        return
+
+    _STRUCTURAL_EXTENSIONS = {'.py', '.md', '.json', '.yaml', '.yml'}
+
+    for inc in result.new_includes:
+        if inc.select and inc.query:
+            ext = os.path.splitext(inc.file)[1].lower()
+            if ext in _STRUCTURAL_EXTENSIONS:
+                inc.query = None
+    for ann in result.existing_include_annotations:
+        if ann.select and ann.query:
+            ext = os.path.splitext(ann.file)[1].lower()
+            if ext in _STRUCTURAL_EXTENSIONS:
+                ann.query = None
+
+
+def _build_new_block(inc: NewInclude, *, compress: bool = False) -> str:
+    """Build a <new> block from a NewInclude."""
+    attrs = ""
+    if compress and inc.file.lower().endswith(".py"):
+        attrs += ' mode="compressed"'
+    if inc.select:
+        attrs += f' select="{inc.select}"'
+    if inc.query:
+        attrs += f' query="{inc.query}"'
+    inner = f"<include{attrs}>{inc.file}</include>"
+    return f"<new>\n<{inc.module}>{inner}</{inc.module}>\n</new>"
+
+
+def _build_update_block(ann: IncludeAnnotation, *, compress: bool = False) -> str:
+    """Build an <update> block from an IncludeAnnotation.
+
+    Skip entries with neither select nor query.
+    """
+    if not ann.select and not ann.query:
+        return ""
+    attrs = ""
+    if compress and ann.file.lower().endswith(".py"):
+        attrs += ' mode="compressed"'
+    if ann.select:
+        attrs += f' select="{ann.select}"'
+    if ann.query:
+        attrs += f' query="{ann.query}"'
+    return f"<update>\n<include{attrs}>{ann.file}</include>\n</update>"
+
+
+def _build_include_directives(result: AutoIncludeResult, *, compress: bool = False) -> str:
+    """Build the include_directives string from the structured LLM result."""
+    blocks = []
+    for inc in result.new_includes:
+        blocks.append(_build_new_block(inc, compress=compress))
+    for ann in result.existing_include_annotations:
+        block = _build_update_block(ann, compress=compress)
+        if block:
+            blocks.append(block)
+    directives = "\n".join(blocks)
+    return _apply_compress_to_include_tags(directives, compress=compress)
 
 
 def _extract_module_name(prompt_filename: Optional[str]) -> Optional[str]:
     """Extract module name from prompt filename.
 
-    Handles various language suffixes:
-    - 'prompts/agentic_fix_python.prompt' -> 'agentic_fix'
-    - 'prompts/some_module_LLM.prompt' -> 'some_module'
-    - 'prompts/cli_bash.prompt' -> 'cli'
-
-    Args:
-        prompt_filename: The prompt filename to extract the module name from.
-
-    Returns:
-        The module name, or None if it cannot be extracted.
+    E.g. 'prompts/agentic_fix_python.prompt' -> 'agentic_fix'
     """
     if not prompt_filename:
         return None
-    # Pattern: captures module name before the last underscore + language + .prompt
-    # e.g., "agentic_fix_python.prompt" captures "agentic_fix"
     match = re.search(r'([^/]+)_[^_]+\.prompt$', prompt_filename)
     if match:
         return match.group(1)
     return None
 
 
-def _filter_self_references(dependencies: str, module_name: Optional[str]) -> str:
-    """Remove includes that reference the module's own example file.
+def _filter_duplicates(directives: str, input_prompt: str) -> str:
+    """Remove <new> blocks whose file path already appears in input_prompt.
 
-    Args:
-        dependencies: The dependencies string containing include tags.
-        module_name: The module name to filter out self-references for.
-
-    Returns:
-        The dependencies string with self-referential includes removed.
+    Compares both full paths and basenames to catch duplicates even when
+    the directive uses a qualified path (e.g. ``dir/file.py``) and the
+    prompt already contains the bare filename (``file.py``), or vice-versa.
     """
+    existing_paths = set(re.findall(r'<include[^>]*>([^<]+)</include>', input_prompt))
+    if not existing_paths:
+        return directives
+
+    existing_basenames = {os.path.basename(p.strip()) for p in existing_paths}
+
+    def should_keep(block: str) -> bool:
+        m = re.search(r'<include[^>]*>([^<]+)</include>', block)
+        if not m:
+            return True
+        new_path = m.group(1).strip()
+        if new_path in existing_paths:
+            return False
+        if os.path.basename(new_path) in existing_basenames:
+            return False
+        return True
+
+    new_blocks = re.findall(r'<new>\n.*?\n</new>', directives, re.DOTALL)
+    result = directives
+    for block in new_blocks:
+        if not should_keep(block):
+            result = result.replace(block, "")
+    return result.strip()
+
+
+def _filter_self_references(directives: str, module_name: Optional[str]) -> str:
+    """Remove <new> blocks that reference the module's own example file."""
     if not module_name:
-        return dependencies
-    # Pattern matches: <...><include>context/[subdirs/]{module_name}_example.py</include></...>
-    # The (?:[^/]+/)* matches zero or more subdirectory levels (e.g., backend/, frontend/)
-    pattern = rf'<[^>]+><include>context/(?:[^/]+/)*{re.escape(module_name)}_example\.py</include></[^>]+>\s*'
-    return re.sub(pattern, '', dependencies)
-
-
-def _fix_malformed_includes(dependencies: str) -> str:
-    """Fix malformed [File: ...] patterns to proper <include>...</include> format.
-
-    The LLM sometimes outputs [File: path] instead of <include>path</include>.
-    This function corrects that error.
-
-    Args:
-        dependencies: The dependencies string containing potential malformed includes.
-
-    Returns:
-        The dependencies string with [File:] patterns converted to <include> tags.
-    """
-    # Pattern: <tag>[File: path]</tag> or <tag>\n[File: path]\n</tag>
-    pattern = r'(<[^>]+>)\s*\[File:\s*([^\]]+)\]\s*(</[^>]+>)'
-
-    def replacer(match: re.Match) -> str:
-        opening_tag = match.group(1)
-        path = match.group(2).strip()  # Strip whitespace from captured path
-        closing_tag = match.group(3)
-        return f'{opening_tag}<include>{path}</include>{closing_tag}'
-
-    fixed = re.sub(pattern, replacer, dependencies)
-    if fixed != dependencies:
-        console.print("[yellow]Warning: Fixed malformed [File:] patterns in dependencies[/yellow]")
-    return fixed
+        return directives
+    pattern = rf'<new>\n.*?{re.escape(module_name)}_example\.py.*?\n</new>'
+    return re.sub(pattern, '', directives, flags=re.DOTALL).strip()
 
 
 def _extract_example_modules(content: str) -> Set[str]:
-    """Extract module names from _example.py includes.
-
-    Args:
-        content: The string content to search for include tags.
-
-    Returns:
-        A set of module names extracted from _example.py paths.
-        E.g., 'context/agentic_bug_example.py' -> 'agentic_bug'
-    """
-    pattern = r'<include>(.*?)</include>'
-    matches = re.findall(pattern, content, re.DOTALL)
+    """Extract module names from _example.py includes in content."""
+    pattern = r'<include[^>]*>([^<]+)</include>'
+    matches = re.findall(pattern, content)
     modules = set()
     for match in matches:
         path = match.strip()
-        # Match pattern: context/[subdirs/]module_name_example.py
         example_match = re.search(r'context/(?:[^/]+/)*([^/]+)_example\.py$', path)
         if example_match:
             modules.add(example_match.group(1))
@@ -209,73 +271,48 @@ def _extract_example_modules(content: str) -> Set[str]:
 
 def _detect_circular_dependencies(
     current_prompt: str,
-    new_dependencies: str,
-    prompts_dir: Optional[str] = None
+    new_directives: str,
+    prompts_dir: Optional[str] = None,
 ) -> List[List[str]]:
     """Detect circular dependencies through example file includes.
 
-    Detects module-level circular dependencies where:
-    - Module A's prompt includes module B's example file
-    - Module B's prompt includes module A's example file
-
-    Args:
-        current_prompt: The current prompt file being processed.
-        new_dependencies: The new dependencies string to check.
-        prompts_dir: Optional base directory for resolving prompt paths.
-
-    Returns:
-        List of cycles found, where each cycle is a list of module names.
+    A circular dependency occurs when module A is about to include module B's
+    example, and module B's prompt already includes module A's example.
     """
-    # Extract current module name from prompt filename
     current_module = _extract_module_name(current_prompt)
     if not current_module:
         return []
 
-    # Extract module names from example includes in new dependencies
-    new_dep_modules = _extract_example_modules(new_dependencies)
+    new_dep_modules = _extract_example_modules(new_directives)
     if not new_dep_modules:
         return []
 
-    cycles: List[List[str]] = []
-
-    # Determine base directory for prompts
     if prompts_dir:
         base_dir = Path(prompts_dir)
     else:
-        # Try to find prompts directory relative to current prompt
         current_path = Path(current_prompt)
         if current_path.parent.name == 'prompts' or 'prompts' in str(current_path):
             base_dir = current_path.parent
         else:
             base_dir = Path('prompts')
 
-    # Extract current prompt filename for cycle reporting
     current_prompt_name = Path(current_prompt).name
+    cycles: List[List[str]] = []
 
-    # For each module we're about to depend on, check if it depends on us
     for dep_module in new_dep_modules:
-        # Find the prompt file for this module (try common patterns)
         prompt_patterns = [
             f"{dep_module}_python.prompt",
             f"{dep_module}_LLM.prompt",
             f"{dep_module}.prompt",
         ]
-
-        for pattern in prompt_patterns:
-            prompt_path = base_dir / pattern
+        for pat in prompt_patterns:
+            prompt_path = base_dir / pat
             if prompt_path.exists():
                 try:
                     content = prompt_path.read_text(encoding='utf-8')
-                    # Check if this prompt includes our example file
                     dep_modules = _extract_example_modules(content)
                     if current_module in dep_modules:
-                        # Found circular dependency!
-                        # Use actual prompt filenames, not hardcoded suffixes
-                        cycles.append([
-                            current_prompt_name,
-                            pattern,
-                            current_prompt_name
-                        ])
+                        cycles.append([current_prompt_name, pat, current_prompt_name])
                 except Exception:
                     pass
                 break
@@ -283,91 +320,101 @@ def _detect_circular_dependencies(
     return cycles
 
 
-def _filter_circular_dependencies(dependencies: str, cycles: List[List[str]]) -> str:
-    """Remove include tags that would create circular dependencies.
-
-    Args:
-        dependencies: The dependencies string containing include tags.
-        cycles: List of cycles, where each cycle is a list of prompt filenames.
-
-    Returns:
-        The dependencies string with circular dependency includes removed.
-    """
+def _filter_circular_dependencies(directives: str, cycles: List[List[str]]) -> str:
+    """Remove <new> blocks that would create circular dependencies."""
     if not cycles:
-        return dependencies
+        return directives
 
-    # Extract module names from cycles (e.g., 'agentic_bug_python.prompt' -> 'agentic_bug')
     problematic_modules: Set[str] = set()
     for cycle in cycles:
         for prompt_name in cycle:
-            # Extract module name from prompt filename using shared helper
             module_name = _extract_module_name(prompt_name)
             if module_name:
                 problematic_modules.add(module_name)
 
-    if not problematic_modules:
-        return dependencies
-
-    # Pattern to match include tags with _example.py files
-    # Matches: <wrapper><include>context/[subdirs/]module_example.py</include></wrapper>
-    # Using a simpler approach: find each include and check if it's problematic
-    result = dependencies
+    result = directives
     for module in problematic_modules:
-        # Remove includes for this module's example file
-        # Pattern: <wrapper><include>context/[subdirs/]module_example.py</include></wrapper>
-        pattern = rf'<[^>]+><include>context/(?:[^/]+/)*{re.escape(module)}_example\.py</include></[^>]+>\s*'
-        result = re.sub(pattern, '', result)
-
-    return result
+        pattern = rf'<new>\n.*?{re.escape(module)}_example\.py.*?\n</new>'
+        result = re.sub(pattern, '', result, flags=re.DOTALL)
+    return result.strip()
 
 
-def _extract_includes(content: str) -> Set[str]:
-    """Extract all paths from <include> tags in the content.
+def _get_file_line_count(file_path: str) -> int:
+    """Return the number of lines in a file, or 0 if unreadable."""
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            return sum(1 for _ in f)
+    except Exception:
+        return 0
 
-    Args:
-        content: The string content to search.
 
-    Returns:
-        A set of paths found in <include> tags.
+def _strip_selectors_from_small_files(directives: str, threshold: int = 100, directory_path: str = "") -> str:
+    """Strip selectors from files under `threshold` lines.
+
+    For <new> blocks: remove select/query attributes but keep the include.
+    For <update> blocks: remove the entire block.
+
+    Resolves relative paths against the project root so that
+    repo-root-relative CSV paths are found regardless of CWD.
     """
-    pattern = r'<include>(.*?)</include>'
-    matches = re.findall(pattern, content, re.DOTALL)
-    return {m.strip() for m in matches}
+    from .path_resolution import find_project_root_from_path
+    _found = find_project_root_from_path(directory_path or ".")
+    _project_root = _found if _found else os.path.abspath(directory_path or ".")
+
+    def _resolve_and_count(file_path: str) -> int:
+        """Try the path as-is, then relative to project root."""
+        count = _get_file_line_count(file_path)
+        if count > 0:
+            return count
+        resolved = os.path.join(_project_root, file_path)
+        count = _get_file_line_count(resolved)
+        return count
+
+    def process_new_block(match: str) -> str:
+        file_match = re.search(r'<include[^>]*>([^<]+)</include>', match)
+        if not file_match:
+            return match
+        file_path = file_match.group(1).strip()
+        if _resolve_and_count(file_path) < threshold:
+            # Remove select/query attributes but keep mode="compressed" (#876).
+            def _shrink_include_tag(tag_match: re.Match[str]) -> str:
+                tag = tag_match.group(0)
+                mode_match = re.search(
+                    r'\bmode\s*=\s*"(?:compressed|interface|full)"',
+                    tag,
+                    re.IGNORECASE,
+                )
+                if mode_match:
+                    return f"<include {mode_match.group(0)}>"
+                return "<include>"
+
+            return re.sub(r"<include\s+[^>]+>", _shrink_include_tag, match)
+        return match
+
+    # Process <new> blocks
+    def replace_new(m: re.Match) -> str:
+        return process_new_block(m.group(0))
+
+    result = re.sub(r'<new>\n.*?\n</new>', replace_new, directives, flags=re.DOTALL)
+
+    # Process <update> blocks — remove entirely if file is small
+    def replace_update(m: re.Match) -> str:
+        block = m.group(0)
+        file_match = re.search(r'<include[^>]*>([^<]+)</include>', block)
+        if not file_match:
+            return block
+        file_path = file_match.group(1).strip()
+        if _resolve_and_count(file_path) < threshold:
+            return ""
+        return block
+
+    result = re.sub(r'<update>\n.*?\n</update>', replace_update, result, flags=re.DOTALL)
+    return result.strip()
 
 
-def _filter_existing_includes(input_prompt: str, dependencies: str) -> str:
-    """Remove includes from dependencies that already exist in the input prompt.
-
-    If the input prompt already has <include>path/to/file</include>, and the
-    generated dependencies also have <wrapper><include>path/to/file</include></wrapper>,
-    the duplicate in dependencies should be removed.
-
-    Args:
-        input_prompt: The original input prompt.
-        dependencies: The generated dependencies string.
-
-    Returns:
-        The dependencies string with duplicates removed.
-    """
-    existing_includes = _extract_includes(input_prompt)
-    if not existing_includes:
-        return dependencies
-
-    result = dependencies
-    for include_path in existing_includes:
-        # Remove any include block that contains this path
-        # Pattern matches: <wrapper><include>path</include></wrapper>
-        # We use re.escape for the path to handle special chars
-        pattern = rf'<[^>]+><include>{re.escape(include_path)}</include></[^>]+>\s*'
-        result = re.sub(pattern, '', result)
-        
-        # Also try to remove bare includes if they exist in the dependencies string
-        # Pattern matches: <include>path</include> surrounded by whitespace
-        pattern_bare = rf'\s*<include>{re.escape(include_path)}</include>\s*'
-        result = re.sub(pattern_bare, '', result)
-
-    return result
-
+# ---------------------------------------------------------------------------
+# Main function
+# ---------------------------------------------------------------------------
 
 def auto_include(
     input_prompt: str,
@@ -378,138 +425,127 @@ def auto_include(
     temperature: float = 0.0,
     time: float = DEFAULT_TIME,
     verbose: bool = False,
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    include_docs: bool = False,
+    max_workers: int = 1,
+    csv_path: Optional[str] = None,
+    compress: bool = False,
 ) -> Tuple[str, str, float, str]:
     """
-    Automatically find and insert proper dependencies into the prompt.
-
-    Args:
-        input_prompt (str): The prompt requiring includes
-        directory_path (str): Directory path of dependencies
-        csv_file (Optional[str]): Contents of existing CSV file
-        prompt_filename (Optional[str]): The prompt filename being processed,
-            used to filter out self-referential example files
-        strength (float): Strength of LLM model (0-1)
-        temperature (float): Temperature of LLM model (0-1)
-        time (float): Time budget for LLM calls
-        verbose (bool): Whether to print detailed information
-        progress_callback (Optional[Callable[[int, int], None]]): Callback for progress updates.
-            Called with (current, total) for each file processed.
+    Automatically find and generate proper dependencies with selective
+    extraction attributes.
 
     Returns:
-        Tuple[str, str, float, str]: (dependencies, csv_output, total_cost, model_name)
+        (include_directives, csv_output, total_cost, model_name)
     """
-    # pylint: disable=broad-except
+    # Req 7: validate inputs
+    _validate_input(strength, temperature)
+
+    # Req 1: load prompt template
+    auto_include_prompt = load_prompt_template("auto_include_LLM")
+    if not auto_include_prompt:
+        raise ValueError("Failed to load prompt template 'auto_include_LLM'")
+
+    llm_kwargs = {
+        "strength": strength,
+        "temperature": temperature,
+        "time": time,
+        "verbose": verbose,
+    }
+
+    # Req 2: run summarize_directory
+    if verbose:
+        console.print(Panel("Step 1: Running summarize_directory", style="blue"))
+
+    csv_output, summary_cost, summary_model = summarize_directory(
+        directory_path=directory_path,
+        csv_file=csv_file,
+        progress_callback=progress_callback,
+        csv_path=csv_path,
+        include_docs=include_docs,
+        max_workers=max_workers,
+        **llm_kwargs,
+    )
+
+    available_includes = _format_csv_rows_for_llm(csv_output)
+
+    # Req 3: Two-stage retrieval — pre-filter with embeddings when candidates > 50
+    if available_includes:
+        # Split formatted entries by the "File: " line prefix
+        candidate_entries = re.split(r'(?=^File: )', available_includes, flags=re.MULTILINE)
+        candidate_entries = [e.strip() for e in candidate_entries if e.strip()]
+        if len(candidate_entries) > 50:
+            if verbose:
+                console.print(
+                    f"[blue]Candidates ({len(candidate_entries)}) exceed 50 — "
+                    f"running embedding pre-filter[/blue]"
+                )
+            filtered_entries = _embed_and_rank(input_prompt, candidate_entries, top_n=50)
+            available_includes = "\n".join(filtered_entries)
+
+    # Req 4: invoke LLM with Pydantic structured output
+    if verbose:
+        console.print(Panel("Step 2: Running auto_include_LLM", style="blue"))
+
     try:
-        _validate_input(input_prompt, directory_path, strength, temperature)
-        
-        llm_kwargs = {
-            "strength": strength,
-            "temperature": temperature,
-            "time": time,
-            "verbose": verbose
-        }
-
-        if verbose:
-            console.print(Panel("Step 1: Loading prompt templates", style="blue"))
-
-        auto_include_prompt, extract_prompt = _load_prompts()
-        
-        if verbose:
-            console.print(Panel("Step 2: Running summarize_directory", style="blue"))
-
-        csv_output, summary_cost, summary_model = _summarize(
-            directory_path, csv_file, llm_kwargs, progress_callback
+        llm_response = llm_invoke(
+            prompt=auto_include_prompt,
+            input_json={
+                "input_prompt": input_prompt,
+                "available_includes": available_includes,
+            },
+            output_pydantic=AutoIncludeResult,
+            **llm_kwargs,
         )
-
-        available_includes = _get_available_includes_from_csv(csv_output)
-        
-        if verbose:
-            console.print(Panel("Step 3: Running auto_include_LLM prompt", style="blue"))
-
-        dependencies, llm_cost, llm_model_name = _run_llm_and_extract(
-            auto_include_prompt=auto_include_prompt,
-            extract_prompt=extract_prompt,
-            input_prompt=input_prompt,
-            available_includes=available_includes,
-            llm_kwargs=llm_kwargs,
-        )
-
-        # Filter out self-referential includes (module's own example file)
-        module_name = _extract_module_name(prompt_filename)
-        dependencies = _filter_self_references(dependencies, module_name)
-
-        # Fix any malformed [File:] patterns from LLM output
-        dependencies = _fix_malformed_includes(dependencies)
-
-        # Detect and filter circular dependencies in prompt includes
-        if prompt_filename:
-            cycles = _detect_circular_dependencies(
-                current_prompt=prompt_filename,
-                new_dependencies=dependencies
-            )
-            if cycles:
-                dependencies = _filter_circular_dependencies(dependencies, cycles)
-                for cycle in cycles:
-                    console.print(
-                        f"[yellow]Warning: Filtered circular dependency: "
-                        f"{' -> '.join(cycle)}[/yellow]"
-                    )
-
-        # Filter out includes that already exist in the input prompt
-        dependencies = _filter_existing_includes(input_prompt, dependencies)
-
-        total_cost = summary_cost + llm_cost
-        model_name = llm_model_name or summary_model
-
-        if verbose:
-            console.print(Panel(
-                (
-                    f"Results:\n"
-                    f"Dependencies: {dependencies}\n"
-                    f"CSV Output: {csv_output}\n"
-                    f"Total Cost: ${total_cost:.6f}\n"
-                    f"Model Used: {model_name}"
-                ),
-                style="green"
-            ))
-
-        return dependencies, csv_output, total_cost, model_name
-
+        total_cost = summary_cost + llm_response["cost"]
+        model_name = llm_response["model_name"]
+        llm_result: AutoIncludeResult = llm_response["result"]
     except Exception as ex:
-        console.print(f"[red]Error in auto_include: {str(ex)}[/red]")
-        raise
+        if verbose:
+            console.print(f"[red]LLM invocation failed: {ex}[/red]")
+        # Req 7: on LLM failure, return empty include_directives
+        return "", csv_output, summary_cost, summary_model
 
+    # Normalize the structured result: when the LLM returns both select= and
+    # query= on the same include, keep only the deterministic select= for
+    # file types that support structural selectors.
+    _enforce_select_query_exclusivity(llm_result)
 
-def main():
-    """Example usage of auto_include function"""
-    try:
-        # Example inputs
-        input_prompt = "Write a function to process image data"
-        directory_path = "context/c*.py"
-        csv_file = (
-            "full_path,file_summary,date\n"
-            "context/image_utils.py,"
-            "\"Image processing utilities\",2023-01-01T10:00:00"
+    # Req 4: build include_directives from structured result
+    include_directives = _build_include_directives(llm_result, compress=compress)
+
+    # Req 5a: filter duplicates (file path already in input_prompt)
+    include_directives = _filter_duplicates(include_directives, input_prompt)
+
+    # Req 5b: filter self-references
+    module_name = _extract_module_name(prompt_filename)
+    include_directives = _filter_self_references(include_directives, module_name)
+
+    # Req 5c: filter circular dependencies
+    if prompt_filename:
+        cycles = _detect_circular_dependencies(
+            current_prompt=prompt_filename,
+            new_directives=include_directives,
         )
+        if cycles:
+            include_directives = _filter_circular_dependencies(include_directives, cycles)
+            for cycle in cycles:
+                console.print(
+                    f"[yellow]Warning: Filtered circular dependency: "
+                    f"{' -> '.join(cycle)}[/yellow]"
+                )
 
-        dependencies, _, total_cost, model_name = auto_include(
-            input_prompt=input_prompt,
-            directory_path=directory_path,
-            csv_file=csv_file,
-            strength=0.7,
-            temperature=0.0,
-            time=DEFAULT_TIME,
-            verbose=True
-        )
+    # Req 6: strip selectors from small files
+    include_directives = _strip_selectors_from_small_files(include_directives, directory_path=directory_path)
 
-        console.print("\n[blue]Final Results:[/blue]")
-        console.print(f"Dependencies: {dependencies}")
-        console.print(f"Total Cost: ${total_cost:.6f}")
-        console.print(f"Model Used: {model_name}")
+    if verbose:
+        console.print(Panel(
+            f"Results:\n"
+            f"Include directives: {include_directives}\n"
+            f"Total Cost: ${total_cost:.6f}\n"
+            f"Model Used: {model_name}",
+            style="green",
+        ))
 
-    except Exception as ex:
-        console.print(f"[red]Error in main: {str(ex)}[/red]")
-
-if __name__ == "__main__":
-    main()
+    # Req 8: return tuple
+    return include_directives, csv_output, total_cost, model_name

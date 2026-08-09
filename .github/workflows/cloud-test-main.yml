@@ -1,0 +1,133 @@
+name: cloud-test-main
+
+# Runs the full Cloud Batch gate (`make cloud-test`) against main continuously,
+# so the release consumes a commit that is already proven green instead of
+# discovering failures on release day.
+#
+# Why this exists: `make cloud-test` is the gate that blocks a release, and
+# until now it ran for the first time during the release itself. That made
+# every latent failure a release blocker found at the worst moment. For
+# v0.0.309 the gate went red twice mid-release; each red restarted the run
+# behind a full fix/review/merge cycle. The two discoveries, their fixes, and
+# the re-validation they forced cost about 5.2 of that day's 11.5 hours.
+# Releases went from a ~1.0-day cadence to ~2.0 days over the two weeks this
+# pattern took hold.
+#
+# This workflow does NOT gate merges. It is deliberately post-merge: the gate
+# takes up to two hours, and blocking every PR on it would trade one throughput
+# problem for a worse one. It reports, and `make check-release-cloud-green`
+# refuses to release a commit it has not blessed.
+#
+# ---- One-time setup required before this is useful ----
+# The dispatcher service account below must exist and be impersonable by THIS
+# workflow ref. The existing WIF provider pins `attribute.workflow_ref`, so a
+# new workflow file cannot reuse auto-heal's service account. See
+# docs/contributors/pdd-cli-release-process.md ("Cloud gate setup").
+
+# Deliberately NOT triggered per-push. The gate takes up to 2h; main receives
+# ~15 commits/day at a 7-minute median gap, so a push trigger can never keep up
+# and would only pile up abandoned work. A timer blesses whatever main's tip is
+# when it fires, which is what the release actually needs.
+on:
+  schedule:
+    # Every 4 hours. Also catches drift that no commit caused — model catalog
+    # changes and provider-side behaviour shifts have both gone red here with
+    # no commit to blame.
+    - cron: '17 */4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # Workload Identity Federation to GCP
+
+# Never cancel a run in flight. submit.sh submits four Cloud Batch jobs (77
+# tasks) and then polls; it has no `gcloud batch jobs delete` on any path, so
+# killing the runner does NOT stop the jobs — it just abandons them mid-flight
+# to burn their full maxRunDuration with nobody reading the results. Queueing
+# is safe here precisely because the trigger is a 4-hourly timer, not a push.
+concurrency:
+  group: cloud-test-main
+  cancel-in-progress: false
+
+jobs:
+  cloud-test:
+    runs-on: ubuntu-latest
+    # Budget: Cloud Build image rebuild (cloudbuild.yaml timeout 1800s) +
+    # submit.sh POLL_TIMEOUT (7200s) + checkout/auth. That is ~152 min at worst,
+    # so 150 would sever the runner just before it reports — leaving Batch jobs
+    # orphaned and no result. Leave real headroom.
+    timeout-minutes: 240
+    environment: pdd-cloud-test
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          # submit.sh derives the candidate version from `git describe --tags`,
+          # so the tag history must be present.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Authenticate to GCP
+        # SHA-pinned to v3.0.0
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          workload_identity_provider: projects/590888610376/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: pdd-cloud-test-runner@prompt-driven-development-stg.iam.gserviceaccount.com
+
+      - name: Set up gcloud
+        # SHA-pinned to v3.0.1
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
+
+      # `.cloud-image-hash` is gitignored, so a fresh runner never has it and
+      # `make cloud-test` would rebuild the container image via Cloud Build on
+      # every single run (apt + npm globals + pip install, up to 30 min).
+      # Restoring it keyed on the image-dep hash skips the rebuild whenever the
+      # deps are unchanged. A cache miss is safe: it just rebuilds.
+      - name: Compute image dependency hash
+        id: imagehash
+        run: echo "hash=$(make -s cloud-image-hash)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached image-build marker
+        uses: actions/cache@v4
+        with:
+          path: .cloud-image-hash
+          key: cloud-image-hash-${{ steps.imagehash.outputs.hash }}
+
+      - name: Run the cloud gate
+        env:
+          # The release lane runs STANDARD provisioning; SPOT preemption
+          # produces retries that read as flakes and would train everyone to
+          # ignore this signal.
+          PDD_CLOUD_BATCH_SPOT_PROVISIONING_MODEL: STANDARD
+        run: make cloud-test
+
+      - name: Report gate outcome
+        if: always()
+        env:
+          OUTCOME: ${{ job.status }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Cloud gate: $OUTCOME"
+            echo
+            echo "Commit: \`$SHA\`"
+            echo
+            if [ "$OUTCOME" = "success" ]; then
+              echo "This commit is blessed. \`make release\` accepts it only"
+              echo "while it is still main's tip — confirm before releasing:"
+              echo
+              echo '```'
+              echo "git rev-parse HEAD   # must equal $SHA"
+              echo "make release"
+              echo '```'
+            else
+              echo "main is red. The next release is blocked on this commit"
+              echo "until it is fixed or the release targets an earlier green SHA."
+              echo "\`make check-release-cloud-green\` will refuse this commit."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -24,7 +24,7 @@ This project demonstrates a simple approach to creating a handpaint application 
 
 **If you want to test this example using PDD, use `pdd sync`:**
 
-1. Install PDD by following the instructions in the main [README.md](https://github.com/gltanaka/pdd/blob/main/README.md)
+1. Install PDD by following the instructions in the main [README.md](https://github.com/promptdriven/pdd/blob/main/README.md)
 2. Navigate to this directory (`examples/handpaint/pdd/`)
 3. Run: `pdd sync handpaint`
 
@@ -56,7 +56,7 @@ This is a learning example that shows a basic implementation of PDD concepts. Fo
 The final iteration of the prompt can be found in [`handpaint_html.prompt`](./handpaint_html.prompt). This prompt was used to generate the code in [`handpaint_pdd.html`](./handpaint_pdd.html).
 
 To replicate this generation process:
-1.  Install PDD by following the instructions in the main [README.md](https://github.com/gltanaka/pdd/blob/main/README.md).
+1.  Install PDD by following the instructions in the main [README.md](https://github.com/promptdriven/pdd/blob/main/README.md).
 2.  Create a new file named `handpaint_html.prompt`.
 3.  Paste the desired iteration of the prompt into that file.
 4.  **Recommended**: Run `pdd sync handpaint` to automatically handle the complete workflow (code generation, testing, verification, and error fixing).

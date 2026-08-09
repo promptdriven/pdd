@@ -4,5 +4,5 @@ pydantic==2.12.5
 fastapi==0.128.0
 uvicorn==0.40.0
 streamlit==1.52.2
-litellm==1.80.12
+litellm==1.84.0
 google-auth>=2.0.0

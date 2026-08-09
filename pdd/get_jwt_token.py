@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -8,6 +9,12 @@ import time
 import webbrowser
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+
+import requests
+
+from ._keyring_timeout import _keyring_op_with_timeout
+
+logger = logging.getLogger(__name__)
 
 # Cross-platform keyring import with fallback for WSL compatibility
 try:
@@ -23,7 +30,6 @@ except ImportError:
         keyring = None
         KEYRING_AVAILABLE = False
         print("Warning: No keyring available - token storage disabled")
-import requests
 
 # Custom exception classes for better error handling
 class AuthError(Exception):
@@ -42,6 +48,30 @@ class UserCancelledError(AuthError):
     """Raised when the user cancels the authentication process."""
     pass
 
+
+def _is_noninteractive() -> bool:
+    """Return True when the process cannot safely prompt a human.
+
+    Refuse GitHub device-flow OAuth in CI and explicit machine-mode contexts
+    where no one can enter the verification code. ``PDD_ALLOW_INTERACTIVE=1``
+    is the deliberate exception for an attended CI terminal; it never
+    overrides explicit force/no-interactive controls.
+    """
+    truthy = ("1", "true", "yes", "on")
+    if os.environ.get("PDD_NO_INTERACTIVE", "").lower() in truthy:
+        return True
+    if os.environ.get("PDD_FORCE", "").lower() in truthy:
+        return True
+    if os.environ.get("PDD_ALLOW_INTERACTIVE", "").lower() in {"0", "false", "no", "off"}:
+        return True
+    if (
+        os.environ.get("CI", "").lower() in truthy
+        and os.environ.get("PDD_ALLOW_INTERACTIVE", "").lower() not in truthy
+    ):
+        return True
+    return False
+
+
 class RateLimitError(AuthError):
     """Raised when rate limits are exceeded."""
     pass
@@ -49,6 +79,7 @@ class RateLimitError(AuthError):
 
 # JWT file cache path (Issue #273 - reduces keyring access to avoid password prompts)
 JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"
+PDD_JWT_TOKEN_ENV = "PDD_JWT_TOKEN"
 
 
 def _decode_jwt_payload(token: str) -> Dict:
@@ -94,14 +125,17 @@ def _get_expected_jwt_audience() -> Optional[str]:
     if not env or env == "local":
         return None
 
-    project_id = os.environ.get("PDD_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
-    if project_id:
-        return project_id
-
     if env in ("prod", "production"):
         return "prompt-driven-development"
     if env == "staging":
         return os.environ.get("STAGING_PROJECT_ID") or "prompt-driven-development-stg"
+
+    # For named PDD environments above, PDD_ENV is the stronger signal. Generic
+    # ADC variables such as GOOGLE_CLOUD_PROJECT often describe the developer's
+    # local gcloud context, not the Firebase audience selected by PDD_CLOUD_URL.
+    project_id = os.environ.get("PDD_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    if project_id:
+        return project_id
     return None
 
 
@@ -205,7 +239,7 @@ def _cache_jwt(jwt: str, expires_in: int = 3600) -> None:
         os.chmod(JWT_CACHE_FILE, 0o600)
     except (IOError, OSError) as e:
         # Cache write failed, continue without caching
-        print(f"Warning: Failed to cache JWT: {e}")
+        logger.warning(f"Failed to cache JWT: {e}")
 
 
 def _macos_force_delete_keychain_item(service_name: str, account_name: str) -> bool:
@@ -290,6 +324,9 @@ class DeviceFlow:
             TokenError: If there's an error exchanging the code for a token.
         """
         start_time = time.time()
+        current_interval = interval
+        backoff_429 = 1  # Exponential backoff counter for HTTP 429 without JSON body
+
         while time.time() - start_time < expires_in:
             try:
                 response = requests.post(
@@ -302,22 +339,58 @@ class DeviceFlow:
                     },
                     timeout=10
                 )
-                response.raise_for_status()
-                data = response.json()
 
-                if "error" in data:
+                # Parse JSON before raise_for_status() to handle slow_down in 429 responses
+                # GitHub may return HTTP 429 with {"error": "slow_down"} in the body
+                data = None
+                try:
+                    data = response.json()
+                except ValueError:
+                    pass
+
+                # Handle error responses in JSON body (may come with 200 or 4xx status)
+                if data and "error" in data:
                     if data["error"] == "authorization_pending":
-                        await asyncio.sleep(interval)
+                        backoff_429 = 1  # Reset backoff after non-429 response
+                        await asyncio.sleep(current_interval)
+                        continue
                     elif data["error"] == "slow_down":
-                        await asyncio.sleep(data["interval"])
+                        # Per GitHub spec: "add 5 seconds to the minimum polling interval"
+                        # The slow_down response does NOT include an interval field
+                        backoff_429 = 1  # Reset backoff after non-429 response
+                        current_interval += 5
+                        await asyncio.sleep(current_interval)
+                        continue
                     elif data["error"] == "expired_token":
                         raise AuthError("Device code expired.")
                     elif data["error"] == "access_denied":
                         raise UserCancelledError("User denied access.")
                     else:
                         raise AuthError(f"GitHub authentication error: {data['error']}")
-                else:
+
+                # Handle HTTP 429 without parseable JSON body (network-level rate limit)
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    if retry_after:
+                        try:
+                            wait_time = int(retry_after)
+                        except ValueError:
+                            wait_time = current_interval * backoff_429
+                    else:
+                        wait_time = current_interval * backoff_429
+                    backoff_429 = min(backoff_429 * 2, 8)  # Cap exponential backoff
+                    await asyncio.sleep(wait_time)
+                    continue
+
+                # Raise for other HTTP errors (4xx, 5xx)
+                response.raise_for_status()
+
+                # Success - return access token
+                if data and "access_token" in data:
                     return data["access_token"]
+                else:
+                    raise TokenError("Unexpected response: missing access_token")
+
             except requests.exceptions.ConnectionError as e:
                 raise NetworkError(f"Failed to connect to GitHub: {e}")
             except requests.exceptions.RequestException as e:
@@ -356,40 +429,41 @@ class FirebaseAuthenticator:
         max_retries = 2
 
         for attempt in range(max_retries):
-            try:
-                keyring.set_password(
+            timed_out, _, exc = _keyring_op_with_timeout(
+                keyring.set_password,
+                self.keyring_service_name,
+                self.keyring_user_name,
+                refresh_token,
+            )
+            if timed_out:
+                logger.warning(
+                    "Keyring set_password timed out - refresh token not cached. "
+                    "This typically happens in headless CI/SSH environments."
+                )
+                return False
+            if exc is None:
+                return True
+
+            error_str = str(exc)
+            is_duplicate_error = '-25299' in error_str
+
+            if is_duplicate_error and attempt < max_retries - 1:
+                # Try to delete the existing item before retrying
+                _keyring_op_with_timeout(
+                    keyring.delete_password,
                     self.keyring_service_name,
                     self.keyring_user_name,
-                    refresh_token
                 )
-                return True
-            except Exception as e:
-                error_str = str(e)
+                # Try macOS-specific force delete
+                if sys.platform == 'darwin':
+                    _macos_force_delete_keychain_item(
+                        self.keyring_service_name,
+                        self.keyring_user_name
+                    )
+                continue
 
-                # Check for errSecDuplicateItem (-25299) on macOS
-                is_duplicate_error = '-25299' in error_str
-
-                if is_duplicate_error and attempt < max_retries - 1:
-                    # Try to delete the existing item before retrying
-                    try:
-                        keyring.delete_password(
-                            self.keyring_service_name,
-                            self.keyring_user_name
-                        )
-                    except Exception:
-                        pass  # Ignore delete errors, try force delete
-
-                    # Try macOS-specific force delete
-                    if sys.platform == 'darwin':
-                        _macos_force_delete_keychain_item(
-                            self.keyring_service_name,
-                            self.keyring_user_name
-                        )
-                    continue
-
-                # Non-duplicate error or final retry failed
-                print(f"Warning: Failed to store refresh token in keyring: {e}")
-                return False
+            logger.warning(f"Failed to store refresh token in keyring: {exc}")
+            return False
 
         return False
 
@@ -397,11 +471,20 @@ class FirebaseAuthenticator:
         """Retrieves the Firebase refresh token from the system keyring."""
         if not KEYRING_AVAILABLE or keyring is None:
             return None
-        try:
-            return keyring.get_password(self.keyring_service_name, self.keyring_user_name)
-        except Exception as e:
-            print(f"Warning: Failed to retrieve refresh token from keyring: {e}")
+        timed_out, value, exc = _keyring_op_with_timeout(
+            keyring.get_password,
+            self.keyring_service_name,
+            self.keyring_user_name,
+        )
+        if timed_out:
+            logger.warning(
+                "Keyring get_password timed out - proceeding without cached refresh token."
+            )
             return None
+        if exc is not None:
+            logger.warning(f"Failed to retrieve refresh token from keyring: {exc}")
+            return None
+        return value
 
     def _delete_stored_refresh_token(self) -> bool:
         """
@@ -414,26 +497,35 @@ class FirebaseAuthenticator:
             print("No keyring available. Token deletion skipped.")
             return True
 
-        try:
-            keyring.delete_password(self.keyring_service_name, self.keyring_user_name)
+        timed_out, _, exc = _keyring_op_with_timeout(
+            keyring.delete_password,
+            self.keyring_service_name,
+            self.keyring_user_name,
+        )
+        if timed_out:
+            logger.warning(
+                "Keyring delete_password timed out - token may remain on disk."
+            )
+            return False
+        if exc is None:
             return True
-        except Exception as e:
-            error_str = str(e)
 
-            # Check if it's a "not found" error (acceptable)
-            if 'PasswordDeleteError' in str(type(e)) or 'not found' in error_str.lower():
+        error_str = str(exc)
+
+        # Check if it's a "not found" error (acceptable)
+        if 'PasswordDeleteError' in str(type(exc)) or 'not found' in error_str.lower():
+            return True
+
+        # Try macOS force delete as fallback
+        if sys.platform == 'darwin':
+            if _macos_force_delete_keychain_item(
+                self.keyring_service_name,
+                self.keyring_user_name
+            ):
                 return True
 
-            # Try macOS force delete as fallback
-            if sys.platform == 'darwin':
-                if _macos_force_delete_keychain_item(
-                    self.keyring_service_name,
-                    self.keyring_user_name
-                ):
-                    return True
-
-            print(f"Warning: Error deleting token from keyring: {e}")
-            return False
+        print(f"Warning: Error deleting token from keyring: {exc}")
+        return False
 
     async def _refresh_firebase_token(self, refresh_token: str) -> str:
         """
@@ -550,6 +642,10 @@ async def get_jwt_token(
         NetworkError: If there are connectivity issues
         TokenError: If token exchange fails
     """
+    injected_token = os.environ.get(PDD_JWT_TOKEN_ENV)
+    if injected_token:
+        return injected_token
+
     # Check JWT cache FIRST to avoid keyring access (Issue #273)
     cached_jwt = _get_cached_jwt()
     if cached_jwt:
@@ -576,6 +672,15 @@ async def get_jwt_token(
             if isinstance(e, RateLimitError):
                 raise
             print("Attempting re-authentication...")
+
+    # Refuse interactive device-flow when no human can enter the verification code
+    # (CI / Cloud Build / Docker). Upstream CloudConfig.get_jwt_token catches
+    # AuthError and falls back to local execution.
+    if _is_noninteractive():
+        raise AuthError(
+            "Refusing interactive device-flow auth in non-interactive context. "
+            "Set PDD_JWT_TOKEN, or run `pdd auth login` to cache credentials."
+        )
 
     # Initiate Device Flow
     device_flow = DeviceFlow(github_client_id)

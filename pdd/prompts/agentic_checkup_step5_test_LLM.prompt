@@ -1,0 +1,159 @@
+% You are an expert software engineer performing a health checkup on a project. Your task is to run the test suite and collect failures.
+
+% Context
+
+You are working on step 5 of 8 in an agentic checkup workflow. Previous steps discovered the project, audited deps, ran build checks, and checked interfaces.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Project Root: {project_root}
+- PR-verification mode: {pr_mode}
+- PR URL (PR mode only): {pr_url}
+- PR test scope (PR mode only): {pr_test_scope}
+- PR changed files (PR mode + targeted scope only):
+<pr_changed_files>
+{pr_changed_files}
+</pr_changed_files>
+- Shell-first Step 5 evidence captured before this agentic step:
+<step5_shell_evidence>
+{step5_shell_evidence}
+</step5_shell_evidence>
+
+% User Request
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+<step4_output>
+{step4_output}
+</step4_output>
+
+% Iteration Info
+
+This is fix-verify iteration {fix_verify_iteration} of {max_fix_verify_iterations}.
+If this is iteration 2 or later, previous fixes have already been applied — check whether earlier test failures are now resolved and identify any remaining or new failures.
+
+% Your Task
+
+1. **Discover the test runner** from the project config:
+   - pytest.ini, setup.cfg, pyproject.toml (Python)
+   - jest.config, package.json scripts (JavaScript/TypeScript)
+   - Makefile test target
+   - Cargo.toml (Rust)
+   - go test (Go)
+
+2. **Run the right tests for this mode** and capture output:
+   - If `<step5_shell_evidence>` is non-empty, treat it as deterministic test evidence already captured by the orchestrator before this agentic step. If it reports `status: failed`, `status: error`, or `status: timeout_partial`, include that command/output in your failure summary and `failure_signal` unless you rerun an equivalent command and prove it is now passing. If it reports `status: not_found`, do not treat that as a failure by itself; continue with project-specific discovery below.
+   - If `PR-verification mode` is `false`, run the full discovered test suite: unit tests, integration tests, and end-to-end tests.
+   - If `PR-verification mode` is `true` and `PR test scope` is `full` (the default), run the full discovered test suite. PR mode does NOT imply targeted scope; the user opted into the comprehensive quality gate by not passing `--test-scope targeted`. If the full suite is too large to complete within this step's budget, report the exact full-suite command as **not run due to time budget** and do not claim full-suite coverage — do not silently fall back to targeted tests.
+   - If `PR-verification mode` is `true` AND `PR test scope` is `targeted`, first run the mandatory PR-scoped tests tied to `<pr_changed_files>`: direct tests for changed modules, adjacent tests, and tests that mention the changed module names. Expand beyond that only when project metadata or previous step output shows broader risk. The user explicitly opted into targeted scope; do NOT run the full suite.
+   - Targeted PR mode hard rule: do NOT run broad aggregators such as `make test`, bare `pytest`, `npm test`, `pnpm test`, `yarn test`, or commands that chain backend and frontend suites unless the changed-file list itself makes every included suite directly relevant. A root-level `package.json`, `pytest.ini`, or `Makefile` only tells you the runner exists; it is NOT permission to run that whole ecosystem for an unrelated docs/assets PR.
+   - If targeted PR mode changed files are only docs/assets or other non-executable files (for example `.md`, `.rst`, `.adoc`, images, screenshots, diagrams, or files under `docs/` with no code/config changes), run a cheap PR-scoped sanity check such as `git diff --check <base>...HEAD -- <changed files>` if the base is available, report 0 executable tests, and set `failure_signal.status: pass` when that check passes. Do NOT run backend, frontend, or Makefile test suites for docs/assets-only PRs.
+   - If a selected test command exits only because no tests were found for an unrelated or unchanged area, classify that runner as not applicable rather than a test failure. Do not run another broad suite to compensate. Use a cheap relevant check and `status: pass` when it passes; use `status: skipped` only when no PR-scoped command can be run at all.
+   - If PR mode is true, test scope is `targeted`, and `<pr_changed_files>` says PR changed files are unavailable, do not broaden into a timeout-prone full-suite run on a large repository. Run only cheap discovery/static checks and any small, clearly relevant tests inferred from the issue and prior step output; report that concrete PR scope could not be established and include the exact full-suite command as not run due to missing PR scope/time budget.
+   - If `<pr_changed_files>` includes a full API changed-file list artifact path, read that local file before selecting PR-scoped tests; the inline list may be a bounded preview.
+
+3. **Collect and categorize failures**:
+   - Import errors (missing modules or packages)
+   - Assertion failures (logic bugs)
+   - Missing mocks or fixtures
+   - Timeouts
+   - Configuration errors
+   - Skipped or xfail tests
+
+4. **Summarize test results**:
+   - Total tests run
+   - Passed / Failed / Skipped / Error counts
+   - List each failure with its category and brief description
+
+% Output
+
+Source issue present: `{has_issue}`. When this value is `false` (PR-only review with no linked issue, #1292), do NOT post any GitHub comment in this step — the orchestrator posts the single canonical report on the PR; skip the `gh issue comment` instruction below. When it is `true` (or in issue mode), post as described:
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 5/8: Test Execution (Iteration {fix_verify_iteration})
+
+### Test Runner
+`[command used]`
+
+### Results Summary
+- **Total:** [N] tests
+- **Passed:** [N]
+- **Failed:** [N]
+- **Skipped:** [N]
+- **Errors:** [N]
+
+### Failures
+| Test | Category | Description |
+|------|----------|-------------|
+| test_name | import_error | Missing module X |
+
+---
+*Proceeding to Step 6: Fix Issues*
+```
+
+% Required: Structured Failure-Signal Block
+
+REGARDLESS of whether tests pass or fail, the LAST block of your final
+response MUST be a fenced ```failure_signal``` block in the exact shape
+below. Step 6 receives this block verbatim and uses it to scope fixes;
+omitting or paraphrasing it forces Step 6 to invent context and produces
+unrelated changes.
+
+```failure_signal
+command: <exact test command you ran>
+exit_code: <integer exit code, or "skipped" if the command was not run>
+status: <pass | fail | skipped | error>
+failing_ids: <comma-separated test IDs, e.g. tests/test_main.py::test_x; empty when no failures>
+artifact_path: <relative path to a saved full log on disk, or "inline">
+output: |
+  <raw stdout/stderr of the failing tests, redacted of any tokens or
+  credentials. Cap at ~200 lines; if longer, point at artifact_path
+  instead. Include FAILED lines, tracebacks, and short test summary
+  info. NEVER omit this when status is fail or error.>
+```
+
+Notes:
+- When `artifact_path` is a file, the file MUST contain the full output and
+  the inline `output:` may be empty.
+- When the test command could not be run at all (time budget, missing
+  scope), set `status: skipped`, `exit_code: skipped`, and put the exact
+  command that was not run in `command`. The `output:` field may then be
+  a one-line explanation.
+- Do NOT include API tokens, Bearer headers, or `https://user:token@host`
+  URLs in `output:` or anywhere else in this block — Step 5 output is
+  surfaced verbatim to operator-visible logs.
+
+% Important
+
+- Discover the correct test command from the project — do NOT assume pytest or jest
+- Run the actual tests and capture real output
+- If tests take too long, use a timeout and report partial results; never present targeted-only PR-mode tests as a full-suite pass
+- In PR mode, `targeted` test scope is opt-in. `full` (the default) means the user expects comprehensive verification — do NOT silently downgrade to targeted because the suite is large; instead report the skipped command honestly
+- Post your findings as a GitHub comment before completing — EXCEPT in a PR-only review (no linked issue, #1292), where you skip posting and the orchestrator owns the single PR report
+- IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
+- IMPORTANT: The `failure_signal` block is REQUIRED on every Step 5 response — Step 6 will reject failures that lack it

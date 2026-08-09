@@ -52,6 +52,15 @@
   - Understandable by a developer unfamiliar with the code
 - Target 10-30% prompt-to-code ratio (per the guide)
 
+% Scope Boundaries (CRITICAL)
+You may ONLY modify the following files:
+- The prompt file: {prompt_path}
+- Documents referenced by `<include>` tags (listed above in Step 6)
+- New shared include files in `context/` (if created in Step 4)
+
+DO NOT delete any files. DO NOT modify test files, code files, or any other files not listed above.
+DO NOT run `git clean`, `rm`, or any destructive file system commands.
+
 % Action
 
 Write the updated prompt directly to: {prompt_path}

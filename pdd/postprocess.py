@@ -71,7 +71,7 @@ def postprocess(
         llm_output: A string containing a mix of text and code sections.
         language: A string specifying the programming language of the code to be extracted.
         strength: A float between 0 and 1 that represents the strength of the LLM model to use.
-        temperature: A float between 0 and 1 that represents the temperature parameter for the LLM model.
+        temperature: A float between 0 and 2 that represents the temperature parameter for the LLM model.
         time: A float between 0 and 1 that controls the thinking effort for the LLM model.
         verbose: A boolean that indicates whether to print detailed processing information.
 
@@ -88,8 +88,8 @@ def postprocess(
         raise ValueError("strength must be between 0 and 1")
     if not isinstance(temperature, (int, float)):
         raise TypeError("temperature must be a number")
-    if not 0 <= temperature <= 1:
-        raise ValueError("temperature must be between 0 and 1")
+    if not 0 <= temperature <= 2:
+        raise ValueError("temperature must be between 0 and 2")
 
     if language == "prompt":
         extracted_code = postprocess_0(llm_output, language)
@@ -121,12 +121,28 @@ def postprocess(
             strength=strength,
             temperature=temperature,
             time=time,
+            language=language,
             output_pydantic=ExtractedCode,
             verbose=verbose,
         )
 
         if not result or "result" not in result:
             error_msg = "Failed to get valid response from LLM"
+            console.print(f"[red]Error during LLM invocation:[/red] {error_msg}")
+            raise ValueError(error_msg)
+
+        # Guard against malformed structured output of any non-``ExtractedCode``
+        # shape (``None``, a raw string, or a raw ``dict`` that survives the
+        # cloud validation-failure ``pass`` in ``llm_invoke``). The ``"result"
+        # not in result`` check above does not catch a present-but-malformed
+        # value, so verify the type before accessing ``.extracted_code`` and
+        # raise a meaningful error rather than crashing pdd sync with an
+        # AttributeError (issue #1612).
+        if not isinstance(result["result"], ExtractedCode):
+            error_msg = (
+                "LLM returned a malformed extraction result "
+                f"(expected ExtractedCode, got {type(result['result']).__name__})."
+            )
             console.print(f"[red]Error during LLM invocation:[/red] {error_msg}")
             raise ValueError(error_msg)
 

@@ -16,6 +16,14 @@ from .agentic_change_orchestrator import run_agentic_change_orchestrator
 console = Console()
 
 
+def _escape_format_braces(text: str) -> str:
+    """
+    Escape curly braces in text to prevent Python's .format() from
+    interpreting them as placeholders. { becomes {{ and } becomes }}.
+    """
+    return text.replace("{", "{{").replace("}", "}}")
+
+
 def _check_gh_cli() -> bool:
     """
     Check if the GitHub CLI (gh) is installed and available in the system PATH.
@@ -42,12 +50,32 @@ def _parse_issue_url(url: str) -> Optional[Tuple[str, str, int]]:
     return None
 
 
-def _run_gh_command(args: List[str]) -> Tuple[bool, str]:
+def _parse_pr_url(url: str) -> Optional[Tuple[str, str, int]]:
+    """
+    Parse a GitHub pull-request URL to extract owner, repo, and PR number.
+
+    Supported formats:
+    - https://github.com/{owner}/{repo}/pull/{number}
+    - https://www.github.com/{owner}/{repo}/pull/{number}
+    - github.com/{owner}/{repo}/pull/{number}
+
+    Returns:
+        Tuple of (owner, repo, pr_number) if successful, else None.
+    """
+    pattern = r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/pull/(\d+)"
+    match = re.search(pattern, url)
+    if match:
+        return match.group(1), match.group(2), int(match.group(3))
+    return None
+
+
+def _run_gh_command(args: List[str], timeout: Optional[int] = None) -> Tuple[bool, str]:
     """
     Execute a gh CLI command.
 
     Args:
         args: List of arguments to pass to `gh`.
+        timeout: Optional timeout in seconds. None means no timeout.
 
     Returns:
         Tuple of (success, output). Output is stdout on success, stderr on failure.
@@ -57,11 +85,14 @@ def _run_gh_command(args: List[str]) -> Tuple[bool, str]:
             ["gh"] + args,
             capture_output=True,
             text=True,
-            check=False
+            check=False,
+            timeout=timeout,
         )
         if result.returncode != 0:
             return False, result.stderr.strip()
         return True, result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        return False, f"gh command timed out after {timeout}s"
     except Exception as e:
         return False, str(e)
 
@@ -131,13 +162,15 @@ def run_agentic_change(
     verbose: bool = False,
     quiet: bool = False,
     timeout_adder: float = 0.0,
-    use_github_state: bool = True
+    use_github_state: bool = True,
+    reasoning_time: Optional[float] = None,
+    clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     CLI entry point for the agentic change workflow.
 
     Fetches issue details and comments from GitHub, sets up the repository,
-    and invokes the orchestrator to perform the 12-step change process.
+    and invokes the orchestrator to perform the 13-step change process.
 
     Args:
         issue_url: The full URL of the GitHub issue.
@@ -145,6 +178,10 @@ def run_agentic_change(
         quiet: If True, suppresses standard output.
         timeout_adder: Additional time to add to step timeouts.
         use_github_state: If True, persists state to GitHub comments.
+        reasoning_time: Optional maximum reasoning time for models that support it.
+        clean_restart: If True, discard any persisted state for this issue
+            and start a fresh full pdd-issue flow from the default base
+            branch (issue #1149).
 
     Returns:
         Tuple containing:
@@ -187,7 +224,7 @@ def run_agentic_change(
     # 4. Fetch Comments
     comments_data = []
     if comments_url:
-        success, comments_json = _run_gh_command(["api", comments_url])
+        success, comments_json = _run_gh_command(["api", comments_url, "--paginate"])
         if success:
             try:
                 comments_data = json.loads(comments_json)
@@ -204,6 +241,9 @@ def run_agentic_change(
                 c_user = comment.get("user", {}).get("login", "unknown")
                 c_body = comment.get("body", "")
                 issue_content += f"\n--- Comment by {c_user} ---\n{c_body}\n"
+
+    # Escape curly braces to prevent .format() errors when issue contains code
+    issue_content = _escape_format_braces(issue_content)
 
     # 6. Setup Repository (Clone or Use Current)
     try:
@@ -223,9 +263,12 @@ def run_agentic_change(
         issue_number=issue_number,
         issue_author=author,
         issue_title=title,
+        issue_updated_at=issue_data.get("updated_at", ""),
         cwd=work_dir,
         verbose=verbose,
         quiet=quiet,
         timeout_adder=timeout_adder,
-        use_github_state=use_github_state
+        use_github_state=use_github_state,
+        reasoning_time=reasoning_time,
+        clean_restart=clean_restart,
     )

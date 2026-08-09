@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any, Mapping
 
 import click
 import requests
@@ -14,9 +15,27 @@ from rich.panel import Panel
 
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
-from .core.cloud import CloudConfig, get_cloud_timeout
+from .content_selector import (
+    PDD_TEST_OUTPUT_NEEDS_REVIEW_MARKER,
+    configured_test_output_pinned,
+    find_collocated_test,
+    record_pdd_created_test,
+    resolve_test_output_path,
+    unresolved_test_output_review_note,
+    was_test_adopted,
+)
+from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 from .generate_test import generate_test
 from .increase_tests import increase_tests
+from .test_result import TestResult
+from .code_generator_main import (
+    TestChurnError,
+    _env_flag_enabled,
+    _get_test_churn_threshold,
+    _prompt_allows_test_churn,
+    _verify_test_churn,
+)
+from .compressed_sync_context import compressed_context_is_active, render_for_prompt
 
 console = Console()
 
@@ -33,7 +52,11 @@ def cmd_test_main(
     merge: bool = False,
     strength: float | None = None,
     temperature: float | None = None,
-) -> tuple[str, float, str]:
+    manual: bool = False,
+    *,
+    repair_directive: str | None = None,
+    compressed_context: Mapping[str, Any] | None = None,
+) -> TestResult:
     """
     CLI wrapper for generating or enhancing unit tests.
 
@@ -49,9 +72,23 @@ def cmd_test_main(
         merge: If True, merge output into the first existing test file.
         strength: Optional override for LLM strength.
         temperature: Optional override for LLM temperature.
+        manual: If True, bypass agentic test generation and use the legacy
+            single-LLM path for all languages (including non-Python).
+        repair_directive: Optional repair-loop instruction to inject into
+            the generation prompt inside a ``<test_repair_directive>``
+            block (#1012, F-H). Sourced explicitly from the caller's
+            loop-local state rather than ``os.environ`` so a stale
+            outer ``PDD_REPAIR_DIRECTIVE`` cannot contaminate a direct/
+            CLI/non-retry invocation. Only the retry helpers in
+            ``sync_orchestration._run_test_op_with_churn_retry`` and
+            the one-session sync pass this kwarg. ``cmd_test_main``
+            does NOT read ``PDD_REPAIR_DIRECTIVE`` from the env itself;
+            the env var remains the inheritance channel for nested
+            PDD CLI subprocesses spawned by agentic test generation.
 
     Returns:
-        tuple: (generated_test_code, total_cost, model_name)
+        tuple: (generated_test_code, total_cost, model_name, agentic_success)
+            agentic_success is True/False for non-Python agentic generation, None for Python.
     """
     # 1. Prepare inputs for path construction
     input_file_paths = {
@@ -66,7 +103,7 @@ def cmd_test_main(
                 "[bold red]Error: 'existing_tests' is required when "
                 "'coverage_report' is provided.[/bold red]"
             )
-            return "", 0.0, "Error: Missing existing_tests"
+            return TestResult("", 0.0, "Error: Missing existing_tests", None, "existing_tests required with coverage_report")
 
         input_file_paths["coverage_report"] = coverage_report
         # We pass the first existing test to help construct_paths resolve context if needed,
@@ -94,7 +131,89 @@ def cmd_test_main(
         )
     except Exception as e:
         console.print(f"[bold red]Error constructing paths: {e}[/bold red]")
-        return "", 0.0, f"Error: {e}"
+        return TestResult("", 0.0, f"Error: {e}", None, str(e))
+
+    # 2b. Issue #1903: when PDD used its derived default test path, adopt an
+    # existing, runner-collected co-located test as the canonical output so both
+    # the agentic and native branches target the real test CI runs instead of a
+    # runner-blind `tests/` shadow. The test location is treated as user-pinned
+    # (never overridden) when the user set it explicitly — via CLI `--output`, the
+    # `PDD_TEST_OUTPUT_PATH` env var, or an explicit `.pddrc test_output_path` for
+    # this module's context. The pin is read from the RAW `.pddrc` defaults (via
+    # configured_test_output_pinned), never from construct_paths' resolved_config,
+    # which injects a generated-default test_output_path and would always read as
+    # pinned. The context is resolved the way construct_paths resolves it: an
+    # explicit `--context` wins, else it is detected from the PROMPT file (whose
+    # `prompts_dir` selects the context — the code file's path may not match the
+    # context's `paths`), anchoring the .pddrc lookup on the prompt side. Mutating
+    # output_file_paths['output'] keeps a single source of truth for downstream
+    # write/churn steps.
+    pin_target = prompt_file or code_file
+    user_pinned_test_path = (
+        output is not None
+        or configured_test_output_pinned(
+            pin_target,
+            context_override=ctx.obj.get("context"),
+            search_from=Path(pin_target).parent if pin_target else None,
+        )
+    )
+    derived_output = output_file_paths.get("output")
+    # Issue #1903 §B.4 provenance: capture whether this test is an ADOPTED human
+    # co-located test (unpinned) at RESOLUTION time — before generation
+    # overwrites the file and makes greenfield-created vs human-adopted
+    # indistinguishable. Threaded into the churn gate so the never-block only
+    # relieves a genuine adopted-human test.
+    test_was_adopted_human = False
+    if derived_output:
+        resolved_output = resolve_test_output_path(
+            code_file, derived_output, user_pinned=user_pinned_test_path
+        )
+        if resolved_output is None:
+            note = unresolved_test_output_review_note(code_file)
+            print(f"{PDD_TEST_OUTPUT_NEEDS_REVIEW_MARKER}: {note}", flush=True)
+            return TestResult("", 0.0, "needs-review", True, "")
+        adopted_output = str(resolved_output)
+        test_was_adopted_human = was_test_adopted(
+            code_file, adopted_output, derived_output,
+            user_pinned=user_pinned_test_path,
+        )
+        # Issue #1903 §B.4 ownership: when PDD is GREENFIELD-creating this test
+        # (no pre-existing co-located sibling, resolved to a runner-collected
+        # non-derived path that does not yet exist), record PDD ownership so a
+        # LATER run never mistakes this PDD-owned file for a human-adopted one.
+        if (
+            not user_pinned_test_path
+            and adopted_output != derived_output
+            and find_collocated_test(code_file) is None
+            and not Path(adopted_output).exists()
+        ):
+            record_pdd_created_test(adopted_output)
+        output_file_paths["output"] = adopted_output
+        # Issue #1903: the write/churn steps read `output` (adopted above), but the
+        # native/cloud generation reads its destination from the separate
+        # `output_file` key (the `test_file_path` derivation below). For `test`
+        # commands generate_output_paths returns only `output`, so `output_file`
+        # is absent and would fall back to a bare `test_output.py` — prompting the
+        # LLM with the wrong destination (broken relative imports) while the write
+        # lands at the adopted/real path. This also covers sync, which passes the
+        # already-adopted path in as an explicit `output` (so no retarget happens
+        # here). Default `output_file` to the actual write target; `setdefault`
+        # leaves any explicitly-provided `output_file` untouched.
+        output_file_paths.setdefault("output_file", output_file_paths["output"])
+
+    # 2c. Issue #1903: sync regenerates a test by MERGING into an already-existing
+    # test, passing it as an explicit `output` with merge=True. With force=False,
+    # construct_paths renames that existing path to a numbered sibling (e.g.
+    # `page.test_1.tsx`), so the agentic/native write would create a NEW shadow
+    # beside the real test while sync keeps verifying the original (now stale) one —
+    # re-introducing the #1903 false-green for the core jest/TSX case. When merging
+    # into a known existing test, the write target IS that test: pin `output` /
+    # `output_file` to it so generation and the write both land on the real file
+    # (churn-guarded), never a numbered shadow.
+    if merge and existing_tests:
+        merge_target = existing_tests[0]
+        output_file_paths["output"] = merge_target
+        output_file_paths["output_file"] = merge_target
 
     # 3. Resolve effective configuration (strength, temperature, time)
     # Priority: Function Arg > CLI Context > Config File > Default
@@ -110,13 +229,206 @@ def cmd_test_main(
     verbose = ctx.obj.get("verbose", False)
     is_local = ctx.obj.get("local", False)
 
+    # 3.5 Agentic test generation: Use for non-Python OR when agentic_mode is enabled
+    # For non-Python languages, the single LLM call often produces incorrect test file
+    # extensions or doesn't follow the correct framework. Agentic mode lets the agent
+    # explore the project and determine the correct test setup.
+    # For Python with agentic_mode=True, we also use agentic test generation for consistency.
+    agentic_mode = ctx.obj.get("agentic_mode", False)
+    # For Python test_extend (merge=True), use native path which properly
+    # merges with existing tests. The agentic path ignores existing_tests
+    # and merge, overwriting the file entirely — destroying coverage.
+    use_agentic_tests = (
+        not manual
+        and ((detected_language and detected_language.lower() != 'python') or agentic_mode)
+        and not (detected_language and detected_language.lower() == 'python' and merge)
+    )
+    if use_agentic_tests:
+        from .agentic_test_generate import run_agentic_test_generate
+
+        if verbose:
+            reason = "agentic_mode enabled" if agentic_mode else f"non-Python language ({detected_language})"
+            console.print(
+                f"[cyan]{reason.capitalize()}. "
+                "Using agentic test generation.[/cyan]"
+            )
+
+        output_test_path = Path(output_file_paths.get("output", "test_output"))
+        prompt_content_for_churn = input_strings.get("prompt_file", "")
+        existing_test_content = ""
+        if output_test_path.exists() and output_test_path.is_file():
+            try:
+                existing_test_content = output_test_path.read_text(encoding="utf-8")
+            except OSError:
+                existing_test_content = ""
+
+        generated_content, total_cost, model_name, agentic_success, agentic_error = run_agentic_test_generate(
+            prompt_file=Path(prompt_file),
+            code_file=Path(code_file),
+            output_test_file=output_test_path,
+            verbose=verbose,
+            quiet=ctx.obj.get("quiet", False),
+            # Forward the explicit repair directive (#1012, F-H) so the
+            # agentic path uses the caller-provided value instead of
+            # reading `PDD_REPAIR_DIRECTIVE` from the env. Direct CLI
+            # invocations pass None (default), so a stale outer env
+            # value cannot contaminate the agent instruction.
+            repair_directive=repair_directive,
+        )
+
+        # The agent writes the test file directly, but we still return the content
+        # for consistency with the Python flow. Always write to output_test_path when
+        # we have content so sync's canonical path (pdd_files['test']) exists even
+        # when the agent wrote elsewhere (e.g. __tests__/foo.test.ts).
+        if generated_content and generated_content.strip():
+            # For Python, apply _inject_sys_path_preamble to ensure correct
+            # sys.path setup, matching the native Python test generation path.
+            # The agent may or may not have added sys.path correctly; this normalizes it.
+            if detected_language and detected_language.lower() == 'python':
+                from .generate_test import _inject_sys_path_preamble
+                generated_content = _inject_sys_path_preamble(generated_content)
+            try:
+                _verify_test_churn(
+                    existing_code=existing_test_content,
+                    generated_code=generated_content,
+                    prompt_name=Path(prompt_file).name,
+                    output_path=str(output_test_path),
+                    prompt_content=prompt_content_for_churn,
+                    adopted_human=test_was_adopted_human,
+                )
+            except TestChurnError as churn_err:
+                churn_err.total_cost = float(total_cost or 0.0)
+                churn_err.model_name = model_name or "unknown"
+                if existing_test_content:
+                    output_test_path.write_text(existing_test_content, encoding="utf-8")
+                raise
+            # Write to sync-expected path for all languages (fix: non-Python was skipped)
+            output_test_path.parent.mkdir(parents=True, exist_ok=True)
+            output_test_path.write_text(generated_content, encoding="utf-8")
+
+            if not ctx.obj.get("quiet", False):
+                console.print(f"[green]Agentic test generation completed.[/green]")
+        else:
+            # Empty/missing generated_content with a pre-existing canonical
+            # test file is the deletion variant of test churn ONLY when the
+            # agent itself reported success (#1012, F-B). If `agentic_success`
+            # is False the agent itself errored (tool failure, provider
+            # crash, etc.) — that is NOT churn, and raising TestChurnError
+            # would mask the underlying agentic failure and mislead the
+            # retry loop into setting a churn repair directive when the
+            # real fix is to rerun the agent itself.
+            # The deletion-as-churn raise must honor the same env-flag
+            # opt-outs that `_verify_test_churn` honors internally
+            # (#1012, F-K). Either per-gate (`PDD_SKIP_TEST_CHURN_GATE`)
+            # or umbrella (`PDD_SKIP_CONFORMANCE`) disables this
+            # shortcut; if set, the empty-content branch falls through
+            # to the warning-and-return path. It must also honor the
+            # anchored prompt-side `BREAKING-CHANGE: rewrite tests`
+            # opt-out parsed by `_prompt_allows_test_churn` so a
+            # deletion is treated symmetrically with a non-empty
+            # rewrite (otherwise the opt-out works only when the agent
+            # writes *some* content, not when it empties/deletes the
+            # file).
+            churn_skip = (
+                _env_flag_enabled("PDD_SKIP_TEST_CHURN_GATE")
+                or _env_flag_enabled("PDD_SKIP_CONFORMANCE")
+                or _prompt_allows_test_churn(prompt_content_for_churn)
+            )
+            if agentic_success and existing_test_content and not churn_skip:
+                # Restore the pre-existing file before raising so the
+                # repair-loop sees the canonical content on disk.
+                output_test_path.parent.mkdir(parents=True, exist_ok=True)
+                output_test_path.write_text(existing_test_content, encoding="utf-8")
+                pre_line_count = len(existing_test_content.splitlines())
+                threshold = _get_test_churn_threshold()
+                raise TestChurnError(
+                    prompt_name=Path(prompt_file).name,
+                    output_path=str(output_test_path),
+                    churn_ratio=1.0,
+                    threshold=threshold,
+                    pre_line_count=pre_line_count,
+                    post_line_count=0,
+                    total_cost=float(total_cost or 0.0),
+                    model_name=model_name or "unknown",
+                    repair_directive=(
+                        "Test churn repair required.\n"
+                        "- The agentic test run reported success but produced "
+                        "no generated test content; the existing test file at "
+                        f"{output_test_path} has been restored.\n"
+                        "- Re-run test generation preserving the prior test "
+                        "function names and coverage; do NOT delete or empty "
+                        "the test file.\n"
+                        "- Add new tests for the prompt change without removing "
+                        "accumulated regression tests."
+                    ),
+                    adopted_human=test_was_adopted_human,
+                )
+            if not agentic_success and existing_test_content:
+                # Agent itself failed — restore the pre-existing test file
+                # defensively in case the agent partially modified it
+                # before erroring out. Do NOT raise TestChurnError; let the
+                # agentic failure (agentic_success=False, agentic_error=...)
+                # surface to the caller so the orchestration layer can
+                # diagnose the real problem rather than retrying as if it
+                # were a churn issue.
+                output_test_path.parent.mkdir(parents=True, exist_ok=True)
+                output_test_path.write_text(existing_test_content, encoding="utf-8")
+                if not ctx.obj.get("quiet", False):
+                    console.print(
+                        "[yellow]Agentic test generation failed; "
+                        "pre-existing test file restored.[/yellow]"
+                    )
+            elif not ctx.obj.get("quiet", False):
+                # First-time generation (no pre-existing canonical test file)
+                # is the documented exemption: keep the warning-and-return
+                # behavior. Also covers the (agentic_success=False, no
+                # pre-existing file) case — agent failed and there's
+                # nothing to restore, so we just warn and propagate.
+                console.print("[yellow]Warning: Agentic test generation produced no content.[/yellow]")
+
+        return TestResult(generated_content, total_cost, model_name, agentic_success, agentic_error)
+
     # 4. Prepare content variables
     prompt_content = input_strings.get("prompt_file", "")
     code_content = input_strings.get("code_file", "")
 
-    # Handle existing tests concatenation
+    # Test-generation repair directive (set by retrying callers such as
+    # sync_orchestration._run_test_op_with_churn_retry when a prior
+    # generation tripped TestChurnError). Append to the prompt inside a
+    # `<test_repair_directive>` block so the next attempt sees concrete
+    # "preserve coverage / extend rather than rewrite" instructions.
+    # Without this the subprocess retry would be an identical request
+    # and the repair loop would not actually repair anything. Mirrors
+    # the `<architecture_repair_directive>` injection in
+    # `code_generator_main` (#1012, F-A). The churn-gate parser
+    # downstream keys on anchored `BREAKING-CHANGE:` directives, so a
+    # repair directive injected here does NOT disable the gate.
+    #
+    # The directive is sourced EXPLICITLY from the `repair_directive`
+    # kwarg (#1012, F-H). cmd_test_main does NOT read
+    # `PDD_REPAIR_DIRECTIVE` from the environment because a stale
+    # outer value (set by the caller's shell, a parent orchestration
+    # layer, or a prior PDD command) would contaminate direct CLI
+    # invocations that have no active retry context. Only the retry
+    # helpers pass this kwarg, and only when THIS loop has caught a
+    # `TestChurnError`. The env var remains the inheritance channel
+    # for nested PDD CLI subprocesses spawned by agentic test
+    # generation — those subprocesses still receive
+    # `PDD_REPAIR_DIRECTIVE` via env inheritance from the retry
+    # helpers' `os.environ` write.
+    if repair_directive and repair_directive.strip():
+        prompt_content = (
+            f"{prompt_content}\n\n<test_repair_directive>\n"
+            f"{repair_directive.strip()}\n"
+            "</test_repair_directive>\n"
+        )
+    rendered_compressed_context = render_for_prompt(compressed_context)
+    if rendered_compressed_context:
+        prompt_content = f"{prompt_content}\n\n{rendered_compressed_context}"
+
+    # Handle existing tests concatenation (skip when compressed context is active).
     concatenated_tests = None
-    if existing_tests:
+    if existing_tests and not compressed_context_is_active(compressed_context):
         test_contents = []
         for et_path in existing_tests:
             try:
@@ -218,7 +530,7 @@ def cmd_test_main(
                 cloud_url,
                 json=payload,
                 headers=headers,
-                timeout=get_cloud_timeout()
+                timeout=get_cloud_request_timeout()
             )
 
             # Check for HTTP errors explicitly
@@ -341,12 +653,12 @@ def cmd_test_main(
 
         except Exception as e:
             console.print(f"[bold red]Error during local execution: {e}[/bold red]")
-            return "", 0.0, f"Error: {e}"
+            return TestResult("", 0.0, f"Error: {e}", None, str(e))
 
     # 7. Validate Output
     if not generated_content or not generated_content.strip():
         console.print("[bold red]Error: Generated test content is empty.[/bold red]")
-        return "", 0.0, "Error: Empty output"
+        return TestResult("", 0.0, "Error: Empty output", None, "Generated test content is empty")
 
     # 8. Write Output
     try:
@@ -367,17 +679,34 @@ def cmd_test_main(
             if verbose:
                 console.print(f"Merging new tests into existing file: {final_output_path}")
 
+        if write_mode == "w":
+            existing_test_content = ""
+            if final_output_path.exists() and final_output_path.is_file():
+                existing_test_content = final_output_path.read_text(encoding="utf-8")
+            _verify_test_churn(
+                existing_code=existing_test_content,
+                generated_code=content_to_write,
+                prompt_name=Path(prompt_file).name,
+                output_path=str(final_output_path),
+                prompt_content=input_strings.get("prompt_file", ""),
+                adopted_human=test_was_adopted_human,
+            )
+
         with open(str(final_output_path), write_mode, encoding="utf-8") as f:
             f.write(content_to_write)
 
         if not ctx.obj.get("quiet", False):
             console.print(f"[green]Successfully wrote tests to {final_output_path}[/green]")
 
+    except TestChurnError as e:
+        e.total_cost = float(total_cost or 0.0)
+        e.model_name = model_name or "unknown"
+        raise
     except Exception as e:
         console.print(f"[bold red]Error writing output file: {e}[/bold red]")
-        return "", 0.0, f"Error: {e}"
+        return TestResult("", 0.0, f"Error: {e}", None, str(e))
 
-    return generated_content, total_cost, model_name
+    return TestResult(generated_content, total_cost, model_name, None, "")
 
 
 def main() -> None:

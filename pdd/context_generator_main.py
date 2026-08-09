@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 from .construct_paths import construct_paths, BUILTIN_EXT_MAP
+from .get_extension import get_extension
 from .context_generator import context_generator
 from .core.cloud import CloudConfig
 # get_jwt_token imports removed - using CloudConfig.get_jwt_token() instead
@@ -107,26 +108,118 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         resolved_config, input_strings, output_file_paths, language = construct_paths(input_file_paths=input_file_paths, force=ctx.obj.get('force', False), quiet=ctx.obj.get('quiet', False), command="example", command_options=command_options, context_override=ctx.obj.get('context'), confirm_callback=ctx.obj.get('confirm_callback'))
         prompt_content = input_strings.get("prompt_file", "")
         code_content = input_strings.get("code_file", "")
+        wrapper_rewrote_path = False
         if output and not output.endswith("/") and not Path(output).is_dir():
             # When format is specified, ensure the output path uses the correct extension
             if format is not None:
                 output_path = Path(output)
                 format_lower = format.lower()
                 if format_lower == "md":
-                    # Replace extension with .md to match format constraint
-                    resolved_output = str(output_path.with_suffix(".md"))
+                    # --format md forces a lowercase .md suffix on the resolved output
+                    # path regardless of what the user supplied (issue #1205 follow-up:
+                    # README/help promise .md, so an explicit .MD must be normalized too).
+                    if output_path.suffix != ".md":
+                        resolved_output = str(output_path.with_suffix(".md"))
+                        wrapper_rewrote_path = True
+                    else:
+                        resolved_output = output
                 elif format_lower == "code":
-                    # For code format, determine the correct language extension based on language
-                    lang_key = language.lower() if language else ''
-                    lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else '.py')
-                    resolved_output = str(output_path.with_suffix(lang_ext))
+                    # Issue #1205: honor any non-empty user-supplied suffix verbatim.
+                    # A language can have multiple valid extensions (.yml/.yaml, .md/.markdown,
+                    # .m for MATLAB, etc.); enumerating aliases is brittle. Only synthesize an
+                    # extension when the user did not supply one.
+                    if output_path.suffix:
+                        resolved_output = output
+                    else:
+                        # Issue #1315: synthesize the extension for a bare --output name using
+                        # the same CSV-first, BUILTIN_EXT_MAP-fallback pattern as construct_paths.
+                        # get_extension returns "" both for true no-extension languages
+                        # (Makefile) and for aliases absent from the CSV (cpp, csharp, yml), so
+                        # an empty CSV result must still fall through to the built-in map.
+                        if language:
+                            try:
+                                lang_ext = get_extension(language)
+                                if not lang_ext:
+                                    raise ValueError('empty extension')
+                            except Exception:
+                                lang_key = language.lower()
+                                lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}")
+                        else:
+                            lang_ext = '.py'
+                        # A final empty extension (e.g. Makefile from BUILTIN_EXT_MAP) means
+                        # "no suffix" — leave the bare name unchanged. Only flag a wrapper
+                        # rewrite when the path actually changed, otherwise the re-confirmation
+                        # step below would prompt twice for the same target that construct_paths
+                        # already confirmed.
+                        resolved_output = str(output_path.with_suffix(lang_ext)) if lang_ext else output
+                        if resolved_output != output:
+                            wrapper_rewrote_path = True
                 else:
                     # Fallback (shouldn't happen due to click.Choice validation)
                     resolved_output = output
             else:
                 resolved_output = output
         else:
+            # Directory --output or no --output: construct_paths already resolved the
+            # final path and ran its own overwrite confirmation. Do NOT re-prompt.
             resolved_output = output_file_paths.get("output")
+        # Issue #1205 follow-up: re-confirm overwrite ONLY when the wrapper itself
+        # rewrote the path after construct_paths confirmed (bare name → language
+        # extension under --format code, or non-.md suffix → .md under --format md).
+        # Directory outputs and no-output cases are already covered by construct_paths.
+        force = ctx.obj.get('force', False)
+        quiet_flag = ctx.obj.get('quiet', False)
+        # Issue #1315 (suggested fix #2): warn ONLY when the wrapper overrode an extension
+        # the user EXPLICITLY supplied (e.g. --format md turning the requested foo.yml into
+        # foo.md) — that is the only case where the artifact lands at a path the caller did
+        # not ask for, and the only one suggested fix #2 is about. Completing a bare --output
+        # name with the language extension (myexample → myexample.py) is the documented
+        # default, not a surprising rewrite, and was silent before this change; warning on it
+        # would be noise on the most ordinary invocation. Names BOTH paths and fires EVEN
+        # WHEN there is no overwrite collision, independently of the re-confirmation below.
+        # Respect --quiet; the no-rewrite and directory/omitted --output cases (already
+        # resolved by construct_paths) never reach here.
+        user_suffix_overridden = wrapper_rewrote_path and bool(Path(output).suffix)
+        if user_suffix_overridden and resolved_output and not quiet_flag:
+            console.print(
+                f"[yellow]Warning: output path rewritten from '{output}' to "
+                f"'{resolved_output}'.[/yellow]"
+            )
+        if (
+            wrapper_rewrote_path
+            and resolved_output
+            and not force
+            and Path(resolved_output).exists()
+        ):
+            confirm_callback = ctx.obj.get('confirm_callback')
+            rewrite_message = (
+                f"The output path was rewritten from '{output}' to '{resolved_output}' "
+                f"and that file already exists. Overwrite?"
+            )
+            if confirm_callback is not None:
+                if not confirm_callback(rewrite_message, "Overwrite Confirmation"):
+                    raise click.Abort()
+            else:
+                if not quiet_flag:
+                    console.print(f"[yellow]Warning: output rewritten to existing file {resolved_output}[/yellow]")
+                try:
+                    if not click.confirm(
+                        click.style(rewrite_message, fg="yellow"), default=True, show_default=True
+                    ):
+                        click.secho("Operation cancelled.", fg="red", err=True)
+                        raise click.Abort()
+                except click.Abort:
+                    raise
+                except Exception as e:
+                    if 'EOF' in str(e) or 'end-of-file' in str(e).lower():
+                        click.secho(
+                            "Non-interactive environment detected. Use --force to overwrite existing files.",
+                            fg="yellow",
+                            err=True,
+                        )
+                        raise click.Abort()
+                    click.secho(f"Confirmation failed: {e}. Aborting.", fg="red", err=True)
+                    raise click.Abort()
         is_local = ctx.obj.get("local", False)
         strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
         temperature = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)

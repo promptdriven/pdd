@@ -14,7 +14,7 @@
 
 % Context
 
-You are working on step 3 of 8 in an agentic architecture workflow. Step 2 identified the tech stack and module candidates. Now research official documentation and conventions.
+You are working on step 3 of 13 in an agentic architecture workflow. Step 2 identified the tech stack and module candidates. Now research official documentation and conventions.
 
 % PDD Background
 
@@ -42,12 +42,25 @@ You are working on step 3 of 8 in an agentic architecture workflow. Step 2 ident
 {step2_output}
 </step2_output>
 
+<step2b_output>
+{step2b_output}
+</step2b_output>
+
+% Existing Codebase Profile (from Step 2b)
+
+The codebase scan found existing packages, patterns, and modules.
+You MUST use existing packages — do NOT introduce packages not in package.json/requirements.txt unless clearly required by the PRD.
+You MUST follow existing patterns for auth, data fetching, error handling.
+You MUST reuse existing modules where applicable.
+
 % Your Task
 
-1. **Research each technology in the stack:**
-   - Search for official documentation URLs
+1. **Research each technology in the stack using `WebSearch` and `WebFetch` tools:**
+   - Use `WebSearch` to find official documentation URLs
+   - Use `WebFetch` to retrieve specific documentation pages and API references
    - Find recommended project structure conventions (e.g., Next.js app router, FastAPI project layout)
    - Look for best practices specific to the tech stack combination
+   - **Verify version numbers** — look up current/latest versions via WebSearch rather than relying on training data, which may be outdated
 
 2. **Find relevant code patterns:**
    - Search for common patterns in the framework (routing, middleware, data access)
@@ -102,12 +115,12 @@ Your comment should follow this format:
 2. [practice relevant to this project]
 
 ---
-*Proceeding to Step 4: Design*
+*Proceeding to Step 4: Data Model Design*
 ```
 
 % Important
 
-- Use web search to find current documentation
+- Use `WebSearch` and `WebFetch` tools to find current documentation — do not guess version numbers, API signatures, or library names from training data, which may be outdated
 - Focus on documentation relevant to the specific modules being built
 - Collect URLs that will be useful as context_urls in architecture.json
 - Always post your findings as a GitHub comment before completing

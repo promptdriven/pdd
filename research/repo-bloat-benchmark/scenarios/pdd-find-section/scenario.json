@@ -1,0 +1,45 @@
+{
+  "scenario_id": "pdd-find-section",
+  "schema_version": 1,
+  "language": "python",
+  "purpose": "real PDD pilot scenario 1/3 (design §4.1.0): dependency-sliced pdd.find_section with a seeded unclosed-fence end-index defect",
+  "upstream": {
+    "repo": "github.com/promptdriven/pdd",
+    "pinned_commit": "4056cfecab558cf6a8e29072e4f3796ddda6fa7b",
+    "target_upstream_path": "pdd/find_section.py",
+    "visible_tests_upstream_path": "tests/test_find_section.py",
+    "subsystem": "template/markdown postprocessing (pdd.postprocess_0 consumer)"
+  },
+  "core_path": "core",
+  "pool_path": "pool",
+  "target_files": ["src/pdd/find_section.py"],
+  "allowed_edit_globs": ["src/pdd/**"],
+  "task_brief_path": "task.md",
+  "visible_tests": {
+    "command": ["{python}", "-m", "pytest", "tests/visible", "-q"],
+    "expected_exit_code": 0
+  },
+  "hidden_verifier": {
+    "path": "hidden",
+    "command": ["{python}", "-m", "pytest", ".", "-q"],
+    "mounted_into_agent_sandbox": false
+  },
+  "oracle_edit": {
+    "file": "src/pdd/find_section.py",
+    "old": "found.append((language, start, len(lines)))",
+    "new": "found.append((language, start, len(lines) - 1))"
+  },
+  "seed": {
+    "target_site": "src/pdd/find_section.py:find_section (unclosed-block handling)",
+    "bug_class": "off_by_one",
+    "description": "unclosed fenced blocks report end index len(lines) — one past the final line — instead of len(lines) - 1; visible tests exercise only closed-block behavior"
+  },
+  "leak_denylist": [
+    "find_section(lines) == [(\"python\", 1, 3)]",
+    "find_section(lines) == [(\"toml\", 1, 1)]",
+    "find_section(lines) == [(\"python\", 0, 5)]",
+    "find_section(lines, start_index=3) == [(\"yaml\", 3, 4)]",
+    "len(lines) - 1",
+    "ends at the LAST line index"
+  ]
+}

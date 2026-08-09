@@ -46,16 +46,22 @@ from typing import Tuple, List, Optional
 try:
     from pdd.agentic_architecture import (
         run_agentic_architecture,
+        run_incremental_architecture,
         _is_github_issue_url,
-        _parse_github_url
+        _parse_github_url,
+        _extract_target_dir,
+        _resolve_target_dir,
     )
 except ImportError:
     # Fallback for direct execution if package structure isn't set up
     sys.path.append(str(Path(__file__).parent.parent.parent))
     from pdd.agentic_architecture import (
         run_agentic_architecture,
+        run_incremental_architecture,
         _is_github_issue_url,
-        _parse_github_url
+        _parse_github_url,
+        _extract_target_dir,
+        _resolve_target_dir,
     )
 
 # --- Z3 Formal Verification ---
@@ -323,3 +329,651 @@ class TestRunAgenticArchitecture:
         
         assert success is False
         assert "Failed to parse GitHub API response" in msg
+
+
+class TestRunIncrementalArchitecture:
+    def test_local_prd_invokes_guarded_propagation(
+        self,
+        mock_cwd: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        prd = tmp_path / "docs" / "prd.md"
+        prd.parent.mkdir()
+        prd.write_text("Add audit logging", encoding="utf-8")
+        mock_cwd.return_value = tmp_path
+
+        with patch("pdd.incremental_prd_architecture.run_incremental_prd_propagation") as mock_run:
+            mock_run.return_value = (True, "Applied", 0.5, "model", ["architecture.json"])
+
+            result = run_incremental_architecture("docs/prd.md", dry_run=True, target_dir="service")
+
+        assert result[0] is True
+        mock_run.assert_called_once()
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs["prd_source"] == "docs/prd.md"
+        assert kwargs["architecture_path"] == tmp_path / "service" / "architecture.json"
+        assert kwargs["prompts_dir"] == tmp_path / "service" / "prompts"
+        assert kwargs["project_root"] == tmp_path
+        assert kwargs["dry_run"] is True
+
+    @pytest.mark.parametrize(
+        "target_dir",
+        [
+            "../outside",
+            "svc; echo OWNED",
+            "svc$(echo OWNED)",
+            "svc with spaces",
+            "svc\nnext",
+            "svc`echo OWNED`",
+            "-svc",
+            "apps/web;",
+        ],
+    )
+    def test_local_prd_rejects_unsafe_target_dir(
+        self,
+        mock_cwd: MagicMock,
+        tmp_path: Path,
+        target_dir: str,
+    ) -> None:
+        prd = tmp_path / "docs" / "prd.md"
+        prd.parent.mkdir()
+        prd.write_text("Add audit logging", encoding="utf-8")
+        mock_cwd.return_value = tmp_path
+
+        with patch("pdd.incremental_prd_architecture.run_incremental_prd_propagation") as mock_run:
+            result = run_incremental_architecture(
+                "docs/prd.md",
+                dry_run=True,
+                target_dir=target_dir,
+            )
+
+        assert result[0] is False
+        assert "Invalid target directory" in result[1]
+        mock_run.assert_not_called()
+
+    def test_issue_target_dir_extraction_rejects_unsafe_paths(self) -> None:
+        with pytest.raises(ValueError, match="Invalid target directory"):
+            _extract_target_dir("Build this in `/tmp/outside`")
+        with pytest.raises(ValueError, match="Invalid target directory"):
+            _extract_target_dir("Build this in `../outside`")
+        with pytest.raises(ValueError, match="Invalid target directory"):
+            _extract_target_dir("Build this in `svc; echo OWNED`")
+        with pytest.raises(ValueError, match="Invalid target directory"):
+            _extract_target_dir("Build this in `svc$(echo OWNED)`")
+        with pytest.raises(ValueError, match="Invalid target directory"):
+            _extract_target_dir("Build this in `svc\nnext`")
+        assert _extract_target_dir("Build this in `services/api`") == "services/api"
+        assert _extract_target_dir("Build this in `apps/web.v2`") == "apps/web.v2"
+        assert _extract_target_dir("Build this in apps/web.v2") == "apps/web.v2"
+        assert _extract_target_dir("Build this in apps/web.v2.") == "apps/web.v2"
+        assert _extract_target_dir("Build this in apps/web-v2.1") == "apps/web-v2.1"
+        assert (
+            _extract_target_dir("Add Google Analytics in `app/sizzle/layout.tsx`")
+            is None
+        )
+
+    def test_explicit_target_dir_rejects_existing_file(self, tmp_path: Path) -> None:
+        target = tmp_path / "app" / "sizzle" / "layout.tsx"
+        target.parent.mkdir(parents=True)
+        target.write_text("export default function Layout() {}", encoding="utf-8")
+
+        base_dir, normalized, error = _resolve_target_dir(
+            tmp_path, "app/sizzle/layout.tsx"
+        )
+
+        assert base_dir == tmp_path.resolve()
+        assert normalized is None
+        assert error == (
+            "Target directory is an existing file: 'app/sizzle/layout.tsx'"
+        )
+
+    def test_github_issue_invalid_target_dir_fails_instead_of_root_fallback(
+        self,
+        mock_shutil_which: MagicMock,
+        mock_subprocess: MagicMock,
+        mock_cwd: MagicMock,
+    ) -> None:
+        mock_shutil_which.return_value = "/usr/bin/gh"
+        mock_cwd.return_value = Path("/path/to/repo")
+        issue_json = json.dumps({
+            "title": "Incremental PRD update",
+            "body": "Build this in `/tmp/outside`",
+            "user": {"login": "author"},
+            "comments_url": "",
+        })
+
+        def subprocess_side_effect(args, **kwargs):
+            cmd = args if isinstance(args, list) else args
+            if "gh" in cmd and "api" in cmd:
+                return MagicMock(returncode=0, stdout=issue_json, stderr="")
+            if "git" in cmd and "config" in cmd:
+                return MagicMock(returncode=0, stdout="https://github.com/o/r.git", stderr="")
+            return MagicMock(returncode=1, stdout="", stderr="Unknown command")
+
+        mock_subprocess.side_effect = subprocess_side_effect
+
+        with patch("pdd.incremental_prd_architecture.run_incremental_prd_propagation") as mock_run:
+            result = run_incremental_architecture(
+                "https://github.com/o/r/issues/1",
+                use_github_state=False,
+            )
+
+        assert result[0] is False
+        assert "Invalid target directory" in result[1]
+        mock_run.assert_not_called()
+
+    def test_github_issue_invokes_guarded_propagation_with_issue_context(
+        self,
+        mock_shutil_which: MagicMock,
+        mock_subprocess: MagicMock,
+        mock_cwd: MagicMock,
+    ) -> None:
+        mock_shutil_which.return_value = "/usr/bin/gh"
+        mock_cwd.return_value = Path("/path/to/repo")
+
+        issue_json = json.dumps({
+            "title": "Incremental PRD update",
+            "body": "Add audit logging in `service`",
+            "user": {"login": "author"},
+            "comments_url": "https://api.github.com/repos/o/r/issues/1/comments",
+        })
+        comments_json = json.dumps([
+            {"user": {"login": "reviewer"}, "body": "Make it targeted."}
+        ])
+
+        def subprocess_side_effect(args, **kwargs):
+            cmd = args if isinstance(args, list) else args
+            cmd_str = " ".join(cmd)
+            if "gh" in cmd and "api" in cmd and "issues/1" in cmd_str and "comments" not in cmd_str:
+                return MagicMock(returncode=0, stdout=issue_json, stderr="")
+            if "gh" in cmd and "api" in cmd and "comments" in cmd_str and "--paginate" in cmd:
+                return MagicMock(returncode=0, stdout=comments_json, stderr="")
+            if "gh" in cmd and "api" in cmd and "comments" in cmd_str and "-f" in cmd:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            if "git" in cmd and "config" in cmd:
+                return MagicMock(returncode=0, stdout="https://github.com/o/r.git", stderr="")
+            return MagicMock(returncode=1, stdout="", stderr="Unknown command")
+
+        mock_subprocess.side_effect = subprocess_side_effect
+
+        with patch("pdd.incremental_prd_architecture.run_incremental_prd_propagation") as mock_run:
+            mock_run.return_value = (True, "Applied", 0.5, "model", ["architecture.json"])
+
+            result = run_incremental_architecture(
+                "https://github.com/o/r/issues/1",
+                use_github_state=True,
+            )
+
+        assert result[0] is True
+        assert result[1] == (
+            "Applied\nNext: run `cd service && pdd sync` for follow-up sync validation "
+            "because generated prompt includes are target-directory relative."
+        )
+        assert result[4] == ["service/architecture.json"]
+        mock_run.assert_called_once()
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs["prd_source"] == "https://github.com/o/r/issues/1"
+        assert "Incremental PRD update" in kwargs["issue_content"]
+        assert "Make it targeted." in kwargs["issue_content"]
+        assert kwargs["architecture_path"] == Path("/path/to/repo/service/architecture.json")
+        assert kwargs["prompts_dir"] == Path("/path/to/repo/service/prompts")
+
+    def test_github_issue_target_dir_noop_does_not_add_sync_hint(
+        self,
+        mock_shutil_which: MagicMock,
+        mock_subprocess: MagicMock,
+        mock_cwd: MagicMock,
+    ) -> None:
+        mock_shutil_which.return_value = "/usr/bin/gh"
+        mock_cwd.return_value = Path("/path/to/repo")
+
+        issue_json = json.dumps({
+            "title": "Incremental PRD update",
+            "body": "No-op update in `service`",
+            "user": {"login": "author"},
+            "comments_url": "",
+        })
+
+        def subprocess_side_effect(args, **kwargs):
+            cmd = args if isinstance(args, list) else args
+            if "gh" in cmd and "api" in cmd:
+                return MagicMock(returncode=0, stdout=issue_json, stderr="")
+            if "git" in cmd and "config" in cmd:
+                return MagicMock(returncode=0, stdout="https://github.com/o/r.git", stderr="")
+            return MagicMock(returncode=1, stdout="", stderr="Unknown command")
+
+        mock_subprocess.side_effect = subprocess_side_effect
+
+        with patch("pdd.incremental_prd_architecture.run_incremental_prd_propagation") as mock_run:
+            mock_run.return_value = (True, "No PRD changes detected.", 0.0, "", [])
+
+            result = run_incremental_architecture(
+                "https://github.com/o/r/issues/1",
+                use_github_state=False,
+            )
+
+        assert result[0] is True
+        assert result[1] == "No PRD changes detected."
+        assert result[4] == []
+
+
+# --- Issue #1256: Dict-format architecture tolerance ---
+# Scope addition: covers expansion item "pdd/agentic_architecture.py:210 and 221
+# load architecture.json from sibling dirs with isinstance check that silently
+# drops dict-format data" identified by Step 6 but absent from Step 8's plan
+
+
+def test_fetch_sibling_architectures_dict_format(tmp_path):
+    """_fetch_sibling_architectures includes dict-format sibling architecture modules (Test 16).
+
+    Bug: isinstance(arch_data, list) at agentic_architecture.py:210 returns False
+    for dict-format {"modules": [...]}, so the sibling architecture is silently
+    dropped and not included in the context string.
+    """
+    from pdd.agentic_architecture import _fetch_sibling_architectures
+
+    # Create sibling subdirectory with dict-format architecture
+    sibling = tmp_path / "backend"
+    sibling.mkdir()
+    sibling_arch = {
+        "modules": [
+            {"filename": "api_Python.prompt", "priority": 1, "description": "Backend API"},
+        ]
+    }
+    (sibling / "architecture.json").write_text(
+        json.dumps(sibling_arch), encoding="utf-8"
+    )
+
+    result = _fetch_sibling_architectures(tmp_path, current_target_dir="frontend")
+    assert result != "", (
+        "Dict-format sibling architecture should be included in context string, "
+        "but isinstance(arch_data, list) at agentic_architecture.py:210 silently drops it"
+    )
+    assert "api_Python" in result or "Backend API" in result, (
+        "Context string should mention the sibling module from dict-format architecture"
+    )
+
+
+# --- F3: filter pdd's own incremental status comments -----------------------
+
+
+def test_fetch_issue_comments_skips_pdd_status_comments():
+    """_fetch_issue_comments_text must filter comments containing the
+    PDD-INCREMENTAL-STATUS marker so the next run does not see its own bot
+    output as a PRD change.
+    """
+    from unittest.mock import patch as mock_patch
+
+    from pdd.agentic_architecture import (
+        _fetch_issue_comments_text,
+        _INCREMENTAL_STATUS_MARKER,
+    )
+
+    fake_comments = [
+        {"user": {"login": "human-user"}, "body": "Please add audit logging."},
+        {
+            "user": {"login": "github-actions[bot]"},
+            "body": (
+                f"{_INCREMENTAL_STATUS_MARKER}\n"
+                "pdd incremental architecture update successful.\n\n"
+                "Result: Applied incremental PRD propagation: 1 affected"
+            ),
+        },
+        {"user": {"login": "another-human"}, "body": "Looks good."},
+    ]
+
+    with mock_patch(
+        "pdd.agentic_architecture._run_gh_command",
+        return_value=(True, json.dumps(fake_comments)),
+    ):
+        text = _fetch_issue_comments_text(
+            "https://api.github.com/repos/o/r/issues/1/comments",
+            verbose=False,
+        )
+
+    assert "Please add audit logging." in text
+    assert "Looks good." in text
+    assert _INCREMENTAL_STATUS_MARKER not in text
+    assert "pdd incremental architecture update" not in text
+
+
+def test_post_incremental_status_comment_includes_marker():
+    """The posted status body must carry the PDD-INCREMENTAL-STATUS marker so
+    _fetch_issue_comments_text can filter it on the next run.
+    """
+    from unittest.mock import patch as mock_patch
+
+    from pdd.agentic_architecture import (
+        _post_incremental_status_comment,
+        _INCREMENTAL_STATUS_MARKER,
+    )
+
+    captured: dict = {}
+
+    def fake_run_gh(args):
+        captured["args"] = args
+        return True, ""
+
+    with mock_patch("pdd.agentic_architecture._run_gh_command", side_effect=fake_run_gh):
+        _post_incremental_status_comment(
+            owner="o",
+            repo="r",
+            issue_number=1,
+            result=(True, "Applied: 1 entry affected", 0.05, "model", ["arch.json"]),
+            quiet=True,
+        )
+
+    body_arg = next((a for a in captured["args"] if isinstance(a, str) and a.startswith("body=")), None)
+    assert body_arg is not None
+    assert _INCREMENTAL_STATUS_MARKER in body_arg
+
+
+def test_post_incremental_status_comment_redacts_absolute_paths():
+    """Failure messages can include local paths; public GitHub comments must not."""
+    from unittest.mock import patch as mock_patch
+
+    from pdd.agentic_architecture import _post_incremental_status_comment
+
+    captured: dict = {}
+
+    def fake_run_gh(args):
+        captured["args"] = args
+        return True, ""
+
+    with mock_patch("pdd.agentic_architecture._run_gh_command", side_effect=fake_run_gh):
+        _post_incremental_status_comment(
+            owner="o",
+            repo="r",
+            issue_number=1,
+            result=(
+                False,
+                "Incremental architecture error: Architecture file not found: "
+                "/Users/alice/work/project/architecture.json; "
+                "retry from /workspace/repo/service/architecture.json; "
+                "container path /root/repo/architecture.json; "
+                "wsl path /mnt/c/repo/architecture.json",
+                0.0,
+                "",
+                ["/workspace/repo/service/prompts/api_python.prompt"],
+            ),
+            quiet=True,
+        )
+
+    body_arg = next((a for a in captured["args"] if isinstance(a, str) and a.startswith("body=")), None)
+    assert body_arg is not None
+    assert "/Users/alice" not in body_arg
+    assert "/workspace/repo" not in body_arg
+    assert "/root/repo" not in body_arg
+    assert "/mnt/c/repo" not in body_arg
+    assert "<local-path>" in body_arg
+
+
+def test_full_agentic_path_filters_pdd_status_comments():
+    """F18: the full (non-incremental) `pdd generate <issue-url>` path must
+    also filter `<!-- PDD-INCREMENTAL-STATUS -->` comments out of the PRD
+    content. Otherwise a later full regenerate would feed prior incremental
+    status output back into the LLM as if it were part of the PRD.
+
+    Validated by exercising the shared `_fetch_issue_comments_text` that the
+    full path now uses (and which already filtered for the incremental
+    flow). Confirms a single source of truth for the filter.
+    """
+    from unittest.mock import patch as mock_patch
+
+    from pdd.agentic_architecture import (
+        _fetch_issue_comments_text,
+        _INCREMENTAL_STATUS_MARKER,
+    )
+
+    fake_comments = [
+        {"user": {"login": "human"}, "body": "Initial PRD comment from human."},
+        {
+            "user": {"login": "github-actions[bot]"},
+            "body": (
+                f"{_INCREMENTAL_STATUS_MARKER}\n"
+                "pdd incremental architecture update successful."
+            ),
+        },
+    ]
+
+    with mock_patch(
+        "pdd.agentic_architecture._run_gh_command",
+        return_value=(True, json.dumps(fake_comments)),
+    ):
+        text = _fetch_issue_comments_text(
+            "https://api.github.com/repos/o/r/issues/1/comments",
+            verbose=False,
+        )
+
+    assert "Initial PRD comment from human." in text
+    assert _INCREMENTAL_STATUS_MARKER not in text
+    assert "pdd incremental architecture update" not in text
+
+
+# --- _ensure_repo_context warning-suppression matrix (issue 815) ---
+
+
+class TestEnsureRepoContextWarningSuppression:
+    """Tests for the false-positive remote-mismatch warning suppression.
+
+    `_ensure_repo_context` emits a warning when the cwd is a git repo whose
+    `origin` remote does not match the issue's `owner/repo`. When the cwd is a
+    self-contained pdd project (`.pddrc`/`.pdd/` or `sources/`+PRD) nested
+    inside an unrelated outer git repo, the warning is a false positive and
+    must be suppressed. This matrix locks the four discriminating cases.
+    """
+
+    @staticmethod
+    def _make_outer_repo_with_inner_pddrc(tmp_path: Path) -> tuple[Path, Path]:
+        """Build outer (with .git) + inner (with .pddrc) and return (outer, inner)."""
+        import subprocess as _sp
+
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        # Real git init so `git rev-parse --show-toplevel` works inside.
+        _sp.run(["git", "init", "-q"], cwd=str(outer), check=True)
+        _sp.run(
+            ["git", "remote", "add", "origin", "git@example.com:other/unrelated.git"],
+            cwd=str(outer),
+            check=True,
+        )
+        inner = outer / "projects" / "service-a"
+        inner.mkdir(parents=True)
+        (inner / ".pddrc").touch()
+        return outer, inner
+
+    def test_suppresses_warning_when_project_root_is_strict_descendant(
+        self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
+    ) -> None:
+        """Inner pdd project nested in an unrelated outer git repo -> warning suppressed."""
+        from pdd.agentic_architecture import _ensure_repo_context
+
+        _outer, inner = self._make_outer_repo_with_inner_pddrc(tmp_path)
+        result_path, error = _ensure_repo_context(
+            owner="issue-owner",
+            repo="issue-repo",
+            current_cwd=inner,
+            quiet=False,
+            project_root=inner,
+        )
+        captured = capsys.readouterr()
+        assert error is None
+        assert result_path == inner
+        assert "does not match" not in captured.out
+        assert "does not match" not in captured.err
+
+    def test_emits_warning_when_no_project_root_supplied(
+        self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
+    ) -> None:
+        """Legacy callers (no project_root) still see the mismatch warning."""
+        from pdd.agentic_architecture import _ensure_repo_context
+
+        _outer, inner = self._make_outer_repo_with_inner_pddrc(tmp_path)
+        result_path, error = _ensure_repo_context(
+            owner="issue-owner",
+            repo="issue-repo",
+            current_cwd=inner,
+            quiet=False,
+        )
+        captured = capsys.readouterr()
+        assert error is None
+        assert result_path == inner
+        # Rich routes warnings to stdout in this codepath; check both streams.
+        combined = captured.out + captured.err
+        assert "does not match" in combined or "Warning" in combined
+
+    def test_emits_warning_when_project_root_equals_git_toplevel(
+        self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
+    ) -> None:
+        """Equality guard: if project_root == git toplevel, do NOT suppress."""
+        import subprocess as _sp
+        from pdd.agentic_architecture import _ensure_repo_context
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _sp.run(["git", "init", "-q"], cwd=str(repo), check=True)
+        _sp.run(
+            ["git", "remote", "add", "origin", "git@example.com:fork/repo.git"],
+            cwd=str(repo),
+            check=True,
+        )
+        # project_root resolved to repo itself (e.g. .pddrc at repo root, fork case)
+        (repo / ".pddrc").touch()
+
+        result_path, error = _ensure_repo_context(
+            owner="upstream-owner",
+            repo="upstream-repo",
+            current_cwd=repo,
+            quiet=False,
+            project_root=repo,
+        )
+        captured = capsys.readouterr()
+        assert error is None
+        assert result_path == repo
+        combined = captured.out + captured.err
+        assert "does not match" in combined or "Warning" in combined
+
+    def test_quiet_suppresses_warning_regardless_of_branch(
+        self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
+    ) -> None:
+        """quiet=True silences output even when project_root is None."""
+        from pdd.agentic_architecture import _ensure_repo_context
+
+        _outer, inner = self._make_outer_repo_with_inner_pddrc(tmp_path)
+        _ensure_repo_context(
+            owner="issue-owner",
+            repo="issue-repo",
+            current_cwd=inner,
+            quiet=True,
+        )
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "does not match" not in combined
+        assert "Warning" not in combined
+
+    def test_project_root_must_be_keyword_only(self) -> None:
+        """Spec requires project_root to be keyword-only — calling positionally fails."""
+        from pdd.agentic_architecture import _ensure_repo_context
+
+        with pytest.raises(TypeError):
+            _ensure_repo_context("o", "r", Path("/tmp"), False, Path("/tmp"))  # type: ignore[misc]
+
+
+# --- Library-level project_root validation (issue 815) ---
+
+
+class TestProjectRootValidationAtEntryPoints:
+    """When `project_root` is supplied to library entry points, it must exist
+    and be a directory. Click guards the CLI surface; these tests cover the
+    library-call path used programmatically and by `pdd_cloud`.
+    """
+
+    def test_run_agentic_architecture_rejects_nonexistent_project_root(self, tmp_path: Path) -> None:
+        from pdd.agentic_architecture import run_agentic_architecture
+
+        missing = tmp_path / "does-not-exist"
+        success, message, cost, model, files = run_agentic_architecture(
+            issue_url="https://github.com/o/r/issues/1",
+            quiet=True,
+            project_root=str(missing),
+        )
+        assert success is False
+        assert "does not exist" in message
+        assert cost == 0.0
+        assert files == []
+
+    def test_run_agentic_architecture_rejects_project_root_that_is_a_file(self, tmp_path: Path) -> None:
+        from pdd.agentic_architecture import run_agentic_architecture
+
+        f = tmp_path / "regular.txt"
+        f.write_text("not a directory", encoding="utf-8")
+        success, message, _, _, _ = run_agentic_architecture(
+            issue_url="https://github.com/o/r/issues/1",
+            quiet=True,
+            project_root=str(f),
+        )
+        assert success is False
+        assert "is not a directory" in message
+
+    def test_run_incremental_architecture_rejects_nonexistent_project_root(self, tmp_path: Path) -> None:
+        from pdd.agentic_architecture import run_incremental_architecture
+
+        prd = tmp_path / "prd.md"
+        prd.write_text("# spec", encoding="utf-8")
+        missing = tmp_path / "nope"
+        success, message, _, _, _ = run_incremental_architecture(
+            prd_source=str(prd),
+            quiet=True,
+            project_root=str(missing),
+        )
+        assert success is False
+        assert "does not exist" in message
+
+    def test_run_incremental_architecture_rejects_project_root_that_is_a_file(self, tmp_path: Path) -> None:
+        from pdd.agentic_architecture import run_incremental_architecture
+
+        prd = tmp_path / "prd.md"
+        prd.write_text("# spec", encoding="utf-8")
+        f = tmp_path / "regular.txt"
+        f.write_text("not a directory", encoding="utf-8")
+        success, message, _, _, _ = run_incremental_architecture(
+            prd_source=str(prd),
+            quiet=True,
+            project_root=str(f),
+        )
+        assert success is False
+        assert "is not a directory" in message
+
+    def test_run_incremental_architecture_resolves_relative_prd_against_project_root(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """When --project-root is supplied, a relative PRD path resolves against
+        that root, not cwd. Lets `pdd generate --project-root /p --incremental
+        --experimental-prd docs/prd.md` work from anywhere on disk.
+        """
+        from pdd.agentic_architecture import run_incremental_architecture
+
+        project = tmp_path / "inner-project"
+        (project / "docs").mkdir(parents=True)
+        (project / "docs" / "prd.md").write_text("# spec", encoding="utf-8")
+
+        # cwd is somewhere unrelated — without the fix, the PRD lookup would
+        # join cwd + 'docs/prd.md' and fail.
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        with patch(
+            "pdd.incremental_prd_architecture.run_incremental_prd_propagation"
+        ) as mock_run:
+            mock_run.return_value = (True, "ok", 0.0, "model", ["architecture.json"])
+            success, message, _, _, _ = run_incremental_architecture(
+                prd_source="docs/prd.md",
+                dry_run=True,
+                quiet=True,
+                project_root=str(project),
+            )
+
+        assert success is True
+        assert "PRD file not found" not in message
+        mock_run.assert_called_once()

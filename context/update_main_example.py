@@ -1,168 +1,141 @@
-#!/usr/bin/env python
 """
-Example usage of the update_main function via Click.
+Example demonstrating how to use the pdd.update_main module to:
+1. Resolve a prompt and code file pair based on workspace conventions.
+2. Run single-file prompt regeneration/updating.
+3. Perform a mock repository-wide drift scan using `update_main`.
 
-This script demonstrates how to:
-1. Define a CLI command that accepts various options (files, Git usage, etc.).
-2. Pass those options (along with global flags like verbosity and strength) to update_main.
-3. Capture and display the results, including the updated prompt, total cost, and model name.
-
-Run:
-    python example.py update \
-        --input-prompt-file path/to/original_prompt.txt \
-        --modified-code-file path/to/modified_code.py \
-        --input-code-file path/to/original_code.py \
-        --output path/to/output_prompt.txt \
-        --strength 0.7 \
-        --temperature 0.1 \
-        --verbose
-
-Or, to use Git history (instead of an original code file):
-    python example.py update \
-        --input-prompt-file path/to/original_prompt.txt \
-        --modified-code-file path/to/modified_code.py \
-        --git \
-        --verbose
+This example is non-interactive and runs to completion. All temporary files
+and outputs are structured inside the './output' directory.
 """
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
 import click
-from rich import print as rprint
 
-# Import the function you want to use
-# Adjust the import path as needed if it's in a different package/module.
-from pdd.update_main import update_main
+# Ensure the parent directory is in sys.path to allow importing from the pdd package
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from pdd.update_main import (
+    resolve_prompt_code_pair,
+    find_and_resolve_all_pairs,
+    update_main,
+)
+
+# Output directory for all generated artifacts
+OUTPUT_DIR = Path("./output").resolve()
 
 
-@click.command(name="update")
-@click.option(
-    "--input-prompt-file",
-    required=True,
-    type=click.Path(exists=True),
-    help="Path to the original prompt file."
-)
-@click.option(
-    "--modified-code-file",
-    required=True,
-    type=click.Path(exists=True),
-    help="Path to the modified code file."
-)
-@click.option(
-    "--input-code-file",
-    type=click.Path(exists=True),
-    help="Path to the original code file (optional). Omit to pull from Git history if --git is used."
-)
-@click.option(
-    "--output",
-    type=str,
-    help="Path where the updated prompt will be saved (optional)."
-)
-@click.option(
-    "--git",
-    is_flag=True,
-    default=False,
-    help="Use Git history to retrieve the original code instead of providing an input code file."
-)
-@click.option(
-    "--strength",
-    default=0.5,
-    show_default=True,
-    help="How strongly the model tries to incorporate differences."
-)
-@click.option(
-    "--temperature",
-    default=0.0,
-    show_default=True,
-    help="Sampling temperature for the model (0.0 is deterministic)."
-)
-@click.option(
-    "--quiet",
-    is_flag=True,
-    help="Suppress console output."
-)
-@click.option(
-    "--force",
-    is_flag=True,
-    help="Overwrite existing files without asking."
-)
-@click.option(
-    "--verbose",
-    is_flag=True,
-    help="Enable verbose logging."
-)
-@click.option(
-    "--simple",
-    is_flag=True,
-    default=False,
-    help="Skip agentic routing and use legacy update_prompt() directly."
-)
-@click.pass_context
-def update(
-    ctx: click.Context,
-    input_prompt_file: str,
-    modified_code_file: str,
-    input_code_file: str,
-    output: str,
-    git: bool,
-    strength: float,
-    temperature: float,
-    quiet: bool,
-    force: bool,
-    verbose: bool,
-    simple: bool
-):
+def setup_mock_workspace() -> tuple[Path, Path]:
     """
-    CLI command to update a prompt based on modified code.
-
-    :param ctx: Click Context to store global parameters.
-    :param input_prompt_file: Path to the original prompt file.
-    :param modified_code_file: Path to the modified code file.
-    :param input_code_file: Optional path to the original code file. If omitted, Git history is used if --git is set.
-    :param output: Optional path to save the updated prompt.
-    :param git: Whether to use Git to retrieve the original code.
-    :param strength: Blends the old and new code information during the update.
-    :param temperature: Sampling temperature for randomness in text generation.
-    :param quiet: Whether to suppress console output.
-    :param force: Whether to overwrite existing files if any.
-    :param verbose: Whether to enable verbose logging.
-    :param simple: Whether to skip agentic routing and use legacy path.
+    Creates a mock codebase structure under ./output.
+    Returns the paths to the mock code file and its corresponding prompt file.
     """
-    # Store parameters in context for the update_main function
-    ctx.ensure_object(dict)
-    ctx.obj["strength"] = strength
-    ctx.obj["temperature"] = temperature
-    ctx.obj["verbose"] = verbose
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Make sure all options (including force, quiet) are accessible as ctx.params
-    ctx.params["force"] = force
-    ctx.params["quiet"] = quiet
-
-    # Call the function from the module
-    updated_prompt, total_cost, model_name = update_main(
-        ctx=ctx,
-        input_prompt_file=input_prompt_file,
-        modified_code_file=modified_code_file,
-        input_code_file=input_code_file,
-        output=output,
-        use_git=git,
-        simple=simple
+    # 1. Create a mock Python code file
+    src_dir = OUTPUT_DIR / "src"
+    src_dir.mkdir(exist_ok=True)
+    code_file = src_dir / "calculator.py"
+    code_file.write_text(
+        "def add(a: int, b: int) -> int:\n"
+        "    return a + b\n\n"
+        "def multiply(a: int, b: int) -> int:\n"
+        "    return a * b\n",
+        encoding="utf-8",
     )
 
-    # Print results
-    if not quiet:
-        rprint("[bold]--- Update Results ---[/bold]")
-        rprint(f"• Prompt snippet (truncated): {updated_prompt[:80]}...")
-        rprint(f"• Total cost: {total_cost}")
-        rprint(f"• Model used: {model_name}")
+    # 2. Create a mock prompts directory
+    prompts_dir = OUTPUT_DIR / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+    prompt_file = prompts_dir / "calculator_python.prompt"
+    
+    # Write a simple, mock prompt
+    prompt_file.write_text(
+        "% You are an expert Python engineer.\n"
+        "% Requirements\n"
+        "1. Create a function `add` that returns the sum of two integers.\n",
+        encoding="utf-8",
+    )
+
+    # 3. Create a minimal .pddrc configuration file
+    pddrc_file = OUTPUT_DIR / ".pddrc"
+    pddrc_file.write_text(
+        "contexts:\n"
+        "  default:\n"
+        "    prompts_dir: 'prompts'\n"
+        "    generate_output_path: 'src'\n",
+        encoding="utf-8",
+    )
+
+    return code_file, prompt_file
 
 
-@click.group()
-def cli():
-    """Command group for our sample CLI."""
-    pass
+def main() -> None:
+    # Set up the mock environment
+    code_file, prompt_file = setup_mock_workspace()
 
+    print("=== 1. Resolving Prompt and Code Pair ===")
+    # Resolve where the corresponding prompt should live relative to the code file.
+    # Inputs:
+    #   - code_file_path (str): The absolute or relative path to the modified code file.
+    #   - quiet (bool): Suppress informational console logs.
+    #   - output_dir (Optional[str]): Custom target prompts directory.
+    #   - create_missing (bool): Create the prompt file if it doesn't exist.
+    resolved_prompt_path, resolved_code_path = resolve_prompt_code_pair(
+        code_file_path=str(code_file),
+        quiet=False,
+        output_dir=str(OUTPUT_DIR / "prompts"),
+        create_missing=True
+    )
+    print(f"  Code File:   {resolved_code_path}")
+    print(f"  Prompt File: {resolved_prompt_path}\n")
 
-# Add the 'update' command to our CLI group
-cli.add_command(update)
+    print("=== 2. Mocking CLI Click Context ===")
+    # In practice, `update_main` is triggered by Click commands and extracts CLI configs
+    # (like verbose, quiet, strength, and temperature) from Click's Context.
+    ctx = click.Context(click.Command('update'))
+    ctx.obj = {
+        "verbose": False,
+        "quiet": False,
+        "strength": 0.5,
+        "temperature": 0.2,
+    }
+
+    print("=== 3. Simulating Repo-Wide Drift Scan ===")
+    # Perform a dry-run repository update to see which prompts have drifted
+    # without making actual LLM billing calls.
+    # Inputs:
+    #   - ctx (click.Context): The Click CLI context dict.
+    #   - input_prompt_file: Optional single target prompt.
+    #   - modified_code_file: Optional single target code file.
+    #   - repo (bool): Scan the entire repository directory.
+    #   - directory (str): Target directory to scan.
+    #   - dry_run (bool): Scan and print the drift report without executing updates.
+    # Outputs:
+    #   - Optional[Tuple[str, float, str]]: (Status/Result message, total cost in USD, models used).
+    result = update_main(
+        ctx=ctx,
+        input_prompt_file=None,
+        modified_code_file=None,
+        input_code_file=None,
+        output=None,
+        repo=True,
+        directory=str(OUTPUT_DIR),
+        dry_run=True,
+    )
+
+    if result:
+        message, total_cost_usd, model_used = result
+        print("Dry Run Scan Result:")
+        print(f"  Message:    {message}")
+        print(f"  Est. Cost:  ${total_cost_usd:.6f}")
+        print(f"  Model:      {model_used}")
+    else:
+        print("No out-of-sync code files detected in the scanned directory.")
 
 
 if __name__ == "__main__":
-    cli()
+    main()

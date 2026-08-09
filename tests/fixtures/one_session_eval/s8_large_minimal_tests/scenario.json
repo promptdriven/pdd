@@ -1,0 +1,10 @@
+{
+    "basename": "workflow_engine",
+    "description": "S8: Large Workflow Engine (~2500 lines) with only 5 basic tests covering ~20% of requirements. Agent should expand to comprehensive test coverage.",
+    "expected_behavior": "Agent preserves the original 5 tests and adds many more covering: state machine transitions, error handling, retry logic, cycle detection, budget management, parallel execution, event logging, and edge cases. All tests pass. Code should not be modified.",
+    "evaluation_guidance": "This is a large module (~3900 lines) with 10 requirements. The starting 5 tests cover: single operation, failure reporting, dry run, budget exceeded, and log entries. The agent needs to add tests for: retry with exponential backoff, cycle detection (repeated operation patterns), parallel execution via threading, state machine transitions (valid and invalid), skip handling with reasons, dependency resolution (topological sort), error recovery, cascading failures (dependent operations auto-skip). Were the original 5 test names preserved? How many new tests were added? Do the new tests actually exercise the complex features or just test trivial cases? Did the agent make any code changes (it shouldn't)? Did it get confused by the module's size?",
+    "expected": {
+        "min_test_count": 15,
+        "quality_threshold": 3
+    }
+}

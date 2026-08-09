@@ -1,141 +1,96 @@
 import os
 import sys
-from typing import List, Optional
-from pydantic import BaseModel, Field
-from rich.console import Console
+import json
+from typing import Optional
+from pydantic import BaseModel
 
-# Ensure the package is in the python path for this example
-# In a real installation, this would just be 'from pdd.llm_invoke import llm_invoke'
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Import the functions from the module
+from pdd.llm_invoke import llm_invoke, set_verbose_logging, setup_file_logging
 
-from pdd.llm_invoke import llm_invoke
+# Ensure the script runs non-interactively by forcing PDD to not prompt for keys
+os.environ["PDD_FORCE"] = "1"
 
-console = Console()
+# Check for an API key to ensure the example can run successfully.
+# The specific key depends on your configured default model in llm_model.csv.
+api_key = os.environ.get("OPENAI_API_KEY")
+if not api_key:
+    print("OPENAI_API_KEY not set. Set it to run this example (or whichever key your default model requires).")
+    sys.exit(0)
 
-# --- Example 1: Simple Text Generation ---
-def example_simple_text():
-    console.print("[bold blue]--- Example 1: Simple Text Generation ---[/bold blue]")
+def main():
+    # Setup output directory for any logs or outputs
+    os.makedirs("./output", exist_ok=True)
     
-    # Define a prompt template
-    prompt_template = "Explain the concept of {concept} to a {audience} in one sentence."
-    
-    # Define input variables
-    input_data = {
-        "concept": "quantum entanglement",
-        "audience": "5-year-old"
-    }
+    # 1. Configure logging
+    setup_file_logging("./output/llm_invoke_example.log")
+    set_verbose_logging(verbose=True)
 
-    # Invoke the LLM
-    # strength=0.5 targets the 'base' model (usually a balance of cost/performance)
-    result = llm_invoke(
-        prompt=prompt_template,
-        input_json=input_data,
+    print("\n--- Example 1: Basic LLM Invocation ---")
+    # We use a simple prompt and input_json mapping.
+    # strength=0.5 requests the base model defined in the environment or CSV.
+    response = llm_invoke(
+        prompt="Translate the following text to French: {text}",
+        input_json={"text": "Hello, how are you?"},
         strength=0.5,
-        temperature=0.7,
-        verbose=True  # Set to True to see detailed logs about model selection and cost
+        temperature=0.1,
+        verbose=True,
+        time=0.0  # Set to > 0 if you want the model to use reasoning/thinking
     )
-
-    console.print(f"[green]Result:[/green] {result['result']}")
-    console.print(f"[dim]Model used: {result['model_name']} | Cost: ${result['cost']:.6f}[/dim]\n")
-
-
-# --- Example 2: Structured Output with Pydantic ---
-class MovieReview(BaseModel):
-    title: str = Field(..., description="The title of the movie")
-    rating: int = Field(..., description="Rating out of 10")
-    summary: str = Field(..., description="A brief summary of the plot")
-    tags: List[str] = Field(..., description="List of genre tags")
-
-def example_structured_output():
-    console.print("[bold blue]--- Example 2: Structured Output (Pydantic) ---[/bold blue]")
-
-    prompt = "Generate a review for a fictional sci-fi movie about {topic}."
-    input_data = {"topic": "time traveling cats"}
-
-    # Invoke with output_pydantic to enforce a schema
-    # strength=0.8 targets a higher-performance model (better at following schemas)
-    result = llm_invoke(
-        prompt=prompt,
-        input_json=input_data,
-        strength=0.8,
-        output_pydantic=MovieReview,
-        temperature=0.5
-    )
-
-    # The 'result' key will contain an instance of the Pydantic model
-    review: MovieReview = result['result']
     
-    console.print(f"[green]Title:[/green] {review.title}")
-    console.print(f"[green]Rating:[/green] {review.rating}/10")
-    console.print(f"[green]Tags:[/green] {', '.join(review.tags)}")
-    console.print(f"[dim]Model used: {result['model_name']}[/dim]\n")
+    print("\nResult 1 (Basic):")
+    print(f"Model Used: {response.get('model_name')}")
+    print(f"Cost: ${response.get('cost'):.6f}")
+    print(f"Text:\n{response.get('result')}")
 
 
-# --- Example 3: Batch Processing ---
-def example_batch_processing():
-    console.print("[bold blue]--- Example 3: Batch Processing ---[/bold blue]")
+    print("\n--- Example 2: Structured Output using Pydantic ---")
+    # Define a schema for the LLM to adhere to
+    class SentimentAnalysis(BaseModel):
+        sentiment: str
+        confidence_score: float
+        key_topics: list[str]
 
-    prompt = "What is the capital of {country}?"
-    
-    # List of inputs triggers batch mode
-    batch_inputs = [
-        {"country": "France"},
-        {"country": "Japan"},
-        {"country": "Brazil"}
-    ]
-
-    # use_batch_mode=True uses the provider's batch API if available/supported by LiteLLM
-    # strength=0.2 targets a cheaper/faster model
-    results = llm_invoke(
-        prompt=prompt,
-        input_json=batch_inputs,
-        use_batch_mode=True,
-        strength=0.2,
-        temperature=0.1
-    )
-
-    # In batch mode, 'result' is a list of strings (or objects)
-    for i, res in enumerate(results['result']):
-        console.print(f"[green]Input:[/green] {batch_inputs[i]['country']} -> [green]Output:[/green] {res}")
-    
-    console.print(f"[dim]Model used: {results['model_name']} | Total Cost: ${results['cost']:.6f}[/dim]\n")
-
-
-# --- Example 4: Reasoning / Thinking Time ---
-def example_reasoning():
-    console.print("[bold blue]--- Example 4: Reasoning / Thinking Time ---[/bold blue]")
-
-    # Some models (like Claude 3.7 or OpenAI o1/o3) support explicit thinking steps.
-    # Setting time > 0 enables this behavior based on the model's configuration in llm_model.csv.
-    
-    prompt = "Solve this riddle: {riddle}"
-    input_data = {"riddle": "I speak without a mouth and hear without ears. I have no body, but I come alive with wind. What am I?"}
-
-    result = llm_invoke(
-        prompt=prompt,
-        input_json=input_data,
-        strength=1.0,  # Target highest capability model
-        time=0.5,      # Request moderate thinking time/budget
+    structured_response = llm_invoke(
+        prompt="Analyze the sentiment of this review: '{review}'",
+        input_json={"review": "The new design is incredibly fast and intuitive, though the color scheme is a bit jarring."},
+        strength=0.5,
+        temperature=0.1,
+        output_pydantic=SentimentAnalysis,
         verbose=True
     )
 
-    console.print(f"[green]Answer:[/green] {result['result']}")
-    
-    # If the model supports it, thinking output is captured separately
-    if result.get('thinking_output'):
-        console.print(f"[yellow]Thinking Process:[/yellow] {result['thinking_output']}")
-    else:
-        console.print("[dim]No separate thinking output returned for this model.[/dim]")
+    print("\nResult 2 (Structured):")
+    print(f"Model Used: {structured_response.get('model_name')}")
+    # The result is automatically parsed into the Pydantic model instance
+    result_obj = structured_response.get('result')
+    if isinstance(result_obj, SentimentAnalysis):
+        print(f"Sentiment: {result_obj.sentiment}")
+        print(f"Confidence: {result_obj.confidence_score}")
+        print(f"Topics: {', '.join(result_obj.key_topics)}")
 
+
+    print("\n--- Example 3: Batch Processing ---")
+    # Passing a list of dictionaries to input_json triggers batch processing
+    batch_inputs = [
+        {"word": "Apple"},
+        {"word": "Banana"},
+        {"word": "Cherry"}
+    ]
+    
+    batch_response = llm_invoke(
+        prompt="Write a one-sentence fun fact about a {word}.",
+        input_json=batch_inputs,
+        strength=0.0,  # 0.0 requests the cheapest available model
+        temperature=0.5,
+        use_batch_mode=True,
+        verbose=True
+    )
+    
+    print("\nResult 3 (Batch):")
+    print(f"Model Used: {batch_response.get('model_name')}")
+    results_list = batch_response.get('result', [])
+    for i, res in enumerate(results_list):
+        print(f"Fact {i+1}: {res}")
 
 if __name__ == "__main__":
-    # Ensure you have a valid .env file or environment variables set for API keys
-    # (e.g., OPENAI_API_KEY, ANTHROPIC_API_KEY)
-    
-    try:
-        example_simple_text()
-        example_structured_output()
-        example_batch_processing()
-        example_reasoning()
-    except Exception as e:
-        console.print(f"[bold red]Error running examples:[/bold red] {e}")
+    main()

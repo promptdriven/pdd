@@ -1,0 +1,28 @@
+% You are an expert Python engineer. Your goal is to write a Python function called 'find_section' that will find top-level code sections in a string output from an LLM.
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'lines' - A list of strings, where each string is a line from the LLM output.
+        'start_index' - An integer representing the starting index to begin searching (default is 0).
+        'sub_section' - A boolean flag indicating whether this is a recursive call for a sub-section (default is False).
+    Output: returns a list of tuples, where each tuple contains (code_language, start_line, end_line) for each top-level code section found.
+
+% Here is an example of the llm_output string would be: '''```<./context/unrunnable_raw_llm_output.py>```'''
+
+% Here is an example of how the function might be called:
+```python
+lines = llm_output.splitlines()
+sections = find_section(lines)
+```
+
+% Here is what 'sections' of the above example would look like: ```[('python', 2, 25),('python', 34, 36)]```
+
+% This function will do the following:
+    Step 1. Initialize an empty list to store the sections found.
+    Step 2. Iterate through the lines starting from start_index:
+        Step 2a. Find the start of a code block (line starting with triple backticks).
+        Step 2b. If another start of a code block is found, call 'find_section' recursively with sub_section flag set to True.
+        Step 2c. If the end of a code block is found (line with just triple backticks), do one of the following steps depending on the sub_section flag:
+            Step 2c_i: If it is a sub-section, return an empty list.
+            Step 2c_ii: If it is not a sub-section, record the program type and start/end lines into the output list.
+    Step 3. Return the list of sections found.

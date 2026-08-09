@@ -1,0 +1,49 @@
+<pdd-reason>CLI subcommand that garbage-collects orphaned .pdd/extracts/ entries not referenced by any prompt.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "pdd extracts prune", "description": "Delete orphaned extracts cache entries not referenced by any prompt file."}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>include_query_extractor_python.prompt</pdd-dependency>
+<pdd-dependency>preprocess_python.prompt</pdd-dependency>
+<pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/extracts_prune.py` module.
+
+% Role & Scope
+The `.pdd/extracts/` directory caches results from `<include query="...">file</include>` tags. Over time, entries can become orphaned when prompts are edited or deleted. This module provides a CLI subcommand (`pdd extracts prune`) that identifies and deletes cache entries no longer referenced by any prompt file.
+
+% Requirements
+1. Implement a `click` group called `extracts` and a `prune` subcommand within it
+2. `prune` accepts a `--force` flag to skip confirmation; also respect global `ctx.obj["force"]`
+3. Scan all `.prompt` files under the project root for `<include query="...">file</include>` tags
+   - Exclude common non-project directories (node_modules, .git, .venv, venv, __pycache__, dist, build)
+4. Compute the expected cache key for each reference using `pdd.include_query_extractor.compute_cache_key`
+   - Resolve file paths relative to the prompt file's parent directory first; fall back to project root
+   - Convert resolved paths to project-relative paths before hashing (ensures keys match CLI/API)
+   - Skip references where the file doesn't exist at either location
+5. Identify `.md` files in `.pdd/extracts/` whose keys are not in the referenced set
+6. Display orphaned entries (Key, Source Path, Query) in a table; read metadata from `.meta.json`
+   - Use `rich` if available; fall back to simple text
+7. Prompt for confirmation ("Delete X orphaned cache entries?"); skip if `--force` is set
+8. Delete both `.md` and `.meta.json` files for each orphan
+9. Use `find_project_root_from_path` (from `path_resolution`) instead of `get_config()["project_root"]` for determining the project root
+10. Module must be importable and testable in isolation without the full `pdd` package installed
+   - Internal `pdd` imports that may not be available (e.g., `find_project_root_from_path`, `compute_cache_key`) should fail gracefully with fallback stubs
+
+% Dependencies
+<include_query_extractor_example><include>context/include_query_extractor_example.py</include></include_query_extractor_example>
+<pdd.__init__><include>context/__init__example.py</include></pdd.__init__>
+
+% Deliverables
+- Code: `pdd/extracts_prune.py`

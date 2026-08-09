@@ -1,0 +1,115 @@
+<pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write `pdd/auth_service.py`.
+
+% Role & Scope
+  This module provides shared authentication helper functions for PDD Cloud.
+  It centralizes auth logic used by both:
+  - REST API endpoints (pdd/server/routes/auth.py) for the web frontend
+  - CLI commands (pdd/commands/auth.py) for terminal-based auth management
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. **Constants**:
+     - JWT_CACHE_FILE: Path to ~/.pdd/jwt_cache
+     - KEYRING_SERVICE_NAME: "firebase-auth-PDD CLI"
+     - KEYRING_USER_NAME: "refresh_token"
+     - LEGACY_KEYRING_SERVICE_NAMES: ("firebase-auth-pdd",)
+     - REFRESH_TOKEN_CHECK_TIMEOUT_ERROR: "keyring get_password timed out"
+
+  2. **get_jwt_cache_info**:
+     - Check if JWT cache file exists and contains a valid token.
+     - Returns Tuple[bool, Optional[float]] - (is_valid, expires_at).
+     - Token is valid if expires_at > current_time + 300 (5 minute buffer).
+     - Return (False, None) if file doesn't exist or is invalid.
+
+  3. **has_refresh_token**:
+     - Check if refresh token exists in system keyring.
+     - Read KEYRING_SERVICE_NAME first, then every service in LEGACY_KEYRING_SERVICE_NAMES so existing users with older server-auth tokens remain authenticated.
+     - Try standard keyring first, fall back to keyrings.alt.file.PlaintextKeyring.
+     - Wrap every keyring get_password call with `_keyring_op_with_timeout`.
+     - If a keyring read times out, return False instead of blocking the caller; if an individual service read raises, continue checking remaining service names and return False only if none yields a token.
+     - Preserve keyring read timeout status so get_auth_status() can expose refresh_token_error.
+     - Returns bool - True if token exists.
+     - Handle ImportError gracefully (return False).
+
+  4. **clear_jwt_cache**:
+     - Delete the JWT cache file if it exists.
+     - Returns Tuple[bool, Optional[str]] - (success, error_message).
+     - Return (True, None) if file doesn't exist (nothing to clear).
+
+  5. **clear_refresh_token**:
+     - Delete refresh token from system keyring.
+     - Delete both KEYRING_SERVICE_NAME and every service in LEGACY_KEYRING_SERVICE_NAMES so logout/start-login cleanup removes refresh tokens written by older server auth flows.
+     - Try standard keyring first, fall back to keyrings.alt.file.PlaintextKeyring.
+     - Wrap every keyring delete_password call with `_keyring_op_with_timeout`.
+     - If deletion times out, return an error containing "keyring delete_password timed out".
+     - Returns Tuple[bool, Optional[str]] - (success, error_message).
+     - Ignore "not found" errors (token already deleted).
+     - Return (True, None) if no keyring available.
+
+  6. **get_auth_status**:
+     - Get current authentication status.
+     - Check JWT cache first, then check for refresh token.
+     - Returns Dict with keys:
+       - authenticated: bool
+       - cached: bool (True if using cached JWT)
+       - expires_at: Optional[float]
+       - refresh_token_error: Optional[str] only when refresh-token keyring status is inconclusive due to timeout
+
+  7. **logout**:
+     - Clear all authentication tokens.
+     - Call both clear_jwt_cache() and clear_refresh_token().
+     - Returns Tuple[bool, Optional[str]] - (success, combined_error_message).
+     - Collect errors from both operations if any.
+
+  8. **get_refresh_token**:
+     - Get the stored refresh token from keyring.
+     - Read KEYRING_SERVICE_NAME first, then every service in LEGACY_KEYRING_SERVICE_NAMES so verify_auth can refresh and migrate older server-auth tokens.
+     - Try standard keyring first, fall back to keyrings.alt.file.PlaintextKeyring.
+     - Wrap every keyring get_password call with `_keyring_op_with_timeout`.
+     - If a keyring read times out, return None instead of blocking server routes; if an individual service read raises, continue checking remaining service names and return None only if none yields a token.
+     - Returns Optional[str] - the refresh token string or None if not found.
+     - Handle ImportError gracefully (return None).
+
+  9. **verify_auth** (async):
+     - Deep validation of authentication state by attempting token refresh if needed.
+     - First check JWT cache - if valid, return success with username extracted from token.
+     - If JWT expired, check for refresh token in keyring.
+     - If refresh token exists, attempt to refresh using FirebaseAuthenticator._refresh_firebase_token().
+     - Extract username from JWT payload (email or sub field).
+     - Returns Dict with keys:
+       - valid: bool - True if we can get a valid token
+       - error: Optional[str] - Error message if validation failed
+       - needs_reauth: bool - True if user needs to re-login
+       - username: Optional[str] - User email/identifier if available
+     - Handle TokenError (needs_reauth=True), NetworkError (needs_reauth=False), RateLimitError (needs_reauth=False).
+
+  11. **get_cached_jwt**:
+     - Retrieve the cached JWT token if valid and not expired.
+     - Read from JWT_CACHE_FILE, parse JSON.
+     - Check if token exists and expires_at > current_time + 300 (5 minute buffer).
+     - Support both 'id_token' (new) and 'jwt' (legacy) keys for backwards compatibility.
+     - Returns Optional[str] - the JWT token string or None if invalid/expired/missing.
+     - Handle file not found, invalid JSON, and missing keys gracefully.
+
+% Dependencies
+  <get_jwt_token><include>context/get_jwt_token_example.py</include></get_jwt_token>
+  <pdd._keyring_timeout>
+    <include>context/_keyring_timeout_example.py</include>
+  </pdd._keyring_timeout>
+
+% Instructions
+  - Use pathlib.Path for file operations.
+  - Use json module for reading JWT cache.
+  - Use time.time() for timestamp comparisons.
+  - Import `_keyring_op_with_timeout` from `._keyring_timeout`.
+  - Import keyring inside functions to handle ImportError gracefully.
+  - Do not call keyring.get_password or keyring.delete_password directly; always use the timeout helper so `pdd auth status`, `pdd auth logout`, and server auth routes do not hang in headless CI/SSH sessions.
+  - All functions should be synchronous (not async).
+  - Include comprehensive docstrings with Args and Returns sections.
+
+% Deliverables
+  - Code: `pdd/auth_service.py`
+  - Exports: get_jwt_cache_info, has_refresh_token, clear_jwt_cache, clear_refresh_token, get_auth_status, logout, get_refresh_token, verify_auth, get_cached_jwt, JWT_CACHE_FILE, KEYRING_SERVICE_NAME, KEYRING_USER_NAME, LEGACY_KEYRING_SERVICE_NAMES, REFRESH_TOKEN_CHECK_TIMEOUT_ERROR

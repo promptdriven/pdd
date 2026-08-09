@@ -1,0 +1,125 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/components/ProjectSettings.tsx`, a project settings screen for `.pddrc` context configuration plus PDD Cloud authentication controls.
+
+% Dependencies
+<project_settings_dependencies>
+  <include-many>pdd/frontend/api.ts, pdd/frontend/types.ts, pdd/frontend/components/Icon.tsx, pdd/frontend/components/Tooltip.tsx, pdd/frontend/components/FilePickerInput.tsx</include-many>
+</project_settings_dependencies>
+
+Requirements
+1. Export a default `ProjectSettings` React functional component and define an internal `ContextCard` component with `ContextCardProps`:
+   - `name: string`
+   - `context: PddrcContext`
+   - `isDefault: boolean`
+   - `onChange(name, context)`
+   - `onDelete(name)`
+   - `onRename(oldName, newName)`
+2. Keep constants:
+   - `LANGUAGES` in this order: `python`, `typescript`, `javascript`, `java`, `go`, `rust`, `cpp`, `c`, `csharp`, `ruby`, `swift`, `kotlin`.
+   - `DEFAULT_CONFIG` with one `default` context (`paths: ['**']`) and defaults:
+     - `generate_output_path: 'src/'`
+     - `test_output_path: 'tests/'`
+     - `example_output_path: 'examples/'`
+     - `default_language: 'python'`
+   - `FIELD_LABELS` keyed by `keyof PddrcContextDefaults` with `{ label, description, placeholder }` for:
+     `generate_output_path`, `test_output_path`, `example_output_path`, `prompts_dir`, `default_language`, `strength`, `temperature`, `budget`, `max_attempts`.
+3. `ContextCard` local state:
+   - `isExpanded` default `true`
+   - `showAdvanced` default `false`
+   - `editingName` default `false`
+   - `newName` initialized from `name`
+4. In `ContextCard`, `handleDefaultsChange(key, value)` must:
+   - copy current defaults
+   - delete key when value is `''` or `undefined`
+   - otherwise assign the value
+   - call `onChange(name, { ...context, defaults: newDefaults })`
+5. In `ContextCard`, `handlePathsChange(value)` splits comma-separated text, trims values, removes empties, and writes back as `paths`.
+6. Keep defensive fallbacks:
+   - `paths = context.paths || []`
+   - `defaults = context.defaults || {}`
+7. `handleNameSubmit()` should rename only when `newName` is non-empty and changed, then exit editing mode.
+8. `ContextCard` header behavior:
+   - clicking header toggles expand/collapse.
+   - show `FolderIcon` and context name.
+   - default context shows `(default)` and cannot be renamed/deleted.
+   - non-default context name enters edit mode on double-click.
+   - rename input submits on blur or Enter, cancels on Escape (restore original name), stops click propagation, and auto-focuses.
+   - non-default cards include a delete icon button wrapped with `Tooltip content="Delete context"`; delete click stops propagation.
+9. `ContextCard` expanded body:
+   - file patterns input bound to comma-joined `paths`, with helper text about glob patterns.
+   - 2-column responsive grid with `FilePickerInput` (directory mode) for:
+     - `generate_output_path`
+     - `test_output_path`
+     - `example_output_path`
+   - default-language `<select>` with blank placeholder option and capitalized labels from `LANGUAGES`.
+10. Advanced options in `ContextCard`:
+   - toggle button labeled `Advanced Options` using chevron up/down icon.
+   - expanded panel includes:
+     - `FilePickerInput` for `prompts_dir` (directory mode)
+     - numeric input `strength` (`min=0`, `max=1`, `step=0.05`)
+     - numeric input `temperature` (`min=0`, `max=2`, `step=0.1`)
+     - numeric input `budget` (`min=0`, `step=1`)
+   - numeric inputs parse values with `parseFloat` and set `undefined` when cleared.
+11. `ProjectSettings` state must include:
+   - `config: PddrcConfig | null`
+   - `originalConfig: string`
+   - `loading`, `saving`, `error`, `saveSuccess`
+   - auth state: `authStatus: AuthStatus | null`, `authLoading`, `authResult`
+12. Implement `loadConfig()`:
+   - set loading and clear error
+   - fetch with `api.getPddrc()`
+   - when config exists: store it and set `originalConfig` to `JSON.stringify(loadedConfig)`
+   - when missing: set `config` to `DEFAULT_CONFIG` and `originalConfig` to `''`
+   - on thrown error: set user-facing load error and fallback config to `DEFAULT_CONFIG`
+   - always end loading
+13. Run `loadConfig()` once on mount.
+14. In a separate mount `useEffect`, load auth status with `api.getAuthStatus()`; on failure use `{ authenticated: false, cached: false, expires_at: null }`.
+15. Implement `handleLogout()`:
+   - set `authLoading` true and clear previous `authResult`
+   - call `api.logout()`
+   - on success: set success message `Tokens cleared. Run any pdd command to re-authenticate with GitHub.`, then refresh auth status via `api.getAuthStatus()`
+   - on unsuccessful response: set returned result directly
+   - on thrown error: set failure message fallback `Failed to clear tokens`
+   - always set `authLoading` false
+16. Implement `hasChanges` with `useCallback`: return false when no config, else compare `JSON.stringify(config)` with `originalConfig`.
+17. Implement `handleSave()`:
+   - no-op when no config
+   - set saving and clear error
+   - call `api.savePddrc(config)`
+   - on success: set `originalConfig`, show `saveSuccess` for ~3 seconds
+   - on failure: set error from response (`result.error`) or fallback text
+   - on thrown error: set fallback save error
+   - always clear saving
+18. Context mutation handlers:
+   - `handleContextChange`: replace one context entry.
+   - `handleContextDelete`: ignore when no config or name is `default`; otherwise remove that key.
+   - `handleContextRename`: ignore invalid/default/self rename; reject existing target with `setError(\`Context "${newName}" already exists\`)`; otherwise rebuild context object preserving order while replacing the key.
+   - `handleAddContext`: create unique names `new-context`, `new-context-1`, ... and add `{ paths: [], defaults: {} }`.
+19. Loading and failure rendering:
+   - while loading: centered `SpinnerIcon` and text `Loading project settings...`
+   - when not loading and config is null: show failure message + `Retry` button calling `loadConfig`
+20. Main layout:
+   - outer container `max-w-4xl` with responsive paddings and `animate-fade-in`
+   - header with gear icon block, title `Project Settings`, subtitle about code/tests/examples output locations
+   - save button triggers `handleSave`, disabled when saving or no changes
+   - save button states: spinner + `Saving...`, success `Saved!`, or default `Save Changes`
+21. Show error banner when `error` exists.
+22. Show description card explaining context matching and default fallback behavior.
+23. Render context cards via `Object.entries(config.contexts)` and pass all handlers.
+24. Render dashed full-width `Add Context` button with `PlusIcon`.
+25. Render a `PDD Cloud Authentication` section:
+   - title/description and key icon block
+   - current-status row with circular indicator:
+     - green when authenticated
+     - yellow pulsing when not authenticated
+   - status text:
+     - primary: `Currently Authenticated` or `Not Authenticated`
+     - secondary: `Using cached JWT token`, `Using refresh token`, or `No valid tokens found`
+   - explanatory text about forcing fresh Device Flow login on next command
+   - conditional result banner from `authResult` with success/error color variants
+   - logout button `Force Re-authentication` wired to `handleLogout`, disabled while loading, and showing spinner + `Clearing...` during request
+   - helper note about clearing JWT cache and keyring refresh token
+26. Show unsaved-changes warning banner when `hasChanges()` is true.
+27. Preserve current dark/glass Tailwind styling, responsive grid/layout behavior, and icon/animation usage patterns.
+
+Deliverable
+- Output only `pdd/frontend/components/ProjectSettings.tsx`.

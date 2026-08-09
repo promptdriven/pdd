@@ -446,6 +446,86 @@ _pdd_pytest_output() {
     '*:filename:_files'
 }
 
+# checkup gate
+# Usage: pdd [GLOBAL OPTIONS] checkup gate [TARGET] [OPTIONS]
+_pdd_checkup_gate() {
+  _arguments -s \
+    $_pdd_global_opts \
+    '--policy[Policy YAML file]:file:_files' \
+    '--stories-dir[User stories directory for contract coverage]:dir:_files -/' \
+    '--tests-dir[Tests directory for contract coverage]:dir:_files -/' \
+    '--json[Emit machine-readable JSON]' \
+    '*:target:_files'
+}
+
+# checkup simplify
+# Usage: pdd [GLOBAL OPTIONS] checkup simplify [OPTIONS]
+_pdd_checkup_simplify() {
+  _arguments -s \
+    $_pdd_global_opts \
+    '--apply[Run simplify and apply a selected candidate]' \
+    '--engine[Simplify engine]:engine:(claude codex gemini opencode auto)' \
+    '--since[Use a Git ref as the selected diff baseline]:ref:' \
+    '--staged[Limit candidates to staged paths]' \
+    '--max-files[Maximum selected source files]:count:' \
+    '--attempts[Independent simplify candidates to sample]:count:' \
+    '--evidence[Write candidate evidence report]' \
+    '--verify[Verify candidates before selection]' \
+    '--no-format[Skip formatting during candidate verification]' \
+    '*:path:_files'
+}
+
+# checkup
+# Usage: pdd [GLOBAL OPTIONS] checkup [OPTIONS]
+_pdd_checkup() {
+  if [[ $words[3] == gate ]]; then
+    _pdd_checkup_gate
+    return
+  fi
+  if [[ $words[3] == simplify ]]; then
+    _pdd_checkup_simplify
+    return
+  fi
+
+  _arguments -s \
+    $_pdd_global_opts \
+    '--validate-arch-includes[Validate architecture includes]' \
+    '--project-root[Project root directory]:dir:_files -/' \
+    '--strict[Strict checks]' \
+    '--no-fix[Do not apply fixes]' \
+    '--timeout-adder[Add seconds to step timeouts]:seconds:' \
+    '--start-step[Recovery override for legacy checkup step]:step:(1 2 3 4 5 6.1 6.2 6.3 7 8)' \
+    '--no-github-state[Skip GitHub state checks]' \
+    '--pr[Target PR number or URL]:pr:' \
+    '--issue[Target issue number or URL]:issue:' \
+    '--review-loop[Enable PR review loop]' \
+    '--final-gate[Canonical final PR gate: PR checkup then review-loop (needs --pr and --issue)]' \
+    '--terra-sol[Bounded GPT-5.6 Terra/Sol loop (5 rounds by default; succeeds only when clean)]' \
+    '--test-scope[PR-mode test scope]:scope:(full targeted)' \
+    '--no-gates[Disable deterministic local gates (issue #1092)]' \
+    '--gate-timeout[Per-gate wall-clock timeout in seconds (default 60)]:seconds:' \
+    '--gate-allow[Repeatable: extra gate name to opt into discovery]:gate:' \
+    '--review-only[Run reviewer only, no fixer]' \
+    '--reviewers[Comma-separated reviewer roles]:reviewers:' \
+    '--reviewer[Primary reviewer role]:reviewer:' \
+    '--fixer[Fixer role]:fixer:' \
+    '--reviewer-fallback[Fallback reviewer when primary fails]:reviewer:' \
+    '--fixer-fallback[Fallback fixer when primary fixer fails (e.g. credential-limit)]:fixer:' \
+    '--allow-same-reviewer-fixer[Allow one role to review and fix explicitly]' \
+    '--max-review-rounds[Max review rounds]:rounds:' \
+    '--max-review-cost[Max review cost (USD)]:cost:' \
+    '--max-review-minutes[Max review wall-clock minutes]:minutes:' \
+    '--require-all-reviewers-clean[Require all reviewers clean]' \
+    '--no-require-all-reviewers-clean[Do not require all reviewers clean]' \
+    '--continue-on-reviewer-limit[Treat infra-limit failures as degraded]' \
+    '--require-final-fresh-review[Require a final fresh review]' \
+    '--no-require-final-fresh-review[Skip final fresh review]' \
+    '--blocking-severities[Comma-separated blocking severities]:severities:' \
+    '--clean-reviewer-states[Comma-separated reviewer states treated as clean]:states:' \
+    '--fallback-reviewer-on-failure[Promote the fixer to a fallback reviewer when the primary ends failed/missing (off by default)]' \
+    '1:github-issue-url:'
+}
+
 ##
 # Main PDD completion dispatcher
 ##
@@ -472,6 +552,7 @@ _pdd() {
     'auto-deps:Analyze a prompt and include deps from a directory or glob'
     'verify:Verify functional correctness using LLM judgment and iteratively fix'
     'sync:Synchronize prompt, code, examples, tests with analysis'
+    'checkup:Run architecture/PR review loop with optional reviewer fallback'
     'setup:Interactive setup and completion install'
     'install_completion:Install shell completion for current shell'
     'pytest-output:Run pytest and capture structured output'
@@ -536,6 +617,9 @@ _pdd() {
       ;;
     sync)
       _pdd_sync
+      ;;
+    checkup)
+      _pdd_checkup
       ;;
     setup)
       _pdd_setup

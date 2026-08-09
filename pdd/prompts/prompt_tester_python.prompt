@@ -1,0 +1,67 @@
+% You are an expert Python Software Engineer. Your goal is to write a Python CLI, "prompt_tester", that will test the prompt for a given prompt file. This will open the cooresponding CSV file containing the test cases and run each test case through the prompt.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    CLI Inputs:
+        - Arg 1: Name of the prompt to test. By default this will be the prompt file in the ./prompts directory and end with ".prompt". Add the ".prompt" extension if it's missing.
+        - Option 1: "strength" of the LLM model to use. Default is 0.5.
+        - Option 2: "temperature" of the LLM model to use. Default is 0.0.
+
+    CLI Outputs:
+        - prompt_results.log: Writes out the results of the tests to a log file and rich prints out the results to the console.
+ 
+ % The CSV file format is as follows with a header row:
+    - test_case (filename of a JSON string/object), where:
+        • String values in nested structures will be recursively replaced with file contents if they match files in the reference directory (./tests/csv/name_of_prompt_to_be_tested)
+        • Empty strings will be preserved as-is
+    - eval_type (string), 
+    - expected_output (filename of a JSON string/object or string), with:
+        • Same nested file loading rules as test_case
+        • Supports multi-level JSON structures with mixed types
+
+% By default here is where the various files are located:
+    - prompt_file: ./prompts/prompter_to_be_tested.prompt
+    - csv_file: ./tests/csv/prompter_to_be_tested.csv
+    - log_file: ./output/prompter_to_be_tested.log
+    - this program: ./tests/prompter_tester.py which will be run in the $PDD_PATH directory by default which is the root directory.
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    For running prompts with llm_invoke (need to reference this by 'from pdd.llm_invoke import llm_invoke'):
+    <llm_invoke_example>
+        <include>context/llm_invoke_example.py</include>
+    </llm_invoke_example>
+</internal_example_modules>
+
+
+% Follow these steps to test the prompt:
+    - Step 1: Read the prompt file.
+    - Step 2: Read the CSV file and for the test_case and expected_output columnsreplace the key value filename to the actual file content from disk into a dictionary. Non-string or empty string key values are the actual dictionary values and don't have to be loaded from another file.
+    - Step 3: For each row in the CSV file:
+        * Run the prompt with the test case via llm_invoke. If the expected output is a JSON string, then be sure to run llm_invoke with structured output to get a dictionary output. You need to build a dynamic Pydantic model (using pydantic.RootModel) with the correct data types based on the expected output json from the CSV file to capture the expected output. This dynamic model will be passed as the output_pydantic parameter to llm_invoke.
+        * If the test case is 
+            - "deterministic", then the expected output can be compared using a string comparison. Otherwise, do a string comparison of each key of expected_output dictionary with the dictionary from the llm_invoke output. Indicate which specific key value pairs are different by running a separate diff of the expected_output and the llm_invoke output for each of the keys that are different. Rich print the diff (rich.syntax.Syntax) so it's easy to see the differences.
+            - "LLM_equivalent" then the expected output can be compared to the output of the prompt using a comparison prompt via llm_invoke.
+
+% Enhanced comparison requirements:
+    - For structured outputs, perform DEEP recursive comparison of nested dictionaries/lists
+    - For mismatches, display:
+        • Full path to mismatched element (e.g. "user.address[0].street")
+        • Type mismatches (e.g. expected dict vs received string)
+        • Unified diffs with color coding:
+            - Green: Added content
+            - Red: Removed content  
+            - Yellow: Location markers
+    - Handle special cases:
+        • JSON strings with escaped newlines
+        • Mixed structure/string comparisons
+        • Array index tracking for list differences
+
+% Additional requirements:
+    - Implement cost tracking for each LLM invocation
+    - Display model costs in test results table
+    - Support partial matches for non-deterministic eval types:
+        • Validate existing keys/types
+        • Ignore extra keys in actual output
+    - Automatic fallback to string comparison if structured validation fails

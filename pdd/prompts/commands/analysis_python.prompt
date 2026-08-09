@@ -1,0 +1,130 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/analysis.py`.
+
+% Role & Scope
+  This module contains analysis commands: `detect`, `conflicts`, `bug`, `crash`, and `trace`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. **detect**: Support two modes:
+     - Standard mode:
+       - Validate `>= 2` positional files (last is `change_file`, preceding are prompt files).
+       - Call `detect_change_main(ctx=..., prompt_files=..., change_file=..., output=...)`.
+       - Option: `--output`; help text must say it is not supported with
+         `--stories`. Story-mode automation uses `--json` or `--json-output`;
+         `--evidence` remains an optional persisted run manifest.
+     - User story validation mode (`--stories`):
+       - Disallow positional file arguments in this mode (raise `click.UsageError`).
+       - Disallow `--output` in this mode (raise `click.UsageError`). The canonical
+         scoped invocation uses `--stories-dir` and `--prompts-dir`; positional
+         directories MUST NOT be accepted.
+       - Call `run_user_story_tests(...)` with:
+         - `prompts_dir`, `stories_dir`
+         - `strength`, `temperature`, `time`, `verbose`, `quiet` from `ctx.obj`
+         - `include_llm_prompts=include_llm`
+         - `fail_fast=fail_fast`
+       - Return result payload as `{"passed": passed, "results": results}` plus cost/model.
+       - If `passed` is false, write any requested evidence first. For direct command invocation with no parent result callback, raise `click.exceptions.Exit(1)`. For top-level CLI invocation, return the result tuple so the summary still includes cost/model; the core result callback must then exit non-zero when it sees `{"passed": False, ...}`.
+       - Options: `--stories`, `--stories-dir`, `--prompts-dir`,
+         `--scope-manifest`, `--include-llm`,
+         `--fail-fast/--no-fail-fast`, `--json`, `--json-output`,
+         `--read-only/--cache-story-links`, and `--non-interactive`.
+       - `--scope-manifest` accepts only `pdd.detect.stories.scope.v1` JSON
+         and resolves its exact story, contract, and prompt paths relative to
+         the project root. Reject absolute paths, `..` traversal, any symlink
+         component (including in-root directory aliases),
+         non-regular/missing files, duplicate entries or JSON keys, duplicate
+         prompt paths within one story entry, empty prompt sets, and any discovery beyond
+         the listed set. Manifest mode cannot be combined with directory
+         options; unknown manifest/entry keys are rejected; story prompt
+         metadata must agree with the listed prompt set. The same resolved
+         prompt may be authorized by more than one distinct story entry; retain
+         each per-story authorization while supplying that prompt only once to
+         the global evaluator pool.
+       - Before evaluator/provider dispatch, validate every on-disk story
+         metadata prompt set against its own manifest entry. A mismatch MUST
+         exit 3 with `scope:MANIFEST_MISMATCH` and MUST NOT invoke the evaluator
+         or spend provider budget.
+       - Structured mode MUST imply non-interactive and read-only behavior, suppress
+         the normal result summary/core dump, and emit exactly one v1 document to
+         stdout or atomically replace the explicit output file. It MUST NOT expose
+         raw provider exceptions. Evaluator/provider diagnostics must not precede
+         the JSON payload on stdout; redirect or capture them and emit only safe,
+         bounded diagnostics through the structured document or stderr. The
+         shared Rich consoles may be redirected only for the evaluator call and
+         MUST restore dynamic stream resolution afterward (``file=None``); never
+         retain a transient Click/CliRunner stdout or stderr object across
+         invocations.
+         document must fail closed for malformed rows, non-finite costs, invalid
+         model provenance, unreadable story files, outside-scope contracts, and
+         absolute/traversal-bearing prompt references.
+       - Stable exits are 0 for explicit all-pass, 1 for semantic story failure,
+         2 for invocation/scope/configuration error, and 3 for auth/provider/timeout
+         or incomplete infrastructure failure.
+       - Apply those same classifications in human mode. Missing, invalid, or
+         empty story/prompt scopes MUST print a corrective configuration
+         diagnostic (unless quiet) and exit 2. Incomplete story rows (including
+         partially or fully unresolved prompt metadata) MUST exit 3.
+         Authentication/provider/timeout exceptions MUST print only a safe
+         classified message and appropriate authenticate/retry guidance (unless
+         quiet), never raw exception text, and exit 3. Exact-manifest metadata
+         mismatch MUST emit a human diagnostic before exiting 3.
+         Authentication classification MUST also recognize normalized exception
+         class-name indicators when the message is generic: exact `auth` tokens
+         and the authentication, authorization, unauthenticated, credential,
+         permission-denied, unauthorized, and forbidden families. Split CamelCase,
+         acronym, underscore, and punctuation boundaries before matching so an
+         unrelated class merely containing letters such as `auth` is not treated
+         as an authentication failure. Timeout classification takes precedence;
+         all other unknown exception types remain provider-unavailable failures.
+       - Quiet human story mode MUST capture and discard evaluator-layer stdout,
+         stderr, and shared Rich-console output (including preprocessing progress
+         emitted before a provider failure). It must preserve the same exit code
+         while emitting no human diagnostic or redirected-output notice.
+     - For handled non-Click exceptions, mark `ctx.obj["_command_failed"] = True` before calling `handle_error(...)` and returning `None`, so the core result callback exits non-zero even when Click chain mode supplies an empty results list.
+  2. **conflicts**: Takes two prompt files. Call `conflicts_main`. Options: `--output`.
+  3. **bug**: Takes either a GitHub issue URL (agentic mode) or `--manual` with 5 positional files.
+     - Agentic mode (first arg is URL): Call `run_agentic_bug(issue_url, verbose=..., quiet=..., timeout_adder=..., use_github_state=..., clean_restart=...)`.
+     - Manual mode (`--manual` flag): Call `bug_main(ctx, prompt_file, code_file, program_file, current_output, desired_output, ...)`.
+     Options: `--manual`, `--output`, `--language`, `--timeout-adder` (float, default 0.0, agentic mode only), `--no-github-state` (flag, disables GitHub state persistence, agentic mode only), `--clean-restart` (flag, discard saved agentic state and start from step 1, agentic mode only). `--clean-restart` MUST raise `click.UsageError` when combined with `--manual` or when the single agentic argument is not a GitHub issue URL.
+  4. **crash**: Takes 4 positional files (prompt, code, program, error). Call `crash_main`. Options: `--output`, `--output-program`, `--loop`, `--max-attempts`, `--budget`.
+     - Log operation using `@log_operation(operation="crash", clears_run_report=True)`.
+  5. **trace**: Takes prompt file, code file, and code line number (int). Call `trace_main`. Options: `--output`.
+
+% Dependencies
+  <include>context/command_logging.prompt</include>
+  <detect_change_main_example>
+  <pdd.detect_change_main><include>context/detect_change_main_example.py</include></pdd.detect_change_main>
+  </detect_change_main_example>
+  <conflicts_main_example>
+  <pdd.conflicts_main><include>context/conflicts_main_example.py</include></pdd.conflicts_main>
+  </conflicts_main_example>
+  <bug_main_example>
+  <pdd.bug_main><include>context/bug_main_example.py</include></pdd.bug_main>
+  </bug_main_example>
+  <run_agentic_bug_example>
+  <pdd.agentic_bug><include>context/agentic_bug_example.py</include></pdd.agentic_bug>
+  </run_agentic_bug_example>
+  <crash_main_example>
+  <pdd.crash_main><include>context/crash_main_example.py</include></pdd.crash_main>
+  </crash_main_example>
+  <trace_main_example>
+  <pdd.trace_main><include>context/trace_main_example.py</include></pdd.trace_main>
+  </trace_main_example>
+  <track_cost_example>
+  <pdd.track_cost><include>context/track_cost_example.py</include></pdd.track_cost>
+  </track_cost_example>
+  - Import and use `run_user_story_tests` from `..user_story_tests` for `detect --stories`.
+  - Import the structured adapter and atomic serializer from
+    `..story_detection_result`; do not duplicate schema construction in Click code.
+
+% Instructions
+  - Use `handle_error` for non-click runtime exceptions.
+  - Re-raise `click.Abort` and `click.ClickException` to preserve Click semantics.
+  - Apply `@track_cost` decorator to all commands.
+  - Access context flags via `ctx.obj.get("key", default)`.
+  - Return `Optional[Tuple[result, float, str]]` where float is cost and str is model name.
+  - Return `None` when an error is handled.
+
+% Deliverables
+  - Code: `pdd/commands/analysis.py`

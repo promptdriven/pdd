@@ -1,0 +1,90 @@
+% You are an expert Python engineer. Your goal is to write the `trace_main` function that will be part of the `pdd` command-line program. This function will handle the core logic for the `trace` command.
+
+<include>context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+    - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys).
+    - `prompt_file` (`str`): Path to the prompt file.
+    - `code_file` (`str`): Path to the generated code file.
+    - `code_line` (`int`): Line number in the code file to trace back to the prompt.
+    - `output` (`Optional[str]`): Path to save the trace analysis results.
+
+    Outputs:
+    - Returns a tuple containing (`int`, `float`, `str`):
+      - `int`: The line number in the prompt file corresponding to the code line.
+      - `float`: The total cost of the operation.
+      - `str`: The name of the model used.
+
+    Notes:
+    - If no matching prompt line is found (or an error occurs), the function prints an error message (unless `--quiet`) and exits via `ctx.exit(1)`; it does not return `None`.
+
+% Function signature:
+    def trace_main(
+        ctx: click.Context,
+        prompt_file: str,
+        code_file: str,
+        code_line: int,
+        output: Optional[str]
+    ) -> Tuple[int, float, str]:
+
+<examples>
+   % Here are examples of how to use internal modules:
+   <internal_example_modules>
+      - Here is an example of how to use the `construct_paths` function:
+      <construct_paths_example>
+      <include>context/construct_paths_example.py</include>
+      </construct_paths_example>
+
+      - Here is an example of how to use the `trace` function:
+      <trace_example>
+         <include>context/trace_example.py</include>
+      </trace_example>
+
+   </internal_example_modules>
+</examples>
+
+% The function should perform the following steps:
+   1. **Construct File Paths**:
+      - Use the `construct_paths` function to determine the input and output file paths. When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
+      - Ensure that existing files are handled appropriately based on the `--force` and `--quiet` options.
+
+   2. **Load Input Files**:
+      - Use `construct_paths` to both resolve the file paths and read their contents.
+      - Access contents via `input_strings`, e.g., `prompt_content = input_strings["prompt_file"]` and `code_content = input_strings["code_file"]`.
+      - Handle any file reading exceptions and provide informative error messages.
+
+   3. **Perform Trace Analysis**:
+      - Retrieve `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`, `temperature = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)`, and `time = ctx.obj.get('time', DEFAULT_TIME)`.
+      - Invoke the `trace` function with the resolved code and prompt contents plus `strength`, `temperature`, and `time`, and capture `prompt_line`, `total_cost`, and `model_name`.
+      - Capture the returned prompt line (`int`), total cost (`float`), and model name (`str`).
+      - Do not pass a `verbose` flag to `trace`; CLI messaging uses Rich and respects `--quiet`.
+
+   4. **Save Results**:
+      - If `output` is specified, use `output_file_paths["output"]` from `construct_paths`.
+      - Ensure the output directory exists (create it if necessary).
+      - Write a plain-text file containing:
+        - `Prompt Line: {prompt_line}`
+        - `Total Cost: ${total_cost:.6f}`
+        - `Model Used: {model_name}`
+
+   5. **Provide User Feedback**:
+      - Use `rprint` from the Rich library to display messages.
+      - Respect `--quiet`.
+      - Messages may use Rich markup for styling (colors, bold, etc.).
+      - On success, print:
+        - "Trace Analysis Complete"
+        - "Corresponding prompt line: {prompt_line}"
+        - "Total cost: ${total_cost:.6f}"
+        - "Model used: {model_name}"
+      - If `prompt_line` is `None` (no match), print "Trace analysis failed" and exit via `ctx.exit(1)`.
+
+   6. **Error Handling**:
+      - Wrap the main logic in a `try-except` block.
+      - Handle specific errors and exit via `ctx.exit(1)`:
+        - `FileNotFoundError`: print "File not found: ..."
+        - `ValueError` (invalid inputs to `trace`): print "Invalid input: ..."
+        - Other exceptions: print "An unexpected error occurred: ..."
+
+% Ensure that the function adheres to the existing codebase's coding style, including proper typing annotations, docstrings, and exception handling. Import defaults as either `from pdd import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME` or `from . import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME` depending on module context. Internal `logging` usage is acceptable as long as user-facing output still respects `--quiet`.

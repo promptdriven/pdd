@@ -1,0 +1,344 @@
+<pdd-reason>LLM prompt for agentic split step 1: neighborhood survey and target file scan.</pdd-reason>
+
+<pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
+
+% You are an expert software engineer planning a potential split for a
+large source file. Before you can decide whether splitting is the right
+move — and if so, where pieces should go — you must understand the
+project's architecture, conventions, and patterns.
+%
+% This step has TWO parts:
+%   Part A — NEIGHBORHOOD survey: understand the project's architecture,
+%            conventions, sibling modules, duplication patterns, precedent.
+%   Part B — TARGET FILE scan: read the target file itself and derive
+%            its intra-module view (symbols, churn, importers, health
+%            signals). Use bash / grep / wc / git — no parser libraries.
+%
+% Both parts feed the same step output. You must NOT propose a split yet
+% (that's step 4). Your job is pure fact-finding.
+
+% Inputs
+- target_file: {target_file}
+- language: {language}
+- repo_root: {cwd}
+
+% Part A — Neighborhood survey (do all 12)
+
+1. **Read the FULL architecture.json (OPTIONAL — graceful skip)**
+   - `cat {cwd}/architecture.json 2>/dev/null || echo "NO_ARCHITECTURE_JSON"`
+   - Count modules, group by directory, inspect `tags`, inspect `dependencies`.
+   - Note "utility" / "helper" modules depended on by many others — those
+     are god-modules that may be re-shapeable by this split.
+   - **If no architecture.json exists** (non-PDD projects, acquired
+     codebases), that's fine — this is an OPTIONAL signal. Emit
+     `architecture_json_present: false` in the output and proceed.
+     Treat its ABSENCE as zero information, not evidence of anything.
+     Do NOT fabricate missing architecture data.
+
+2. **Read .pddrc if it exists**
+   - `cat {cwd}/.pddrc 2>/dev/null`
+   - PDD's .pddrc defines context groups — directories PDD treats as
+     related.
+
+3. **Survey the directory structure**
+   - `find {cwd} -type d -maxdepth 4 -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.pdd/*'`
+   - Note: `utils/`, `helpers/`, `lib/`, `internal/`, `core/`, `services/`,
+     `routes/`, `models/`, `runtime/`, `shared/`.
+
+4. **Find precedent — has anyone split a large file before?**
+   - `git log --oneline --grep='split\|refactor.*split\|extract\|decompose\|monolith' -n 30`
+   - For 1-3 promising commits: `git show <commit> --stat`. Note the
+     resulting directory structure (flat / hierarchical) and naming.
+   - **If a prior split established a shared-layer convention (e.g.
+     `runtime/`, `shared/`, `core/`), that convention is likely correct
+     and should be reused.**
+
+5. **Find sibling modules**
+   - What other modules live next to the target? Sizes (`wc -l`)?
+   - Read 2-3 of the most similar siblings to understand the domain's
+     conventions. (The target file itself is read in Part B.)
+
+6. **Find cross-worker / cross-module duplication (PRIMARY signal for "extract to shared layer" option)**
+   - Look for sibling files by naming convention: any file adjacent to
+     the target with a similar suffix or prefix. In Python: `*_executor.py`,
+     `*_orchestrator.py`, `*_runner.py`, etc. In Go: `*_worker.go`,
+     `*_handler.go`. In Rust: `*_service.rs`, `*_worker.rs`. Adapt to
+     the language — just use file-name patterns, not symbol patterns.
+   - Read 2-3 of the most similar siblings directly (same as step 5).
+     Using code-reading intelligence, identify their top-level symbols.
+     (Do NOT grep with language-specific patterns — read and reason.)
+   - Compare: which function / method / class names appear in >=2
+     siblings? This is the shared-layer candidate list.
+   - **Symbols with the same name across 2+ siblings belong in a
+     SHARED layer**, not in the target's package. The `pdd_executor`
+     example put `_terminate_process`, `clone_repository`,
+     `_redact_secrets` in `runtime/` because both `pdd_executor` and
+     `connect_executor` contained those same functions.
+   - Note: this "same name = duplication" heuristic can produce false
+     positives for Go interface implementations, Rust trait impls, and
+     C++ template specializations where identical signatures are
+     intentional, not duplicative. Apply judgment: if the symbols have
+     the same name AND similar implementation structure AND aren't
+     implementing a shared interface/trait/concept, it's duplication.
+     Otherwise note it and move on.
+   - Output the shared-layer candidate list with counts.
+
+7. **Identify the project's organizational style**
+   - Pick ONE: `flat` | `layered` | `by-feature` | `by-package`.
+   - Justify with evidence from (3), (4), (5).
+
+8. **Is there an existing shared layer the target could migrate onto?**
+   - If yes: name it, describe its contents, note how many symbols in
+     the target's domain already exist there.
+   - If no: describe where a new shared layer would live if created.
+
+9. **Precedent: how does the PROJECT'S OWN CLI / tooling structure its large files?**
+   - If the project is a CLI: `wc -l <project>/src/**/*.py | sort -rn | head -20`
+   - Read the 2-3 biggest files' docstrings. Are they intentionally flat
+     (one cohesive workflow) or sprawling (candidates for splitting)?
+   - **Important**: if the project's own CLI tolerates 1,800+ line files
+     (like PDD CLI's `agentic_common.py`), that's a conscious architectural
+     choice. Respect it. "Flat but huge" is a valid pattern.
+
+10. **Read the refactoring literature for language-agnostic context**
+    - If you don't already know these patterns, fetch:
+      - Fowler "Split Phase": https://refactoring.com/catalog/splitPhase.html
+      - Fowler "Extract Class": https://refactoring.guru/smells/large-class
+      - Fowler "Strangler Fig": https://martinfowler.com/bliki/StranglerFigApplication.html
+      - Tornhill "Hotspots": https://docs.enterprise.codescene.io/versions/3.2.1/guides/technical/hotspots.html
+      - Bogard "Vertical Slice": https://www.jimmybogard.com/vertical-slice-architecture/
+    - These are calibration; don't re-summarize them in the survey.
+
+11. **Identify the target's likely role in the architecture**
+    - Based on its arch.json entry (and later Part B's scan), is this
+      module: a god-object, a workflow, a controller, a data model,
+      infrastructure?
+    - Role determines the right split pattern.
+
+12. **Decide: target's recommended layout IF a split happens**
+    - **Stay flat** (sibling files in same dir) if target implements ONE
+      cohesive workflow, even if huge.
+    - **Become a package** (`<basename>/` dir) if target dispatches
+      MULTIPLE workflows.
+    - **Subdirectories** only when a cluster has 3+ distinct concerns.
+    - This is advisory — step 2 (diagnose) can override with LEAVE_ALONE.
+
+% Part B — Target file scan (intra-module view)
+
+After the neighborhood survey, scan the target file itself to derive
+the intra-module facts. Downstream steps will read these from your
+output, so be thorough. Use bash tools only — NO parser assumptions.
+
+**Core principle**: you read the target file and reason about it the same way a human engineer would. You do NOT use language-specific grep patterns to identify symbols. You have read millions of lines of Python, Go, Rust, TypeScript, Kotlin, Swift, C++, Haskell, and every other mainstream language — you already know what a function, class, method, type, trait, impl block, or arrow function looks like in each. Use that knowledge. Grep patterns are brittle across languages; your code understanding is not.
+
+B1. **File size and commit history** (language-agnostic bash, safe to use)
+   - `wc -l {target_file}` -> total_loc
+   - `git log --follow --format='%cs' -- {target_file} | head -1` -> first_commit_date
+   - `git log --follow --format='%cs' -- {target_file} | tail -1` -> last_commit_date
+   - `git log --follow --oneline -- {target_file} | wc -l` -> total_commits
+
+B2. **Read the target file and identify its structure**
+   - If the file is <=25,000 lines: read the whole thing in one pass.
+   - If the file is larger: read the first 500 lines for imports and
+     top-level structure, then targeted reads of specific sections
+     based on what you found.
+   - Using your code-reading intelligence, identify every top-level
+     symbol: functions, classes, methods, types, interfaces, traits,
+     impl blocks, constants — whatever the language calls them. For
+     each symbol record: name, kind (language-appropriate: `function`,
+     `method`, `class`, `type`, `impl`, `trait`, `enum`, `const`, etc.),
+     start_line, end_line, line_count, is_public (exported /
+     non-private / `pub` / unprefixed / etc. — follow the language's
+     visibility convention), short one-line purpose drawn from code
+     reading.
+   - For languages with nested symbol structures (Rust impl blocks,
+     Python classes, Go receivers, TypeScript namespaces): record
+     both the container AND each nested method as a separate
+     `top_level_symbol`. Each method gets its own churn and coupling
+     analysis downstream.
+   - **Do NOT use grep patterns for this.** Read the file and
+     understand it.
+
+B3. **Module-level constants and configuration values**
+   - While reading the file in B2, note every top-level binding that
+     looks like a constant: uppercase-named values, `const` declarations,
+     `static` declarations, config objects, default parameters declared
+     at module scope. These are candidates for the "stays put" rule #1
+     (anything patched by tests at module level).
+
+B4. **Per-symbol churn** (primary signal for Hot / Hot-helper / Cold tiers)
+   - `git log --follow --oneline -n 100 -- {target_file}` -> list of
+     (sha, subject) pairs.
+   - For the 15-20 most interesting commits — prioritize (a) large
+     diffs (`git show --stat <sha> -- {target_file}` showing >50 lines
+     changed), (b) recent activity (last 90 days), (c) subjects
+     matching keywords like "fix", "bug", "refactor", "feat", "issue" —
+     run `git show <sha> -- {target_file}` and read the diff.
+   - For each diff hunk, look at the line range `@@ -X,Y +A,B @@` and
+     match it against the symbol boundaries you identified in B2.
+     Attribute each line of change to the enclosing symbol. This is
+     **reasoning about line-range containment**, not hunk-header
+     parsing — git's hunk headers are unreliable across languages and
+     you should not depend on them.
+   - Build the per-symbol table: `{name, commits, lines_touched,
+     density=commits/line_count}`. Commits = count of distinct SHAs
+     that touched the symbol; lines_touched = total lines added+removed
+     across those commits.
+   - **Identify coupling clusters**: symbols touched together in >=3
+     shared commits form a cluster. Emit the shared commit SHAs as
+     evidence.
+   - **On budget**: for files with >200 commits, you don't need to
+     read every commit — sample the most-interesting 20 and acknowledge
+     the sample in your output. Reliability of the signal matters more
+     than exhaustiveness.
+
+B5. **Importers** (language-agnostic grep — safe)
+   - `grep -rln "<module_basename>" --exclude-dir={.git,node_modules,.pdd,target,dist,build,__pycache__,.venv,venv} {repo_root}`
+   - This matches any file that mentions the target's basename. It
+     picks up imports in any language (Python `import X`, Go
+     `"path/X"`, Rust `use X`, TypeScript `from 'X'`, etc.) without
+     language-specific patterns.
+   - Filter false positives: read each matching file briefly to
+     verify the match is an actual import / reference, not just a
+     coincidence (e.g., a variable named the same as the module).
+   - Output: list of confirmed-importer file paths.
+
+B6. **External refs per public symbol**
+   - For each public symbol identified in B2:
+     `grep -rn "<symbol_name>" --exclude-dir={.git,node_modules,.pdd,target,dist,build,__pycache__,.venv,venv} {repo_root}`
+     minus the target file itself.
+   - Grep is safe here because you're searching for specific known
+     symbol names, not language-specific declaration syntax.
+   - Output: `symbol_name -> list[(file, line)]`.
+
+B7. **Module constants referenced by tests**
+   - For each constant identified in B3, `grep -n "<CONSTANT>" {test_file}`
+     (language-agnostic — just substring match).
+   - Cross-reference the matches: is the constant assigned in the test
+     file (legitimate test constant), or is it used in a patch /
+     mock / stub / fake / monkey-patch pattern for THIS module? Use
+     your code-reading intelligence to distinguish.
+   - Output: constants that tests patch at runtime (critical for
+     stays-put rule #1). Language-neutral — applies to any test
+     framework that does runtime substitution of module globals.
+
+B8. **Derived health signals**
+   - max_hotspot_density = max(density) across all symbols in B4
+   - longest_function_lines = max(line_count) across all symbols in B2
+   - dead_symbol_candidates = symbols from B2 where B6 returns 0
+     external results AND `git log --follow --since='2 years ago' --
+     {target_file}` does not touch the symbol. **Flag these as
+     candidates only — do NOT auto-delete.** Dead-symbol detection
+     via grep is unreliable across dynamic-reference patterns
+     (Python `importlib` / `getattr`, Go `init()` auto-runs,
+     Rust `#[no_mangle]` exports, TypeScript decorators that
+     register classes globally, plugin systems that reference
+     symbols by config-file strings). The propose_options step
+     surfaces candidates in the PR body for human confirmation.
+   - test_coverage_ratio = (test file line count) / (source file line count),
+     null if test file missing. This is a cheap proxy — not real
+     coverage — but good enough to flag "file has tests >= 40% of
+     source size" vs "file has barely any tests."
+   - closure_density = a rough count of cross-symbol references
+     identified while reading the file (state-sharing, mutable
+     globals, nonlocal bindings, shared receivers, module-level
+     handles). This is a "tangle" proxy; higher = harder to split.
+
+B9. **Cross-file co-change analysis** (the signal for shared-layer extraction)
+   - `git log --name-only --follow --format='%H' -n 100 -- {target_file}`
+     — for each commit that touched the target, list every other file
+     that was modified in the same commit.
+   - Build a co-change table: `{other_file: shared_commit_count,
+     shared_commit_ratio=shared/total_commits_touching_target}`.
+   - Files with `shared_commit_ratio >= 0.3` (co-change in ≥30% of
+     target's commits) are strong candidates: their churn is tightly
+     coupled with the target.
+   - For co-changed SIBLING files (same directory or one level up),
+     this is the **primary signal** for "missing shared layer":
+     repeated co-change across siblings indicates shared responsibility
+     that isn't factored out yet.
+   - For co-changed files far from the target (cross-package), this
+     is the primary signal for **boundary violation**: two modules
+     that aren't logically coupled shouldn't be churning in lockstep.
+   - Output `co_changed_files: [{path, shared_commits, shared_ratio}]`
+     sorted by ratio descending. Limit to top 20.
+   - If the target has <5 commits, emit `co_changed_files: []` and
+     note `co_change_data_limited: "insufficient history"`. The
+     downstream diagnose step treats this as inconclusive, not as
+     evidence of cohesion.
+
+B10. **Sibling deep-scan** (when co-change signals it)
+   - For every sibling file in Part A.6's `sibling_duplication` list
+     AND every sibling appearing in B9's `co_changed_files` with
+     ratio ≥0.3, read the sibling directly (not just its symbol list).
+   - For each such sibling, identify:
+     - Which symbols in the sibling duplicate symbols in the target
+       (by NAME and by IMPLEMENTATION SHAPE — don't just match names).
+     - Which symbols in the sibling *differ* but serve the same role
+       (variants of the same concept — candidates for a common
+       abstraction in the shared layer).
+   - Output `sibling_deep_scan: [{path, duplicate_symbols,
+     role_variants}]`. This feeds directly into step 3's
+     `shared_layer_candidates` list and step 4's
+     `shared_layer_children` option.
+
+% Output
+
+Emit TWO JSON blocks, in this order:
+
+1. `ARCHITECTURE_SURVEY_BEGIN / ARCHITECTURE_SURVEY_END` — neighborhood findings:
+   - project_scale (file_count, total_loc, languages)
+   - organizational_style
+   - conventions (naming, directory layout)
+   - precedent (prior splits with references)
+   - sibling_files (list with sizes and 1-line purposes)
+   - sibling_duplication (duplicated function names across siblings, with counts)
+   - existing_shared_layer (path, contents, applicability)
+   - domain_vocabulary (terms from sibling docstrings, useful for naming)
+   - project_own_cli_precedent (does the project tolerate huge flat files?)
+   - target_role (god-object | workflow | controller | data_model | infra)
+   - recommended_target_layout_if_split (flat | package | package_with_subdirs)
+
+2. `DEV_UNIT_DETAILS_BEGIN / DEV_UNIT_DETAILS_END` — target-scan findings:
+   - total_loc, total_commits, first_commit_date, last_commit_date
+   - top_level_symbols: [ {name, kind, start_line, end_line, line_count, is_public, short_purpose} ]
+     — `kind` is whatever the language calls it (`function`, `method`,
+     `class`, `struct`, `trait`, `impl`, `enum`, `type`, `const`, etc.)
+   - module_constants: [ {name, line} ]
+   - churn_per_symbol: [ {name, commits, lines_touched, density, tier} ]
+     — `tier` is `hot` | `hot-helper` | `cold`
+   - coupling_clusters: [ {symbols, shared_commits} ]
+   - importers: [ file_path ]
+   - external_refs: { symbol_name: [ {file, line} ] }
+   - test_file: path or null
+   - constants_patched_by_tests: [ name ]
+   - co_changed_files: [ {path, shared_commits, shared_ratio} ]
+   - sibling_deep_scan: [ {path, duplicate_symbols, role_variants} ]
+   - health: { max_hotspot_density, longest_function_lines, dead_symbol_candidates, test_coverage_ratio, closure_density }
+
+% Hard stops
+- If architecture.json **is present** but has no entry for `{target_file}`:
+  emit `ARCHITECTURE_STALE` and stop. User must run `pdd sync` first.
+  (If architecture.json is absent entirely, that is handled above — proceed normally.)
+
+% Important
+- This step is FACT-FINDING ONLY. Do NOT propose a split yet.
+- **Read the target file directly; do not try to grep for language-
+  specific function declaration patterns.** Grep patterns like
+  `^(async def |def |class )` are Python-flavored and break on
+  Go methods, Rust impl blocks, TypeScript arrow functions, and
+  multi-line signatures. You can read code in any mainstream
+  language and identify its structure directly. Use that skill.
+- The only grep commands you should run are in B4 (git log),
+  B5 (importers by basename), B6 (external refs by symbol name),
+  and B7 (constant references in test file). These search for
+  specific known strings, not for language-specific declaration
+  syntax, so they're language-agnostic.
+- Budget: you have 900s. Quality of this survey determines the
+  quality of everything downstream.
+- The agent that extracts in step 6 will trust this scan. If you
+  miss a symbol, that symbol stays in the parent — conservative
+  failure mode. Err on the side of thoroughness.
+- Your structural understanding should be as good for Rust,
+  TypeScript, Go, Swift, Kotlin, C++, or Haskell as it is for
+  Python. The design relies on this being true.

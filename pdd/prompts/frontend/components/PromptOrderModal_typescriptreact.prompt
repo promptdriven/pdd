@@ -1,0 +1,36 @@
+1) Role and Scope:
+The `PromptOrderModal` is a React functional component designed to provide a user interface for configuring the generation of architecture prompts. It serves as a selection and ordering tool within a development workflow, allowing users to choose which modules to process, define their execution sequence, and configure global generation parameters (like temperature and strength). It is responsible for managing the state of selected modules and providing a bridge between the user's configuration and the generation API.
+
+2) Requirements:
+1.  **Module Selection & Ordering**: Users must be able to toggle the selection of specific modules and reorder them using "Up" and "Down" controls.
+2.  **Smart Initialization**: On load, the component should automatically select only those modules that do not already have existing prompts (based on the `existingPrompts` prop).
+3.  **Bulk Actions**: Provide "Select All", "Deselect All", and "Select Missing" (only modules without existing prompts) buttons.
+4.  **Visual Indicators**: Display a clear indicator (e.g., an "exists" badge) for modules that already have generated prompts.
+5.  **Advanced Configuration**: Include a collapsible "Advanced Options" section to modify global settings such as `strength`, `temperature`, `time`, `local`, `verbose`, `quiet`, and `force`.
+6.  **Dynamic Formatting**: Implement helper functions to format option names (kebab-case to Title Case) and extract language/name information from filenames.
+7.  **Input Validation**: The "Generate" button must be disabled if no modules are selected.
+8.  **Responsive UI**: Use Tailwind CSS for a dark-themed, modal-based layout with scrollable content areas and hover states.
+
+3) Dependencies:
+<api_types>
+    <include>../api.ts</include>
+</api_types>
+<constants>
+    <include>../constants.ts</include>
+</constants>
+<types>
+    <include>../types.ts</include>
+</types>
+
+4) Instructions:
+1.  **Component Structure**: Create a main `PromptOrderModal` component and a sub-component `OptionInput` for handling different global option types (checkbox and range).
+2.  **State Management**: Use `useState` to manage the list of `ModuleItem` objects (containing selection and order state) and the visibility of the advanced options.
+3.  **Effect Hooks**: Implement a `useEffect` to synchronize the internal module list whenever the `modules` or `existingPrompts` props change.
+4.  **Memoization**: Use `useCallback` for action handlers like `toggleSelection`, `moveUp`, `moveDown`, and `handleConfirm` to optimize performance.
+5.  **Option Rendering**: The `OptionInput` should dynamically render a range slider for numeric values (with min/max/step) and a styled checkbox for boolean values.
+6.  **Styling**: Use `bg-surface-900` for the modal background, `accent-500` for primary actions, and `emerald-500` for "existing" indicators. Ensure the modal is centered with a backdrop blur.
+7.  **Filename Parsing**: Extract the module name by removing suffixes like `_Language.prompt` and extract the language from the suffix itself.
+
+5) Deliverables:
+-   A single TypeScript file `PromptOrderModal.tsx` exporting the `PromptOrderModal` component as the default export.
+-   The file must include the `OptionInput` helper component and the `formatOptionName` utility function.

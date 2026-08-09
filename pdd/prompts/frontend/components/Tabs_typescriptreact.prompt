@@ -1,0 +1,24 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/components/Tabs.tsx`, a compact command-tab switcher.
+
+% Dependencies
+<types_contract><include>pdd/frontend/types.ts</include></types_contract>
+
+Requirements
+1. Import `React` from `'react'` and `CommandType` from `'../types'`.
+2. Define `TabsProps` with:
+   - `activeCommand: CommandType`
+   - `onCommandChange: (command: CommandType) => void`
+3. Export default `Tabs` as `React.FC<TabsProps>`.
+4. Inside `Tabs`, compute `const commands = Object.values(CommandType)`.
+5. Render:
+   - outer wrapper `<div className="border-b border-gray-700">`
+   - `<nav className="-mb-px flex space-x-6" aria-label="Tabs">`
+6. Map `commands` to buttons:
+   - `key={command}`
+   - `onClick={() => onCommandChange(command)}`
+   - button text `{command}`
+   - class template containing base classes `whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm capitalize`, conditional active classes `'border-blue-500 text-blue-400'` vs inactive classes `'border-transparent text-gray-400 hover:text-gray-300 hover:border-gray-500'`, and trailing `focus:outline-none transition-colors duration-200`.
+7. Keep the component purely presentational (no local state, no extra helpers).
+
+Deliverable
+- Output only `pdd/frontend/components/Tabs.tsx`.

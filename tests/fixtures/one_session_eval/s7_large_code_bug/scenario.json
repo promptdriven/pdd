@@ -1,0 +1,10 @@
+{
+    "basename": "llm_client",
+    "description": "S7: Large LLM Client (~2500 lines) with injected cost accumulation bug. When retries occur, the cost from the first attempt is not added to the total \u2014 only the retry cost is reported. Tests catch the wrong total cost.",
+    "expected_behavior": "Agent identifies that code has a bug in retry cost accumulation (costs from failed attempts are discarded instead of accumulated). Fixes the code so total cost includes all attempts. Preserves all existing tests — adding new tests for additional coverage is acceptable, but existing tests must not be deleted or rewritten.",
+    "evaluation_guidance": "This is a large module (~3500 lines). The bug is subtle: in the retry loop, total_cost = attempt_cost (assignment) instead of total_cost += attempt_cost (accumulation). Two tests catch this: test_retry_cost_accumulation and test_multiple_retries_accumulate. Did the agent find and fix the correct line? Did it preserve existing tests? (Adding new tests is fine — the agent should NOT be penalized for increasing coverage. Only penalize if it deleted or rewrote existing passing tests.) Did it get stuck navigating the large file? How many fix attempts did it need (check for test_fix_attempt markers)? Did it make any unnecessary changes to other parts of the code? The fix should be a single character change (= to +=).",
+    "expected": {
+        "min_test_count": 10,
+        "quality_threshold": 2
+    }
+}

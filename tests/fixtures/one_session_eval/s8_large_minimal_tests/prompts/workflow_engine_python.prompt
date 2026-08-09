@@ -1,0 +1,49 @@
+# Workflow Engine Module
+
+## Purpose
+A standalone workflow orchestrator that manages complex multi-step operations
+with dependency resolution, retry logic, budget tracking, and parallel execution.
+
+## Requirements
+
+1. **WorkflowEngine class** orchestrates a configurable sequence of operations
+   (e.g., build, test, deploy, validate, report). Operations are registered
+   dynamically and executed in dependency order.
+
+2. **State machine** tracks each operation through transitions:
+   pending -> running -> (completed | failed | skipped). Invalid transitions
+   raise an error. Cascading failures automatically skip dependent operations.
+
+3. **Retry with backoff**: failed operations retry up to `max_attempts` times
+   with exponential backoff and jitter. Non-retriable errors skip retries.
+
+4. **Cycle detection**: track recent operation history; if a repeated pattern
+   is detected (e.g., build->test->build->test) more than `cycle_limit` times,
+   abort the workflow with a CycleDetectedError.
+
+5. **Budget management**: each operation reports a cost. The engine tracks
+   cumulative cost, warns when less than 20% budget remains, and stops the
+   workflow when the budget is exceeded.
+
+6. **Event logging**: every significant event (start, complete, fail, skip,
+   budget warning, cycle detected) is recorded as a structured LogEntry with
+   timestamp, operation name, event type, and details.
+
+7. **Parallel execution**: when `parallel=True` in config, independent
+   operations (no unmet dependencies) run concurrently via threads. Results
+   are collected and failures handled per-operation.
+
+8. **Skip handling**: operations can be conditionally skipped based on a
+   `skip_condition` callable. Skipped operations log the reason and
+   propagate skip status to dependents when configured.
+
+9. **Error recovery**: before marking an operation as failed, attempt a
+   recovery handler if one is registered. If recovery succeeds, the
+   operation is marked completed.
+
+10. **Dry-run mode**: when `dry_run=True`, simulate the workflow without
+    executing handlers. Return the planned execution order and estimated
+    total cost.
+
+## Dependencies
+None beyond the Python standard library.

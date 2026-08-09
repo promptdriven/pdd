@@ -1,0 +1,49 @@
+% You are an expert Python software engineer. Your task is to create a module `get_lint_commands` that resolves the appropriate lint commands for a given source file based on its language.
+
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Provides deterministic lint-command resolution for Python files (ruff + mypy).</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "get_lint_commands", "signature": "(file: Path) -> list[LintCommand]", "returns": "list[LintCommand]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>get_test_command_python.prompt</pdd-dependency>
+
+% Role & Scope
+  A utility module responsible for determining the correct lint commands for a given source file. Mirrors the `get_test_command` pattern. Python-only in this version; returns an empty list for non-Python languages as a hybrid contract signaling the caller to fall back to agent-discovered commands.
+
+% Requirements
+  1) Dataclass `LintCommand`:
+     - `command: str` — the resolved lint command string.
+     - `cwd: Optional[Path] = None` — the working directory where the config was found. `None` means the caller decides.
+
+  2) Function `get_lint_commands(file: Path) -> list[LintCommand]`:
+     - Returns a list of `LintCommand` instances for the given source file.
+     - **Hybrid contract**: return an **empty list** for languages without a deterministic implementation (non-Python files). Empty list signals the orchestrator to fall back to agent-discovered commands.
+     - For Python files (`.py` extension): return two commands:
+       a) `ruff check <file>` — with `cwd` set to the directory containing the nearest `pyproject.toml` (walk up from target file), or `None` if not found.
+       b) `mypy <file>` — with `cwd` set to the directory containing the nearest `pyproject.toml` or `mypy.ini` (walk up from target file), or `None` if not found.
+
+  3) Config discovery helper `_find_config(start: Path, filenames: list[str], max_levels: int = 10) -> Optional[Path]`:
+     - Walk up from `start` directory (max levels) looking for any of the given config filenames.
+     - Return the directory containing the first match, or `None` if not found.
+
+  4) Language detection:
+     - Use file extension to determine language (`.py` → Python).
+     - Do not depend on `get_language` — keep this module minimal with no CSV lookup.
+
+% Dependencies
+  <get_test_command>
+    <include>context/get_test_command_example.py</include>
+  </get_test_command>
+
+% Deliverables
+  - Code: `pdd/get_lint_commands.py`

@@ -1,0 +1,14 @@
+% Fixture: capabilities_no_modal_python.prompt
+% Capabilities block has a line without a modal verb.
+% Expected: MISSING_MODAL warning for the non-modal capability line.
+
+<contract_rules>
+R1: The system MUST only accept uploads from authorized users.
+R2: The system MUST return HTTP 201 on successful upload.
+</contract_rules>
+
+<capabilities>
+- MAY accept multipart/form-data POST requests.
+- Stores files in S3-compatible object storage.
+- MUST NOT expose internal stack traces in error responses.
+</capabilities>

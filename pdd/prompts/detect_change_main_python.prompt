@@ -1,0 +1,50 @@
+% You are an expert Python engineer. Your goal is to write a Python function, 'detect_change_main', that will be the CLI wrapper for detecting which prompts need to be changed based on a change description. This function will analyze a list of prompt files and a change description file to determine which prompts need modifications. It should retrieve a `time` parameter from the Click context (`ctx.obj.get('time', DEFAULT_TIME)`) and pass it to the `detect_change` function as a float time budget.
+
+<include>./context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys).
+        - `prompt_files` (List[str]): A list of filenames of prompts that may need to be changed.
+        - `change_file` (str): Filename whose content describes the changes that need to be analyzed.
+        - `output` (Optional[str]): Optional path where to save the CSV file containing analysis results. If None, uses default naming convention.
+    Outputs:
+        - Returns a tuple containing (List[dict], float, str):
+            - List[dict]: List of dictionaries containing analysis results with 'prompt_name' and 'change_instructions' keys
+            - float: The total cost of the operation
+            - str: The name of the model used
+
+% Implementation requirements and behavior alignment:
+    - Use `.construct_paths` with `command="detect"` to resolve input files and determine output paths. When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
+      - Map inputs as: `{"change_file": change_file, **{f"prompt_file_{i}": pf for i, pf in enumerate(prompt_files)}}`.
+      - Read the change description from `input_strings["change_file"]`.
+      - Allow default output path generation (pattern `{basename}_detect.csv`) when `output` is not provided.
+    - Retrieve parameters from `ctx.obj`:
+      - `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`
+      - `temperature = ctx.obj.get('temperature', 0.0)`
+      - `time_budget = ctx.obj.get('time', DEFAULT_TIME)` (float in [0.0, 1.0])
+    - Call `detect_change(prompt_files, change_description, strength, temperature, time_budget, verbose=not ctx.obj.get('quiet', False))`.
+    - Save CSV results to the resolved `output_file_paths["output"]` when available, with headers `prompt_name,change_instructions`.
+    - Unless `--quiet` is set, print a success summary (model used, total cost) and list detected changes. On error, print a Rich‑styled error and exit with status 1.
+
+<examples>
+   % Here are examples of how to use internal modules:
+   <internal_example_modules>
+      - Here is an example of how to use the `construct_paths` function:
+      <construct_paths_example>
+      <include>context/construct_paths_example.py</include>
+      </construct_paths_example>
+
+      - Here is an example of how to use the `detect_change` function (time is a float budget):
+      <detect_change_example>
+      <include>context/detect_change_example.py</include>
+      </detect_change_example>
+   </internal_example_modules>
+</examples>
+
+
+% Here is the README for the cli command that has details of how the 'detect' command works:
+   <cli_command_readme>
+   <include>./README.md</include>
+   </cli_command_readme>

@@ -94,12 +94,12 @@ def test_postprocess_invalid_strength_high():
         postprocess(llm_output="some code", language="python", strength=1.1)
 
 def test_postprocess_invalid_temperature_low():
-    with pytest.raises(ValueError, match="temperature must be between 0 and 1"):
+    with pytest.raises(ValueError, match="temperature must be between 0 and 2"):
         postprocess(llm_output="some code", language="python", temperature=-0.1)
 
 def test_postprocess_invalid_temperature_high():
-    with pytest.raises(ValueError, match="temperature must be between 0 and 1"):
-        postprocess(llm_output="some code", language="python", temperature=1.1)
+    with pytest.raises(ValueError, match="temperature must be between 0 and 2"):
+        postprocess(llm_output="some code", language="python", temperature=2.1)
 
 def test_postprocess_invalid_strength_type_string():
     with pytest.raises(TypeError): # Comparison "0 <= 'abc'" raises TypeError
@@ -380,8 +380,26 @@ def test_strength_gt_0_parameters_passed_to_llm_invoke(mock_llm_invoke, mock_loa
     assert kwargs['strength'] == strength_val
     assert kwargs['temperature'] == temperature_val
     assert kwargs['time'] == time_val
+    assert kwargs['language'] == language_val
     assert kwargs['verbose'] == verbose_val
     assert kwargs['output_pydantic'] == ExtractedCode
+
+
+@patch('pdd.postprocess.load_prompt_template', return_value="test_prompt")
+@patch('pdd.postprocess.llm_invoke')
+def test_postprocess_accepts_generate_temperature_above_one(
+    mock_llm_invoke, mock_load_template,
+):
+    """The generate CLI's documented 0-2 range reaches code extraction."""
+    mock_llm_invoke.return_value = {
+        'result': ExtractedCode(extracted_code="code"),
+        'cost': 0.1,
+        'model_name': 'model',
+    }
+
+    postprocess("Test LLM Output", "python", temperature=1.5)
+
+    assert mock_llm_invoke.call_args.kwargs['temperature'] == 1.5
 
 
 # IV. Default Parameter Values
@@ -405,6 +423,7 @@ def test_default_parameters(mock_llm_invoke, mock_load_template):
     assert kwargs['strength'] == DEFAULT_STRENGTH  # Default strength
     assert kwargs['temperature'] == 0    # Default temperature
     assert kwargs['time'] == DEFAULT_TIME # Default time
+    assert kwargs['language'] == language_val
     assert kwargs['verbose'] == False   # Default verbose
     assert kwargs['output_pydantic'] == ExtractedCode
 
@@ -589,3 +608,90 @@ Clean prompt without tags.
     expected_code = """Clean prompt without tags."""
     extracted_code, cost, model_name = postprocess(llm_output, "prompt", strength=0)
     assert extracted_code == expected_code
+
+
+# ---------------------------------------------------------------------------
+# Scope addition: covers expansion item pdd/postprocess.py:134 identified
+# by Step 6 but absent from Step 8's plan.
+#
+# Root cause (sibling of issue #1612 Bug 1): `extracted_code =
+# result["result"].extracted_code` at line 134 has no isinstance guard.
+# When llm_invoke returns a raw str as result["result"] (cache-bypass /
+# truncation path), the attribute access raises
+# AttributeError('str object has no attribute extracted_code') instead of
+# a meaningful error.
+# ---------------------------------------------------------------------------
+
+
+@patch('pdd.postprocess.load_prompt_template', return_value="dummy_prompt")
+@patch('pdd.postprocess.llm_invoke')
+def test_result_raw_string_does_not_raise_attribute_error_issue_1612(
+    mock_llm_invoke, mock_load_template
+):
+    """Scope addition: covers expansion item pdd/postprocess.py:134 identified
+    by Step 6 but absent from Step 8's plan.
+
+    When llm_invoke returns a raw string as result['result'] (cache-bypass path),
+    accessing result["result"].extracted_code at line 134 raises
+    AttributeError('str object has no attribute extracted_code').
+    postprocess should raise a meaningful ValueError, not propagate AttributeError.
+    """
+    mock_llm_invoke.return_value = {
+        "result": "Cache bypass retry also returned None",  # raw str, not ExtractedCode
+        "cost": 0.05,
+        "model_name": "gpt-4",
+    }
+
+    # After the fix, postprocess must not propagate AttributeError.
+    # It should raise ValueError (consistent with the existing guard at line 129)
+    # or handle the malformed result another way — but NOT AttributeError.
+    with pytest.raises((ValueError, TypeError)):
+        postprocess("some output", "python", strength=0.5)
+
+
+@patch('pdd.postprocess.load_prompt_template', return_value="dummy_prompt")
+@patch('pdd.postprocess.llm_invoke')
+def test_result_none_value_does_not_raise_attribute_error_issue_1612(
+    mock_llm_invoke, mock_load_template
+):
+    """Scope addition: covers expansion item pdd/postprocess.py:134 identified
+    by Step 6 but absent from Step 8's plan.
+
+    When llm_invoke returns None as result['result'] (cache-bypass path),
+    accessing result["result"].extracted_code at line 134 raises
+    AttributeError('NoneType object has no attribute extracted_code').
+    postprocess should raise a meaningful ValueError, not propagate AttributeError.
+    """
+    mock_llm_invoke.return_value = {
+        "result": None,  # None, not ExtractedCode
+        "cost": 0.05,
+        "model_name": "gpt-4",
+    }
+
+    with pytest.raises((ValueError, TypeError)):
+        postprocess("some output", "python", strength=0.5)
+
+
+@patch('pdd.postprocess.load_prompt_template', return_value="dummy_prompt")
+@patch('pdd.postprocess.llm_invoke')
+def test_result_raw_dict_value_does_not_raise_attribute_error_issue_1612(
+    mock_llm_invoke, mock_load_template
+):
+    """Regression for the issue #1612 raw-dict hole.
+
+    When a cloud structured-output response fails Pydantic validation,
+    ``llm_invoke`` logs a warning and ``pass``es the raw parsed value through,
+    so ``result['result']`` can be a plain ``dict`` (see llm_invoke.py cloud
+    path). The original narrow guard only caught ``None``/``str`` and let a
+    ``dict`` reach ``result["result"].extracted_code``, raising
+    AttributeError('dict object has no attribute extracted_code'). The robust
+    ``isinstance`` guard must turn it into a meaningful ValueError instead.
+    """
+    mock_llm_invoke.return_value = {
+        "result": {"extracted_code": "print('hello')"},  # raw dict, not ExtractedCode
+        "cost": 0.05,
+        "model_name": "gpt-4",
+    }
+
+    with pytest.raises((ValueError, TypeError)):
+        postprocess("some output", "python", strength=0.5)

@@ -1,0 +1,210 @@
+<pdd-reason>Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.</pdd-reason>
+
+<pdd-dependency>agentic_checkup_python.prompt</pdd-dependency>
+<pdd-dependency>commands/prompt_python.prompt</pdd-dependency>
+<pdd-dependency>commands/contracts_python.prompt</pdd-dependency>
+<pdd-dependency>commands/gate_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_agent_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_planner_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_prompt_main_python.prompt</pdd-dependency>
+
+<pdd-interface>
+{
+  "type": "command",
+  "command": {
+    "commands": [
+      {"name": "checkup", "description": "Run agentic health checkup, PR review loop, Terra/Sol convergence, or local diagnostics including lint; supports --agentic-review-loop for standalone adversarial PR review"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Write `pdd/commands/checkup.py` implementing the `pdd checkup` CLI wrapper for `run_agentic_checkup`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+- Click command: `@click.command("checkup")`, `@click.pass_context`, `@track_cost`.
+- Dispatch the reserved positional target `simplify` to `pdd.commands.checkup_simplify`, forwarding remaining Click arguments so `pdd checkup simplify [PATH] [OPTIONS]` is available as the local Claude Code candidate-cleanup subcommand. Because `checkup` is retained as a backwards-compatible command rather than converted to a Click group, disable Click's eager parent help option and forward a deferred `--help` flag when `target == "simplify"` so `pdd checkup simplify --help` renders simplify options; for all other targets it must still render normal checkup help.
+- Implement `pdd checkup lint ...` as the primary command to lint prompts and stories.
+  The sub-invocation may use extra-argument dispatch, but `pdd checkup --help` and
+  `pdd checkup lint --help` must both show the appropriate help output.
+- Dispatch `pdd checkup contract ...` / `pdd checkup contracts ...` to the contract
+  check command group without breaking issue-mode checkup behavior.
+  `pdd checkup contract check --help` must render the `contracts check` subcommand help
+  and exit 0 (no doubled `check` token, no missing TARGET error).
+- Params:
+- `--prompt-repair` Choice of `off` | `best-effort` | `strict` (default `"off"`). When a prompt source-set check fails (status != "pass") during local prompt-target checkup: `off` = report and continue; `best-effort` = attempt non-interactive repair and warn on remaining source-set findings; `strict` = attempt repair and block on remaining unresolved source-set findings. Forwarded as `prompt_repair` to `run_agentic_checkup()`.
+- `--max-prompt-repair-rounds` int (default `1`). Maximum repair-and-recheck iterations per prompt file. Forwarded as `max_prompt_repair_rounds`.
+- `--max-prompt-token-growth` int (default `1000`). Maximum token increase allowed during a single repair pass. Forwarded as `max_prompt_token_growth`.
+- `--max-prompt-repair-seconds` float (default `120.0`). Wall-clock timeout for the entire prompt repair loop. Forwarded as `max_prompt_repair_seconds`.
+- `--prompt-repair-model` string (default unset). Exact Codex model for the local
+  non-interactive prompt-repair loop; it disables provider/model fallback and requires
+  `--prompt-repair best-effort|strict`.
+- `--prompt-repair-effort` choice `low` | `medium` | `high` | `xhigh` (default unset).
+  Exact Codex effort forwarded with `--prompt-repair-model`; reject effort without a
+  model and reject both selectors outside local prompt-target repair.
+- `--interactive` flag. With a single prompt target, explicitly enter the agentic
+  interactive repair session. This is opt-in only; bare `pdd checkup <prompt>`
+  MUST remain structured/non-interactive.
+- `--auto` flag. With a single prompt target, run the agentic session in
+  non-interactive auto mode.
+- `--apply` flag. Write selected low-risk repairs; valid only with `--interactive`
+  or `--auto`.
+- `--dry-run` flag, with `--preview` retained as a compatibility alias. With
+  `--apply`, preview changes without writing files.
+- `--planner` choice of `deterministic` | `llm`. Explicitly selects the agentic
+  checkup planner; using this flag is explicit agentic-review intent.
+- `target` arg (positional, optional — required for issue mode; also dispatches local checkup utilities below)
+  - `--no-fix` flag
+  - `--timeout-adder` (float, default `0.0`)
+  - `--start-step` recovery override. Accept only `1`, `2`, `3`, `4`, `5`, `6.1`, `6.2`, `6.3`, `7`, or `8`; pass the parsed int/float as `start_step_override` to the legacy `run_agentic_checkup` path.
+  - `--no-github-state` flag
+  - `--validate-arch-includes` flag (local mode — cross-validates `architecture.json` against module prompt `<include>` tags; mutually exclusive with `target` and `--pr`/`--issue`)
+  - `--project-root` (path, used with `--validate-arch-includes`)
+  - `--strict` flag (used with `--validate-arch-includes`)
+  - `--help` / `-h` eager flag when needed for alias-aware help dispatch
+  - `--pr <pr-url>` (PR-verification mode — verify an existing PR instead of opening one; `--issue` is OPTIONAL (with no issue the PR is reviewed on its own merits); mutually exclusive with `target`)
+  - `--issue <issue-url>` (OPTIONAL PR-mode companion to `--pr` — when given, the source issue the PR is meant to resolve and the PR is verified for issue alignment; cannot be passed without `--pr`)
+  - `--review-loop` (PR mode only — run the primary-reviewer/fixer review loop; still requires both `--pr` and `--issue`)
+  - `--terra-sol` (PR mode only — run bounded Terra/Sol convergence with both roles fixed to GPT-5.6 Codex; Sol may finish early on a current clean verdict, otherwise `--max-review-rounds` is the hard cap, default `5`; requires `--pr`; cannot combine with `--final-gate`, `--review-loop`, `--agentic-review-loop`, `--no-fix`, `--review-only`, or prompt-repair modes; pass `--prompt-repair off`; time and cost values do not cap this mode)
+  - `--agentic-review-loop` (standalone adversarial PR checkup mode; implies `--review-loop` and `--json`; requires `--pr`; `--issue` is optional; permits `--no-fix` for report-only mode; cannot be combined with `--final-gate`)
+  - `--adversarial-prompt TEXT` (adversarial instruction forwarded to all reviewers in `--agentic-review-loop` mode; defaults to a canonical-checkup-anchored lens so the fallback/mirror pass does not invent new merge criteria: `"Using the same criteria as canonical pdd checkup, find concrete reasons this PR should not merge. Do not introduce new merge criteria. Report only verifiable blockers or material risks."`)
+  - Hosted fallback/mirror env: when `PDD_CHECKUP_FALLBACK_MIRROR=1`, `PDD_AGENTIC_CHECKUP_ARTIFACT_PATH` controls the exact artifact path and optional `PDD_AGENTIC_CHECKUP_REVIEWERS=codex:/review,claude:/code-review` requests provider-native review-command behavior while preserving canonical `--final-gate` authority.
+  - `--fresh-final-review ROLE` (role to use for the fresh final review in `--agentic-review-loop` mode; runs in a new context/session with no prior reviewer/fixer conversation state)
+  - `--full-suite-source` (choice `local`|`github-checks`, default `local`; final-gate only. `local` requires `--test-scope full`; `github-checks` requires `--test-scope targeted` and gates on GitHub checks for the current PR head before Layer 2)
+  - `--final-gate` (`final_gate`, flag — the canonical final PR gate, issue #1406; requires both `--pr` and `--issue`; runs the PR-scoped checkup as Layer 1 then the review-loop as Layer 2 and returns a real ship verdict; this is what "ready for maintainer review" means once a PR exists; cannot be combined with `--review-loop`, `--no-fix`, `--review-only`, `--start-step`, or `--no-gates`; `--test-scope targeted` is allowed only with `--full-suite-source github-checks`)
+  - `--review-only` (requires `--review-loop`; run every configured independent reviewer pass and do not invoke fixer/commit/push; may be combined with `--no-fix`)
+  - `--reviewers` (comma-separated independent reviewer roles, default `codex,claude`; every role runs before the separately configured fixer; agentic mirror/fallback mode also accepts `role:/slash-command` tokens such as `codex:/review,claude:/code-review`)
+  - `--reviewer` (explicit primary reviewer role; reorders the `--reviewers` roles)
+  - `--fixer` (the only fixer selector; defaults to `claude` when omitted and never consumes the second `--reviewers` role)
+  - `--reviewer-fallback` (optional secondary reviewer role invoked once if the primary reviewer cannot complete; must differ from the resolved reviewer and fixer)
+  - `--fixer-fallback` (optional secondary fixer role invoked once if the primary fixer cannot address reviewer findings; must differ from the resolved fixer, active reviewer, and originally configured reviewer)
+  - `--allow-same-reviewer-fixer` (flag, default off; explicitly allows the resolved reviewer and fixer to be the same role in `--review-loop`, opting into single-role review/fix mode)
+  - `--max-review-rounds` (int, default `5`)
+  - `--max-review-cost` (float, default `50.0`)
+  - `--max-review-minutes` (float, default `90.0`)
+  - `--require-all-reviewers-clean/--no-require-all-reviewers-clean` (default true)
+  - `--continue-on-reviewer-limit` (flag; reports provider/rate/context-limit/auth/network/sandbox reviewer failures as `degraded` instead of `failed`, but never marks the active reviewer clean or continues mutation without a completed review)
+  - `--fallback-reviewer-on-failure` (flag, default off; when the primary reviewer ends in `failed` or `missing`, run a second review pass using the fixer's identity as a fallback reviewer; only `failed`/`missing` are eligible — `degraded` means reduced quality and must not silently lose signal; on a clean fallback the rendered `reviewer-status:` line shows the primary as `clean` so the cloud verdict adapter's real-reviewer-clean rule can fire, but the primary's original failure is preserved in `reviewer_status_details` with a `superseded_by_fallback="true"` marker and rendered in the `### Reviewer Diagnostics` subsection)
+  - `--require-final-fresh-review/--no-require-final-fresh-review` (default true)
+  - `--blocking-severities` (comma-separated highest-priority severities for review-loop reporting and prompt guidance; the fixer still receives every valid reviewer finding; default `blocker,critical,medium`; unknown severities silently dropped)
+  - `--clean-reviewer-states` (compatibility parser for downstream reviewer-status gates; default `clean`; the tokens `failed`, `degraded`, and `missing` are always treated as not-clean regardless of this flag)
+  - `--no-gates` (flag, default off; disable the Issue #1092 deterministic-gate enforcement layer — the review loop discovers a conservative set of fast local checks (prettier --check, PR-range git diff --check, a non-mutating Python syntax check via builtin `compile()`, optional ruff/black/mypy/tsc) and refuses a clean LLM verdict if any of them fail on the worktree; `--no-gates` reverts to LLM-only verdicts)
+  - `--gate-timeout` (float, default `60.0`; per-gate wall-clock cap in seconds — a gate exceeding the cap is recorded as a runner-side failure and treated as a blocker finding rather than blocking the loop)
+  - `--gate-allow` (repeatable string, default `()`; forward-compatibility hook for opting extra gate names into discovery beyond the conservative v1 set — discovery remains allowlist-only; this argument is threaded through so the CLI surface and discovery surface can co-evolve)
+- Signature returns `Optional[Tuple[str, float, str]]`.
+- Local utility dispatch before mode validation:
+  - Import `prompt_lint` from `.prompt`, `contracts_group` from `.contracts`, and `coverage_cmd` from `.coverage`.
+  - For `target == "lint"`, delegate remaining args to `prompt_lint.main(...)`, enabling `pdd checkup lint`.
+  - For `target in {"contract", "contracts"}`, delegate remaining args to `contracts_group.main(...)`, enabling `pdd checkup contract check`.
+  - For `target == "coverage"`, delegate remaining args to `coverage_cmd.main(...)`, enabling deterministic `pdd checkup coverage`; contract-rule analysis is implied and no `--contracts` flag is required.
+  - For `target == "gate"`, delegate remaining args to `gate_cmd.main(...)` with `prog_name="pdd checkup gate"`; do not register a top-level `pdd gate` command.
+  - For a non-utility target, reject any remaining unknown arguments.
+- Prompt-target dispatch (before PR/issue mode validation): classify `target` with
+  `classify_checkup_target(target, project_root=project_root)`. When `pr_url is
+  None`, `target` is set, and `is_prompt_shaped_target(target,
+  project_root=project_root)` is true:
+  - For `CheckupTargetKind.PROMPT_FILE`, bare `pdd checkup <prompt>` MUST call the
+    structured `run_checkup_prompt()` path. Instantiate `CheckupAgent` only when
+    explicit agentic intent is present (`--interactive`, `--auto`, or `--planner`)
+    and not for `--json`, `--explain`, or active prompt repair.
+  - `--interactive` requires a TTY unless paired with `--auto`; `--auto` is
+    CI-safe and must not prompt.
+  - `--apply` requires `--interactive` or `--auto`; `--dry-run`/`--preview` keeps
+    apply read-only.
+  - For prompt directories, run the agentic review over every prompt file and
+    print one aggregate pass/warn/block summary. Resolve relative directories
+    against `--project-root` before falling back to cwd; if no prompt files are
+    present, raise `UsageError("No .prompt files found under ...")`.
+  - For devunit targets, keep the structured multi-target path by calling
+    `run_checkup_prompt(target, explain=..., as_json=..., quiet=...,
+    strict=..., project_root=...)`; do not route devunits through
+    `CheckupAgent.run()`, which is intentionally single-file only.
+  - When the structured check fails (`passed is False`) and `prompt_repair !=
+    "off"` and `--json` is not set, resolve one or more local `.prompt` paths and
+    for each file: (a) build `pdd.prompt_source_set_report.v1` via
+    `build_prompt_source_set_report(path, target=target, project_root=...,
+    strict=strict)`; (b) skip when `report.status == "pass"`; (c) otherwise call
+    `run_prompt_repair_loop(path, PromptRepairConfig(...), context={
+    "source_set_report": json.dumps(report.as_dict()),
+    "recommended_actions": "\n".join(report.recommended_actions())}, cwd=...,
+    verbose=..., quiet=..., strict=strict, model=prompt_repair_model,
+    reasoning_effort=prompt_repair_effort)`; then re-run `run_checkup_prompt`.
+    Accumulate the initial check, repair, and final check costs, and expose the repair's
+    provider-observed model when present. A known-zero subscription repair remains zero
+    and must not be converted to direct API pricing. Return the final
+    `(message, cost, model)` tuple and do not call
+    `run_agentic_checkup()`.
+- Mode validation:
+  - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.
+  - If `--review-only` is set without `--review-loop`: reject it.
+  - If `--start-step` is combined with `--review-loop`: reject it; the override only applies to the legacy checkup orchestrator.
+  - PR mode is keyed on `--pr` alone: `pr_mode = pr_url is not None`. `--issue` is OPTIONAL in PR mode (#1292).
+  - If `--issue` is set without `--pr`: reject it (BadParameter, `param_hint="'--issue'"`, message must mention `--issue requires --pr`) — a standalone issue belongs in default issue mode as `target`.
+  - Mode-conflict summary (one row per mode; the bullets below are the authoritative detail and error messages — this table exists so the combinatorics can be read and unit-tested at a glance):
+
+    | Mode flag | Requires | `--issue` | `--no-fix` | Forbidden combos | Implicit sets |
+    |---|---|---|---|---|---|
+    | `--agentic-review-loop` | `--pr` | optional | allowed (report-only) | `--final-gate` | `review_loop=True`, `json=True` |
+    | `--terra-sol` | `--pr` | optional | rejected | `--final-gate`, `--review-loop`, `--agentic-review-loop`, `--no-fix`, `--review-only`, prompt-repair modes | `terra_sol=True` |
+    | `--review-loop` (agentic off) | `--pr` + `--issue` | required | only with `--review-only` | — | — |
+    | `--final-gate` | `--pr` + `--issue` | required | rejected | `--review-loop`, `--no-fix`, `--review-only`, `--start-step`, `--no-gates` | — |
+
+    Round validation (`--max-review-rounds >= 1`) applies to every review mode including `--terra-sol`; cost/minutes finite-and-`> 0` validation applies to the three ordinary bounded modes (`--agentic-review-loop`, `--review-loop`, and `--final-gate`). Terra/Sol deliberately ignores cost/minutes caps, but not its round cap.
+  - If `--agentic-review-loop` is set: requires `--pr` (message: `--agentic-review-loop requires --pr`); `--issue` is optional; sets `review_loop=True` and `json=True` internally; allows `--no-fix`; reject combining with `--final-gate` (BadParameter, `param_hint="'--agentic-review-loop'"`, message must mention `--agentic-review-loop cannot be combined with --final-gate`); validate max-review values the same as `--review-loop`.
+  - If `--terra-sol` is set: require `--pr`; reject `--final-gate`, `--review-loop`, `--agentic-review-loop`, `--no-fix`, and `--review-only` with `BadParameter` and `param_hint="'--terra-sol'"`; require `--prompt-repair off` (including any effective project default); require `--max-review-rounds >= 1`; forward `terra_sol=True` plus the caller-selected round cap to `run_agentic_checkup`. Caller-supplied reviewer/fixer fallback options may parse normally, but both the dispatcher and direct review-loop configuration boundary must disable them before execution so only GPT-5.6 Codex can run either authoritative role.
+  - If `--review-loop` is set (and `--agentic-review-loop` is NOT set): require BOTH `--pr` and `--issue` (review-loop without an issue is deferred as a follow-up; message must mention `--review-loop requires --pr and --issue`); reject `--no-fix` unless `--review-only` is also set; validate max-review values are positive (`--max-review-rounds >= 1`, cost/minutes > 0).
+  - Hosted `pdd_cloud` fallback/mirror integration is env-driven, not a second command: when `PDD_CHECKUP_FALLBACK_MIRROR=1` and `PDD_AGENTIC_CHECKUP_ARTIFACT_PATH` is set, the normal `--final-gate` path should remain valid and `agentic_checkup.py` should pass the exact artifact path into `ReviewLoopConfig.agentic_artifact_path`. Do not make `--agentic-review-loop` compatible with `--final-gate`; the env contract is the hosted bridge.
+  - If `--final-gate` is set (issue #1406): require BOTH `--pr` and `--issue` (message must mention `--final-gate requires --pr and --issue`). Reject combining it with `--review-loop` (the gate owns the review-loop as Layer 2), with `--no-fix` (the gate owns the fix/review steps), with `--review-only`, with `--start-step` (the override only applies to the legacy checkup workflow), or with `--no-gates` (the canonical ship verdict must keep the deterministic gates, else an LLM-only review could pass over a failing gate). If `--full-suite-source local`, require `--test-scope full`; if `--full-suite-source github-checks`, require `--test-scope targeted` and use GitHub checks as the full-suite truth before Layer 2 (the default all-check-runs gate blocks only on genuine failed/pending/missing/unreadable checks, treats skipped/neutral and `action_required` as non-applicable, and fails open on unrecognized future conclusions; see `ci_validation_python.prompt` item #15). There is no `none` final-gate source. All final-gate conflict rejections raise `BadParameter` with `param_hint="'--final-gate'"` except the github-checks test-scope pairing, which uses `param_hint="'--full-suite-source'"`. Forward `final_gate=final_gate` and `full_suite_source=full_suite_source` to `run_agentic_checkup`. Because the gate runs the review loop as Layer 2, the Layer-2 budget validation (`--max-review-rounds >= 1`, and `--max-review-cost`/`--max-review-minutes` finite-and-`> 0`, rejecting NaN/inf) applies for `--final-gate` exactly as it does for `--review-loop`.
+  - If `--pr` is set (PR mode): `target` must be `None` (mutually exclusive); validate `--pr` via `_parse_pr_url(pr_url)` (mention "GitHub pull-request URL" in error); validate `--issue` via `_is_github_issue_url(issue_url_opt)` ONLY when it is provided (mention "GitHub issue URL" in error); use `issue_url_opt` as the effective issue URL (may be `None` → review the PR on its own merits).
+  - Otherwise (default agentic issue mode): require `target`; validate via
+    `_is_github_issue_url(target)` (BadParameter with `param_hint="'TARGET'"` and
+    message must mention "GitHub issue URL"). Prompt-shaped targets are handled
+    by the prompt-target dispatch path above and never reach this branch.
+- Do not force `--no-fix` in PR mode. `pdd checkup --pr <pr-url>` (with or without `--issue`) must preserve the user's fix intent so the orchestrator can run the full steps 1-7, commit generated fixes, and push them back to the same PR branch. `--no-fix` remains an explicit user option for verification-only PR checks.
+- `ctx.ensure_object(dict)`; read `quiet = ctx.obj.get("quiet", False)` and `verbose = ctx.obj.get("verbose", False)`.
+- Agentic prompt repair: when dispatching to `run_agentic_checkup()`, forward
+  `prompt_repair`, `max_prompt_repair_rounds`, `max_prompt_token_growth`, and
+  `max_prompt_repair_seconds`. Inside `run_agentic_checkup()`, when
+  `prompt_repair != "off"`, discover changed prompt files, build each
+  `pdd.prompt_source_set_report.v1`, skip `status == "pass"`, call
+  `run_prompt_repair_loop` with the report as context, and in `strict` mode block
+  on unresolved source-set status before entering the orchestrator.
+- Dispatch to `run_agentic_checkup(**checkup_kwargs)`. Do NOT spell out a single flat 40-argument call — assemble `checkup_kwargs` as a dict from the grouped mappings below, then splat it. Each option maps to exactly one keyword (left = Click option/local var after any transform, right = `run_agentic_checkup` keyword); `pr_url` is `None` in non-PR modes:
+  - Core context: `issue_url=effective_issue_url`, `pr_url`, `verbose`, `quiet=(quiet or agentic_review_loop)`, `no_fix`, `timeout_adder`, `use_github_state=(not no_github_state)`, `test_scope`, `full_suite_source`, `terra_sol`. Force-quiet the review loop under `--agentic-review-loop` (which emits its structured verdict as JSON on stdout) so the loop's human/console output stays off stdout and the emitted stdout is guaranteed to parse as JSON (issue #1788).
+  - Mode selection: `review_loop`, `agentic_review_loop`, `final_gate`, `review_only`. For standalone agentic mode, also pass the invocation-private reserved path as `agentic_artifact_path`; pass `None` otherwise.
+  - Reviewer/fixer roles: `reviewers`, `reviewer`, `fixer`, `reviewer_fallback`, `fixer_fallback`, `allow_same_reviewer_fixer`, `require_all_reviewers_clean`, `continue_on_reviewer_limit`, `fallback_reviewer_on_failure`, `require_final_fresh_review`, `blocking_severities`, `clean_reviewer_states`, `fresh_final_review_role=fresh_final_review`, `adversarial_prompt`.
+  - Budget caps: `max_review_rounds`, `max_review_cost`, `max_review_minutes`.
+  - Deterministic gates: `enable_gates=(not no_gates)`, `gate_timeout`, `gate_allow=tuple(gate_allow)`, `start_step_override`.
+  - Prompt repair: `prompt_repair`, `max_prompt_repair_rounds`, `max_prompt_token_growth`, `max_prompt_repair_seconds`.
+- Role-independence rules enforced by the review loop (see the mode-conflict table above), restated here as the dispatch contract:
+  - `--fixer-fallback` (string, default `None`) is the analog of `--reviewer-fallback`: when the primary fixer cannot address the reviewer's findings (typically Claude Code subscription-tier credential exhaustion classified as `credential-limit`), the loop invokes the configured fallback fixer once before breaking. It must differ from `--fixer` and `--reviewer`.
+  - `--allow-same-reviewer-fixer` is an explicit opt-in for single-role review/fix mode; without it, resolved reviewer/fixer equality is rejected by the review loop.
+- Output emission (issue #1788):
+  - When `agentic_review_loop` is set, the standalone adversarial PR checkup emits the machine-readable `pdd.checkup.agentic.v1` verdict on stdout (it implies `--json`). Derive the per-PR base name `Path.cwd() / f"pdd-checkup-agentic-{pr_number}.json"` from `_parse_pr_url`, then make this invocation's public destination **invocation-specific** by inserting a cryptographic nonce before the suffix: `pdd-checkup-agentic-{pr_number}-{secrets.token_hex(16)}.json`. Two concurrent same-PR invocations therefore own disjoint public paths and can never consume or overwrite each other's verdict — there is no shared slot to claim, and a crashed/failed invocation simply leaves no consumable verdict at its unique path (fail-closed by construction). As defence in depth for any consumer still reading the legacy shared name, remove a pre-existing shared-name artifact (`Path.unlink(missing_ok=True)`) so a stale `status="passed"` can never be mistaken for a current verdict. Reserve a unique temporary file in the same directory with `tempfile.NamedTemporaryFile(delete=False)`. If reservation fails, emit the stable failed wrapper and exit before calling `run_agentic_checkup`. Pass the private path as `agentic_artifact_path` so the review loop writes only this invocation's artifact. After the run, call `_emit_agentic_review_loop_json(*, artifact_path=<private>, published_artifact_path=<unique public>, failure_category=<static literal>)` INSTEAD of the human status lines. The helper may accept only a parseable private `pdd.checkup.agentic.v1` object and a public filename matching the closed, bounded shape `pdd-checkup-agentic-{numeric_pr}-{32_lowercase_hex}.json` (maximum 128 characters). Before publication it MUST set the schema-backed top-level `artifact_path` field to that exact **cwd-relative basename** (never the raw absolute path), rewrite the private JSON, atomically publish it with `Path.replace`, and echo that same verified object (pretty-printed). Thus successful stdout and the persisted artifact identify the exact file under the invocation cwd without serializing credential-shaped or oversized cwd components after the bounded/redacted builder has finished. A missing/unparseable/unreadable private artifact, unsafe public filename, or failed atomic publication emits the stable failed wrapper `{"schema_version": "pdd.checkup.agentic.v1.wrapper", "artifact_path": <safe cwd-relative basename or None>, "success": false, "status": "failed", "failure_category": <static literal>}` on stdout and returns false. Successful artifacts and failed wrappers apply the same bounded relative-reference rule. The wrapper and any persisted tombstone MUST be secret-safe: they carry ONLY a static, caller-chosen `failure_category` and never raw provider/runtime diagnostics (`message`, `cost`, or `model`), which can embed credentials and would leak through retained stdout/job logs. On any failure, guarantee this invocation's unique public path is left non-pass/non-consumable: atomically replace it with the static blocking tombstone `{"schema_version": "pdd.checkup.agentic.v1.wrapper", "success": false, "status": "failed"}` via the private reservation, or — when that is impossible (no reservation, or the atomic replace fails) — remove the unique public path entirely, so no PASS can remain after a reservation or publication failure. Never consult any pre-existing public artifact when deriving this invocation's verdict; concurrent same-PR invocations publish to disjoint invocation-specific paths and must not consume each other's artifacts.
+  - Otherwise, if not quiet, `click.echo` exactly these lines:
+    - `Status: Success|Failed`
+    - `Message: {message}`
+    - `Cost: ${cost:.4f}`
+    - `Model: {model}`
+  - **Model suppression**: Suppress the "Model: ..." line if the model name is empty, "unknown", or "N/A" (case-insensitive).
+- If `not success`: raise `click.exceptions.Exit(1)`; else return `(message, cost, model)`.
+- Exception policy: re-raise `click.Abort` and `click.exceptions.Exit`; all other exceptions call `handle_error(exception, "checkup", ctx.obj.get("quiet", False))` and return `None`.
+
+Before forwarding PR-mode prompt-repair settings, force effective `prompt_repair="off"` whenever `no_fix` or `review_only` is true, including when a project default requested repair; report-only modes never edit prompts or write prompt-repair audit artifacts.
+
+% Dependencies
+<include-many>context/agentic_checkup_example.py, context/agentic_sync_example.py, context/track_cost_example.py, context/core/errors_example.py</include-many>
+<pdd.agentic_common>
+    <include select="def:_parse_pr_url,def:_is_github_issue_url">context/agentic_common_example.py</include>
+</pdd.agentic_common>
+<pdd.architecture_sync>
+    <include select="def:run_validate_arch_includes_cli">context/architecture_sync_example.py</include>
+</pdd.architecture_sync>
+<pdd.agentic_checkup_orchestrator>
+    <include select="def:run_agentic_checkup">context/agentic_checkup_orchestrator_example.py</include>
+</pdd.agentic_checkup_orchestrator>
+<pdd.agentic_sync>
+    <include>context/agentic_sync_example.py</include>
+</pdd.agentic_sync>

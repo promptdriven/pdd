@@ -1,0 +1,4 @@
+[
+  {"filename": "child_Python.prompt", "dependencies": ["parent_Python.prompt"]},
+  {"filename": "parent_Python.prompt", "dependencies": []}
+]

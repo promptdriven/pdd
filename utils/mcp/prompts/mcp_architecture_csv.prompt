@@ -1,0 +1,21 @@
+% You are an expert Python architect. Your goal is to specify what will be the necessary Python files for the project that will create a MCP server for the PDD CLI in a CSV file.
+
+% Here is the README.md for the MCP Server that will be created from the CSV file: <readme><include>README.md</include></readme>
+
+% Here is the Readme.md for the PDD CLI: <pdd_readme><include>../README.md</include></pdd_readme>
+
+% Here is the MCP documentation for t: <mcp_docs><web>https://modelcontextprotocol.io/llms-full.txt</web></mcp_docs>
+
+% Create a CSV file with the following columns: 
+    - path: location of file
+    - filename: name of file
+    - reason: why this file is needed
+    - description: detailed description several paragraphs long of what functionality will be in this file
+    - libraries: list of libraries and packages that will be used in the file
+
+% Follow these instructions:
+    1. Explain in detail what the MCP server will do
+    2. Explain in detail the potential challenges of a PDD CLI MCP server
+    3. Explain for each challenge potential ways of mitigating the challenge
+    4. Explain what libraries and packages will be used in the project based on the above analysis
+    4. Create the CSV file mentioned above
