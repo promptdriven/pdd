@@ -8,8 +8,6 @@
 % Instructions (override the preamble)
 - Import `yaml` at module level. This module is a hard dependency of the sync engine, which already
   requires PyYAML; deferring the import would hide config parse failures.
-- Generate the implementation only. Tests live in `tests/test_sync_core_manifest.py` and
-  `tests/test_sync_core_pdd_rollout_policy.py` and accumulate separately.
 
 <responsibility>
 Read a protected base Git ref and a candidate head Git ref, and partition **every** tracked path in
@@ -39,8 +37,8 @@ that invalidates the manifest. Produce stable digests over that partition.
 
 % Public API
 
-- `ManifestError(ValueError)` — unusable Git inventory or malformed protected input. Fail closed
-  with `ManifestError`; record recoverable problems as `invalid_reasons` strings instead.
+- `ManifestError(ValueError)` — unusable Git inventory or malformed protected input. Raise it to fail
+  closed; record every recoverable problem as an `invalid_reasons` string instead.
 - Frozen ordered dataclasses `GitTreeEntry(relpath, git_mode, object_id)`,
   `OwnershipRule(pattern, inventory, role, owner, preauthorize_absent=False)`,
   `ManifestUnit(unit_id, present_in_base, present_in_head, artifact_paths, tombstoned)`,
@@ -57,7 +55,7 @@ that invalidates the manifest. Produce stable digests over that partition.
 Tests and sibling modules reach into these module-private names, so keep them exactly:
 `_PDD_REPOSITORY_ID`, `_EXTERNAL_CONTEXT_TEMPLATE`, `_BOOTSTRAP_HUMAN_OWNERSHIP`,
 `_REPLAY_HUMAN_OWNERSHIP`, `_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES`,
-`_SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES`, `_SYNC_ROLLOUT_REPAIR_METADATA_BYTES`,
+`_SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES`,
 `_SYNC_ROLLOUT_REPAIR_HUMAN_OWNERSHIP`, `_ownership_rules`, `_bootstrap_ownership_rules`,
 `_sync_rollout_repair_ownership_rules`, `_replay_bootstrap_weakenings`, `_map_architecture_modules`.
 
@@ -100,7 +98,8 @@ are invalid reasons.
 R9 (MUST): For a unit no architecture file claims, find the nearest `.pddrc` walking up from the
 prompt's directory, else the repository-root `.pddrc`. Choose the `contexts` entry whose
 `defaults.prompts_dir` (resolved against the config's directory) contains the prompt, preferring the
-deepest root and then declaration order. A non-mapping `contexts` is an invalid reason.
+deepest root and then declaration order. A `.pddrc` that is not decodable YAML, and a non-mapping
+`contexts`, are invalid reasons.
 R10 (MUST): Derive the output from `defaults.outputs.code.path` formatted with `{name}`,
 `{language}`, `{category}`, `{dir_prefix}` (trailing-slash form of `category`, empty at the prompts
 root); otherwise from `defaults.generate_output_path` joined with the prompt's subdirectory, the stem
@@ -186,6 +185,13 @@ ownership rules, aliases, tombstones, and registry — compute control transitio
 rules, head rules, and the replay weakening exceptions, and return
 `enforce_head_fixed_point(transition, stable, control_invalid)`. Candidate policy that only becomes
 valid in the transition must therefore also hold stationary at head.
+
+% Determinism and reporting
+R38 (MUST): Order every emitted collection — candidates, units, artifact paths, expected managed,
+invalid reasons, unaccounted paths, ownership rules, aliases, weakening pairs — deterministically, so
+two builds over the same two trees are byte-identical and produce identical digests. Prefix a reason
+raised while parsing one tree with that tree's ref (`{ref}:{path}: …`); a reason about the candidate
+partition starts with the bare path, because consumers split it off to identify the offending file.
 </contract_rules>
 
 <repository_bound_bootstraps>
