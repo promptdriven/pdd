@@ -1738,6 +1738,14 @@
       "prompt_path": "pdd/prompts/story_coverage_python.prompt"
     },
     {
+      "language_id": "llm",
+      "prompt_path": "pdd/prompts/story_criteria_LLM.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/story_criteria_python.prompt"
+    },
+    {
       "language_id": "python",
       "prompt_path": "pdd/prompts/story_detection_result_python.prompt"
     },
