@@ -2325,6 +2325,36 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
     assert profiles.coverage == 1.0
 
 
+def test_sync_rollout_repair_protected_transition_survives_live_repin(
+    monkeypatch,
+) -> None:
+    """A live ownership edit cannot revoke the immutable replay transition."""
+    skip_if_authenticated_candidate_lacks_refs(
+        ROOT,
+        "exact sync-rollout protected history",
+        SYNC_ROLLOUT_PROTECTED_BASE,
+        PR_2316_PHASE_A_PROTECTED,
+    )
+    base_digest, _live_digest = (  # pylint: disable=protected-access
+        manifest_module._SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES
+    )
+    monkeypatch.setattr(
+        manifest_module,
+        "_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES",
+        (base_digest, "0" * 64),
+    )
+
+    manifest = build_unit_manifest(
+        ROOT,
+        base_ref=SYNC_ROLLOUT_PROTECTED_BASE,
+        head_ref=PR_2316_PHASE_A_PROTECTED,
+    )
+
+    assert not _invalid_reasons_for_base_paths(
+        manifest, SYNC_ROLLOUT_PROTECTED_BASE, PR_2316_PHASE_A_PROTECTED
+    )
+
+
 def test_sync_rollout_repair_metadata_bridge_stays_ordinary() -> None:
     """The exact bridge cannot turn its base-existing paths into absences."""
     skip_if_authenticated_candidate_lacks_refs(
@@ -4033,6 +4063,13 @@ def test_sync_rollout_repair_ownership_pin_tracks_the_actual_policy_file() -> No
         "`.pdd/sync-ownership.json` changed without re-pinning "
         "_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES[1] in pdd/sync_core/manifest.py. "
         f"Set it to {actual!r}."
+    )
+    protected_actual = hashlib.sha256(
+        _git_blob(PR_2316_PHASE_A_PROTECTED, OWNERSHIP_PATH)
+    ).hexdigest()
+    assert (
+        protected_actual
+        == manifest_module._SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES[1]  # pylint: disable=protected-access
     )
 
 
