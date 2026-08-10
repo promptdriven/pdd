@@ -207,8 +207,8 @@ candidate policy contains that exact reviewed row; the path is absent in the bas
 present in the head tree. Any mutation or extra path stays unaccounted.
 R32 (MUST): Declare `_BOOTSTRAP_HUMAN_OWNERSHIP` rows with `preauthorize_absent=True` and
 `_REPLAY_HUMAN_OWNERSHIP` rows as ordinary rows. The #1998 replay was reviewed against a base that
-already carried the replay rows; rebasing makes them candidate-only, and editing that policy file must
-not grant reusable absent-path authority. The repository-bound bootstrap is the only bridge.
+already carried the replay rows; rebasing makes them candidate-only, and editing that policy file
+must not grant reusable absent-path authority.
 R33 (MUST): Expose `_replay_bootstrap_weakenings` returning the sorted (effective, candidate) pairs
 for exactly the replay rows whose R31 predicates it re-proves. The transition classifier sees the
 absent-path-capable rule while the candidate keeps its ordinary row; control validation may accept
