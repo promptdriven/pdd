@@ -1,0 +1,87 @@
+You are to implement a deterministic base/head candidate inventory and unit manifest system in Python. The module must reside in a package with access to relative modules for decommission, identity, git_io, language, and path_policy.
+
+% Dependencies and Imports
+The module should use the following imports:
+- Standard library: `__future__.annotations`, `hashlib`, `fnmatch`, `json`, `posixpath`, `subprocess`, `dataclasses.dataclass`, `pathlib.Path`, `pathlib.PurePosixPath`, `typing.Optional`.
+- Third-party: `yaml`.
+- Relative imports:
+  - `from .alias_policy import ALIAS_POLICY_PATH, parse_protected_alias_policy`
+  - `from .decommission import DecommissionTombstone, control_transition_invalid, enforce_head_fixed_point, load_expected_registry, load_tombstones`
+  - `from .identity import REPOSITORY_ID_RELPATH, canonical_repository_id`
+  - `from .git_io import read_git_blob, read_git_tree_entry`
+  - `from .language import LanguageRegistry, LanguageRegistryError`
+  - `from .path_policy import PathPolicyError, validate_canonical_alias_path`
+  - `from .types import CandidateId, InventoryStatus, UnitId`
+
+% Types and Classes
+Implement the following structures and types:
+- `ManifestError(ValueError)`: Exception raised when Git inventory or protected manifest inputs are invalid.
+- `@dataclass(frozen=True, order=True) class GitTreeEntry`: Mode and object identity for one tracked path.
+  - Fields: `relpath: PurePosixPath`, `git_mode: str`, `object_id: str`.
+- `@dataclass(frozen=True, order=True) class CandidateRecord`: Base/head accounting for one tracked candidate path.
+  - Fields: `candidate_id: CandidateId`, `inventory: InventoryStatus`, `in_base: bool`, `in_head: bool`, `ownership_provenance: str`, `base_object_id: str | None = None`, `base_git_mode: str | None = None`, `head_object_id: str | None = None`, `head_git_mode: str | None = None`, `unit_id: UnitId | None = None`.
+- `@dataclass(frozen=True, order=True) class ManifestUnit`: Prompt-backed unit identity and its architecture-owned outputs.
+  - Fields: `unit_id: UnitId`, `present_in_base: bool`, `present_in_head: bool`, `artifact_paths: tuple[PurePosixPath, ...]`, `tombstoned: bool`.
+- `@dataclass(frozen=True) class ManifestRefs`:
+  - Fields: `base: str`, `head: str`.
+- `@dataclass(frozen=True, order=True) class OwnershipRule`: Protected-base classification for an otherwise unmatched tracked path.
+  - Fields: `pattern: str`, `inventory: InventoryStatus`, `role: str`, `owner: str`, `preauthorize_absent: bool = False`.
+- `@dataclass(frozen=True) class _TreeManifest`: Internal helper representing parsed candidate inputs for one tree.
+  - Fields: `ref: str`, `entries: dict[PurePosixPath, GitTreeEntry]`, `units: dict[PurePosixPath, UnitId]`, `outputs: dict[PurePosixPath, UnitId]`, `invalid_reasons: tuple[str, ...]`.
+- `@dataclass(frozen=True) class _UnitSources`: Internal helper holding unit assembly dictionaries.
+- `@dataclass(frozen=True) class _CandidateSources`: Internal helper for candidate classification inputs.
+- `@dataclass(frozen=True) class UnitManifest`: Deterministic partition of the protected base/head candidate universe.
+  - Fields: `repository_id: str`, `language_registry_digest: str`, `refs: ManifestRefs`, `candidates: tuple[CandidateRecord, ...]`, `units: tuple[ManifestUnit, ...]`, `expected_managed: tuple[UnitId, ...]`, `invalid_reasons: tuple[str, ...]`, `unaccounted_tracked_paths: tuple[PurePosixPath, ...]`.
+  - Properties: `base_ref` (string), `head_ref` (string), `managed_units` (filtered `self.units` present in head).
+  - Methods:
+    - `digest(self) -> str`: Return a deterministic SHA-256 digest of identity, ownership, and non-dynamic candidate paths. Sort keys and format as compact JSON.
+    - `unit_digest(self, unit: ManifestUnit) -> str`: Bind one unit to its own manifest slice and relevant policy, returning a SHA-256 digest of that slice.
+
+% Bootstrap Constants & Reviewed Rules
+The module must define the exact bootstrap tuples, IDs, and rollout repair rules byte-for-byte to keep rollout boundaries and historical replays reviewable and auditable.
+- `_PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"`
+- `_BOOTSTRAP_HUMAN_OWNERSHIP`: A tuple of `OwnershipRule` objects mapping various `.pdd/meta/` files, docs, schemas, and test Python files under human-ownership, with `preauthorize_absent=True`.
+- `_REPLAY_HUMAN_OWNERSHIP`: A tuple of `OwnershipRule` objects for historical issue replays mapping issue metadata and specific test Python files under human-ownership, generated dynamically from patterns.
+- `_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES` & `_SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES`: SHA-256 hashes pinning `.pdd/sync-ownership.json`.
+- `_SYNC_ROLLOUT_REPAIR_METADATA_BYTES`: Dual-element tuples of path to its specific SHA-256 metadata file hashes.
+- `_SYNC_ROLLOUT_REPAIR_HUMAN_OWNERSHIP`: Dynamically generated `OwnershipRule` mapping for these repaired paths.
+- `_EXTERNAL_CONTEXT_TEMPLATE`: Dictionary detailing context template specifications.
+
+% Internal Helpers and Core Functions
+Provide the following helper functions to parse Git structures and configurations:
+- `require_valid_manifest(manifest: UnitManifest) -> None`: Raises `ManifestError` if `manifest.invalid_reasons` is not empty.
+- `_unit_payload(unit_id: UnitId | None) -> dict[str, str] | None`
+- `_git(root: Path, *args: str) -> bytes`: Executes subprocess git commands or raises `ManifestError`.
+- `_tree_entries(root: Path, ref: str) -> dict[PurePosixPath, GitTreeEntry]`: Parses `git ls-tree -r -z` for the ref.
+- `_blob(root: Path, ref: str, path: PurePosixPath) -> bytes`
+- `_prompt_units(...) -> tuple[dict[PurePosixPath, UnitId], list[str]]`: Extract valid prompt paths matching language alias conventions.
+- `_architecture_outputs(...) -> tuple[dict[PurePosixPath, UnitId], list[str]]`: Load and validate architecture modules mapped in target `architecture.json` configurations.
+- `_governing_config(...)`: Find matching `.pddrc` files up the tree path.
+- `_config_context(...)` and `_configured_output(...)`: Process `.pddrc` settings to map outputs for configured contexts.
+- `_config_outputs(...) -> tuple[dict[PurePosixPath, UnitId], list[str]]`
+- `_paths_by_name(prompt_units)`: Index prompt paths by their file name.
+- `_architecture_modules(...)`
+- `_is_external_context_template(item)`
+- `_map_architecture_modules(...)`
+- `_manifest_unit(...)` and `_manifest_units(...)`: Assemble units and reconcile decommission validations using `DecommissionTombstone`.
+- `_candidate_records(...)`: Reconcile tracked paths from base and head into structured `CandidateRecord`s, determining the appropriate ownership provenance, rules, or invalid status.
+- `_managed_alias_counterparts(...)`: Map managed paths to their canonical counterparts.
+- `_validate_managed_alias_counterparts(...)`: Confirm alias paths comply with policies via `validate_canonical_alias_path`.
+- `_is_protected_control(...)`: Determine if a path belongs to structural configuration or metadata (e.g. `.pddrc`, `architecture.json`, registry files).
+- `_is_dynamic_canonical_state(...)`: Identify runtime-generated content-addressed state paths (e.g., `.pdd/meta/v2`, `.pdd/evidence/v2`).
+- `_ownership_for(path, rules)`: Reconcile and match tracking rules, raising ambiguity errors if needed.
+- `_ownership_rules(root, protected_base_ref)`: Load ownership specifications from `.pdd/sync-ownership.json`.
+- `_bootstrap_ownership_rules(...)` and `_sync_rollout_repair_ownership_rules(...)` and `_replay_bootstrap_weakenings(...)`: Reconcile rollout-specific historical human ownership transitions and repairs.
+- `_approved_aliases(root, base_ref, head_ref)`: Fetch and validate unchanged, approved symlinks according to alias policies.
+- `_valid_ownership_rule(rule) -> bool`: Prevent broad wildcards or escaping structures in ownership rules.
+- `_tree_manifest(...)`: Orchestrate the resolution of a single tree into its units and outputs.
+- `_protected_expected_units(...)`: Reconcile parsed units with expected registry contents.
+- `_assemble_manifest(...)`: Construct a complete `UnitManifest` by uniting base/head trees, validation rules, tombstones, and candidates.
+
+% Main Entrance Function
+Implement the primary entrypoint:
+- `build_unit_manifest(root: Path, *, base_ref: str, head_ref: str, registry: Optional[LanguageRegistry] = None) -> UnitManifest`:
+  1. Resolve repository roots and validate repository identity files (`.pdd/repository-id`).
+  2. Parse ownership rules, dynamic bootstrap modifications, and approved symlink policies.
+  3. Extract tree structures for both base and head references.
+  4. Build and return the transitioning `UnitManifest`. If `base_ref` differs from `head_ref`, parse the head reference standalone to ensure convergence against a fixed-point candidate model before final construction.
