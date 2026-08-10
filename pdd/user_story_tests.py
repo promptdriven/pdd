@@ -20,6 +20,7 @@ from rich.markup import escape as rich_escape
 from .detect_change import detect_change
 from .get_extension import get_extension
 from .story_criteria import (
+    AcceptanceCriterion,
     CriteriaEvaluation,
     StoryCriteriaError,
     changes_from_verdicts,
@@ -1093,7 +1094,7 @@ def _resolve_story_criteria(
     story_path: Path,
     story_content: str,
     contract_path: Optional[Path] = None,
-) -> Tuple[List[object], str]:
+) -> Tuple[List[AcceptanceCriterion], str]:
     """Return the acceptance criteria to gate on, and where they came from.
 
     The contract is the machine-checkable oracle, so it wins when it has
@@ -1868,7 +1869,7 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                     break
                 continue
 
-        criteria: List[object] = []
+        criteria: List[AcceptanceCriterion] = []
         criteria_source = ""
         if not legacy_detect:
             criteria, criteria_source = _resolve_story_criteria(
