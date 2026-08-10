@@ -91,7 +91,7 @@ PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 AUTO_HEAL_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "auto-heal.yml"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
-EXPECTED_MANAGED_UNITS = 469
+EXPECTED_MANAGED_UNITS = 470
 # #1989's dormant-bootstrap assertions retain their original immutable base;
 # the replay audit intentionally binds to the current main that it was rebased
 # onto.

@@ -1771,6 +1771,10 @@
     },
     {
       "language_id": "python",
+      "prompt_path": "pdd/prompts/sync_core/manifest_python.prompt"
+    },
+    {
+      "language_id": "python",
       "prompt_path": "pdd/prompts/sync_determine_operation_python.prompt"
     },
     {
