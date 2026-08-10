@@ -240,7 +240,21 @@ def test_unrecognized_status_becomes_unclear_never_satisfied(tmp_path):
     assert [v.status for v in evaluation.verdicts] == ["unclear", "unclear"]
 
 
-@pytest.mark.parametrize("raw_id", ["AC1", "ac1", "AC 1", "ac-1", "1", "criterion 1"])
+@pytest.mark.parametrize(
+    "raw_id",
+    [
+        "AC1",
+        "ac1",
+        "AC 1",
+        "ac-1",
+        "1",
+        "criterion 1",
+        # Models often echo the criterion text after its identifier; dropping
+        # that would turn a real verdict into a false "unevaluated".
+        "AC1: Given a valid CSV, when uploaded, then a summary report is shown.",
+        "1. Given a valid CSV",
+    ],
+)
 def test_criterion_identifiers_are_matched_loosely(tmp_path, raw_id):
     evaluation = _evaluate(
         tmp_path,

@@ -54,8 +54,15 @@ _CRITERIA_SECTION_RE = re.compile(
 # A criterion starts at ``1. ``/``1) `` or ``- ``/``* ``; continuation lines are
 # indented or bare prose and are folded into the criterion above them.
 _CRITERION_START_RE = re.compile(r"^[ \t]*(?:\d+[.)]|[-*+])[ \t]+(?P<text>\S.*)$")
-# Accept AC1, ac-1, AC 1, "1", "criterion 1" -- models are not consistent here.
-_CRITERION_ID_RE = re.compile(r"(?:ac|criterion)?[ _-]*(?P<number>\d+)\s*\Z", re.IGNORECASE)
+# Accept AC1, ac-1, AC 1, "1", "criterion 1", and "AC1: <echoed text>" -- models
+# are not consistent here, and dropping an identifier we could have read would
+# turn a real verdict into a false ``unevaluated``.
+_CRITERION_ID_LEADING_RE = re.compile(
+    r"\A(?:ac|criterion)?[ _-]*(?P<number>\d+)", re.IGNORECASE
+)
+_CRITERION_ID_TRAILING_RE = re.compile(
+    r"(?:ac|criterion)[ _-]*(?P<number>\d+)\s*\Z", re.IGNORECASE
+)
 _WHITESPACE_RE = re.compile(r"\s+")
 
 # A citation shorter than this is not evidence -- "yes", "R15", "the prompt".
@@ -196,14 +203,18 @@ def parse_acceptance_criteria(contract_text: str) -> List[AcceptanceCriterion]:
 
     return [
         AcceptanceCriterion(id=f"AC{index}", text=_clean(text))
-        for index, text in enumerate(items, start=1)
-        if text.strip()
+        for index, text in enumerate(
+            (item for item in items if item.strip()), start=1
+        )
     ]
 
 
 def _normalize_criterion_id(raw: object) -> Optional[str]:
     """Map a model-supplied identifier onto the canonical ``AC<n>`` form."""
-    match = _CRITERION_ID_RE.search(str(raw or "").strip())
+    candidate = str(raw or "").strip()
+    match = _CRITERION_ID_LEADING_RE.match(candidate) or _CRITERION_ID_TRAILING_RE.search(
+        candidate
+    )
     return f"AC{int(match.group('number'))}" if match else None
 
 
