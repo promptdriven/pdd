@@ -1,87 +1,341 @@
-You are to implement a deterministic base/head candidate inventory and unit manifest system in Python. The module must reside in a package with access to relative modules for decommission, identity, git_io, language, and path_policy.
+# manifest_python.prompt
 
-% Dependencies and Imports
-The module should use the following imports:
-- Standard library: `__future__.annotations`, `hashlib`, `fnmatch`, `json`, `posixpath`, `subprocess`, `dataclasses.dataclass`, `pathlib.Path`, `pathlib.PurePosixPath`, `typing.Optional`.
-- Third-party: `yaml`.
-- Relative imports:
-  - `from .alias_policy import ALIAS_POLICY_PATH, parse_protected_alias_policy`
-  - `from .decommission import DecommissionTombstone, control_transition_invalid, enforce_head_fixed_point, load_expected_registry, load_tombstones`
-  - `from .identity import REPOSITORY_ID_RELPATH, canonical_repository_id`
-  - `from .git_io import read_git_blob, read_git_tree_entry`
-  - `from .language import LanguageRegistry, LanguageRegistryError`
-  - `from .path_policy import PathPolicyError, validate_canonical_alias_path`
-  - `from .types import CandidateId, InventoryStatus, UnitId`
+% You are an expert Python engineer. Implement `pdd/sync_core/manifest.py`: the deterministic
+% base/head candidate inventory and unit manifest for PDD's synchronization engine.
 
-% Types and Classes
-Implement the following structures and types:
-- `ManifestError(ValueError)`: Exception raised when Git inventory or protected manifest inputs are invalid.
-- `@dataclass(frozen=True, order=True) class GitTreeEntry`: Mode and object identity for one tracked path.
-  - Fields: `relpath: PurePosixPath`, `git_mode: str`, `object_id: str`.
-- `@dataclass(frozen=True, order=True) class CandidateRecord`: Base/head accounting for one tracked candidate path.
-  - Fields: `candidate_id: CandidateId`, `inventory: InventoryStatus`, `in_base: bool`, `in_head: bool`, `ownership_provenance: str`, `base_object_id: str | None = None`, `base_git_mode: str | None = None`, `head_object_id: str | None = None`, `head_git_mode: str | None = None`, `unit_id: UnitId | None = None`.
-- `@dataclass(frozen=True, order=True) class ManifestUnit`: Prompt-backed unit identity and its architecture-owned outputs.
-  - Fields: `unit_id: UnitId`, `present_in_base: bool`, `present_in_head: bool`, `artifact_paths: tuple[PurePosixPath, ...]`, `tombstoned: bool`.
-- `@dataclass(frozen=True) class ManifestRefs`:
-  - Fields: `base: str`, `head: str`.
-- `@dataclass(frozen=True, order=True) class OwnershipRule`: Protected-base classification for an otherwise unmatched tracked path.
-  - Fields: `pattern: str`, `inventory: InventoryStatus`, `role: str`, `owner: str`, `preauthorize_absent: bool = False`.
-- `@dataclass(frozen=True) class _TreeManifest`: Internal helper representing parsed candidate inputs for one tree.
-  - Fields: `ref: str`, `entries: dict[PurePosixPath, GitTreeEntry]`, `units: dict[PurePosixPath, UnitId]`, `outputs: dict[PurePosixPath, UnitId]`, `invalid_reasons: tuple[str, ...]`.
-- `@dataclass(frozen=True) class _UnitSources`: Internal helper holding unit assembly dictionaries.
-- `@dataclass(frozen=True) class _CandidateSources`: Internal helper for candidate classification inputs.
-- `@dataclass(frozen=True) class UnitManifest`: Deterministic partition of the protected base/head candidate universe.
-  - Fields: `repository_id: str`, `language_registry_digest: str`, `refs: ManifestRefs`, `candidates: tuple[CandidateRecord, ...]`, `units: tuple[ManifestUnit, ...]`, `expected_managed: tuple[UnitId, ...]`, `invalid_reasons: tuple[str, ...]`, `unaccounted_tracked_paths: tuple[PurePosixPath, ...]`.
-  - Properties: `base_ref` (string), `head_ref` (string), `managed_units` (filtered `self.units` present in head).
-  - Methods:
-    - `digest(self) -> str`: Return a deterministic SHA-256 digest of identity, ownership, and non-dynamic candidate paths. Sort keys and format as compact JSON.
-    - `unit_digest(self, unit: ManifestUnit) -> str`: Bind one unit to its own manifest slice and relevant policy, returning a SHA-256 digest of that slice.
+<include>context/python_preamble.prompt</include>
 
-% Bootstrap Constants & Reviewed Rules
-The module must define the exact bootstrap tuples, IDs, and rollout repair rules byte-for-byte to keep rollout boundaries and historical replays reviewable and auditable.
-- `_PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"`
-- `_BOOTSTRAP_HUMAN_OWNERSHIP`: A tuple of `OwnershipRule` objects mapping various `.pdd/meta/` files, docs, schemas, and test Python files under human-ownership, with `preauthorize_absent=True`.
-- `_REPLAY_HUMAN_OWNERSHIP`: A tuple of `OwnershipRule` objects for historical issue replays mapping issue metadata and specific test Python files under human-ownership, generated dynamically from patterns.
-- `_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES` & `_SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES`: SHA-256 hashes pinning `.pdd/sync-ownership.json`.
-- `_SYNC_ROLLOUT_REPAIR_METADATA_BYTES`: Dual-element tuples of path to its specific SHA-256 metadata file hashes.
-- `_SYNC_ROLLOUT_REPAIR_HUMAN_OWNERSHIP`: Dynamically generated `OwnershipRule` mapping for these repaired paths.
-- `_EXTERNAL_CONTEXT_TEMPLATE`: Dictionary detailing context template specifications.
+% Instructions (override the preamble)
+- Import `yaml` at module level. This module is a hard dependency of the sync engine, which already
+  requires PyYAML; deferring the import would hide config parse failures.
+- Generate the implementation only. Tests live in `tests/test_sync_core_manifest.py` and
+  `tests/test_sync_core_pdd_rollout_policy.py` and accumulate separately.
 
-% Internal Helpers and Core Functions
-Provide the following helper functions to parse Git structures and configurations:
-- `require_valid_manifest(manifest: UnitManifest) -> None`: Raises `ManifestError` if `manifest.invalid_reasons` is not empty.
-- `_unit_payload(unit_id: UnitId | None) -> dict[str, str] | None`
-- `_git(root: Path, *args: str) -> bytes`: Executes subprocess git commands or raises `ManifestError`.
-- `_tree_entries(root: Path, ref: str) -> dict[PurePosixPath, GitTreeEntry]`: Parses `git ls-tree -r -z` for the ref.
-- `_blob(root: Path, ref: str, path: PurePosixPath) -> bytes`
-- `_prompt_units(...) -> tuple[dict[PurePosixPath, UnitId], list[str]]`: Extract valid prompt paths matching language alias conventions.
-- `_architecture_outputs(...) -> tuple[dict[PurePosixPath, UnitId], list[str]]`: Load and validate architecture modules mapped in target `architecture.json` configurations.
-- `_governing_config(...)`: Find matching `.pddrc` files up the tree path.
-- `_config_context(...)` and `_configured_output(...)`: Process `.pddrc` settings to map outputs for configured contexts.
-- `_config_outputs(...) -> tuple[dict[PurePosixPath, UnitId], list[str]]`
-- `_paths_by_name(prompt_units)`: Index prompt paths by their file name.
-- `_architecture_modules(...)`
-- `_is_external_context_template(item)`
-- `_map_architecture_modules(...)`
-- `_manifest_unit(...)` and `_manifest_units(...)`: Assemble units and reconcile decommission validations using `DecommissionTombstone`.
-- `_candidate_records(...)`: Reconcile tracked paths from base and head into structured `CandidateRecord`s, determining the appropriate ownership provenance, rules, or invalid status.
-- `_managed_alias_counterparts(...)`: Map managed paths to their canonical counterparts.
-- `_validate_managed_alias_counterparts(...)`: Confirm alias paths comply with policies via `validate_canonical_alias_path`.
-- `_is_protected_control(...)`: Determine if a path belongs to structural configuration or metadata (e.g. `.pddrc`, `architecture.json`, registry files).
-- `_is_dynamic_canonical_state(...)`: Identify runtime-generated content-addressed state paths (e.g., `.pdd/meta/v2`, `.pdd/evidence/v2`).
-- `_ownership_for(path, rules)`: Reconcile and match tracking rules, raising ambiguity errors if needed.
-- `_ownership_rules(root, protected_base_ref)`: Load ownership specifications from `.pdd/sync-ownership.json`.
-- `_bootstrap_ownership_rules(...)` and `_sync_rollout_repair_ownership_rules(...)` and `_replay_bootstrap_weakenings(...)`: Reconcile rollout-specific historical human ownership transitions and repairs.
-- `_approved_aliases(root, base_ref, head_ref)`: Fetch and validate unchanged, approved symlinks according to alias policies.
-- `_valid_ownership_rule(rule) -> bool`: Prevent broad wildcards or escaping structures in ownership rules.
-- `_tree_manifest(...)`: Orchestrate the resolution of a single tree into its units and outputs.
-- `_protected_expected_units(...)`: Reconcile parsed units with expected registry contents.
-- `_assemble_manifest(...)`: Construct a complete `UnitManifest` by uniting base/head trees, validation rules, tombstones, and candidates.
+<responsibility>
+Read a protected base Git ref and a candidate head Git ref, and partition **every** tracked path in
+their union into exactly one classification: a PDD-managed artifact belonging to a unit, an
+intrinsic control path, a human-owned path authorized by protected policy, or an unaccounted path
+that invalidates the manifest. Produce stable digests over that partition.
+</responsibility>
 
-% Main Entrance Function
-Implement the primary entrypoint:
-- `build_unit_manifest(root: Path, *, base_ref: str, head_ref: str, registry: Optional[LanguageRegistry] = None) -> UnitManifest`:
-  1. Resolve repository roots and validate repository identity files (`.pdd/repository-id`).
-  2. Parse ownership rules, dynamic bootstrap modifications, and approved symlink policies.
-  3. Extract tree structures for both base and head references.
-  4. Build and return the transitioning `UnitManifest`. If `base_ref` differs from `head_ref`, parse the head reference standalone to ensure convergence against a fixed-point candidate model before final construction.
+<non_responsibilities>
+- Does not read the working tree. Every input is a Git object read through an explicit ref.
+- Does not mutate anything, and does not decide whether a sync operation may proceed — callers gate
+  on `invalid_reasons` via `require_valid_manifest`.
+- Does not load or evaluate verification profiles, evidence, or attestations.
+</non_responsibilities>
+
+<vocabulary>
+- **Protected base**: the reviewed ref. Ownership, alias, tombstone, and registry policy are read
+  from here, so a candidate cannot grant itself authority by editing policy.
+- **Unit**: one `.prompt` source plus the exact artifacts an `architecture.json` or `.pddrc`
+  declares it generates.
+- **Effective rules**: base ownership rules plus any repository-bound bootstrap additions.
+- **Absent-path authority**: `preauthorize_absent=True`, the only way a rule may classify a path
+  that does not exist in the protected base.
+- **Dynamic canonical state**: content-addressed runtime state under `.pdd/meta/v2/` or
+  `.pdd/evidence/v2/`, which must never be hashed into a manifest digest (it would self-reference).
+</vocabulary>
+
+% Public API
+
+- `ManifestError(ValueError)` — unusable Git inventory or malformed protected input. Fail closed
+  with `ManifestError`; record recoverable problems as `invalid_reasons` strings instead.
+- Frozen ordered dataclasses `GitTreeEntry(relpath, git_mode, object_id)`,
+  `OwnershipRule(pattern, inventory, role, owner, preauthorize_absent=False)`,
+  `ManifestUnit(unit_id, present_in_base, present_in_head, artifact_paths, tombstoned)`,
+  `CandidateRecord(candidate_id, inventory, in_base, in_head, ownership_provenance,
+  base_object_id=None, base_git_mode=None, head_object_id=None, head_git_mode=None, unit_id=None)`,
+  and frozen `ManifestRefs(base, head)`.
+- `UnitManifest(repository_id, language_registry_digest, refs, candidates, units, expected_managed,
+  invalid_reasons, unaccounted_tracked_paths)` with properties `base_ref`, `head_ref`,
+  `managed_units` (units present in head) and methods `digest()`, `unit_digest(unit)`.
+- `require_valid_manifest(manifest) -> None` — raise `ManifestError` naming every invalid reason.
+- `build_unit_manifest(root: Path, *, base_ref: str, head_ref: str,
+  registry: Optional[LanguageRegistry] = None) -> UnitManifest`.
+
+Tests and sibling modules reach into these module-private names, so keep them exactly:
+`_PDD_REPOSITORY_ID`, `_EXTERNAL_CONTEXT_TEMPLATE`, `_BOOTSTRAP_HUMAN_OWNERSHIP`,
+`_REPLAY_HUMAN_OWNERSHIP`, `_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES`,
+`_SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES`, `_SYNC_ROLLOUT_REPAIR_METADATA_BYTES`,
+`_SYNC_ROLLOUT_REPAIR_HUMAN_OWNERSHIP`, `_ownership_rules`, `_bootstrap_ownership_rules`,
+`_sync_rollout_repair_ownership_rules`, `_replay_bootstrap_weakenings`, `_map_architecture_modules`.
+
+<contract_rules>
+
+% Identity and inventory
+R1 (MUST): Read `.pdd/repository-id` from both refs. Missing in either, undecodable, non-canonical,
+or differing between base and head → `ManifestError`. The worktree's identity is irrelevant.
+R2 (MUST): Enumerate tracked paths with `git ls-tree -r -z --full-tree <ref>`, keeping `blob` and
+`commit` (submodule) entries and decoding paths as strict UTF-8. Any non-zero Git exit →
+`ManifestError` carrying the captured stderr.
+
+% Prompt units
+R3 (MUST): Treat a tracked path as a unit source exactly when its suffix is `.prompt` and its stem
+contains `_`. The trailing `_<alias>` stem segment resolves through `LanguageRegistry`; an
+unresolvable alias is an invalid reason, not an exception. The unit id is
+`UnitId(repository_id, prompt_path, language_id)`.
+R4 (MUST NOT): Treat as a unit source a prompt that is the canonical target of an approved `.prompt`
+alias, or a prompt a protected rule classifies `HUMAN_OWNED` — a protected human rule outranks
+filename inference.
+R5 (MUST): Apply ownership rules during head parsing only to paths that exist in the protected base;
+a base parse considers all of its own entries.
+
+% Architecture-declared outputs
+R6 (MUST): Read every tracked file named `architecture.json` as the authoritative output declaration
+for its own project directory, skipping any whose ownership rule has role `excluded-project`. Accept
+a top-level list or a `modules` list; anything else is an invalid reason, as is invalid JSON or a
+non-object module entry.
+R7 (MUST): Map a module entry only through its exact declared `filename`/`filepath` strings. Resolve
+the declared prompt against, in order, `<project>/prompts/`, `<project>/pdd/prompts/`, `<project>/`,
+and repository-root `prompts/`; only when no exact candidate exists fall back to a unique basename
+match. Zero or multiple matches is an invalid reason naming the count. Skip entries whose `filename`
+is not a `.prompt`, and skip the shared non-managed context entry (`_EXTERNAL_CONTEXT_TEMPLATE`,
+matched as a whole).
+R8 (MUST): Resolve `filepath` relative to the architecture file's directory. Absolute or
+`..`-escaping outputs, duplicates within one architecture file, and conflicting owners across files
+are invalid reasons.
+
+% `.pddrc`-configured outputs
+R9 (MUST): For a unit no architecture file claims, find the nearest `.pddrc` walking up from the
+prompt's directory, else the repository-root `.pddrc`. Choose the `contexts` entry whose
+`defaults.prompts_dir` (resolved against the config's directory) contains the prompt, preferring the
+deepest root and then declaration order. A non-mapping `contexts` is an invalid reason.
+R10 (MUST): Derive the output from `defaults.outputs.code.path` formatted with `{name}`,
+`{language}`, `{category}`, `{dir_prefix}` (trailing-slash form of `category`, empty at the prompts
+root); otherwise from `defaults.generate_output_path` joined with the prompt's subdirectory, the stem
+minus its language suffix, and the language's single registered extension.
+R11 (MUST): Normalize the configured output. An unrenderable template, a language without exactly
+one extension, a result that is absolute or escapes the repository, and a conflicting owner are each
+invalid reasons.
+R12 (MUST NOT): Keep a prompt as its own source unit when it is a declared output of a *different*
+unit — generated prompts belong to their generator.
+
+% Ownership policy
+R13 (MUST): Load ownership rules from `.pdd/sync-ownership.json` in a named ref. A malformed
+document, a non-list `rules`, a non-object row, a missing or invalid field, a duplicate pattern, or
+an invalid rule raises `ManifestError`.
+R14 (MUST): Reject as invalid any rule whose pattern is `*`, `**`, or `**/*`, starts with `/`, or
+contains `..`; whose role or owner is empty; whose inventory is not `MANAGED` or `HUMAN_OWNED`; whose
+`preauthorize_absent` is not a bool; or which claims absent-path authority while containing any of
+`*`, `?`, `[`.
+R15 (MUST): Match rules with case-sensitive fnmatch. Multiple matches disagreeing on
+(inventory, role, owner) yield no rule plus an ambiguity invalid reason.
+R16 (MUST): Classify a base-present path against all effective rules, but classify a path that exists
+only in head against **only** effective rules that have absent-path authority *and* whose pattern
+equals the path exactly.
+
+% Candidate partition
+R17 (MUST): Emit one `CandidateRecord` per path in base ∪ head, carrying both trees' object ids and
+modes (`None` where absent), and classify by this precedence:
+  1. prompt-owned → role `prompt`, `MANAGED`, provenance `prompt-backed`
+  2. output-owned → role `code`, `MANAGED`, provenance `architecture`
+  3. rule with role `excluded-project` → rule's role/inventory, provenance
+     `protected-ownership:{owner}:{pattern}`
+  4. approved alias path → role `approved-alias`, `MANAGED`, provenance `protected-alias-policy`
+  5. derived alias counterpart → role `code`, `MANAGED`, provenance
+     `architecture:protected-alias-policy`
+  6. protected control path → role `policy`, `MANAGED`, provenance `protected-control`
+  7. any other matching rule → rule's role/inventory, provenance
+     `protected-ownership:{owner}:{pattern}`
+  8. otherwise → role `unaccounted`, `INVALID`, provenance `none`, and the invalid reason
+     `"{path}: tracked path has no ownership rule"` (or the ambiguity reason).
+R18 (MUST): Report `unaccounted_tracked_paths` as every path whose record is `INVALID`. An unmatched
+path MUST NOT default to human-owned.
+R19 (MUST): Treat as protected control paths any file named `.pddrc` or `architecture.json`, all
+dynamic canonical state, and exactly `.pdd/repository-id`, `.pdd/expected-managed.json`,
+`.pdd/sync-policy.json`, `.pdd/sync-aliases.json`, `.pdd/verification-profiles.json`,
+`.pdd/verification-profile-rotations.json`, `.pdd/attestation-trust.json`,
+`.pdd/sync-ownership.json`, `.pdd/sync-tombstones.json`, `.pdd/sync-waivers.json`.
+
+% Approved aliases
+R20 (MUST): Require `.pdd/sync-aliases.json` to be byte-identical in base and head, and each declared
+alias to be an unchanged symlink blob (mode `120000`) in both trees whose UTF-8, relative target
+normalizes to the declared canonical path, which must itself pass `validate_canonical_alias_path`.
+Any failure — including a candidate adding, removing, or changing the policy — yields an empty alias
+map plus one explanatory invalid reason.
+R21 (MUST): Derive canonical counterparts for managed paths that equal an alias or sit beneath it,
+and report an invalid reason when a counterpart would have two managed owners, or when a counterpart
+also matches an `excluded-project` rule.
+
+% Units, decommission, and the expected denominator
+R22 (MUST): Emit one `ManifestUnit` per prompt path in base ∪ head, with `artifact_paths` the sorted
+union of base-declared and head-declared outputs for that unit.
+R23 (MUST): Mark a removed unit `tombstoned` only when a protected tombstone covers exactly the base
+artifacts plus the prompt itself and its `baseline_status` is `IN_SYNC`. A removal without such a
+tombstone, a tombstone that does not match that exact set, and a tombstone with no base unit outside
+the expected registry are each invalid reasons.
+R24 (MUST): With no protected registry, `expected_managed` is the discovered unit set. With one, it
+is the registry minus authorized removals plus head-only additions; a base-present unit missing from
+the registry, and a registry entry neither discovered nor authorized-removed, are invalid reasons.
+
+% Digests
+R25 (MUST): `digest()` is sha256 over canonical JSON (`sort_keys=True`, `(",", ":")` separators) of
+repository id, language registry digest, candidate records, units, expected managed, invalid reasons,
+and unaccounted paths. Refs MUST NOT be part of the digest, and candidates for dynamic canonical
+state MUST be excluded.
+R26 (MUST): `unit_digest(unit)` uses the same encoding over the repository id, registry digest, the
+unit, and only candidates owned by that unit or lying on its prompt/artifact paths (again excluding
+dynamic canonical state). A unit not in this manifest raises `ValueError`.
+
+% Head fixed point
+R27 (MUST): Build the transition manifest from base→head using effective ownership and base-derived
+aliases. When `base_ref == head_ref`, return it directly.
+R28 (MUST): Otherwise also assemble a stable manifest with head as its own base — using the head's
+ownership rules, aliases, tombstones, and registry — compute control transition problems from base
+rules, head rules, and the replay weakening exceptions, and return
+`enforce_head_fixed_point(transition, stable, control_invalid)`. Candidate policy that only becomes
+valid in the transition must therefore also hold stationary at head.
+</contract_rules>
+
+<repository_bound_bootstraps>
+Ownership is read from the protected base, so a first protected installation and a replay rebased
+onto a newer base have no base row to consume. Three narrow tables bridge that gap. They are the only
+way a candidate-side row can take effect, and they live in code — not policy data — so a candidate
+cannot broaden them with a wildcard, a parent directory, or an altered owner/inventory.
+
+R29 (MUST): Gate all three tables on
+`_PDD_REPOSITORY_ID == "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"`. For any other repository they return
+the base rules unchanged and no weakening pairs. Never add a pattern, directory, or glob to them.
+R30 (MUST): Give every synthesized row inventory `HUMAN_OWNED`, role `human-maintained`, owner
+`pdd-maintainers`, and derive the effective rule set as the sorted union of base rules and additions.
+
+% (a) Bootstrap rows — one-time absent-path prerequisites
+R31 (MUST): For each `_BOOTSTRAP_HUMAN_OWNERSHIP` and `_REPLAY_HUMAN_OWNERSHIP` pattern, add an
+effective rule with absent-path authority only when *all* hold: the pattern has no base rule; the
+candidate policy contains that exact reviewed row; the path is absent in the base tree; the path is
+present in the head tree. Any mutation or extra path stays unaccounted.
+R32 (MUST): Declare `_BOOTSTRAP_HUMAN_OWNERSHIP` rows with `preauthorize_absent=True` and
+`_REPLAY_HUMAN_OWNERSHIP` rows as ordinary rows. The #1998 replay was reviewed against a base that
+already carried the replay rows; rebasing makes them candidate-only, and editing that policy file must
+not grant reusable absent-path authority. The repository-bound bootstrap is the only bridge.
+R33 (MUST): Expose `_replay_bootstrap_weakenings` returning the sorted (effective, candidate) pairs
+for exactly the replay rows whose R31 predicates it re-proves. The transition classifier sees the
+absent-path-capable rule while the candidate keeps its ordinary row; control validation may accept
+that one narrow apparent weakening only against these re-proven pairs.
+
+`_BOOTSTRAP_HUMAN_OWNERSHIP` patterns:
+```
+.pdd/meta/agentic_architecture_python.json
+.pdd/meta/ci_detect_changed_modules_python.json
+.pdd/meta/commands_generate_python.json
+.pdd/meta/evidence_manifest_python.json
+.pdd/meta/postprocess_python.json
+.pdd/meta/story_detection_result_python.json
+.pdd/meta/unfinished_prompt_python.json
+.pdd/meta/user_story_tests_python.json
+.pdd/meta/user_story_tests_python_run.json
+docs/global_sync_extraction_manifest.md
+docs/global_sync_pdd_adapter_demand.json
+pdd/schemas/story_detection_result.schema.json
+pdd/schemas/story_detection_scope.schema.json
+pdd/sync_core/adapter_demand_verifier.py
+scripts/manual_validate_pr_1875.py
+tests/test_e2e_story_failure_diagnostics.py
+tests/test_story_detection_result.py
+tests/test_sync_core_adapter_demand_verifier.py
+```
+
+`_REPLAY_HUMAN_OWNERSHIP` patterns:
+```
+.pdd/meta/agentic_test_orchestrator_python.json
+.pdd/meta/auto_deps_main_python.json
+.pdd/meta/auto_deps_main_python_run.json
+.pdd/meta/ci_validation_python.json
+.pdd/meta/cmd_test_main_python.json
+.pdd/meta/cmd_test_main_python_run.json
+.pdd/meta/code_generator_main_python_run.json
+.pdd/meta/content_selector_python.json
+.pdd/meta/content_selector_python_run.json
+.pdd/meta/core_cli_python.json
+.pdd/meta/evidence_manifest_python_run.json
+.pdd/meta/fix_main_python.json
+.pdd/meta/fix_main_python_run.json
+.pdd/meta/mock_contract_validation_python.json
+.pdd/meta/mock_contract_validation_python_run.json
+.pdd/meta/one_session_sync_python.json
+.pdd/meta/operation_log_python.json
+.pdd/meta/operation_log_python_run.json
+.pdd/meta/preprocess_python_run.json
+.pdd/meta/sync_main_python.json
+.pdd/meta/sync_main_python_run.json
+.pdd/meta/update_main_python.json
+.pdd/meta/update_main_python_run.json
+context/evidence_manifest_example.py
+context/mock_contract_validation_example.py
+tests/test_issue_1900_surface_contract.py
+tests/test_issue_1903_adopt_collocated_test.py
+tests/test_issue_1939_mock_contract_validation.py
+tests/test_issue_1968_annotation_convergence.py
+tests/test_issue_2004_authoritative_drift_pair.py
+tests/test_mock_contract_fix_wiring.py
+tests/test_mock_contract_validation.py
+```
+
+% (b) The release-2026-07-25 rollout repair — base-existing metadata
+R34 (MUST): Classify the eight already-tracked metadata paths below as human-owned only when every
+predicate holds, and otherwise return the base rules unchanged:
+  - the (base sha256, head sha256) pair of `.pdd/sync-ownership.json` equals **either**
+    `_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES` **or** `_SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES`;
+  - no listed pattern already has a base rule, and the candidate policy carries each exact ordinary
+    row;
+  - every listed path exists in both trees with bytes hashing to its pinned sha256.
+R35 (MUST NOT): Promote any rollout-repair row to `preauthorize_absent`. These paths already exist in
+the base, so the bridge must never mint reusable absent-path authority.
+R36 (MUST): Keep the two ownership pin pairs independent. `_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES`
+tracks the *live* `.pdd/sync-ownership.json`, so any edit to that file re-pins it; the protected
+replay transition runs against an immutable historical head whose ownership bytes stay pinned
+separately. Re-pinning the live pair MUST NOT revoke the replay transition — accepting either pair is
+what keeps an ordinary one-line ownership edit from silently un-owning the eight metadata paths and
+resurfacing them as unaccounted tracked paths.
+
+Both pairs are `(protected base digest, head digest)`. The second element of the live pair is the
+sha256 of the checked-in `.pdd/sync-ownership.json`; `tests/test_sync_core_pdd_rollout_policy.py`
+enforces both pins and reports the required value on failure.
+```
+_SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES = (
+  8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07,
+  558910b5d03c183855dbbccdbde662cc36f028765a9eb24883a85ffa040fae3a,
+)
+_SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES = (
+  8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07,
+  558910b5d03c183855dbbccdbde662cc36f028765a9eb24883a85ffa040fae3a,
+)
+```
+
+`_SYNC_ROLLOUT_REPAIR_METADATA_BYTES` — `(path, sha256 required in both trees)`; the derived rows form
+`_SYNC_ROLLOUT_REPAIR_HUMAN_OWNERSHIP`:
+```
+.pdd/meta/code_generator_python.json          fc290e4e99719087de461c390beb1b205a0fef124e7b8b3404088a0a8fc16db9
+.pdd/meta/code_generator_python_run.json      d06bb9b47711bf02f73b95e2bbf40d3124bbf1c1cb56ca6807165115923e463e
+.pdd/meta/continue_generation_python.json     e568bad6adce6674679294959f1b975b46bf0e3197f12bf6ae3255df63ee20b9
+.pdd/meta/continue_generation_python_run.json 127888aed12764a11ba3f3c5b29a5ca4ea5128b4f4fdee1c2e8aa2a68e18d7c5
+.pdd/meta/detect_change_python.json           67dc5b6e01504773a005e0131dd23b19ea3eb3c14d782809ae54da742a8f09b7
+.pdd/meta/detect_change_python_run.json       6c3da8d5736a18f7cbfca130c66e792ac82548c034f1ab678daade8bec25d8d0
+.pdd/meta/generate_test_python.json           ffcc4a5ae929aedbb4191a0920f41f8a1df029604c60a0ba16fc66a8d97fb067
+.pdd/meta/generate_test_python_run.json       7e64abbfc87b8eb09fa7f402b66276b36bda6a762ae1720ad60d1f57078c8989
+```
+
+R37 (MUST): Apply the bootstrap table first and the rollout repair on top of its result, but derive
+the replay weakening pairs from the *unmodified* base rules.
+
+`_EXTERNAL_CONTEXT_TEMPLATE` — the exact architecture entry ignored by R7:
+```json
+{"reason": "Provides shared Python generation conventions for prompt templates.",
+ "description": "Human-maintained context template included by Python prompt modules to define package, typing, import, error-handling, and preservation conventions.",
+ "dependencies": [], "priority": 98,
+ "filename": "context/python_preamble.prompt", "filepath": "context/python_preamble.prompt",
+ "tags": ["config", "context", "python", "template"],
+ "interface": {"type": "config", "config": {"keys": []}}}
+```
+</repository_bound_bootstraps>
+
+<dependencies>
+<include mode="interface">pdd/sync_core/types.py</include>
+<include mode="interface">pdd/sync_core/git_io.py</include>
+<include mode="interface">pdd/sync_core/decommission.py</include>
+<include mode="interface">pdd/sync_core/language.py</include>
+<include mode="interface">pdd/sync_core/path_policy.py</include>
+<include mode="interface">pdd/sync_core/alias_policy.py</include>
+<include mode="interface">pdd/sync_core/identity.py</include>
+</dependencies>
