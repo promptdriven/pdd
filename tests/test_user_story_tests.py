@@ -8,6 +8,11 @@ from unittest.mock import patch
 
 import pytest
 
+from pdd.story_criteria import (
+    CriteriaEvaluation,
+    CriterionVerdict,
+    StoryCriteriaError,
+)
 from pdd.user_story_tests import (
     _contract_path_for_story,
     _story_content_hash,
@@ -1062,36 +1067,59 @@ def test_run_user_story_tests_passes_then_fails_for_harmful_context_prompt_chang
     contract.parent.mkdir(parents=True, exist_ok=True)
     contract.write_text(_CONTEXT_CONTRACT_MD, encoding="utf-8")
 
-    harmful_changes = [
-        {
-            "prompt_name": "context_python.prompt",
-            "change_instructions": (
-                "Restore the per-source `Estimated usage by category` breakdown; "
-                "aggregate-only token totals violate the generated user story."
-            ),
-        }
-    ]
     captured_prompt_inputs = []
     detect_trace = []
 
-    def fake_detect(prompt_paths, story_content, *_args, **_kwargs):
-        captured_prompt_inputs.append(prompt_paths)
+    def fake_evaluate(prompt_paths, story_content, criteria, *_args, **_kwargs):
+        """Judge AC1 (per-source attribution) against the prompt under test.
+
+        The other criteria stay satisfied, so the regression shows up as one
+        named criterion flipping rather than as a wall of prose.
+        """
+        captured_prompt_inputs.append([str(path) for path in prompt_paths])
         prompt_text = Path(prompt_paths[0]).read_text(encoding="utf-8")
         assert "per-source token attribution" in story_content
         assert "Aggregate-only token totals are not sufficient" in story_content
-        if "Attribute tokens per source segment" in prompt_text:
+        per_source_required = "Attribute tokens per source segment" in prompt_text
+        if not per_source_required and "Report only aggregate token totals" not in prompt_text:
+            raise AssertionError(
+                "test fixture prompt must be original or aggregate-only mutation"
+            )
+        if per_source_required:
             detect_trace.append(
                 "PASS: original prompt still requires per-source attribution"
             )
-            return [], 0.1, "gpt-test"
-        if "Report only aggregate token totals" in prompt_text:
+        else:
             detect_trace.append("FAIL: mutated prompt reports aggregate-only totals")
-            return harmful_changes, 0.2, "gpt-test"
-        raise AssertionError(
-            "test fixture prompt must be original or aggregate-only mutation"
+
+        verdicts = [
+            CriterionVerdict(
+                criterion_id=criterion.id,
+                criterion_text=criterion.text,
+                status="satisfied",
+                citation="Attribute tokens per source segment",
+                prompt_name="context_python.prompt",
+                citation_verified=True,
+            )
+            for criterion in criteria
+        ]
+        if not per_source_required:
+            verdicts[0] = CriterionVerdict(
+                criterion_id=criteria[0].id,
+                criterion_text=criteria[0].text,
+                status="unsatisfied",
+                prompt_name="context_python.prompt",
+                rationale="The prompt reports aggregate-only token totals.",
+            )
+        return CriteriaEvaluation(
+            verdicts=verdicts,
+            cost=0.1 if per_source_required else 0.2,
+            model="gpt-test",
         )
 
-    with patch("pdd.user_story_tests.detect_change", side_effect=fake_detect):
+    with patch(
+        "pdd.user_story_tests.evaluate_acceptance_criteria", side_effect=fake_evaluate
+    ):
         baseline_passed, baseline_results, baseline_cost, baseline_model = (
             run_user_story_tests(
                 prompts_dir=str(prompts_dir),
@@ -1111,24 +1139,25 @@ def test_run_user_story_tests_passes_then_fails_for_harmful_context_prompt_chang
         )
 
     assert baseline_passed is True
-    assert baseline_results == [
-        {
-            "story": str(story),
-            "passed": True,
-            "changes": [],
-        }
-    ]
+    assert baseline_results[0]["story"] == str(story)
+    assert baseline_results[0]["passed"] is True
+    assert baseline_results[0]["changes"] == []
+    assert baseline_results[0]["criteria_source"] == "contract"
+    assert {row["status"] for row in baseline_results[0]["criteria"]} == {"satisfied"}
     assert baseline_cost == pytest.approx(0.1)
     assert baseline_model == "gpt-test"
 
     assert mutated_passed is False
-    assert mutated_results == [
-        {
-            "story": str(story),
-            "passed": False,
-            "changes": harmful_changes,
-        }
-    ]
+    assert mutated_results[0]["passed"] is False
+    # The failure names the criterion that broke, not a free-form suggestion.
+    assert len(mutated_results[0]["changes"]) == 1
+    assert mutated_results[0]["changes"][0]["prompt_name"] == "context_python.prompt"
+    assert "AC1 is not satisfied" in (
+        mutated_results[0]["changes"][0]["change_instructions"]
+    )
+    mutated_statuses = [row["status"] for row in mutated_results[0]["criteria"]]
+    assert mutated_statuses[0] == "unsatisfied"
+    assert set(mutated_statuses[1:]) == {"satisfied"}
     assert captured_prompt_inputs == [[str(prompt_one)], [str(prompt_one)]]
     assert detect_trace == [
         "PASS: original prompt still requires per-source attribution",
@@ -1373,7 +1402,7 @@ def test_sync_regenerates_contract_when_story_changes(tmp_path):
 
 
 def test_validation_uses_story_plus_contract_as_oracle(tmp_path):
-    """detect_change receives the human Story AND its contract combined."""
+    """The evaluator receives the human Story AND its contract combined."""
     prompts_dir = tmp_path / "prompts"
     stories_dir = tmp_path / "user_stories"
     prompts_dir.mkdir()
@@ -1391,12 +1420,28 @@ def test_validation_uses_story_plus_contract_as_oracle(tmp_path):
 
     seen = {}
 
-    def fake_detect(prompt_paths, oracle, *_a, **_k):
+    def fake_evaluate(prompt_paths, oracle, criteria, *_a, **_k):
         seen["oracle"] = oracle
-        return [], 0.1, "gpt-test"
+        seen["criteria"] = criteria
+        return CriteriaEvaluation(
+            verdicts=[
+                CriterionVerdict(
+                    criterion_id=criterion.id,
+                    criterion_text=criterion.text,
+                    status="satisfied",
+                    citation="uploads and shows a summary report",
+                    citation_verified=True,
+                )
+                for criterion in criteria
+            ],
+            cost=0.1,
+            model="gpt-test",
+        )
 
-    with patch("pdd.user_story_tests.detect_change", side_effect=fake_detect):
-        passed, _, _, _ = run_user_story_tests(
+    with patch(
+        "pdd.user_story_tests.evaluate_acceptance_criteria", side_effect=fake_evaluate
+    ):
+        passed, results, _, _ = run_user_story_tests(
             prompts_dir=str(prompts_dir), stories_dir=str(stories_dir), quiet=True
         )
 
@@ -1404,6 +1449,9 @@ def test_validation_uses_story_plus_contract_as_oracle(tmp_path):
     # The oracle must contain both the human Story sentence and a contract section.
     assert "As a data analyst, I can upload a CSV file" in seen["oracle"]
     assert "## Acceptance Criteria" in seen["oracle"]
+    # The gated criteria come from the contract, not the story prose.
+    assert [c.id for c in seen["criteria"]] == ["AC1"]
+    assert results[0]["criteria_source"] == "contract"
 
 
 def test_generate_user_story_fails_when_llm_output_contains_placeholders(tmp_path):
@@ -1462,8 +1510,25 @@ def test_legacy_minimal_story_passes_validation(tmp_path):
         encoding="utf-8",
     )
 
-    with patch("pdd.user_story_tests.detect_change") as mock_detect:
-        mock_detect.return_value = ([], 0.1, "gpt-legacy")
+    def fake_evaluate(_prompt_paths, _oracle, criteria, *_a, **_k):
+        return CriteriaEvaluation(
+            verdicts=[
+                CriterionVerdict(
+                    criterion_id=criterion.id,
+                    criterion_text=criterion.text,
+                    status="satisfied",
+                    citation="Math operations including basic addition.",
+                    citation_verified=True,
+                )
+                for criterion in criteria
+            ],
+            cost=0.1,
+            model="gpt-legacy",
+        )
+
+    with patch(
+        "pdd.user_story_tests.evaluate_acceptance_criteria", side_effect=fake_evaluate
+    ):
         success, results, cost, model = run_user_story_tests(
             prompts_dir=str(prompts_dir),
             stories_dir=str(stories_dir),
@@ -1472,6 +1537,233 @@ def test_legacy_minimal_story_passes_validation(tmp_path):
     assert success is True
     assert len(results) == 1
     assert results[0]["passed"] is True
+    # No contract exists, so the story's own criteria section is gated on.
+    assert results[0]["criteria_source"] == "story"
+
+
+def _story_with_contract(tmp_path):
+    """Build a prompts dir plus one contract-backed story with two criteria."""
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+    (prompts_dir / "upload_python.prompt").write_text("uploads", encoding="utf-8")
+    story = stories_dir / "story__upload.md"
+    story.write_text(
+        "<!-- pdd-story-prompts: upload_python.prompt -->\n\n" + _LLM_STORY_MD,
+        encoding="utf-8",
+    )
+    contract = _contract_path_for_story(story)
+    contract.parent.mkdir(parents=True, exist_ok=True)
+    contract.write_text(
+        "## Acceptance Criteria\n\n"
+        "1. Given a valid CSV, when uploaded, then a summary report is shown.\n"
+        "2. Given an empty CSV, when uploaded, then the upload is rejected.\n",
+        encoding="utf-8",
+    )
+    return prompts_dir, stories_dir, story
+
+
+def _evaluation(criteria, statuses, cost=0.1, model="gpt-test"):
+    return CriteriaEvaluation(
+        verdicts=[
+            CriterionVerdict(
+                criterion_id=criterion.id,
+                criterion_text=criterion.text,
+                status=status,
+                citation="uploads" if status == "satisfied" else "",
+                citation_verified=status == "satisfied",
+            )
+            for criterion, status in zip(criteria, statuses)
+        ],
+        cost=cost,
+        model=model,
+    )
+
+
+def test_legacy_detect_forces_the_open_ended_gate(tmp_path):
+    """--legacy-detect must bypass criteria classification entirely."""
+    prompts_dir, stories_dir, _ = _story_with_contract(tmp_path)
+
+    with (
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch("pdd.user_story_tests.evaluate_acceptance_criteria") as mock_evaluate,
+    ):
+        mock_detect.return_value = ([], 0.4, "legacy-model")
+        passed, results, cost, model = run_user_story_tests(
+            prompts_dir=str(prompts_dir),
+            stories_dir=str(stories_dir),
+            quiet=True,
+            legacy_detect=True,
+        )
+
+    mock_evaluate.assert_not_called()
+    mock_detect.assert_called_once()
+    assert passed is True
+    assert "criteria" not in results[0]
+    assert cost == 0.4
+    assert model == "legacy-model"
+
+
+def test_story_without_criteria_falls_back_to_detect_change(tmp_path):
+    """A story with no parseable criteria keeps the legacy behavior."""
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+    (prompts_dir / "foo_python.prompt").write_text("prompt", encoding="utf-8")
+    (stories_dir / "story__bare.md").write_text("As a user...", encoding="utf-8")
+
+    with (
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch("pdd.user_story_tests.evaluate_acceptance_criteria") as mock_evaluate,
+    ):
+        mock_detect.return_value = ([], 0.2, "gpt-test")
+        passed, results, _, _ = run_user_story_tests(
+            prompts_dir=str(prompts_dir), stories_dir=str(stories_dir), quiet=True
+        )
+
+    mock_evaluate.assert_not_called()
+    mock_detect.assert_called_once()
+    assert passed is True
+    assert "criteria" not in results[0]
+
+
+def test_unclear_criteria_are_advisory_warnings_and_still_pass(tmp_path):
+    """Issue #5: a hedging model must not fail a correct prompt set."""
+    prompts_dir, stories_dir, _ = _story_with_contract(tmp_path)
+
+    with patch(
+        "pdd.user_story_tests.evaluate_acceptance_criteria",
+        side_effect=lambda _p, _o, criteria, *_a, **_k: _evaluation(
+            criteria, ["satisfied", "unclear"]
+        ),
+    ):
+        passed, results, _, _ = run_user_story_tests(
+            prompts_dir=str(prompts_dir), stories_dir=str(stories_dir), quiet=True
+        )
+
+    assert passed is True
+    assert results[0]["changes"] == []
+    assert [w["code"] for w in results[0]["warnings"]] == ["criteria:UNCLEAR"]
+    assert all(w["severity"] == "warning" for w in results[0]["warnings"])
+
+
+def test_unsatisfied_criteria_fail_and_name_the_criterion(tmp_path):
+    prompts_dir, stories_dir, _ = _story_with_contract(tmp_path)
+
+    with patch(
+        "pdd.user_story_tests.evaluate_acceptance_criteria",
+        side_effect=lambda _p, _o, criteria, *_a, **_k: _evaluation(
+            criteria, ["satisfied", "unsatisfied"]
+        ),
+    ):
+        passed, results, _, _ = run_user_story_tests(
+            prompts_dir=str(prompts_dir), stories_dir=str(stories_dir), quiet=True
+        )
+
+    assert passed is False
+    assert "evaluation_status" not in results[0]
+    assert "AC2 is not satisfied" in results[0]["changes"][0]["change_instructions"]
+    assert results[0]["changes"][0]["prompt_name"] == "upload_python.prompt"
+
+
+def test_a_skipped_criterion_makes_the_run_incomplete_not_a_pass(tmp_path):
+    """The legacy gate treated a silent detector as success; this one does not."""
+    prompts_dir, stories_dir, _ = _story_with_contract(tmp_path)
+
+    with patch(
+        "pdd.user_story_tests.evaluate_acceptance_criteria",
+        side_effect=lambda _p, _o, criteria, *_a, **_k: _evaluation(
+            criteria, ["satisfied", "unevaluated"]
+        ),
+    ):
+        passed, results, _, _ = run_user_story_tests(
+            prompts_dir=str(prompts_dir), stories_dir=str(stories_dir), quiet=True
+        )
+
+    assert passed is False
+    assert results[0]["evaluation_status"] == "incomplete"
+    assert "no verdict" in results[0]["error"]
+    # No change instructions: nothing was proven wrong, the run just did not finish.
+    assert results[0]["changes"] == []
+
+
+def test_evaluator_failure_is_incomplete_and_does_not_fall_back(tmp_path):
+    """Falling back to the open-ended detector here would read as success."""
+    prompts_dir, stories_dir, _ = _story_with_contract(tmp_path)
+
+    with (
+        patch(
+            "pdd.user_story_tests.evaluate_acceptance_criteria",
+            side_effect=StoryCriteriaError("malformed", cost=0.05),
+        ),
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+    ):
+        passed, results, cost, _ = run_user_story_tests(
+            prompts_dir=str(prompts_dir), stories_dir=str(stories_dir), quiet=True
+        )
+
+    mock_detect.assert_not_called()
+    assert passed is False
+    assert results[0]["evaluation_status"] == "incomplete"
+    # The failed call is still billed rather than silently understating spend.
+    assert cost == pytest.approx(0.05)
+
+
+def test_unverified_citation_is_warned_about_but_still_passes(tmp_path):
+    prompts_dir, stories_dir, _ = _story_with_contract(tmp_path)
+
+    def fake_evaluate(_prompts, _oracle, criteria, *_a, **_k):
+        return CriteriaEvaluation(
+            verdicts=[
+                CriterionVerdict(
+                    criterion_id=criterion.id,
+                    criterion_text=criterion.text,
+                    status="satisfied",
+                    citation="a paraphrase that is not in the prompt",
+                    citation_verified=False,
+                )
+                for criterion in criteria
+            ],
+            cost=0.1,
+            model="gpt-test",
+        )
+
+    with patch(
+        "pdd.user_story_tests.evaluate_acceptance_criteria", side_effect=fake_evaluate
+    ):
+        passed, results, _, _ = run_user_story_tests(
+            prompts_dir=str(prompts_dir), stories_dir=str(stories_dir), quiet=True
+        )
+
+    assert passed is True
+    assert {w["code"] for w in results[0]["warnings"]} == {
+        "criteria:UNVERIFIED_CITATION"
+    }
+
+
+def test_criteria_report_names_the_model_that_produced_the_verdict(
+    tmp_path, capsys
+):
+    """A cheap-model PASS must not be mistakable for a strong one."""
+    prompts_dir, stories_dir, _ = _story_with_contract(tmp_path)
+
+    with patch(
+        "pdd.user_story_tests.evaluate_acceptance_criteria",
+        side_effect=lambda _p, _o, criteria, *_a, **_k: _evaluation(
+            criteria, ["satisfied", "unclear"], model="gemini-3-flash-preview"
+        ),
+    ):
+        run_user_story_tests(
+            prompts_dir=str(prompts_dir), stories_dir=str(stories_dir), quiet=False
+        )
+
+    output = capsys.readouterr().out
+    assert "judged by gemini-3-flash-preview" in output
+    assert "SATISFIED" in output
+    assert "UNCLEAR" in output
+    assert "AC1" in output and "AC2" in output
 
 
 def test_generate_user_story_missing_prompt_fails(tmp_path):

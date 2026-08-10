@@ -336,6 +336,15 @@ def _raw_story_results_are_incomplete(results: object) -> bool:
     help="Include *_llm.prompt files in user story validation.",
 )
 @click.option(
+    "--legacy-detect",
+    is_flag=True,
+    default=False,
+    help=(
+        "Gate stories on the legacy open-ended change detector instead of "
+        "classifying each acceptance criterion."
+    ),
+)
+@click.option(
     "--fail-fast/--no-fail-fast",
     default=True,
     help="Stop on the first failing story in user story validation mode.",
@@ -380,6 +389,7 @@ def detect_change(
     prompts_dir: Optional[str] = None,
     scope_manifest: Optional[Path] = None,
     include_llm: bool = False,
+    legacy_detect: bool = False,
     fail_fast: bool = True,
     evidence: bool = False,
     json_output_stdout: bool = False,
@@ -669,6 +679,7 @@ def detect_change(
                         fail_fast=fail_fast,
                         include_llm_prompts=include_llm,
                         cache_story_prompt_links=not effective_read_only,
+                        legacy_detect=legacy_detect,
                     )
 
                 if evaluator_stdout is None:

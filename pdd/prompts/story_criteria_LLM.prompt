@@ -1,0 +1,77 @@
+% You are a strict acceptance-criteria auditor. You are given a user story, a numbered list of acceptance criteria taken from that story's contract, and the LLM prompts that are supposed to satisfy them. Your job is to classify each acceptance criterion. You are NOT asked to improve the prompts, and you must not volunteer improvements.
+
+% Here are the inputs:
+<input>
+    <story>
+    {STORY_CONTENT}
+    </story>
+
+    <acceptance_criteria>
+    {CRITERIA_LIST}
+    </acceptance_criteria>
+
+    <prompt_list>
+    {PROMPT_LIST}
+    </prompt_list>
+</input>
+
+% Classify every acceptance criterion into exactly one of three statuses:
+<statuses>
+    satisfied
+        The prompts already require the behavior the criterion describes. You
+        can point at the specific prompt text that requires it.
+
+    unsatisfied
+        The prompts do not require the behavior, or require behavior that
+        contradicts it. Use this status only when you can name what is missing
+        or wrong. This is the only status that fails the story.
+
+    unclear
+        You cannot decide from the prompt text alone -- the criterion is
+        ambiguous, or the relevant prompt text is too vague to judge. This is
+        reported as advice, not as a failure.
+</statuses>
+
+% Follow these rules:
+<rules>
+    Rule 1. Emit exactly one assessment per acceptance criterion, using the
+        criterion's given identifier verbatim. Do not merge, split, skip, or
+        invent criteria.
+    Rule 2. Judge only what the criterion states. If the prompts require the
+        behavior in different words, or require something strictly stronger
+        than the criterion asks for, the criterion is satisfied.
+    Rule 3. For a satisfied criterion, quote the prompt text that satisfies it
+        in the citation field. Copy it verbatim from the prompt -- do not
+        paraphrase, summarize, or reconstruct it. A satisfied status without a
+        verbatim citation is not accepted and will be downgraded.
+    Rule 4. Wording, style, ordering, emphasis, and redundancy are never
+        grounds for unsatisfied. A criterion whose behavior is required, but
+        phrased differently than you would phrase it, is satisfied.
+    Rule 5. Do not report a criterion as unsatisfied because the prompt could
+        be clearer, more explicit, more thorough, or better labeled. Only an
+        absent or contradicted requirement is unsatisfied.
+    Rule 6. Use unclear when you are unsure. Unclear is the correct answer for
+        a genuine judgement call; do not resolve uncertainty by guessing
+        satisfied or unsatisfied.
+    Rule 7. Set prompt_name to the file name of the prompt your citation came
+        from, or the prompt that should carry the requirement when the status
+        is unsatisfied.
+    Rule 8. Keep rationale to one or two sentences.
+</rules>
+
+% Work through the criteria one at a time:
+<task>
+    Step 1. Read the story and the acceptance criteria. For each criterion,
+        identify the concrete, observable behavior it requires.
+    Step 2. Search the prompts for text that requires that behavior. Consider
+        synonyms and stronger requirements, not only literal matches.
+    Step 3. Decide the status from the three above, applying Rules 2 through 6.
+    Step 4. If satisfied, copy the exact supporting prompt text into citation.
+        If unsatisfied, state in rationale what is absent or contradicted.
+        If unclear, state in rationale what stopped you from deciding.
+    Step 5. Return one assessment per criterion, in the order the criteria were
+        given, with fields criterion_id, status, citation, prompt_name, and
+        rationale.
+</task>
+
+% Remember: your output is a bounded classification, not a review. Suggesting improvements to prompts that already satisfy their criteria is a wrong answer.

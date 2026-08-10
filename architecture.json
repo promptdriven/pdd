@@ -10066,10 +10066,76 @@
     }
   },
   {
+    "reason": "Replaces the model-strength-sensitive story gate with a bounded per-acceptance-criterion judgement.",
+    "description": "Parses acceptance criteria from a story contract or story and classifies each one as satisfied, unsatisfied, unclear, or unevaluated, requiring a verbatim prompt citation for a satisfied verdict and failing only on unsatisfied.",
+    "dependencies": [
+      "detect_change_python.prompt"
+    ],
+    "priority": 241,
+    "filename": "story_criteria_python.prompt",
+    "filepath": "pdd/story_criteria.py",
+    "tags": [
+      "module",
+      "python",
+      "stories",
+      "validation"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "AcceptanceCriterion",
+            "kind": "dataclass"
+          },
+          {
+            "name": "CriterionVerdict",
+            "kind": "dataclass"
+          },
+          {
+            "name": "CriteriaEvaluation",
+            "kind": "dataclass"
+          },
+          {
+            "name": "StoryCriteriaError",
+            "kind": "exception"
+          }
+        ],
+        "functions": [
+          {
+            "name": "parse_acceptance_criteria",
+            "signature": "(contract_text: str)",
+            "returns": "List[AcceptanceCriterion]"
+          },
+          {
+            "name": "evaluate_acceptance_criteria",
+            "signature": "(prompt_files, story_content, criteria, strength, temperature, time, verbose)",
+            "returns": "CriteriaEvaluation"
+          },
+          {
+            "name": "changes_from_verdicts",
+            "signature": "(verdicts, default_prompt_name)",
+            "returns": "List[Dict[str, str]]"
+          },
+          {
+            "name": "evaluation_summary",
+            "signature": "(evaluation: CriteriaEvaluation)",
+            "returns": "Tuple[int, int, int, int]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
     "reason": "LLM oracle for user story validation, generation, and story-driven prompt fixing; owns the story_id filename-slug identity convention and cross-unit story metadata helpers.",
     "description": "Discovers story files, validates them against prompts via detect_change, generates LLM-authored story markdown from GitHub issues, and applies prompt fixes. Validation accepts an optional exact story-to-contract mapping so scoped callers use the authorized contract rather than discovering a conventional sibling. Provides the public story_id helper plus cross-unit story traceability via parse_story_dev_unit_metadata, story_is_cross_unit, get_cross_unit_stories_for_prompt, and get_all_dev_units_for_story.",
     "dependencies": [
       "contract_ir_python.prompt",
+      "story_criteria_python.prompt",
       "detect_change_python.prompt",
       "change_main_python.prompt",
       "llm_invoke_python.prompt"

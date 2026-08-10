@@ -19,6 +19,13 @@ from rich.markup import escape as rich_escape
 
 from .detect_change import detect_change
 from .get_extension import get_extension
+from .story_criteria import (
+    CriteriaEvaluation,
+    StoryCriteriaError,
+    changes_from_verdicts,
+    evaluate_acceptance_criteria,
+    parse_acceptance_criteria,
+)
 
 
 DEFAULT_STORIES_DIR = "user_stories"
@@ -1070,6 +1077,139 @@ def _compose_story_oracle(
     return story_content
 
 
+def _story_contract_text(
+    story_path: Path,
+    contract_path: Optional[Path] = None,
+) -> str:
+    """Return the contract markdown for a story, or ``""`` when there is none."""
+    contract_path = contract_path or _contract_path_for_story(story_path)
+    try:
+        return contract_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return ""
+
+
+def _resolve_story_criteria(
+    story_path: Path,
+    story_content: str,
+    contract_path: Optional[Path] = None,
+) -> Tuple[List[object], str]:
+    """Return the acceptance criteria to gate on, and where they came from.
+
+    The contract is the machine-checkable oracle, so it wins when it has
+    criteria. Legacy stories predate contracts but often carry their own
+    ``## Acceptance Criteria`` section, and gating on those is still far better
+    than gating on whether a model volunteered suggestions. When neither yields
+    criteria the caller falls back to the open-ended ``detect_change`` path.
+    """
+    criteria = parse_acceptance_criteria(
+        _story_contract_text(story_path, contract_path)
+    )
+    if criteria:
+        return list(criteria), "contract"
+    criteria = parse_acceptance_criteria(story_content)
+    if criteria:
+        return list(criteria), "story"
+    return [], ""
+
+
+def _criteria_diagnostics(evaluation: CriteriaEvaluation) -> List[Dict[str, object]]:
+    """Map advisory verdicts onto the stable story-diagnostic warning shape.
+
+    ``unclear`` is deliberately a warning and not an error: it must never move
+    the verdict, or a model that hedges would fail a correct prompt set --
+    the exact model-sensitivity this gate exists to remove.
+    """
+    diagnostics: List[Dict[str, object]] = []
+    for verdict in evaluation.unclear:
+        diagnostics.append(
+            {
+                "code": "criteria:UNCLEAR",
+                "severity": "warning",
+                "message": (
+                    f"{verdict.criterion_id} could not be decided from the prompt "
+                    f"text: {verdict.criterion_text}"
+                ),
+                "retryable": False,
+            }
+        )
+    for verdict in evaluation.verdicts:
+        if verdict.status == "satisfied" and not verdict.citation_verified:
+            diagnostics.append(
+                {
+                    "code": "criteria:UNVERIFIED_CITATION",
+                    "severity": "warning",
+                    "message": (
+                        f"{verdict.criterion_id} was reported satisfied, but the "
+                        "quoted evidence was not found verbatim in the evaluated "
+                        "prompts."
+                    ),
+                    "retryable": False,
+                }
+            )
+    return diagnostics
+
+
+def _render_criteria_report(
+    story_path: Path,
+    evaluation: CriteriaEvaluation,
+    story_prompt_files: Iterable[Path],
+    criteria_source: str,
+) -> None:
+    """Print the per-criterion verdict table for one story.
+
+    The report is the point of the bounded gate: an operator can check a
+    verdict against the quoted prompt text instead of trusting it.
+    """
+    status_styles = {
+        "satisfied": "green",
+        "unsatisfied": "red",
+        "unclear": "yellow",
+        "unevaluated": "yellow",
+    }
+    if evaluation.unevaluated:
+        headline = "UNKNOWN"
+    elif evaluation.unsatisfied:
+        headline = "FAIL"
+    else:
+        headline = "PASS"
+    rprint(f"[bold]{headline}[/bold] {rich_escape(str(story_path))}")
+    rprint("")
+    rprint(
+        f"  Acceptance criteria (from {criteria_source}), "
+        f"judged by {rich_escape(evaluation.model or 'unknown model')}:"
+    )
+    for verdict in evaluation.verdicts:
+        style = status_styles.get(verdict.status, "yellow")
+        rprint(
+            f"  [{style}]{verdict.status.upper():<12}[/{style}] "
+            f"{verdict.criterion_id}: {rich_escape(verdict.criterion_text)}"
+        )
+        if verdict.status == "satisfied" and verdict.citation:
+            marker = "" if verdict.citation_verified else " (not found verbatim)"
+            rprint(
+                f"               evidence{marker}: "
+                f"{rich_escape(verdict.citation)}"
+            )
+        elif verdict.rationale:
+            rprint(f"               {rich_escape(verdict.rationale)}")
+
+    if headline == "PASS":
+        return
+
+    rprint("")
+    rprint("  Evaluated prompts:")
+    for prompt_path in story_prompt_files:
+        rprint(f"  - {rich_escape(str(prompt_path))}")
+    if evaluation.unevaluated:
+        rprint(
+            "  Next step: re-run; the evaluator returned no verdict for "
+            f"{len(evaluation.unevaluated)} criteria."
+        )
+    else:
+        rprint(f"  Next step:  pdd fix {rich_escape(_story_fix_target(story_path))}")
+
+
 def _normalized_story_for_hash(story_text: str) -> str:
     """Return story text normalized for hashing.
 
@@ -1632,11 +1772,19 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
     include_llm_prompts: bool = False,
     cache_story_prompt_links: bool = False,
     link_story_prompt_metadata: Optional[bool] = None,
+    legacy_detect: bool = False,
 ) -> Tuple[bool, List[Dict[str, object]], float, str]:
     """
-    Run user story tests by calling detect_change on each story.
+    Run user story tests by classifying each story's acceptance criteria.
 
-    A story passes if detect_change returns an empty changes_list.
+    A story passes when every acceptance criterion is evaluated and none is
+    reported ``unsatisfied``. ``unclear`` verdicts are advisory and never fail
+    a story; a criterion the evaluator skipped leaves the run incomplete, which
+    is reported as an error rather than a pass.
+
+    Stories with no parseable acceptance criteria fall back to the legacy
+    ``detect_change`` gate, which passes on an empty change list. Set
+    ``legacy_detect`` to force every story onto that older gate.
 
     ``link_story_prompt_metadata`` is a deprecated alias for
     ``cache_story_prompt_links`` (main API). When both are passed,
@@ -1720,32 +1868,99 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                     break
                 continue
 
-        changes_list, cost, model = detect_change(
-            [str(p) for p in story_prompt_files],
-            oracle_content,
-            strength,
-            temperature,
-            time,
-            verbose=verbose,
-        )
+        criteria: List[object] = []
+        criteria_source = ""
+        if not legacy_detect:
+            criteria, criteria_source = _resolve_story_criteria(
+                story_path, story_content, contract_path
+            )
+
+        evaluation: Optional[CriteriaEvaluation] = None
+        criteria_error = ""
+        criteria_error_cost = 0.0
+        if criteria:
+            try:
+                evaluation = evaluate_acceptance_criteria(
+                    story_prompt_files,
+                    oracle_content,
+                    criteria,
+                    strength,
+                    temperature,
+                    time,
+                    verbose=verbose,
+                )
+            except StoryCriteriaError as exception:
+                # An unusable evaluator response is a failure to evaluate, not a
+                # pass. Record it and keep going rather than falling back to the
+                # open-ended detector, whose empty answer would read as success.
+                criteria_error = str(exception)
+                criteria_error_cost = getattr(exception, "cost", 0.0)
+
+        if evaluation is not None:
+            changes_list = changes_from_verdicts(
+                evaluation.unsatisfied,
+                default_prompt_name=(
+                    story_prompt_files[0].name
+                    if len(story_prompt_files) == 1
+                    else ""
+                ),
+            )
+            cost, model = evaluation.cost, evaluation.model
+        elif criteria_error:
+            changes_list, cost, model = [], criteria_error_cost, ""
+        else:
+            changes_list, cost, model = detect_change(
+                [str(p) for p in story_prompt_files],
+                oracle_content,
+                strength,
+                temperature,
+                time,
+                verbose=verbose,
+            )
         total_cost += cost
         model_name = model or model_name
-        evaluation_incomplete = bool(unresolved_prompt_refs)
-        passed = len(changes_list) == 0 and not evaluation_incomplete
+
+        # Anything that leaves a criterion unjudged makes the run incomplete.
+        # Reporting it as an error rather than a pass is the point: the legacy
+        # gate treated a silent detector as success.
+        if unresolved_prompt_refs:
+            incomplete_reason = (
+                "Some pdd-story-prompts references could not be resolved."
+            )
+        elif criteria_error:
+            incomplete_reason = "Acceptance criteria could not be evaluated."
+        elif evaluation is not None and evaluation.unevaluated:
+            incomplete_reason = (
+                "The evaluator returned no verdict for "
+                f"{len(evaluation.unevaluated)} acceptance criteria."
+            )
+        else:
+            incomplete_reason = ""
+
+        evaluation_incomplete = bool(incomplete_reason)
+        passed = not changes_list and not evaluation_incomplete
         if not passed:
             all_passed = False
-        result_row = {
+        result_row: Dict[str, object] = {
             "story": str(story_path),
             "passed": passed,
             "changes": changes_list,
         }
+        if evaluation is not None:
+            result_row["criteria"] = [
+                verdict.as_dict() for verdict in evaluation.verdicts
+            ]
+            result_row["criteria_source"] = criteria_source
+            diagnostics = _criteria_diagnostics(evaluation)
+            if diagnostics:
+                result_row["warnings"] = diagnostics
         if evaluation_incomplete:
             result_row.update(
                 {
                     "evaluation_status": "incomplete",
                     "evaluated_prompts": [str(path) for path in story_prompt_files],
                     "unresolved_prompts": unresolved_prompt_refs,
-                    "error": "Some pdd-story-prompts references could not be resolved.",
+                    "error": incomplete_reason,
                 }
             )
         results.append(result_row)
@@ -1767,14 +1982,24 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                 logger.info("Updated story prompt metadata links for %s", story_path)
 
         if not quiet:
-            if evaluation_incomplete:
+            if unresolved_prompt_refs:
                 _render_incomplete_story_evaluation(
                     story_path, story_prompt_files, unresolved_prompt_refs
                 )
+            elif evaluation is not None:
+                _render_criteria_report(
+                    story_path, evaluation, story_prompt_files, criteria_source
+                )
+            elif criteria_error:
+                rprint(f"[bold]UNKNOWN[/bold] {rich_escape(str(story_path))}")
+                rprint("")
+                rprint("  Story was not successfully evaluated:")
+                rprint("  Acceptance criteria could not be evaluated.")
+                rprint("  Next step: re-run, or use --legacy-detect.")
             else:
                 status = "PASS" if passed else "FAIL"
                 rprint(f"[bold]{status}[/bold] {rich_escape(str(story_path))}")
-            if not evaluation_incomplete and not passed:
+            if evaluation is None and not evaluation_incomplete and not passed:
                 rprint("")
                 rprint("  Evaluated prompts:")
                 for _p in story_prompt_files:
