@@ -12123,5 +12123,39 @@
       "x": 11600,
       "y": 2200
     }
+  },
+  {
+    "reason": "Builds the deterministic protected-base/head manifest that makes ownership and tracked-artifact classification reviewable.",
+    "description": "Reads Git trees and protected policy inputs to assemble a stable inventory of managed units, human-owned artifacts, policy controls, and invalid paths; it also enforces replay and fixed-point constraints for synchronization transitions.",
+    "dependencies": [],
+    "priority": 250,
+    "filename": "sync_core/manifest_python.prompt",
+    "filepath": "pdd/sync_core/manifest.py",
+    "tags": [
+      "git",
+      "manifest",
+      "module",
+      "policy",
+      "python",
+      "sync"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "require_valid_manifest",
+            "signature": "(manifest: UnitManifest) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "build_unit_manifest",
+            "signature": "(root: Path, *, base_ref: str, head_ref: str, registry: Optional[LanguageRegistry] = None) -> UnitManifest",
+            "returns": "UnitManifest"
+          }
+        ]
+      }
+    },
+    "position": null
   }
 ]

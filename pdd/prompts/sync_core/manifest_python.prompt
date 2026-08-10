@@ -5,6 +5,20 @@
 
 <include>context/python_preamble.prompt</include>
 
+<pdd-reason>Deterministic protected-base/head manifest builder that partitions tracked artifacts into managed, policy-controlled, human-owned, or invalid candidates.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "require_valid_manifest", "signature": "(manifest: UnitManifest) -> None", "returns": "None"},
+      {"name": "build_unit_manifest", "signature": "(root: Path, *, base_ref: str, head_ref: str, registry: Optional[LanguageRegistry] = None) -> UnitManifest", "returns": "UnitManifest"}
+    ]
+  }
+}
+</pdd-interface>
+
 % Instructions (override the preamble)
 - Import `yaml` at module level. This module is a hard dependency of the sync engine, which already
   requires PyYAML; deferring the import would hide config parse failures.
