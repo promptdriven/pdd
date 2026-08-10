@@ -35,7 +35,7 @@ import ast
 import logging
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -44,7 +44,11 @@ import click
 from .construct_paths import _find_pddrc_file, _load_pddrc_config
 from .path_resolution import find_project_root_from_path
 from .story_regression import StoryTestMap, build_story_map
-from .story_test_generation import story_bundle_hash
+from .story_test_generation import (
+    STORY_TEST_MODE_CONSTANT,
+    STORY_TEST_MODE_TRACEABILITY,
+    story_bundle_hash,
+)
 from .user_story_tests import (
     STORY_PREFIX,
     STORY_SUFFIX,
@@ -72,6 +76,13 @@ STATUS_STORY_REGRESSION_STALE = "story-regression-stale"
 STATUS_PASSING = "story-regression-present"
 STATUS_MISSING = STATUS_STORY_REGRESSION_MISSING
 STATUS_STALE = STATUS_STORY_REGRESSION_STALE
+# A story whose only fresh test is a generated traceability (text-pinning) test.
+# The test exists and is current, but it never executes the code the story is
+# about, so it cannot catch a behavioural regression. Reported distinctly from
+# ``story-regression-ok`` so a documentary story is not mistaken for a protected
+# one (pdd#2392). This is a *narrower* claim than OK, not a failure: the gate
+# treats it as satisfying presence/freshness exactly as before.
+STATUS_STORY_REGRESSION_TRACEABILITY_ONLY = "story-regression-traceability-only"
 
 _GATE_MODES = frozenset({"off", "warn", "strict"})
 _DEFAULT_MODE = "warn"
@@ -93,6 +104,11 @@ class StoryMarker:
     test_file: str
     test_name: str
     lineno: int
+    # Generated tests declare PDD_STORY_TEST_MODE; hand-written ones do not, so
+    # ``None`` means "unknown", which is treated as behavioural. Only a test
+    # that explicitly declares itself traceability-only is reported as such --
+    # the gate must never downgrade a test it cannot classify (pdd#2392).
+    mode: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -329,7 +345,13 @@ def _markers_in_source(source: str, test_file: str) -> List[StoryMarker]:
                     constants=constants,
                 )
             )
-    return found
+    # A generated test declares its mode as a module-level string constant, so
+    # it rides along in the constants map the marker scan already builds. Every
+    # marker in a module shares that module's mode.
+    mode = constants.get(STORY_TEST_MODE_CONSTANT)
+    if mode is None:
+        return found
+    return [replace(marker, mode=mode) for marker in found]
 
 
 def discover_story_markers(tests_dir) -> Dict[str, StoryMarker]:
@@ -449,23 +471,49 @@ def _classify_story_from_markers(
             detail="No @pytest.mark.story regression test resolves to this story.",
         )
 
-    # Fresh if ANY claiming test records an acceptable hash.
-    for marker in story_markers:
-        if marker.story_hash and marker.story_hash in acceptable_hashes:
-            return StoryRegressionResult(
-                story_id=story_id,
-                story_path=str(path),
-                status=STATUS_STORY_REGRESSION_OK,
-                current_hash=current_hash,
-                recorded_hash=marker.story_hash,
-                test_file=marker.test_file,
-                test_name=marker.test_name,
-                detail=(
+    # Fresh if ANY claiming test records an acceptable hash. Prefer a
+    # behavioural claim over a traceability-only one: a story protected by a
+    # real behavioural test must not be reported as documentary just because a
+    # text-pinning sibling also claims it.
+    fresh = [
+        marker
+        for marker in story_markers
+        if marker.story_hash and marker.story_hash in acceptable_hashes
+    ]
+    if fresh:
+        behavioural = [
+            marker for marker in fresh if marker.mode != STORY_TEST_MODE_TRACEABILITY
+        ]
+        marker = behavioural[0] if behavioural else fresh[0]
+        traceability_only = not behavioural
+        return StoryRegressionResult(
+            story_id=story_id,
+            story_path=str(path),
+            status=(
+                STATUS_STORY_REGRESSION_TRACEABILITY_ONLY
+                if traceability_only
+                else STATUS_STORY_REGRESSION_OK
+            ),
+            current_hash=current_hash,
+            recorded_hash=marker.story_hash,
+            test_file=marker.test_file,
+            test_name=marker.test_name,
+            detail=(
+                (
+                    "Story has a fresh, linked traceability-only test: it pins the "
+                    "story/contract text but does NOT execute the code the story "
+                    "is about, so it cannot catch a behavioural regression. Add a "
+                    "machine-readable ## Entry Point to the contract and re-run "
+                    "`pdd test --from-story` to get a behavioural test."
+                )
+                if traceability_only
+                else (
                     "Story has a fresh, linked regression test "
                     "(pass/fail is verified separately by the story lane, "
                     "`pytest -m story`)."
-                ),
-            )
+                )
+            ),
+        )
 
     # None fresh: prefer a marker that at least records a hash for a precise message.
     hashed = [m for m in story_markers if m.story_hash]
@@ -816,7 +864,13 @@ class StoryRegressionEvaluation:
 
     @property
     def passed(self) -> bool:
-        return self.status == STATUS_PASSING
+        # Traceability-only is a narrower *description* of the same
+        # present-and-fresh outcome, not a failure, so it must not flip this
+        # flag and silently tighten any caller's gate (pdd#2392).
+        return self.status in (
+            STATUS_PASSING,
+            STATUS_STORY_REGRESSION_TRACEABILITY_ONLY,
+        )
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -860,6 +914,25 @@ def _recorded_story_hashes(test_path: Path, sid: str) -> List[str]:
     return hashes
 
 
+def _declares_traceability_only(test_path: Path) -> bool:
+    """Whether *test_path* declares itself a generated traceability-only test.
+
+    Absence of the marker constant means "unknown", which is treated as
+    behavioural: a hand-written test must never be downgraded because it does
+    not carry generator metadata (pdd#2392).
+    """
+    try:
+        source = test_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    constants = _module_string_constants(tree)
+    return constants.get(STORY_TEST_MODE_CONSTANT) == STORY_TEST_MODE_TRACEABILITY
+
+
 def evaluate_story_regression(
     story_path: Path,
     *,
@@ -886,10 +959,14 @@ def evaluate_story_regression(
 
     recorded: dict[str, str] = {}
     all_recorded: set = set()
+    # A story is documentary only when EVERY linked test declares itself
+    # traceability-only; one behavioural sibling is enough to call it protected.
+    linked_paths: List[Path] = []
     for nodeid in tests:
         test_path = _test_file_for_nodeid(nodeid, tests_dir)
         if test_path is None:
             continue
+        linked_paths.append(test_path)
         found = _recorded_story_hashes(test_path, sid)
         if found:
             recorded[nodeid] = found[0]
@@ -915,9 +992,16 @@ def evaluate_story_regression(
     # recorded hash matching either form is fresh; otherwise the story changed.
     acceptable = _acceptable_story_hashes(story_path)
     if all_recorded & acceptable:
+        traceability_only = bool(linked_paths) and all(
+            _declares_traceability_only(path) for path in linked_paths
+        )
         return StoryRegressionEvaluation(
             story_id=sid,
-            status=STATUS_PASSING,
+            status=(
+                STATUS_STORY_REGRESSION_TRACEABILITY_ONLY
+                if traceability_only
+                else STATUS_PASSING
+            ),
             current_hash=current_hash,
             tests=tests,
             recorded_hashes=recorded,
