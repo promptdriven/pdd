@@ -3381,6 +3381,18 @@ def _matches_unchanged_requirement_state(
     )
 
 
+def _matches_current_stationary_requirement_state(
+    profile: _ProfileInput,
+    prompts: tuple[bytes | None, bytes | None],
+) -> bool:
+    """Treat a self-consistent snapshot as stationary after old rules age out."""
+    return bool(
+        prompts[0] is not None
+        and prompts[0] == prompts[1]
+        and profile.requirements == _prompt_requirements(prompts[0])
+    )
+
+
 def _evaluate_requirement_authorization(
     context: _RequirementTransitionContext,
     authorization: _RequirementTransitionAuthorization,
@@ -3401,6 +3413,7 @@ def _evaluate_requirement_authorization(
     bindings = authorization.bindings
     stationary = protected == candidate and (
         _matches_unchanged_requirement_state(protected, prompts, authorization)
+        or _matches_current_stationary_requirement_state(protected, prompts)
         or _matches_bound_stationary_state(
             protected,
             context.policies,

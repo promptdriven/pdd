@@ -1525,6 +1525,37 @@ def test_dormant_requirement_transition_survives_unrelated_exact_transition(
     assert profiles.coverage == 1.0
 
 
+def test_historical_requirement_transition_does_not_invalidate_stationary_state(
+    tmp_path,
+) -> None:
+    """A fully superseded rule cannot reject a self-consistent current snapshot."""
+    root = _repository(tmp_path)
+    prompt_path = "prompts/widget_python.prompt"
+    v1 = b"Opaque widget contract version one\n"
+    v2 = b"Opaque widget contract version two\n"
+    v3 = b"Opaque widget contract version three\n"
+    profile_v1 = {"profiles": [_human_row(prompt_path, v1)]}
+    profile_v2 = {"profiles": [_human_row(prompt_path, v2)]}
+    profile_v3 = {"profiles": [_human_row(prompt_path, v3)]}
+    profile_bytes = [json.dumps(item).encode() for item in (profile_v1, profile_v2)]
+    policy = {
+        "schema_version": 2,
+        "rotations": _rotation_authorization()["rotations"],
+        "requirement_rotations": [
+            _requirement_rule(prompt_path, v1, v2, *profile_bytes)
+        ],
+    }
+    (root / prompt_path).write_bytes(v3)
+    (root / ".pdd/verification-profiles.json").write_text(json.dumps(profile_v3))
+    (root / ".pdd/verification-profile-rotations.json").write_text(json.dumps(policy))
+    current = _commit(root, "retain historical requirement transition")
+
+    profiles = load_verification_profiles(root, _manifest(root, current, current))
+
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
 @pytest.mark.parametrize("substitution", ["removed-requirement", "cross-profile"])
 def test_exact_requirement_transition_rejects_profile_substitution(
     tmp_path, substitution
