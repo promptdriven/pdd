@@ -24,7 +24,6 @@
 </pdd-interface>
 
 <pdd-dependency>contract_ir_python.prompt</pdd-dependency>
-<pdd-dependency>story_criteria_python.prompt</pdd-dependency>
 <pdd-dependency>detect_change_python.prompt</pdd-dependency>
 <pdd-dependency>change_main_python.prompt</pdd-dependency>
 <pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
@@ -169,8 +168,8 @@ varies during normal development goes in `## Non-Oracle`.
   prompt mutations (for example changing per-source token attribution to
   aggregate-only totals) fail user-story validation.
   Keep a regression test for a harmful prompt mutation that verifies
-  `run_user_story_tests()` returns a failed result when the mutated prompt no
-  longer satisfies an acceptance criterion.
+  `run_user_story_tests()` returns a failed result when `detect_change` reports the
+  story no longer matches the mutated prompt.
 - **Metadata is independent of generation.** Regardless of which path produced the
   body, `generate_user_story()` stitches `<!-- pdd-story-prompts: ... -->`
   metadata directly from the exact prompt files the user passed. It must not call
@@ -179,29 +178,10 @@ varies during normal development goes in `## Non-Oracle`.
   `cache_story_prompt_links`.
 - Story-generation `llm_invoke` cost/model accumulate into the returned cost/model.
 
-**Story validation gate**
-- `run_user_story_tests` MUST gate each story on a bounded per-acceptance-criterion
-  judgement from `story_criteria`, not on whether an open-ended detector volunteered
-  zero suggestions. The legacy criterion measured model strength: a weaker model
-  failed a correct prompt set and the same inputs flipped verdict on `--strength`.
-- Criteria are read from the story's contract when it has an `## Acceptance Criteria`
-  section, otherwise from the story itself. A story with no parseable criteria falls
-  back to the legacy `detect_change` gate.
-- A story fails only on `unsatisfied` criteria. `unclear` verdicts MUST be emitted as
-  warnings without affecting the verdict. A criterion left unevaluated, or an
-  evaluator error, MUST mark the run incomplete rather than passing it, and MUST NOT
-  fall back to `detect_change`, whose empty answer would read as success.
-- `unsatisfied` criteria MUST be rendered into the existing
-  `{prompt_name, change_instructions}` change rows so `pdd fix`, story-link caching,
-  and the result document keep working unchanged.
-- Non-quiet output MUST report each criterion's status and name the model that
-  produced the verdict, so a cheap-model PASS is not mistaken for a strong one.
-- `legacy_detect=True` (CLI `--legacy-detect`) MUST force every story onto the legacy
-  gate.
-
 **Backward compatibility**
 - `run_user_story_tests`, `cache_story_prompt_links`, and `run_user_story_fix` must not
-  require the new sections. Legacy minimal stories must still pass.
+  require the new sections. Legacy minimal stories must still pass when `detect_change`
+  returns no changes.
 - Keep the public keyword `cache_story_prompt_links` on `run_user_story_tests`.
   `link_story_prompt_metadata` may exist only as a deprecated alias (warn + map).
 
