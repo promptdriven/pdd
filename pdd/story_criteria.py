@@ -204,9 +204,11 @@ def parse_acceptance_criteria(contract_text: str) -> List[AcceptanceCriterion]:
     the section holds no list items, which is the caller's signal to fall back
     to the legacy open-ended detector.
     """
-    return _parse_section(
-        contract_text, _CRITERIA_SECTION_RE, prefix="AC"
-    ) + _parse_section(contract_text, _NEGATIVE_SECTION_RE, prefix="NC")
+    # Only ``## Acceptance Criteria``. A contract's ``## Negative Cases`` are
+    # equally part of its oracle, and gating them measurably catches real gaps
+    # -- but that is a verification concern that belongs in a command which owns
+    # verification, not in a mode of the change detector. Tracked separately.
+    return _parse_section(contract_text, _CRITERIA_SECTION_RE, prefix="AC")
 
 
 def _parse_section(
