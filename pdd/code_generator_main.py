@@ -11,6 +11,8 @@ import subprocess
 import requests
 import tempfile
 import sys
+import textwrap
+import warnings
 from typing import Optional, Tuple, Dict, Any, Iterator, List, Set, Mapping
 
 import click
@@ -433,6 +435,81 @@ class ProseOutputError(click.UsageError):
     @property
     def repair_directive(self) -> str:
         return PROSE_OUTPUT_REPAIR_DIRECTIVE
+
+
+class LanguageMismatchError(click.UsageError):
+    """Raised when the declared language is Python but the generated content is not valid Python.
+
+    Terminal by design: no retry path catches or parses this error, so unlike
+    ``ArchitectureConformanceError`` / ``ProseOutputError`` it deliberately
+    exposes no ``repair_directive``.
+    """
+
+    def __init__(
+        self,
+        prompt_name: str,
+        output_path: str,
+        language: str,
+        model_name: str = "unknown",
+        total_cost: float = 0.0,
+        raw_output: Optional[str] = None,
+        syntax_error: str = "",
+    ) -> None:
+        self.prompt_name = prompt_name
+        self.output_path = output_path or ""
+        self.language = language or "unknown"
+        self.model_name = model_name or "unknown"
+        self.total_cost = float(total_cost or 0.0)
+        self.syntax_error = syntax_error or ""
+        raw = "" if raw_output is None else str(raw_output)
+        excerpt = raw.strip()
+        if not excerpt:
+            excerpt = "<empty>"
+        elif len(excerpt) > 240:
+            excerpt = excerpt[:237] + "..."
+        self.raw_output_excerpt = excerpt
+        output_display = self.output_path or "<unknown>"
+        super().__init__(
+            f"Language mismatch for {prompt_name}:\n"
+            f"model_name: {self.model_name}\n"
+            f"language: {self.language}\n"
+            f"output: {output_display}\n"
+            f"Syntax error: {self.syntax_error}\n"
+            f"Raw output excerpt: {self.raw_output_excerpt}"
+        )
+
+
+def _verify_language_validity(
+    generated_code_content: str, language: str
+) -> Tuple[Optional[SyntaxError], str]:
+    """Validate that `generated_code_content` is parseable when `language` is Python.
+
+    Returns ``(error, content)`` where ``error`` is the triggering ``SyntaxError``
+    (``None`` when the content is acceptable) and ``content`` is **the exact text
+    that was successfully parsed** — which callers MUST write in place of the
+    original.
+
+    Returning the parsed candidate is the whole point of the tuple. The dedent
+    retry recovers uniformly indented output (e.g. left over from fence
+    extraction), but an earlier version validated ``textwrap.dedent(content)``
+    while the caller went on to write the *original* indented bytes. Uniformly
+    indented source fails ``ast.parse`` with "unexpected indent" and passes only
+    after dedent, so that gate reported success and still saved a ``.py`` file
+    that does not import. Validating one string and writing another is the bug;
+    the parsed candidate and the written bytes must be the same object.
+    """
+    if str(language or "").strip().lower() != "python":
+        return None, generated_code_content
+    last_error: Optional[SyntaxError] = None
+    for candidate in (generated_code_content, textwrap.dedent(generated_code_content)):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                ast.parse(candidate)
+            return None, candidate
+        except SyntaxError as exc:
+            last_error = exc
+    return last_error, generated_code_content
 
 
 # --- Helper Functions ---
@@ -5544,6 +5621,45 @@ def code_generator_main(
                     extractor_result="empty",
                 )
 
+            # Language Validity Gate: verify the generated content is syntactically
+            # valid Python before any downstream gate (architecture conformance,
+            # public-surface) assumes it can be parsed with ast.parse.
+            #
+            # This runs for EVERY generated Python candidate, whether or not a
+            # file already exists at the output path. An earlier version skipped
+            # the gate whenever a non-empty file was there, on the theory that the
+            # public-surface and test-churn gates would diagnose unparseable
+            # output better. They only do so when the PREVIOUS public surface is
+            # non-empty: `_verify_public_surface_regression` guards its syntax
+            # check with `if before:`. A private/script-only module (all `_`
+            # helpers, or bare statements) snapshots to an empty surface, so
+            # nothing checked the new bytes and HTML could overwrite working
+            # Python — reproduced as a silent, complete loss of the existing file.
+            # Syntax validity is a safety boundary, not a diagnostic nicety, so it
+            # is enforced unconditionally and before any write; the richer
+            # symbol-listing diagnosis still runs for every candidate that parses.
+            #
+            # Raising here also preserves the existing file for free: the gate is
+            # upstream of every write below, so a failure leaves the target's
+            # bytes exactly as they were.
+            syntax_err, validated_code_content = _verify_language_validity(
+                generated_code_content, language or ""
+            )
+            # Write back the candidate that actually parsed (the dedent retry can
+            # return normalized bytes) so validated content and written content
+            # are never two different strings.
+            generated_code_content = validated_code_content
+            if syntax_err is not None:
+                raise LanguageMismatchError(
+                    prompt_name=prompt_name,
+                    output_path=output_path or "",
+                    language=language or "unknown",
+                    model_name=model_name or "unknown",
+                    total_cost=float(total_cost or 0.0),
+                    raw_output=generated_code_content,
+                    syntax_error=f"{syntax_err.msg} (line {syntax_err.lineno}, offset {syntax_err.offset})",
+                )
+
             # Optional output_schema JSON validation before writing (only when LLM ran)
             if llm_enabled:
                 try:
@@ -5670,7 +5786,17 @@ def code_generator_main(
                         output_path=output_path,
                         prompt_content=prompt_content,
                     )
-                except (PublicSurfaceRegressionError, TestChurnError) as compat_err:
+                # ArchitectureConformanceError is in the tuple because
+                # `_verify_public_surface_regression` raises it directly for a
+                # syntax failure (issue #1612 Bug 2). Catching only the other two
+                # let that variant escape with `total_cost` / `model_name` still
+                # at their 0.0 / "unknown" defaults, so the repair loop lost the
+                # attempted model and cost for the failed generation.
+                except (
+                    PublicSurfaceRegressionError,
+                    TestChurnError,
+                    ArchitectureConformanceError,
+                ) as compat_err:
                     if output_path and existing_code_content is not None:
                         try:
                             pathlib.Path(output_path).write_text(
