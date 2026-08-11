@@ -672,6 +672,30 @@
         "base_prompt_sha256": "09e5140c01bbf8136f4c487c873c816f8e75db75412c11794a8b7ea47259cf3c",
         "head_prompt_sha256": "10129606f47d4301052490b7767acc08d8fc713e48bcb2b867efadf2063f8d1e"
       }
+    },
+    {
+      "obsolete": {
+        "prompt_path": "pdd/prompts/code_generator_main_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": "CONTRACT-SHA256:8d0a51822aaa2c64e1b71579d0cb6e41460b90734441e0b6ec3ec146402495fe",
+        "to_requirement_id": "CONTRACT-SHA256:51ec006a5b7faeb397be9c1b8e61205e97459fdc08cd9e90e7f0692ccf55a1d5",
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "head_policy_sha256": "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
+        "base_prompt_sha256": "8d0a51822aaa2c64e1b71579d0cb6e41460b90734441e0b6ec3ec146402495fe",
+        "head_prompt_sha256": "51ec006a5b7faeb397be9c1b8e61205e97459fdc08cd9e90e7f0692ccf55a1d5"
+      },
+      "replacement": {
+        "prompt_path": "pdd/prompts/code_generator_main_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": "CONTRACT-SHA256:9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
+        "to_requirement_id": "CONTRACT-SHA256:e06cce1691f72866d95042c2b520a990a2db7e856b64343412d507641f961f41",
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f",
+        "head_policy_sha256": "af2bebb4bd797345a809331632d7cd7335af763690a47d65fc43555e84484605",
+        "base_prompt_sha256": "9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
+        "head_prompt_sha256": "e06cce1691f72866d95042c2b520a990a2db7e856b64343412d507641f961f41"
+      }
     }
   ]
 }
