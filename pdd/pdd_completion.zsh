@@ -54,13 +54,21 @@ _pdd_global_opts=(
   '--temperature[Set the temperature of the AI model (default: 0.0)]:temperature:(0.0 0.25 0.5 0.75 1.0)'
   '--verbose[Increase output verbosity for more detailed information.]'
   '--quiet[Decrease output verbosity (minimal information).]'
+  '--color[Force colored output.]'
+  '--no-color[Disable colored output.]'
   '--output-cost[Enable cost tracking and output a CSV file with usage details.]:filename:_files'
+  '(--estimate --dry-run-cost)'{'--estimate','--dry-run-cost'}'[Preview token usage and estimated cost without running.]'
+  '--estimate-json[Emit the estimate as JSON.]'
   '--review-examples[Review and optionally exclude few-shot examples before command execution.]'
   '--local[Run commands locally instead of in the cloud.]'
   '--context[Override automatic .pddrc context]:context-name:_guard'
   '--list-contexts[List available .pddrc contexts and exit]'
+  '--core-dump[Write a JSON core dump.]'
+  '--no-core-dump[Disable JSON core dumps.]'
   '--help[Show help message and exit.]'
   '--version[Show version and exit.]'
+  '--compress-examples[Compress example code in context.]'
+  '--compress-test-context[Compress test context.]'
 )
 
 ##
@@ -544,9 +552,14 @@ _pdd_find_subcommand() {
       --strength|--model|--temperature|--time|--output-cost|--context|--keep-core-dumps|--context-compression|--compression-fallback)
         expect_value=1
         ;;
-      --strength=*|--model=*|--temperature=*|--time=*|--output-cost=*|--context=*|--keep-core-dumps=*|--context-compression=*|--compression-fallback=*|--*)
+      --strength=*|--model=*|--temperature=*|--time=*|--output-cost=*|--context=*|--keep-core-dumps=*|--context-compression=*|--compression-fallback=*)
         ;;
-      generate|example|test|preprocess|fix|split|change|update|detect|conflicts|crash|trace|bug|auto-deps|verify|sync|checkup|setup|install_completion|pytest-output)
+      --force|--verbose|--quiet|--color|--no-color|--estimate|--dry-run-cost|--estimate-json|--review-examples|--local|--list-contexts|--core-dump|--no-core-dump|--compress-examples|--compress-test-context|--help|--version)
+        ;;
+      --*)
+        return 1
+        ;;
+      generate|example|test|preprocess|fix|split|change|update|detect|conflicts|crash|trace|bug|auto-deps|verify|sync|sync-architecture|checkup|contracts|extracts|report-core|replay|context|which|reconcile|install-hooks|certify|recover|baseline|validate|templates|connect|auth|sessions|firecrawl-cache|story|setup|install_completion|pytest-output)
         print -r -- "$token"
         return 0
         ;;
@@ -580,7 +593,26 @@ _pdd() {
     'auto-deps:Analyze a prompt and include deps from a directory or glob'
     'verify:Verify functional correctness using LLM judgment and iteratively fix'
     'sync:Synchronize prompt, code, examples, tests with analysis'
+    'sync-architecture:Synchronize architecture documentation'
     'checkup:Run architecture/PR review loop with optional reviewer fallback'
+    'contracts:Run deterministic prompt contract checks'
+    'extracts:Manage prompt extraction artifacts'
+    'report-core:Display a saved core dump'
+    'replay:Replay a saved command run'
+    'context:Generate prompt context'
+    'which:Show the installed PDD executable'
+    'reconcile:Reconcile project artifacts'
+    'install-hooks:Install Git hooks'
+    'certify:Create a sync certificate'
+    'recover:Recover a sync transaction'
+    'baseline:Create a sync baseline'
+    'validate:Validate a sync module'
+    'templates:Manage project templates'
+    'connect:Connect to PDD Cloud'
+    'auth:Manage PDD Cloud authentication'
+    'sessions:Manage remote PDD sessions'
+    'firecrawl-cache:Manage Firecrawl cache'
+    'story:Manage regression-suite user stories'
     'setup:Interactive setup and completion install'
     'install_completion:Install shell completion for current shell'
     'pytest-output:Run pytest and capture structured output'
@@ -660,9 +692,12 @@ _pdd() {
     pytest-output)
       _pdd_pytest_output
       ;;
-    # If the subcommand is unknown or not typed yet, fall back to showing the list of subcommands.
+    # Commands without a dedicated completion function still accept global
+    # options and complete positional arguments as paths.
     *)
-      _describe -t subcommands 'pdd subcommand' _pdd_subcommands
+      _arguments -s \
+        $_pdd_global_opts \
+        '*:argument:_files'
       ;;
   esac
 }

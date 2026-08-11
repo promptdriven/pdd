@@ -15,16 +15,14 @@ pytestmark = pytest.mark.skipif(shutil.which("zsh") is None, reason="requires zs
 
 def _resolved_subcommand(*words: str) -> str:
     """Source the completion file and return its parsed command token."""
-    invocation = " ".join(words)
     result = subprocess.run(
         [
             "zsh",
             "-fc",
-            (
-                f"source {COMPLETION}; "
-                f"words=({invocation}); CURRENT=${{#words}}; "
-                "_pdd_find_subcommand"
-            ),
+            'source "$1"; shift; words=("$@"); CURRENT=${#words}; _pdd_find_subcommand',
+            "zsh",
+            str(COMPLETION),
+            *words,
         ],
         check=True,
         capture_output=True,
@@ -41,3 +39,13 @@ def test_zsh_completion_resolves_sync_after_local_global_option() -> None:
 def test_zsh_completion_skips_value_of_global_option_before_sync() -> None:
     """A global option's value must not be mistaken for the command."""
     assert _resolved_subcommand("pdd", "--context", "local", "sync") == "sync"
+
+
+def test_zsh_completion_resolves_current_cli_command_after_global_option() -> None:
+    """Global options must also work with commands added after this script."""
+    assert _resolved_subcommand("pdd", "--local", "validate") == "validate"
+
+
+def test_zsh_completion_does_not_skip_unknown_global_option() -> None:
+    """Misspelled options must not dispatch completion for a later command."""
+    assert _resolved_subcommand("pdd", "--modle", "claude", "sync") == ""
