@@ -10,16 +10,30 @@ prompts: a weaker model fails a correct prompt set, and the same inputs flip ver
 on `--strength` alone.
 
 % Contract
-- Parse the `## Acceptance Criteria` section of a story contract or story into
-  ordered `AcceptanceCriterion` records identified `AC1`..`ACn`. Numbered and
+- Parse the three checkable contract sections into ordered
+  `AcceptanceCriterion` records, from a contract or a story:
+  `## Acceptance Criteria` -> `AC<n>` (behavior the prompts MUST require),
+  `## Negative Cases` -> `NC<n>` (an outcome the prompts MUST prevent), and
+  `## Oracle` -> `OR<n>` (a detail the prompts MUST determine). Numbered and
   bulleted list items are both accepted; continuation lines fold into the item
-  above them; parsing MUST stop at the next heading.
+  above them; parsing MUST stop at the next heading. Gating acceptance criteria
+  alone passes a prompt set with a real gap, because a contract may state a
+  requirement only as a negative case or an oracle detail.
+- `parse_non_oracle_guards` MUST return the `## Non-Oracle` bullets. These are
+  NOT criteria: they are passed to the evaluator via the `guards` parameter as
+  details that may never be grounds for `unsatisfied`, so the judge is
+  constrained by the contract's own declaration of what is irrelevant.
 - Absence of a criteria section, or a section with no list items, MUST return an
   empty list so the caller can fall back to the legacy detector.
 - Classify every criterion exactly once as `satisfied`, `unsatisfied`, or
   `unclear`. Only `unsatisfied` fails a story.
-- `unclear` MUST be advisory and MUST NOT affect the verdict; a hedging model must
-  not be able to fail a correct prompt set.
+- `unclear` MUST NEVER fail a story -- a hedging model must not be able to fail
+  a correct prompt set -- but it MUST NOT pass one either. `passed` requires
+  `verified` (no `unclear`, no `unevaluated`), so an undecided criterion leaves
+  the story unverified and the caller reports it as incomplete. Measured on a
+  weak model, a genuinely regressed prompt set scored `unclear` on the criterion
+  it broke in 4 runs of 4; treating that as a pass reproduced the fail-open this
+  module exists to remove.
 - A criterion the evaluator returned no assessment for MUST be `unevaluated`, and
   MUST make the evaluation incomplete rather than passing. Silence is never
   approval.
@@ -27,6 +41,13 @@ on `--strength` alone.
   without one it degrades to `unclear`. Report whether the citation was found
   verbatim, but MUST NOT fail a criterion for an unverifiable citation, since
   models paraphrase and a false alarm would restore model sensitivity.
+- Conflicting duplicate assessments for one criterion MUST resolve to the WORST
+  status, not the first seen; first-wins let a model's self-correction to
+  `unsatisfied` be masked by an earlier `satisfied`.
+- A linked prompt file that cannot be read MUST NOT be silently dropped: it never
+  reaches the model, so any `unsatisfied` resting on it is a false negative.
+  Downgrade those verdicts to `unclear` naming the unreadable file, and raise
+  when no linked file could be read at all.
 - An unrecognized or empty status MUST become `unclear`, never `satisfied`.
 - Criterion identifiers MUST be matched loosely (`AC1`, `ac-1`, `1`, `criterion 1`);
   unknown identifiers are dropped and duplicates keep the first assessment.
@@ -52,14 +73,16 @@ on `--strength` alone.
 % Interface
 - `parse_acceptance_criteria(contract_text) -> list[AcceptanceCriterion]`
 - `evaluate_acceptance_criteria(prompt_files, story_content, criteria, strength,
-  temperature, time, verbose) -> CriteriaEvaluation`
+  temperature, time, verbose, guards) -> CriteriaEvaluation`
+- `parse_non_oracle_guards(contract_text) -> list[str]`
 - `changes_from_verdicts(verdicts, default_prompt_name) -> list[dict[str, str]]`
 - `evaluation_summary(evaluation) -> tuple[int, int, int, int]`
 - `CriteriaEvaluation` exposes `verdicts`, `cost`, `model`, and the derived
-  `unsatisfied`, `unclear`, `unevaluated`, `passed`, and `complete` properties.
+  `unsatisfied`, `unclear`, `unevaluated`, `passed`, `verified`, and
+  `complete` properties.
 
 % Implementation notes
 - Send the bounded classification through `llm_invoke` with a structured output
   model in a single call; the template is `story_criteria_LLM`.
 - Preprocess the template with `double_curly_brackets=True`, excluding
-  `PROMPT_LIST`, `STORY_CONTENT`, and `CRITERIA_LIST`.
+  `PROMPT_LIST`, `STORY_CONTENT`, `CRITERIA_LIST`, and `NON_ORACLE_LIST`.

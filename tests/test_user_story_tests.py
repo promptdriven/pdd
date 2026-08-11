@@ -1655,7 +1655,11 @@ def test_unclear_criteria_do_not_fail_the_story_but_leave_it_unverified(tmp_path
     # Not a failure: nothing was proven wrong, so there is nothing to fix.
     assert results[0]["changes"] == []
     assert results[0]["evaluation_status"] == "incomplete"
-    assert "could not be decided" in results[0]["error"]
+    assert "undecided" in results[0]["error"]
+    # The reason must not mention "prompt": story_detection_result
+    # classifies row errors by substring and would report this undecided
+    # story as prompt:UNRESOLVED_LINK.
+    assert "prompt" not in results[0]["error"].lower()
     assert [w["code"] for w in results[0]["warnings"]] == ["criteria:UNCLEAR"]
     assert all(w["severity"] == "warning" for w in results[0]["warnings"])
 

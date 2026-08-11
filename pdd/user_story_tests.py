@@ -1180,9 +1180,15 @@ def _render_criteria_report(
         "unclear": "yellow",
         "unevaluated": "yellow",
     }
-    if evaluation.unsatisfied:
+    # Order matters and must match the caller's incomplete_reason chain, which
+    # checks `unevaluated` before `unsatisfied`. Judging FAIL first here made the
+    # terminal say FAIL for a run the v1 document reported as UNKNOWN/INCOMPLETE
+    # -- the same run disagreeing with itself depending on where you read it.
+    if evaluation.unevaluated:
+        headline = "UNKNOWN"
+    elif evaluation.unsatisfied:
         headline = "FAIL"
-    elif evaluation.unevaluated or evaluation.unclear:
+    elif evaluation.unclear:
         # Undecided is neither a pass nor a failure; saying PASS here would
         # repeat the legacy gate's fail-open behaviour.
         headline = "UNKNOWN"
@@ -1968,9 +1974,14 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
             # success -- measured on a weak model, a regressed prompt set scored
             # unclear on the criterion it broke and would have passed. It still
             # must not FAIL, or a hedging model could fail correct prompts.
+            # Must not contain the word "prompt": story_detection_result
+            # classifies a row error by substring, and any mention routes it to
+            # `prompt:UNRESOLVED_LINK` ("A linked prompt could not be
+            # resolved") -- sending an operator hunting for a broken
+            # pdd-story-prompts reference that does not exist.
             incomplete_reason = (
-                f"{len(evaluation.unclear)} acceptance criteria could not be "
-                "decided from the prompt text."
+                f"{len(evaluation.unclear)} acceptance criteria were undecided; "
+                "the story is not verified."
             )
         else:
             incomplete_reason = ""
@@ -2248,7 +2259,9 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     if errors:
         return False, "\n".join(errors), total_cost, model_name, changed_files
 
-    # Re-run validation for just this story after applying changes
+    # Re-run validation for just this story after applying changes. Forward
+    # legacy_detect: planning the repair with one engine and judging it with
+    # another would report against a standard the repair never targeted.
     passed, _, validation_cost, validation_model = run_user_story_tests(
         prompts_dir=str(prompts_root),
         story_files=[story_path],
@@ -2256,6 +2269,7 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
         strength=strength,
         temperature=temperature,
         time=time,
+        legacy_detect=legacy_detect,
         verbose=verbose,
         quiet=quiet,
         fail_fast=True,

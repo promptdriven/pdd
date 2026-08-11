@@ -385,7 +385,8 @@ def test_unknown_criterion_ids_are_dropped(tmp_path):
     assert len(evaluation.unevaluated) == 2
 
 
-def test_duplicate_assessments_keep_the_first(tmp_path):
+def test_conflicting_duplicates_take_the_worst_status(tmp_path):
+    """First-wins was the one ambiguity in this module that failed open."""
     evaluation = _evaluate(
         tmp_path,
         [
@@ -400,6 +401,25 @@ def test_duplicate_assessments_keep_the_first(tmp_path):
     )
 
     assert evaluation.verdicts[0].status == "unsatisfied"
+
+
+def test_a_later_correction_to_unsatisfied_wins_over_an_earlier_satisfied(tmp_path):
+    """The order that previously failed open: satisfied first, corrected after."""
+    evaluation = _evaluate(
+        tmp_path,
+        [
+            _CriterionAssessment(
+                criterion_id="AC1",
+                status="satisfied",
+                citation="MUST show a summary report after upload",
+            ),
+            _CriterionAssessment(criterion_id="AC1", status="unsatisfied"),
+            _CriterionAssessment(criterion_id="AC2", status="unclear"),
+        ],
+    )
+
+    assert evaluation.verdicts[0].status == "unsatisfied"
+    assert evaluation.passed is False
 
 
 # --------------------------------------------------------------------------
@@ -513,3 +533,53 @@ def test_criterion_is_hashable_and_frozen():
     assert {criterion}
     with pytest.raises(Exception):
         criterion.text = "mutated"  # type: ignore[misc]
+
+
+def test_an_unreadable_prompt_does_not_read_as_a_missing_requirement(tmp_path):
+    """Evidence the model never saw cannot prove a requirement absent.
+
+    Previously the read error was swallowed, so criteria satisfied by that file
+    came back `unsatisfied`, the story failed, and `pdd fix` then edited other
+    prompts to add requirements that already existed.
+    """
+    readable = tmp_path / "upload_python.prompt"
+    readable.write_text("The command MUST show a summary report.", encoding="utf-8")
+    broken = tmp_path / "broken_python.prompt"
+    broken.write_bytes(b"\xff\xfe not valid utf-8 \xff")
+
+    criteria = parse_acceptance_criteria(_CONTRACT)
+    response = {
+        "result": _CriteriaAssessment(
+            assessments=[
+                _CriterionAssessment(criterion_id=c.id, status="unsatisfied")
+                for c in criteria
+            ]
+        ),
+        "cost": 0.0,
+        "model_name": "m",
+    }
+    with (
+        patch("pdd.story_criteria.load_prompt_template", return_value="T"),
+        patch("pdd.story_criteria.preprocess", side_effect=lambda text, **_k: text),
+        patch("pdd.story_criteria.llm_invoke", return_value=response),
+    ):
+        evaluation = evaluate_acceptance_criteria([readable, broken], "story", criteria)
+
+    assert evaluation.unsatisfied == []  # not failed on absent evidence
+    assert all(v.status == "unclear" for v in evaluation.verdicts)
+    assert "broken_python.prompt" in evaluation.verdicts[0].rationale
+    assert evaluation.passed is False  # and certainly not a pass
+
+
+def test_no_readable_prompt_at_all_raises_rather_than_failing_the_story(tmp_path):
+    broken = tmp_path / "broken_python.prompt"
+    broken.write_bytes(b"\xff\xfe\xff")
+
+    with (
+        patch("pdd.story_criteria.load_prompt_template", return_value="T"),
+        patch("pdd.story_criteria.preprocess", side_effect=lambda text, **_k: text),
+        pytest.raises(StoryCriteriaError, match="None of the linked prompt files"),
+    ):
+        evaluate_acceptance_criteria(
+            [broken], "story", parse_acceptance_criteria(_CONTRACT)
+        )

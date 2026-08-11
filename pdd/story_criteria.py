@@ -6,10 +6,13 @@ rather than the prompts: a weak model volunteers something for a correct
 prompt set, a strong model volunteers nothing, and the same inputs flip
 verdict on ``--strength`` alone.
 
-This module asks a bounded question instead.  Every acceptance criterion
-(``AC<n>``) and negative case (``NC<n>``) in the story contract is classified
-exactly once as ``satisfied``, ``unsatisfied``, or ``unclear``, and a
-``satisfied`` verdict must quote the prompt text that satisfies it.
+This module asks a bounded question instead.  Every checkable item in the story
+contract is classified exactly once as ``satisfied``, ``unsatisfied``, or
+``unclear``, and a ``satisfied`` verdict must quote the prompt text that earns
+it.  Three sections become criteria -- ``## Acceptance Criteria`` (``AC<n>``,
+must be required), ``## Negative Cases`` (``NC<n>``, must be prevented), and
+``## Oracle`` (``OR<n>``, must be determined) -- while ``## Non-Oracle`` becomes
+a guard the judge may never fail a criterion on.
 
 Only ``unsatisfied`` fails a story -- letting ``unclear`` fail would import
 the model sensitivity this replaces.  But ``unclear`` does not pass either:
@@ -25,7 +28,7 @@ evaluate_acceptance_criteria(...) -> CriteriaEvaluation
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 
@@ -174,7 +177,7 @@ class CriteriaEvaluation:
 
     @property
     def unclear(self) -> List[CriterionVerdict]:
-        """Criteria the evaluator could not decide: advisory, never a failure."""
+        """Criteria the evaluator could not decide: never a failure, never a pass."""
         return [v for v in self.verdicts if v.status == "unclear"]
 
     @property
@@ -352,11 +355,25 @@ def _verdicts_from_assessments(
     ``unevaluated`` so the caller reports an incomplete run instead of a pass.
     """
     known_ids = [criterion.id for criterion in criteria]
+    # Conflicting duplicates resolve to the WORST status, not the first seen. A
+    # model that says "AC3 satisfied" and then corrects itself to "AC3
+    # unsatisfied" must not yield a passing story; every other ambiguity in this
+    # module (unparseable status, missing citation, unknown id) already fails
+    # closed, and first-wins was the one place that failed open.
+    severity = {"satisfied": 0, "unclear": 1, "unsatisfied": 2}
     by_id: Dict[str, _CriterionAssessment] = {}
     for assessment in assessments:
         criterion_id = _resolve_criterion_id(assessment.criterion_id, known_ids)
-        if criterion_id is not None:
-            by_id.setdefault(criterion_id, assessment)
+        if criterion_id is None:
+            continue
+        existing = by_id.get(criterion_id)
+        if existing is None:
+            by_id[criterion_id] = assessment
+            continue
+        if severity.get(_normalize_status(assessment.status), 1) > severity.get(
+            _normalize_status(existing.status), 1
+        ):
+            by_id[criterion_id] = assessment
 
     haystack = _normalized_haystack(prompt_files)
     verdicts: List[CriterionVerdict] = []
@@ -398,17 +415,25 @@ def _verdicts_from_assessments(
     return verdicts
 
 
-def _prompt_payload(prompt_files: Sequence[Path]) -> List[Dict[str, str]]:
-    """Read the evaluated prompts into the shape the template expects."""
+def _prompt_payload(
+    prompt_files: Sequence[Path],
+) -> Tuple[List[Dict[str, str]], List[str]]:
+    """Read the evaluated prompts, and report any that could not be read.
+
+    An unreadable prompt must not be dropped silently: it never reaches the
+    model, so every criterion it satisfies comes back ``unsatisfied`` and the
+    repair then edits other prompts to add requirements that already exist.
+    """
     payload: List[Dict[str, str]] = []
+    unreadable: List[str] = []
     for path in prompt_files:
         try:
             payload.append(
                 {"PROMPT_NAME": path.name, "PROMPT_DESCRIPTION": path.read_text(encoding="utf-8")}
             )
         except (OSError, UnicodeError):
-            continue
-    return payload
+            unreadable.append(path.name)
+    return payload, unreadable
 
 
 def evaluate_acceptance_criteria(
@@ -445,10 +470,19 @@ def evaluate_acceptance_criteria(
         exclude=["PROMPT_LIST", "STORY_CONTENT", "CRITERIA_LIST", "NON_ORACLE_LIST"],
     )
 
+    payload, unreadable = _prompt_payload(prompt_files)
+    if unreadable and not payload:
+        # Nothing to judge against: every criterion would come back
+        # "unsatisfied" purely because the evidence never reached the model.
+        raise StoryCriteriaError(
+            "None of the linked prompt files could be read: "
+            + ", ".join(sorted(unreadable))
+        )
+
     response = llm_invoke(
         prompt=processed_template,
         input_json={
-            "PROMPT_LIST": _prompt_payload(prompt_files),
+            "PROMPT_LIST": payload,
             "STORY_CONTENT": preprocess(
                 story_content, recursive=False, double_curly_brackets=False
             ),
@@ -473,8 +507,26 @@ def evaluate_acceptance_criteria(
             cost=float(response.get("cost", 0.0) or 0.0),
         )
 
+    verdicts = _verdicts_from_assessments(criteria, result.assessments, prompt_files)
+    if unreadable:
+        # A prompt the model never saw cannot support any criterion, so every
+        # verdict resting on it would be a false "unsatisfied". Downgrade those
+        # to undecided and say why, rather than failing the story on missing
+        # evidence.
+        note = "Unreadable linked file(s): " + ", ".join(sorted(unreadable))
+        verdicts = [
+            replace(
+                verdict,
+                status="unclear",
+                rationale=f"{note}. {verdict.rationale}".strip(),
+            )
+            if verdict.status == "unsatisfied"
+            else verdict
+            for verdict in verdicts
+        ]
+
     return CriteriaEvaluation(
-        verdicts=_verdicts_from_assessments(criteria, result.assessments, prompt_files),
+        verdicts=verdicts,
         cost=float(response.get("cost", 0.0) or 0.0),
         model=str(response.get("model_name", "") or ""),
     )

@@ -465,7 +465,7 @@ def verify_stories(  # pylint: disable=too-many-arguments
     legacy_detect: bool,
     json_output_stdout: bool,
     json_output: Optional[Path],
-) -> None:
+):
     """Verify that the linked prompts satisfy each story's acceptance criteria.
 
     Classifies every acceptance criterion in a story's contract as satisfied,
@@ -480,7 +480,12 @@ def verify_stories(  # pylint: disable=too-many-arguments
     """
     from .analysis import detect_change as _detect_command  # noqa: PLC0415
 
-    ctx.invoke(
+    # Return the payload, do not just invoke. A plain story FAIL is signalled by
+    # RETURNING ``({"passed": False}, ...)`` to the group's result callback --
+    # `detect`'s own ``raise Exit(1)`` is guarded on ``ctx.parent is None`` and
+    # so cannot fire through ``ctx.invoke``. Dropping the return value made this
+    # command exit 0 on exactly the failure it exists to catch.
+    return ctx.invoke(
         _detect_command,
         stories=True,
         stories_dir=stories_dir,
