@@ -1449,8 +1449,10 @@ def test_validation_uses_story_plus_contract_as_oracle(tmp_path):
     # The oracle must contain both the human Story sentence and a contract section.
     assert "As a data analyst, I can upload a CSV file" in seen["oracle"]
     assert "## Acceptance Criteria" in seen["oracle"]
-    # The gated criteria come from the contract, not the story prose.
-    assert [c.id for c in seen["criteria"]] == ["AC1"]
+    # The gated criteria come from the contract, not the story prose, and cover
+    # its negative cases as well as its acceptance criteria (#2392 follow-up:
+    # a contract can state a requirement only as a "must not").
+    assert [c.id for c in seen["criteria"]] == ["AC1", "NC1"]
     assert results[0]["criteria_source"] == "contract"
 
 
@@ -1629,8 +1631,14 @@ def test_story_without_criteria_falls_back_to_detect_change(tmp_path):
     assert "criteria" not in results[0]
 
 
-def test_unclear_criteria_are_advisory_warnings_and_still_pass(tmp_path):
-    """Issue #5: a hedging model must not fail a correct prompt set."""
+def test_unclear_criteria_do_not_fail_the_story_but_leave_it_unverified(tmp_path):
+    """Undecided is the third state: no change list, but not a green pass.
+
+    Issue #5 requires that a hedging model cannot FAIL a correct prompt set.
+    Reporting "could not decide" as PASS would instead repeat the legacy gate's
+    fail-open behaviour, and README's contract is that exit 0 means every story
+    *explicitly* passed -- so this lands as an incomplete evaluation.
+    """
     prompts_dir, stories_dir, _ = _story_with_contract(tmp_path)
 
     with patch(
@@ -1643,8 +1651,11 @@ def test_unclear_criteria_are_advisory_warnings_and_still_pass(tmp_path):
             prompts_dir=str(prompts_dir), stories_dir=str(stories_dir), quiet=True
         )
 
-    assert passed is True
+    assert passed is False
+    # Not a failure: nothing was proven wrong, so there is nothing to fix.
     assert results[0]["changes"] == []
+    assert results[0]["evaluation_status"] == "incomplete"
+    assert "could not be decided" in results[0]["error"]
     assert [w["code"] for w in results[0]["warnings"]] == ["criteria:UNCLEAR"]
     assert all(w["severity"] == "warning" for w in results[0]["warnings"])
 

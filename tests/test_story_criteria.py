@@ -74,6 +74,87 @@ def test_stops_at_the_next_heading():
     assert all("returned value shape" not in c.text for c in criteria)
 
 
+_CONTRACT_WITH_NEGATIVES = _CONTRACT + (
+    "\n## Negative Cases\n\n"
+    "- A normal web URL must not be accepted as an issue.\n"
+    "- The command must not call both workflows for one invocation.\n"
+)
+
+
+def test_negative_cases_are_gated_alongside_acceptance_criteria():
+    """A contract can state a requirement only as a negative; that must be gated."""
+    criteria = parse_acceptance_criteria(_CONTRACT_WITH_NEGATIVES)
+
+    assert [c.id for c in criteria] == ["AC1", "AC2", "NC1", "NC2"]
+    assert criteria[2].text.startswith("A normal web URL must not be accepted")
+
+
+def test_negative_cases_alone_are_enough_to_gate_a_story():
+    contract = (
+        "## Negative Cases\n\n- Refunds must not be issued twice.\n\n## Notes\n\n- x\n"
+    )
+
+    assert [c.id for c in parse_acceptance_criteria(contract)] == ["NC1"]
+
+
+def test_an_unsatisfied_negative_case_fails_the_story(tmp_path):
+    prompt_path = _prompt(tmp_path, "The command MUST show a summary report after upload.")
+    criteria = parse_acceptance_criteria(_CONTRACT_WITH_NEGATIVES)
+    response = {
+        "result": _CriteriaAssessment(
+            assessments=[
+                _CriterionAssessment(
+                    criterion_id=c.id,
+                    status="satisfied" if c.id.startswith("AC") else "unsatisfied",
+                    citation="MUST show a summary report after upload",
+                )
+                for c in criteria
+            ]
+        ),
+        "cost": 0.01,
+        "model": "m",
+        "model_name": "m",
+    }
+    with (
+        patch("pdd.story_criteria.load_prompt_template", return_value="T"),
+        patch("pdd.story_criteria.preprocess", side_effect=lambda text, **_k: text),
+        patch("pdd.story_criteria.llm_invoke", return_value=response),
+    ):
+        evaluation = evaluate_acceptance_criteria([prompt_path], "story", criteria)
+
+    assert evaluation.passed is False
+    assert [v.criterion_id for v in evaluation.unsatisfied] == ["NC1", "NC2"]
+
+
+def test_criterion_ids_resolve_across_both_families(tmp_path):
+    """A bare number is ambiguous once two families exist; prefixes must win."""
+    prompt_path = _prompt(tmp_path, "body text that is long enough to cite")
+    criteria = parse_acceptance_criteria(_CONTRACT_WITH_NEGATIVES)
+    response = {
+        "result": _CriteriaAssessment(
+            assessments=[
+                _CriterionAssessment(criterion_id="NC1", status="unsatisfied"),
+                _CriterionAssessment(criterion_id="AC1", status="unsatisfied"),
+            ]
+        ),
+        "cost": 0.0,
+        "model_name": "m",
+    }
+    with (
+        patch("pdd.story_criteria.load_prompt_template", return_value="T"),
+        patch("pdd.story_criteria.preprocess", side_effect=lambda text, **_k: text),
+        patch("pdd.story_criteria.llm_invoke", return_value=response),
+    ):
+        evaluation = evaluate_acceptance_criteria([prompt_path], "story", criteria)
+
+    by_id = {v.criterion_id: v.status for v in evaluation.verdicts}
+    assert by_id["AC1"] == "unsatisfied"
+    assert by_id["NC1"] == "unsatisfied"
+    # The two the model did not mention stay unevaluated, not cross-assigned.
+    assert by_id["AC2"] == "unevaluated"
+    assert by_id["NC2"] == "unevaluated"
+
+
 def test_returns_nothing_without_a_criteria_section():
     assert parse_acceptance_criteria("# Story\n\nJust prose, no criteria.\n") == []
     assert parse_acceptance_criteria("") == []
@@ -152,8 +233,14 @@ def test_only_unsatisfied_fails_the_story(tmp_path):
     assert [v.criterion_id for v in evaluation.unsatisfied] == ["AC1"]
 
 
-def test_unclear_is_advisory_and_never_fails(tmp_path):
-    """The core of issue #5: a hedging model must not fail a correct prompt set."""
+def test_unclear_never_fails_but_never_passes_either(tmp_path):
+    """Undecided is the third state, not a pass and not a failure.
+
+    A hedging model must not FAIL a correct prompt set (the core of issue #5),
+    but reporting "could not decide" as PASS is the same fail-open shape as the
+    legacy gate treating silence as success -- and README's contract is that
+    exit 0 means every story *explicitly* passed.
+    """
     evaluation = _evaluate(
         tmp_path,
         [
@@ -162,9 +249,10 @@ def test_unclear_is_advisory_and_never_fails(tmp_path):
         ],
     )
 
-    assert evaluation.passed is True
+    assert evaluation.unsatisfied == []  # never a failure
+    assert evaluation.passed is False  # but never a pass
+    assert evaluation.verified is False
     assert len(evaluation.unclear) == 2
-    assert evaluation.unsatisfied == []
 
 
 def test_satisfied_without_a_citation_degrades_to_unclear(tmp_path):
@@ -177,7 +265,9 @@ def test_satisfied_without_a_citation_degrades_to_unclear(tmp_path):
     )
 
     assert [v.status for v in evaluation.verdicts] == ["unclear", "unclear"]
-    assert evaluation.passed is True
+    # Degraded to undecided, so the story is not verified -- but not failed.
+    assert evaluation.passed is False
+    assert evaluation.unsatisfied == []
 
 
 def test_unverifiable_citation_is_reported_but_still_passes(tmp_path):

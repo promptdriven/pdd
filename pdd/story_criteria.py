@@ -6,12 +6,15 @@ rather than the prompts: a weak model volunteers something for a correct
 prompt set, a strong model volunteers nothing, and the same inputs flip
 verdict on ``--strength`` alone.
 
-This module asks a bounded question instead.  Every acceptance criterion in
-the story contract is classified exactly once as ``satisfied``,
-``unsatisfied``, or ``unclear``, and a ``satisfied`` verdict must quote the
-prompt text that satisfies it.  Only ``unsatisfied`` fails the story;
-``unclear`` is advisory, and a criterion the evaluator skipped entirely is
-``unevaluated`` -- an incomplete run, never a pass.
+This module asks a bounded question instead.  Every acceptance criterion
+(``AC<n>``) and negative case (``NC<n>``) in the story contract is classified
+exactly once as ``satisfied``, ``unsatisfied``, or ``unclear``, and a
+``satisfied`` verdict must quote the prompt text that satisfies it.
+
+Only ``unsatisfied`` fails a story -- letting ``unclear`` fail would import
+the model sensitivity this replaces.  But ``unclear`` does not pass either:
+it, and a criterion the evaluator skipped (``unevaluated``), leave the run
+unverified, which the caller reports as incomplete rather than green.
 
 Public API
 ----------
@@ -51,18 +54,17 @@ _CRITERIA_SECTION_RE = re.compile(
     r"^[ \t]*#{1,6}[ \t]*acceptance\s+criteria[ \t]*$(?P<body>.*?)(?=^[ \t]*#{1,6}[ \t]|\Z)",
     re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
+# ``## Negative Cases`` -- forbidden outcomes the story protects against. Gated
+# alongside the acceptance criteria: a contract can state a requirement only as
+# a negative ("must not accept a non-issue URL"), and leaving that ungated is a
+# real hole. Identified NC<n> so a verdict names which kind it refers to.
+_NEGATIVE_SECTION_RE = re.compile(
+    r"^[ \t]*#{1,6}[ \t]*negative\s+cases[ \t]*$(?P<body>.*?)(?=^[ \t]*#{1,6}[ \t]|\Z)",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
 # A criterion starts at ``1. ``/``1) `` or ``- ``/``* ``; continuation lines are
 # indented or bare prose and are folded into the criterion above them.
 _CRITERION_START_RE = re.compile(r"^[ \t]*(?:\d+[.)]|[-*+])[ \t]+(?P<text>\S.*)$")
-# Accept AC1, ac-1, AC 1, "1", "criterion 1", and "AC1: <echoed text>" -- models
-# are not consistent here, and dropping an identifier we could have read would
-# turn a real verdict into a false ``unevaluated``.
-_CRITERION_ID_LEADING_RE = re.compile(
-    r"\A(?:ac|criterion)?[ _-]*(?P<number>\d+)", re.IGNORECASE
-)
-_CRITERION_ID_TRAILING_RE = re.compile(
-    r"(?:ac|criterion)[ _-]*(?P<number>\d+)\s*\Z", re.IGNORECASE
-)
 _WHITESPACE_RE = re.compile(r"\s+")
 
 # A citation shorter than this is not evidence -- "yes", "R15", "the prompt".
@@ -166,8 +168,23 @@ class CriteriaEvaluation:
 
     @property
     def passed(self) -> bool:
-        """Pass only when every criterion was evaluated and none is unsatisfied."""
-        return bool(self.verdicts) and not self.unsatisfied and not self.unevaluated
+        """Pass only when every criterion was judged and every one is satisfied.
+
+        An ``unclear`` criterion does NOT pass. Measured on a live weak model
+        (gemini-3-flash-preview at strength 0.2), a genuinely regressed prompt
+        set scored ``unclear`` on the criterion it broke, 4 runs out of 4;
+        reporting that as PASS reproduced the very fail-open behaviour this
+        module replaces, just moved from "the model said nothing" to "the model
+        could not decide". ``unclear`` still must never *fail* a story -- that
+        would let a hedging model fail correct prompts -- so it lands in the
+        third state via :attr:`verified`.
+        """
+        return bool(self.verdicts) and not self.unsatisfied and self.verified
+
+    @property
+    def verified(self) -> bool:
+        """Whether every criterion got a decisive verdict (no unclear/unevaluated)."""
+        return bool(self.verdicts) and not self.unclear and not self.unevaluated
 
     @property
     def complete(self) -> bool:
@@ -187,9 +204,21 @@ def parse_acceptance_criteria(contract_text: str) -> List[AcceptanceCriterion]:
     the section holds no list items, which is the caller's signal to fall back
     to the legacy open-ended detector.
     """
+    return _parse_section(
+        contract_text, _CRITERIA_SECTION_RE, prefix="AC"
+    ) + _parse_section(contract_text, _NEGATIVE_SECTION_RE, prefix="NC")
+
+
+def _parse_section(
+    contract_text: str,
+    pattern: "re.Pattern[str]",
+    *,
+    prefix: str,
+) -> List[AcceptanceCriterion]:
+    """Extract list items from one contract section as identified criteria."""
     if not contract_text:
         return []
-    match = _CRITERIA_SECTION_RE.search(contract_text)
+    match = pattern.search(contract_text)
     if not match:
         return []
 
@@ -202,20 +231,37 @@ def parse_acceptance_criteria(contract_text: str) -> List[AcceptanceCriterion]:
             items[-1] = f"{items[-1]} {line.strip()}"
 
     return [
-        AcceptanceCriterion(id=f"AC{index}", text=_clean(text))
+        AcceptanceCriterion(id=f"{prefix}{index}", text=_clean(text))
         for index, text in enumerate(
             (item for item in items if item.strip()), start=1
         )
     ]
 
 
-def _normalize_criterion_id(raw: object) -> Optional[str]:
-    """Map a model-supplied identifier onto the canonical ``AC<n>`` form."""
+def _resolve_criterion_id(raw: object, known_ids: Sequence[str]) -> Optional[str]:
+    """Match a model-supplied identifier against the criteria actually asked about.
+
+    Resolved against the known set rather than reconstructed, because two
+    families are in play (``AC`` acceptance criteria and ``NC`` negative cases)
+    and a bare ``"3"`` is only unambiguous when one family is present. Tolerates
+    the separator and case variants models produce, and an identifier with the
+    criterion text echoed after it.
+    """
     candidate = str(raw or "").strip()
-    match = _CRITERION_ID_LEADING_RE.match(candidate) or _CRITERION_ID_TRAILING_RE.search(
-        candidate
-    )
-    return f"AC{int(match.group('number'))}" if match else None
+    if not candidate:
+        return None
+    for criterion_id in known_ids:
+        prefix, number = criterion_id[:2], criterion_id[2:]
+        if re.match(rf"{prefix}[ _-]*{number}\b", candidate, re.IGNORECASE):
+            return criterion_id
+    bare = re.match(r"(?:criterion)?[ _-]*(?P<number>\d+)\b", candidate, re.IGNORECASE)
+    if bare:
+        families = {criterion_id[:2] for criterion_id in known_ids}
+        if len(families) == 1:
+            resolved = f"{families.pop()}{int(bare.group('number'))}"
+            if resolved in known_ids:
+                return resolved
+    return None
 
 
 def _normalize_status(raw: object) -> CriterionStatus:
@@ -267,9 +313,10 @@ def _verdicts_from_assessments(
     first judgement, and a criterion the model never mentioned stays
     ``unevaluated`` so the caller reports an incomplete run instead of a pass.
     """
+    known_ids = [criterion.id for criterion in criteria]
     by_id: Dict[str, _CriterionAssessment] = {}
     for assessment in assessments:
-        criterion_id = _normalize_criterion_id(assessment.criterion_id)
+        criterion_id = _resolve_criterion_id(assessment.criterion_id, known_ids)
         if criterion_id is not None:
             by_id.setdefault(criterion_id, assessment)
 

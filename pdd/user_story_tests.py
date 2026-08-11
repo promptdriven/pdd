@@ -1168,10 +1168,12 @@ def _render_criteria_report(
         "unclear": "yellow",
         "unevaluated": "yellow",
     }
-    if evaluation.unevaluated:
-        headline = "UNKNOWN"
-    elif evaluation.unsatisfied:
+    if evaluation.unsatisfied:
         headline = "FAIL"
+    elif evaluation.unevaluated or evaluation.unclear:
+        # Undecided is neither a pass nor a failure; saying PASS here would
+        # repeat the legacy gate's fail-open behaviour.
+        headline = "UNKNOWN"
     else:
         headline = "PASS"
     rprint(f"[bold]{headline}[/bold] {rich_escape(str(story_path))}")
@@ -1206,6 +1208,12 @@ def _render_criteria_report(
         rprint(
             "  Next step: re-run; the evaluator returned no verdict for "
             f"{len(evaluation.unevaluated)} criteria."
+        )
+    elif not evaluation.unsatisfied and evaluation.unclear:
+        rprint(
+            f"  Next step: {len(evaluation.unclear)} criteria were undecided. "
+            "Re-run at a higher --strength, or review them by hand; the story is "
+            "not verified either way."
         )
     else:
         rprint(f"  Next step:  pdd fix {rich_escape(_story_fix_target(story_path))}")
@@ -1934,6 +1942,20 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
             incomplete_reason = (
                 "The evaluator returned no verdict for "
                 f"{len(evaluation.unevaluated)} acceptance criteria."
+            )
+        elif (
+            evaluation is not None
+            and evaluation.unclear
+            and not evaluation.unsatisfied
+        ):
+            # "Could not decide" is not "verified fine". Reporting it as a pass
+            # is the same fail-open shape as the legacy gate treating silence as
+            # success -- measured on a weak model, a regressed prompt set scored
+            # unclear on the criterion it broke and would have passed. It still
+            # must not FAIL, or a hedging model could fail correct prompts.
+            incomplete_reason = (
+                f"{len(evaluation.unclear)} acceptance criteria could not be "
+                "decided from the prompt text."
             )
         else:
             incomplete_reason = ""
