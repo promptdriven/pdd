@@ -540,11 +540,21 @@ _pdd_checkup() {
 # Return the first PDD subcommand in the current invocation.  Global options
 # are valid before a command, so `$words[2]` cannot be assumed to be one.
 _pdd_find_subcommand() {
-  local token expect_value=0
+  local token expect_value=0 options_ended=0
 
   for token in "${(@)words[2,CURRENT]}"; do
     if (( expect_value )); then
       expect_value=0
+      continue
+    fi
+
+    if (( options_ended )); then
+      case "$token" in
+        generate|example|test|preprocess|fix|split|change|update|detect|conflicts|crash|trace|bug|auto-deps|verify|sync|sync-architecture|checkup|contracts|extracts|report-core|replay|context|which|reconcile|install-hooks|certify|recover|baseline|validate|templates|connect|auth|sessions|firecrawl-cache|story|setup|install_completion|pytest-output)
+          print -r -- "$token"
+          return 0
+          ;;
+      esac
       continue
     fi
 
@@ -554,7 +564,13 @@ _pdd_find_subcommand() {
         ;;
       --strength=*|--model=*|--temperature=*|--time=*|--output-cost=*|--context=*|--keep-core-dumps=*|--context-compression=*|--compression-fallback=*)
         ;;
-      --force|--verbose|--quiet|--color|--no-color|--estimate|--dry-run-cost|--estimate-json|--review-examples|--local|--list-contexts|--core-dump|--no-core-dump|--compress-examples|--compress-test-context|--help|--version)
+      --)
+        options_ended=1
+        ;;
+      --help|--version|--list-contexts)
+        return 1
+        ;;
+      --force|--verbose|--quiet|--color|--no-color|--estimate|--dry-run-cost|--estimate-json|--review-examples|--local|--core-dump|--no-core-dump|--compress-examples|--compress-test-context)
         ;;
       --*)
         return 1
@@ -567,6 +583,83 @@ _pdd_find_subcommand() {
   done
 
   return 1
+}
+
+_pdd_auth() {
+  local -a commands
+  commands=(
+    'login:Authenticate with PDD Cloud'
+    'status:Show authentication status'
+    'logout:Sign out of PDD Cloud'
+    'token:Print an authentication token'
+    'clear-cache:Clear cached authentication state'
+  )
+  _arguments -C -s $_pdd_global_opts '1:auth command:->group_command' && return 0
+  case $state in
+    group_command) _describe -t commands 'auth command' commands ;;
+  esac
+}
+
+_pdd_templates() {
+  local -a commands
+  commands=(
+    'list:List available templates'
+    'show:Show a template'
+    'copy:Copy a template into the project'
+  )
+  _arguments -C -s $_pdd_global_opts '1:templates command:->group_command' && return 0
+  case $state in
+    group_command) _describe -t commands 'templates command' commands ;;
+  esac
+}
+
+_pdd_contracts() {
+  local -a commands
+  commands=('check:Run deterministic contract checks')
+  _arguments -C -s $_pdd_global_opts '1:contracts command:->group_command' && return 0
+  case $state in
+    group_command) _describe -t commands 'contracts command' commands ;;
+  esac
+}
+
+_pdd_sessions() {
+  local -a commands
+  commands=(
+    'list:List remote sessions'
+    'info:Show remote session information'
+    'cleanup:Clean up remote sessions'
+  )
+  _arguments -C -s $_pdd_global_opts '1:sessions command:->group_command' && return 0
+  case $state in
+    group_command) _describe -t commands 'sessions command' commands ;;
+  esac
+}
+
+_pdd_story() {
+  local -a commands
+  commands=(
+    'add:Add a user story'
+    'list:List user stories'
+    'link:Link a user story'
+  )
+  _arguments -C -s $_pdd_global_opts '1:story command:->group_command' && return 0
+  case $state in
+    group_command) _describe -t commands 'story command' commands ;;
+  esac
+}
+
+_pdd_firecrawl_cache() {
+  local -a commands
+  commands=(
+    'stats:Show cache statistics'
+    'clear:Clear cached entries'
+    'info:Show cache configuration'
+    'check:Check whether a URL is cached'
+  )
+  _arguments -C -s $_pdd_global_opts '1:firecrawl-cache command:->group_command' && return 0
+  case $state in
+    group_command) _describe -t commands 'firecrawl-cache command' commands ;;
+  esac
 }
 
 _pdd() {
@@ -682,6 +775,24 @@ _pdd() {
       ;;
     checkup)
       _pdd_checkup
+      ;;
+    auth)
+      _pdd_auth
+      ;;
+    templates)
+      _pdd_templates
+      ;;
+    contracts)
+      _pdd_contracts
+      ;;
+    sessions)
+      _pdd_sessions
+      ;;
+    story)
+      _pdd_story
+      ;;
+    firecrawl-cache)
+      _pdd_firecrawl_cache
       ;;
     setup)
       _pdd_setup
