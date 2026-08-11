@@ -640,12 +640,12 @@
       "prompt_path": "pdd/prompts/code_generator_main_python.prompt",
       "language_id": "python",
       "from_requirement_id": "CONTRACT-SHA256:9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
-      "to_requirement_id": "CONTRACT-SHA256:e06cce1691f72866d95042c2b520a990a2db7e856b64343412d507641f961f41",
+      "to_requirement_id": "CONTRACT-SHA256:a8038190a5a4454cd749255a8d5019f9a9aa8ef3d528b96aac92a022dd0ed8cf",
       "policy_path": ".pdd/verification-profiles.json",
       "base_policy_sha256": "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f",
-      "head_policy_sha256": "af2bebb4bd797345a809331632d7cd7335af763690a47d65fc43555e84484605",
+      "head_policy_sha256": "d581021739b0b54d8ca81122b24a81db9f510d54be4871a1f847b030754e1050",
       "base_prompt_sha256": "9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
-      "head_prompt_sha256": "e06cce1691f72866d95042c2b520a990a2db7e856b64343412d507641f961f41"
+      "head_prompt_sha256": "a8038190a5a4454cd749255a8d5019f9a9aa8ef3d528b96aac92a022dd0ed8cf"
     }
   ],
   "requirement_rotation_retirements": [
@@ -689,12 +689,12 @@
         "prompt_path": "pdd/prompts/code_generator_main_python.prompt",
         "language_id": "python",
         "from_requirement_id": "CONTRACT-SHA256:9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
-        "to_requirement_id": "CONTRACT-SHA256:e06cce1691f72866d95042c2b520a990a2db7e856b64343412d507641f961f41",
+        "to_requirement_id": "CONTRACT-SHA256:a8038190a5a4454cd749255a8d5019f9a9aa8ef3d528b96aac92a022dd0ed8cf",
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f",
-        "head_policy_sha256": "af2bebb4bd797345a809331632d7cd7335af763690a47d65fc43555e84484605",
+        "head_policy_sha256": "d581021739b0b54d8ca81122b24a81db9f510d54be4871a1f847b030754e1050",
         "base_prompt_sha256": "9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
-        "head_prompt_sha256": "e06cce1691f72866d95042c2b520a990a2db7e856b64343412d507641f961f41"
+        "head_prompt_sha256": "a8038190a5a4454cd749255a8d5019f9a9aa8ef3d528b96aac92a022dd0ed8cf"
       }
     }
   ]
