@@ -90,13 +90,6 @@ PROSE_OUTPUT_REPAIR_DIRECTIVE = (
     "text, prose explanation, or partial snippets outside the code block."
 )
 
-LANGUAGE_MISMATCH_REPAIR_DIRECTIVE = (
-    "The previous response was not valid Python and could not be parsed. Return "
-    "the complete Python source file only, inside a single code block, starting "
-    "at column zero. Do not emit another language (HTML, Markdown, JSON) and do "
-    "not wrap the module body in an extra indentation level."
-)
-
 
 class ArchitectureConformanceError(click.UsageError):
     """Typed exception raised when generated code violates the architecture contract.
@@ -445,7 +438,12 @@ class ProseOutputError(click.UsageError):
 
 
 class LanguageMismatchError(click.UsageError):
-    """Raised when the declared language is Python but the generated content is not valid Python."""
+    """Raised when the declared language is Python but the generated content is not valid Python.
+
+    Terminal by design: no retry path catches or parses this error, so unlike
+    ``ArchitectureConformanceError`` / ``ProseOutputError`` it deliberately
+    exposes no ``repair_directive``.
+    """
 
     def __init__(
         self,
@@ -479,10 +477,6 @@ class LanguageMismatchError(click.UsageError):
             f"Syntax error: {self.syntax_error}\n"
             f"Raw output excerpt: {self.raw_output_excerpt}"
         )
-
-    @property
-    def repair_directive(self) -> str:
-        return LANGUAGE_MISMATCH_REPAIR_DIRECTIVE
 
 
 def _verify_language_validity(
