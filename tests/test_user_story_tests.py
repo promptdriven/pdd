@@ -2154,9 +2154,23 @@ def test_user_story_fix_detect_and_change_are_contract_aware(tmp_path):
     detected_oracle = {}
     change_prompt_contents = {}
 
-    def fake_detect_change(prompts, change_description, *args, **kwargs):
+    def fake_evaluate(prompts, change_description, criteria, *args, **kwargs):
+        # The repair is planned from the same bounded verification that judges
+        # it, so the combined-oracle assertion below targets that call.
         detected_oracle["text"] = change_description
-        return ([{"prompt_name": "calc_python.prompt"}], 0.1, "detect-model")
+        return CriteriaEvaluation(
+            verdicts=[
+                CriterionVerdict(
+                    criterion_id=criteria[0].id,
+                    criterion_text=criteria[0].text,
+                    status="unsatisfied",
+                    prompt_name="calc_python.prompt",
+                    rationale="Nothing requires it.",
+                )
+            ],
+            cost=0.1,
+            model="detect-model",
+        )
 
     def fake_change_main(**kwargs):
         change_prompt_contents["text"] = Path(kwargs["change_prompt_file"]).read_text(
@@ -2168,7 +2182,10 @@ def test_user_story_fix_detect_and_change_are_contract_aware(tmp_path):
 
     with (
         patch("pdd.user_story_tests.discover_prompt_files", return_value=[prompt_path]),
-        patch("pdd.user_story_tests.detect_change", side_effect=fake_detect_change),
+        patch(
+            "pdd.user_story_tests.evaluate_acceptance_criteria",
+            side_effect=fake_evaluate,
+        ),
         patch("pdd.user_story_tests.get_extension", return_value=".py"),
         patch("pdd.change_main.change_main", side_effect=fake_change_main),
         patch(
@@ -2184,7 +2201,7 @@ def test_user_story_fix_detect_and_change_are_contract_aware(tmp_path):
         )
 
     assert success is True, message
-    # detect_change saw the combined oracle (story + contract criterion).
+    # The verifier saw the combined oracle (story + contract criterion).
     assert "CONTRACT_ONLY_CRITERION" in detected_oracle["text"]
     assert "As a user I want calc." in detected_oracle["text"]
     # change_main received the combined oracle on disk, not just the story file.
@@ -2614,3 +2631,107 @@ def test_cache_story_prompt_links_honors_explicit_prompts(tmp_path, monkeypatch)
     metadata_line = story.read_text(encoding="utf-8").splitlines()[0]
     assert "demo2_python.prompt" in metadata_line
     assert "demo_python.prompt" in metadata_line
+
+
+def _fix_story_with_contract(tmp_path):
+    """A story + contract + prompt + code file, wired for run_user_story_fix."""
+    prompts_dir = tmp_path / "prompts"
+    src_dir = tmp_path / "src"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir(parents=True)
+    src_dir.mkdir(parents=True)
+    stories_dir.mkdir()
+    (prompts_dir / "calc_python.prompt").write_text("prompt", encoding="utf-8")
+    (src_dir / "calc.py").write_text("code", encoding="utf-8")
+    story_path = stories_dir / "story__calc.md"
+    story_path.write_text("## Story\nAs a user I want calc.\n", encoding="utf-8")
+    contract = _contract_path_for_story(story_path)
+    contract.parent.mkdir(parents=True, exist_ok=True)
+    contract.write_text(
+        "## Acceptance Criteria\n1. Addition must work.\n2. Division must work.\n",
+        encoding="utf-8",
+    )
+    return prompts_dir, story_path
+
+
+def test_story_fix_does_not_claim_success_on_an_unverified_story(tmp_path):
+    """An empty change list is only good news if everything was judged.
+
+    Nothing unsatisfied plus an undecided criterion means "not shown to be
+    broken", not "confirmed fine" -- claiming success there is the same
+    fail-open the story gate was rewritten to remove.
+    """
+    prompts_dir, story_path = _fix_story_with_contract(tmp_path)
+
+    def all_unclear(_prompts, _oracle, criteria, *_a, **_k):
+        return CriteriaEvaluation(
+            verdicts=[
+                CriterionVerdict(c.id, c.text, "unclear") for c in criteria
+            ],
+            cost=0.1,
+            model="m",
+        )
+
+    with patch(
+        "pdd.user_story_tests.evaluate_acceptance_criteria", side_effect=all_unclear
+    ):
+        success, message, _cost, _model, changed = run_user_story_fix(
+            ctx=SimpleNamespace(obj={}),
+            story_file=str(story_path),
+            prompts_dir=str(prompts_dir),
+            quiet=True,
+        )
+
+    assert success is False
+    assert "could not be fully verified" in message
+    assert changed == []
+
+
+def test_story_fix_reports_no_change_needed_when_every_criterion_is_satisfied(tmp_path):
+    prompts_dir, story_path = _fix_story_with_contract(tmp_path)
+
+    def all_satisfied(_prompts, _oracle, criteria, *_a, **_k):
+        return CriteriaEvaluation(
+            verdicts=[
+                CriterionVerdict(c.id, c.text, "satisfied", citation="x" * 20)
+                for c in criteria
+            ],
+            cost=0.1,
+            model="m",
+        )
+
+    with patch(
+        "pdd.user_story_tests.evaluate_acceptance_criteria", side_effect=all_satisfied
+    ):
+        success, message, _cost, _model, changed = run_user_story_fix(
+            ctx=SimpleNamespace(obj={}),
+            story_file=str(story_path),
+            prompts_dir=str(prompts_dir),
+            quiet=True,
+        )
+
+    assert success is True
+    assert "No prompt changes needed" in message
+    assert changed == []
+
+
+def test_story_fix_legacy_detect_still_uses_the_open_ended_detector(tmp_path):
+    prompts_dir, story_path = _fix_story_with_contract(tmp_path)
+
+    with (
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+        patch("pdd.user_story_tests.evaluate_acceptance_criteria") as mock_evaluate,
+    ):
+        mock_detect.return_value = ([], 0.2, "legacy-model")
+        success, _message, _cost, model, _changed = run_user_story_fix(
+            ctx=SimpleNamespace(obj={}),
+            story_file=str(story_path),
+            prompts_dir=str(prompts_dir),
+            quiet=True,
+            legacy_detect=True,
+        )
+
+    mock_evaluate.assert_not_called()
+    mock_detect.assert_called_once()
+    assert success is True
+    assert model == "legacy-model"

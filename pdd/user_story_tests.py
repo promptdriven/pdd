@@ -2070,6 +2070,7 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     budget: float = 5.0,
     verbose: bool = False,
     quiet: bool = False,
+    legacy_detect: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Attempt to fix prompts based on a single user story.
@@ -2096,16 +2097,72 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     # file alone omits the acceptance criteria/oracle, so `pdd fix` would no-op or
     # produce an under-specified change that later fails `run_user_story_tests`.
     oracle_content = _compose_story_oracle(story_path, story_content)
-    changes_list, detect_cost, detect_model = detect_change(
-        [str(p) for p in prompt_files],
-        oracle_content,
-        strength,
-        temperature,
-        time,
-        verbose=verbose,
-    )
+
+    # Where a contract exists it IS the specification, so the repair is planned
+    # from the same bounded verification that judges it: each unsatisfied
+    # criterion names both the gap and the prompt that should carry it. Asking
+    # `detect_change` "what would you change?" here re-derived, less precisely,
+    # what the contract already states -- and its plan was discarded anyway,
+    # since `change_main` receives the oracle, not the change instructions.
+    criteria: List[AcceptanceCriterion] = []
+    if not legacy_detect:
+        criteria, _ = _resolve_story_criteria(story_path, story_content)
+
+    verified = True
+    if criteria:
+        try:
+            evaluation = evaluate_acceptance_criteria(
+                prompt_files,
+                oracle_content,
+                criteria,
+                strength,
+                temperature,
+                time,
+                verbose=verbose,
+                guards=_story_non_oracle_guards(story_path, story_content),
+            )
+        except StoryCriteriaError as exception:
+            return (
+                False,
+                "Could not verify the story's criteria, so there is nothing to "
+                "repair against.",
+                getattr(exception, "cost", 0.0),
+                "",
+                [],
+            )
+        detect_cost, detect_model = evaluation.cost, evaluation.model
+        verified = evaluation.verified
+        changes_list = changes_from_verdicts(
+            evaluation.unsatisfied,
+            default_prompt_name=(
+                prompt_files[0].name if len(prompt_files) == 1 else ""
+            ),
+        )
+    else:
+        changes_list, detect_cost, detect_model = detect_change(
+            [str(p) for p in prompt_files],
+            oracle_content,
+            strength,
+            temperature,
+            time,
+            verbose=verbose,
+        )
 
     if not changes_list:
+        # An empty change list means "nothing was shown to need changing", which
+        # is only good news when everything was actually judged. Claiming success
+        # on an undecided or silent evaluation is the same fail-open the story
+        # gate was rewritten to remove.
+        if not verified:
+            return (
+                False,
+                "No criterion was shown unsatisfied, but the story could not be "
+                "fully verified, so nothing was changed. Re-run at a higher "
+                "--strength or review the undecided criteria by hand.",
+                detect_cost,
+                detect_model,
+                [],
+            )
         return (
             True,
             "No prompt changes needed for this user story.",
