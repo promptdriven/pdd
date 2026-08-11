@@ -57,10 +57,12 @@ flowchart TD
     C --> E{"Human review:<br/>is this the behavior I want?"}
     E -- edit Story --> F["sync_user_story_contract()<br/>re-aligns the contract"]
     F --> E
-    E -- approved --> G["pdd detect --stories<br/>(validate vs linked prompts)"]
-    G -- fails --> H["pdd fix story__slug.md<br/>(apply story to prompts)"]
+    E -- approved --> G["pdd story verify<br/>(classify each contract criterion<br/>vs linked prompts)"]
+    G -- unsatisfied --> H["pdd fix story__slug.md<br/>(apply story to prompts)"]
     H --> G
-    G -- passes --> I["pdd test --from-story story__slug.md<br/>(generate executable regression)"]
+    G -- unclear --> K["review by hand or<br/>re-run at higher --strength"]
+    K --> G
+    G -- all satisfied --> I["pdd test --from-story story__slug.md<br/>(generate executable regression)"]
     I --> J[Commit Story + contract + regression test]
 ```
 
@@ -201,7 +203,7 @@ Open `user_stories/story__<slug>.md` and read the single sentence. This is the
 
 If the Story is right, you have signed off on the **human** artifact — but you
 are not quite done. **Do not hand-edit the generated contract, but do not rubber-
-stamp it either.** The contract is the actual oracle that `pdd detect --stories`
+stamp it either.** The contract is the actual oracle that `pdd story verify`
 and `pdd fix story__*.md` run against, so before you commit or merge story
 coverage, spot-check it for *false* or *over-broad* acceptance criteria and
 `## Oracle` claims — behavior the implementation does not actually provide. The
@@ -264,14 +266,44 @@ against each linked prompt. A story **passes** when the prompts still deliver th
 promised behavior, and **fails** when they have drifted.
 
 ```bash
-# Validate every story in user_stories/ against its linked prompts
-pdd detect --stories
+# Verify every story in user_stories/ against its linked prompts
+pdd story verify
 
 # Useful flags
-pdd detect --stories --stories-dir user_stories --prompts-dir prompts
-pdd detect --stories --no-fail-fast      # report all failures, don't stop at the first
-pdd detect --stories --include-llm       # also validate against *_llm.prompt runtime templates
+pdd story verify --stories-dir user_stories --prompts-dir prompts
+pdd story verify --no-fail-fast      # report all failures, don't stop at the first
+pdd story verify --include-llm       # also verify against *_llm.prompt runtime templates
+pdd story verify --legacy-detect     # use the pre-2389 open-ended change detector
+
+# `pdd detect --stories` is the older spelling of the same check and takes the
+# same options. Verification lives under `pdd story` because it answers "does
+# this hold?", not the change detector's "what should change?".
+pdd detect --stories
 ```
+
+### What it checks
+
+Each criterion in the story's contract is classified exactly once, and the
+verdict names the criterion rather than proposing prose edits:
+
+| section | id | question |
+| --- | --- | --- |
+| `## Acceptance Criteria` | `AC<n>` | do the prompts **require** this behavior? |
+| `## Negative Cases` | `NC<n>` | do the prompts **prevent** this outcome? |
+| `## Oracle` | `OR<n>` | do the prompts **determine** this detail? |
+| `## Non-Oracle` | — | not judged: handed to the evaluator as details that may never fail a story |
+
+A `satisfied` verdict must quote the prompt text that requires it, so you can
+check the verdict instead of trusting it. Quoting a heading or an option list —
+text that names the subject without requiring anything — does not support a
+`satisfied` status.
+
+Only an `unsatisfied` criterion fails a story: a model that hedges must not be
+able to fail a correct prompt set. But `unclear` does not pass either — it, and
+any criterion the evaluator skipped, leave the story **unverified**, reported as
+`UNKNOWN`. Verification quality depends on model strength; the output names the
+model that produced the verdict so a cheap-model result is not mistaken for a
+strong one.
 
 Story mode prints PASS, FAIL, or UNKNOWN for each story and exits non-zero if
 any story does not pass. `--output` is the standard detector's CSV option and
@@ -367,7 +399,7 @@ pdd fix user_stories/story__<slug>.md
 ```
 
 This treats the Story + contract as the spec and updates the linked prompts to
-satisfy it. Re-run `pdd detect --stories` to confirm.
+satisfy it. Re-run `pdd story verify` to confirm.
 
 ## Step 8 — Generate executable regression tests
 
@@ -510,7 +542,7 @@ def test_refund_rejects_zero_amount():
   [`docs/coverage_contracts.md`](coverage_contracts.md), "Story regression
   coverage".
 
-This is distinct from `pdd detect --stories`, which validates stories against
+This is distinct from `pdd story verify`, which verifies stories against
 prompts via an LLM oracle. The marker mechanism is deterministic and requires no
 LLM calls.
 
@@ -520,7 +552,7 @@ Add story validation as a pre-merge gate so prompt drift is caught
 automatically:
 
 ```bash
-pdd detect --stories --no-fail-fast
+pdd story verify --no-fail-fast
 ```
 
 For CI artifacts, add `--evidence`. The standard detect `--output` CSV is not
@@ -533,7 +565,7 @@ coverage matrix ([`docs/coverage_contracts.md`](coverage_contracts.md)).
 
 ## Story regression suite (executable oracles)
 
-`pdd detect --stories` catches prompt *drift* against the live prompts. The story
+`pdd story verify` catches prompt *drift* against the live prompts. The story
 **regression suite** is the complementary, fully executable layer: a story can
 carry a generated `@pytest.mark.story` test that runs in a public-safe lane with
 no secrets and no LLM/cloud credentials.
@@ -568,7 +600,7 @@ no secrets and no LLM/cloud credentials.
 | Generate executable story regression tests | `pdd test --from-story user_stories/story__<slug>.md --output tests/story_regression/test_story_<slug>.py` |
 | Generate a story + contract (direct form) | `pdd test --issue <url\|number\|file> prompts/<module>_<lang>.prompt` |
 | Refresh prompt-link metadata only | `pdd test user_stories/story__<slug>.md` |
-| Validate all stories against their prompts | `pdd detect --stories` |
+| Verify all stories against their prompts | `pdd story verify` |
 | Apply a story back to its prompts | `pdd fix user_stories/story__<slug>.md` |
 | Re-align a contract after editing the Story | `sync_user_story_contract(...)` (library function — no CLI yet; see Step 4) |
 | Run only story-backed regression tests | `pytest -m story` |
@@ -593,5 +625,5 @@ no secrets and no LLM/cloud credentials.
   `pytest -m story` as a blocking pass/fail gate and writes no coverage JSON;
   wiring the emitter is tracked in issue #1909 (see
   [`docs/ci.md`](ci.md), "Story Regression Coverage"). This whole suite is
-  distinct from the LLM-backed `pdd detect --stories` validation described in this
+  distinct from the LLM-backed `pdd story verify` validation described in this
   guide.
