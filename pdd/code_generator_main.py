@@ -90,6 +90,13 @@ PROSE_OUTPUT_REPAIR_DIRECTIVE = (
     "text, prose explanation, or partial snippets outside the code block."
 )
 
+LANGUAGE_MISMATCH_REPAIR_DIRECTIVE = (
+    "The previous response was not valid Python and could not be parsed. Return "
+    "the complete Python source file only, inside a single code block, starting "
+    "at column zero. Do not emit another language (HTML, Markdown, JSON) and do "
+    "not wrap the module body in an extra indentation level."
+)
+
 
 class ArchitectureConformanceError(click.UsageError):
     """Typed exception raised when generated code violates the architecture contract.
@@ -473,21 +480,42 @@ class LanguageMismatchError(click.UsageError):
             f"Raw output excerpt: {self.raw_output_excerpt}"
         )
 
+    @property
+    def repair_directive(self) -> str:
+        return LANGUAGE_MISMATCH_REPAIR_DIRECTIVE
 
-def _verify_language_validity(generated_code_content: str, language: str) -> Optional[SyntaxError]:
-    """Return the triggering SyntaxError when `language` is Python and the content
-    does not parse as valid Python (after a dedent retry); otherwise None."""
+
+def _verify_language_validity(
+    generated_code_content: str, language: str
+) -> Tuple[Optional[SyntaxError], str]:
+    """Validate that `generated_code_content` is parseable when `language` is Python.
+
+    Returns ``(error, content)`` where ``error`` is the triggering ``SyntaxError``
+    (``None`` when the content is acceptable) and ``content`` is **the exact text
+    that was successfully parsed** — which callers MUST write in place of the
+    original.
+
+    Returning the parsed candidate is the whole point of the tuple. The dedent
+    retry recovers uniformly indented output (e.g. left over from fence
+    extraction), but an earlier version validated ``textwrap.dedent(content)``
+    while the caller went on to write the *original* indented bytes. Uniformly
+    indented source fails ``ast.parse`` with "unexpected indent" and passes only
+    after dedent, so that gate reported success and still saved a ``.py`` file
+    that does not import. Validating one string and writing another is the bug;
+    the parsed candidate and the written bytes must be the same object.
+    """
     if str(language or "").strip().lower() != "python":
-        return None
+        return None, generated_code_content
+    last_error: Optional[SyntaxError] = None
     for candidate in (generated_code_content, textwrap.dedent(generated_code_content)):
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", SyntaxWarning)
                 ast.parse(candidate)
-            return None
+            return None, candidate
         except SyntaxError as exc:
             last_error = exc
-    return last_error
+    return last_error, generated_code_content
 
 
 # --- Helper Functions ---
@@ -5602,15 +5630,31 @@ def code_generator_main(
             # Language Validity Gate: verify the generated content is syntactically
             # valid Python before any downstream gate (architecture conformance,
             # public-surface) assumes it can be parsed with ast.parse.
-            # Only runs when this generation is creating the file. When a real
-            # file was already there, the public-surface and test-churn gates
-            # compare against its previous contents and diagnose unparseable
-            # output better than a bare SyntaxError would.
-            syntax_err = (
-                _verify_language_validity(generated_code_content, language or "")
-                if existing_code_content is None
-                else None
+            #
+            # This runs for EVERY generated Python candidate, whether or not a
+            # file already exists at the output path. An earlier version skipped
+            # the gate whenever a non-empty file was there, on the theory that the
+            # public-surface and test-churn gates would diagnose unparseable
+            # output better. They only do so when the PREVIOUS public surface is
+            # non-empty: `_verify_public_surface_regression` guards its syntax
+            # check with `if before:`. A private/script-only module (all `_`
+            # helpers, or bare statements) snapshots to an empty surface, so
+            # nothing checked the new bytes and HTML could overwrite working
+            # Python — reproduced as a silent, complete loss of the existing file.
+            # Syntax validity is a safety boundary, not a diagnostic nicety, so it
+            # is enforced unconditionally and before any write; the richer
+            # symbol-listing diagnosis still runs for every candidate that parses.
+            #
+            # Raising here also preserves the existing file for free: the gate is
+            # upstream of every write below, so a failure leaves the target's
+            # bytes exactly as they were.
+            syntax_err, validated_code_content = _verify_language_validity(
+                generated_code_content, language or ""
             )
+            # Write back the candidate that actually parsed (the dedent retry can
+            # return normalized bytes) so validated content and written content
+            # are never two different strings.
+            generated_code_content = validated_code_content
             if syntax_err is not None:
                 raise LanguageMismatchError(
                     prompt_name=prompt_name,
@@ -5748,7 +5792,17 @@ def code_generator_main(
                         output_path=output_path,
                         prompt_content=prompt_content,
                     )
-                except (PublicSurfaceRegressionError, TestChurnError) as compat_err:
+                # ArchitectureConformanceError is in the tuple because
+                # `_verify_public_surface_regression` raises it directly for a
+                # syntax failure (issue #1612 Bug 2). Catching only the other two
+                # let that variant escape with `total_cost` / `model_name` still
+                # at their 0.0 / "unknown" defaults, so the repair loop lost the
+                # attempted model and cost for the failed generation.
+                except (
+                    PublicSurfaceRegressionError,
+                    TestChurnError,
+                    ArchitectureConformanceError,
+                ) as compat_err:
                     if output_path and existing_code_content is not None:
                         try:
                             pathlib.Path(output_path).write_text(
