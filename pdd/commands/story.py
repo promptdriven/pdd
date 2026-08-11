@@ -418,3 +418,76 @@ def link_story(story_file: str, prompts: tuple[str, ...], prompts_dir: Optional[
     if not success:
         raise click.ClickException(message)
     click.echo(message)
+
+
+@story.command("verify")
+@click.option("--stories-dir", default=None, type=click.Path(file_okay=False))
+@click.option("--prompts-dir", default=None, type=click.Path(file_okay=False))
+@click.option(
+    "--include-llm",
+    is_flag=True,
+    default=False,
+    help="Include *_llm.prompt runtime templates in verification.",
+)
+@click.option(
+    "--fail-fast/--no-fail-fast",
+    default=True,
+    help="Stop at the first story that does not verify.",
+)
+@click.option(
+    "--legacy-detect",
+    is_flag=True,
+    default=False,
+    help=(
+        "Verify with the legacy open-ended change detector instead of "
+        "classifying each acceptance criterion."
+    ),
+)
+@click.option(
+    "--json/--no-json",
+    "json_output_stdout",
+    default=False,
+    help="Emit one pdd.detect.stories.v1 document to stdout.",
+)
+@click.option(
+    "--json-output",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Atomically write the pdd.detect.stories.v1 document to FILE.",
+)
+@click.pass_context
+def verify_stories(  # pylint: disable=too-many-arguments
+    ctx: click.Context,
+    stories_dir: Optional[str],
+    prompts_dir: Optional[str],
+    include_llm: bool,
+    fail_fast: bool,
+    legacy_detect: bool,
+    json_output_stdout: bool,
+    json_output: Optional[Path],
+) -> None:
+    """Verify that the linked prompts satisfy each story's acceptance criteria.
+
+    Classifies every acceptance criterion in a story's contract as satisfied,
+    unsatisfied, or unclear, and requires a verbatim prompt citation for a
+    satisfied verdict. Only an unsatisfied criterion fails a story; an undecided
+    one leaves it unverified rather than passing it.
+
+    This is the front door for story verification. It runs the same evaluation
+    as ``pdd detect --stories``, which remains supported: verification lives
+    here, next to ``story add``/``link``/``list``, rather than under the change
+    detector whose engine it no longer shares.
+    """
+    from .analysis import detect_change as _detect_command  # noqa: PLC0415
+
+    ctx.invoke(
+        _detect_command,
+        stories=True,
+        stories_dir=stories_dir,
+        prompts_dir=prompts_dir,
+        include_llm=include_llm,
+        fail_fast=fail_fast,
+        legacy_detect=legacy_detect,
+        json_output_stdout=json_output_stdout,
+        json_output=json_output,
+    )

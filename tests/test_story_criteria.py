@@ -17,6 +17,7 @@ from pdd.story_criteria import (
     evaluate_acceptance_criteria,
     evaluation_summary,
     parse_acceptance_criteria,
+    parse_non_oracle_guards,
 )
 
 
@@ -28,7 +29,17 @@ _CONTRACT = (
     "1. Given a valid CSV, when uploaded, then a summary report is shown.\n"
     "2. Given an empty CSV, when uploaded, then the upload is rejected\n"
     "   with a message naming the file.\n\n"
-    "## Oracle\n\n- returned value shape\n"
+    "## Notes\n\n- returned value shape\n"
+)
+
+_FULL_CONTRACT = (
+    "## Acceptance Criteria\n\n1. The upload shows a summary report.\n\n"
+    "## Negative Cases\n\n- A malformed CSV must not be accepted.\n\n"
+    "## Oracle\n\nThese details matter for pass/fail:\n- returned value shape\n"
+    "- emitted event\n\n"
+    "## Non-Oracle\n\nThese details should not matter:\n- private helper names\n"
+    "- exact color of console output\n\n"
+    "## Non-Goals\n\n- editing the CSV\n"
 )
 
 
@@ -74,13 +85,95 @@ def test_stops_at_the_next_heading():
     assert all("returned value shape" not in c.text for c in criteria)
 
 
+def test_all_three_checkable_families_become_criteria():
+    """AC alone passes a prompt set with a real gap the contract states as a
+    negative case or an oracle detail, so all three are gated."""
+    criteria = parse_acceptance_criteria(_FULL_CONTRACT)
+
+    assert [c.id for c in criteria] == ["AC1", "NC1", "OR1", "OR2"]
+    assert criteria[1].text.startswith("A malformed CSV must not")
+    assert criteria[2].text == "returned value shape"
+
+
+def test_oracle_lead_in_prose_is_not_a_criterion():
+    """"These details matter for pass/fail:" is a lead-in, not a bullet."""
+    texts = [c.text for c in parse_acceptance_criteria(_FULL_CONTRACT)]
+
+    assert all("matter for pass/fail" not in text for text in texts)
+
+
+def test_non_oracle_is_a_guard_not_a_criterion():
+    criteria = parse_acceptance_criteria(_FULL_CONTRACT)
+    guards = parse_non_oracle_guards(_FULL_CONTRACT)
+
+    assert all("private helper names" not in c.text for c in criteria)
+    assert guards == ["private helper names", "exact color of console output"]
+
+
+def test_non_oracle_lead_in_prose_is_not_a_guard():
+    assert all(
+        "should not matter" not in guard
+        for guard in parse_non_oracle_guards(_FULL_CONTRACT)
+    )
+
+
+def test_a_bare_number_is_ambiguous_once_families_overlap(tmp_path):
+    """AC1 and OR1 both exist, so "1" cannot be resolved and is dropped."""
+    prompt_path = _prompt(tmp_path, "body text long enough to be a citation")
+    criteria = parse_acceptance_criteria(_FULL_CONTRACT)
+    response = {
+        "result": _CriteriaAssessment(
+            assessments=[_CriterionAssessment(criterion_id="1", status="unsatisfied")]
+        ),
+        "cost": 0.0,
+        "model_name": "m",
+    }
+    with (
+        patch("pdd.story_criteria.load_prompt_template", return_value="T"),
+        patch("pdd.story_criteria.preprocess", side_effect=lambda text, **_k: text),
+        patch("pdd.story_criteria.llm_invoke", return_value=response),
+    ):
+        evaluation = evaluate_acceptance_criteria([prompt_path], "story", criteria)
+
+    assert evaluation.unsatisfied == []
+    assert len(evaluation.unevaluated) == 4
+
+
+def test_guards_are_passed_to_the_evaluator(tmp_path):
+    prompt_path = _prompt(tmp_path, "body")
+    seen = {}
+
+    def fake_invoke(**kwargs):
+        seen["guards"] = kwargs["input_json"]["NON_ORACLE_LIST"]
+        return {"result": _CriteriaAssessment(assessments=[]), "cost": 0.0, "model_name": "m"}
+
+    with (
+        patch("pdd.story_criteria.load_prompt_template", return_value="T"),
+        patch("pdd.story_criteria.preprocess", side_effect=lambda text, **_k: text),
+        patch("pdd.story_criteria.llm_invoke", side_effect=fake_invoke),
+    ):
+        evaluate_acceptance_criteria(
+            [prompt_path],
+            "story",
+            parse_acceptance_criteria(_CONTRACT),
+            guards=parse_non_oracle_guards(_FULL_CONTRACT),
+        )
+
+    assert seen["guards"] == ["private helper names", "exact color of console output"]
+
+
 def test_returns_nothing_without_a_criteria_section():
     assert parse_acceptance_criteria("# Story\n\nJust prose, no criteria.\n") == []
     assert parse_acceptance_criteria("") == []
 
 
-def test_returns_nothing_when_the_section_is_empty():
-    assert parse_acceptance_criteria("## Acceptance Criteria\n\n## Oracle\n- x\n") == []
+def test_an_empty_section_contributes_no_criteria():
+    """An empty Acceptance Criteria section yields no AC, but a populated
+    sibling section still yields its own."""
+    criteria = parse_acceptance_criteria("## Acceptance Criteria\n\n## Oracle\n- x\n")
+
+    assert [c.id for c in criteria] == ["OR1"]
+    assert parse_acceptance_criteria("## Acceptance Criteria\n\n## Notes\n- x\n") == []
 
 
 # --------------------------------------------------------------------------

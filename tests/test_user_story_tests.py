@@ -1449,8 +1449,10 @@ def test_validation_uses_story_plus_contract_as_oracle(tmp_path):
     # The oracle must contain both the human Story sentence and a contract section.
     assert "As a data analyst, I can upload a CSV file" in seen["oracle"]
     assert "## Acceptance Criteria" in seen["oracle"]
-    # The gated criteria come from the contract, not the story prose.
-    assert [c.id for c in seen["criteria"]] == ["AC1"]
+    # The gated criteria come from the contract, not the story prose, and
+    # cover all three checkable families: acceptance criteria, negative
+    # cases, and oracle details.
+    assert [c.id for c in seen["criteria"]] == ["AC1", "NC1", "OR1"]
     assert results[0]["criteria_source"] == "contract"
 
 

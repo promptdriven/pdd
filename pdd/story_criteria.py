@@ -45,6 +45,7 @@ __all__ = [
     "evaluate_acceptance_criteria",
     "evaluation_summary",
     "parse_acceptance_criteria",
+    "parse_non_oracle_guards",
 ]
 
 CriterionStatus = Literal["satisfied", "unsatisfied", "unclear", "unevaluated"]
@@ -60,6 +61,21 @@ _CRITERIA_SECTION_RE = re.compile(
 # real hole. Identified NC<n> so a verdict names which kind it refers to.
 _NEGATIVE_SECTION_RE = re.compile(
     r"^[ \t]*#{1,6}[ \t]*negative\s+cases[ \t]*$(?P<body>.*?)(?=^[ \t]*#{1,6}[ \t]|\Z)",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+# ``## Oracle`` -- the details the contract says decide pass/fail. Gated as
+# ``OR<n>``: the question is whether the prompts *determine* the detail, since a
+# detail the contract calls load-bearing but the prompts leave open is a hole.
+_ORACLE_SECTION_RE = re.compile(
+    r"^[ \t]*#{1,6}[ \t]*oracle[ \t]*$(?P<body>.*?)(?=^[ \t]*#{1,6}[ \t]|\Z)",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+# ``## Non-Oracle`` -- details the contract declares irrelevant. NOT criteria:
+# they are guards handed to the judge, which must never fail a criterion on
+# these grounds. This attacks the legacy detector's noise structurally rather
+# than by asking a model not to nitpick.
+_NON_ORACLE_SECTION_RE = re.compile(
+    r"^[ \t]*#{1,6}[ \t]*non[- ]?oracle[ \t]*$(?P<body>.*?)(?=^[ \t]*#{1,6}[ \t]|\Z)",
     re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
 # A criterion starts at ``1. ``/``1) `` or ``- ``/``* ``; continuation lines are
@@ -204,11 +220,31 @@ def parse_acceptance_criteria(contract_text: str) -> List[AcceptanceCriterion]:
     the section holds no list items, which is the caller's signal to fall back
     to the legacy open-ended detector.
     """
-    # Only ``## Acceptance Criteria``. A contract's ``## Negative Cases`` are
-    # equally part of its oracle, and gating them measurably catches real gaps
-    # -- but that is a verification concern that belongs in a command which owns
-    # verification, not in a mode of the change detector. Tracked separately.
-    return _parse_section(contract_text, _CRITERIA_SECTION_RE, prefix="AC")
+    # All three checkable families. Gating acceptance criteria alone passes a
+    # prompt set with a real contract gap: measured on `story__pdd_bug`, the
+    # prompts satisfy every AC while satisfying no requirement to reject a
+    # non-issue GitHub URL -- which the contract states only as a negative case.
+    return (
+        _parse_section(contract_text, _CRITERIA_SECTION_RE, prefix="AC")
+        + _parse_section(contract_text, _NEGATIVE_SECTION_RE, prefix="NC")
+        + _parse_section(contract_text, _ORACLE_SECTION_RE, prefix="OR")
+    )
+
+
+def parse_non_oracle_guards(contract_text: str) -> List[str]:
+    """Return the ``## Non-Oracle`` bullets: details that must never fail a story.
+
+    Handed to the evaluator as prohibitions rather than judged. The contract
+    already names what it considers irrelevant -- wording, private helper names,
+    styling -- so the judge can be constrained by the story's own declaration
+    instead of by generic "do not nitpick" instructions.
+    """
+    return [
+        criterion.text
+        for criterion in _parse_section(
+            contract_text, _NON_ORACLE_SECTION_RE, prefix="XX"
+        )
+    ]
 
 
 def _parse_section(
@@ -383,8 +419,13 @@ def evaluate_acceptance_criteria(
     temperature: float = 0.0,
     time: Optional[float] = DEFAULT_TIME,
     verbose: bool = False,
+    guards: Sequence[str] = (),
 ) -> CriteriaEvaluation:
-    """Classify every acceptance criterion against the linked prompts.
+    """Classify every contract criterion against the linked prompts.
+
+    ``guards`` are the contract's ``## Non-Oracle`` bullets -- details it
+    declares irrelevant. They are passed to the model as prohibitions so a
+    verdict cannot rest on them.
 
     Raises ``StoryCriteriaError`` when the template is missing or the model
     returns an unusable shape -- a malformed response is a failure to evaluate,
@@ -401,7 +442,7 @@ def evaluate_acceptance_criteria(
         template,
         recursive=False,
         double_curly_brackets=True,
-        exclude=["PROMPT_LIST", "STORY_CONTENT", "CRITERIA_LIST"],
+        exclude=["PROMPT_LIST", "STORY_CONTENT", "CRITERIA_LIST", "NON_ORACLE_LIST"],
     )
 
     response = llm_invoke(
@@ -415,6 +456,7 @@ def evaluate_acceptance_criteria(
                 {"CRITERION_ID": criterion.id, "CRITERION_TEXT": criterion.text}
                 for criterion in criteria
             ],
+            "NON_ORACLE_LIST": list(guards),
         },
         strength=strength,
         temperature=temperature,

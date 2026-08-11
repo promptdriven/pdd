@@ -26,6 +26,7 @@ from .story_criteria import (
     changes_from_verdicts,
     evaluate_acceptance_criteria,
     parse_acceptance_criteria,
+    parse_non_oracle_guards,
 )
 
 
@@ -1103,15 +1104,26 @@ def _resolve_story_criteria(
     than gating on whether a model volunteered suggestions. When neither yields
     criteria the caller falls back to the open-ended ``detect_change`` path.
     """
-    criteria = parse_acceptance_criteria(
-        _story_contract_text(story_path, contract_path)
-    )
+    contract_text = _story_contract_text(story_path, contract_path)
+    criteria = parse_acceptance_criteria(contract_text)
     if criteria:
         return list(criteria), "contract"
     criteria = parse_acceptance_criteria(story_content)
     if criteria:
         return list(criteria), "story"
     return [], ""
+
+
+def _story_non_oracle_guards(
+    story_path: Path,
+    story_content: str,
+    contract_path: Optional[Path] = None,
+) -> List[str]:
+    """Return the contract's ``## Non-Oracle`` bullets, else the story's."""
+    guards = parse_non_oracle_guards(
+        _story_contract_text(story_path, contract_path)
+    )
+    return guards or parse_non_oracle_guards(story_content)
 
 
 def _criteria_diagnostics(evaluation: CriteriaEvaluation) -> List[Dict[str, object]]:
@@ -1897,6 +1909,9 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                     temperature,
                     time,
                     verbose=verbose,
+                    guards=_story_non_oracle_guards(
+                        story_path, story_content, contract_path
+                    ),
                 )
             except StoryCriteriaError as exception:
                 # An unusable evaluator response is a failure to evaluate, not a
