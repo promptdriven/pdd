@@ -171,6 +171,17 @@ _PR2316_STALE_LLM_REISSUE_PHASE_B_STATIONARY_PROFILE_BYTES = (
     _PR2316_STALE_LLM_REISSUE_PHASE_B_PROFILE_BYTES[1],
     _PR2316_STALE_LLM_REISSUE_PHASE_B_PROFILE_BYTES[1],
 )
+
+# The language-validity gate consumes one code-generator prompt transition.
+# Retain prior reconciliations only for its exact policy and profile bytes.
+_CODE_GENERATOR_LANGUAGE_GATE_ROTATION_POLICY_BYTES = (
+    "1792f122b1185e71098ab0e86e95d74c3ea25e99f05fd54125bc2e28c35f3b05",
+    "1792f122b1185e71098ab0e86e95d74c3ea25e99f05fd54125bc2e28c35f3b05",
+)
+_CODE_GENERATOR_LANGUAGE_GATE_PROFILE_BYTES = (
+    "af2bebb4bd797345a809331632d7cd7335af763690a47d65fc43555e84484605",
+    "af2bebb4bd797345a809331632d7cd7335af763690a47d65fc43555e84484605",
+)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
@@ -2934,6 +2945,13 @@ def _load_requirement_transition_authorizations(
             ),
         }
     )
+    code_generator_language_gate_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        == (
+            _CODE_GENERATOR_LANGUAGE_GATE_ROTATION_POLICY_BYTES,
+            _CODE_GENERATOR_LANGUAGE_GATE_PROFILE_BYTES,
+        )
+    )
     temperature_regression_state = (
         exact_pr2316_phase_a_reissue
         or exact_pr2316_stationary_reissue
@@ -2965,7 +2983,10 @@ def _load_requirement_transition_authorizations(
         )
     )
     historical_composed_state = (
-        opus_fable_state or sync_rollout_repair_state or temperature_regression_state
+        opus_fable_state
+        or sync_rollout_repair_state
+        or code_generator_language_gate_state
+        or temperature_regression_state
     )
     gemini_36_terra_sol_state = is_pdd_repository and (
         (policy_digests, profile_digests)
@@ -3030,7 +3051,7 @@ def _load_requirement_transition_authorizations(
         authority.update(_GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS)
     if historical_composed_state:
         opus_fable_transitions = _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
-        if exact_pr2316_phase_b_state:
+        if exact_pr2316_phase_b_state or code_generator_language_gate_state:
             # The transition and its exact consumed state retain protected rows
             # for these two identities.  The older Opus/Fable overlay is still
             # required for every other historical identity, but replacing the
@@ -3040,6 +3061,15 @@ def _load_requirement_transition_authorizations(
                 for item in opus_fable_transitions
                 if (item.prompt_path, item.language_id)
                 not in _PR2316_STALE_LLM_REISSUE_TARGET_IDENTITIES
+            )
+        if code_generator_language_gate_state:
+            language_gate_identities = {
+                (PurePosixPath("pdd/prompts/code_generator_main_python.prompt"), "python")
+            }
+            opus_fable_transitions = tuple(
+                item
+                for item in opus_fable_transitions
+                if (item.prompt_path, item.language_id) not in language_gate_identities
             )
         opus_fable_identities = {
             (item.prompt_path, item.language_id)
@@ -3068,7 +3098,11 @@ def _load_requirement_transition_authorizations(
             not in temperature_regression_identities
         ) + temperature_regression_transitions
         authority.update(temperature_regression_transitions)
-    if sync_rollout_repair_state or temperature_regression_state:
+    if (
+        sync_rollout_repair_state
+        or code_generator_language_gate_state
+        or temperature_regression_state
+    ):
         # These retained schema-2 rows describe historical prompt changes.
         # Their identities are already at the exact repaired prompt bytes, so
         # do not re-evaluate them as a live transition at this one state.
