@@ -61,6 +61,15 @@ def test_literal_include_tag_in_prose_does_not_consume_later_markup() -> None:
     assert [item.path for item in references] == ["docs/actual.md"]
 
 
+def test_literal_include_many_tag_in_prose_does_not_consume_later_markup() -> None:
+    text = (
+        "Use `<include-many>` only when several files are needed.\n"
+        "<include>docs/actual.md</include>\n"
+    )
+    references = parse_include_references(text)
+    assert [item.path for item in references] == ["docs/actual.md"]
+
+
 @pytest.mark.timeout(1, func_only=True)
 def test_malformed_include_text_is_bounded() -> None:
     """Unterminated include markup cannot trigger superlinear parser backtracking."""

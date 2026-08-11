@@ -205,6 +205,12 @@ def _parse_xml_includes(text: str) -> list[IncludeReference]:
         start = text.find(tag_name, cursor)
         if start < 0:
             return references
+        # Markdown examples such as ``<include-many>`` are documentation, not
+        # directives.  The dedicated backtick grammar below handles the only
+        # supported backtick include form (````<path>````).
+        if start > 0 and text[start - 1] == "`":
+            cursor = start + len(tag_name)
+            continue
         name_end = start + len(tag_name)
         if not _is_tag_boundary(text, name_end):
             cursor = name_end
@@ -255,6 +261,9 @@ def _parse_include_many(text: str) -> list[IncludeReference]:
         start = text.find(tag_name, cursor)
         if start < 0:
             return references
+        if start > 0 and text[start - 1] == "`":
+            cursor = start + len(tag_name)
+            continue
         name_end = start + len(tag_name)
         if not _is_tag_boundary(text, name_end):
             cursor = name_end
