@@ -50,6 +50,7 @@ local -a _pdd_global_opts
 _pdd_global_opts=(
   '--force[Overwrite existing files without asking for confirmation.]'
   '--strength[Set the strength of the AI model (0.0 to 1.0, default: 0.5)]:strength:(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)'
+  '--model[Override the model for this invocation]:model:_guard'
   '--time[Controls the reasoning allocation for LLM models (0.0 to 1.0, default: 0.25)]:time:(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)'
   '--temperature[Set the temperature of the AI model (default: 0.0)]:temperature:(0.0 0.25 0.5 0.75 1.0)'
   '--verbose[Increase output verbosity for more detailed information.]'
@@ -62,6 +63,9 @@ _pdd_global_opts=(
   '--review-examples[Review and optionally exclude few-shot examples before command execution.]'
   '--local[Run commands locally instead of in the cloud.]'
   '--context[Override automatic .pddrc context]:context-name:_guard'
+  '--keep-core-dumps[Number of core dumps to retain]:count:'
+  '--context-compression[Set global context compression mode]:mode:(off test examples contracts all)'
+  '--compression-fallback[Set behavior when compression fails]:mode:(full error)'
   '--list-contexts[List available .pddrc contexts and exit]'
   '--core-dump[Write a JSON core dump.]'
   '--no-core-dump[Disable JSON core dumps.]'
@@ -486,11 +490,15 @@ _pdd_checkup_simplify() {
 # checkup
 # Usage: pdd [GLOBAL OPTIONS] checkup [OPTIONS]
 _pdd_checkup() {
-  if [[ $words[3] == gate ]]; then
+  local checkup_index
+  for (( checkup_index = 2; checkup_index <= CURRENT; checkup_index++ )); do
+    [[ $words[checkup_index] == checkup ]] && break
+  done
+  if (( checkup_index <= CURRENT )) && [[ ${words[checkup_index + 1]} == gate ]]; then
     _pdd_checkup_gate
     return
   fi
-  if [[ $words[3] == simplify ]]; then
+  if (( checkup_index <= CURRENT )) && [[ ${words[checkup_index + 1]} == simplify ]]; then
     _pdd_checkup_simplify
     return
   fi
@@ -555,7 +563,7 @@ _pdd_find_subcommand() {
           return 0
           ;;
       esac
-      continue
+      return 1
     fi
 
     case "$token" in
@@ -579,6 +587,9 @@ _pdd_find_subcommand() {
         print -r -- "$token"
         return 0
         ;;
+      *)
+        return 1
+        ;;
     esac
   done
 
@@ -594,10 +605,7 @@ _pdd_auth() {
     'token:Print an authentication token'
     'clear-cache:Clear cached authentication state'
   )
-  _arguments -C -s $_pdd_global_opts '1:auth command:->group_command' && return 0
-  case $state in
-    group_command) _describe -t commands 'auth command' commands ;;
-  esac
+  _pdd_group_commands auth 'auth command' commands
 }
 
 _pdd_templates() {
@@ -607,19 +615,13 @@ _pdd_templates() {
     'show:Show a template'
     'copy:Copy a template into the project'
   )
-  _arguments -C -s $_pdd_global_opts '1:templates command:->group_command' && return 0
-  case $state in
-    group_command) _describe -t commands 'templates command' commands ;;
-  esac
+  _pdd_group_commands templates 'templates command' commands
 }
 
 _pdd_contracts() {
   local -a commands
   commands=('check:Run deterministic contract checks')
-  _arguments -C -s $_pdd_global_opts '1:contracts command:->group_command' && return 0
-  case $state in
-    group_command) _describe -t commands 'contracts command' commands ;;
-  esac
+  _pdd_group_commands contracts 'contracts command' commands
 }
 
 _pdd_sessions() {
@@ -629,10 +631,7 @@ _pdd_sessions() {
     'info:Show remote session information'
     'cleanup:Clean up remote sessions'
   )
-  _arguments -C -s $_pdd_global_opts '1:sessions command:->group_command' && return 0
-  case $state in
-    group_command) _describe -t commands 'sessions command' commands ;;
-  esac
+  _pdd_group_commands sessions 'sessions command' commands
 }
 
 _pdd_story() {
@@ -642,10 +641,7 @@ _pdd_story() {
     'list:List user stories'
     'link:Link a user story'
   )
-  _arguments -C -s $_pdd_global_opts '1:story command:->group_command' && return 0
-  case $state in
-    group_command) _describe -t commands 'story command' commands ;;
-  esac
+  _pdd_group_commands story 'story command' commands
 }
 
 _pdd_firecrawl_cache() {
@@ -656,10 +652,20 @@ _pdd_firecrawl_cache() {
     'info:Show cache configuration'
     'check:Check whether a URL is cached'
   )
-  _arguments -C -s $_pdd_global_opts '1:firecrawl-cache command:->group_command' && return 0
-  case $state in
-    group_command) _describe -t commands 'firecrawl-cache command' commands ;;
-  esac
+  _pdd_group_commands firecrawl-cache 'firecrawl-cache command' commands
+}
+
+_pdd_group_commands() {
+  local command=$1 label=$2 array_name=$3 index
+  for (( index = 2; index <= CURRENT; index++ )); do
+    [[ $words[index] == "$command" ]] && break
+  done
+  # In a native completion frame, a trailing space does not add an empty item
+  # to `$words`: CURRENT still points at the group command.  Keep this
+  # relative to the located root command so preceding global options do not
+  # change the group grammar.
+  (( index <= CURRENT )) || return 1
+  _describe -t commands "$label" "$array_name"
 }
 
 _pdd() {

@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
+import pexpect
 import pytest
 
 
@@ -31,28 +32,33 @@ def _resolved_subcommand(*words: str) -> str:
     return result.stdout.strip()
 
 
-def _completion_output(*words: str) -> str:
-    """Run the dispatcher with completion helpers replaced by observable stubs."""
-    result = subprocess.run(
-        [
-            "zsh",
-            "-fc",
-            (
-                'source "$1"; shift; '
-                '_arguments() { print -r -- "arguments:$*"; state=group_command; return 1; }; '
-                '_describe() { local name="${@: -1}"; '
-                'print -r -- "describe:${(j: :)${(P)name}}"; return 0; }; '
-                'words=("$@"); CURRENT=${#words}; curcontext=:completion::; _pdd'
-            ),
-            "zsh",
-            str(COMPLETION),
-            *words,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
+def _native_completion_output(command: str) -> str:
+    """Complete *command* through Zsh's real interactive completion frame.
+
+    Do not replace `_arguments`, `_describe`, or `state`: doing so can hide
+    positional parsing bugs in the completion function itself.
+    """
+    shell = pexpect.spawn(
+        "zsh", ["-f", "-i"], encoding="utf-8", timeout=5, dimensions=(40, 160)
     )
-    return result.stdout
+    try:
+        shell.expect_exact("% ")
+        shell.sendline("PROMPT='PDD_PROMPT> '")
+        # The first match is echoed input; the second is the rendered prompt.
+        shell.expect_exact("PDD_PROMPT> ")
+        shell.expect_exact("PDD_PROMPT> ")
+        shell.sendline(
+            f"autoload -Uz compinit; compinit -D; source {COMPLETION}; compdef _pdd pdd"
+        )
+        shell.expect_exact("PDD_PROMPT> ")
+        shell.send(command)
+        shell.sendcontrol("i")
+        # Accept the line to make Zsh flush its candidates to the PTY.
+        shell.sendline("")
+        shell.expect_exact("PDD_PROMPT> ")
+        return shell.before
+    finally:
+        shell.close(force=True)
 
 
 def test_zsh_completion_resolves_sync_after_local_global_option() -> None:
@@ -73,6 +79,18 @@ def test_zsh_completion_resolves_current_cli_command_after_global_option() -> No
 def test_zsh_completion_does_not_skip_unknown_global_option() -> None:
     """Misspelled options must not dispatch completion for a later command."""
     assert _resolved_subcommand("pdd", "--modle", "claude", "sync") == ""
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        ("pdd", "typo", "sync"),
+        ("pdd", "--", "typo", "sync"),
+    ],
+)
+def test_zsh_completion_stops_at_the_first_invalid_command_token(words: tuple[str, ...]) -> None:
+    """Click treats the first bare token as the command, even after `--`."""
+    assert _resolved_subcommand(*words) == ""
 
 
 @pytest.mark.parametrize(
@@ -129,21 +147,41 @@ def test_zsh_completion_does_not_dispatch_after_eager_global_option(option: str)
 
 
 def test_zsh_completion_dispatches_sync_specific_completion() -> None:
-    """The dispatcher, not just the parser, selects sync completion."""
-    assert "--skip-verify" in _completion_output("pdd", "--local", "sync")
+    """A global option still reaches sync in a real Zsh completion context."""
+    assert "--skip-verify" in _native_completion_output("pdd --local sync --skip-")
+
+
+@pytest.mark.parametrize("prefix", ("--mo", "--context-com"))
+def test_zsh_completion_offers_new_global_options(prefix: str) -> None:
+    """Global option suggestions are tested through `_arguments`, not the scanner."""
+    expected = "--model" if prefix == "--mo" else "--context-compression"
+    assert expected in _native_completion_output(f"pdd {prefix}")
 
 
 @pytest.mark.parametrize(
-    ("group", "command"),
+    ("prefix", "group", "command"),
     [
-        ("auth", "login"),
-        ("templates", "list"),
-        ("contracts", "check"),
-        ("sessions", "cleanup"),
-        ("story", "link"),
-        ("firecrawl-cache", "stats"),
+        ("", "auth", "login"),
+        ("--local ", "auth", "login"),
+        ("", "templates", "list"),
+        ("--local ", "templates", "list"),
+        ("", "contracts", "check"),
+        ("--local ", "contracts", "check"),
+        ("", "sessions", "cleanup"),
+        ("--local ", "sessions", "cleanup"),
+        ("", "story", "link"),
+        ("--local ", "story", "link"),
+        ("", "firecrawl-cache", "stats"),
+        ("--local ", "firecrawl-cache", "stats"),
     ],
 )
-def test_zsh_completion_dispatches_group_subcommands(group: str, command: str) -> None:
-    """Groups reached after a global option offer their registered subcommands."""
-    assert command in _completion_output("pdd", "--local", group)
+def test_zsh_completion_dispatches_group_subcommands(
+    prefix: str, group: str, command: str
+) -> None:
+    """Nested groups work with and without a global option before the root command."""
+    assert command in _native_completion_output(f"pdd {prefix}{group} ")
+
+
+def test_zsh_completion_dispatches_checkup_gate_after_global_option() -> None:
+    """Nested checkup completion is located relative to its resolved command."""
+    assert "--policy" in _native_completion_output("pdd --local checkup gate --po")
