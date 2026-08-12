@@ -48,7 +48,7 @@ def _native_completion_output(command: str) -> str:
         shell.expect_exact("PDD_PROMPT> ")
         shell.expect_exact("PDD_PROMPT> ")
         shell.sendline(
-            f"autoload -Uz compinit; compinit -D; source {COMPLETION}; compdef _pdd pdd"
+            f"autoload -Uz compinit; compinit -D -i; source {COMPLETION}; compdef _pdd pdd"
         )
         shell.expect_exact("PDD_PROMPT> ")
         shell.send(command)
