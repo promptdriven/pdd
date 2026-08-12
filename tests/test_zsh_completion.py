@@ -3,6 +3,7 @@
 from pathlib import Path
 import shutil
 import subprocess
+import time
 
 import pexpect
 import pytest
@@ -41,6 +42,7 @@ def _native_completion_output(command: str) -> str:
     shell = pexpect.spawn(
         "zsh", ["-f", "-i"], encoding="utf-8", timeout=5, dimensions=(40, 160)
     )
+    shell.delaybeforesend = 0.01
     try:
         shell.expect_exact("% ")
         shell.sendline("PROMPT='PDD_PROMPT> '")
@@ -52,11 +54,24 @@ def _native_completion_output(command: str) -> str:
         )
         shell.expect_exact("PDD_PROMPT> ")
         shell.send(command)
+        time.sleep(0.05)
         shell.sendcontrol("i")
-        # Accept the line to make Zsh flush its candidates to the PTY.
-        shell.sendline("")
+        # ZLE renders candidates asynchronously on the PTY.  Drain until it
+        # has been quiet briefly: the first read often contains only the
+        # echoed command, while candidates arrive in a later terminal write.
+        completion_parts: list[str] = []
+        while True:
+            try:
+                completion_parts.append(shell.read_nonblocking(10_000, timeout=0.2))
+            except pexpect.TIMEOUT:
+                break
+        completion_output = "".join(completion_parts)
+        # A unique candidate is inserted into ZLE's buffer rather than printed.
+        # Cancel instead of accepting the buffer: accepting it executes the real
+        # PDD command (which may wait on network or project state).
+        shell.sendcontrol("c")
         shell.expect_exact("PDD_PROMPT> ")
-        return shell.before
+        return completion_output + shell.before
     finally:
         shell.close(force=True)
 
