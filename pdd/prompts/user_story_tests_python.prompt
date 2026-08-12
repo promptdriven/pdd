@@ -66,7 +66,7 @@ precise:
 - The machine-checkable contract is GENERATED from the human Story + the original
   issue and lives at `user_stories/contracts/<slug>.contract.md`. It carries the
   top-level (`##`) sections `## Covers`, `## Context`, `## Acceptance Criteria`,
-  `## Oracle`, `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`,
+  `## Entry Point`, `## Seams`, `## Oracle`, `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`,
   `## Candidate Prompts`, `## Notes` (`_REQUIRED_CONTRACT_SECTIONS`), under a
   `<!-- pdd-story-contract derived-from-story="..." story-hash="..."
   issue-ref="..." -->` header used for sync.
@@ -147,7 +147,8 @@ varies during normal development goes in `## Non-Oracle`.
   such as `<persona>`, `<capability>`, or `<benefit>` (strip a wrapping
   ``` ``` ``` fence first). The contract generator (`_llm_generate_story_contract`)
   accepts only when its output carries the full `_REQUIRED_CONTRACT_SECTIONS` set
-  (`## Covers`, `## Context`, `## Acceptance Criteria`, `## Oracle`,
+  (`## Covers`, `## Context`, `## Acceptance Criteria`, `## Entry Point`,
+  `## Seams`, `## Oracle`,
   `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, `## Candidate Prompts`,
   `## Notes`) and no placeholders. When the LLM is unavailable (no provider key,
   offline, error) OR the output is empty, missing a required section, or
@@ -315,7 +316,8 @@ R2 (MUST NOT): Print the diagnostic block when `quiet` is true.
    - `generate_user_story` writes the human Story file via
      `_llm_generate_story_markdown` (requires `## Story`) and then the contract
      file via `_generate_and_write_contract` / `_llm_generate_story_contract`
-     (requires the `_REQUIRED_CONTRACT_SECTIONS` set incl. `## Candidate Prompts`).
+     (requires the `_REQUIRED_CONTRACT_SECTIONS` set incl. `## Entry Point`,
+     `## Seams`, and `## Candidate Prompts`).
      It returns failure without writing anything when the human story is
      unavailable/invalid; a contract failure is non-blocking.
    - `_llm_generate_story_markdown` takes the resolved issue text/ref (NOT prompt

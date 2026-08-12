@@ -10,6 +10,7 @@ import pytest
 
 from pdd.user_story_tests import (
     _contract_path_for_story,
+    _primary_prompt_interfaces,
     _story_content_hash,
     cache_story_prompt_links,
     discover_prompt_files,
@@ -144,6 +145,22 @@ def test_discover_prompt_files_includes_llm(tmp_path):
     results = discover_prompt_files(str(prompts_dir), include_llm=True)
 
     assert {p.name for p in results} == {"foo_python.prompt", "bar_llm.prompt"}
+
+
+def test_primary_prompt_interfaces_exposes_linked_prompt_interface(tmp_path):
+    prompt = tmp_path / "checkout_python.prompt"
+    prompt.write_text(
+        "<pdd-interface>\n"
+        '{"type": "module", "module": {"functions": '
+        '[{"name": "checkout_total", "signature": "(items)", "returns": "int"}]}}\n'
+        "</pdd-interface>\n",
+        encoding="utf-8",
+    )
+
+    interfaces = _primary_prompt_interfaces([prompt])
+
+    assert "### checkout_python.prompt" in interfaces
+    assert '"checkout_total"' in interfaces
 
 
 def test_discover_story_files_filters_prefix(tmp_path):
@@ -818,6 +835,9 @@ _CONTRACT_MD = (
     "## Context\n\n- `prompts/upload_python.prompt`: CSV upload + summary\n\n"
     "## Acceptance Criteria\n\n"
     "1. Given a valid CSV, when uploaded, then a summary report is shown.\n\n"
+    "## Entry Point\n\n"
+    "- module: upload_app\n- callable: upload_csv\n- args: []\n- kwargs: {}\n\n"
+    "## Seams\n\n- none\n\n"
     "## Oracle\n\n- returned value shape\n\n"
     "## Non-Oracle\n\n- internal helper names\n\n"
     "## Negative Cases\n\n- Rejecting a valid CSV\n\n"
@@ -908,6 +928,9 @@ _CONTEXT_CONTRACT_MD = (
     "then the command exits with code 2.\n"
     "5. Given dynamic tags such as `<shell>` or `<web>` are present, when they are "
     "not expanded, then warning entries are reported without making an LLM call.\n\n"
+    "## Entry Point\n\n"
+    "- module: pdd.commands.context\n- callable: context\n- args: []\n- kwargs: {}\n\n"
+    "## Seams\n\n- none\n\n"
     "## Oracle\n\n"
     "These details matter for pass/fail:\n"
     "- The default output is a usage box with a "
@@ -1277,6 +1300,8 @@ def test_generate_writes_two_files_human_story_and_contract(tmp_path):
     for section in (
         "## Covers",
         "## Acceptance Criteria",
+        "## Entry Point",
+        "## Seams",
         "## Oracle",
         "## Negative Cases",
         "## Candidate Prompts",

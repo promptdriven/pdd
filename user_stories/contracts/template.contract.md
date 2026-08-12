@@ -20,6 +20,18 @@ Describe relevant state, assumptions, fixtures, users, records, external service
 1. Given ..., when ..., then ...
 2. Given ..., when ..., then ...
 
+## Entry Point
+
+- module: <importable module from a linked prompt's pdd-interface>
+- callable: <callable function from that interface>
+- args: []
+- kwargs: {}
+
+## Seams
+
+Optional runtime-boundary patches for deterministic behavioral tests:
+- <dotted.import.path> = <Python literal>
+
 ## Oracle
 
 These details matter for pass/fail:

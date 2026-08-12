@@ -31,6 +31,12 @@
     <primary_prompts>
     {PRIMARY_PROMPTS}
     </primary_prompts>
+
+    % Machine-readable interfaces declared by the prompts already linked to this
+    % Story. Use these as the source of truth for the behavioral test entry point.
+    <primary_prompt_interfaces>
+    {PRIMARY_PROMPT_INTERFACES}
+    </primary_prompt_interfaces>
 </input>
 
 % What the contract must do
@@ -39,6 +45,8 @@
     - Pull concrete, behavior-changing detail from the issue (per-source vs aggregate, `--json`, a `--threshold` exit code, "MUST NOT make an LLM call") into `## Covers`, `## Acceptance Criteria`, and `## Oracle`. Preserve distinctions precisely; do not collapse them into vague wording, and do not broaden a requirement beyond the issue/Story.
     - `## Covers` lists the named requirements/acceptance-criteria the story exercises (`- AC1: <summary>` / `- R1: <summary>`), specific enough that removing that behavior fails validation.
     - `## Acceptance Criteria` are concrete Given/When/Then statements about observable behavior (prefer 2–5).
+    - `## Entry Point` is required. Select an importable module and callable from `<primary_prompt_interfaces>`; do not invent either. Use Python literals for `args` (a list) and `kwargs` (a dict). Choose safe, deterministic arguments that exercise this Story. If the declared interface has no suitable callable, use the most directly relevant module-level callable and explain the limitation in `## Notes`.
+    - `## Seams` is required but may contain only `- none` when no runtime boundary needs patching. Otherwise each bullet must be `dotted.import.path = <Python literal>` and must make the behavioral test deterministic without changing the behavior under test.
     - `## Oracle` lists what decides pass/fail (error type, state transition, presence/absence of an external call, returned value shape). `## Non-Oracle` lists what must NOT matter.
     - `## Negative Cases` lists forbidden outcomes (from MUST NOT / SHALL NOT rules or obviously-wrong behavior).
     - `## Non-Goals` reflects the issue's own non-goals when stated.
@@ -77,6 +85,15 @@
     ## Acceptance Criteria
     1. Given <state>, when <action>, then <observable outcome>.
     2. ...
+
+    ## Entry Point
+    - module: <importable module from primary_prompt_interfaces>
+    - callable: <callable from that module's declared interface>
+    - args: [<Python literals>]
+    - kwargs: {<keyword>: <Python literal>}
+
+    ## Seams
+    - none
 
     ## Oracle
     These details matter for pass/fail:

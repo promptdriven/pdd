@@ -875,6 +875,8 @@ _REQUIRED_CONTRACT_SECTIONS = (
     "## Covers",
     "## Context",
     "## Acceptance Criteria",
+    "## Entry Point",
+    "## Seams",
     "## Oracle",
     "## Non-Oracle",
     "## Negative Cases",
@@ -1121,6 +1123,24 @@ def _prompt_inventory_descriptor(prompt_path: Path) -> str:
     return snippet[:160]
 
 
+def _primary_prompt_interfaces(prompt_paths: Iterable[Path]) -> str:
+    """Return declared PDD interfaces for linked prompts, when available."""
+    interfaces: List[str] = []
+    for prompt_path in _dedupe_prompt_paths(prompt_paths):
+        try:
+            text = prompt_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        match = re.search(
+            r"<pdd-interface>\s*(.*?)\s*</pdd-interface>",
+            text,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if match:
+            interfaces.append(f"### {prompt_path.name}\n{match.group(1).strip()}")
+    return "\n\n".join(interfaces) or "(no declared pdd-interface found)"
+
+
 def _scan_prompt_inventory(
     prompts_dir: Optional[Path],
     *,
@@ -1173,6 +1193,7 @@ def _llm_generate_story_contract(  # pylint: disable=too-many-arguments,too-many
     issue_text: str,
     inventory: List[Tuple[str, str]],
     primary_refs: List[str],
+    primary_interfaces: str,
     strength: float,
     temperature: float,
     time: float,
@@ -1214,6 +1235,7 @@ def _llm_generate_story_contract(  # pylint: disable=too-many-arguments,too-many
             "ISSUE_TEXT",
             "PROMPT_INVENTORY",
             "PRIMARY_PROMPTS",
+            "PRIMARY_PROMPT_INTERFACES",
         ],
     )
     try:
@@ -1225,6 +1247,7 @@ def _llm_generate_story_contract(  # pylint: disable=too-many-arguments,too-many
                 "ISSUE_TEXT": issue_text,
                 "PROMPT_INVENTORY": inventory_block,
                 "PRIMARY_PROMPTS": primary_block,
+                "PRIMARY_PROMPT_INTERFACES": primary_interfaces,
             },
             strength=strength,
             temperature=temperature,
@@ -1294,13 +1317,24 @@ def _generate_and_write_contract(  # pylint: disable=too-many-arguments,too-many
     Returns ``(contract_path, cost, model, error)``. ``contract_path`` is None and
     ``error`` is set when contract generation could not be completed.
     """
+    extra_prompt_paths = list(extra_prompt_paths)
     inventory = _scan_prompt_inventory(prompts_root, extra_paths=extra_prompt_paths)
+    prompt_paths = list(extra_prompt_paths)
+    if prompts_root is not None:
+        prompt_paths.extend(
+            _resolve_prompt_refs_to_paths(
+                primary_refs,
+                discover_prompt_files(str(prompts_root), include_llm=True),
+                prompts_root,
+            )
+        )
     body, cost, model = _llm_generate_story_contract(
         title=title,
         story_text=story_text,
         issue_text=issue_text,
         inventory=inventory,
         primary_refs=primary_refs,
+        primary_interfaces=_primary_prompt_interfaces(prompt_paths),
         strength=strength,
         temperature=temperature,
         time=time,
