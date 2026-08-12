@@ -134,6 +134,10 @@ def _resolve_architecture_prompt_path(filename: str, project_root: Path) -> Path
     else:
         candidates.append(project_root / "prompts" / rel)
         candidates.append(project_root / "pdd" / "prompts" / rel)
+        # Architecture entries occasionally name project-level prompt context
+        # (for example context/python_preamble.prompt).  Preserve that valid
+        # root-relative identity instead of forcing it below a prompts/ tree.
+        candidates.append(project_root / rel)
     for candidate in candidates:
         try:
             resolved = candidate.resolve()

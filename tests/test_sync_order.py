@@ -934,6 +934,39 @@ def test_build_dependency_graph_from_architecture_nested_architecture_file(tmp_p
     assert graph["auth"] == ["log"]
 
 
+def test_build_dependency_graph_from_nested_architecture_uses_ancestor_prompt_root(tmp_path):
+    """A nested architecture file can govern an ancestor project's prompts/."""
+    prompts_dir = tmp_path / "prompts"
+    _write_prompt(prompts_dir, "auth_python.prompt", dependencies=["log_python.prompt"])
+    _write_prompt(prompts_dir, "log_python.prompt")
+    arch_file = tmp_path / "backend" / "functions" / "architecture.json"
+    arch_file.parent.mkdir(parents=True)
+    arch_file.write_text(json.dumps([
+        {"filename": "auth_python.prompt", "dependencies": []},
+        {"filename": "log_python.prompt", "dependencies": []},
+    ]), encoding="utf-8")
+
+    assert sync_order.build_dependency_graph_from_architecture(arch_file)["auth"] == ["log"]
+
+
+def test_architecture_graph_follows_unregistered_declared_dependency(tmp_path):
+    """A stale registry cannot cut off a real prompt dependency chain."""
+    prompts_dir = tmp_path / "prompts"
+    _write_prompt(prompts_dir, "entry_python.prompt", dependencies=["missing_python.prompt"])
+    _write_prompt(prompts_dir, "missing_python.prompt", dependencies=["leaf_python.prompt"])
+    _write_prompt(prompts_dir, "leaf_python.prompt")
+    arch_file = tmp_path / "architecture.json"
+    arch_file.write_text(json.dumps([
+        {"filename": "entry_python.prompt", "dependencies": []},
+        {"filename": "leaf_python.prompt", "dependencies": []},
+    ]), encoding="utf-8")
+
+    graph = sync_order.build_dependency_graph_from_architecture(arch_file)
+
+    assert graph["entry"] == ["missing"]
+    assert graph["missing"] == ["leaf"]
+
+
 def test_build_dependency_graph_from_architecture_missing_or_invalid(tmp_path, mock_logger):
     """Test behavior when architecture file is missing, can't be parsed, or is invalid."""
     missing_file = tmp_path / "missing_architecture.json"

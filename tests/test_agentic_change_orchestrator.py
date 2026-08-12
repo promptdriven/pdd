@@ -10803,3 +10803,19 @@ class TestBuildDependencyContext:
         arch_path = tmp_path / "architecture.json"
         arch_path.write_text(json.dumps([]), encoding="utf-8")
         assert _build_dependency_context(arch_path, quiet=True) == ""
+
+    def test_renders_all_modules_and_dependents_without_truncation(self, tmp_path):
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text("[]", encoding="utf-8")
+        graph = {
+            **{f"dependent_{index:02d}": ["shared"] for index in range(11)},
+            **{f"module_{index:02d}": [f"dependency_{index:02d}"] for index in range(31)},
+        }
+        with patch(
+            "pdd.agentic_change_orchestrator.build_dependency_graph_from_architecture",
+            return_value=graph,
+        ):
+            result = _build_dependency_context(arch_path, quiet=True)
+
+        assert "dependency_30" in result
+        assert "dependent_10" in result

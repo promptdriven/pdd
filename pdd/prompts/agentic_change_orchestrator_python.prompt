@@ -59,9 +59,10 @@ Decorate `run_agentic_change_orchestrator` with `provider_failure_workflow` so d
 11. **Sync Order Generation**: After review loop completes (before Step 13):
     - Import from pdd.sync_order: build_dependency_graph, topological_sort, get_affected_modules, generate_sync_order_script, extract_module_from_include
     - Build dependency graph from prompts_dir = worktree_path / "prompts"
-    - Extract modified modules from files_to_stage using `extract_module_from_include()` on files matching `prompts/*.prompt`
+    - Extract modified modules from files_to_stage using `_architecture_module_key()` on the prompt-relative path, preserving directories and `_LLM.prompt` identity
     - Get affected modules (modified + transitive dependents)
     - If affected modules exist, generate sync_order.sh in both user's CWD and worktree root
+    - Build the post-merge affected-module graph from `architecture.json` using `build_dependency_graph_from_architecture()`, not `build_dependency_graph(prompts_dir)`: this list must use the same declared `<pdd-dependency>` semantics as Step 6. Map changed prompt paths through `_architecture_module_key()` so path-qualified and `_LLM.prompt` modules remain distinct.
     - Generate clean `pdd sync X` command list for sync_order_list (NOT the full bash script with shebang/set -e)
     - Add to context: sync_order_script (path or ""), sync_order_list (newline-separated commands or "No modules to sync")
     - Ensure sync_order.sh is added to changed_files for Step 13 to commit
@@ -326,7 +327,7 @@ Before Step 6 runs, build a formatted module-dependency summary so the step can 
 Helper: `_build_dependency_context(architecture_path: Path, quiet: bool = False) -> str`:
 - Build dependency graph using `build_dependency_graph_from_architecture(architecture_path)`
 - Compute reverse dependencies (module → modules that depend on it)
-- Format as "## Module Dependency Graph" with sections showing modules sorted by number of dependents (limit top 30, max 10 dependents shown per module)
+- Format as "## Module Dependency Graph" with modules sorted deterministically by descending number of dependents, then module name. Render every module with dependents and every dependent; Step 6 must never silently truncate declared dependency context.
 - Add to `context["dependency_context"]`
 - Return empty string if architecture_path doesn't exist or on any error
 

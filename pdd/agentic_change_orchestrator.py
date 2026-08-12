@@ -43,12 +43,11 @@ from pdd.agentic_common import (
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.sync_order import (
-    build_dependency_graph,
     build_dependency_graph_from_architecture,
+    _architecture_module_key,
     topological_sort,
     get_affected_modules,
     generate_sync_order_script,
-    extract_module_from_include,
     discover_associated_documents,
 )
 from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context
@@ -2280,14 +2279,13 @@ def _build_dependency_context(architecture_path: Path, quiet: bool = False) -> s
         if modules_with_dependents:
             lines.append("### Modules and their dependents (modules that will be affected if changed):")
             lines.append("")
-            # Sort by number of dependents (most impactful first)
+            # Render the complete graph.  This context is the workflow's only
+            # dependency source of truth; truncating it silently omits modules
+            # that Step 6 must consider.
             for module in sorted(modules_with_dependents.keys(),
-                               key=lambda m: len(modules_with_dependents[m]),
-                               reverse=True)[:30]:  # Limit to top 30
+                               key=lambda m: (-len(modules_with_dependents[m]), m)):
                 dependents = modules_with_dependents[module]
-                lines.append(f"- **{module}** → affects: {', '.join(sorted(dependents)[:10])}")
-                if len(dependents) > 10:
-                    lines.append(f"  (and {len(dependents) - 10} more)")
+                lines.append(f"- **{module}** → affects: {', '.join(sorted(dependents))}")
 
         lines.append("")
         lines.append(f"Total modules tracked: {len(graph)}")
@@ -3667,18 +3665,25 @@ def run_agentic_change_orchestrator(
     modified_modules: Set[str] = set()
     for file_path in file_list:
         if file_path.endswith(".prompt") and ("/prompts/" in file_path or file_path.startswith("prompts/")):
-            module = extract_module_from_include(file_path)
+            normalized_path = file_path.replace("\\", "/")
+            prompt_marker = "/prompts/"
+            prompt_filename = (
+                normalized_path.split(prompt_marker, 1)[1]
+                if prompt_marker in normalized_path
+                else normalized_path[len("prompts/"):]
+            )
+            module = _architecture_module_key(prompt_filename)
             if module: modified_modules.add(module)
 
     if worktree_path:
-        prompts_dir = worktree_path / "prompts"
-        if prompts_dir.exists() and modified_modules:
+        architecture_path = worktree_path / "architecture.json"
+        if architecture_path.exists() and modified_modules:
             try:
-                graph = build_dependency_graph(prompts_dir)
+                graph = build_dependency_graph_from_architecture(architecture_path)
                 sorted_modules, cycles = topological_sort(graph)
                 if cycles and not quiet:
                     console.print(f"[yellow]Warning: Circular dependencies detected: {cycles}[/yellow]")
-                cyclic_modules = set(cycles[0]) if cycles else set()
+                cyclic_modules = {module for cycle in cycles for module in cycle}
                 affected = get_affected_modules(sorted_modules, modified_modules, graph, cyclic_modules)
                 if affected:
                     # Generate clean command list for PR body (not full bash script)

@@ -200,8 +200,9 @@ _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES = (
     _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
     _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
 )
-# PR #2376 changes only the dependency-orchestrator and sync-order prompt
-# contracts. Bind the two profile rows to the exact post-#2377 stationary
+# PR #2376 changes the dependency-orchestrator, sync-order, and architecture
+# include-validation prompt contracts. Bind the three profile rows to the exact
+# post-#2377 stationary
 # policy/profile pair, so this acknowledgement cannot authorize any other
 # prompt change.
 _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES = (
@@ -210,7 +211,7 @@ _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES = (
 )
 _PR2376_DEPENDENCY_FIX_PROFILE_BYTES = (
     _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES[1],
-    "2bd747bbd30cf1e4242e3a91692f421dee9a023df51c56fb0ac18500764243db",
+    "533506e436cba8c7b79e9241258199ed120a55e809c2a4efef6649bf1e576a72",
 )
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
@@ -1029,7 +1030,7 @@ _PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS = (
         "pdd/prompts/agentic_change_orchestrator_python.prompt",
         "python",
         "a5f609c2aa21b86d5b1bdb1ef7b36207c40326fc85b617c8b7d7b99dc5b23b9c",
-        "3afe3ea26d5ea37134d923e9428d0820e13eda7145ee0a1a04728d60108a4347",
+        "35bc67657d714841a3001883a0f86b26fa65095a07a2c3032d7e271e74a1c2fc",
         _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[0],
         _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
     ),
@@ -1037,13 +1038,21 @@ _PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS = (
         "pdd/prompts/sync_order_python.prompt",
         "python",
         "4f3169caa3f9ef7429adfad3aea0514d4b7cba7ef581f7cd254064446d591df6",
-        "9bb0a505ad38e88a1b025c52f666dea462a58b7a41a60330e7835261d77c619a",
+        "9f37ef643369ddcda4e054b2ef74ca3683d487920e892c10ac6c2dc98a5983f2",
         _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[0],
         _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
     ),
 )
 
 _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/architecture_include_validation_python.prompt",
+        "python",
+        "fe8ce6cdcde2f7dc0ad49f1dfb90f81b505812a87afcdca57a27e12848d9d59c",
+        "e280e55b009da1afc34f31bfc8410518d17e70b2cd794170bcf8960c48214411",
+        _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[0],
+        _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+    ),
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_checkup_python.prompt",
         "python",

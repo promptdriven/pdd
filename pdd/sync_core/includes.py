@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import posixpath
+import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import PurePosixPath
@@ -195,7 +196,22 @@ def _is_tag_boundary(text: str, index: int) -> bool:
     return index == len(text) or text[index].isspace() or text[index] in ">/"
 
 
-def _parse_xml_includes(text: str) -> list[IncludeReference]:
+def _markdown_fence_spans(text: str) -> tuple[tuple[int, int], ...]:
+    """Return fenced-code spans, excluding the legacy ````<path>```` include form."""
+    spans: list[tuple[int, int]] = []
+    fence_re = re.compile(r"(?m)^[ \t]*([`~]{3,})[^\n]*\n[\s\S]*?\n[ \t]*\1[ \t]*(?:\n|$)")
+    for match in fence_re.finditer(text):
+        if match.group(1).startswith("`") and text[match.start():match.end()].startswith("```<"):
+            continue
+        spans.append((match.start(), match.end()))
+    return tuple(spans)
+
+
+def _in_fenced_span(position: int, spans: tuple[tuple[int, int], ...]) -> bool:
+    return any(start <= position < end for start, end in spans)
+
+
+def _parse_xml_includes(text: str, fence_spans: tuple[tuple[int, int], ...] = ()) -> list[IncludeReference]:
     """Scan ``<include>`` markup without regex backtracking over user text."""
     references: list[IncludeReference] = []
     cursor = 0
@@ -205,6 +221,9 @@ def _parse_xml_includes(text: str) -> list[IncludeReference]:
         start = text.find(tag_name, cursor)
         if start < 0:
             return references
+        if _in_fenced_span(start, fence_spans):
+            cursor = start + len(tag_name)
+            continue
         # Markdown examples such as ``<include-many>`` are documentation, not
         # directives.  The dedicated backtick grammar below handles the only
         # supported backtick include form (````<path>````).
@@ -251,7 +270,7 @@ def _parse_xml_includes(text: str) -> list[IncludeReference]:
             )
 
 
-def _parse_include_many(text: str) -> list[IncludeReference]:
+def _parse_include_many(text: str, fence_spans: tuple[tuple[int, int], ...] = ()) -> list[IncludeReference]:
     """Scan ``<include-many>`` markup with a single forward cursor."""
     references: list[IncludeReference] = []
     cursor = 0
@@ -261,6 +280,9 @@ def _parse_include_many(text: str) -> list[IncludeReference]:
         start = text.find(tag_name, cursor)
         if start < 0:
             return references
+        if _in_fenced_span(start, fence_spans):
+            cursor = start + len(tag_name)
+            continue
         if start > 0 and text[start - 1] == "`":
             cursor = start + len(tag_name)
             continue
@@ -316,8 +338,9 @@ def parse_include_references(text: str) -> tuple[IncludeReference, ...]:
     """Parse includes once, preserving duplicates and deterministic source order."""
     if not text:
         return ()
-    references = _parse_xml_includes(text)
-    references.extend(_parse_include_many(text))
+    fence_spans = _markdown_fence_spans(text)
+    references = _parse_xml_includes(text, fence_spans)
+    references.extend(_parse_include_many(text, fence_spans))
     references.extend(_parse_backtick_includes(text))
     return tuple(sorted(references))
 

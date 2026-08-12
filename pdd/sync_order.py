@@ -151,6 +151,17 @@ def _architecture_module_key(filename: str) -> Optional[str]:
     return f"{parent.as_posix()}/{clean_stem}"
 
 
+def _architecture_project_root(architecture_path: Path) -> Path:
+    """Find the nearest ancestor that owns prompt sources for an architecture file."""
+    current = architecture_path.parent.resolve()
+    while True:
+        if (current / "prompts").is_dir() or (current / "pdd" / "prompts").is_dir():
+            return current
+        if current.parent == current:
+            return architecture_path.parent.resolve()
+        current = current.parent
+
+
 def build_dependency_graph(prompts_dir: Path) -> Dict[str, List[str]]:
     """
     Scans prompt files and builds a dependency graph based on includes.
@@ -241,15 +252,23 @@ def build_dependency_graph_from_architecture(architecture_path: Path) -> Dict[st
         logger.warning(f"Could not import architecture_sync helpers: {exc}")
         return {}
 
-    project_root = architecture_path.parent
+    # Nested architecture files may describe modules from an ancestor project's
+    # prompts/ directory.  Use the nearest such prompt root, rather than
+    # assuming prompts live beside architecture.json.
+    project_root = _architecture_project_root(architecture_path)
     dependency_graph: Dict[str, Set[str]] = {}
 
-    for entry in arch_entries:
-        if not isinstance(entry, dict):
+    filenames_to_read = deque(
+        entry.get("filename")
+        for entry in arch_entries
+        if isinstance(entry, dict) and isinstance(entry.get("filename"), str)
+    )
+    read_filenames: Set[str] = set()
+    while filenames_to_read:
+        filename = filenames_to_read.popleft()
+        if filename in read_filenames:
             continue
-        filename = entry.get("filename")
-        if not filename:
-            continue
+        read_filenames.add(filename)
 
         current_key = _architecture_module_key(filename)
         if not current_key:
@@ -278,6 +297,11 @@ def build_dependency_graph_from_architecture(architecture_path: Path) -> Dict[st
             dependency_graph[current_key].add(dep_key)
             if dep_key not in dependency_graph:
                 dependency_graph[dep_key] = set()
+            # Architecture registries can lag a prompt's declared dependency.
+            # Follow the on-disk prompt when present so a missing registry row
+            # cannot silently sever its transitive declared-dependency edges.
+            if dep_filename not in read_filenames:
+                filenames_to_read.append(dep_filename)
 
     return {k: sorted(v) for k, v in dependency_graph.items()}
 

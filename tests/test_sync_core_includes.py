@@ -70,6 +70,19 @@ def test_literal_include_many_tag_in_prose_does_not_consume_later_markup() -> No
     assert [item.path for item in references] == ["docs/actual.md"]
 
 
+@pytest.mark.parametrize("fence", ("```", "~~~"))
+def test_include_tags_in_fenced_examples_are_not_directives(fence: str) -> None:
+    text = (
+        f"{fence}xml\n"
+        "<include>docs/example-only.md</include>\n"
+        "<include-many>docs/one.md, docs/two.md</include-many>\n"
+        f"{fence}\n"
+        "<include>docs/actual.md</include>\n"
+    )
+    references = parse_include_references(text)
+    assert [item.path for item in references] == ["docs/actual.md"]
+
+
 @pytest.mark.timeout(1, func_only=True)
 def test_malformed_include_text_is_bounded() -> None:
     """Unterminated include markup cannot trigger superlinear parser backtracking."""
