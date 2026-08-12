@@ -200,3 +200,10 @@ def test_zsh_completion_dispatches_group_subcommands(
 def test_zsh_completion_dispatches_checkup_gate_after_global_option() -> None:
     """Nested checkup completion is located relative to its resolved command."""
     assert "--policy" in _native_completion_output("pdd --local checkup gate --po")
+
+
+@pytest.mark.parametrize("option", ("--model", "--context"))
+def test_zsh_completion_ignores_command_named_global_option_values(option: str) -> None:
+    """A global option value may equal `checkup` without changing its position."""
+    command = f"pdd {option} checkup checkup gate --po"
+    assert "--policy" in _native_completion_output(command)

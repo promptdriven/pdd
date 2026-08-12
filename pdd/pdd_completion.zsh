@@ -490,10 +490,7 @@ _pdd_checkup_simplify() {
 # checkup
 # Usage: pdd [GLOBAL OPTIONS] checkup [OPTIONS]
 _pdd_checkup() {
-  local checkup_index
-  for (( checkup_index = 2; checkup_index <= CURRENT; checkup_index++ )); do
-    [[ $words[checkup_index] == checkup ]] && break
-  done
+  local checkup_index=$1
   if (( checkup_index <= CURRENT )) && [[ ${words[checkup_index + 1]} == gate ]]; then
     _pdd_checkup_gate
     return
@@ -545,12 +542,15 @@ _pdd_checkup() {
 ##
 # Main PDD completion dispatcher
 ##
-# Return the first PDD subcommand in the current invocation.  Global options
-# are valid before a command, so `$words[2]` cannot be assumed to be one.
-_pdd_find_subcommand() {
-  local token expect_value=0 options_ended=0
+# Resolve the first PDD subcommand and its absolute index. Global options are
+# valid before a command, so `$words[2]` cannot be assumed to be one. The
+# caller receives `<index>:<command>` in REPLY.
+_pdd_resolve_subcommand() {
+  local token index expect_value=0 options_ended=0
+  REPLY=
 
-  for token in "${(@)words[2,CURRENT]}"; do
+  for (( index = 2; index <= CURRENT; index++ )); do
+    token=$words[index]
     if (( expect_value )); then
       expect_value=0
       continue
@@ -559,7 +559,7 @@ _pdd_find_subcommand() {
     if (( options_ended )); then
       case "$token" in
         generate|example|test|preprocess|fix|split|change|update|detect|conflicts|crash|trace|bug|auto-deps|verify|sync|sync-architecture|checkup|contracts|extracts|report-core|replay|context|which|reconcile|install-hooks|certify|recover|baseline|validate|templates|connect|auth|sessions|firecrawl-cache|story|setup|install_completion|pytest-output)
-          print -r -- "$token"
+          REPLY="$index:$token"
           return 0
           ;;
       esac
@@ -584,7 +584,7 @@ _pdd_find_subcommand() {
         return 1
         ;;
       generate|example|test|preprocess|fix|split|change|update|detect|conflicts|crash|trace|bug|auto-deps|verify|sync|sync-architecture|checkup|contracts|extracts|report-core|replay|context|which|reconcile|install-hooks|certify|recover|baseline|validate|templates|connect|auth|sessions|firecrawl-cache|story|setup|install_completion|pytest-output)
-        print -r -- "$token"
+        REPLY="$index:$token"
         return 0
         ;;
       *)
@@ -594,6 +594,12 @@ _pdd_find_subcommand() {
   done
 
   return 1
+}
+
+# Return the first PDD subcommand for callers that only need its name.
+_pdd_find_subcommand() {
+  _pdd_resolve_subcommand || return 1
+  print -r -- "${REPLY#*:}"
 }
 
 _pdd_auth() {
@@ -717,7 +723,12 @@ _pdd() {
     'pytest-output:Run pytest and capture structured output'
   )
 
-  pdd_command=$(_pdd_find_subcommand)
+  local pdd_command_index
+  _pdd_resolve_subcommand
+  if [[ -n "$REPLY" ]]; then
+    pdd_command_index=${REPLY%%:*}
+    pdd_command=${REPLY#*:}
+  fi
 
   # If no subcommand has been entered, offer global options and subcommands.
   if [[ -z "$pdd_command" ]]; then
@@ -780,7 +791,7 @@ _pdd() {
       _pdd_sync
       ;;
     checkup)
-      _pdd_checkup
+      _pdd_checkup "$pdd_command_index"
       ;;
     auth)
       _pdd_auth
