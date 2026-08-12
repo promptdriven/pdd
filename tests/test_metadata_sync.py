@@ -770,22 +770,43 @@ def test_subdir_prompt_tag_lookup_uses_real_arch_shape(tmp_path: Path) -> None:
     assert entry.get("filename") == "subpkg/demo_python.prompt"
 
 
-def test_subdir_prompt_without_arch_entry_is_skipped_not_failed(tmp_path: Path) -> None:
-    """A subdir prompt that has no architecture entry (unregistered module)
-    must report architecture as `skipped`, not `failed`, so fingerprint is
-    written and CI auto-heal does not revert the prompt."""
+def test_subdir_prompt_without_arch_entry_bootstraps_metadata(tmp_path: Path) -> None:
+    """A new nested prompt gains minimal tags and a path-aware registry row."""
     ws = _make_subdir_workspace(
         tmp_path, arch_filename="subpkg/demo_python.prompt", register_in_arch=False
     )
     result = run_metadata_sync(
-        ws["prompt_path"], dry_run=True, architecture_path=ws["arch_path"]
+        ws["prompt_path"], dry_run=False, architecture_path=ws["arch_path"]
     )
-    assert result.stages["architecture"].status == "skipped"
-    assert "No architecture entry found" in (result.stages["architecture"].reason or "")
-    # Fingerprint must NOT be gated off by a skipped (vs failed) arch stage.
-    assert result.stages["fingerprint"].status == "dry_run"
+    prompt_text = ws["prompt_path"].read_text(encoding="utf-8")
+    architecture = json.loads(ws["arch_path"].read_text(encoding="utf-8"))
+    assert "<pdd-reason>Auto-registered module: subpkg/demo_python.prompt</pdd-reason>" in prompt_text
+    assert "<pdd-interface>" in prompt_text
+    assert result.stages["tags"].status == "ok"
+    assert result.stages["architecture"].status == "ok"
+    assert any(entry["filename"] == "subpkg/demo_python.prompt" for entry in architecture)
+    assert result.stages["fingerprint"].status == "ok"
     assert result.failing_stage is None
     assert result.ok is True
+
+
+def test_new_nested_prompt_bootstrap_dry_run_does_not_write(tmp_path: Path) -> None:
+    """Dry-run previews registration without modifying prompt or architecture."""
+    ws = _make_subdir_workspace(
+        tmp_path, arch_filename="subpkg/demo_python.prompt", register_in_arch=False
+    )
+    before_prompt = ws["prompt_path"].read_text(encoding="utf-8")
+    before_architecture = ws["arch_path"].read_text(encoding="utf-8")
+
+    result = run_metadata_sync(
+        ws["prompt_path"], dry_run=True, architecture_path=ws["arch_path"]
+    )
+
+    assert ws["prompt_path"].read_text(encoding="utf-8") == before_prompt
+    assert ws["arch_path"].read_text(encoding="utf-8") == before_architecture
+    assert result.stages["tags"].status == "dry_run"
+    assert result.stages["architecture"].status == "dry_run"
+    assert "would register and sync subpkg/demo_python.prompt" in (result.stages["architecture"].detail or "")
 
 
 def test_subdir_prompt_basename_fallback_when_outside_prompts_dir(tmp_path: Path) -> None:
