@@ -121,6 +121,73 @@ These are observable, testable in isolation, and have knowable interfaces — ex
 
 Weak-fit code isn't permanently off-limits — promote it to a PDD module once it has seams and tests and the contract becomes knowable. The discipline: **convert what's worth verifying repeatedly; leave the rest.** The [Brownfield Adoption](#brownfield-adoption) chapter applies this boundary to picking first modules; [Hybrid Agent Workflow](#using-pdd-with-your-coding-agent) applies it to choosing between PDD and your agent.
 
+### Mandatory Architecture-Readiness Gate
+
+Before authoring or approving implementation prompts, run an architecture-readiness
+review when a change has **any** of these triggers:
+
+- one user story changes a lifecycle, state machine, or side-effect ordering across
+  two or more dev units;
+- brownfield behavior crosses storage, job/worker, provider, API, or UI boundaries;
+- a shared adapter or coordinator must serve modules with different execution
+  topologies;
+- a requirement adds durability, reconnection, cancellation, replacement,
+  idempotency, or asynchronous progress that the current system may not support; or
+- the authoritative state owner or a required capability is not yet known.
+
+This is a **stop gate**, not an optional prompt section. Do not proceed to broad
+generation merely because each individual prompt sounds testable. First record the
+following architecture contract in an authoritative shared prompt, included design
+contract, or other versioned source that every affected prompt can use:
+
+1. **Shared vocabulary and lifecycle.** Define each state, allowed transition,
+   terminal outcome, and recovery/re-entry rule. Words such as "accepted",
+   "started", "active", and "completed" need distinct observable meanings when
+   the distinction affects behavior.
+2. **Typed seam.** Declare the shared operations, inputs, outputs, and failure
+   outcomes. Saying that a route "uses an adapter" is not a seam unless the
+   adapter's public contract is supplied.
+3. **Authority and capabilities.** Name the authority for the accepted input
+   snapshot, each state transition, side-effect admission, progress, completion,
+   and recovery. Record whether each archetype can cancel, replace, retry, resume,
+   or prove that work did not start; mark unsupported capabilities explicitly.
+4. **Observable ordering invariants.** State only ordering that affects
+   correctness, such as durable admission before an external side effect or
+   validation before a provider call.
+5. **Usable dependency context.** Supply contract-critical interfaces with
+   `<include mode="interface">`, a stable contract document, or a vetted example.
+   `<pdd-dependency>` records architecture metadata; it does not by itself give a
+   generator the dependency contract.
+6. **Module/archetype feasibility matrix.** For each affected module, or for each
+   genuinely equivalent archetype, record the current topology, input/state
+   authority, start/completion evidence, progress/result channel, side effects,
+   recovery/replacement capability, and any contract gap. Do not assume one generic
+   wrapper makes heterogeneous modules equivalent.
+7. **Verification mold.** Establish baseline characterization tests for existing
+   behavior, behavioral evidence for every changed rule, negative tests for every
+   forbidden side effect or premature call, and cross-module tests for important
+   handoffs and transitions.
+
+A compact matrix is enough; its purpose is to expose unsupported assumptions:
+
+| Module / archetype | Current topology | Input/state authority | Start/completion evidence | Progress/result channel | Side effects | Recovery/replacement | Contract gaps |
+|---|---|---|---|---|---|---|---|
+| `<unit or archetype>` | `<sync, worker, provider, ...>` | `<authority>` | `<observable proof>` | `<channel or none>` | `<allowed effects>` | `<supported or unsupported>` | `<decision needed or none>` |
+
+If the matrix exposes an unknown seam, hidden coupling, or a capability that the
+current topology cannot provide, classify the work as weak-fit and pause production
+prompt generation. Run a bounded feasibility spike or make a conventional
+architecture change to establish the seam and characterization tests. Promote the
+work back to PDD only when the interface, lifecycle, capability ownership, and test
+oracle are knowable. A synchronous request path, for example, cannot be assumed to
+satisfy a durable asynchronous lifecycle without an explicit architecture decision.
+
+This gate does **not** conflict with "no implementation steps." Architecture-level
+interfaces, lifecycle vocabulary, state authority, capability boundaries, observable
+ordering, and test oracles are required intent. Private helper names, internal class
+layout, storage paths, framework primitives, and non-observable algorithms remain
+implementation details unless they are themselves a public compatibility contract.
+
 ---
 
 ## The PDD Mental Model
@@ -716,6 +783,7 @@ Include an optional section only when its trigger fires. If no trigger fires, om
 | `<waivers>` | A high-risk rule is intentionally unchecked, with approver and expiry |
 | `<coverage>` | Production-critical module; story files remain the primary source of truth |
 | `<deliverables>` | The expected artifact is non-obvious |
+| Architecture-readiness record | A high-risk cross-module or brownfield trigger fires; complete the [mandatory gate](#mandatory-architecture-readiness-gate) before implementation prompts |
 | **Instructions** | Default generation behavior needs overriding |
 
 ### What NOT to Include
@@ -2237,6 +2305,19 @@ This classification prevents the "test oracle problem" - where tests generated f
 
 Before merging a prompt change, check the contract, story, test, context, and evidence surfaces together.
 
+### Architecture Readiness
+
+For every change that triggers the [mandatory architecture-readiness gate](#mandatory-architecture-readiness-gate):
+
+- [ ] Is the shared typed seam actually declared, or does a requirement merely delegate to an undefined "adapter," "manager," "coordinator," or "service"?
+- [ ] Are lifecycle terms and transition authorities defined precisely enough that a test can distinguish them?
+- [ ] Does the current topology provide every required durability, progress, cancellation, replacement, retry, and recovery capability? If not, is there an explicit architecture decision or feasibility spike?
+- [ ] Does a module/archetype matrix show how heterogeneous units satisfy the contract instead of assuming one wrapper fits all?
+- [ ] Does every contract-critical `<pdd-dependency>` also have usable included interface/context where generation needs it?
+- [ ] Are authoritative input/state owners and observable side-effect ordering unambiguous?
+- [ ] Do characterization, behavioral, negative, and cross-module handoff tests exist before broad implementation begins?
+- [ ] If any answer is unknown, has prompt generation stopped until the seam and oracle are established?
+
 ### Contract Quality
 
 - [ ] Does every important behavior have a contract rule?
@@ -2423,6 +2504,7 @@ flowchart LR
 - [ ] Dependencies included (if external or critical)
 - [ ] High-risk MUST/MUST NOT rules have stable IDs
 - [ ] Ambiguous terms are defined in Vocabulary
+- [ ] If an architecture-readiness trigger fires, the shared contract, archetype matrix, feasibility decisions, and minimum mold gate are complete
 
 ### For Established Modules
 - [ ] Tests exist for known edge cases
@@ -2504,6 +2586,11 @@ Weak-fit modules aren't permanently off-limits — but convert them only after y
 ---
 
 ## The Recipe
+
+For a behavior change spanning multiple brownfield modules, complete the
+[mandatory architecture-readiness gate](#mandatory-architecture-readiness-gate)
+before applying this recipe module by module. Characterizing isolated modules is
+not enough when correctness depends on a shared lifecycle or handoff.
 
 ### 1. Pick a high-churn module
 
