@@ -127,6 +127,7 @@ dev = [
     "pytest-mock",
     "pytest-asyncio",
     "pytest-timeout",
+    "pexpect>=4.9",
     "build",
     "twine"
 ]

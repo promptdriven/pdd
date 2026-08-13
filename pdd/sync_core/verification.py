@@ -182,6 +182,24 @@ _CODE_GENERATOR_LANGUAGE_GATE_PROFILE_BYTES = (
     "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
     "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
 )
+# Issue #2377 lets global options precede a subcommand in the Zsh completion
+# dispatcher, moving `pdd/prompts/pdd_completion_zsh.prompt` and its profile row
+# together.  The rotation policy is untouched, so only the profile file rotates.
+# Recognizing this exact pair keeps the language-gate base reconciliations
+# applicable across that rotation; it adds no reusable authority of its own.
+_ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES = (
+    _CODE_GENERATOR_LANGUAGE_GATE_ROTATION_POLICY_BYTES[1],
+    _CODE_GENERATOR_LANGUAGE_GATE_ROTATION_POLICY_BYTES[1],
+)
+_ZSH_GLOBAL_OPTION_PROFILE_BYTES = (
+    _CODE_GENERATOR_LANGUAGE_GATE_PROFILE_BYTES[1],
+    "0fcb1bb324022fbda46424be9738f3e2d8fe3f3440eb6d72fff7b5fd8411c5c1",
+)
+# The candidate is also evaluated against itself once the rotation has landed.
+_ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES = (
+    _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
+    _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
+)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
@@ -977,6 +995,20 @@ _PDD_1875_COMPOSED_REQUIREMENT_TRANSITIONS = (
         "e0f5f0173e29379d84dd34934b3221b5ae0f5c9c7b745ea35cb73699cb6162b1",
         _PDD_1875_COMPOSED_PROFILE_BYTES[0],
         _PDD_1875_COMPOSED_PROFILE_BYTES[1],
+    ),
+)
+
+# Issue #2377's single prompt transition, bound to the exact profile bytes that
+# consume it.  It supersedes the Terra/Sol row for this one identity and grants
+# no reusable transition authority.
+_ZSH_GLOBAL_OPTION_COMPOSED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/pdd_completion_zsh.prompt",
+        "zsh",
+        "5d05ee3fcc959bfba1312b3d2ded6c2329ef1f6df0f532e855ac5a345ec6a107",
+        "488cde2f0d55b75a1cafc4f3e8f0e5f3984d4c0c0b70076c0d61820a4974365f",
+        _ZSH_GLOBAL_OPTION_PROFILE_BYTES[0],
+        _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
     ),
 )
 
@@ -2947,10 +2979,34 @@ def _load_requirement_transition_authorizations(
     )
     code_generator_language_gate_state = is_pdd_repository and (
         (policy_digests, profile_digests)
-        == (
-            _CODE_GENERATOR_LANGUAGE_GATE_ROTATION_POLICY_BYTES,
-            _CODE_GENERATOR_LANGUAGE_GATE_PROFILE_BYTES,
-        )
+        in {
+            (
+                _CODE_GENERATOR_LANGUAGE_GATE_ROTATION_POLICY_BYTES,
+                _CODE_GENERATOR_LANGUAGE_GATE_PROFILE_BYTES,
+            ),
+            # Issue #2377 rotates only the profile file above that same base.
+            (
+                _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES,
+                _ZSH_GLOBAL_OPTION_PROFILE_BYTES,
+            ),
+            (
+                _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES,
+                _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES,
+            ),
+        }
+    )
+    zsh_global_option_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        in {
+            (
+                _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES,
+                _ZSH_GLOBAL_OPTION_PROFILE_BYTES,
+            ),
+            (
+                _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES,
+                _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES,
+            ),
+        }
     )
     temperature_regression_state = (
         exact_pr2316_phase_a_reissue
@@ -3038,6 +3094,18 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in terra_sol_identities
         ) + _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS)
+    if zsh_global_option_state:
+        # Supersede the Terra/Sol row for the one identity this change moves.
+        zsh_identities = {
+            (item.prompt_path, item.language_id)
+            for item in _ZSH_GLOBAL_OPTION_COMPOSED_REQUIREMENT_TRANSITIONS
+        }
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id) not in zsh_identities
+        ) + _ZSH_GLOBAL_OPTION_COMPOSED_REQUIREMENT_TRANSITIONS
+        authority.update(_ZSH_GLOBAL_OPTION_COMPOSED_REQUIREMENT_TRANSITIONS)
     if generate_reliability_state or historical_composed_state:
         reliability_identities = {
             (item.prompt_path, item.language_id)
