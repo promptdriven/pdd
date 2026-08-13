@@ -175,12 +175,12 @@ _PR2316_STALE_LLM_REISSUE_PHASE_B_STATIONARY_PROFILE_BYTES = (
 # The language-validity gate consumes one code-generator prompt transition.
 # Retain prior reconciliations only for its exact policy and profile bytes.
 _CODE_GENERATOR_LANGUAGE_GATE_ROTATION_POLICY_BYTES = (
-    "57d51b73e72340571d14944c4484222dd3ca53f22c8e5c97e6b5a6050ecae9a8",
-    "57d51b73e72340571d14944c4484222dd3ca53f22c8e5c97e6b5a6050ecae9a8",
+    "20a601f852448cc548747d7649e52896460165eb90975491114458bf6b0098da",
+    "20a601f852448cc548747d7649e52896460165eb90975491114458bf6b0098da",
 )
 _CODE_GENERATOR_LANGUAGE_GATE_PROFILE_BYTES = (
-    "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
-    "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
+    "3af7bc3a094544bb77c8956485c18f75355856239218438086f9692c1d6d3de6",
+    "3af7bc3a094544bb77c8956485c18f75355856239218438086f9692c1d6d3de6",
 )
 # Issue #2377 lets global options precede a subcommand in the Zsh completion
 # dispatcher, moving `pdd/prompts/pdd_completion_zsh.prompt` and its profile row
@@ -3384,7 +3384,8 @@ def _load_requirement_transition_authorizations(
             )
         if code_generator_language_gate_state:
             language_gate_identities = {
-                (PurePosixPath("pdd/prompts/code_generator_main_python.prompt"), "python")
+                (PurePosixPath("pdd/prompts/code_generator_main_python.prompt"), "python"),
+                (PurePosixPath("pdd/prompts/metadata_sync_python.prompt"), "python"),
             }
             opus_fable_transitions = tuple(
                 item
