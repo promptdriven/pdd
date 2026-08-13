@@ -2401,9 +2401,17 @@ mechanically by React filename:
 prompts/ui/<unit>/
 ├── <unit>.ui.prompt
 └── views/
-    ├── <state>__<width>x<height>.ui.svg
-    └── <materially-different-state>__<width>x<height>.ui.svg
+    ├── <state>__<layout-mode>.ui.svg
+    └── <state>--<variant>__<layout-mode>.ui.svg
 ```
+
+Name each SVG `<state>[--<variant>]__<layout-mode>.ui.svg`. The layout mode
+names the material spatial arrangement—such as `split-pane`, `single-pane`,
+`stacked`, `side-by-side`, or `grid`—rather than a pixel size, device, or
+orientation. For example, use `ready__split-pane.ui.svg` and
+`ready--detail__single-pane.ui.svg`. Choose the most specific stable spatial
+relationship; do not use `mobile`, `desktop`, `AR`, or a generic orientation
+when the arrangement itself can be named.
 
 A unit may be a component, dialog, or coherent screen. It may generate one code
 file or several files that jointly implement the same responsibility. Do not
@@ -2496,7 +2504,8 @@ The prompt describes everything that cannot be learned safely from a picture:
 - what happens after clicks, keyboard actions, submission, cancellation, and
   navigation;
 - loading, empty, error, success, selected, disabled, and pending states;
-- how the layout changes between screen sizes;
+- how the layout changes as available space, content fit, or interaction
+  requirements change;
 - accessible names, focus behavior, keyboard order, announcements, and actions
   that must not happen; and
 - which shared design-system values should be used instead of copied colors or
@@ -2504,8 +2513,9 @@ The prompt describes everything that cannot be learned safely from a picture:
 
 Use stable `R<n>` MUST/MUST NOT rules for behavior that must survive
 regeneration. Include each SVG directly from the prompt. Immediately before the
-include, state the view ID, UI state, viewport, and how strictly the SVG must be
-followed:
+include, state the view ID, UI state, layout mode, when that layout applies, and
+how strictly the SVG must be followed. Do not treat one pixel viewport as the
+view's requirement or identity:
 
 - **Example:** general direction only.
 - **Layout requirements:** preserve grouping, order, alignment, relative size,
@@ -2514,11 +2524,14 @@ followed:
   stated tolerance. Use this only when exact matching is necessary.
 
 ```xml
-<view id="open-desktop" state="open" viewport="1440x900"
+<view id="ready-split-pane" state="ready" layout="split-pane"
       fidelity="relational">
+Use this arrangement when the available inline space supports the list and
+detail regions simultaneously without obscuring required content. The SVG
+viewBox is a scalable drawing coordinate system, not a required display size.
 Preserve region order, relative size, alignment, and named design-system roles.
 Browser font metrics and antialiasing are not exact requirements.
-<include>views/open__1440x900.ui.svg</include>
+<include>views/ready__split-pane.ui.svg</include>
 </view>
 
 <contract_rules>
@@ -2528,14 +2541,31 @@ R2 (MUST NOT): Allow background controls to operate while the dialog is open.
 </contract_rules>
 ```
 
+Preserve an exact dimension or aspect ratio only when it is an external or
+fixed-output contract, such as a social card, video frame, print artifact, or
+fixed display surface. Keep that requirement explicit in the prompt rather
+than using it as the SVG identity:
+
+```xml
+<view id="default-social-card" state="default" layout="social-card"
+      fidelity="exact">
+This external share-card output MUST render at 1200x630 pixels.
+<include>views/default__social-card.ui.svg</include>
+</view>
+```
+
 ### Create the SVG Files
 
-Create an SVG only for a state or screen size whose visual arrangement changes
-in an important way. Do not create one for every possible state or width.
+Create an SVG only for a state or layout mode whose visual arrangement changes
+in an important way. Do not create one for every possible size.
 
-- Use a descriptive filename such as `open__1440x900.ui.svg`.
+- Use `<state>[--<variant>]__<layout-mode>.ui.svg`, such as
+  `ready__split-pane.ui.svg` or `ready--detail__single-pane.ui.svg`.
 - Add a `viewBox`, `title`, and `desc`, plus stable, intent-based IDs such as
   `region-primary-action` for important regions.
+- Treat the `viewBox` as scalable drawing coordinates, not a required display
+  dimension. Do not set root `width` or `height` unless an external or
+  fixed-output contract requires them.
 - Use attributes such as `data-intent-role` and `data-token` when they clarify
   a region or shared design-system value.
 - Do not embed event handlers, React structure, Tailwind classes, external
@@ -2559,11 +2589,13 @@ shared prompt's target manifest matches all contexts that reference it, and
 every SVG include resolves. Validate SVG XML and raster renderability.
 
 After regeneration, use behavior and accessibility tests for prompt
-requirements. Use browser tests at the pictured screen sizes and around
-layout-change widths. Cover loading/error/empty/success distinctions, long text,
-overflow, zoom, keyboard access, visible focus, focus restoration, and forbidden
-actions. Review source diffs and rendered views; do not accept a screenshot as
-the only oracle.
+requirements. Use browser tests at representative review/test viewport sizes
+and around layout-change thresholds; those sizes are verification parameters,
+not canonical source identity. Test exact dimensions when an external or
+fixed-output contract requires them. Cover loading/error/empty/success
+distinctions, long text, overflow, zoom, keyboard access, visible focus, focus
+restoration, and forbidden actions. Review source diffs and rendered views; do
+not accept a screenshot as the only oracle.
 
 ---
 
