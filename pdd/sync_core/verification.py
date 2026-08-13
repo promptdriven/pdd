@@ -3044,6 +3044,13 @@ def _load_requirement_transition_authorizations(
                     _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[1],
                 ),
             ),
+            (
+                _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES,
+                (
+                    _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],
+                    _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
+                ),
+            ),
         }
     )
     code_generator_language_gate_state = is_pdd_repository and (
@@ -3832,6 +3839,13 @@ def _authorized_sync_rollout_profile_reconciliation(
         (
             _TEMPERATURE_REGRESSION_SYNC_COMPOSED_PROFILE_BYTES,
             _SYNC_ROLLOUT_REPAIR_ROTATION_POLICY_BYTES,
+        ),
+        (
+            (
+                _SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],
+                _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
+            ),
+            _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES,
         ),
     } and not exact_pr2316_history:
         return {}, frozenset()

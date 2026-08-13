@@ -157,6 +157,9 @@ PR_1971_PYTEST_OBLIGATIONS = {
     },
 }
 PDD_1989_EXPECTED_MANAGED_UNITS = 468
+# These historical transition assertions build their manifests from frozen
+# commits that predate the six conformance units on the current branch.
+PDD_1875_EXPECTED_MANAGED_UNITS = 469
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -2208,9 +2211,9 @@ def test_pdd1875_phase_a_is_dormant_on_its_composed_head() -> None:
 
     profiles = load_verification_profiles(ROOT, manifest)
 
-    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+    assert len(manifest.expected_managed) == PDD_1875_EXPECTED_MANAGED_UNITS
     assert not manifest.invalid_reasons
-    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert len(profiles.profiles) == PDD_1875_EXPECTED_MANAGED_UNITS
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
 
@@ -2228,9 +2231,9 @@ def test_replay_transitions_cover_the_actual_protected_base() -> None:
     )
     profiles = load_verification_profiles(ROOT, manifest)
 
-    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+    assert len(manifest.expected_managed) == PDD_1875_EXPECTED_MANAGED_UNITS
     assert not manifest.invalid_reasons
-    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert len(profiles.profiles) == PDD_1875_EXPECTED_MANAGED_UNITS
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
 
@@ -2291,6 +2294,10 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
         (
             verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
             verification._ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],  # pylint: disable=protected-access
+        ),
+        (
+            verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
+            verification._CONFORMANCE_SPLIT_PROFILE_BYTES[1],  # pylint: disable=protected-access
         ),
     }
     assert (
@@ -3927,7 +3934,7 @@ def test_story_bootstrap_ignores_extra_candidate_rule(monkeypatch) -> None:
         (*_BOOTSTRAP_HUMAN_OWNERSHIP, extra),
     )
 
-    assert result == tuple(_BOOTSTRAP_HUMAN_OWNERSHIP)
+    assert result == tuple(sorted(_BOOTSTRAP_HUMAN_OWNERSHIP))
     assert extra not in result
 
 
