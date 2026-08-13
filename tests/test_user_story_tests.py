@@ -9,7 +9,11 @@ from unittest.mock import patch
 import pytest
 
 from pdd.user_story_tests import (
+    ClauseCoverage,
+    CompletenessReview,
+    ContractObligation,
     _contract_path_for_story,
+    _parse_explicit_contract_obligations,
     _story_content_hash,
     cache_story_prompt_links,
     discover_prompt_files,
@@ -45,10 +49,20 @@ def _stub_contract_llm():
     """Stub the contract LLM call for the whole module so generation tests never
     hit the network. The real contract WRITER still runs, so a contract file is
     produced from ``_CONTRACT_MD``. Tests that assert issue-specific contract
-    content override this with their own ``_llm_generate_story_contract`` patch."""
-    with patch(
-        "pdd.user_story_tests._llm_generate_story_contract",
-        return_value=(_CONTRACT_MD, 0.0, "contract-model"),
+    content override this with their own ``_llm_generate_story_contract`` patch.
+
+    Also stub LLM obligation extraction (Issue #2362) so fixtures without
+    explicit clause IDs skip the semantic gate instead of fail-closing offline.
+    """
+    with (
+        patch(
+            "pdd.user_story_tests._llm_generate_story_contract",
+            return_value=(_CONTRACT_MD, 0.0, "contract-model"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_extract_contract_obligations",
+            return_value=([], 0.0, "", None),
+        ),
     ):
         yield
 
@@ -1404,6 +1418,358 @@ def test_validation_uses_story_plus_contract_as_oracle(tmp_path):
     # The oracle must contain both the human Story sentence and a contract section.
     assert "As a data analyst, I can upload a CSV file" in seen["oracle"]
     assert "## Acceptance Criteria" in seen["oracle"]
+
+
+# ---------------------------------------------------------------------------
+# Issue #2362 — semantic completeness gate for generated Story contracts
+# ---------------------------------------------------------------------------
+
+_SEMANTIC_STORY_MD = (
+    "# User Story: Auth recovery workflow\n\n"
+    "## Story\n\n"
+    "As an operator, I can recover from auth and workflow faults without "
+    "latching bad state, so that the session stays usable.\n"
+)
+
+_SEMANTIC_ISSUE_BODY = """# Issue: Auth recovery distinctions
+
+## Summary
+Preserve recoverable auth faults and no-latch workflow states.
+
+## Contract obligations
+- AUTH-RECOVER-401: recoverable HTTP 401 is an explicit branch distinct from terminal authorization failure
+- AUTH-RECOVER-403: recoverable HTTP 403 is an explicit branch distinct from terminal authorization failure
+- NO-LOADING-ERROR-RECONNECTING-BUSY-INERT-LATCH: loading/error/reconnecting/busy/inert states must not latch
+- NO-STALE-CONTEXT-BLOCK: stale or context-block observations must be explicit
+- NO-LATE-RESULT-CONTAMINATION: late-result contamination must be observed and rejected
+- PRESERVE-PERMITTED-TEST-AUTH: already-permitted test-auth recovery eligibility is preserved
+"""
+
+_SEMANTIC_OBLIGATION_IDS = (
+    "AUTH-RECOVER-401",
+    "AUTH-RECOVER-403",
+    "NO-LOADING-ERROR-RECONNECTING-BUSY-INERT-LATCH",
+    "NO-STALE-CONTEXT-BLOCK",
+    "NO-LATE-RESULT-CONTAMINATION",
+    "PRESERVE-PERMITTED-TEST-AUTH",
+)
+
+
+def _semantic_contract_body(*, omit: str | None = None) -> str:
+    """Build a structurally valid contract; optionally omit one obligation."""
+    covers = {
+        "AUTH-RECOVER-401": (
+            "Recoverable HTTP 401 is handled as its own branch, not as a "
+            "terminal authorization failure."
+        ),
+        "AUTH-RECOVER-403": (
+            "Recoverable HTTP 403 is handled as its own branch, not as a "
+            "terminal authorization failure."
+        ),
+        "NO-LOADING-ERROR-RECONNECTING-BUSY-INERT-LATCH": (
+            "Workflow stages expose loading, error, reconnecting, busy, and "
+            "inert states without latching."
+        ),
+        "NO-STALE-CONTEXT-BLOCK": (
+            "Stale or context-block conditions are observed explicitly."
+        ),
+        "NO-LATE-RESULT-CONTAMINATION": (
+            "Late results that would contaminate state are rejected."
+        ),
+        "PRESERVE-PERMITTED-TEST-AUTH": (
+            "Already-permitted test-auth recovery eligibility remains available."
+        ),
+    }
+    cover_lines = [
+        f"- {clause_id}: {text}"
+        for clause_id, text in covers.items()
+        if clause_id != omit
+    ]
+    return (
+        "## Covers\n\n"
+        + "\n".join(cover_lines)
+        + "\n\n"
+        "## Context\n\n- Auth recovery workflow under test.\n\n"
+        "## Acceptance Criteria\n\n"
+        "1. Given a recoverable auth fault, when it occurs, then the matching "
+        "branch runs without treating it as terminal failure.\n\n"
+        "## Oracle\n\n- branch selection and no-latch state transitions\n\n"
+        "## Non-Oracle\n\n- exact log wording\n\n"
+        "## Negative Cases\n\n- Collapsing 401/403 into terminal auth failure\n\n"
+        "## Non-Goals\n\n- Redesigning the whole auth stack\n\n"
+        "## Candidate Prompts\n\n- none beyond the primary prompt(s)\n\n"
+        "## Notes\n\n- Issue #2362 fixture\n"
+    )
+
+
+def _all_covered_review(omit: str | None = None) -> CompletenessReview:
+    coverages = []
+    for clause_id in _SEMANTIC_OBLIGATION_IDS:
+        if clause_id == omit:
+            coverages.append(
+                ClauseCoverage(
+                    clause_id=clause_id, disposition="missing", evidence=""
+                )
+            )
+        else:
+            coverages.append(
+                ClauseCoverage(
+                    clause_id=clause_id,
+                    disposition="covered",
+                    evidence=f"paraphrase for {clause_id}",
+                )
+            )
+    return CompletenessReview(ok=omit is None, coverages=tuple(coverages))
+
+
+def test_parse_explicit_contract_obligations_from_issue():
+    obligations = _parse_explicit_contract_obligations(
+        _SEMANTIC_STORY_MD, _SEMANTIC_ISSUE_BODY
+    )
+    assert [o.clause_id for o in obligations] == list(_SEMANTIC_OBLIGATION_IDS)
+    assert all(isinstance(o, ContractObligation) for o in obligations)
+
+
+def test_semantic_gate_rejects_structurally_valid_but_incomplete_contract(tmp_path):
+    """A contract with every required heading but one uncovered obligation is rejected."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt = prompts_dir / "auth_python.prompt"
+    prompt.write_text("Auth recovery.", encoding="utf-8")
+    incomplete = _semantic_contract_body(omit="AUTH-RECOVER-403")
+
+    with (
+        patch("pdd.user_story_tests.detect_change"),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(_SEMANTIC_STORY_MD, 0.01, "story-model"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_contract",
+            return_value=(incomplete, 0.02, "contract-model"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_review_contract_completeness",
+            return_value=(_all_covered_review(omit="AUTH-RECOVER-403"), 0.0, "reviewer"),
+        ),
+    ):
+        success, message, _, _, story_file, _ = generate_user_story(
+            prompt_files=[str(prompt)],
+            issue=_write_issue(tmp_path, body=_SEMANTIC_ISSUE_BODY),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert Path(story_file).exists()
+    assert "Contract generation was skipped" in message
+    assert "AUTH-RECOVER-403" in message
+    assert not _contract_path_for_story(Path(story_file)).exists()
+
+
+def test_semantic_gate_accepts_fluent_paraphrase_coverage(tmp_path):
+    """Fluent wording that preserves obligations is accepted without exact copy."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt = prompts_dir / "auth_python.prompt"
+    prompt.write_text("Auth recovery.", encoding="utf-8")
+    complete = _semantic_contract_body()
+
+    with (
+        patch("pdd.user_story_tests.detect_change"),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(_SEMANTIC_STORY_MD, 0.01, "story-model"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_contract",
+            return_value=(complete, 0.02, "contract-model"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_review_contract_completeness",
+            return_value=(_all_covered_review(), 0.0, "reviewer"),
+        ),
+    ):
+        success, message, _, _, story_file, _ = generate_user_story(
+            prompt_files=[str(prompt)],
+            issue=_write_issue(tmp_path, body=_SEMANTIC_ISSUE_BODY),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert "Generated contract file:" in message
+    contract_path = _contract_path_for_story(Path(story_file))
+    assert contract_path.exists()
+    # Fluent paraphrase — not a verbatim copy of the issue line.
+    assert "explicit branch distinct from terminal" not in contract_path.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_sync_force_does_not_overwrite_when_semantic_gate_rejects(tmp_path):
+    """sync_user_story_contract(force=True) keeps old bytes when replacement fails."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt = prompts_dir / "auth_python.prompt"
+    prompt.write_text("Auth recovery.", encoding="utf-8")
+    complete = _semantic_contract_body()
+    incomplete = _semantic_contract_body(omit="NO-STALE-CONTEXT-BLOCK")
+
+    with (
+        patch("pdd.user_story_tests.detect_change"),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(_SEMANTIC_STORY_MD, 0.01, "story-model"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_contract",
+            return_value=(complete, 0.02, "contract-model"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_review_contract_completeness",
+            return_value=(_all_covered_review(), 0.0, "reviewer"),
+        ),
+    ):
+        _, _, _, _, story_file, _ = generate_user_story(
+            prompt_files=[str(prompt)],
+            issue=_write_issue(tmp_path, body=_SEMANTIC_ISSUE_BODY),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    story_path = Path(story_file)
+    contract_path = _contract_path_for_story(story_path)
+    before = contract_path.read_text(encoding="utf-8")
+    before_hash = _story_content_hash(before)
+
+    with (
+        patch(
+            "pdd.user_story_tests._llm_generate_story_contract",
+            return_value=(incomplete, 0.02, "contract-model"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_review_contract_completeness",
+            return_value=(
+                _all_covered_review(omit="NO-STALE-CONTEXT-BLOCK"),
+                0.0,
+                "reviewer",
+            ),
+        ),
+    ):
+        changed, msg, _, _, _ = sync_user_story_contract(
+            str(story_path),
+            prompts_dir=str(prompts_dir),
+            force=True,
+        )
+
+    assert changed is False
+    assert "semantic completeness" in msg
+    assert "NO-STALE-CONTEXT-BLOCK" in msg
+    after = contract_path.read_text(encoding="utf-8")
+    assert after == before
+    assert _story_content_hash(after) == before_hash
+
+
+def test_semantic_reviewer_unavailable_fails_closed_without_overwrite(tmp_path):
+    """Indeterminate/unavailable reviewer must not write or overwrite."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt = prompts_dir / "auth_python.prompt"
+    prompt.write_text("Auth recovery.", encoding="utf-8")
+
+    with (
+        patch("pdd.user_story_tests.detect_change"),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(_SEMANTIC_STORY_MD, 0.01, "story-model"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_contract",
+            return_value=(_semantic_contract_body(), 0.02, "contract-model"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_review_contract_completeness",
+            return_value=(
+                CompletenessReview(
+                    ok=False, error="semantic completeness review indeterminate"
+                ),
+                0.0,
+                "reviewer",
+            ),
+        ),
+    ):
+        success, message, _, _, story_file, _ = generate_user_story(
+            prompt_files=[str(prompt)],
+            issue=_write_issue(tmp_path, body=_SEMANTIC_ISSUE_BODY),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert Path(story_file).exists()
+    assert "indeterminate" in message
+    assert not _contract_path_for_story(Path(story_file)).exists()
+
+
+def test_incomplete_candidate_never_becomes_detection_oracle(tmp_path):
+    """Downstream detection cannot receive a rejected incomplete candidate."""
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+    prompt = prompts_dir / "auth_python.prompt"
+    prompt.write_text("Auth recovery.", encoding="utf-8")
+
+    with (
+        patch("pdd.user_story_tests.detect_change"),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_markdown",
+            return_value=(_SEMANTIC_STORY_MD, 0.01, "story-model"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_contract",
+            return_value=(
+                _semantic_contract_body(omit="PRESERVE-PERMITTED-TEST-AUTH"),
+                0.02,
+                "contract-model",
+            ),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_review_contract_completeness",
+            return_value=(
+                _all_covered_review(omit="PRESERVE-PERMITTED-TEST-AUTH"),
+                0.0,
+                "reviewer",
+            ),
+        ),
+    ):
+        _, _, _, _, story_file, _ = generate_user_story(
+            prompt_files=[str(prompt)],
+            issue=_write_issue(tmp_path, body=_SEMANTIC_ISSUE_BODY),
+            stories_dir=str(stories_dir),
+            prompts_dir=str(prompts_dir),
+        )
+
+    story_path = Path(story_file)
+    assert not _contract_path_for_story(story_path).exists()
+
+    seen = {}
+
+    def fake_detect(prompt_paths, oracle, *_a, **_k):
+        seen["oracle"] = oracle
+        return [], 0.0, "gpt-test"
+
+    with patch("pdd.user_story_tests.detect_change", side_effect=fake_detect):
+        passed, _, _, _ = run_user_story_tests(
+            prompts_dir=str(prompts_dir), stories_dir=str(stories_dir), quiet=True
+        )
+
+    assert passed is True
+    # Oracle is the human Story only — incomplete candidate was never written.
+    assert "PRESERVE-PERMITTED-TEST-AUTH" not in seen["oracle"]
+    assert "## Acceptance Criteria" not in seen["oracle"]
+    assert "recover from auth and workflow faults" in seen["oracle"]
 
 
 def test_generate_user_story_fails_when_llm_output_contains_placeholders(tmp_path):

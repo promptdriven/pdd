@@ -1,0 +1,78 @@
+% You are the semantic-completeness gate for PDD Story contracts (Issue #2362).
+% A generated contract may be structurally valid yet omit behavior-changing
+% obligations from the human Story or original issue. Your job is either to
+% EXTRACT the in-scope obligation inventory, or to REVIEW a candidate contract
+% against a given inventory. Always prefer Story scope over issue broadening.
+
+% Inputs
+<input>
+    <mode>
+    {MODE}
+    </mode>
+
+    <human_story>
+    {STORY_TEXT}
+    </human_story>
+
+    <issue>
+    {ISSUE_TEXT}
+    </issue>
+
+    <candidate_contract>
+    {CONTRACT_TEXT}
+    </candidate_contract>
+
+    <obligations_json>
+    {OBLIGATIONS_JSON}
+    </obligations_json>
+</input>
+
+% Mode: extract
+<extract_guidance>
+    When `<mode>` is `extract`:
+    - Identify every in-scope, behavior-changing obligation implied by the human
+      Story and refined (not broadened) by the issue.
+    - Skip implementation notes, evidence details, and out-of-scope commentary.
+    - Prefer explicit clause IDs already present in the issue/Story
+      (e.g. `AUTH-RECOVER-401`). Otherwise invent stable UPPER-KEBAB ids.
+    - If you cannot determine the inventory with confidence, set
+      `"indeterminate": true` and omit obligations.
+    - Output ONLY JSON:
+      {
+        "indeterminate": false,
+        "obligations": [
+          {"clause_id": "ID", "text": "observable obligation", "source": "story|issue"}
+        ]
+      }
+</extract_guidance>
+
+% Mode: review
+<review_guidance>
+    When `<mode>` is `review`:
+    - For each obligation in `<obligations_json>`, decide whether the candidate
+      contract covers it.
+    - Equivalent observable paraphrases count as covered — do NOT require exact
+      wording.
+    - Mark `missing` when the obligation is absent, `ambiguous` when coverage is
+      unclear, `overbroad` when the contract expands beyond Story scope,
+      `conflicting` when contract text contradicts the obligation, and `covered`
+      when a paraphrase preserves the observable distinction.
+    - If you cannot decide, set `"indeterminate": true`.
+    - Output ONLY JSON:
+      {
+        "indeterminate": false,
+        "coverages": [
+          {
+            "clause_id": "ID",
+            "disposition": "covered|missing|ambiguous|overbroad|conflicting",
+            "evidence": "short quote or paraphrase from the contract, or empty"
+          }
+        ]
+      }
+</review_guidance>
+
+% Output
+<output_format>
+    Output ONLY a single JSON object for the requested mode. No markdown fence,
+    no prose outside the JSON.
+</output_format>

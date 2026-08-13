@@ -11,8 +11,9 @@ import re
 import subprocess
 import tempfile
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from rich import print as rprint
 from rich.markup import escape as rich_escape
@@ -860,6 +861,14 @@ def resolve_issue_source(  # pylint: disable=too-many-return-statements
 
 _STORY_META_PROMPT_NAME = "generate_user_story_LLM"
 _STORY_CONTRACT_PROMPT_NAME = "generate_story_contract_LLM"
+_STORY_CONTRACT_COMPLETENESS_PROMPT_NAME = "review_story_contract_completeness_LLM"
+# Explicit clause IDs in Story/issue text (Issue #2362), e.g. AUTH-RECOVER-401.
+_EXPLICIT_CLAUSE_ID_RE = re.compile(
+    r"^\s*[-*]?\s*`?(?P<id>[A-Z][A-Z0-9]+(?:-[A-Z0-9]+)+)`?"
+    r"\s*(?::|—|--|-)\s*(?P<text>.+?)\s*$",
+    re.MULTILINE,
+)
+_COVERED_DISPOSITIONS = frozenset({"covered"})
 # Two-file audience split (the human verifies the Story; the AI owns the
 # contract). The human story file is tiny — it must carry the ``## Story``
 # sentence and nothing else is required. Invalid or unavailable LLM output fails
@@ -908,6 +917,408 @@ def _contains_placeholder_tokens(markdown: str) -> bool:
     """Return True when model output still contains template placeholders."""
     return bool(
         _PLACEHOLDER_TOKEN_RE.search(markdown) or _PDD_METADATA_TAG_RE.search(markdown)
+    )
+
+
+@dataclass(frozen=True)
+class ContractObligation:
+    """One in-scope, behavior-changing Story/issue clause (Issue #2362)."""
+
+    clause_id: str
+    text: str
+    source: str  # "story" | "issue"
+
+
+@dataclass(frozen=True)
+class ClauseCoverage:
+    """Machine-checkable coverage disposition for one obligation."""
+
+    clause_id: str
+    disposition: str
+    evidence: str = ""
+
+
+@dataclass(frozen=True)
+class CompletenessReview:
+    """Result of the semantic-completeness gate before contract write."""
+
+    ok: bool
+    coverages: Tuple[ClauseCoverage, ...] = ()
+    error: Optional[str] = None
+
+    def diagnostics(self) -> str:
+        """Human-readable clause-level failure summary."""
+        if self.error:
+            return self.error
+        bad = [
+            c
+            for c in self.coverages
+            if c.disposition.lower() not in _COVERED_DISPOSITIONS
+        ]
+        if not bad:
+            return "semantic completeness review failed"
+        parts = [f"{c.clause_id} ({c.disposition})" for c in bad]
+        return "uncovered or invalid clauses: " + ", ".join(parts)
+
+
+def _parse_explicit_contract_obligations(
+    story_text: str, issue_text: str
+) -> List[ContractObligation]:
+    """Collect stable clause IDs authored into the Story/issue (Issue #2362)."""
+    found: Dict[str, ContractObligation] = {}
+    for source_name, blob in (("story", story_text or ""), ("issue", issue_text or "")):
+        for match in _EXPLICIT_CLAUSE_ID_RE.finditer(blob):
+            clause_id = match.group("id").strip()
+            text = match.group("text").strip()
+            if clause_id not in found:
+                found[clause_id] = ContractObligation(
+                    clause_id=clause_id, text=text, source=source_name
+                )
+    return list(found.values())
+
+
+def _llm_extract_contract_obligations(  # pylint: disable=too-many-arguments,too-many-locals,broad-exception-caught,import-outside-toplevel
+    *,
+    story_text: str,
+    issue_text: str,
+    strength: float,
+    temperature: float,
+    time: float,
+    verbose: bool,
+) -> Tuple[Optional[List[ContractObligation]], float, str, Optional[str]]:
+    """Ask the LLM for in-scope behavior-changing obligations when no IDs exist.
+
+    Returns ``(obligations, cost, model, error)``. ``obligations`` is None when
+    extraction is unavailable or indeterminate (fail closed).
+    """
+    try:
+        from .llm_invoke import llm_invoke
+        from .load_prompt_template import load_prompt_template
+        from .preprocess import preprocess
+    except Exception as exc:  # pragma: no cover
+        return None, 0.0, "", f"obligation extraction unavailable: {exc}"
+
+    template = load_prompt_template(_STORY_CONTRACT_COMPLETENESS_PROMPT_NAME)
+    if not template:
+        return (
+            None,
+            0.0,
+            "",
+            f"meta-prompt {_STORY_CONTRACT_COMPLETENESS_PROMPT_NAME} not found",
+        )
+
+    # Reuse the completeness prompt in extract mode via a mode marker.
+    processed = preprocess(
+        template,
+        recursive=False,
+        double_curly_brackets=True,
+        exclude_keys=[
+            "MODE",
+            "STORY_TEXT",
+            "ISSUE_TEXT",
+            "CONTRACT_TEXT",
+            "OBLIGATIONS_JSON",
+        ],
+    )
+    try:
+        response = llm_invoke(
+            prompt=processed,
+            input_json={
+                "MODE": "extract",
+                "STORY_TEXT": story_text,
+                "ISSUE_TEXT": issue_text,
+                "CONTRACT_TEXT": "",
+                "OBLIGATIONS_JSON": "[]",
+            },
+            strength=strength,
+            temperature=temperature,
+            time=time,
+            verbose=verbose,
+        )
+    except Exception as exc:
+        return None, 0.0, "", f"obligation extraction failed: {exc}"
+
+    cost = float(response.get("cost", 0.0) or 0.0)
+    model = response.get("model_name", "") or ""
+    raw = response.get("result", "")
+    if not isinstance(raw, str) or not raw.strip():
+        return None, cost, model, "obligation extraction returned empty output"
+    data = _parse_json_object_from_llm(raw)
+    if data is None:
+        return None, cost, model, "obligation extraction returned non-JSON output"
+    if data.get("indeterminate") is True:
+        return None, cost, model, "obligation extraction indeterminate"
+    items = data.get("obligations")
+    if not isinstance(items, list):
+        return None, cost, model, "obligation extraction missing obligations list"
+    obligations: List[ContractObligation] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        clause_id = str(item.get("clause_id") or "").strip()
+        text = str(item.get("text") or "").strip()
+        source = str(item.get("source") or "issue").strip() or "issue"
+        if clause_id and text:
+            obligations.append(
+                ContractObligation(clause_id=clause_id, text=text, source=source)
+            )
+    return obligations, cost, model, None
+
+
+def _collect_contract_obligations(  # pylint: disable=too-many-arguments
+    *,
+    story_text: str,
+    issue_text: str,
+    strength: float,
+    temperature: float,
+    time: float,
+    verbose: bool,
+) -> Tuple[Optional[List[ContractObligation]], float, str, Optional[str]]:
+    """Resolve the in-scope obligation inventory for semantic acceptance."""
+    explicit = _parse_explicit_contract_obligations(story_text, issue_text)
+    if explicit:
+        return explicit, 0.0, "", None
+    return _llm_extract_contract_obligations(
+        story_text=story_text,
+        issue_text=issue_text,
+        strength=strength,
+        temperature=temperature,
+        time=time,
+        verbose=verbose,
+    )
+
+
+def _parse_json_object_from_llm(raw: str) -> Optional[dict]:
+    """Extract the first JSON object from an LLM response."""
+    text = _strip_markdown_code_fence(raw).strip()
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        pass
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        data = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _llm_review_contract_completeness(  # pylint: disable=too-many-arguments,too-many-locals,broad-exception-caught,import-outside-toplevel
+    *,
+    story_text: str,
+    issue_text: str,
+    contract_text: str,
+    obligations: Sequence[ContractObligation],
+    strength: float,
+    temperature: float,
+    time: float,
+    verbose: bool,
+) -> Tuple[CompletenessReview, float, str]:
+    """Semantically review whether ``contract_text`` covers every obligation."""
+    try:
+        from .llm_invoke import llm_invoke
+        from .load_prompt_template import load_prompt_template
+        from .preprocess import preprocess
+    except Exception as exc:  # pragma: no cover
+        return (
+            CompletenessReview(
+                ok=False, error=f"semantic completeness reviewer unavailable: {exc}"
+            ),
+            0.0,
+            "",
+        )
+
+    template = load_prompt_template(_STORY_CONTRACT_COMPLETENESS_PROMPT_NAME)
+    if not template:
+        return (
+            CompletenessReview(
+                ok=False,
+                error=(
+                    f"semantic completeness reviewer unavailable: meta-prompt "
+                    f"{_STORY_CONTRACT_COMPLETENESS_PROMPT_NAME} not found"
+                ),
+            ),
+            0.0,
+            "",
+        )
+
+    obligations_json = json.dumps(
+        [
+            {
+                "clause_id": o.clause_id,
+                "text": o.text,
+                "source": o.source,
+            }
+            for o in obligations
+        ],
+        indent=2,
+    )
+    processed = preprocess(
+        template,
+        recursive=False,
+        double_curly_brackets=True,
+        exclude_keys=[
+            "MODE",
+            "STORY_TEXT",
+            "ISSUE_TEXT",
+            "CONTRACT_TEXT",
+            "OBLIGATIONS_JSON",
+        ],
+    )
+    try:
+        response = llm_invoke(
+            prompt=processed,
+            input_json={
+                "MODE": "review",
+                "STORY_TEXT": story_text,
+                "ISSUE_TEXT": issue_text,
+                "CONTRACT_TEXT": contract_text,
+                "OBLIGATIONS_JSON": obligations_json,
+            },
+            strength=strength,
+            temperature=temperature,
+            time=time,
+            verbose=verbose,
+        )
+    except Exception as exc:
+        return (
+            CompletenessReview(
+                ok=False, error=f"semantic completeness review failed: {exc}"
+            ),
+            0.0,
+            "",
+        )
+
+    cost = float(response.get("cost", 0.0) or 0.0)
+    model = response.get("model_name", "") or ""
+    raw = response.get("result", "")
+    if not isinstance(raw, str) or not raw.strip():
+        return (
+            CompletenessReview(
+                ok=False, error="semantic completeness review returned empty output"
+            ),
+            cost,
+            model,
+        )
+    data = _parse_json_object_from_llm(raw)
+    if data is None:
+        return (
+            CompletenessReview(
+                ok=False, error="semantic completeness review returned non-JSON output"
+            ),
+            cost,
+            model,
+        )
+    if data.get("indeterminate") is True:
+        return (
+            CompletenessReview(
+                ok=False, error="semantic completeness review indeterminate"
+            ),
+            cost,
+            model,
+        )
+
+    coverages_raw = data.get("coverages")
+    if not isinstance(coverages_raw, list):
+        return (
+            CompletenessReview(
+                ok=False, error="semantic completeness review missing coverages list"
+            ),
+            cost,
+            model,
+        )
+
+    by_id: Dict[str, ClauseCoverage] = {}
+    for item in coverages_raw:
+        if not isinstance(item, dict):
+            continue
+        clause_id = str(item.get("clause_id") or "").strip()
+        disposition = str(item.get("disposition") or "").strip().lower()
+        evidence = str(item.get("evidence") or "").strip()
+        if not clause_id or not disposition:
+            continue
+        by_id[clause_id] = ClauseCoverage(
+            clause_id=clause_id, disposition=disposition, evidence=evidence
+        )
+
+    coverages: List[ClauseCoverage] = []
+    missing_ids: List[str] = []
+    for obligation in obligations:
+        coverage = by_id.get(obligation.clause_id)
+        if coverage is None:
+            missing_ids.append(obligation.clause_id)
+            coverages.append(
+                ClauseCoverage(
+                    clause_id=obligation.clause_id,
+                    disposition="missing",
+                    evidence="",
+                )
+            )
+        else:
+            coverages.append(coverage)
+
+    # Disposition must be exactly "covered"; anything else fails closed.
+    failed = [c for c in coverages if c.disposition != "covered"]
+    return (
+        CompletenessReview(ok=not failed, coverages=tuple(coverages)),
+        cost,
+        model,
+    )
+
+
+def _review_contract_semantic_completeness(  # pylint: disable=too-many-arguments
+    *,
+    story_text: str,
+    issue_text: str,
+    contract_text: str,
+    strength: float,
+    temperature: float,
+    time: float,
+    verbose: bool,
+) -> Tuple[CompletenessReview, float, str]:
+    """Run the Issue #2362 acceptance gate; fail closed when incomplete."""
+    obligations, extract_cost, extract_model, extract_error = (
+        _collect_contract_obligations(
+            story_text=story_text,
+            issue_text=issue_text,
+            strength=strength,
+            temperature=temperature,
+            time=time,
+            verbose=verbose,
+        )
+    )
+    if extract_error or obligations is None:
+        return (
+            CompletenessReview(
+                ok=False,
+                error=extract_error
+                or "could not establish in-scope obligation inventory",
+            ),
+            extract_cost,
+            extract_model,
+        )
+    if not obligations:
+        # No behavior-changing clauses identified — nothing to gate.
+        return CompletenessReview(ok=True, coverages=()), extract_cost, extract_model
+
+    review, review_cost, review_model = _llm_review_contract_completeness(
+        story_text=story_text,
+        issue_text=issue_text,
+        contract_text=contract_text,
+        obligations=obligations,
+        strength=strength,
+        temperature=temperature,
+        time=time,
+        verbose=verbose,
+    )
+    return (
+        review,
+        extract_cost + review_cost,
+        review_model or extract_model,
     )
 
 
@@ -1293,6 +1704,10 @@ def _generate_and_write_contract(  # pylint: disable=too-many-arguments,too-many
 
     Returns ``(contract_path, cost, model, error)``. ``contract_path`` is None and
     ``error`` is set when contract generation could not be completed.
+
+    Issue #2362: a structurally valid body is still rejected when the semantic
+    completeness gate cannot prove every in-scope obligation is covered. On
+    rejection the previous contract bytes (if any) are left untouched.
     """
     inventory = _scan_prompt_inventory(prompts_root, extra_paths=extra_prompt_paths)
     body, cost, model = _llm_generate_story_contract(
@@ -1308,6 +1723,25 @@ def _generate_and_write_contract(  # pylint: disable=too-many-arguments,too-many
     )
     if body is None:
         return None, cost, model, "contract generation returned no valid contract"
+
+    review, review_cost, review_model = _review_contract_semantic_completeness(
+        story_text=story_text,
+        issue_text=issue_text,
+        contract_text=body,
+        strength=strength,
+        temperature=temperature,
+        time=time,
+        verbose=verbose,
+    )
+    cost += review_cost
+    model = review_model or model
+    if not review.ok:
+        return (
+            None,
+            cost,
+            model,
+            f"semantic completeness rejected contract ({review.diagnostics()})",
+        )
 
     contract_path = _contract_path_for_story(story_path)
     contract_path.parent.mkdir(parents=True, exist_ok=True)
