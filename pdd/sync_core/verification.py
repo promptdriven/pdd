@@ -1313,6 +1313,20 @@ _REPLAY_REQUIREMENT_REPLACEMENTS = frozenset(
 # legacy profile-byte guard for every other candidate.
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _REPLAY_REPLACED_PROTECTED_TRANSITIONS
 
+# PR #2374 narrows the code-generator orchestrator prompt after extracting its
+# conformance gates.  Authorize only the reviewed prompt/profile byte pair.
+_PDD_2374_CONFORMANCE_SPLIT_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/code_generator_main_python.prompt",
+        "python",
+        "9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
+        "1f8e8deced7c0065ddf1ad5b10973e40b401e89c49b142f490ea79842b10f928",
+        "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f",
+        "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+    ),
+)
+_BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_2374_CONFORMANCE_SPLIT_REQUIREMENT_TRANSITIONS
+
 
 # One long-lived pre-schema-2 unit first becomes managed in pdd#1790. Bind its
 # initial profile to the exact candidate policy and prompt bytes so the merged
@@ -1339,6 +1353,50 @@ _BOOTSTRAP_PROFILE_ADDITIONS = (
         "CONTRACT-SHA256:34624bde64048913f0c05a3ce2d7faab89997cf46c97f81e4ae27a603e5ed506",
         "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
         "34624bde64048913f0c05a3ce2d7faab89997cf46c97f81e4ae27a603e5ed506",
+    ),
+    # PR #2374: the code-generator conformance split introduces six managed
+    # prompts. Each entry binds its initial profile to the exact policy bytes.
+    (
+        PurePosixPath("pdd/prompts/conformance/declared_surface_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:7d9e403fd0caf99507f83574c4fda1d130fa83a9aa272d9fc34765ce526aa261",
+        "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+        "7d9e403fd0caf99507f83574c4fda1d130fa83a9aa272d9fc34765ce526aa261",
+    ),
+    (
+        PurePosixPath("pdd/prompts/conformance/directives_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:224f895cc5962e735ff2d86011d482641200458e5b150c67813fa86b78406145",
+        "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+        "224f895cc5962e735ff2d86011d482641200458e5b150c67813fa86b78406145",
+    ),
+    (
+        PurePosixPath("pdd/prompts/conformance/gate_errors_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:00fad9b0866fe16b6d44f94cad9d1055359a5a2aa0dc15480f62ce5851df8e81",
+        "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+        "00fad9b0866fe16b6d44f94cad9d1055359a5a2aa0dc15480f62ce5851df8e81",
+    ),
+    (
+        PurePosixPath("pdd/prompts/conformance/interface_check_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:a347181aa8cfe63444a077839ed878629b17e405b5b857ba687c8807cb4ce91a",
+        "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+        "a347181aa8cfe63444a077839ed878629b17e405b5b857ba687c8807cb4ce91a",
+    ),
+    (
+        PurePosixPath("pdd/prompts/conformance/surface_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:0e07e0613288d0ec8489315dac9a15678153959a4b6d30f14ed5a1cb90e3e31a",
+        "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+        "0e07e0613288d0ec8489315dac9a15678153959a4b6d30f14ed5a1cb90e3e31a",
+    ),
+    (
+        PurePosixPath("pdd/prompts/conformance/test_churn_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:f1cf9d53c757c6735d005b92efd1fddfa5e970d78794572eb08779e45c94ccd9",
+        "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+        "f1cf9d53c757c6735d005b92efd1fddfa5e970d78794572eb08779e45c94ccd9",
     ),
 )
 

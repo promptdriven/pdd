@@ -14920,6 +14920,48 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "pdd/conformance/__init__.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "scripts/validate_conformance_prompts.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "tests/story_regression/test_story_pdd_generation_gates_preserved.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "user_stories/contracts/pdd_generation_gates_preserved.contract.md",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "user_stories/issues/conformance-gate-split.md",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "user_stories/story__pdd_generation_gates_preserved.md",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "tests/test_zsh_completion.py",
       "role": "human-maintained"
     }

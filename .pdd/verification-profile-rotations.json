@@ -406,6 +406,17 @@
       "head_prompt_sha256": "51ec006a5b7faeb397be9c1b8e61205e97459fdc08cd9e90e7f0692ccf55a1d5"
     },
     {
+      "prompt_path": "pdd/prompts/code_generator_main_python.prompt",
+      "language_id": "python",
+      "from_requirement_id": "CONTRACT-SHA256:9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
+      "to_requirement_id": "CONTRACT-SHA256:1f8e8deced7c0065ddf1ad5b10973e40b401e89c49b142f490ea79842b10f928",
+      "policy_path": ".pdd/verification-profiles.json",
+      "base_policy_sha256": "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f",
+      "head_policy_sha256": "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+      "base_prompt_sha256": "9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
+      "head_prompt_sha256": "1f8e8deced7c0065ddf1ad5b10973e40b401e89c49b142f490ea79842b10f928"
+    },
+    {
       "prompt_path": "pdd/prompts/commands/fix_python.prompt",
       "language_id": "python",
       "from_requirement_id": "CONTRACT-SHA256:3e180110a579e905ed0e7eeead2f5b8145a5cbbeed781942b6aaad1e713c3ec6",
@@ -635,17 +646,6 @@
       "head_policy_sha256": "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f",
       "base_prompt_sha256": "7c020d1e55839dfa7a962df32a3991952466bd3710afa3006122424f3d21c89b",
       "head_prompt_sha256": "4ab43d1625c4229c4088c6d71cdf92aadbe92b3467cde71b1f24d774b7cfc501"
-    },
-    {
-      "prompt_path": "pdd/prompts/code_generator_main_python.prompt",
-      "language_id": "python",
-      "from_requirement_id": "CONTRACT-SHA256:9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
-      "to_requirement_id": "CONTRACT-SHA256:882876b0dea9198c1fa9492806d85bfb088b393096f4f1a0543cc8f31f40fc30",
-      "policy_path": ".pdd/verification-profiles.json",
-      "base_policy_sha256": "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f",
-      "head_policy_sha256": "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
-      "base_prompt_sha256": "9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
-      "head_prompt_sha256": "882876b0dea9198c1fa9492806d85bfb088b393096f4f1a0543cc8f31f40fc30"
     }
   ],
   "requirement_rotation_retirements": [
@@ -689,12 +689,12 @@
         "prompt_path": "pdd/prompts/code_generator_main_python.prompt",
         "language_id": "python",
         "from_requirement_id": "CONTRACT-SHA256:9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
-        "to_requirement_id": "CONTRACT-SHA256:882876b0dea9198c1fa9492806d85bfb088b393096f4f1a0543cc8f31f40fc30",
+        "to_requirement_id": "CONTRACT-SHA256:1f8e8deced7c0065ddf1ad5b10973e40b401e89c49b142f490ea79842b10f928",
         "policy_path": ".pdd/verification-profiles.json",
         "base_policy_sha256": "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f",
-        "head_policy_sha256": "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
+        "head_policy_sha256": "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
         "base_prompt_sha256": "9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
-        "head_prompt_sha256": "882876b0dea9198c1fa9492806d85bfb088b393096f4f1a0543cc8f31f40fc30"
+        "head_prompt_sha256": "1f8e8deced7c0065ddf1ad5b10973e40b401e89c49b142f490ea79842b10f928"
       }
     }
   ]

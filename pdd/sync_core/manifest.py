@@ -96,6 +96,49 @@ class OwnershipRule:
 # or altered owner/inventory fields.
 _PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 _BOOTSTRAP_HUMAN_OWNERSHIP = (
+    # PR #2374: six extracted conformance units and their review evidence.
+    OwnershipRule(
+        "pdd/conformance/__init__.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "scripts/validate_conformance_prompts.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "tests/story_regression/test_story_pdd_generation_gates_preserved.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "user_stories/contracts/pdd_generation_gates_preserved.contract.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "user_stories/issues/conformance-gate-split.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "user_stories/story__pdd_generation_gates_preserved.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
     OwnershipRule(
         ".pdd/meta/agentic_architecture_python.json",
         InventoryStatus.HUMAN_OWNED,
