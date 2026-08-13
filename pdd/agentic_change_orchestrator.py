@@ -43,6 +43,10 @@ from pdd.agentic_common import (
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.sync_order import (
+    # Retained as stable patch points for orchestration callers/tests while
+    # Step 6 uses the architecture-backed dependency graph below.
+    build_dependency_graph,
+    extract_module_from_include,
     build_dependency_graph_from_architecture,
     _architecture_module_key,
     topological_sort,

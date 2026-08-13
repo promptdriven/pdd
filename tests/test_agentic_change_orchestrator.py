@@ -8539,7 +8539,7 @@ class TestSyncOrderPddPromptsPath:
              patch("pdd.agentic_change_orchestrator.clear_workflow_state") as mock_clear, \
              patch("pdd.agentic_change_orchestrator.load_prompt_template") as mock_template, \
              patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
-             patch("pdd.agentic_change_orchestrator.build_dependency_graph") as mock_build_graph, \
+             patch("pdd.agentic_change_orchestrator.build_dependency_graph_from_architecture") as mock_build_graph, \
              patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
              patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_get_affected, \
              patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script, \
@@ -8558,6 +8558,11 @@ class TestSyncOrderPddPromptsPath:
             prompts_dir.mkdir(parents=True)
             (prompts_dir / "embed_retrieve_python.prompt").write_text("% embed module")
             (prompts_dir / "auto_include_python.prompt").write_text("% auto include")
+            (worktree_dir / "architecture.json").write_text("[]")
+            mock_build_graph.return_value = {
+                "embed_retrieve": [],
+                "auto_include": [],
+            }
 
             # Step 9 reports files with pdd/prompts/ prefix (as git does with real paths)
             existing_state = {
@@ -8579,8 +8584,8 @@ class TestSyncOrderPddPromptsPath:
                 cwd=tmp_path, quiet=True,
             )
 
-            # build_dependency_graph should have been called (modules were detected)
-            mock_build_graph.assert_called()
+            # The sync order uses the architecture-backed graph (issue #1807).
+            mock_build_graph.assert_called_once_with(worktree_dir / "architecture.json")
             # get_affected_modules should have received the detected modules
             call_args = mock_get_affected.call_args
             detected_modules = call_args[0][1]  # second positional arg
@@ -8597,7 +8602,7 @@ class TestSyncOrderPddPromptsPath:
              patch("pdd.agentic_change_orchestrator.clear_workflow_state") as mock_clear, \
              patch("pdd.agentic_change_orchestrator.load_prompt_template") as mock_template, \
              patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
-             patch("pdd.agentic_change_orchestrator.build_dependency_graph") as mock_build_graph, \
+             patch("pdd.agentic_change_orchestrator.build_dependency_graph_from_architecture") as mock_build_graph, \
              patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
              patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_get_affected, \
              patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script:
@@ -8614,6 +8619,8 @@ class TestSyncOrderPddPromptsPath:
             prompts_dir = worktree_dir / "prompts"
             prompts_dir.mkdir(parents=True)
             (prompts_dir / "foo_python.prompt").write_text("% foo module")
+            (worktree_dir / "architecture.json").write_text("[]")
+            mock_build_graph.return_value = {"foo": []}
 
             existing_state = {
                 "last_completed_step": 12,
@@ -8631,7 +8638,7 @@ class TestSyncOrderPddPromptsPath:
                 cwd=tmp_path, quiet=True,
             )
 
-            mock_build_graph.assert_called()
+            mock_build_graph.assert_called_once_with(worktree_dir / "architecture.json")
             call_args = mock_get_affected.call_args
             detected_modules = call_args[0][1]
             assert "foo" in detected_modules
