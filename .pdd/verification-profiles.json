@@ -8279,7 +8279,7 @@
       "prompt_path": "pdd/prompts/pdd_completion_zsh.prompt",
       "language_id": "zsh",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:5d05ee3fcc959bfba1312b3d2ded6c2329ef1f6df0f532e855ac5a345ec6a107"
+        "CONTRACT-SHA256:488cde2f0d55b75a1cafc4f3e8f0e5f3984d4c0c0b70076c0d61820a4974365f"
       ],
       "obligations": [
         {
@@ -8288,7 +8288,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:5d05ee3fcc959bfba1312b3d2ded6c2329ef1f6df0f532e855ac5a345ec6a107"
+            "CONTRACT-SHA256:488cde2f0d55b75a1cafc4f3e8f0e5f3984d4c0c0b70076c0d61820a4974365f"
           ],
           "artifact_paths": [
             "pdd/prompts/pdd_completion_zsh.prompt"

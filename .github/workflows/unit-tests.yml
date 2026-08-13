@@ -129,7 +129,7 @@ jobs:
       - name: Provision and verify protected Linux sandbox
         run: |
           sudo apt-get update
-          sudo apt-get install --yes bubblewrap
+          sudo apt-get install --yes bubblewrap zsh
           private_root="$(mktemp -d)"
           chmod 700 "$private_root"
           mkdir -m 700 "$private_root/scratch"
