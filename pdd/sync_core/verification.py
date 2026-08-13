@@ -1042,9 +1042,6 @@ _PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS = (
         _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[0],
         _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
     ),
-)
-
-_TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/architecture_include_validation_python.prompt",
         "python",
@@ -1053,6 +1050,9 @@ _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS = (
         _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[0],
         _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
     ),
+)
+
+_TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_checkup_python.prompt",
         "python",
