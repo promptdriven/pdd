@@ -2362,6 +2362,11 @@
             "name": "ProseOutputError",
             "signature": "(prompt_name: str, output_path: str, language: str, model_name: str = \"unknown\", total_cost: float = 0.0, raw_output: Optional[str] = None, extractor_result: str = \"empty\")",
             "returns": "ProseOutputError"
+          },
+          {
+            "name": "LanguageMismatchError",
+            "signature": "(prompt_name: str, output_path: str, language: str, model_name: str = \"unknown\", total_cost: float = 0.0, raw_output: Optional[str] = None, syntax_error: str = \"\")",
+            "returns": "LanguageMismatchError"
           }
         ]
       }
