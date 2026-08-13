@@ -3905,7 +3905,7 @@ def test_story_bootstrap_rejects_mutated_exact_rule(monkeypatch, field, value) -
         tuple(mutated),
     )
 
-    assert result == tuple(_BOOTSTRAP_HUMAN_OWNERSHIP[1:])
+    assert result == tuple(sorted(_BOOTSTRAP_HUMAN_OWNERSHIP[1:]))
 
 
 def test_story_bootstrap_ignores_extra_candidate_rule(monkeypatch) -> None:
