@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import warnings
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from rich import print as rprint
 from rich.markup import escape as rich_escape
@@ -1121,6 +1121,103 @@ def _prompt_inventory_descriptor(prompt_path: Path) -> str:
     return snippet[:160]
 
 
+def _dotted_module_for_code_path(
+    code_path: Path,
+    source_root: Path,
+) -> Optional[str]:
+    """Return the importable dotted module name for a generated source file."""
+    try:
+        relative = code_path.resolve().relative_to(source_root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if relative.suffix != ".py":
+        return None
+    parts = list(relative.with_suffix("").parts)
+    if not parts or any(not part.isidentifier() for part in parts):
+        return None
+    return ".".join(parts)
+
+
+def _declared_interface_callables(prompt_path: Path) -> List[str]:
+    """Return the callables a prompt declares in its ``<pdd-interface>`` block."""
+    try:
+        from .architecture_sync import (  # pylint: disable=import-outside-toplevel
+            parse_prompt_tags,
+        )
+
+        interface = parse_prompt_tags(
+            prompt_path.read_text(encoding="utf-8")
+        ).get("interface")
+    except Exception:  # pylint: disable=broad-exception-caught
+        return []
+    if not isinstance(interface, dict):
+        return []
+    module = interface.get("module")
+    if not isinstance(module, dict):
+        return []
+    names: List[str] = []
+    for entry in module.get("functions", []) or []:
+        if isinstance(entry, dict):
+            name = entry.get("name")
+            if isinstance(name, str) and name.isidentifier():
+                names.append(name)
+    return names
+
+
+def derive_contract_entry_point(
+    prompt_paths: Sequence[Path],
+    prompts_root: Optional[Path],
+    source_root: Optional[Path] = None,
+) -> Optional[str]:
+    """Return a complete ``## Entry Point`` block, or ``None`` when ambiguous.
+
+    Derived from the story's linked prompt rather than asked of a model: the
+    prompt already declares its module (via the prompt->code mapping) and its
+    callables (via ``<pdd-interface>``), so this is deterministic and checkable.
+
+    Emitted ONLY when a single linked prompt declares a single callable. A
+    partial or guessed Entry Point is worse than none: ``story_test_generation``
+    routes on heading presence, so a declared-but-incomplete block turns
+    ``pdd test --from-story`` into a hard error (pdd#1889 C-F7), and a wrong
+    callable produces a confidently wrong behavioural test. When the derivation
+    is not unambiguous the section is omitted and the story keeps the
+    traceability path.
+    """
+    if prompts_root is None or len(prompt_paths) != 1:
+        return None
+    prompt_path = Path(prompt_paths[0])
+    code_path = _prompt_to_code_path(prompt_path, prompts_root)
+    if code_path is None or not code_path.is_file():
+        return None
+    root = source_root or _resolve_src_dir(prompts_root)
+    module = _dotted_module_for_code_path(code_path, root)
+    if module is None:
+        return None
+    callables = _declared_interface_callables(prompt_path)
+    if len(callables) != 1:
+        return None
+    return (
+        "## Entry Point\n\n"
+        f"- module: {module}\n"
+        f"- callable: {callables[0]}\n"
+        "- args: []\n"
+        "- kwargs: {}\n"
+    )
+
+
+def _insert_entry_point(contract_body: str, entry_point: str) -> str:
+    """Insert *entry_point* before ``## Oracle``, matching the contract order."""
+    if "## Entry Point" in contract_body:
+        return contract_body
+    marker = "\n## Oracle"
+    index = contract_body.find(marker)
+    if index == -1:
+        return f"{contract_body.rstrip()}\n\n{entry_point}"
+    head = contract_body[:index].rstrip()
+    tail = contract_body[index:].lstrip("\n")
+    return f"{head}\n\n{entry_point}\n{tail}"
+
+
 def _scan_prompt_inventory(
     prompts_dir: Optional[Path],
     *,
@@ -1294,7 +1391,10 @@ def _generate_and_write_contract(  # pylint: disable=too-many-arguments,too-many
     Returns ``(contract_path, cost, model, error)``. ``contract_path`` is None and
     ``error`` is set when contract generation could not be completed.
     """
-    inventory = _scan_prompt_inventory(prompts_root, extra_paths=extra_prompt_paths)
+    # Materialize once: the caller may pass a generator, and it is read twice
+    # (inventory scan, then Entry Point derivation).
+    linked_prompt_paths = list(extra_prompt_paths)
+    inventory = _scan_prompt_inventory(prompts_root, extra_paths=linked_prompt_paths)
     body, cost, model = _llm_generate_story_contract(
         title=title,
         story_text=story_text,
@@ -1308,6 +1408,14 @@ def _generate_and_write_contract(  # pylint: disable=too-many-arguments,too-many
     )
     if body is None:
         return None, cost, model, "contract generation returned no valid contract"
+
+    # #2391: the contract meta-prompt's output format has no ## Entry Point, so
+    # every generated contract lands on the traceability path. Derive the
+    # section deterministically from the linked prompt's declared interface
+    # instead -- no model involved, and omitted entirely when ambiguous.
+    entry_point = derive_contract_entry_point(linked_prompt_paths, prompts_root)
+    if entry_point:
+        body = _insert_entry_point(body, entry_point)
 
     contract_path = _contract_path_for_story(story_path)
     contract_path.parent.mkdir(parents=True, exist_ok=True)

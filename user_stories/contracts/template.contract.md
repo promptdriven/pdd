@@ -20,9 +20,37 @@ Describe relevant state, assumptions, fixtures, users, records, external service
 1. Given ..., when ..., then ...
 2. Given ..., when ..., then ...
 
+## Entry Point
+
+Declaring this section is what makes `pdd test --from-story` generate a
+*behavioural* test — one that imports the callable, invokes it, and asserts the
+`## Oracle` / `## Negative Cases` below as Python expressions over `result`.
+Omit the section and the generated test only pins this document's text; it will
+not execute the code the story is about.
+
+Declare it completely or not at all: a partial block (missing `- module:` or
+`- callable:`) is rejected rather than silently downgraded.
+
+- module: package.module
+- callable: function_name
+- args: []
+- kwargs: {}
+
+## Seams
+
+Optional. Assignments applied before the call, to pin values the story does not
+control (clocks, rates, IDs) so the oracle stays deterministic.
+
+- package.module.SOME_CONSTANT = 0
+
 ## Oracle
 
-These details matter for pass/fail:
+These details matter for pass/fail.
+
+When `## Entry Point` is declared, write these as Python expressions over
+`result` (e.g. `result["total"] == 3`) — they are evaluated against the live
+return value. Without an Entry Point they are prose, and are only recorded.
+
 - error type
 - state transition
 - absence/presence of external call

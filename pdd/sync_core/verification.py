@@ -182,6 +182,16 @@ _CODE_GENERATOR_LANGUAGE_GATE_PROFILE_BYTES = (
     "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
     "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
 )
+_STORY_ENTRY_POINT_PROFILE_STATE = (
+    (
+        "01d5c04c110c9dcb0cd731c218478f928c2fac457a99e9eaee87a9eec2395a7b",
+        "01d5c04c110c9dcb0cd731c218478f928c2fac457a99e9eaee87a9eec2395a7b",
+    ),
+    (
+        "4a13a755b91804e29e9975fe4c63b00466db9ae65ef32f1c62d3980af9b6155a",
+        "4a13a755b91804e29e9975fe4c63b00466db9ae65ef32f1c62d3980af9b6155a",
+    ),
+)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
@@ -2947,10 +2957,13 @@ def _load_requirement_transition_authorizations(
     )
     code_generator_language_gate_state = is_pdd_repository and (
         (policy_digests, profile_digests)
-        == (
-            _CODE_GENERATOR_LANGUAGE_GATE_ROTATION_POLICY_BYTES,
-            _CODE_GENERATOR_LANGUAGE_GATE_PROFILE_BYTES,
-        )
+        in {
+            (
+                _CODE_GENERATOR_LANGUAGE_GATE_ROTATION_POLICY_BYTES,
+                _CODE_GENERATOR_LANGUAGE_GATE_PROFILE_BYTES,
+            ),
+            _STORY_ENTRY_POINT_PROFILE_STATE,
+        }
     )
     temperature_regression_state = (
         exact_pr2316_phase_a_reissue

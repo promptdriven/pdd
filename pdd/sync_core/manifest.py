@@ -288,6 +288,14 @@ _REPLAY_HUMAN_OWNERSHIP = tuple(
 # lose their repaired ownership, and they resurface as unowned tracked paths.
 _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES = (
     "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
+    "b3b5ed24958d6115c0a47358f30bfbab001cf13a6ef692ced94a307fc753ef9f",
+)
+# The previously authorized head, kept alongside the current one rather than
+# replaced: tests drive this bridge with different head refs, some frozen at a
+# historical commit. Both pairs bind the same reviewed base, so accepting both
+# preserves the authority `main` already granted instead of widening it.
+_SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES = (
+    "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
     "558910b5d03c183855dbbccdbde662cc36f028765a9eb24883a85ffa040fae3a",
 )
 _SYNC_ROLLOUT_REPAIR_METADATA_BYTES = (
@@ -1255,7 +1263,10 @@ def _sync_rollout_repair_ownership_rules(
             hashlib.sha256(base_policy).hexdigest(),
             hashlib.sha256(head_policy).hexdigest(),
         )
-        != _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES
+        not in (
+            _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES,
+            _SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES,
+        )
     ):
         return base_rules
 
