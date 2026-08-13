@@ -293,9 +293,17 @@ R2 (MUST NOT): Print the diagnostic block when `quiet` is true.
 
 2. **Story validation**
    - For each story file, read content, compose the story oracle from the human story
-     plus its contract when present, and call:
-     `detect_change([prompt_paths], oracle_content, strength, temperature, time, verbose=verbose)`.
-   - A story passes when `changes_list` is empty.
+     plus its contract when present. Parse the checkable `## Acceptance Criteria`,
+     `## Negative Cases`, and `## Oracle` items from the contract (falling back to
+     the Story when the contract has none), and classify each against the scoped
+     prompts with `evaluate_acceptance_criteria`. Pass `## Non-Oracle` items as
+     guards that can never ground an unsatisfied verdict.
+   - A story passes only when every parsed criterion is decisively `satisfied`.
+     Any `unsatisfied` criterion is a completed semantic failure; `unclear`,
+     unevaluated, malformed, or provider-failed criteria are incomplete/UNKNOWN,
+     never a pass. Render unsatisfied verdicts as the existing
+     `{prompt_name, change_instructions}` rows. Stories with no parseable criteria
+     retain the legacy `detect_change` fallback, where an empty changes list passes.
    - Support `fail_fast=True` to stop after first failure.
    - Respect `quiet` for console output.
    - If no stories are found, return success with zero cost.
@@ -332,7 +340,14 @@ R2 (MUST NOT): Print the diagnostic block when `quiet` is true.
 
 4. **Story fix flow**
    - `run_user_story_fix` must:
-     - load the target story file and run `detect_change` over prompt files
+     - load the target story file and resolve its `pdd-story-prompts` metadata
+       against the full project prompt inventory. When metadata is present, it is
+       an exact repair boundary: evaluate, resolve, and modify only those linked
+       prompts; refuse to modify anything when a declared reference is unresolved.
+       Without metadata, use the full prompt set.
+     - for stories with parseable criteria, plan repairs with
+       `evaluate_acceptance_criteria` and turn only `unsatisfied` verdicts into
+       change rows; otherwise use the legacy `detect_change` fallback
      - for each reported prompt, resolve prompt path robustly (case-insensitive + basename fallback)
      - map prompt file path to source file path via prompt naming convention (`<basename>_<language>.prompt`) and `get_extension(language)`
      - resolve source root from `PDD_SRC_DIR` override or default `../src` from prompts root

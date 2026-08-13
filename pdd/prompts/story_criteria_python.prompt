@@ -50,7 +50,8 @@ on `--strength` alone.
   when no linked file could be read at all.
 - An unrecognized or empty status MUST become `unclear`, never `satisfied`.
 - Criterion identifiers MUST be matched loosely (`AC1`, `ac-1`, `1`, `criterion 1`);
-  unknown identifiers are dropped and duplicates keep the first assessment.
+  unknown identifiers are dropped and conflicting duplicates resolve to the
+  worst status (`unsatisfied` > `unclear` > `satisfied`).
 - A malformed evaluator response or missing template MUST raise
   `StoryCriteriaError` carrying the cost already incurred, never return an empty
   (passing) verdict set.

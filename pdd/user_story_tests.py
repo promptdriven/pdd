@@ -2080,8 +2080,10 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     """
     Attempt to fix prompts based on a single user story.
 
-    This runs detect_change on the story, then applies changes to each affected
-    prompt by calling change_main with the story as the change prompt.
+    For stories with parseable criteria, this plans repairs from the bounded
+    criteria evaluation; otherwise it falls back to ``detect_change``. It then
+    applies the scoped changes by calling ``change_main`` with the story as the
+    change prompt.
     """
     from .change_main import change_main  # pylint: disable=import-outside-toplevel
 
@@ -2097,6 +2099,41 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
         return False, f"User story file not found: {story_file}", 0.0, "", []
 
     story_content = _read_story(story_path)
+    # Story metadata is an explicit repair boundary, not merely a validation
+    # hint.  A verifier may only nominate a file it was given; otherwise a
+    # hallucinated name (or a valid but unrelated prompt name) can make ``pdd
+    # fix`` edit a prompt outside the story's declared scope.  Use the same
+    # resolution rules as ``run_user_story_tests`` and refuse to mutate when
+    # any declared reference is unresolved.
+    metadata_prompt_refs = _parse_story_prompt_metadata(story_content)
+    story_prompt_files = prompt_files
+    if metadata_prompt_refs:
+        resolved_story_prompts: List[Path] = []
+        unresolved_prompt_refs: List[str] = []
+        for ref in metadata_prompt_refs:
+            resolved = _resolve_prompt_path(ref, prompt_files, prompts_root)
+            if resolved:
+                resolved_story_prompts.append(resolved)
+            else:
+                unresolved_prompt_refs.append(ref)
+        if unresolved_prompt_refs:
+            return (
+                False,
+                "Cannot repair a story with unresolved pdd-story-prompts "
+                "metadata: " + ", ".join(unresolved_prompt_refs),
+                0.0,
+                "",
+                [],
+            )
+        if not resolved_story_prompts:
+            return (
+                False,
+                "No prompts from pdd-story-prompts metadata could be resolved.",
+                0.0,
+                "",
+                [],
+            )
+        story_prompt_files = _dedupe_prompt_paths(resolved_story_prompts)
     # Detect and repair against the SAME oracle validation uses: the human Story
     # plus its generated contract. With the two-file story model, the tiny story
     # file alone omits the acceptance criteria/oracle, so `pdd fix` would no-op or
@@ -2115,7 +2152,7 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     if criteria:
         try:
             evaluation = evaluate_acceptance_criteria(
-                prompt_files,
+                story_prompt_files,
                 oracle_content,
                 criteria,
                 strength,
@@ -2138,12 +2175,12 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
         changes_list = changes_from_verdicts(
             evaluation.unsatisfied,
             default_prompt_name=(
-                prompt_files[0].name if len(prompt_files) == 1 else ""
+                story_prompt_files[0].name if len(story_prompt_files) == 1 else ""
             ),
         )
     else:
         changes_list, detect_cost, detect_model = detect_change(
-            [str(p) for p in prompt_files],
+            [str(p) for p in story_prompt_files],
             oracle_content,
             strength,
             temperature,
@@ -2210,7 +2247,9 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     try:
         for change in changes_list:
             prompt_name = str(change.get("prompt_name") or "")
-            prompt_path = _resolve_prompt_path(prompt_name, prompt_files, prompts_root)
+            prompt_path = _resolve_prompt_path(
+                prompt_name, story_prompt_files, prompts_root
+            )
             if not prompt_path:
                 errors.append(f"Unable to resolve prompt path: {prompt_name}")
                 continue
@@ -2255,7 +2294,7 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     passed, _, validation_cost, validation_model = run_user_story_tests(
         prompts_dir=str(prompts_root),
         story_files=[story_path],
-        prompt_files=prompt_files,
+        prompt_files=story_prompt_files,
         strength=strength,
         temperature=temperature,
         time=time,

@@ -2693,3 +2693,62 @@ def test_story_fix_reports_no_change_needed_when_every_criterion_is_satisfied(tm
     assert success is True
     assert "No prompt changes needed" in message
     assert changed == []
+
+
+def test_story_fix_never_modifies_a_prompt_outside_metadata_scope(tmp_path):
+    """A verifier cannot use ``pdd fix`` to write an unlinked prompt."""
+    prompts_dir = tmp_path / "prompts"
+    src_dir = tmp_path / "src"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    src_dir.mkdir()
+    stories_dir.mkdir()
+    linked_prompt = prompts_dir / "linked_python.prompt"
+    unlinked_prompt = prompts_dir / "unlinked_python.prompt"
+    linked_prompt.write_text("linked", encoding="utf-8")
+    unlinked_prompt.write_text("unlinked", encoding="utf-8")
+    (src_dir / "linked.py").write_text("", encoding="utf-8")
+    (src_dir / "unlinked.py").write_text("", encoding="utf-8")
+    story_path = stories_dir / "story__scoped.md"
+    story_path.write_text(
+        "<!-- pdd-story-prompts: linked_python.prompt -->\n## Story\nScoped repair.\n",
+        encoding="utf-8",
+    )
+    contract = _contract_path_for_story(story_path)
+    contract.parent.mkdir()
+    contract.write_text("## Acceptance Criteria\n- Must remain scoped.\n", encoding="utf-8")
+
+    evaluated = []
+
+    def fake_evaluate(prompt_files, _oracle, criteria, *_args, **_kwargs):
+        evaluated.extend(path.name for path in prompt_files)
+        return CriteriaEvaluation(
+            verdicts=[
+                CriterionVerdict(
+                    criteria[0].id,
+                    criteria[0].text,
+                    "unsatisfied",
+                    prompt_name=unlinked_prompt.name,
+                )
+            ]
+        )
+
+    with (
+        patch(
+            "pdd.user_story_tests.evaluate_acceptance_criteria",
+            side_effect=fake_evaluate,
+        ),
+        patch("pdd.change_main.change_main") as mock_change,
+    ):
+        success, message, _cost, _model, changed = run_user_story_fix(
+            ctx=SimpleNamespace(obj={}),
+            story_file=str(story_path),
+            prompts_dir=str(prompts_dir),
+            quiet=True,
+        )
+
+    assert evaluated == [linked_prompt.name]
+    assert success is False
+    assert "Unable to resolve prompt path" in message
+    assert changed == []
+    mock_change.assert_not_called()
