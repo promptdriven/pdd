@@ -41,6 +41,9 @@
   `@pytest.mark.story(story_id="<slug>")`, else `false`. Compute it by querying
   the `story_regression` traceability API (`tests_for_story` / `has_regression_test`),
   not by re-implementing pytest collection here.
+- Obtain the per-story regression `status` from `evaluate_story_regression`; preserve
+  `story-regression-traceability-only` when its only fresh linked tests are generated
+  text-pins. Do not let a stale behavioural sibling upgrade that status.
 - This dimension MUST be orthogonal and additive: it MUST NOT alter the rule-keyed
   statuses or their `test_R<n>`-derived priority
   (`waived > failed > checked > story-only > test-only > unchecked`).
