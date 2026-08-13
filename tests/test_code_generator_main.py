@@ -1,3 +1,4 @@
+import ast
 import asyncio
 import json
 import os
@@ -604,7 +605,10 @@ def test_cloud_non_json_response_not_stripped(
         {},
         {"prompt_file": "Generate Python"},
         {"output": output_file_path_str},
-        "python"  # Non-JSON language should NOT trigger fence stripping
+        "yaml"  # Non-JSON language should NOT trigger fence stripping; a
+                # non-Python language also keeps this test out of the
+                # Language Validity Gate's scope (fence markers themselves
+                # are never valid Python syntax to parse).
     )
 
     mock_response = MagicMock(spec=requests.Response)
@@ -930,13 +934,13 @@ def test_incremental_gen_with_original_prompt_file(
         {"output": str(output_file_path)}, 
         "python"
     )
-    mock_incremental_generator_fixture.return_value = ("Updated code", True, 0.002, "inc_model")
+    mock_incremental_generator_fixture.return_value = ("def updated(): pass", True, 0.002, "inc_model")
 
     code, incremental, cost, model = code_generator_main(
         mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
     )
 
-    assert code == "Updated code"
+    assert code == "def updated(): pass"
     assert incremental
     assert cost == 0.002
     assert model == "inc_model"
@@ -951,7 +955,7 @@ def test_incremental_gen_with_original_prompt_file(
     assert call_kwargs["force_incremental"] is False
     assert call_kwargs["verbose"] is False
     assert call_kwargs["preprocess_prompt"] is False
-    assert output_file_path.read_text() == "Updated code"
+    assert output_file_path.read_text() == "def updated(): pass"
 
 
 def test_incremental_gen_with_git_committed_prompt(
@@ -1002,13 +1006,13 @@ def test_incremental_gen_with_git_committed_prompt(
         {"output": str(output_file_path)}, 
         "python"
     )
-    mock_incremental_generator_fixture.return_value = ("Git updated code", True, 0.003, "git_inc_model")
+    mock_incremental_generator_fixture.return_value = ("def git_updated(): pass", True, 0.003, "git_inc_model")
 
     code, incremental, _, _ = code_generator_main(
         mock_ctx, str(prompt_file_path_in_git), str(output_file_path), None, False
     )
 
-    assert code == "Git updated code"
+    assert code == "def git_updated(): pass"
     assert incremental
     call_kwargs = mock_incremental_generator_fixture.call_args.kwargs
     assert call_kwargs["language"] == "python"
@@ -1067,7 +1071,7 @@ def test_incremental_base_ref_fallback_used_when_no_local_history(
         {"output": str(output_file_path)},
         "python",
     )
-    mock_incremental_generator_fixture.return_value = ("Base-ref updated code", True, 0.004, "base_inc_model")
+    mock_incremental_generator_fixture.return_value = ("def base_ref_updated(): pass", True, 0.004, "base_inc_model")
 
     def fake_get_content(file_path, git_ref="HEAD"):
         if git_ref == "HEAD":
@@ -1084,7 +1088,7 @@ def test_incremental_base_ref_fallback_used_when_no_local_history(
         )
 
     assert incremental
-    assert code == "Base-ref updated code"
+    assert code == "def base_ref_updated(): pass"
     call_kwargs = mock_incremental_generator_fixture.call_args.kwargs
     assert call_kwargs["original_prompt"] == base_prompt
     assert call_kwargs["new_prompt"] == on_disk_prompt
@@ -1189,7 +1193,7 @@ def test_incremental_base_ref_env_override_is_honored(
         {"output": str(output_file_path)},
         "python",
     )
-    mock_incremental_generator_fixture.return_value = ("Override updated code", True, 0.004, "override_model")
+    mock_incremental_generator_fixture.return_value = ("def override_updated(): pass", True, 0.004, "override_model")
 
     seen_refs = []
 
@@ -4318,7 +4322,7 @@ def test_incremental_different_code_no_fallback(
     """When incremental produces genuinely different code, no fallback should occur (regression guard)."""
     mock_ctx.obj['local'] = True
     existing_code = "Existing code content"
-    updated_code = "Updated code that is different"
+    updated_code = "def updated(): pass\n\ndef extra(): pass\n"
 
     prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_diff_prompt.prompt"
     create_file(prompt_file_path, "New prompt")
@@ -8666,6 +8670,219 @@ class TestSyncCompatibilityGates:
 
 
 # ---------------------------------------------------------------------------
+# Tests for the Language Validity Gate (5b): a prompt declared as Python
+# (by filename convention) whose generated output isn't actually Python
+# must raise LanguageMismatchError before any file write, rather than
+# silently writing mismatched content to a .py file.
+# ---------------------------------------------------------------------------
+class TestVerifyLanguageValidityHelper:
+    """Direct unit tests for the `_verify_language_validity` helper."""
+
+    def test_returns_none_for_valid_python(self):
+        """Valid Python source must pass the gate and come back unchanged."""
+        from pdd.code_generator_main import _verify_language_validity
+
+        source = "def hello():\n    return 'world'\n"
+        err, content = _verify_language_validity(source, "python")
+        assert err is None
+        assert content == source
+
+    def test_returns_syntax_error_for_invalid_python(self):
+        """Non-Python content declared as Python must fail ast.parse."""
+        from pdd.code_generator_main import _verify_language_validity
+
+        html_output = "<!DOCTYPE html>\n<html>\n<body>Hello</body>\n</html>\n"
+        err, _content = _verify_language_validity(html_output, "python")
+        assert isinstance(err, SyntaxError)
+
+    def test_dedent_fallback_returns_the_text_that_actually_parsed(self):
+        """Uniformly indented Python must not be misclassified as invalid once
+        dedented — and the helper must hand back the DEDENTED text, not the
+        original. Returning the original is what let a 'valid' verdict write a
+        .py file that raises IndentationError on import."""
+        from pdd.code_generator_main import _verify_language_validity
+
+        indented = "    def hello():\n        return 'world'\n"
+        err, content = _verify_language_validity(indented, "python")
+        assert err is None
+        assert content != indented
+        ast.parse(content)  # the returned bytes must be parseable
+
+    def test_is_noop_for_non_python_language(self):
+        """The gate is Python-only: any other declared language is a no-op,
+        even for content that would never parse as Python. Non-Python content
+        must be returned byte-identical (never dedented)."""
+        from pdd.code_generator_main import _verify_language_validity
+
+        html_output = "<!DOCTYPE html>\n<html>\n<body>Hello</body>\n</html>\n"
+        for lang in ("html", "javascript"):
+            err, content = _verify_language_validity(html_output, lang)
+            assert err is None
+            assert content == html_output
+
+
+class TestLanguageMismatchErrorGate:
+    """Integration tests: `code_generator_main` must raise
+    `LanguageMismatchError` when the declared language is Python but the
+    generated content is not, and must leave the target file untouched."""
+
+    def test_code_generator_main_raises_language_mismatch_for_non_python_output(
+        self,
+        mock_ctx,
+        temp_dir_setup,
+        mock_construct_paths_fixture,
+        mock_local_generator_fixture,
+        mock_env_vars,
+    ):
+        """A prompt declared Python (by filename convention) whose LLM
+        output is actually HTML MUST raise `LanguageMismatchError` before
+        any file write, and MUST NOT reach the architecture conformance
+        gate. The gate only runs on first generation, so the output path
+        must not already hold a file."""
+        from pdd.code_generator_main import (
+            LanguageMismatchError,
+            ProseOutputError,
+            code_generator_main,
+        )
+
+        assert not issubclass(LanguageMismatchError, ProseOutputError)
+        assert issubclass(LanguageMismatchError, click.UsageError)
+
+        mock_ctx.obj['local'] = True
+        prompt_file = temp_dir_setup["prompts_dir"] / "page_python.prompt"
+        prompt_file.write_text("Generate an HTML page for the landing screen.")
+        output_file = temp_dir_setup["output_dir"] / "page.py"
+        assert not output_file.exists()
+
+        html_output = "<!DOCTYPE html>\n<html>\n<body>Hello</body>\n</html>\n"
+        mock_construct_paths_fixture.return_value = (
+            {},
+            {"prompt_file": "Generate an HTML page for the landing screen."},
+            {"output": str(output_file)},
+            "python",
+        )
+        mock_local_generator_fixture.return_value = (html_output, 0.001, "mock_model_v1")
+
+        with patch(
+            "pdd.code_generator_main.is_git_repository", return_value=False
+        ), patch(
+            "pdd.code_generator_main._verify_architecture_conformance"
+        ) as mock_verify_arch:
+            with pytest.raises(LanguageMismatchError) as excinfo:
+                code_generator_main(
+                    mock_ctx, str(prompt_file), str(output_file), None, False
+                )
+
+        # The language gate must fire before architecture conformance runs.
+        mock_verify_arch.assert_not_called()
+
+        exc = excinfo.value
+        assert exc.prompt_name == "page_python.prompt"
+        assert exc.language == "python"
+        assert exc.model_name == "mock_model_v1"
+        msg = str(exc)
+        assert msg.startswith("Language mismatch for page_python.prompt:")
+        assert "Syntax error:" in msg
+        assert "Raw output excerpt:" in msg
+
+        # The gate fires before the writer, so no file is created.
+        assert not output_file.exists()
+
+    @pytest.mark.parametrize(
+        "existing_source, label",
+        [
+            ("def render():\n    return '<div></div>'\n", "public-surface"),
+            (
+                "import sys\n\ndef _helper():\n    return 1\n\nprint(_helper())\n",
+                "private-script-only",
+            ),
+        ],
+    )
+    def test_code_generator_main_language_gate_preserves_existing_file(
+        self,
+        existing_source,
+        label,
+        mock_ctx,
+        temp_dir_setup,
+        mock_construct_paths_fixture,
+        mock_local_generator_fixture,
+        mock_env_vars,
+    ):
+        """Non-Python output over an EXISTING .py file must fail and leave the
+        file byte-identical.
+
+        The `private-script-only` case is the regression that matters: a module
+        with no public symbols snapshots to an empty public surface, and
+        `_verify_public_surface_regression` guards its syntax check with
+        `if before:`. With the gate skipped for existing files, nothing
+        inspected the candidate and HTML silently replaced working Python.
+        """
+        from pdd.code_generator_main import code_generator_main
+
+        mock_ctx.obj['local'] = True
+        prompt_file = temp_dir_setup["prompts_dir"] / "page_python.prompt"
+        prompt_file.write_text("Generate an HTML page for the landing screen.")
+        output_file = temp_dir_setup["output_dir"] / "page.py"
+        output_file.write_text(existing_source)
+
+        html_output = "<!DOCTYPE html>\n<html>\n<body>Hello</body>\n</html>\n"
+        mock_construct_paths_fixture.return_value = (
+            {},
+            {"prompt_file": "Generate an HTML page for the landing screen."},
+            {"output": str(output_file)},
+            "python",
+        )
+        mock_local_generator_fixture.return_value = (html_output, 0.001, "mock_model_v1")
+
+        with patch(
+            "pdd.code_generator_main.is_git_repository", return_value=False
+        ), pytest.raises(click.UsageError):
+            code_generator_main(
+                mock_ctx, str(prompt_file), str(output_file), None, False
+            )
+
+        # The existing file must survive untouched, and must still be Python.
+        assert output_file.read_text() == existing_source, (
+            f"{label}: existing file was modified by a failed generation"
+        )
+        ast.parse(output_file.read_text())
+
+    def test_code_generator_main_language_gate_is_noop_for_non_python_declared_language(
+        self,
+        mock_ctx,
+        temp_dir_setup,
+        mock_construct_paths_fixture,
+        mock_local_generator_fixture,
+        mock_env_vars,
+    ):
+        """The same non-Python content must NOT be blocked when the prompt
+        declares a non-Python language (no false positive)."""
+        from pdd.code_generator_main import code_generator_main
+
+        mock_ctx.obj['local'] = True
+        prompt_file = temp_dir_setup["prompts_dir"] / "page_html.prompt"
+        prompt_file.write_text("Generate an HTML page for the landing screen.")
+        output_file = temp_dir_setup["output_dir"] / "page.html"
+
+        html_output = "<!DOCTYPE html>\n<html>\n<body>Hello</body>\n</html>\n"
+        mock_construct_paths_fixture.return_value = (
+            {},
+            {"prompt_file": "Generate an HTML page for the landing screen."},
+            {"output": str(output_file)},
+            "html",
+        )
+        mock_local_generator_fixture.return_value = (html_output, 0.001, "mock_model_v1")
+
+        with patch("pdd.code_generator_main.is_git_repository", return_value=False):
+            code, incremental, cost, model = code_generator_main(
+                mock_ctx, str(prompt_file), str(output_file), None, False
+            )
+
+        assert code == html_output
+        assert output_file.read_text(encoding="utf-8") == html_output
+
+
+# ---------------------------------------------------------------------------
 # Tests for <pdd-interface> signature conformance (Issue #928)
 # ---------------------------------------------------------------------------
 class TestPddInterfaceSignatureConformance:
@@ -11736,3 +11953,123 @@ def test_issue_1724_whitespace_only_directive_is_inactive(
     mock_local_generator_fixture.assert_not_called()
     # And no repair-directive block was injected into the prompt.
     assert "<architecture_repair_directive>" not in (captured.get("new_prompt") or "")
+
+
+# ---------------------------------------------------------------------------
+# CLI-boundary coverage for the Language Validity Gate (Requirement 5b).
+#
+# The tests above call `code_generator_main` directly, which proves the gate
+# raises but not what a user experiences: that `pdd generate` exits non-zero and
+# leaves the target file byte-identical. These drive the real Click command
+# through CliRunner, mocking only the model call (`local_code_generator_func`),
+# so the gates, the writer, and the CLI's exception handling all run for real.
+# ---------------------------------------------------------------------------
+class TestLanguageValidityGateCliBoundary:
+    """Deterministic `pdd generate` checks for exit code and file preservation."""
+
+    HTML_OUTPUT = "<!DOCTYPE html>\n<html>\n<body>Hello</body>\n</html>\n"
+    INDENTED_PYTHON = "    def add(a, b):\n        return a + b\n"
+
+    @staticmethod
+    def _run_generate(tmp_path, generated_content, existing_source=None):
+        """Invoke `pdd --local generate` with only the model boundary mocked.
+
+        Returns ``(result, output_file, bytes_before)``.
+        """
+        from click.testing import CliRunner
+
+        from pdd.cli import cli
+
+        prompt_file = tmp_path / "page_python.prompt"
+        prompt_file.write_text("Generate the landing screen module.\n")
+        output_file = tmp_path / "page.py"
+        if existing_source is not None:
+            output_file.write_text(existing_source)
+        bytes_before = output_file.read_bytes() if output_file.exists() else None
+
+        generator = MagicMock(return_value=(generated_content, 0.001, "mock_model_v1"))
+        with patch(
+            "pdd.code_generator_main.local_code_generator_func", generator
+        ), patch("pdd.code_generator_main.is_git_repository", return_value=False):
+            result = CliRunner().invoke(
+                cli,
+                [
+                    "--local",
+                    "--force",
+                    "generate",
+                    str(prompt_file),
+                    "--output",
+                    str(output_file),
+                ],
+                catch_exceptions=True,
+            )
+        return result, output_file, bytes_before
+
+    @pytest.fixture(autouse=True)
+    def _gate_env(self, monkeypatch, tmp_path):
+        """Offline, deterministic CLI run with no user config bleeding in."""
+        monkeypatch.setenv("PDD_LOCAL", "1")
+        monkeypatch.setenv("PDD_AUTO_UPDATE", "false")
+        monkeypatch.delenv("PDD_ALLOW_EMPTY_GENERATION", raising=False)
+        monkeypatch.delenv("PDD_SKIP_CONFORMANCE", raising=False)
+        monkeypatch.chdir(tmp_path)
+
+    @pytest.mark.parametrize(
+        "existing_source, label",
+        [
+            ("def render():\n    return 1\n", "public-surface"),
+            (
+                "import sys\n\ndef _helper():\n    return 1\n\nprint(_helper())\n",
+                "private-script-only",
+            ),
+        ],
+    )
+    def test_generate_rejects_non_python_and_preserves_existing_file(
+        self, tmp_path, existing_source, label
+    ):
+        """HTML generated into an existing .py must exit non-zero and leave the
+        target byte-identical.
+
+        `private-script-only` is the data-loss regression: with no public
+        symbols the downstream syntax check (guarded by `if before:`) never
+        inspected the candidate, and the writer replaced working Python.
+        """
+        result, output_file, bytes_before = self._run_generate(
+            tmp_path, self.HTML_OUTPUT, existing_source=existing_source
+        )
+
+        assert result.exit_code != 0, (
+            f"{label}: expected a non-zero exit; got {result.exit_code}"
+        )
+        assert output_file.read_bytes() == bytes_before, (
+            f"{label}: target file was modified by a failed generation"
+        )
+        ast.parse(output_file.read_text())
+
+    def test_generate_rejects_non_python_on_first_generation(self, tmp_path):
+        """With no pre-existing file the gate must exit non-zero and must not
+        leave a partial .py behind."""
+        result, output_file, _ = self._run_generate(tmp_path, self.HTML_OUTPUT)
+
+        assert result.exit_code != 0
+        assert not output_file.exists(), (
+            "a rejected generation must not create the file"
+        )
+
+    def test_generate_writes_parseable_python_for_indented_output(self, tmp_path):
+        """The dedent recovery path must save bytes that actually parse.
+
+        Uniformly indented source parses only after `textwrap.dedent`. When the
+        gate validated the dedented text but the writer wrote the original,
+        `pdd generate` reported success and saved a .py file that raises
+        IndentationError on import.
+        """
+        result, output_file, _ = self._run_generate(tmp_path, self.INDENTED_PYTHON)
+
+        assert result.exit_code == 0, (
+            f"indented-but-recoverable Python should generate cleanly; "
+            f"got {result.exit_code}: {result.output}"
+        )
+        assert output_file.exists()
+        # The saved file is the contract: it must import.
+        ast.parse(output_file.read_text())
