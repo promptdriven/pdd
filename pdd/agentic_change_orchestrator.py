@@ -3681,9 +3681,20 @@ def run_agentic_change_orchestrator(
 
     if worktree_path:
         architecture_path = worktree_path / "architecture.json"
-        if architecture_path.exists() and modified_modules:
+        prompts_dir = worktree_path / "prompts"
+        if modified_modules and (architecture_path.exists() or prompts_dir.exists()):
             try:
-                graph = build_dependency_graph_from_architecture(architecture_path)
+                if architecture_path.exists():
+                    graph = build_dependency_graph_from_architecture(architecture_path)
+                else:
+                    graph = build_dependency_graph(prompts_dir)
+                    modified_modules = {
+                        module
+                        for module in (
+                            extract_module_from_include(path) for path in file_list
+                        )
+                        if module
+                    }
                 sorted_modules, cycles = topological_sort(graph)
                 if cycles and not quiet:
                     console.print(f"[yellow]Warning: Circular dependencies detected: {cycles}[/yellow]")
