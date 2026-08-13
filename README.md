@@ -763,7 +763,6 @@ Commands:
   - `## Non-Oracle` is not judged; it is passed to the evaluator as details that may never be grounds for failure.
 
   A `satisfied` verdict must quote the prompt text that requires it, so each verdict is checkable rather than trusted. Only an `unsatisfied` criterion fails a story — a hedging model must not be able to fail a correct prompt set. An `unclear` or unjudged criterion leaves the story **unverified**, reported as `UNKNOWN` rather than passed.
-  Pass `--legacy-detect` to fall back to the open-ended change detector that story validation used previously.
 - `pdd change` runs story validation after prompt modifications and fails if any story fails.
 - `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it. The repair is planned from the same verification that judges it: each unsatisfied criterion becomes one change, so every edit traces to a named criterion the prompts do not meet. When no criterion is unsatisfied but the story could not be fully verified, nothing is changed and the command says so rather than reporting success.
 - `pdd test --issue <url|number|issue.md> <prompt_1.prompt> [prompt_2.prompt ...]` generates a `story__*.md` file from the issue text and links those prompts.

@@ -1583,30 +1583,6 @@ def _evaluation(criteria, statuses, cost=0.1, model="gpt-test"):
     )
 
 
-def test_legacy_detect_forces_the_open_ended_gate(tmp_path):
-    """--legacy-detect must bypass criteria classification entirely."""
-    prompts_dir, stories_dir, _ = _story_with_contract(tmp_path)
-
-    with (
-        patch("pdd.user_story_tests.detect_change") as mock_detect,
-        patch("pdd.user_story_tests.evaluate_acceptance_criteria") as mock_evaluate,
-    ):
-        mock_detect.return_value = ([], 0.4, "legacy-model")
-        passed, results, cost, model = run_user_story_tests(
-            prompts_dir=str(prompts_dir),
-            stories_dir=str(stories_dir),
-            quiet=True,
-            legacy_detect=True,
-        )
-
-    mock_evaluate.assert_not_called()
-    mock_detect.assert_called_once()
-    assert passed is True
-    assert "criteria" not in results[0]
-    assert cost == 0.4
-    assert model == "legacy-model"
-
-
 def test_story_without_criteria_falls_back_to_detect_change(tmp_path):
     """A story with no parseable criteria keeps the legacy behavior."""
     prompts_dir = tmp_path / "prompts"
@@ -2717,25 +2693,3 @@ def test_story_fix_reports_no_change_needed_when_every_criterion_is_satisfied(tm
     assert success is True
     assert "No prompt changes needed" in message
     assert changed == []
-
-
-def test_story_fix_legacy_detect_still_uses_the_open_ended_detector(tmp_path):
-    prompts_dir, story_path = _fix_story_with_contract(tmp_path)
-
-    with (
-        patch("pdd.user_story_tests.detect_change") as mock_detect,
-        patch("pdd.user_story_tests.evaluate_acceptance_criteria") as mock_evaluate,
-    ):
-        mock_detect.return_value = ([], 0.2, "legacy-model")
-        success, _message, _cost, model, _changed = run_user_story_fix(
-            ctx=SimpleNamespace(obj={}),
-            story_file=str(story_path),
-            prompts_dir=str(prompts_dir),
-            quiet=True,
-            legacy_detect=True,
-        )
-
-    mock_evaluate.assert_not_called()
-    mock_detect.assert_called_once()
-    assert success is True
-    assert model == "legacy-model"

@@ -1799,7 +1799,6 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
     include_llm_prompts: bool = False,
     cache_story_prompt_links: bool = False,
     link_story_prompt_metadata: Optional[bool] = None,
-    legacy_detect: bool = False,
 ) -> Tuple[bool, List[Dict[str, object]], float, str]:
     """
     Run user story tests by classifying each story's acceptance criteria.
@@ -1810,8 +1809,7 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
     is reported as an error rather than a pass.
 
     Stories with no parseable acceptance criteria fall back to the legacy
-    ``detect_change`` gate, which passes on an empty change list. Set
-    ``legacy_detect`` to force every story onto that older gate.
+    ``detect_change`` gate, which passes on an empty change list.
 
     ``link_story_prompt_metadata`` is a deprecated alias for
     ``cache_story_prompt_links`` (main API). When both are passed,
@@ -1895,12 +1893,9 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                     break
                 continue
 
-        criteria: List[AcceptanceCriterion] = []
-        criteria_source = ""
-        if not legacy_detect:
-            criteria, criteria_source = _resolve_story_criteria(
-                story_path, story_content, contract_path
-            )
+        criteria, criteria_source = _resolve_story_criteria(
+            story_path, story_content, contract_path
+        )
 
         evaluation: Optional[CriteriaEvaluation] = None
         criteria_error = ""
@@ -2044,7 +2039,7 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                 rprint("")
                 rprint("  Story was not successfully evaluated:")
                 rprint("  Acceptance criteria could not be evaluated.")
-                rprint("  Next step: re-run, or use --legacy-detect.")
+                rprint("  Next step: re-run after restoring provider availability.")
             else:
                 status = "PASS" if passed else "FAIL"
                 rprint(f"[bold]{status}[/bold] {rich_escape(str(story_path))}")
@@ -2081,7 +2076,6 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     budget: float = 5.0,
     verbose: bool = False,
     quiet: bool = False,
-    legacy_detect: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Attempt to fix prompts based on a single user story.
@@ -2115,9 +2109,7 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     # `detect_change` "what would you change?" here re-derived, less precisely,
     # what the contract already states -- and its plan was discarded anyway,
     # since `change_main` receives the oracle, not the change instructions.
-    criteria: List[AcceptanceCriterion] = []
-    if not legacy_detect:
-        criteria, _ = _resolve_story_criteria(story_path, story_content)
+    criteria, _ = _resolve_story_criteria(story_path, story_content)
 
     verified = True
     if criteria:
@@ -2259,9 +2251,7 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     if errors:
         return False, "\n".join(errors), total_cost, model_name, changed_files
 
-    # Re-run validation for just this story after applying changes. Forward
-    # legacy_detect: planning the repair with one engine and judging it with
-    # another would report against a standard the repair never targeted.
+    # Re-run validation for just this story after applying changes.
     passed, _, validation_cost, validation_model = run_user_story_tests(
         prompts_dir=str(prompts_root),
         story_files=[story_path],
@@ -2269,7 +2259,6 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
         strength=strength,
         temperature=temperature,
         time=time,
-        legacy_detect=legacy_detect,
         verbose=verbose,
         quiet=quiet,
         fail_fast=True,

@@ -273,7 +273,6 @@ pdd detect --stories
 pdd detect --stories --stories-dir user_stories --prompts-dir prompts
 pdd detect --stories --no-fail-fast      # report all failures, don't stop at the first
 pdd detect --stories --include-llm       # also validate against *_llm.prompt runtime templates
-pdd detect --stories --legacy-detect     # use the pre-2389 open-ended change detector
 ```
 
 ### What it checks
