@@ -3033,6 +3033,20 @@ def _load_requirement_transition_authorizations(
                 _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES,
                 _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES,
             ),
+            (
+                _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES,
+                _PR2376_DEPENDENCY_FIX_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1],
+                    _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1],
+                ),
+                (
+                    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+                    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+                ),
+            ),
         }
     )
     zsh_global_option_state = is_pdd_repository and (
@@ -3045,6 +3059,20 @@ def _load_requirement_transition_authorizations(
             (
                 _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES,
                 _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES,
+            ),
+            (
+                _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES,
+                _PR2376_DEPENDENCY_FIX_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1],
+                    _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1],
+                ),
+                (
+                    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+                    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+                ),
             ),
         }
     )
