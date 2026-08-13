@@ -44,7 +44,10 @@ Readability is not in tension with reliability: review and edit cost sit in the 
 
 If you are new to Prompt-Driven Development (PDD), follow this recipe:
 
-1.  **Think "One Prompt = One Module":** Don't try to generate the whole app at once. Focus on one file (e.g., `user_service.py`).
+1.  **Think "One Prompt = One Coherent Unit":** For ordinary code this is
+    usually one file or module. A frontend unit may span several code files
+    that jointly implement one recognizable interface responsibility; see
+    [Frontend Prompt and SVG Files](#frontend-prompt-and-svg-files).
 2.  **Use a Template:** Start with a clear structure: Role, Requirements, Dependencies. (Start from the [Minimal Skeleton](#minimal-skeleton-default); escalate only when risk triggers fire.)
 3.  **Explicitly Include Context:** Use `<include>path/to/file</include>` to give the model *only* what it needs (e.g., a shared preamble or a dependency interface). This is a **PDD directive**, not just XML. (See [Directives & Context](#prompt-syntax-essentials).)
 4.  **Regenerate, Don't Patch:** Change behavior by changing the prompt and regenerating. If generated code fails to satisfy a correct prompt/test, use `pdd bug` / `pdd fix`. If the intended behavior is missing or wrong in the prompt, update the prompt first.
@@ -2387,16 +2390,109 @@ Key differences:
 
 ## Frontend Prompt and SVG Files
 
-For a simple component whose appearance is already defined by the shared design
-system, use an ordinary text prompt. When layout or appearance would be unclear
-or verbose in text, use a prompt file plus one or more SVG files. Do not add a
-YAML, JSON, manifest, schema, or index file for frontend requirements.
+For frontend work where spatial hierarchy or appearance matters, use one
+canonical generator prompt plus semantic SVG views. The prompt and SVGs are
+source; generated components, styles, and screenshots are output.
+
+Organize this source by a user-recognizable interface responsibility, not
+mechanically by React filename:
+
+```text
+prompts/ui/<unit>/
+├── <unit>.ui.prompt
+└── views/
+    ├── <state>__<width>x<height>.ui.svg
+    └── <materially-different-state>__<width>x<height>.ui.svg
+```
+
+A unit may be a component, dialog, or coherent screen. It may generate one code
+file or several files that jointly implement the same responsibility. Do not
+create an extra YAML, JSON, manifest, schema, or index file for frontend
+requirements: the prompt contains the target manifest, and `.pddrc` is the
+routing source.
+
+For a simple component whose appearance is already fully determined by the
+shared design system, an ordinary prompt without SVGs is enough. Providers,
+hooks, metadata layouts, and orchestration controllers with no spatial contract
+should remain prompt-only units rather than receiving decorative SVGs.
+
+### Make the Prompt and SVGs the Generator
+
+The UI prompt is the generator, not a companion included by a separate per-file
+language prompt. Do not keep both of these authorities:
+
+```text
+per-file TypeScript/React generator prompt
+  └── includes shared UI prompt + SVGs
+```
+
+Instead, route every target directly to the canonical UI prompt. One `.pddrc`
+context still maps to one `outputs.code.path`, preserving one writer per code
+file. When several targets share a UI unit, give each target its own context and
+repeat the same `outputs.prompt.path`:
+
+```yaml
+contexts:
+  marketing_landing_page:
+    defaults:
+      outputs:
+        code:
+          path: "components/landing/LandingPage.tsx"
+        prompt:
+          path: "prompts/ui/marketing-landing/marketing-landing.ui.prompt"
+
+  marketing_landing_cta:
+    defaults:
+      outputs:
+        code:
+          path: "components/landing/LandingPageCta.tsx"
+        prompt:
+          path: "prompts/ui/marketing-landing/marketing-landing.ui.prompt"
+```
+
+Conceptually:
+
+```text
+.pddrc context A ─┬─> shared UI prompt + SVGs ─> code target A
+.pddrc context B ─┘                           └> code target B
+```
+
+The shared prompt path represents shared intent, not shared write authority.
+Each code path must appear in exactly one context. A generation run must select
+one context and write only that context's target.
+
+The prompt must contain a target manifest naming every context and code path,
+plus a target-specific contract section for each target. Shared behavior,
+accessibility, responsive rules, and visual views apply to the whole unit;
+target-specific interfaces, dependencies, route behavior, and forbidden side
+effects apply only when that target's context is active.
+
+```xml
+<target-contract context="marketing_landing_page"
+                 code-path="components/landing/LandingPage.tsx">
+  <pdd-interface>...</pdd-interface>
+  <contract_rules>...</contract_rules>
+</target-contract>
+```
+
+Do not merge units merely because one imports another. Keep a child separate
+when users recognize it independently, it is reused across surfaces, or it can
+be regenerated and verified independently. Group files when they are tightly
+coupled parts of one coherent experience and reviewing their behavior and
+layout together reduces drift.
+
+Some PDD releases infer the target language from a `_<Language>.prompt` suffix.
+If a project adopts the semantic `.ui.prompt` suffix, its repository generation
+command must supply the language and selected output without creating a second
+checked-in prompt. Keep `.pddrc` as the only prompt-to-code routing map.
 
 ### Write the Prompt File
 
 The prompt describes everything that cannot be learned safely from a picture:
 
-- what the component or screen is for and which code files it applies to;
+- the unit's role and user outcome;
+- its complete context-to-code target manifest;
+- the public interface and target-specific behavior for every generated file;
 - what happens after clicks, keyboard actions, submission, cancellation, and
   navigation;
 - loading, empty, error, success, selected, disabled, and pending states;
@@ -2406,8 +2502,10 @@ The prompt describes everything that cannot be learned safely from a picture:
 - which shared design-system values should be used instead of copied colors or
   framework-specific class names.
 
-Include each SVG directly from the prompt. Immediately before the include,
-state the UI state, screen size, and how strictly the SVG must be followed:
+Use stable `R<n>` MUST/MUST NOT rules for behavior that must survive
+regeneration. Include each SVG directly from the prompt. Immediately before the
+include, state the view ID, UI state, viewport, and how strictly the SVG must be
+followed:
 
 - **Example:** general direction only.
 - **Layout requirements:** preserve grouping, order, alignment, relative size,
@@ -2416,11 +2514,12 @@ state the UI state, screen size, and how strictly the SVG must be followed:
   stated tolerance. Use this only when exact matching is necessary.
 
 ```xml
-<desktop_open_view>
-This SVG gives layout requirements for the open dialog at 1440x900. Preserve
-the region order, relative size, alignment, and named design-system roles.
-<include>prompts/ui/thumbnail-preview/views/open__1440x900.ui.svg</include>
-</desktop_open_view>
+<view id="open-desktop" state="open" viewport="1440x900"
+      fidelity="relational">
+Preserve region order, relative size, alignment, and named design-system roles.
+Browser font metrics and antialiasing are not exact requirements.
+<include>views/open__1440x900.ui.svg</include>
+</view>
 
 <contract_rules>
 R1 (MUST): Clicking Close or pressing Escape closes the dialog and returns
@@ -2429,18 +2528,14 @@ R2 (MUST NOT): Allow background controls to operate while the dialog is open.
 </contract_rules>
 ```
 
-The existing generator prompt and `.pddrc` remain responsible for selecting the
-generated code files. A frontend prompt may be included by that generator, but
-it must not become a second generator for the same code file.
-
 ### Create the SVG Files
 
 Create an SVG only for a state or screen size whose visual arrangement changes
 in an important way. Do not create one for every possible state or width.
 
 - Use a descriptive filename such as `open__1440x900.ui.svg`.
-- Add `title` and `desc` elements and stable, human-readable IDs for important
-  regions.
+- Add a `viewBox`, `title`, and `desc`, plus stable, intent-based IDs such as
+  `region-primary-action` for important regions.
 - Use attributes such as `data-intent-role` and `data-token` when they clarify
   a region or shared design-system value.
 - Do not embed event handlers, React structure, Tailwind classes, external
@@ -2450,19 +2545,34 @@ in an important way. Do not create one for every possible state or width.
 
 The SVG describes appearance; the prompt describes behavior and accessibility.
 The order of shapes in an SVG does not determine DOM or keyboard-focus order.
+The SVG is semantic source, not a DOM, CSS, or screenshot transcription.
+
+PDD normally supplies an included SVG to the model as XML text. When visual
+image input is needed, deterministically render an uncommitted PNG overview or
+named crops for generation/review and record the source SVG hash. The SVG stays
+authoritative; generated PNGs and contact sheets are review evidence.
 
 ### Verify the Generated Frontend
 
-Use behavior and accessibility tests for prompt requirements. Use browser tests
-at the pictured screen sizes and around layout-change widths. Cover long text,
-overflow, keyboard access, focus, and forbidden actions.
+Before regeneration, verify that every code target has one context, every
+shared prompt's target manifest matches all contexts that reference it, and
+every SVG include resolves. Validate SVG XML and raster renderability.
+
+After regeneration, use behavior and accessibility tests for prompt
+requirements. Use browser tests at the pictured screen sizes and around
+layout-change widths. Cover loading/error/empty/success distinctions, long text,
+overflow, zoom, keyboard access, visible focus, focus restoration, and forbidden
+actions. Review source diffs and rendered views; do not accept a screenshot as
+the only oracle.
 
 ---
 
 ## Why PDD Scales to Large Codebases
 
 - Explicit, curated context: use minimal examples and targeted includes instead of dumping source, reducing tokens and confusion.
-- Modular dev units: one prompt per file/module constrains scope, enabling independent regeneration and parallel work.
+- Modular dev units: one prompt per coherent unit, with one context per code
+  target, constrains scope while allowing tightly related frontend files to
+  share one visual and behavioral authority.
 - Batch, reproducible flow: eliminate long chat histories; regeneration avoids patch accumulation and incoherent diffs.
 - Accumulating tests: protect behavior across wide regenerations and refactors; failures localize issues quickly.
 - Single source of truth: prompts unify intent and dependencies, improving cross‑team coordination and reducing drift.
@@ -2528,7 +2638,10 @@ flowchart LR
 
 ## Naming & Conventions (This Repo)
 
-- One prompt per module/file, named like `${BASENAME}_${LanguageOrFramework}.prompt` (see templates under `pdd/pdd/templates`).
+- Ordinary module prompts use `${BASENAME}_${LanguageOrFramework}.prompt` (see
+  templates under `pdd/pdd/templates`). Frontend projects may use the semantic
+  `prompts/ui/<unit>/<unit>.ui.prompt` layout described above when their
+  generation command supplies language/output selection.
 - Follow codebase conventions from README.md for Python and TypeScript style.
 - Use curated examples under `context/` to encode interfaces and behaviors.
 
