@@ -200,6 +200,17 @@ _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES = (
     _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
     _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
 )
+# PR #2374 adds six managed conformance profiles and advances the code-generator
+# contract. Retain the historical composed transition overlay only at these
+# exact consumed policy bytes.
+_CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES = (
+    "e27ac51bbd5d20af859376855ae12115cc605b41c6b61189cf55ddb1ce375441",
+    "e27ac51bbd5d20af859376855ae12115cc605b41c6b61189cf55ddb1ce375441",
+)
+_CONFORMANCE_SPLIT_PROFILE_BYTES = (
+    "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
+    "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
+)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
@@ -1322,7 +1333,7 @@ _PDD_2374_CONFORMANCE_SPLIT_REQUIREMENT_TRANSITIONS = (
         "9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
         "1f8e8deced7c0065ddf1ad5b10973e40b401e89c49b142f490ea79842b10f928",
         "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f",
-        "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+        "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
     ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_2374_CONFORMANCE_SPLIT_REQUIREMENT_TRANSITIONS
@@ -1360,42 +1371,42 @@ _BOOTSTRAP_PROFILE_ADDITIONS = (
         PurePosixPath("pdd/prompts/conformance/declared_surface_python.prompt"),
         "python",
         "CONTRACT-SHA256:7d9e403fd0caf99507f83574c4fda1d130fa83a9aa272d9fc34765ce526aa261",
-        "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+        "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
         "7d9e403fd0caf99507f83574c4fda1d130fa83a9aa272d9fc34765ce526aa261",
     ),
     (
         PurePosixPath("pdd/prompts/conformance/directives_python.prompt"),
         "python",
         "CONTRACT-SHA256:224f895cc5962e735ff2d86011d482641200458e5b150c67813fa86b78406145",
-        "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+        "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
         "224f895cc5962e735ff2d86011d482641200458e5b150c67813fa86b78406145",
     ),
     (
         PurePosixPath("pdd/prompts/conformance/gate_errors_python.prompt"),
         "python",
         "CONTRACT-SHA256:00fad9b0866fe16b6d44f94cad9d1055359a5a2aa0dc15480f62ce5851df8e81",
-        "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+        "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
         "00fad9b0866fe16b6d44f94cad9d1055359a5a2aa0dc15480f62ce5851df8e81",
     ),
     (
         PurePosixPath("pdd/prompts/conformance/interface_check_python.prompt"),
         "python",
         "CONTRACT-SHA256:a347181aa8cfe63444a077839ed878629b17e405b5b857ba687c8807cb4ce91a",
-        "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+        "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
         "a347181aa8cfe63444a077839ed878629b17e405b5b857ba687c8807cb4ce91a",
     ),
     (
         PurePosixPath("pdd/prompts/conformance/surface_python.prompt"),
         "python",
         "CONTRACT-SHA256:0e07e0613288d0ec8489315dac9a15678153959a4b6d30f14ed5a1cb90e3e31a",
-        "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+        "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
         "0e07e0613288d0ec8489315dac9a15678153959a4b6d30f14ed5a1cb90e3e31a",
     ),
     (
         PurePosixPath("pdd/prompts/conformance/test_churn_python.prompt"),
         "python",
         "CONTRACT-SHA256:f1cf9d53c757c6735d005b92efd1fddfa5e970d78794572eb08779e45c94ccd9",
-        "eb561efa403916574248a588a52e5017d3962ff20363489f80eb4413e7159054",
+        "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
         "f1cf9d53c757c6735d005b92efd1fddfa5e970d78794572eb08779e45c94ccd9",
     ),
 )
@@ -3050,6 +3061,10 @@ def _load_requirement_transition_authorizations(
             (
                 _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES,
                 _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES,
+            ),
+            (
+                _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES,
+                _CONFORMANCE_SPLIT_PROFILE_BYTES,
             ),
         }
     )
