@@ -35,21 +35,24 @@ def test_content_selector_dependency_expansion():
     assert "def unrelated():" not in result
 
 
-def test_preprocess_expand_attribute(tmp_path):
+def test_preprocess_expand_attribute():
     """Verify the preprocessor respects the expand="true" attribute."""
-    dependency_path = tmp_path / "dep_test.py"
-    with dependency_path.open("w", encoding="utf-8") as handle:
+    with open("dep_test.py", "w", encoding="utf-8") as handle:
         handle.write(textwrap.dedent("""
             CONST = 42
             def func():
                 return CONST
         """))
 
-    prompt = f'<include path="{dependency_path}" select="def:func" expand="true" />'
-    result = preprocess(prompt)
+    try:
+        prompt = '<include path="dep_test.py" select="def:func" expand="true" />'
+        result = preprocess(prompt)
 
-    assert "def func():" in result
-    assert "CONST = 42" in result
+        assert "def func():" in result
+        assert "CONST = 42" in result
+    finally:
+        if os.path.exists("dep_test.py"):
+            os.remove("dep_test.py")
 
 
 def test_import_drift_prevention_excludes_unused_imports():
