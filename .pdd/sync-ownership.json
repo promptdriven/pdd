@@ -13620,7 +13620,6 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/test_story_contract_entry_point.py",
-      "preauthorize_absent": true,
       "role": "human-maintained"
     },
     {
