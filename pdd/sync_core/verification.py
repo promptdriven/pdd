@@ -3079,6 +3079,10 @@ def _load_requirement_transition_authorizations(
                 _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES,
                 _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES,
             ),
+            (
+                _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES,
+                _CONFORMANCE_SPLIT_PROFILE_BYTES,
+            ),
         }
     )
     temperature_regression_state = (
