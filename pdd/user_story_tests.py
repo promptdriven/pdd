@@ -1123,11 +1123,11 @@ def _prompt_inventory_descriptor(prompt_path: Path) -> str:
 
 def _dotted_module_for_code_path(
     code_path: Path,
-    project_root: Path,
+    source_root: Path,
 ) -> Optional[str]:
     """Return the importable dotted module name for a generated source file."""
     try:
-        relative = code_path.resolve().relative_to(project_root.resolve())
+        relative = code_path.resolve().relative_to(source_root.resolve())
     except (OSError, RuntimeError, ValueError):
         return None
     if relative.suffix != ".py":
@@ -1167,7 +1167,7 @@ def _declared_interface_callables(prompt_path: Path) -> List[str]:
 def derive_contract_entry_point(
     prompt_paths: Sequence[Path],
     prompts_root: Optional[Path],
-    project_root: Optional[Path] = None,
+    source_root: Optional[Path] = None,
 ) -> Optional[str]:
     """Return a complete ``## Entry Point`` block, or ``None`` when ambiguous.
 
@@ -1187,9 +1187,9 @@ def derive_contract_entry_point(
         return None
     prompt_path = Path(prompt_paths[0])
     code_path = _prompt_to_code_path(prompt_path, prompts_root)
-    if code_path is None:
+    if code_path is None or not code_path.is_file():
         return None
-    root = project_root or prompts_root.parent
+    root = source_root or _resolve_src_dir(prompts_root)
     module = _dotted_module_for_code_path(code_path, root)
     if module is None:
         return None

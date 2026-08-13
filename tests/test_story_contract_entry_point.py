@@ -42,20 +42,24 @@ _INTERFACE_TWO = """<pdd-interface>
 def _prompts_root(tmp_path: Path, body: str, name: str = "checkout_python.prompt") -> Path:
     prompts = tmp_path / "prompts"
     prompts.mkdir(parents=True, exist_ok=True)
-    (prompts / name).write_text(body, encoding="utf-8")
+    prompt = prompts / name
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text(body, encoding="utf-8")
     (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
     return prompts
 
 
 def test_derives_entry_point_from_a_single_declared_callable(tmp_path):
     prompts = _prompts_root(tmp_path, _INTERFACE_ONE)
+    code = tmp_path / "src" / "checkout.py"
+    code.parent.mkdir()
+    code.write_text("def checkout_total(a, b): return {}\n", encoding="utf-8")
 
-    block = derive_contract_entry_point(
-        [prompts / "checkout_python.prompt"], prompts, tmp_path
-    )
+    block = derive_contract_entry_point([prompts / "checkout_python.prompt"], prompts)
 
     assert block is not None
     assert "## Entry Point" in block
+    assert "- module: checkout" in block
     assert "- callable: checkout_total" in block
     assert "- args: []" in block
     assert "- kwargs: {}" in block
@@ -67,7 +71,7 @@ def test_omits_entry_point_when_the_prompt_declares_several_callables(tmp_path):
 
     assert (
         derive_contract_entry_point(
-            [prompts / "checkout_python.prompt"], prompts, tmp_path
+            [prompts / "checkout_python.prompt"], prompts
         )
         is None
     )
@@ -81,7 +85,6 @@ def test_omits_entry_point_when_several_prompts_are_linked(tmp_path):
         derive_contract_entry_point(
             [prompts / "checkout_python.prompt", prompts / "other_python.prompt"],
             prompts,
-            tmp_path,
         )
         is None
     )
@@ -92,7 +95,7 @@ def test_omits_entry_point_when_the_prompt_declares_no_interface(tmp_path):
 
     assert (
         derive_contract_entry_point(
-            [prompts / "checkout_python.prompt"], prompts, tmp_path
+            [prompts / "checkout_python.prompt"], prompts
         )
         is None
     )
@@ -106,6 +109,32 @@ def test_omits_entry_point_for_an_empty_link_list(tmp_path):
     prompts = _prompts_root(tmp_path, _INTERFACE_ONE)
 
     assert derive_contract_entry_point([], prompts, tmp_path) is None
+
+
+def test_omits_entry_point_when_the_mapped_source_module_is_missing(tmp_path):
+    prompts = _prompts_root(tmp_path, _INTERFACE_ONE)
+
+    assert (
+        derive_contract_entry_point([prompts / "checkout_python.prompt"], prompts)
+        is None
+    )
+
+
+def test_derives_module_relative_to_pdd_src_dir(tmp_path, monkeypatch):
+    prompts = _prompts_root(
+        tmp_path, _INTERFACE_ONE, "payments/checkout_python.prompt"
+    )
+    code = tmp_path / "custom_src" / "payments" / "checkout.py"
+    code.parent.mkdir(parents=True)
+    code.write_text("def checkout_total(a, b): return {}\n", encoding="utf-8")
+    monkeypatch.setenv("PDD_SRC_DIR", str(tmp_path / "custom_src"))
+
+    block = derive_contract_entry_point(
+        [prompts / "payments/checkout_python.prompt"], prompts
+    )
+
+    assert block is not None
+    assert "- module: payments.checkout" in block
 
 
 # ---------------------------------------------------------------------------
