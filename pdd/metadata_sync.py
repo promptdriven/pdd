@@ -174,41 +174,53 @@ def _bootstrap_tags_content(prompt_content: str, prompt_filename: str) -> Option
     return tag_block + "\n\n" + prompt_content
 
 
+def _lookup_arch_entry_for_prompt(
+    prompt_path: Path,
+    architecture_path: Optional[Path],
+    prompts_dir: Optional[Path] = None,
+) -> tuple[Optional[Dict[str, Any]], bool]:
+    """Return the architecture entry and whether its lookup succeeded.
+
+    A nested prompt must match its prompts-dir-relative architecture filename
+    exactly. This avoids adopting metadata from a different module that happens
+    to share its basename. Flat-layout callers retain basename fallback.
+    """
+    if architecture_path is None or not architecture_path.exists():
+        return None, True
+    try:
+        relative_filename: Optional[str] = None
+        if prompts_dir is not None:
+            try:
+                relative_filename = prompt_path.resolve().relative_to(
+                    prompts_dir.resolve()
+                ).as_posix()
+            except ValueError:
+                pass
+        if relative_filename is not None:
+            entry = get_architecture_entry_for_prompt(
+                relative_filename, architecture_path
+            )
+            if entry is not None and entry.get("filename") == relative_filename:
+                return entry, True
+            if "/" in relative_filename:
+                return None, True
+        entry = get_architecture_entry_for_prompt(prompt_path.name, architecture_path)
+        return entry, True
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        return None, False
+
+
 def _load_arch_entry_for_prompt(
     prompt_path: Path,
     architecture_path: Optional[Path],
     prompts_dir: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Best-effort lookup of the architecture.json entry for this prompt.
-
-    Delegates to :func:`pdd.architecture_sync.get_architecture_entry_for_prompt`,
-    which handles both the bare-list and ``{"modules": [...]}`` shapes of
-    ``architecture.json`` and keys entries by their ``filename`` field
-    (subdirectory-aware per Issue #617). Tries the prompts-dir-relative path
-    first (e.g. ``commands/foo_python.prompt``) and falls back to the basename
-    so flat-layout repos keep working.
-    """
-    if architecture_path is None or not architecture_path.exists():
-        return None
-    try:
-        candidates: List[str] = []
-        if prompts_dir is not None:
-            try:
-                rel = prompt_path.resolve().relative_to(prompts_dir.resolve()).as_posix()
-                candidates.append(rel)
-            except ValueError:
-                pass
-        if prompt_path.name not in candidates:
-            candidates.append(prompt_path.name)
-        for filename in candidates:
-            entry = get_architecture_entry_for_prompt(filename, architecture_path)
-            if entry is not None:
-                return entry
-    except (KeyboardInterrupt, SystemExit):
-        raise
-    except Exception:
-        return None
-    return None
+    """Best-effort compatibility wrapper for architecture-entry lookup."""
+    return _lookup_arch_entry_for_prompt(
+        prompt_path, architecture_path, prompts_dir
+    )[0]
 
 
 def run_metadata_sync(
@@ -304,9 +316,11 @@ def run_metadata_sync(
     refreshed_prompt_content: str = prompt_content  # carry forward to architecture stage
     bootstrapped_unregistered = False
     try:
-        arch_entry = _load_arch_entry_for_prompt(
+        arch_entry, arch_lookup_succeeded = _lookup_arch_entry_for_prompt(
             prompt_path, architecture_path, prompts_dir=prompts_dir
         )
+        if not arch_lookup_succeeded:
+            raise RuntimeError("architecture lookup failed")
         new_content = _refresh_tags_content(prompt_content, arch_entry)
         if (
             new_content is None
@@ -412,7 +426,10 @@ def run_metadata_sync(
                 registration_errors = registration.get("errors") or []
                 if registration_errors:
                     raise RuntimeError("; ".join(str(error) for error in registration_errors))
-                if dry_run and bootstrapped_unregistered:
+                registered = registration.get("registered") or []
+                if dry_run and (
+                    bootstrapped_unregistered or arch_prompt_filename in registered
+                ):
                     detail = f"would register and sync {arch_prompt_filename}"
                     result.stages["architecture"] = StageStatus(status="dry_run", detail=detail)
                     _stage_log_exit("architecture", "dry_run", detail)
