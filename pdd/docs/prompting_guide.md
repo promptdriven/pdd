@@ -2514,23 +2514,35 @@ The prompt describes everything that cannot be learned safely from a picture:
 Use stable `R<n>` MUST/MUST NOT rules for behavior that must survive
 regeneration. Include each SVG directly from the prompt. Immediately before the
 include, state the view ID, UI state, layout mode, when that layout applies, and
-how strictly the SVG must be followed. Do not treat one pixel viewport as the
-view's requirement or identity:
+how strictly the SVG must be followed. For a brownfield UI, default to
+`fidelity="measured"`: the SVG is a measured representation of the existing
+view, not a generic design direction. The view's layout-mode name remains its
+identity; its reference viewport records the captured comparison surface.
 
-- **Example:** general direction only.
-- **Layout requirements:** preserve grouping, order, alignment, relative size,
-  spacing, visible text, and named design-system roles.
-- **Exact requirements:** preserve the stated measurements and values within a
-  stated tolerance. Use this only when exact matching is necessary.
+- **Relational:** general direction only. Use this only when visual matching is
+  not an acceptance requirement.
+- **Measured (brownfield default):** preserve major region geometry,
+  alignment, spacing, the captured fold, responsive layout modes, visible token
+  colors, type hierarchy, and control geometry. It is structurally exact but
+  decoratively representative; see [Create the SVG Files](#create-the-svg-files).
+- **Exact:** preserve the stated measurements and values within a stated
+  tolerance when the output itself has a fixed external contract.
+
+State any external surrounding UI that appears in the view as `context-only`.
+It may be drawn to make the owned region intelligible, but it MUST NOT expand
+the unit's generated-code ownership, target manifest, or behavioral contract.
 
 ```xml
 <view id="ready-split-pane" state="ready" layout="split-pane"
-      fidelity="relational">
+      fidelity="measured" reference-viewport="1440x900"
+      geometry-tolerance="max(8px, 2%)" color-tolerance="token-exact">
 Use this arrangement when the available inline space supports the list and
-detail regions simultaneously without obscuring required content. The SVG
-viewBox is a scalable drawing coordinate system, not a required display size.
-Preserve region order, relative size, alignment, and named design-system roles.
-Browser font metrics and antialiasing are not exact requirements.
+detail regions simultaneously without obscuring required content. Match the
+measured viewBox to the reference viewport. Preserve the measured split,
+alignment, spacing, visible fold, type hierarchy, resolved design tokens, and
+control geometry; do not substitute a generic card layout. Browser font metrics
+and antialiasing are not exact requirements. The application shell is
+context-only; this unit owns the list and detail regions only.
 <include>views/ready__split-pane.ui.svg</include>
 </view>
 
@@ -2562,20 +2574,42 @@ in an important way. Do not create one for every possible size.
 - Use `<state>[--<variant>]__<layout-mode>.ui.svg`, such as
   `ready__split-pane.ui.svg` or `ready--detail__single-pane.ui.svg`.
 - Add a `viewBox`, `title`, and `desc`, plus stable, intent-based IDs such as
-  `region-primary-action` for important regions.
-- Treat the `viewBox` as scalable drawing coordinates, not a required display
-  dimension. Do not set root `width` or `height` unless an external or
+  `region-primary-action` for important regions. Keep meaningful semantic IDs
+  and accessibility metadata even when decorative detail is simplified.
+- For a measured view, set a `viewBox` matching the declared reference
+  viewport. It is still scalable drawing coordinates, not a required runtime
+  display size; do not set root `width` or `height` unless an external or
   fixed-output contract requires them.
-- Use attributes such as `data-intent-role` and `data-token` when they clarify
-  a region or shared design-system value.
+- Use attributes such as `data-intent-role` and `data-token` to name important
+  regions and design-system values. In a measured view, render the resolved
+  token colors seen in the reference exactly; do not replace them with generic
+  fallback colors.
 - Do not embed event handlers, React structure, Tailwind classes, external
   resources, base64 files, editor metadata, or hidden alternate designs.
-- Treat example copy and fallback colors as illustrative unless the prompt says
-  they are requirements.
+
+Measured SVGs are **structurally exact but decoratively representative**. Keep
+the major composition, region bounds, alignment, spacing, media aspect ratios,
+visible controls, type hierarchy, and meaningful visible copy. Do not spend
+SVG bytes transcribing visual ornament that does not change those facts:
+
+- Express repeated grids with a reusable `<pattern>` rather than enumerated
+  lines, and consolidate atmospheric gradients to the few needed to establish
+  the observed effect.
+- Represent raster-like media, thumbnails, illustrations, and minor icons with
+  a semantic frame, overlay, label, and a small number of representative
+  shapes. Do not recreate photographic or intricate artwork path by path.
+- Secondary body copy may be representative when it retains the same line
+  count, line wrapping, and occupied text geometry. The prompt retains the
+  complete authoritative copy. Headings, labels, and controls remain exact.
+
+Mark external regions as `data-intent-scope="context-only"` (or an equivalent
+explicit semantic marker). They provide orientation only and do not imply that
+the unit owns, generates, or changes them.
 
 The SVG describes appearance; the prompt describes behavior and accessibility.
 The order of shapes in an SVG does not determine DOM or keyboard-focus order.
-The SVG is semantic source, not a DOM, CSS, or screenshot transcription.
+The SVG is semantic source, not a DOM, CSS, or high-detail screenshot
+transcription.
 
 PDD normally supplies an included SVG to the model as XML text. When visual
 image input is needed, deterministically render an uncommitted PNG overview or
@@ -2591,11 +2625,16 @@ every SVG include resolves. Validate SVG XML and raster renderability.
 After regeneration, use behavior and accessibility tests for prompt
 requirements. Use browser tests at representative review/test viewport sizes
 and around layout-change thresholds; those sizes are verification parameters,
-not canonical source identity. Test exact dimensions when an external or
-fixed-output contract requires them. Cover loading/error/empty/success
-distinctions, long text, overflow, zoom, keyboard access, visible focus, focus
-restoration, and forbidden actions. Review source diffs and rendered views; do
-not accept a screenshot as the only oracle.
+not canonical source identity. For every measured view, compare the actual UI
+and SVG rendered at the same declared reference viewport side by side, then use
+a 50% overlay to review alignment and fold placement. Accept major geometric
+differences only within `max(8px, 2%)` of the relevant reference dimension;
+require token-exact colors. Do not reject browser font rasterization or the
+approved representative decorative details for not being pixel-identical. Test
+exact dimensions when an external or fixed-output contract requires them. Cover
+loading/error/empty/success distinctions, long text, overflow, zoom, keyboard
+access, visible focus, focus restoration, and forbidden actions. Review source
+diffs and rendered views; do not accept a screenshot as the only oracle.
 
 ---
 
