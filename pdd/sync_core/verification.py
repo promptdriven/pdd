@@ -200,6 +200,18 @@ _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES = (
     _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
     _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
 )
+
+# Story-contract generation advances two managed prompt requirements while
+# retaining the same protected rollout history.  Accept only these exact final
+# policy/profile bytes when resolving that inherited history.
+_STORY_CONTRACT_ROTATION_POLICY_BYTES = (
+    "b5e50dc0c621449fe9465103e487e7955e41d24b463ca63c33a1fd088c0d0eb7",
+    "b5e50dc0c621449fe9465103e487e7955e41d24b463ca63c33a1fd088c0d0eb7",
+)
+_STORY_CONTRACT_PROFILE_BYTES = (
+    "84e7755e30f56d8c77f7c20a32d29253b9af256f6b16d9792dfaccefac61183f",
+    "84e7755e30f56d8c77f7c20a32d29253b9af256f6b16d9792dfaccefac61183f",
+)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
@@ -2992,6 +3004,10 @@ def _load_requirement_transition_authorizations(
             (
                 _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES,
                 _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES,
+            ),
+            (
+                _STORY_CONTRACT_ROTATION_POLICY_BYTES,
+                _STORY_CONTRACT_PROFILE_BYTES,
             ),
         }
     )
