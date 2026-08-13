@@ -959,14 +959,18 @@ def evaluate_story_regression(
 
     recorded: dict[str, str] = {}
     all_recorded: set = set()
-    # A story is documentary only when EVERY linked test declares itself
-    # traceability-only; one behavioural sibling is enough to call it protected.
-    linked_paths: List[Path] = []
+    # Same acceptance as the full gate: content hash UNION bundle hash. A
+    # recorded hash matching either form is fresh; otherwise the story changed.
+    acceptable = _acceptable_story_hashes(story_path)
+    # A story is documentary only when EVERY *fresh* linked test declares
+    # itself traceability-only. A stale behavioural sibling cannot provide
+    # behavioural coverage for the current story, so it must not mask the
+    # traceability-only status of a fresh text-pin.
+    fresh_linked_paths: List[Path] = []
     for nodeid in tests:
         test_path = _test_file_for_nodeid(nodeid, tests_dir)
         if test_path is None:
             continue
-        linked_paths.append(test_path)
         found = _recorded_story_hashes(test_path, sid)
         if found:
             recorded[nodeid] = found[0]
@@ -974,6 +978,8 @@ def evaluate_story_regression(
             # so a stale marker listed before a fresh one in the same file cannot
             # shadow it -- matching the full gate's any-fresh-wins rule (#1889).
             all_recorded.update(found)
+            if set(found) & acceptable:
+                fresh_linked_paths.append(test_path)
 
     if not recorded:
         # Coverage uses this lightweight evaluator to preserve #1699
@@ -988,12 +994,9 @@ def evaluate_story_regression(
             recorded_hashes={},
         )
 
-    # Same acceptance as the full gate: content hash UNION bundle hash. A
-    # recorded hash matching either form is fresh; otherwise the story changed.
-    acceptable = _acceptable_story_hashes(story_path)
     if all_recorded & acceptable:
-        traceability_only = bool(linked_paths) and all(
-            _declares_traceability_only(path) for path in linked_paths
+        traceability_only = bool(fresh_linked_paths) and all(
+            _declares_traceability_only(path) for path in fresh_linked_paths
         )
         return StoryRegressionEvaluation(
             story_id=sid,
