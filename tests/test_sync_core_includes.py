@@ -83,6 +83,19 @@ def test_mixed_fence_delimiters_do_not_hide_a_real_include() -> None:
     ]
 
 
+@pytest.mark.parametrize("fence", ("```", "~~~"))
+def test_fenced_include_and_include_many_examples_are_literal(fence: str) -> None:
+    """Both directive grammars are ignored together inside a valid fence."""
+    text = (
+        f"{fence}xml\n"
+        "<include>docs/example-only.md</include>\n"
+        "<include-many>docs/one.md, docs/two.md</include-many>\n"
+        f"{fence}\n"
+        "<include>docs/actual.md</include>\n"
+    )
+    assert [item.path for item in parse_include_references(text)] == ["docs/actual.md"]
+
+
 @pytest.mark.timeout(1, func_only=True)
 def test_malformed_include_text_is_bounded() -> None:
     """Unterminated include markup cannot trigger superlinear parser backtracking."""
