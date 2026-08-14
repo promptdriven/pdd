@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ObservabilityModule, ObservabilityRunDetail, ObservabilityRunSummary } from '../api';
+import DeploymentsPanel from './DeploymentsPanel';
 
 const formatCost = (cost: number) => `$${cost.toFixed(4)}`;
 
@@ -121,6 +122,9 @@ const ObservabilityDashboard: React.FC = () => {
           ))}
         </div>
       </section>
+
+      {/* Renders only when the optional pdd-k8s plugin and a manifest exist. */}
+      <DeploymentsPanel />
     </div>
   );
 };

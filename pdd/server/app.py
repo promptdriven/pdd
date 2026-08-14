@@ -23,6 +23,7 @@ from .security import (
 from .jobs import JobManager
 from .routes.websocket import ConnectionManager, create_websocket_routes
 from .routes import architecture, auth, extracts, files, commands, prompts
+from .routes.deployments import create_deployments_router
 from .routes.observability import create_observability_router
 from .routes import websocket as ws_routes
 from .routes.config import router as config_router
@@ -258,6 +259,7 @@ def create_app(
     app.include_router(commands.router)
     app.include_router(prompts.router)
     app.include_router(create_observability_router(_app_state.project_root))
+    app.include_router(create_deployments_router(_app_state.project_root))
 
     create_websocket_routes(app, _app_state.connection_manager, _app_state.job_manager)
 

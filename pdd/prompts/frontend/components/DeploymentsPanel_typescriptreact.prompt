@@ -1,0 +1,27 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/components/DeploymentsPanel.tsx`, an opt-in PDD Connect panel for services running on a local Kubernetes cluster.
+
+% Dependencies
+<deployments_dependencies>
+  <include>pdd/frontend/api.ts</include>
+</deployments_dependencies>
+
+% Concept
+Dev Units are implementation units, not pods. A service is a deployable unit that a developer has explicitly mapped one or more Dev Units onto, declared in `.pdd/deployments.yaml`. This panel shows that mapping and the resulting workload health. It is not a general Kubernetes dashboard.
+
+% Requirements
+1. Export default `DeploymentsPanel` as a React functional component.
+2. On mount, call `api.getDeployments()`. Render nothing at all while loading, when `plugin_installed` is false, or when `configured` is false, so projects that never need containers are unaffected.
+3. For each service, show its name, deploy state badge, the Dev Units it carries, ready/desired replicas, restart count, port, per-pod health and node, and any recent failure events.
+4. Provide Deploy/Redeploy, Stop and Logs actions per service. Deploy and Stop return an operation record; append it to a recent-actions list showing action, service, state and any failure message.
+5. While any operation is `running`, poll for fresh status every few seconds and disable the action buttons; clear the interval on unmount.
+6. Show logs on demand via `api.getDeploymentLogs(service)` in a closable, scrollable preformatted block.
+7. Surface an unreachable cluster as an inline message while still listing the statically declared services and their Dev Units.
+8. Handle request failures by showing an inline error, never by throwing.
+9. Use responsive Tailwind dark/glass styling consistent with the Connect app shell.
+
+% Security constraints
+- Display only data returned by the deployments API; do not read browser storage or project files directly.
+- Render logs and event text as plain text; never inject them as HTML.
+
+% Deliverable
+- Output only `pdd/frontend/components/DeploymentsPanel.tsx`.

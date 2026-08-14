@@ -11,6 +11,7 @@
 3. Render compact summary cards for success rate, total spend, recorded runs, and the most used non-unknown model.
 4. Render a selectable execution-run list with command, timestamp, cost, model, and success/failed status. Selecting a run must call `api.getObservabilityRun(filename)` and show its JSON detail.
 5. Render Dev Unit cards with module name, language, and optional passed/failed test totals.
+5a. Render `<DeploymentsPanel />` below the Dev Unit cards. It renders nothing unless the optional `pdd-k8s` companion package is installed and the project declares services, so Dev Units and pods stay distinct concepts in this view.
 6. Support loading, empty, and API-error states. The component is read-only: it must never write project files or execute PDD commands.
 7. Use responsive Tailwind dark/glass styling consistent with the Connect app shell.
 

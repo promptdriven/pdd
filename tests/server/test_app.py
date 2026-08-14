@@ -148,6 +148,7 @@ def app_module_with_mocks():
         "pdd.server.routes.prompts",
         "pdd.server.routes.config",
         "pdd.server.routes.observability",
+        "pdd.server.routes.deployments",
     ]
 
     # Save and remove ALL pdd.server modules to ensure clean slate
@@ -239,6 +240,10 @@ def app_module_with_mocks():
         _mock_routes_observability.create_observability_router = MagicMock(return_value=APIRouter())
         sys.modules["pdd.server.routes.observability"] = _mock_routes_observability
 
+        _mock_routes_deployments = types.ModuleType("pdd.server.routes.deployments")
+        _mock_routes_deployments.create_deployments_router = MagicMock(return_value=APIRouter())
+        sys.modules["pdd.server.routes.deployments"] = _mock_routes_deployments
+
         # Set submodules as attributes on the routes module (required for 'from .routes import X')
         _mock_routes.architecture = _mock_routes_architecture
         _mock_routes.files = _mock_routes_files
@@ -249,6 +254,7 @@ def app_module_with_mocks():
         _mock_routes.config = _mock_routes_config
         _mock_routes.extracts = _mock_routes_extracts
         _mock_routes.observability = _mock_routes_observability
+        _mock_routes.deployments = _mock_routes_deployments
 
         # Remove cached app module if any
         if "pdd.server.app" in sys.modules:

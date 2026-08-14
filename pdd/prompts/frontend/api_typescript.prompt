@@ -39,6 +39,12 @@
      - `ObservabilityRunSummary { filename, timestamp, argv:string[], status:'success'|'failed', total_cost, model, error_message:string|null }`
      - `ObservabilityRunDetail { timestamp_utc, argv:string[], total_cost, steps:Record<string,unknown>[], errors:Record<string,unknown>[], terminal_output, platform:Record<string,unknown> }`
      - `ObservabilityModule { module_name, language, fingerprint:Record<string,unknown>, run_report:{tests_passed?,tests_failed?}|null }`
+   - Optional local deployment types (served only when the `pdd-k8s` companion package is installed):
+     - `DeploymentPod { name, service, phase, health:string|null, health_checked_at:string|null, restarts, node, created_at }`
+     - `DeploymentService { name, dev_units:string[], image, port, health_path, desired_replicas, ready_replicas, state, restarts, pods:DeploymentPod[], events:string[] }`
+     - `DeploymentStatus { plugin_installed, configured, available, cluster:string|null, namespace:string|null, manifest_path, message:string|null, services:DeploymentService[] }`
+     - `DeploymentOperation { id, action, service:string|null, state:'running'|'succeeded'|'failed'|string, message:string|null, results:Record<string,unknown>[], started_at, finished_at:number|null }`
+     - `DeploymentLogs { service, logs, message:string|null }`
 
 2) Prompt metrics/sync/model types:
    - `CostEstimate { input_cost, model, tokens, cost_per_million, currency }`
@@ -117,6 +123,11 @@
    - `getObservabilityRuns()` -> GET `/api/v1/observability/runs`
    - `getObservabilityRun(filename)` -> GET `/api/v1/observability/runs/${encodeURIComponent(filename)}`
    - `getObservabilityModules()` -> GET `/api/v1/observability/modules`
+   - `getDeployments()` -> GET `/api/v1/deployments`
+   - `getDeploymentOperations()` -> GET `/api/v1/deployments/operations`
+   - `getDeploymentLogs(service, tail = 200)` -> GET `/api/v1/deployments/${encodeURIComponent(service)}/logs?tail=${tail}`
+   - `deployService(service)` -> POST `/api/v1/deployments/${encodeURIComponent(service)}/deploy`
+   - `stopService(service)` -> POST `/api/v1/deployments/${encodeURIComponent(service)}/stop`
    - `getAuthStatus()` -> GET `/api/v1/auth/status`
    - `logout()` -> POST `/api/v1/auth/logout`
    - `startLogin(options?)` -> POST `/api/v1/auth/login` with `JSON.stringify(options || {})`

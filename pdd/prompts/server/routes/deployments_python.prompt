@@ -1,0 +1,34 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/routes/deployments.py`.
+
+% Role & Scope
+  Provide project-scoped FastAPI endpoints that surface optional local service
+  deployments in PDD Connect. Deployment support lives in the separate
+  `pdd-k8s` companion package: core PDD must not depend on Docker or
+  Kubernetes, and projects that are plain scripts, CLIs or libraries must be
+  entirely unaffected.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. Export `create_deployments_router(project_root: Path) -> APIRouter` with
+     the prefix `/api/v1/deployments`.
+  2. Import `pdd_k8s` lazily inside a helper. When it is not installed, `GET
+     /api/v1/deployments` must still return HTTP 200 with
+     `plugin_installed: false` and an install hint, and every other endpoint
+     must return HTTP 501 with that hint.
+  3. Expose `GET ''` (service definitions, Dev Unit mapping and pod health),
+     `GET /doctor`, `GET /operations`, `GET /{service}/logs`,
+     `POST /{service}/deploy` and `POST /{service}/stop`.
+  4. Deploys run container builds that take minutes. The mutating endpoints
+     must return an operation record immediately and run the plugin call in a
+     background task, so the client polls `/operations` for the outcome.
+  5. Track operations in memory with an async lock, newest first, capped at
+     `MAX_TRACKED_OPERATIONS` by evicting the oldest finished entries.
+  6. Run every blocking plugin call via `asyncio.to_thread`.
+  7. An exception raised by the plugin must fail its operation with the error
+     text, never return HTTP 500 or take the server down.
+  8. Bound the `logs` tail size with a validated query parameter.
+
+% Deliverables
+  - Code: `pdd/server/routes/deployments.py`
+  - Exports: create_deployments_router, OperationTracker, MAX_TRACKED_OPERATIONS

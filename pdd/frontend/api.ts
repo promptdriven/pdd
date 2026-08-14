@@ -52,6 +52,60 @@ export interface ObservabilityModule {
   run_report: { tests_passed?: number; tests_failed?: number } | null;
 }
 
+export interface DeploymentPod {
+  name: string;
+  service: string;
+  phase: 'ready' | 'failed' | 'pending' | string;
+  health: string | null;
+  health_checked_at: string | null;
+  restarts: number;
+  node: string;
+  created_at: string;
+}
+
+export interface DeploymentService {
+  name: string;
+  dev_units: string[];
+  image: string;
+  port: number;
+  health_path: string;
+  desired_replicas: number;
+  ready_replicas: number;
+  state: 'running' | 'failed' | 'pending' | 'not deployed' | string;
+  restarts: number;
+  pods: DeploymentPod[];
+  events: string[];
+}
+
+/** Local deployment state; absent plugin and absent manifest are both normal. */
+export interface DeploymentStatus {
+  plugin_installed: boolean;
+  configured: boolean;
+  available: boolean;
+  cluster: string | null;
+  namespace: string | null;
+  manifest_path: string;
+  message: string | null;
+  services: DeploymentService[];
+}
+
+export interface DeploymentOperation {
+  id: string;
+  action: 'deploy' | 'stop' | string;
+  service: string | null;
+  state: 'running' | 'succeeded' | 'failed' | string;
+  message: string | null;
+  results: Record<string, unknown>[];
+  started_at: number;
+  finished_at: number | null;
+}
+
+export interface DeploymentLogs {
+  service: string;
+  logs: string;
+  message: string | null;
+}
+
 export interface CommandInfo {
   name: string;
   description: string;
@@ -661,6 +715,35 @@ class PDDApiClient {
 
   async getObservabilityModules(): Promise<ObservabilityModule[]> {
     return this.request<ObservabilityModule[]>('/api/v1/observability/modules');
+  }
+
+  // Local deployments (requires the optional pdd-k8s companion package)
+  async getDeployments(): Promise<DeploymentStatus> {
+    return this.request<DeploymentStatus>('/api/v1/deployments');
+  }
+
+  async getDeploymentOperations(): Promise<{ operations: DeploymentOperation[] }> {
+    return this.request<{ operations: DeploymentOperation[] }>('/api/v1/deployments/operations');
+  }
+
+  async getDeploymentLogs(service: string, tail = 200): Promise<DeploymentLogs> {
+    return this.request<DeploymentLogs>(
+      `/api/v1/deployments/${encodeURIComponent(service)}/logs?tail=${tail}`,
+    );
+  }
+
+  async deployService(service: string): Promise<DeploymentOperation> {
+    return this.request<DeploymentOperation>(
+      `/api/v1/deployments/${encodeURIComponent(service)}/deploy`,
+      { method: 'POST' },
+    );
+  }
+
+  async stopService(service: string): Promise<DeploymentOperation> {
+    return this.request<DeploymentOperation>(
+      `/api/v1/deployments/${encodeURIComponent(service)}/stop`,
+      { method: 'POST' },
+    );
   }
 
   // Auth
