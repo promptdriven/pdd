@@ -930,7 +930,7 @@ const App: React.FC = () => {
                 </button>
                 <button
                   onClick={() => setView('observability')}
-                  className={`whitespace-nowrap px-2 md:px-3 lg:px-4 py-1 md:py-1.5 lg:py-2 rounded-md md:rounded-lg text-xs md:text-sm font-medium transition-all duration-200 ${
+                  className={`inline-flex items-center whitespace-nowrap px-2 md:px-3 lg:px-4 py-1 md:py-1.5 lg:py-2 rounded-md md:rounded-lg text-xs md:text-sm font-medium transition-all duration-200 ${
                     view === 'observability'
                       ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
