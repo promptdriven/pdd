@@ -920,7 +920,7 @@ const App: React.FC = () => {
                 </button>
                 <button
                   onClick={() => setView('observability')}
-                  className={`p-1.5 rounded-md transition-all duration-200 ${
+                  className={`whitespace-nowrap px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md text-xs font-medium transition-all duration-200 ${
                     view === 'observability'
                       ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
@@ -928,9 +928,10 @@ const App: React.FC = () => {
                   title="Observability: local execution history and Dev Unit health"
                   aria-label="Observability"
                 >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3v18h18M7 16l4-5 3 3 5-7" />
                   </svg>
+                  Observability
                 </button>
               </div>
             </div>

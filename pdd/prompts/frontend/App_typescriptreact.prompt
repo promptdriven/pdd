@@ -71,7 +71,7 @@ Requirements
    - preserve PromptSpace back-navigation context by saving `window.scrollY` and prior devunits sub-view before opening; restore both on back (with multiple timed scroll restores).
 16. Render structure:
    - root `ErrorBoundary`.
-   - sticky glass header with branding, a compact centered workflow switcher (`devunits`, `bug`, `fix`, `change`, `settings`) plus an icon-only `observability` control, and right-side status controls.
+   - sticky glass header with branding and a compact centered workflow switcher (`devunits`, `bug`, `fix`, `change`, `settings`, `observability`), and right-side status controls.
    - keep the workflow switcher content-sized: small padding/gaps, no wrapped labels, and a compact border so it does not consume the header width.
    - right-side controls include jobs toggle + active count, remote/local panel toggle, connection status pill, audio toggle, and `AuthStatusIndicator`.
    - remote settings dropdown/backdrop includes `ExecutionModeToggle` and, in remote mode, `RemoteSessionSelector` with refresh callback.
