@@ -35,7 +35,7 @@ A story lives in **two files with different owners**:
 
 | File | Owner | Holds | Edited by |
 | --- | --- | --- | --- |
-| `user_stories/story__<slug>.md` | **Human** (source of truth) | One plain-language `## Story` sentence | A person, by hand |
+| `user_stories/story__<slug>.md` | **Human-authoritative** (source of truth) | One plain-language `## Story` sentence | A person or an agent acting on the person's correction/approval |
 | `user_stories/contracts/<slug>.contract.md` | **Tooling** (generated) | `## Covers`, `## Acceptance Criteria`, `## Oracle`, `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, `## Candidate Prompts` | Regenerated, never hand-edited |
 
 The human file is deliberately tiny so a person can read it, decide *"yes, that
@@ -43,6 +43,12 @@ is the behavior I want"*, and verify it by using the product. The machine-checka
 contract is **derived** from that Story plus the original issue, and is
 re-derived whenever the Story changes. A `story-hash` in the contract header
 tracks alignment.
+
+Human-authoritative describes who controls the meaning, not who performs the
+keystrokes. In an agent-assisted workflow, the agent may draft and edit this
+small file from the independently preserved request, present the sentence to
+the human, and apply the human's correction. The human does not need to know
+the story filename, directory, metadata, or CLI command.
 
 > **Edit the Story, not the contract.** Hand-editing the contract is overwritten
 > the next time it is regenerated.
