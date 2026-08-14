@@ -240,7 +240,9 @@ _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES = (
     _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES[1],
 )
 _PR2376_DEPENDENCY_FIX_PROFILE_BYTES = (
-    _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES[1],
+    # After merging main, the protected base for this branch is #2374's
+    # conformance-split profile state, not the pre-#2374 zsh stationary one.
+    _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
     "85d01008145de7a7bc67bc6b458b7780a1fbaf24f9733708a0a1032ecb49a9f5",
 )
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
