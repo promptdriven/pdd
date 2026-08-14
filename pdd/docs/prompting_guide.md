@@ -166,7 +166,9 @@ contract, or other versioned source that every affected prompt can use:
 7. **Verification mold.** Establish baseline characterization tests for existing
    behavior, behavioral evidence for every changed rule, negative tests for every
    forbidden side effect or premature call, and cross-module tests for important
-   handoffs and transitions.
+   handoffs and transitions. Where the existing coverage policy permits a temporary
+   waiver, record its scope, rationale, approver, and expiry. A waiver cannot stand
+   in for an unknown seam, authority, or required capability.
 
 A compact matrix is enough; its purpose is to expose unsupported assumptions:
 
