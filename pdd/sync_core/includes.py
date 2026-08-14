@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import posixpath
-import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import PurePosixPath
@@ -196,23 +195,95 @@ def _is_tag_boundary(text: str, index: int) -> bool:
     return index == len(text) or text[index].isspace() or text[index] in ">/"
 
 
-def _markdown_fence_spans(text: str) -> tuple[tuple[int, int], ...]:
-    """Return fenced-code spans, excluding the legacy ````<path>```` include form."""
-    spans: list[tuple[int, int]] = []
-    fence_re = re.compile(r"(?m)^[ \t]*([`~]{3,})[^\n]*\n[\s\S]*?\n[ \t]*\1[ \t]*(?:\n|$)")
-    for match in fence_re.finditer(text):
-        if match.group(1).startswith("`") and text[match.start():match.end()].startswith("```<"):
+def _markdown_literal_mask(text: str) -> str:
+    """Mask fenced and inline Markdown code without changing source offsets."""
+    masked = list(text)
+
+    def hide(start: int, end: int) -> None:
+        for index in range(start, end):
+            if masked[index] not in "\r\n":
+                masked[index] = " "
+
+    cursor = 0
+    line_start = 0
+    while cursor < len(text):
+        line_end = text.find("\n", cursor)
+        if line_end < 0:
+            line_end = len(text)
+        line = text[line_start:line_end]
+        indent = len(line) - len(line.lstrip(" "))
+        if indent <= 3 and indent < len(line) and line[indent] in "`~":
+            delimiter = line[indent]
+            run_end = indent
+            while run_end < len(line) and line[run_end] == delimiter:
+                run_end += 1
+            run_length = run_end - indent
+            # `````<path>````` is PDD's legacy include syntax, not a Markdown
+            # fence. Other trailing text is a Markdown info string.
+            if run_length >= 3 and not line[run_end:].lstrip().startswith("<"):
+                close_cursor = line_end + (line_end < len(text))
+                while close_cursor < len(text):
+                    close_end = text.find("\n", close_cursor)
+                    if close_end < 0:
+                        close_end = len(text)
+                    close_line = text[close_cursor:close_end]
+                    close_indent = len(close_line) - len(close_line.lstrip(" "))
+                    close_run_end = close_indent
+                    while (
+                        close_run_end < len(close_line)
+                        and close_line[close_run_end] == delimiter
+                    ):
+                        close_run_end += 1
+                    if (
+                        close_indent <= 3
+                        and close_run_end - close_indent >= run_length
+                        and close_line[close_run_end:].strip() == ""
+                    ):
+                        hide(line_start, close_end)
+                        cursor = close_end + (close_end < len(text))
+                        line_start = cursor
+                        break
+                    close_cursor = close_end + (close_end < len(text))
+                else:
+                    hide(line_start, len(text))
+                    break
+                continue
+        cursor = line_end + (line_end < len(text))
+        line_start = cursor
+
+    cursor = 0
+    while cursor < len(text):
+        if masked[cursor] != "`":
+            cursor += 1
             continue
-        spans.append((match.start(), match.end()))
-    return tuple(spans)
+        run_end = cursor
+        while run_end < len(text) and masked[run_end] == "`":
+            run_end += 1
+        delimiter_length = run_end - cursor
+        if delimiter_length == 3 and text.startswith("```<", cursor):
+            cursor = run_end
+            continue
+        close = text.find("`" * delimiter_length, run_end)
+        if close < 0:
+            cursor = run_end
+            continue
+        if "\n" in text[run_end:close]:
+            cursor = run_end
+            continue
+        close_end = close
+        while close_end < len(text) and text[close_end] == "`":
+            close_end += 1
+        if close_end - close != delimiter_length:
+            cursor = close_end
+            continue
+        hide(cursor, close_end)
+        cursor = close_end
+    return "".join(masked)
 
 
-def _in_fenced_span(position: int, spans: tuple[tuple[int, int], ...]) -> bool:
-    return any(start <= position < end for start, end in spans)
-
-
-def _parse_xml_includes(text: str, fence_spans: tuple[tuple[int, int], ...] = ()) -> list[IncludeReference]:
+def _parse_xml_includes(text: str, source: str | None = None) -> list[IncludeReference]:
     """Scan ``<include>`` markup without regex backtracking over user text."""
+    source = text if source is None else source
     references: list[IncludeReference] = []
     cursor = 0
     tag_name = "<include"
@@ -221,15 +292,6 @@ def _parse_xml_includes(text: str, fence_spans: tuple[tuple[int, int], ...] = ()
         start = text.find(tag_name, cursor)
         if start < 0:
             return references
-        if _in_fenced_span(start, fence_spans):
-            cursor = start + len(tag_name)
-            continue
-        # Markdown examples such as ``<include-many>`` are documentation, not
-        # directives.  The dedicated backtick grammar below handles the only
-        # supported backtick include form (````<path>````).
-        if start > 0 and text[start - 1] == "`":
-            cursor = start + len(tag_name)
-            continue
         name_end = start + len(tag_name)
         if not _is_tag_boundary(text, name_end):
             cursor = name_end
@@ -237,7 +299,7 @@ def _parse_xml_includes(text: str, fence_spans: tuple[tuple[int, int], ...] = ()
         opening_end = _tag_end(text, name_end)
         if opening_end < 0:
             return references
-        raw_attrs = text[name_end:opening_end]
+        raw_attrs = source[name_end:opening_end]
         self_closing = raw_attrs.rstrip().endswith("/")
         if self_closing:
             raw_attrs = raw_attrs.rstrip()[:-1]
@@ -250,7 +312,7 @@ def _parse_xml_includes(text: str, fence_spans: tuple[tuple[int, int], ...] = ()
             if close_start < 0:
                 cursor = opening_end + 1
                 continue
-            body = text[opening_end + 1:close_start]
+            body = source[opening_end + 1:close_start]
             path = (attrs.get("path") or body).strip()
             if any(character in path for character in "<>\r\n"):
                 cursor = opening_end + 1
@@ -270,8 +332,9 @@ def _parse_xml_includes(text: str, fence_spans: tuple[tuple[int, int], ...] = ()
             )
 
 
-def _parse_include_many(text: str, fence_spans: tuple[tuple[int, int], ...] = ()) -> list[IncludeReference]:
+def _parse_include_many(text: str, source: str | None = None) -> list[IncludeReference]:
     """Scan ``<include-many>`` markup with a single forward cursor."""
+    source = text if source is None else source
     references: list[IncludeReference] = []
     cursor = 0
     tag_name = "<include-many"
@@ -280,12 +343,6 @@ def _parse_include_many(text: str, fence_spans: tuple[tuple[int, int], ...] = ()
         start = text.find(tag_name, cursor)
         if start < 0:
             return references
-        if _in_fenced_span(start, fence_spans):
-            cursor = start + len(tag_name)
-            continue
-        if start > 0 and text[start - 1] == "`":
-            cursor = start + len(tag_name)
-            continue
         name_end = start + len(tag_name)
         if not _is_tag_boundary(text, name_end):
             cursor = name_end
@@ -293,13 +350,13 @@ def _parse_include_many(text: str, fence_spans: tuple[tuple[int, int], ...] = ()
         opening_end = _tag_end(text, name_end)
         if opening_end < 0:
             return references
-        raw_attrs = text[name_end:opening_end]
+        raw_attrs = source[name_end:opening_end]
         close_start = text.find(close_tag, opening_end + 1)
         if close_start < 0:
             cursor = opening_end + 1
             continue
         attrs = _parse_attrs(raw_attrs)
-        inner = text[opening_end + 1:close_start]
+        inner = source[opening_end + 1:close_start]
         for offset, path in enumerate(
             item.strip() for line in inner.splitlines() for item in line.split(",") if item.strip()
         ):
@@ -315,8 +372,9 @@ def _parse_include_many(text: str, fence_spans: tuple[tuple[int, int], ...] = ()
         cursor = close_start + len(close_tag)
 
 
-def _parse_backtick_includes(text: str) -> list[IncludeReference]:
+def _parse_backtick_includes(text: str, source: str | None = None) -> list[IncludeReference]:
     """Scan backtick include fences without regex matching on prompt text."""
+    source = text if source is None else source
     references: list[IncludeReference] = []
     cursor = 0
     opening = "```<"
@@ -328,7 +386,7 @@ def _parse_backtick_includes(text: str) -> list[IncludeReference]:
         path_end = text.find(closing, start + len(opening))
         if path_end < 0:
             return references
-        path = text[start + len(opening):path_end].strip()
+        path = source[start + len(opening):path_end].strip()
         if path:
             references.append(IncludeReference(start, path, IncludeSyntax.BACKTICK))
         cursor = path_end + len(closing)
@@ -338,10 +396,10 @@ def parse_include_references(text: str) -> tuple[IncludeReference, ...]:
     """Parse includes once, preserving duplicates and deterministic source order."""
     if not text:
         return ()
-    fence_spans = _markdown_fence_spans(text)
-    references = _parse_xml_includes(text, fence_spans)
-    references.extend(_parse_include_many(text, fence_spans))
-    references.extend(_parse_backtick_includes(text))
+    scanned = _markdown_literal_mask(text)
+    references = _parse_xml_includes(scanned, text)
+    references.extend(_parse_include_many(scanned, text))
+    references.extend(_parse_backtick_includes(scanned, text))
     return tuple(sorted(references))
 
 

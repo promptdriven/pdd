@@ -61,26 +61,26 @@ def test_literal_include_tag_in_prose_does_not_consume_later_markup() -> None:
     assert [item.path for item in references] == ["docs/actual.md"]
 
 
-def test_literal_include_many_tag_in_prose_does_not_consume_later_markup() -> None:
-    text = (
-        "Use `<include-many>` only when several files are needed.\n"
-        "<include>docs/actual.md</include>\n"
-    )
-    references = parse_include_references(text)
-    assert [item.path for item in references] == ["docs/actual.md"]
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Use ``<include>docs/fake.md</include>`` here\n<include>docs/real.md</include>",
+        "````markdown\n<include>docs/fake.md</include>\n`````\n<include>docs/real.md</include>",
+        "~~~\n<include-many>docs/fake.md, docs/also-fake.md</include-many>\n~~~~\n<include-many>docs/real.md</include-many>",
+    ],
+)
+def test_markdown_literal_spans_do_not_create_include_dependencies(text) -> None:
+    """Inline spans and homogeneous fences leave directives literal."""
+    assert [item.path for item in parse_include_references(text)] == ["docs/real.md"]
 
 
-@pytest.mark.parametrize("fence", ("```", "~~~"))
-def test_include_tags_in_fenced_examples_are_not_directives(fence: str) -> None:
-    text = (
-        f"{fence}xml\n"
-        "<include>docs/example-only.md</include>\n"
-        "<include-many>docs/one.md, docs/two.md</include-many>\n"
-        f"{fence}\n"
-        "<include>docs/actual.md</include>\n"
-    )
-    references = parse_include_references(text)
-    assert [item.path for item in references] == ["docs/actual.md"]
+def test_mixed_fence_delimiters_do_not_hide_a_real_include() -> None:
+    """An invalid mixed-delimiter fence is ordinary text, not a literal span."""
+    text = "~~`\n<include>docs/fake.md</include>\n~~`\n<include>docs/real.md</include>"
+    assert [item.path for item in parse_include_references(text)] == [
+        "docs/fake.md",
+        "docs/real.md",
+    ]
 
 
 @pytest.mark.timeout(1, func_only=True)
