@@ -200,6 +200,16 @@ _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES = (
     _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
     _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
 )
+# The one linear retirement chain PR #2374 installs: the code-generator
+# successor authorized by PR #2370 is itself retired here. Identified by the
+# transition it names -- both requirement ids are CONTRACT-SHA256 values, so
+# this stays exact-byte bound without depending on the rest of the policy file.
+_CONFORMANCE_SPLIT_RETIRED_SUCCESSOR = (
+    PurePosixPath("pdd/prompts/code_generator_main_python.prompt"),
+    "python",
+    "CONTRACT-SHA256:9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
+    "CONTRACT-SHA256:882876b0dea9198c1fa9492806d85bfb088b393096f4f1a0543cc8f31f40fc30",
+)
 # PR #2374 adds six managed conformance profiles and advances the code-generator
 # contract. Retain the historical composed transition overlay only at these
 # exact consumed policy bytes.
@@ -2000,16 +2010,27 @@ def _parse_requirement_transition_retirements(
     obsolete = [item.obsolete for item in retirements]
     replacements = [item.replacement for item in retirements]
     # PR #2374 retires the exact prior code-generator successor while retaining
-    # its immutable schema-3 history.  Accept that one hash-bound linear chain;
+    # its immutable schema-3 history.  Accept that one reviewed linear chain;
     # every other duplicate or chained retirement remains invalid.
+    #
+    # The link is identified by the authorization it names, not by the digest
+    # of the whole policy file: a file-wide hash also revokes this exemption
+    # for any unrelated edit elsewhere in the document, which silently turns
+    # every other rejection in this function into "duplicated or chained".
     if (
         len(retirements) > _MAX_REQUIREMENT_TRANSITIONS
         or len(obsolete) != len(set(obsolete))
         or len(replacements) != len(set(replacements))
-        or (
-            set(obsolete) & set(replacements)
-            and _sha256(raw) != _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[1]
-        )
+        or {
+            (
+                item.prompt_path,
+                item.language_id,
+                item.from_requirement_id,
+                item.to_requirement_id,
+            )
+            for item in set(obsolete) & set(replacements)
+        }
+        - {_CONFORMANCE_SPLIT_RETIRED_SUCCESSOR}
     ):
         raise VerificationProfileError(
             f"{source} requirement transition retirement rules are duplicated or chained"
