@@ -35,6 +35,10 @@
    - `CommandStatus { running, command:string|null }`
    - `SpawnTerminalResponse { success, message, command, platform, job_id? }`
    - `SpawnedJobStatus { job_id, command, status:'running'|'completed'|'failed'|'unknown', started_at, completed_at?, exit_code? }`
+   - Read-only local observability types:
+     - `ObservabilityRunSummary { filename, timestamp, argv:string[], status:'success'|'failed', total_cost, model, error_message:string|null }`
+     - `ObservabilityRunDetail { timestamp_utc, argv:string[], total_cost, steps:Record<string,unknown>[], errors:Record<string,unknown>[], terminal_output, platform:Record<string,unknown> }`
+     - `ObservabilityModule { module_name, language, fingerprint:Record<string,unknown>, run_report:{tests_passed?,tests_failed?}|null }`
 
 2) Prompt metrics/sync/model types:
    - `CostEstimate { input_cost, model, tokens, cost_per_million, currency }`
@@ -110,6 +114,9 @@
 
 4) Local server endpoint wrappers (name/signature/endpoint/body):
    - `getStatus()` -> GET `/api/v1/status`
+   - `getObservabilityRuns()` -> GET `/api/v1/observability/runs`
+   - `getObservabilityRun(filename)` -> GET `/api/v1/observability/runs/${encodeURIComponent(filename)}`
+   - `getObservabilityModules()` -> GET `/api/v1/observability/modules`
    - `getAuthStatus()` -> GET `/api/v1/auth/status`
    - `logout()` -> POST `/api/v1/auth/logout`
    - `startLogin(options?)` -> POST `/api/v1/auth/login` with `JSON.stringify(options || {})`

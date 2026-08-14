@@ -1,0 +1,22 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/components/ObservabilityDashboard.tsx`, an in-page PDD Connect view for local execution history and Dev Unit health.
+
+% Dependencies
+<observability_dependencies>
+  <include>pdd/frontend/api.ts</include>
+</observability_dependencies>
+
+% Requirements
+1. Export default `ObservabilityDashboard` as a React functional component.
+2. On mount, load run summaries and module metadata using `api.getObservabilityRuns()` and `api.getObservabilityModules()`; provide a Refresh button that repeats both requests.
+3. Render compact summary cards for success rate, total spend, recorded runs, and the most used non-unknown model.
+4. Render a selectable execution-run list with command, timestamp, cost, model, and success/failed status. Selecting a run must call `api.getObservabilityRun(filename)` and show its JSON detail.
+5. Render Dev Unit cards with module name, language, and optional passed/failed test totals.
+6. Support loading, empty, and API-error states. The component is read-only: it must never write project files or execute PDD commands.
+7. Use responsive Tailwind dark/glass styling consistent with the Connect app shell.
+
+% Security constraints
+- Display only data returned by the observability API; do not read browser storage or project files directly.
+- Treat run details as text using `JSON.stringify`; never inject report content as HTML.
+
+% Deliverable
+- Output only `pdd/frontend/components/ObservabilityDashboard.tsx`.

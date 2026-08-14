@@ -5,13 +5,13 @@
 </core_dependencies>
 
 <ui_dependencies>
-  <include-many>pdd/frontend/components/PromptSelector.tsx, pdd/frontend/components/PromptSpace.tsx, pdd/frontend/components/ArchitectureView.tsx, pdd/frontend/components/ProjectSettings.tsx, pdd/frontend/components/JobDashboard.tsx, pdd/frontend/components/TaskQueuePanel.tsx, pdd/frontend/components/AddToQueueModal.tsx, pdd/frontend/components/AuthStatusIndicator.tsx, pdd/frontend/components/ReauthModal.tsx, pdd/frontend/components/ErrorBoundary.tsx, pdd/frontend/components/RemoteSessionSelector.tsx, pdd/frontend/components/ExecutionModeToggle.tsx, pdd/frontend/components/Icon.tsx, pdd/frontend/components/Toast.tsx, pdd/frontend/components/DeviceIndicator.tsx</include-many>
+  <include-many>pdd/frontend/components/PromptSelector.tsx, pdd/frontend/components/PromptSpace.tsx, pdd/frontend/components/ArchitectureView.tsx, pdd/frontend/components/ProjectSettings.tsx, pdd/frontend/components/ObservabilityDashboard.tsx, pdd/frontend/components/JobDashboard.tsx, pdd/frontend/components/TaskQueuePanel.tsx, pdd/frontend/components/AddToQueueModal.tsx, pdd/frontend/components/AuthStatusIndicator.tsx, pdd/frontend/components/ReauthModal.tsx, pdd/frontend/components/ErrorBoundary.tsx, pdd/frontend/components/RemoteSessionSelector.tsx, pdd/frontend/components/ExecutionModeToggle.tsx, pdd/frontend/components/Icon.tsx, pdd/frontend/components/Toast.tsx, pdd/frontend/components/DeviceIndicator.tsx</include-many>
 </ui_dependencies>
 
 Requirements
 1. Export a default `App` React functional component and keep a local `parseHash()` helper.
 2. Keep view unions:
-   - `View = 'devunits' | 'bug' | 'fix' | 'change' | 'settings'`
+   - `View = 'devunits' | 'bug' | 'fix' | 'change' | 'settings' | 'observability'`
    - `DevUnitsSubView = 'graph' | 'list'`
 3. `parseHash()` must:
    - default to `{ view: 'devunits', subView: 'graph' }` on empty hash.
@@ -71,7 +71,8 @@ Requirements
    - preserve PromptSpace back-navigation context by saving `window.scrollY` and prior devunits sub-view before opening; restore both on back (with multiple timed scroll restores).
 16. Render structure:
    - root `ErrorBoundary`.
-   - sticky glass header with branding, centered workflow tabs (`devunits`, `bug`, `fix`, `change`, `settings`), and right-side status controls.
+   - sticky glass header with branding, a compact centered workflow switcher (`devunits`, `bug`, `fix`, `change`, `settings`) plus an icon-only `observability` control, and right-side status controls.
+   - keep the workflow switcher content-sized: small padding/gaps, no wrapped labels, and a compact border so it does not consume the header width.
    - right-side controls include jobs toggle + active count, remote/local panel toggle, connection status pill, audio toggle, and `AuthStatusIndicator`.
    - remote settings dropdown/backdrop includes `ExecutionModeToggle` and, in remote mode, `RemoteSessionSelector` with refresh callback.
    - execution status bar for running/success/failed states; running state includes spinner, current command, and Stop button calling `api.cancelCommand`.
@@ -79,6 +80,7 @@ Requirements
    - main content: embedded `PromptSpace` when editing; otherwise offline banner when disconnected and the current view content:
      - `devunits`: `ArchitectureView` (graph) or `PromptSelector` (list)
      - `settings`: `ProjectSettings`
+     - `observability`: `ObservabilityDashboard`, displayed in-page at `#observability` rather than navigating away from Connect.
      - `bug` / `fix` / `change`: responsive two-column card layouts with URL input, action button, prerequisites, post-action guidance, and workflow step list
    - always render `JobDashboard`, `TaskQueuePanel`, and `AddToQueueModal` near the root.
    - render fixed footer status strip, conditional `ReauthModal`, and `DeviceIndicator`.
