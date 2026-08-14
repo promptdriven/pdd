@@ -1,0 +1,46 @@
+<pdd-reason>Shared grammar for the BREAKING-CHANGE opt-out directives that let a prompt author authorise a specific change the conformance gates would otherwise block.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "_env_flag_enabled", "signature": "(name: str) -> bool", "returns": "bool"},
+      {"name": "_parse_llm_bool", "signature": "(value: str) -> bool", "returns": "bool"},
+      {"name": "_strip_yaml_front_matter", "signature": "(prompt_content: Optional[str]) -> str", "returns": "str"},
+      {"name": "_iter_breaking_change_directives", "signature": "(prompt_content: Optional[str]) -> List[str]", "returns": "List[str]"},
+      {"name": "_prompt_breaking_change_removed_symbols", "signature": "(prompt_content: Optional[str]) -> Set[str]", "returns": "Set[str]"},
+      {"name": "_prompt_breaking_change_signature_symbols", "signature": "(prompt_content: Optional[str]) -> Set[str]", "returns": "Set[str]"},
+      {"name": "_prompt_allows_breaking_change", "signature": "(prompt_content: Optional[str]) -> bool", "returns": "bool"},
+      {"name": "_prompt_has_breaking_change_marker", "signature": "(prompt_content: Optional[str]) -> bool", "returns": "bool"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Implement the BREAKING-CHANGE directive
+% grammar in `pdd/conformance/directives.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Responsibility
+  Parse `BREAKING-CHANGE:` directives into gate allow-lists and flag readers.
+
+% Contract rules
+<contract_rules>
+  R1. Only a line beginning (after whitespace) with `BREAKING-CHANGE:` MUST be a
+      directive; prose mentions are inert. Strip a leading BOM and YAML front
+      matter first.
+  R2. Removal tails MUST begin with a case-insensitive inflection of `remove`,
+      `delete`, `drop`, or `rename`; signature tails begin with `change` plus
+      `signature`, `signatures`, `api`, or `contract`.
+  R3. The parser MUST accept only comma-separated dotted Python identifiers after that grammar.
+      Matching quote/backtick wrappers and one final `.`, `;`, or `:` are allowed;
+      whitespace, mismatched wrappers, and trailing prose never authorise names.
+  R4. A bare marker MUST authorise nothing; opt-outs are always name-scoped.
+  R5. Parsers MUST accept `None` or empty input without raising.
+  R6. `_env_flag_enabled` MUST accept only `1/true/yes/on`; `_parse_llm_bool`
+      enables empty, recognises false values, and otherwise disables.
+</contract_rules>
+
+% Dependencies
+  Standard library only.
