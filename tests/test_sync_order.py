@@ -971,7 +971,7 @@ def test_build_dependency_graph_from_architecture_missing_or_invalid(tmp_path, m
     """Test behavior when architecture file is missing, can't be parsed, or is invalid."""
     missing_file = tmp_path / "missing_architecture.json"
     assert sync_order.build_dependency_graph_from_architecture(missing_file) == {}
-    
+
     bad_file = tmp_path / "bad.json"
     bad_file.write_text("{invalid json", encoding="utf-8")
     assert sync_order.build_dependency_graph_from_architecture(bad_file) == {}

@@ -236,8 +236,8 @@ _CONFORMANCE_SPLIT_STATIONARY_PROFILE_BYTES = (
 # policy/profile pair, so this acknowledgement cannot authorize any other
 # prompt change.
 _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES = (
-    _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES[1],
-    _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES[1],
+    _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[1],
+    _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[1],
 )
 _PR2376_DEPENDENCY_FIX_PROFILE_BYTES = (
     # After merging main, the protected base for this branch is #2374's
