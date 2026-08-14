@@ -941,7 +941,7 @@ const App: React.FC = () => {
                   <svg className="w-3.5 h-3.5 md:w-4 md:h-4 mr-1 md:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3v18h18M7 16l4-5 3 3 5-7" />
                   </svg>
-                  <span className="text-[11px] md:text-xs">Observability</span>
+                  <span className="text-[9px] md:text-[10px]">Observability</span>
                 </button>
               </div>
             </div>
