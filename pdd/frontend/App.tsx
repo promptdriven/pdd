@@ -862,7 +862,7 @@ const App: React.FC = () => {
             <div className="flex-1 min-w-0 flex justify-center">
               <div
                 className="inline-flex w-fit max-w-full gap-0.5 md:gap-1.5 p-0.5 md:p-1.5 rounded-lg md:rounded-xl border md:border-2 border-[#FDCE49]/60 bg-surface-800/40 overflow-x-auto scrollbar-hide"
-                style={{ width: 'fit-content', zoom: 0.82 }}
+                style={{ width: 'fit-content', zoom: 0.75 }}
               >
                 <button
                   onClick={() => setView('devunits')}
@@ -941,7 +941,7 @@ const App: React.FC = () => {
                   <svg className="w-3.5 h-3.5 md:w-4 md:h-4 mr-1 md:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3v18h18M7 16l4-5 3 3 5-7" />
                   </svg>
-                  <span className="text-[9px] md:text-[10px]">Observability</span>
+                  Observability
                 </button>
               </div>
             </div>

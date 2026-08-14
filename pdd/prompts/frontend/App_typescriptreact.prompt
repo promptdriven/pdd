@@ -72,7 +72,7 @@ Requirements
 16. Render structure:
    - root `ErrorBoundary`.
    - sticky glass header with branding and a compact centered workflow switcher (`devunits`, `bug`, `fix`, `change`, `settings`, `observability`), and right-side status controls.
-   - keep the workflow switcher content-sized, visually compact (including a modest 0.82 scale), with readable button spacing, no wrapped labels, and a bounded border so it does not consume the header width. Keep the Observability label slightly smaller than the other workflow labels. On constrained/tablet widths, reduce button padding, icons, gaps, and border treatment; render compact icon controls for Dev Units/Bug/Fix/Change/Settings while preserving the Observability label; restore full labels and larger controls at desktop width.
+   - keep the workflow switcher content-sized, visually compact (including a 0.75 scale), with readable button spacing, no wrapped labels, and a bounded border so it does not consume the header width. Keep the Observability label the same size as the other workflow labels. On constrained/tablet widths, reduce button padding, icons, gaps, and border treatment; render compact icon controls for Dev Units/Bug/Fix/Change/Settings while preserving the Observability label; restore full labels and larger controls at desktop width.
    - right-side controls include jobs toggle + active count, remote/local panel toggle, connection status pill, audio toggle, and `AuthStatusIndicator`.
    - remote settings dropdown/backdrop includes `ExecutionModeToggle` and, in remote mode, `RemoteSessionSelector` with refresh callback.
    - execution status bar for running/success/failed states; running state includes spinner, current command, and Stop button calling `api.cancelCommand`.
