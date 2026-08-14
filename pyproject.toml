@@ -110,6 +110,7 @@ packages = ["pdd", "pdd.commands", "pdd.core", "pdd.server", "pdd.server.routes"
     "*.sh",
     "frontend/dist/**",
     "frontend/dist/*",
+    "server/observability/**",
     "sync_core/native/*.c",
 ]
 

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PDD Observability</title>
+    <link rel="stylesheet" href="/observability/static/style.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <div>
+          <p class="eyebrow">PDD CONNECT</p>
+          <h1>Observability</h1>
+          <p class="subtitle">Local execution history and Dev Unit health.</p>
+        </div>
+        <div class="actions">
+          <a href="/">Back to Connect</a>
+          <button id="refresh" type="button">Refresh</button>
+        </div>
+      </header>
+      <section class="stats" aria-label="Run summary">
+        <article><span>Success rate</span><strong id="success-rate">—</strong></article>
+        <article><span>Total spend</span><strong id="total-cost">$0.0000</strong></article>
+        <article><span>Runs</span><strong id="run-count">0</strong></article>
+        <article><span>Most used model</span><strong id="top-model">—</strong></article>
+      </section>
+      <section class="grid">
+        <article class="panel">
+          <div class="panel-heading"><h2>Execution runs</h2><span id="run-status"></span></div>
+          <div id="runs" class="list" aria-live="polite"></div>
+        </article>
+        <article class="panel">
+          <div class="panel-heading"><h2>Run detail</h2></div>
+          <div id="details" class="details empty">Select a run to inspect its safe local report.</div>
+        </article>
+      </section>
+      <section class="panel modules">
+        <div class="panel-heading"><h2>Dev Units</h2><span id="module-count"></span></div>
+        <div id="modules" class="module-grid"></div>
+      </section>
+    </main>
+    <script src="/observability/static/app.js"></script>
+  </body>
+</html>

@@ -914,6 +914,15 @@ const App: React.FC = () => {
                 >
                   <Cog6ToothIcon className="hidden sm:inline w-4 h-4 mr-1.5" />Settings
                 </button>
+                <button
+                  onClick={() => window.location.assign('/observability')}
+                  className="px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)] transition-all duration-200"
+                  title="Open local execution history and Dev Unit health"
+                >
+                  <svg className="hidden sm:inline w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3v18h18M7 16l4-5 3 3 5-7" />
+                  </svg>Observability
+                </button>
               </div>
             </div>
 

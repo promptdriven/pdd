@@ -1,0 +1,21 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/routes/observability.py`.
+
+% Role & Scope
+  Provide project-scoped, read-only FastAPI endpoints for the PDD Connect
+  observability dashboard. Reports are local `.pdd` JSON artifacts, not a
+  cloud telemetry service.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. Export `create_observability_router(project_root: Path) -> APIRouter`.
+  2. Expose `/api/v1/observability/runs`, `/runs/{filename}`, and `/modules`.
+  3. Gracefully ignore corrupt report files and return empty lists when PDD
+     report directories do not exist.
+  4. Restrict run-detail lookup to a JSON basename to prevent path traversal.
+  5. Never return environment values. Exclude secret-bearing error fields.
+  6. Return compact summaries for run lists and safe details only on demand.
+
+% Deliverables
+  - Code: `pdd/server/routes/observability.py`
+  - Exports: create_observability_router

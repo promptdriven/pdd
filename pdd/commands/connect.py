@@ -315,6 +315,7 @@ def connect(
     click.echo(f"Project Root: {click.style(str(project_root), fg='blue')}")
     click.echo(f"API Documentation: {click.style(f'{server_url}/docs', underline=True)}")
     click.echo(f"Local Frontend: {click.style(target_url, underline=True)}")
+    click.echo(f"Observability: {click.style(f'{server_url}/observability', underline=True)}")
     # TODO: Re-enable when production /connect page is deployed
     # if cloud_url:
     #     click.echo(f"Remote Access: {click.style(cloud_url, fg='cyan', underline=True)}")

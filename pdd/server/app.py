@@ -23,6 +23,7 @@ from .security import (
 from .jobs import JobManager
 from .routes.websocket import ConnectionManager, create_websocket_routes
 from .routes import architecture, auth, extracts, files, commands, prompts
+from .routes.observability import create_observability_router
 from .routes import websocket as ws_routes
 from .routes.config import router as config_router
 
@@ -256,10 +257,24 @@ def create_app(
     app.include_router(files.router)
     app.include_router(commands.router)
     app.include_router(prompts.router)
+    app.include_router(create_observability_router(_app_state.project_root))
 
     create_websocket_routes(app, _app_state.connection_manager, _app_state.job_manager)
 
     # 4. Serve Frontend Static Files
+    observability_static = Path(__file__).parent / "observability"
+    if observability_static.exists():
+        app.mount(
+            "/observability/static",
+            StaticFiles(directory=observability_static),
+            name="observability-static",
+        )
+
+        @app.get("/observability", response_class=HTMLResponse)
+        async def serve_observability():
+            """Serve the local observability dashboard."""
+            return FileResponse(observability_static / "index.html")
+
     # Look for frontend dist in the pdd package directory
     frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
     if frontend_dist.exists():

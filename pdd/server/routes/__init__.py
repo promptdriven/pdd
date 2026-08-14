@@ -7,6 +7,7 @@ from . import extracts
 from . import files
 from . import commands
 from . import prompts
+from . import observability
 from .architecture import router as architecture_router
 from .auth import router as auth_router
 from .config import router as config_router
@@ -15,6 +16,7 @@ from .files import router as files_router
 from .commands import router as commands_router
 from .websocket import router as websocket_router
 from .prompts import router as prompts_router
+from .observability import create_observability_router
 
 __all__ = [
     "architecture",
@@ -24,6 +26,7 @@ __all__ = [
     "files",
     "commands",
     "prompts",
+    "observability",
     "architecture_router",
     "auth_router",
     "config_router",
@@ -32,4 +35,5 @@ __all__ = [
     "commands_router",
     "websocket_router",
     "prompts_router",
+    "create_observability_router",
 ]
