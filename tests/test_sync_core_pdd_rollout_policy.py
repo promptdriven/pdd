@@ -2238,6 +2238,19 @@ def test_replay_transitions_cover_the_actual_protected_base() -> None:
     assert profiles.coverage == 1.0
 
 
+def test_conformance_split_profiles_load_from_actual_merge_base() -> None:
+    """The conformance split preserves protected verification history verbatim."""
+    skip_if_authenticated_candidate_lacks_refs(ROOT, "origin/main")
+    manifest = build_unit_manifest(ROOT, base_ref="origin/main", head_ref="HEAD")
+
+    assert not manifest.invalid_reasons
+    profiles = load_verification_profiles(ROOT, manifest)
+
+    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
 def test_pr2017_phase_a_is_dormant_on_its_exact_protected_base() -> None:
     """The PR #2017 prerequisite installs authority without consuming bytes."""
     skip_if_authenticated_candidate_lacks_refs(

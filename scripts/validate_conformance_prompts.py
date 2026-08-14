@@ -26,6 +26,28 @@ EXPECTED = [
     "interface_check",
 ]
 
+# This is the compatibility surface retained in code_generator_main after the
+# conformance split.  Keep it explicit: deriving the requirement from the
+# source module would let a future regeneration silently shrink the contract.
+REQUIRED_CONFORMANCE_REEXPORTS = frozenset({
+    "ArchitectureConformanceError", "LanguageMismatchError", "PROSE_OUTPUT_REPAIR_DIRECTIVE", "ProseOutputError", "PublicSurfaceRegressionError", "TestChurnError",
+    "_CHURN_NONCE_CACHE", "_CHURN_NONCE_ENV", "_CHURN_NONCE_READ", "_LANGUAGE_TEST_FILE_EXTS", "_read_churn_nonce", "_verify_language_validity",
+    "_BREAKING_CHANGE_DIRECTIVE_RE", "_DIRECTIVE_SYMBOL_RE", "_YAML_FRONT_MATTER_RE", "_env_flag_enabled", "_iter_breaking_change_directives", "_parse_breaking_change_symbols",
+    "_parse_llm_bool", "_prompt_allows_breaking_change", "_prompt_breaking_change_removed_symbols", "_prompt_breaking_change_signature_symbols", "_prompt_has_breaking_change_marker", "_strip_yaml_front_matter",
+    "_COMPREHENSION_TYPES", "_DUNDER_ALL_MUTATOR_METHODS", "_SCOPE_NODE_TYPES", "_assign_target_matches", "_class_constructor_signature", "_clean_dunder_all_literal",
+    "_collect_bound_module_names", "_collect_dataclass_inherited_parts", "_collect_dataclass_own_parts", "_collect_patch_targets", "_collect_python_public_surface", "_dataclass_decorator_is_kw_only",
+    "_dataclass_decorator_synthesizes_init", "_dataclass_field_call_is_init_false", "_diff_public_surface", "_effective_patch_targets", "_extract_dunder_all", "_format_python_signature",
+    "_is_dataclass_decorator", "_is_kw_only_sentinel", "_node_writes_dunder_all", "_part_field_name", "_patch_target_signature_entry", "_python_method_binding_kind",
+    "_python_property_accessor_role", "_reexport_binding", "_resolve_class_node", "_scannable_children", "_snapshot_public_signatures", "_snapshot_public_surface",
+    "_subtree_mutates_dunder_all", "_symbol_exists_in_module", "_synthesize_dataclass_init_signature", "_TEST_CHURN_BRIDGE_BREAK_RE", "_TEST_CHURN_OPT_OUT_RE", "_TEST_CHURN_TARGET_RE",
+    "_calculate_test_churn_ratio", "_compute_test_churn_ratio", "_find_default_test_files", "_get_test_churn_threshold", "_is_python_generation", "_is_test_output_path",
+    "_prompt_allows_test_churn", "_verify_test_churn", "ParamSpec", "_ast_args_to_specs", "_collect_actual_param_specs", "_collect_pdd_interface_names",
+    "_collect_python_symbols", "_extract_pdd_interface_signatures", "_find_target_function", "_parse_declared_param_specs", "_verify_architecture_conformance", "_verify_architecture_json_conformance",
+    "_verify_pdd_interface_signatures", "_annotation_only_edits", "_apply_byte_edits", "_collect_declared_surface", "_declared_patch_targets", "_declared_presence_name",
+    "_declared_signature_to_entry", "_entry_binding_context", "_index_function_defs", "_line_start_byte_offsets", "_node_byte_span", "_parse_declared_def",
+    "_reconcile_declared_annotation_drift", "_signature_slots", "_verify_public_surface_regression",
+})
+
 # Mirrors pdd.contract_ir: a <contract_rules> line is read as a rule ID when it
 # matches _EXPLICIT_ID_RE or _SEQ_ID_RE, and as a MALFORMED one when it matches
 # only _CANDIDATE_ID_RE. A rule that wraps onto a hyphenated word ("prose-wrapped")
@@ -285,6 +307,61 @@ def check_orchestrator_selector() -> None:
                 errors.append(f"{ORCH}: selector names missing symbol {sym}")
 
 
+def check_orchestrator_compatibility_reexports() -> None:
+    """Require regenerating context for every conformance compatibility alias."""
+    if not ORCH.is_file() or not SOURCE.is_file():
+        return
+    text = ORCH.read_text(encoding="utf-8")
+    try:
+        tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
+    except SyntaxError as exc:
+        errors.append(f"{SOURCE}: cannot parse compatibility aliases: {exc}")
+        return
+
+    reexport_nodes = [
+        node for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 1
+        and node.module is not None
+        and node.module.startswith("conformance.")
+    ]
+    actual = {
+        alias.asname or alias.name
+        for node in reexport_nodes
+        for alias in node.names
+    }
+    missing = REQUIRED_CONFORMANCE_REEXPORTS - actual
+    unexpected = actual - REQUIRED_CONFORMANCE_REEXPORTS
+    if missing or unexpected:
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(sorted(missing)))
+        if unexpected:
+            details.append("unexpected " + ", ".join(sorted(unexpected)))
+        errors.append(f"{SOURCE}: conformance compatibility aliases drifted: " + "; ".join(details))
+
+    ranges = []
+    for match in re.finditer(r"<include\b(?P<attrs>[^>]*)>(?P<path>[^<]*)</include>", text):
+        if match.group("path").strip() != str(SOURCE):
+            continue
+        lines = re.search(r'\blines="(\d+)-(\d+)"', match.group("attrs"))
+        if lines:
+            ranges.append((int(lines.group(1)), int(lines.group(2))))
+    if not ranges:
+        errors.append(f"{ORCH}: missing line-range include for conformance compatibility exports")
+        return
+
+    uncovered = [
+        node for node in reexport_nodes
+        if not any(start <= node.lineno <= node.end_lineno <= end for start, end in ranges)
+    ]
+    if uncovered:
+        errors.append(
+            f"{ORCH}: compatibility include omits "
+            + ", ".join(f".{node.module}" for node in uncovered)
+        )
+
+
 def check_orchestrator_contract_rules() -> None:
     """The orchestrator carries the gate obligations the units cannot own.
 
@@ -306,6 +383,7 @@ def main() -> int:
         check_prompt(name)
     check_architecture()
     check_orchestrator_selector()
+    check_orchestrator_compatibility_reexports()
     check_orchestrator_contract_rules()
 
     if errors:

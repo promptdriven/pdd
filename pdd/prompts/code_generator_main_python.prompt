@@ -114,6 +114,9 @@ BREAKING-CHANGE: change signature ArchitectureConformanceError, PublicSurfaceReg
 <architecture_sync>
     <include select="def:code_generator_main,def:_run_discovery,def:_should_wire_generated_exports,def:_wire_to_parent_init,def:_parse_front_matter,def:_expand_vars,def:_run_git_command,def:is_git_repository,def:get_git_content_at_ref,def:get_file_git_status,def:git_add_files">pdd/code_generator_main.py</include>
 </architecture_sync>
+<conformance_compatibility_exports>
+    <include lines="56-164">pdd/code_generator_main.py</include>
+</conformance_compatibility_exports>
 <env_detector>
     <include>pdd/python_env_detector.py</include>
 </env_detector>
