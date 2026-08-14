@@ -118,7 +118,8 @@ def test_routes_module_exports():
 
         # Verify __all__ definition
         assert hasattr(routes_module, "__all__")
-        expected_all = ["architecture", "auth", "config", "extracts", "files", "commands", "prompts", "architecture_router", "auth_router", "config_router", "extracts_router", "files_router", "commands_router", "websocket_router", "prompts_router"]
+        # Project-scoped routers are exported as factories, not module-level routers.
+        expected_all = ["architecture", "auth", "config", "extracts", "files", "commands", "prompts", "observability", "architecture_router", "auth_router", "config_router", "extracts_router", "files_router", "commands_router", "websocket_router", "prompts_router", "create_observability_router"]
         assert sorted(routes_module.__all__) == sorted(expected_all)
 
 def test_routes_import_failure():
