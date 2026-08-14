@@ -2033,11 +2033,11 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
         results.append(result_row)
 
         if cache_story_prompt_links and not metadata_prompt_refs:
-            # Criteria verdicts name only unsatisfied rows. Using them to create
-            # metadata would discard prompts that satisfied another criterion
-            # and silently narrow the next evaluation. Cache the full scope the
-            # criteria evaluator actually received instead.
-            if evaluation is not None:
+            # Parsed criteria make ``story_prompt_files`` the scope that must be
+            # retried. This remains true when the evaluator is incomplete or
+            # errors: falling back to prose-based linking in either case can
+            # silently remove a prompt from the next attempt.
+            if criteria:
                 linked_prompt_paths = _dedupe_prompt_paths(story_prompt_files)
             else:
                 linked_prompt_paths, _ = _select_story_prompt_links(

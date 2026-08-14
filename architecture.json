@@ -10137,7 +10137,7 @@
   },
   {
     "reason": "LLM oracle for user story validation, generation, and story-driven prompt fixing; owns the story_id filename-slug identity convention and cross-unit story metadata helpers.",
-    "description": "Discovers story files, validates checkable contract criteria against scoped prompts via story_criteria (falling back to detect_change only when no criteria are parseable), generates LLM-authored story markdown from GitHub issues, and applies scoped prompt fixes. Validation accepts an optional exact story-to-contract mapping so scoped callers use the authorized contract rather than discovering a conventional sibling. Provides the public story_id helper plus cross-unit story traceability via parse_story_dev_unit_metadata, story_is_cross_unit, get_cross_unit_stories_for_prompt, and get_all_dev_units_for_story.",
+    "description": "Discovers story files, validates checkable contract criteria against scoped prompts via story_criteria (falling back to detect_change only when no criteria are parseable), and caches the full attempted scope whenever parsed criteria run, including incomplete or errored evaluator calls. Generates LLM-authored story markdown from GitHub issues and applies scoped prompt fixes. Validation accepts an optional exact story-to-contract mapping so scoped callers use the authorized contract rather than discovering a conventional sibling. Provides the public story_id helper plus cross-unit story traceability via parse_story_dev_unit_metadata, story_is_cross_unit, get_cross_unit_stories_for_prompt, and get_all_dev_units_for_story.",
     "dependencies": [
       "contract_ir_python.prompt",
       "story_criteria_python.prompt",

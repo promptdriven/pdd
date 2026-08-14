@@ -1788,6 +1788,44 @@ def test_criteria_link_caching_preserves_the_full_evaluated_scope(tmp_path):
     assert "b_python.prompt" in metadata
 
 
+def test_criteria_link_caching_preserves_scope_after_evaluator_error(tmp_path):
+    """An incomplete criteria evaluation must not use prose to narrow a retry."""
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+    prompt_a = prompts_dir / "a_python.prompt"
+    prompt_b = prompts_dir / "b_python.prompt"
+    prompt_a.write_text("A", encoding="utf-8")
+    prompt_b.write_text("B", encoding="utf-8")
+    story = stories_dir / "story__cache_error_scope.md"
+    story.write_text("## Story\nOnly A is mentioned here.\n", encoding="utf-8")
+    contract = _contract_path_for_story(story)
+    contract.parent.mkdir()
+    contract.write_text("## Acceptance Criteria\n- A and B work.\n", encoding="utf-8")
+
+    with (
+        patch(
+            "pdd.user_story_tests.evaluate_acceptance_criteria",
+            side_effect=StoryCriteriaError("malformed", cost=0.05),
+        ),
+        patch("pdd.user_story_tests.detect_change") as mock_detect,
+    ):
+        passed, results, _cost, _model = run_user_story_tests(
+            prompts_dir=str(prompts_dir),
+            stories_dir=str(stories_dir),
+            quiet=True,
+            cache_story_prompt_links=True,
+        )
+
+    assert passed is False
+    assert results[0]["evaluation_status"] == "incomplete"
+    mock_detect.assert_not_called()
+    metadata = story.read_text(encoding="utf-8").splitlines()[0]
+    assert "a_python.prompt" in metadata
+    assert "b_python.prompt" in metadata
+
+
 def test_criteria_report_names_the_model_that_produced_the_verdict(
     tmp_path, capsys
 ):
