@@ -81,6 +81,56 @@ def _key_values(section: str) -> dict[str, str]:
     return values
 
 
+# Assertion bullets are issue/LLM-derived text that gets spliced verbatim into
+# `assert {expr}` in a generated pytest file the story-regression CI lane
+# executes. Syntax validity alone does not make that safe (`__import__('os')
+# .system(...)` is syntactically valid). This allowlist constrains bullets to a
+# read-only "compare/inspect `result`" DSL: no calls to anything but a small
+# set of pure builtins, and no access to dunder names/attributes (which is how
+# a restricted-eval sandbox normally gets escaped, e.g. `type(x).__mro__`).
+_SAFE_ASSERTION_CALL_NAMES = frozenset(
+    {
+        "len", "isinstance", "str", "int", "float", "bool", "abs", "round",
+        "sorted", "min", "max", "sum", "any", "all", "repr", "type",
+    }
+)
+_SAFE_ASSERTION_NODE_TYPES = (
+    ast.Expression, ast.BoolOp, ast.UnaryOp, ast.BinOp, ast.Compare, ast.Call,
+    ast.Name, ast.Load, ast.Constant, ast.Attribute, ast.Subscript, ast.Slice,
+    ast.List, ast.Tuple, ast.Dict, ast.Set,
+    ast.And, ast.Or, ast.Not, ast.Invert, ast.UAdd, ast.USub,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.Pow,
+    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Is, ast.IsNot,
+    ast.In, ast.NotIn,
+)
+
+
+def _ensure_safe_assertion(tree: ast.AST, bullet: str) -> None:
+    """Reject any assertion expression outside the safe result-inspection DSL."""
+    for node in ast.walk(tree):
+        if not isinstance(node, _SAFE_ASSERTION_NODE_TYPES):
+            raise ValueError(
+                "Story assertion bullets may only compare/inspect `result` "
+                f"(unsupported construct {type(node).__name__}): {bullet!r}"
+            )
+        if isinstance(node, ast.Name) and node.id.startswith("_"):
+            raise ValueError(
+                f"Story assertion bullet references a private/dunder name: {bullet!r}"
+            )
+        if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
+            raise ValueError(
+                f"Story assertion bullet accesses a private/dunder attribute: {bullet!r}"
+            )
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id not in _SAFE_ASSERTION_CALL_NAMES:
+                raise ValueError(
+                    f"Story assertion bullet calls disallowed function {node.func.id!r}; "
+                    f"only {sorted(_SAFE_ASSERTION_CALL_NAMES)} are permitted: {bullet!r}"
+                )
+        elif isinstance(node, ast.Call) and not isinstance(node.func, ast.Attribute):
+            raise ValueError(f"Story assertion bullet has an unsupported call target: {bullet!r}")
+
+
 def _assertion_from_bullet(bullet: str) -> str:
     text = bullet.strip()
     if text.startswith("assert "):
@@ -90,12 +140,13 @@ def _assertion_from_bullet(bullet: str) -> str:
     if not expr:
         raise ValueError("Story assertion bullet is empty.")
     try:
-        ast.parse(expr, mode="eval")
+        tree = ast.parse(expr, mode="eval")
     except SyntaxError as exc:
         raise ValueError(
             "Story test generation requires Oracle/Negative Cases bullets to be "
-            f"Python assertion expressions; got: {bullet!r}"
+            f"Python assertion expressions over `result`; got: {bullet!r}"
         ) from exc
+    _ensure_safe_assertion(tree, bullet)
     return expr
 
 

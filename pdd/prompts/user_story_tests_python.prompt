@@ -320,6 +320,25 @@ R2 (MUST NOT): Print the diagnostic block when `quiet` is true.
      `## Seams`, and `## Candidate Prompts`).
      It returns failure without writing anything when the human story is
      unavailable/invalid; a contract failure is non-blocking.
+   - `## Entry Point`/`## Seams` are populated from `PRIMARY_PROMPT_INTERFACES`,
+     which `_resolve_prompt_interfaces` builds from each linked prompt's own
+     `<pdd-interface>` block PLUS a module path PDD's file-layout convention
+     derives deterministically from the prompt's path
+     (`_module_path_for_prompt`) — never from the model. Only a `type: module`
+     interface with a resolvable module path is offered as usable; a `type: cli`
+     interface (or one whose path can't be resolved) is listed as explicitly
+     unsupported so the model cannot invent an import binding for it.
+     `_validate_contract_entry_point_and_assertions` then rejects (contract not
+     written; generation fails closed, same as a missing required section) any
+     LLM output whose `## Entry Point` module/callable isn't exactly one of
+     those offered pairs (`- module: none` / `- callable: none` is the only
+     accepted "no deterministic entry point" case), or whose `## Oracle`/
+     `## Negative Cases` bullets aren't syntactically-safe boolean expressions
+     over `result` per `story_test_generator._assertion_from_bullet`'s
+     allowlist (comparisons/boolean logic/literals/attribute+index access on
+     `result`, calls only to a small pure-builtin allowlist, no dunder names —
+     the deepest enforcement point, since these bullets are spliced into
+     `assert {expr}` in generated pytest that CI executes).
    - `_llm_generate_story_markdown` takes the resolved issue text/ref (NOT prompt
      content), loads the `generate_user_story_LLM` meta-prompt (`load_prompt_template`),
      escapes it via `preprocess(double_curly_brackets=True,

@@ -201,17 +201,6 @@ _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES = (
     _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
 )
 
-# Story-contract generation advances two managed prompt requirements while
-# retaining the same protected rollout history.  Accept only these exact final
-# policy/profile bytes when resolving that inherited history.
-_STORY_CONTRACT_ROTATION_POLICY_BYTES = (
-    "7f6a78db509ff378cc0c2c7a577d2beb0210eb50e1d01e75a5b39a29951a35d5",
-    "7f6a78db509ff378cc0c2c7a577d2beb0210eb50e1d01e75a5b39a29951a35d5",
-)
-_STORY_CONTRACT_PROFILE_BYTES = (
-    "7ec3c0c3e9377d9def09472b9114cae54cf2237647e8be48e592f02a1078b823",
-    "7ec3c0c3e9377d9def09472b9114cae54cf2237647e8be48e592f02a1078b823",
-)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
@@ -3020,13 +3009,6 @@ def _load_requirement_transition_authorizations(
             ),
         }
     )
-    story_contract_state = is_pdd_repository and (
-        (policy_digests, profile_digests)
-        == (
-            _STORY_CONTRACT_ROTATION_POLICY_BYTES,
-            _STORY_CONTRACT_PROFILE_BYTES,
-        )
-    )
     temperature_regression_state = (
         exact_pr2316_phase_a_reissue
         or exact_pr2316_stationary_reissue
@@ -3198,15 +3180,6 @@ def _load_requirement_transition_authorizations(
             for item in candidate
             if (item.prompt_path, item.language_id)
             not in _SYNC_ROLLOUT_REPAIR_STALE_ROTATION_IDENTITIES
-        )
-    if story_contract_state:
-        # The two story-contract rows are bound to this final profile. Older
-        # rotations are already consumed and must not be replayed against it.
-        candidate = tuple(
-            item
-            for item in candidate
-            if item.bindings.head_policy_sha256
-            == _STORY_CONTRACT_PROFILE_BYTES[1]
         )
     pr1971_reconciliation = _is_exact_pr1971_pytest_reconciliation(
         manifest, (protected_policy, candidate_policy), policies, candidate

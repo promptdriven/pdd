@@ -110,6 +110,22 @@ def _bullets(text: str) -> list[str]:
     return rows
 
 
+def _entry_point_has_binding(md_sections: dict[str, str]) -> bool:
+    """True when ``## Entry Point`` declares a real module/callable pair.
+
+    ``- module: none`` is the contract generator's explicit "no
+    deterministically-bound callable for this Story" marker (see
+    ``user_story_tests._validate_contract_entry_point_and_assertions``); such a
+    contract must fall through to the text-pinning generator below, same as a
+    contract with no ``## Entry Point`` heading at all.
+    """
+    entry_text = _section(md_sections, "Entry Point").lower()
+    for bullet in _bullets(entry_text):
+        if bullet.startswith("module:") and bullet.split(":", 1)[1].strip() == "none":
+            return False
+    return True
+
+
 def _literal_list(values: list[str], *, indent: str = "    ") -> str:
     if not values:
         return "[]"
@@ -280,8 +296,13 @@ def generate_story_regression_test(
     # (missing `- module:`/`- callable:`) instead of silently degrading to a
     # text-pin that the user would mistake for a real behavioral oracle
     # (pdd#1889 C-F7). A contract with no ## Entry Point at all still falls
-    # through to the text-pinning generator below.
-    if "entry point" in md_sections:
+    # through to the text-pinning generator below. The one deliberate
+    # exception is `- module: none`: the contract generator's own validation
+    # (`_validate_contract_entry_point_and_assertions`) only ever writes that
+    # exact marker when it found no deterministically-bound callable for this
+    # Story, so it is a confirmed "no entry point" outcome, not a malformed
+    # one, and also falls through to the text-pinning generator.
+    if "entry point" in md_sections and _entry_point_has_binding(md_sections):
         return _generate_behavioral_test(story_path, output)
 
     oracle_text = _section(md_sections, "Oracle", "Acceptance Criteria", "Story")

@@ -212,3 +212,66 @@ def test_from_story_requires_machine_readable_entrypoint(tmp_path: Path):
     contract.write_text("## Oracle\n\n- result is not None\n", encoding="utf-8")
     with pytest.raises(ValueError, match="Entry Point"):
         generate_story_test(story, tmp_path / "tests" / "test_story.py")
+
+
+# --- Safe-assertion allowlist (review #2397 P1 security) -------------------
+#
+# Oracle/Negative Cases bullets are issue/LLM-derived text spliced verbatim
+# into `assert {expr}` in a generated pytest file the story-regression CI
+# lane executes. `_assertion_from_bullet` previously only checked syntax
+# validity, so `__import__('os').system(...)` compiled fine. These tests pin
+# the allowlist that now rejects it, at the deepest point the bytes actually
+# become executable code -- independent of whatever validation ran upstream
+# when the contract was generated.
+
+
+@pytest.mark.parametrize(
+    "malicious",
+    [
+        "__import__('os').system('touch /tmp/pwned')",
+        "result.__class__.__mro__[1].__subclasses__()",
+        "eval('1')",
+        "(lambda: 1)()",
+        "__builtins__",
+        "getattr(result, '__class__')",
+    ],
+)
+def test_assertion_from_bullet_rejects_unsafe_expressions(malicious):
+    from pdd.story_test_generator import _assertion_from_bullet
+
+    with pytest.raises(ValueError):
+        _assertion_from_bullet(malicious)
+
+
+@pytest.mark.parametrize(
+    "safe",
+    [
+        'result == "ok"',
+        'result.get("status") == "ok"',
+        "len(result) == 3",
+        "isinstance(result, dict)",
+        '"error" not in result',
+        'result.startswith("ok")',
+        "result[0] == 1 and result[1] == 2",
+    ],
+)
+def test_assertion_from_bullet_accepts_safe_expressions(safe):
+    from pdd.story_test_generator import _assertion_from_bullet
+
+    assert _assertion_from_bullet(safe) == safe
+
+
+def test_generate_story_test_rejects_unsafe_oracle_at_generation_time(tmp_path: Path):
+    """A malicious Oracle expression must fail `generate_story_test` itself --
+    the compiler is the last line of defense even if a contract with unsafe
+    content somehow reached disk."""
+    story = _write_story_contract(tmp_path)
+    contract = tmp_path / "user_stories" / "contracts" / "checkout_total.contract.md"
+    contract.write_text(
+        "## Entry Point\n\n- module: checkout_app\n- callable: checkout_total\n"
+        "- args: [1, 2]\n- kwargs: {}\n\n"
+        "## Oracle\n\n- __import__('os').system('true')\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        generate_story_test(story, tmp_path / "tests" / "test_story.py")

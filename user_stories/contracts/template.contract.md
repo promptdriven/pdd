@@ -22,8 +22,8 @@ Describe relevant state, assumptions, fixtures, users, records, external service
 
 ## Entry Point
 
-- module: <importable module from a linked prompt's pdd-interface>
-- callable: <callable function from that interface>
+- module: <module: value copied verbatim from primary_prompt_interfaces, or `none`>
+- callable: <a name from that block's functions: list, or `none`>
 - args: []
 - kwargs: {}
 
@@ -34,12 +34,12 @@ Optional runtime-boundary patches for deterministic behavioral tests:
 
 ## Oracle
 
-These details matter for pass/fail:
-- error type
-- state transition
-- absence/presence of external call
-- emitted event
-- returned value shape
+Each bullet is an executable Python boolean expression over `result` (the Entry
+Point's return value) — not prose. These decide pass/fail:
+- result.status == "ok"
+- isinstance(result, dict)
+- result.get("event") == "emitted"
+- "error" not in result
 
 ## Non-Oracle
 
@@ -54,7 +54,8 @@ These details should not matter:
 
 ## Negative Cases
 
-List forbidden outcomes this story protects against.
+Each bullet is the same kind of boolean expression over `result`, protecting
+against a forbidden outcome (e.g. `result.get("called_llm") is False`).
 
 ## Non-Goals
 

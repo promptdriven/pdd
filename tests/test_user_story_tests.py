@@ -2,6 +2,8 @@
 # pylint: disable=use-implicit-booleaness-not-comparison,unused-variable
 # pylint: disable=too-many-locals,line-too-long,too-many-lines
 
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -10,6 +12,7 @@ import pytest
 
 from pdd.user_story_tests import (
     _contract_path_for_story,
+    _generate_and_write_contract,
     _primary_prompt_interfaces,
     _story_content_hash,
     cache_story_prompt_links,
@@ -21,6 +24,7 @@ from pdd.user_story_tests import (
     run_user_story_tests,
     sync_user_story_contract,
 )
+from pdd.user_story_tests import _llm_generate_story_contract as _REAL_LLM_GENERATE_STORY_CONTRACT
 
 
 # Issue #1356: stories are authored from the ISSUE, never the prompt. Tests use a
@@ -147,7 +151,52 @@ def test_discover_prompt_files_includes_llm(tmp_path):
     assert {p.name for p in results} == {"foo_python.prompt", "bar_llm.prompt"}
 
 
-def test_primary_prompt_interfaces_exposes_linked_prompt_interface(tmp_path):
+def test_primary_prompt_interfaces_binds_deterministic_module_path(tmp_path):
+    """A `type: module` interface is paired with the module path PDD's own
+    file-layout convention derives from the prompt's location -- the model is
+    handed the exact string, never left to invent one (review #2397 P1)."""
+    prompts_dir = tmp_path / "app" / "prompts"
+    prompts_dir.mkdir(parents=True)
+    prompt = prompts_dir / "checkout_python.prompt"
+    prompt.write_text(
+        "<pdd-interface>\n"
+        '{"type": "module", "module": {"functions": '
+        '[{"name": "checkout_total", "signature": "(items)", "returns": "int"}]}}\n'
+        "</pdd-interface>\n",
+        encoding="utf-8",
+    )
+
+    interfaces = _primary_prompt_interfaces([prompt], prompts_dir)
+
+    assert "### checkout_python.prompt" in interfaces
+    assert "module: app.checkout" in interfaces
+    assert "checkout_total(items)" in interfaces
+
+
+def test_primary_prompt_interfaces_excludes_cli_interfaces(tmp_path):
+    """A `type: cli` interface (a Click command) has no direct-call binding --
+    it must be listed as explicitly unusable, not silently omitted (which
+    would let the model believe it's free to invent one) (review #2397 P1)."""
+    prompts_dir = tmp_path / "app" / "prompts"
+    prompts_dir.mkdir(parents=True)
+    prompt = prompts_dir / "context_python.prompt"
+    prompt.write_text(
+        "<pdd-interface>\n"
+        '{"type": "cli", "cli": {"commands": [{"name": "context", "description": "x"}]}}\n'
+        "</pdd-interface>\n",
+        encoding="utf-8",
+    )
+
+    interfaces = _primary_prompt_interfaces([prompt], prompts_dir)
+
+    assert "### context_python.prompt" in interfaces
+    assert "module:" not in interfaces
+    assert "no usable behavioral Entry Point" in interfaces
+
+
+def test_primary_prompt_interfaces_without_prompts_root_offers_nothing(tmp_path):
+    """No `prompts_root` means no module path can be derived -- fail closed
+    (no Entry Point offered) rather than guess one."""
     prompt = tmp_path / "checkout_python.prompt"
     prompt.write_text(
         "<pdd-interface>\n"
@@ -159,8 +208,8 @@ def test_primary_prompt_interfaces_exposes_linked_prompt_interface(tmp_path):
 
     interfaces = _primary_prompt_interfaces([prompt])
 
-    assert "### checkout_python.prompt" in interfaces
-    assert '"checkout_total"' in interfaces
+    assert "module:" not in interfaces
+    assert "no usable behavioral Entry Point" in interfaces
 
 
 def test_discover_story_files_filters_prefix(tmp_path):
@@ -2336,3 +2385,202 @@ def test_cache_story_prompt_links_honors_explicit_prompts(tmp_path, monkeypatch)
     metadata_line = story.read_text(encoding="utf-8").splitlines()[0]
     assert "demo2_python.prompt" in metadata_line
     assert "demo_python.prompt" in metadata_line
+
+
+# --- Contract generation -> compiled pytest handoff (review #2397) ---------
+#
+# The tests above stub `_llm_generate_story_contract` wholesale (see
+# `_stub_contract_llm`), so they never exercise its content validation. These
+# tests call the REAL function (captured as `_REAL_LLM_GENERATE_STORY_CONTRACT`
+# at import time, before the autouse stub patches the module attribute) with
+# only the innermost `llm_invoke` call mocked, so they cover the actual
+# generation -> validation -> written-contract -> compiled-pytest path.
+
+
+def _write_greeter_app(root: Path, greeting: str = "Hello, {name}!") -> None:
+    app_dir = root / "app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / "greeter.py").write_text(
+        "def greet(name):\n"
+        f'    return "{greeting}".format(name=name)\n',
+        encoding="utf-8",
+    )
+
+
+def _write_greeter_prompt(root: Path) -> Path:
+    prompts_dir = root / "app" / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    prompt = prompts_dir / "greeter_python.prompt"
+    prompt.write_text(
+        "<pdd-interface>\n"
+        '{"type": "module", "module": {"functions": '
+        '[{"name": "greet", "signature": "(name)", "returns": "str"}]}}\n'
+        "</pdd-interface>\n"
+        "Greet a user by name.\n",
+        encoding="utf-8",
+    )
+    return prompt
+
+
+def _write_greeter_story(root: Path) -> Path:
+    stories = root / "user_stories"
+    stories.mkdir(parents=True, exist_ok=True)
+    story = stories / "story__greeter.md"
+    story.write_text(
+        "# User Story: Greeter\n\n"
+        "## Story\n\n"
+        "As a user, I get a friendly greeting with my name in it.\n",
+        encoding="utf-8",
+    )
+    return story
+
+
+def _generate_greeter_contract(tmp_path, contract_markdown):
+    prompt = _write_greeter_prompt(tmp_path)
+    story = _write_greeter_story(tmp_path)
+    story_text = story.read_text(encoding="utf-8")
+    fake_llm = {"result": contract_markdown, "cost": 0.03, "model_name": "contract-model"}
+    with (
+        patch(
+            "pdd.user_story_tests._llm_generate_story_contract",
+            side_effect=_REAL_LLM_GENERATE_STORY_CONTRACT,
+        ),
+        patch("pdd.llm_invoke.llm_invoke", return_value=fake_llm),
+    ):
+        return story, _generate_and_write_contract(
+            story_path=story,
+            story_text=story_text,
+            title="Greeter",
+            issue_text="Greet a user by name.",
+            issue_ref="local",
+            prompts_root=tmp_path / "app" / "prompts",
+            extra_prompt_paths=[],
+            primary_refs=["greeter_python.prompt"],
+            strength=0.2,
+            temperature=0.0,
+            time=0.25,
+            verbose=False,
+        )
+
+
+_GREETER_CONTRACT_MD = (
+    "## Covers\n\n- AC1: greets the user by name\n\n"
+    "## Context\n\n`greet` returns a friendly greeting for a given name.\n\n"
+    "## Acceptance Criteria\n\n"
+    "1. Given a name, when greet is called, then it returns a greeting containing that name.\n\n"
+    "## Entry Point\n\n- module: app.greeter\n- callable: greet\n- args: [\"World\"]\n- kwargs: {}\n\n"
+    "## Seams\n\n- none\n\n"
+    "## Oracle\n\n- result == \"Hello, World!\"\n\n"
+    "## Non-Oracle\n\n- internal formatting helpers\n\n"
+    "## Negative Cases\n\n- result != \"Goodbye, World!\"\n\n"
+    "## Non-Goals\n\n- none\n\n"
+    "## Candidate Prompts\n\n- none beyond the primary prompt(s)\n\n"
+    "## Notes\n\n- none\n"
+)
+
+
+def test_valid_generated_contract_compiles_to_real_red_green_pytest(tmp_path):
+    """End-to-end: a validated, LLM-generated contract (module/callable copied
+    from primary_prompt_interfaces, Oracle/Negative Cases as expressions) is
+    written, compiles via `generate_story_test` into a real pytest file, and
+    that file genuinely passes against correct behavior and genuinely fails
+    once the target regresses -- not a text-pinning tautology."""
+    from pdd.story_test_generator import generate_story_test
+
+    story, (contract_path, cost, model, error) = _generate_greeter_contract(
+        tmp_path, _GREETER_CONTRACT_MD
+    )
+    assert error is None, error
+    assert contract_path is not None and contract_path.exists()
+    assert model == "contract-model"
+    assert cost == pytest.approx(0.03)
+
+    _write_greeter_app(tmp_path, greeting="Hello, {name}!")
+    output = tmp_path / "tests" / "test_story_greeter.py"
+    generate_story_test(story, output)
+
+    passing = subprocess.run(
+        [sys.executable, "-m", "pytest", str(output), "-q"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert passing.returncode == 0, passing.stdout + passing.stderr
+
+    # Seed a real regression in the target behavior -- the SAME generated test
+    # file must now fail, proving it asserts real behavior, not a tautology.
+    _write_greeter_app(tmp_path, greeting="Goodbye, {name}!")
+    failing = subprocess.run(
+        [sys.executable, "-m", "pytest", str(output), "-q"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert failing.returncode != 0
+    assert "test_story_greeter" in failing.stdout
+
+
+def test_contract_generation_rejects_invented_entry_point(tmp_path):
+    """A module/callable not offered in primary_prompt_interfaces is an
+    invented binding (review #2397 P1) -- generation must fail closed with no
+    contract written, not silently accept it."""
+    bad = _GREETER_CONTRACT_MD.replace(
+        "- module: app.greeter\n- callable: greet",
+        "- module: app.greeter\n- callable: farewell",
+    )
+    story, (contract_path, _cost, _model, error) = _generate_greeter_contract(tmp_path, bad)
+    assert contract_path is None
+    assert error is not None
+    assert not _contract_path_for_story(story).exists()
+
+
+def test_contract_generation_rejects_prose_oracle_bullets(tmp_path):
+    """Prose Oracle bullets ("returned value shape") don't compile as Python
+    assertion expressions (review #2397 P1) -- generation must fail closed."""
+    bad = _GREETER_CONTRACT_MD.replace(
+        '## Oracle\n\n- result == "Hello, World!"\n\n',
+        "## Oracle\n\n- returned value shape\n\n",
+    )
+    story, (contract_path, _cost, _model, error) = _generate_greeter_contract(tmp_path, bad)
+    assert contract_path is None
+    assert error is not None
+    assert not _contract_path_for_story(story).exists()
+
+
+def test_contract_generation_rejects_unsafe_oracle_expression(tmp_path):
+    """An Oracle bullet that would execute arbitrary code once spliced into a
+    generated `assert` (review #2397 P1 security) must be rejected at
+    generation time, not merely syntax-checked."""
+    bad = _GREETER_CONTRACT_MD.replace(
+        '## Oracle\n\n- result == "Hello, World!"\n\n',
+        "## Oracle\n\n- __import__('os').system('true')\n\n",
+    )
+    story, (contract_path, _cost, _model, error) = _generate_greeter_contract(tmp_path, bad)
+    assert contract_path is None
+    assert error is not None
+    assert not _contract_path_for_story(story).exists()
+
+
+def test_contract_generation_accepts_explicit_no_entry_point(tmp_path):
+    """`module: none` / `callable: none` is the deliberate escape hatch for a
+    Story with no deterministically-bound callable -- it must be accepted,
+    and the resulting contract must fall back to the text-pinning generator
+    rather than crash trying to import module "none"."""
+    from pdd.story_test_generation import generate_story_regression_test
+
+    none_contract = _GREETER_CONTRACT_MD.replace(
+        "- module: app.greeter\n- callable: greet\n- args: [\"World\"]\n- kwargs: {}",
+        "- module: none\n- callable: none\n- args: []\n- kwargs: {}",
+    )
+    story, (contract_path, _cost, _model, error) = _generate_greeter_contract(
+        tmp_path, none_contract
+    )
+    assert error is None, error
+    assert contract_path is not None and contract_path.exists()
+
+    result = generate_story_regression_test(story, output=tmp_path / "tests" / "test_story_greeter.py")
+    assert result.test_count >= 1
+    text = result.test_file.read_text(encoding="utf-8")
+    assert "importlib.import_module" not in text
