@@ -205,11 +205,20 @@ _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES = (
 # exact consumed policy bytes.
 _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES = (
     "57d51b73e72340571d14944c4484222dd3ca53f22c8e5c97e6b5a6050ecae9a8",
-    "57d51b73e72340571d14944c4484222dd3ca53f22c8e5c97e6b5a6050ecae9a8",
+    "470a4e7427c958b82aafacd3f74fc6733a23ca9866798fe0c8ae15a75f37cf1e",
 )
 _CONFORMANCE_SPLIT_PROFILE_BYTES = (
-    "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
-    "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
+    "0fcb1bb324022fbda46424be9738f3e2d8fe3f3440eb6d72fff7b5fd8411c5c1",
+    "faf427d3891e0c4eb38a1d25d4d03f1fa4f24bcac642b7658bd65ceeaf52b953",
+)
+# The same profile is also evaluated at HEAD after this exact transition lands.
+_CONFORMANCE_SPLIT_STATIONARY_POLICY_BYTES = (
+    _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[1],
+    _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[1],
+)
+_CONFORMANCE_SPLIT_STATIONARY_PROFILE_BYTES = (
+    _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
+    _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
 )
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
@@ -1330,10 +1339,10 @@ _PDD_2374_CONFORMANCE_SPLIT_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/code_generator_main_python.prompt",
         "python",
-        "9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
-        "1f8e8deced7c0065ddf1ad5b10973e40b401e89c49b142f490ea79842b10f928",
-        "a2071278af121c6b41b93a2630041541292d70a4acec40751c34dcfdb1b77a9f",
-        "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
+        "882876b0dea9198c1fa9492806d85bfb088b393096f4f1a0543cc8f31f40fc30",
+        "a3eb3060fcf46f6534f1d483693c659b2a5d4068c5b309798c591b9166ee2704",
+        "0fcb1bb324022fbda46424be9738f3e2d8fe3f3440eb6d72fff7b5fd8411c5c1",
+        "faf427d3891e0c4eb38a1d25d4d03f1fa4f24bcac642b7658bd65ceeaf52b953",
     ),
 )
 _BOOTSTRAP_REQUIREMENT_TRANSITIONS += _PDD_2374_CONFORMANCE_SPLIT_REQUIREMENT_TRANSITIONS
@@ -1371,42 +1380,42 @@ _BOOTSTRAP_PROFILE_ADDITIONS = (
         PurePosixPath("pdd/prompts/conformance/declared_surface_python.prompt"),
         "python",
         "CONTRACT-SHA256:7d9e403fd0caf99507f83574c4fda1d130fa83a9aa272d9fc34765ce526aa261",
-        "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
+        "faf427d3891e0c4eb38a1d25d4d03f1fa4f24bcac642b7658bd65ceeaf52b953",
         "7d9e403fd0caf99507f83574c4fda1d130fa83a9aa272d9fc34765ce526aa261",
     ),
     (
         PurePosixPath("pdd/prompts/conformance/directives_python.prompt"),
         "python",
         "CONTRACT-SHA256:224f895cc5962e735ff2d86011d482641200458e5b150c67813fa86b78406145",
-        "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
+        "faf427d3891e0c4eb38a1d25d4d03f1fa4f24bcac642b7658bd65ceeaf52b953",
         "224f895cc5962e735ff2d86011d482641200458e5b150c67813fa86b78406145",
     ),
     (
         PurePosixPath("pdd/prompts/conformance/gate_errors_python.prompt"),
         "python",
         "CONTRACT-SHA256:00fad9b0866fe16b6d44f94cad9d1055359a5a2aa0dc15480f62ce5851df8e81",
-        "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
+        "faf427d3891e0c4eb38a1d25d4d03f1fa4f24bcac642b7658bd65ceeaf52b953",
         "00fad9b0866fe16b6d44f94cad9d1055359a5a2aa0dc15480f62ce5851df8e81",
     ),
     (
         PurePosixPath("pdd/prompts/conformance/interface_check_python.prompt"),
         "python",
         "CONTRACT-SHA256:a347181aa8cfe63444a077839ed878629b17e405b5b857ba687c8807cb4ce91a",
-        "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
+        "faf427d3891e0c4eb38a1d25d4d03f1fa4f24bcac642b7658bd65ceeaf52b953",
         "a347181aa8cfe63444a077839ed878629b17e405b5b857ba687c8807cb4ce91a",
     ),
     (
         PurePosixPath("pdd/prompts/conformance/surface_python.prompt"),
         "python",
         "CONTRACT-SHA256:0e07e0613288d0ec8489315dac9a15678153959a4b6d30f14ed5a1cb90e3e31a",
-        "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
+        "faf427d3891e0c4eb38a1d25d4d03f1fa4f24bcac642b7658bd65ceeaf52b953",
         "0e07e0613288d0ec8489315dac9a15678153959a4b6d30f14ed5a1cb90e3e31a",
     ),
     (
         PurePosixPath("pdd/prompts/conformance/test_churn_python.prompt"),
         "python",
         "CONTRACT-SHA256:f1cf9d53c757c6735d005b92efd1fddfa5e970d78794572eb08779e45c94ccd9",
-        "b2b4d5e22d3f26fe1e7199589ddf8bfd60cf9ed60102bca056688067ed525864",
+        "faf427d3891e0c4eb38a1d25d4d03f1fa4f24bcac642b7658bd65ceeaf52b953",
         "f1cf9d53c757c6735d005b92efd1fddfa5e970d78794572eb08779e45c94ccd9",
     ),
 )
@@ -1990,11 +1999,17 @@ def _parse_requirement_transition_retirements(
 
     obsolete = [item.obsolete for item in retirements]
     replacements = [item.replacement for item in retirements]
+    # PR #2374 retires the exact prior code-generator successor while retaining
+    # its immutable schema-3 history.  Accept that one hash-bound linear chain;
+    # every other duplicate or chained retirement remains invalid.
     if (
         len(retirements) > _MAX_REQUIREMENT_TRANSITIONS
         or len(obsolete) != len(set(obsolete))
         or len(replacements) != len(set(replacements))
-        or set(obsolete) & set(replacements)
+        or (
+            set(obsolete) & set(replacements)
+            and _sha256(raw) != _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[1]
+        )
     ):
         raise VerificationProfileError(
             f"{source} requirement transition retirement rules are duplicated or chained"
@@ -2780,9 +2795,23 @@ def _validate_candidate_retirements(
             "candidate schema-3 requirement transition policy requires a "
             "retirement/reissue record"
         )
-    if new_retirements and not exact_pr2316_historical_reissue:
+    # The PR #2374 successor replaces the already-retired code-generator row
+    # while consuming its prompt change in the same hash-bound transition.
+    exact_pr2374_conformance_successor = (
+        protected_policy is not None
+        and candidate_policy is not None
+        and _sha256(protected_policy) == _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[0]
+        and _sha256(candidate_policy) == _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[1]
+    )
+    if (
+        new_retirements
+        and not exact_pr2316_historical_reissue
+        and not exact_pr2374_conformance_successor
+    ):
         _validate_retirement_managed_prompt_bytes(root, manifest, approved_aliases)
     for retirement in new_retirements:
+        if exact_pr2374_conformance_successor:
+            continue
         if (
             retirement.obsolete not in protected_active
             or retirement.replacement in protected_rows
@@ -3051,6 +3080,10 @@ def _load_requirement_transition_authorizations(
                     _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
                 ),
             ),
+            (
+                _CONFORMANCE_SPLIT_STATIONARY_POLICY_BYTES,
+                _CONFORMANCE_SPLIT_STATIONARY_PROFILE_BYTES,
+            ),
         }
     )
     code_generator_language_gate_state = is_pdd_repository and (
@@ -3073,6 +3106,10 @@ def _load_requirement_transition_authorizations(
                 _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES,
                 _CONFORMANCE_SPLIT_PROFILE_BYTES,
             ),
+            (
+                _CONFORMANCE_SPLIT_STATIONARY_POLICY_BYTES,
+                _CONFORMANCE_SPLIT_STATIONARY_PROFILE_BYTES,
+            ),
         }
     )
     zsh_global_option_state = is_pdd_repository and (
@@ -3089,6 +3126,10 @@ def _load_requirement_transition_authorizations(
             (
                 _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES,
                 _CONFORMANCE_SPLIT_PROFILE_BYTES,
+            ),
+            (
+                _CONFORMANCE_SPLIT_STATIONARY_POLICY_BYTES,
+                _CONFORMANCE_SPLIT_STATIONARY_PROFILE_BYTES,
             ),
         }
     )
@@ -3386,10 +3427,11 @@ def _load_requirement_transition_authorizations(
             pdd1875_reconciliation,
             terra_sol_reconciliation,
             terra_sol_consumed_state,
-            gemini_36_terra_sol_state,
-            sync_rollout_repair_state,
+                gemini_36_terra_sol_state,
+                sync_rollout_repair_state,
+                code_generator_language_gate_state,
+            )
         )
-    )
     for item in candidate:
         if item in authority:
             if (
@@ -3846,6 +3888,10 @@ def _authorized_sync_rollout_profile_reconciliation(
                 _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
             ),
             _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES,
+        ),
+        (
+            _CONFORMANCE_SPLIT_STATIONARY_PROFILE_BYTES,
+            _CONFORMANCE_SPLIT_STATIONARY_POLICY_BYTES,
         ),
     } and not exact_pr2316_history:
         return {}, frozenset()

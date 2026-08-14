@@ -349,6 +349,7 @@ PREAUTHORIZED_CHILD_PATHS = (
     | {
         "pdd/conformance/__init__.py",
         "scripts/validate_conformance_prompts.py",
+        "tests/test_conformance_prompt_compatibility_exports.py",
         "tests/story_regression/test_story_pdd_generation_gates_preserved.py",
         "user_stories/contracts/pdd_generation_gates_preserved.contract.md",
         "user_stories/issues/conformance-gate-split.md",

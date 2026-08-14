@@ -112,6 +112,13 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
         True,
     ),
     OwnershipRule(
+        "tests/test_conformance_prompt_compatibility_exports.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
         "tests/story_regression/test_story_pdd_generation_gates_preserved.py",
         InventoryStatus.HUMAN_OWNED,
         "human-maintained",

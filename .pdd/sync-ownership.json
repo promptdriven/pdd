@@ -14934,6 +14934,13 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "tests/test_conformance_prompt_compatibility_exports.py",
+      "preauthorize_absent": true,
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "tests/story_regression/test_story_pdd_generation_gates_preserved.py",
       "preauthorize_absent": true,
       "role": "human-maintained"
