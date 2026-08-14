@@ -976,3 +976,101 @@ def test_build_dependency_graph_from_architecture_missing_or_invalid(tmp_path, m
     bad_file.write_text("{invalid json", encoding="utf-8")
     assert sync_order.build_dependency_graph_from_architecture(bad_file) == {}
     mock_logger.warning.assert_called()
+
+
+def _seed_chain_prompts(prompts_dir):
+    """Root and nested modules: declared edges plus include-only edges."""
+    _write_prompt(
+        prompts_dir, "checkout_python.prompt",
+        dependencies=["pricing_python.prompt"],
+        includes=["docs/pricing_examples.md"],
+    )
+    _write_prompt(prompts_dir, "pricing_python.prompt")
+    _write_prompt(
+        prompts_dir, "billing/invoice_python.prompt",
+        dependencies=["pricing_python.prompt"],
+    )
+    _write_prompt(prompts_dir, "billing/ledger_python.prompt")
+
+
+def _run_production_chain(project_root, prompts_dir, arch_file):
+    """sync -> auto-deps merge -> Step 6, all through production entry points."""
+    from pdd.architecture_sync import sync_all_prompts_to_architecture
+    from pdd.auto_deps_architecture import merge_auto_deps_includes_into_architecture
+
+    # Production auto-registration builds every architecture entry; the test
+    # never hand-writes the integration boundary (PR #2376 review).
+    arch_file.parent.mkdir(parents=True, exist_ok=True)
+    arch_file.write_text("[]", encoding="utf-8")
+    result = sync_all_prompts_to_architecture(
+        prompts_dir=prompts_dir, architecture_path=arch_file, dry_run=False
+    )
+    assert result["success"], result.get("errors")
+
+    # The merge step writes an <include>-derived module edge into the same
+    # architecture.json ``dependencies`` field that declared edges live in.
+    nested = prompts_dir / "billing" / "invoice_python.prompt"
+    merged = merge_auto_deps_includes_into_architecture(
+        project_root=project_root,
+        written_prompt_path=nested,
+        old_prompt_text=nested.read_text(encoding="utf-8"),
+        new_prompt_text=nested.read_text(encoding="utf-8")
+        + "<include>billing/ledger_python.prompt</include>\n",
+    )
+    return result, merged
+
+
+def _assert_declared_edges_only(arch_file):
+    from pdd.agentic_change_orchestrator import _build_dependency_context
+
+    graph = sync_order.build_dependency_graph_from_architecture(arch_file)
+    assert graph["checkout"] == ["pricing"]
+    assert graph["billing/invoice"] == ["pricing"]
+    assert not any("ledger" in dep for dep in graph["billing/invoice"]), (
+        "an <include>-derived edge leaked into the declared dependency graph"
+    )
+    context = _build_dependency_context(arch_file, quiet=True)
+    assert "checkout" in context
+    assert "ledger" not in context
+
+
+def test_production_chain_root_architecture_keeps_declared_edges_only(tmp_path):
+    """Issue #1807, root flow, no hand-written architecture.json.
+
+    Drives sync_all_prompts_to_architecture -> merge_auto_deps_includes_into_
+    architecture -> _build_dependency_context so CI protects the exact
+    mixed-provenance boundary that caused the bug (PR #2376 review).
+    """
+    prompts_dir = tmp_path / "prompts"
+    _seed_chain_prompts(prompts_dir)
+    arch_file = tmp_path / "architecture.json"
+
+    _, merged = _run_production_chain(tmp_path, prompts_dir, arch_file)
+    # The merge really did write the include-derived edge, so the Step 6
+    # assertions below exercise the mixed-provenance boundary rather than a
+    # registry that happens to be clean.
+    assert merged["added_dependencies"] == ["billing/ledger_python.prompt"]
+    _assert_declared_edges_only(arch_file)
+
+
+def test_production_chain_nested_architecture_uses_ancestor_prompts(tmp_path):
+    """The same chain when architecture.json lives below the prompt root.
+
+    Step 6 resolves nested architectures against the nearest ancestor that
+    owns ``prompts/`` (``_architecture_project_root``), so declared edges must
+    survive here too.
+
+    The auto-deps merge does NOT reach this architecture file: it resolves
+    entry filenames against the architecture's own directory rather than the
+    ancestor prompt root, so the two disagree for nested registries. That
+    limitation is pinned below -- if merge is ever taught to walk up, this
+    assertion fails and the include-pollution case should be asserted here as
+    it is in the root test.
+    """
+    prompts_dir = tmp_path / "prompts"
+    _seed_chain_prompts(prompts_dir)
+    arch_file = tmp_path / "services" / "billing" / "architecture.json"
+
+    _, merged = _run_production_chain(tmp_path, prompts_dir, arch_file)
+    assert merged["updated"] is False and merged["architecture_path"] is None
+    _assert_declared_edges_only(arch_file)
