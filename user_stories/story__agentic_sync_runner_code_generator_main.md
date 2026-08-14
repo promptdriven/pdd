@@ -1,4 +1,5 @@
-<!-- pdd-story-prompts: agentic_sync_runner_python.prompt, code_generator_main_python.prompt -->
+<!-- pdd-story-prompts: agentic_sync_runner_python.prompt, code_generator_main_python.prompt, declared_surface_python.prompt, gate_errors_python.prompt -->
+<!-- pdd-story-dev-units: agentic_sync_runner_python.prompt, code_generator_main_python.prompt, declared_surface_python.prompt, gate_errors_python.prompt -->
 
 # User Story: Classify prose/empty LLM generation output separately from architecture regressions
 
