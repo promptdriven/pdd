@@ -861,66 +861,66 @@ const App: React.FC = () => {
             {/* CENTER: Main workflow buttons with gold border */}
             <div className="flex-1 min-w-0 flex justify-center">
               <div
-                className="inline-flex w-fit max-w-full gap-0.5 sm:gap-1 p-1 rounded-lg border border-[#FDCE49]/60 bg-surface-800/40 overflow-x-auto scrollbar-hide"
+                className="inline-flex w-fit max-w-full gap-1 sm:gap-1.5 p-1.5 rounded-xl border-2 border-[#FDCE49]/60 bg-surface-800/40 overflow-x-auto scrollbar-hide"
                 style={{ width: 'fit-content' }}
               >
                 <button
                   onClick={() => setView('devunits')}
-                  className={`whitespace-nowrap px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md text-xs font-medium transition-all duration-200 ${
+                  className={`whitespace-nowrap px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'devunits'
                       ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
-                  <Squares2X2Icon className="hidden sm:inline w-3.5 h-3.5 mr-1" />Dev Units
+                  <Squares2X2Icon className="hidden sm:inline w-4 h-4 mr-1.5" />Dev Units
                 </button>
                 <button
                   onClick={() => setView('bug')}
-                  className={`whitespace-nowrap px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md text-xs font-medium transition-all duration-200 ${
+                  className={`whitespace-nowrap px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'bug'
                       ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
-                  <BugAntIcon className="hidden sm:inline w-3.5 h-3.5 mr-1" />Bug
+                  <BugAntIcon className="hidden sm:inline w-4 h-4 mr-1.5" />Bug
                 </button>
                 <button
                   onClick={() => setView('fix')}
-                  className={`whitespace-nowrap px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md text-xs font-medium transition-all duration-200 ${
+                  className={`whitespace-nowrap px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'fix'
                       ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
-                  <svg className="hidden sm:inline w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="hidden sm:inline w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                   </svg>Fix
                 </button>
                 <button
                   onClick={() => setView('change')}
-                  className={`whitespace-nowrap px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md text-xs font-medium transition-all duration-200 ${
+                  className={`whitespace-nowrap px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'change'
                       ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
-                  <svg className="hidden sm:inline w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="hidden sm:inline w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
                   </svg>Change
                 </button>
                 <button
                   onClick={() => setView('settings')}
-                  className={`whitespace-nowrap px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md text-xs font-medium transition-all duration-200 ${
+                  className={`whitespace-nowrap px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'settings'
                       ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
-                  <Cog6ToothIcon className="hidden sm:inline w-3.5 h-3.5 mr-1" />Settings
+                  <Cog6ToothIcon className="hidden sm:inline w-4 h-4 mr-1.5" />Settings
                 </button>
                 <button
                   onClick={() => setView('observability')}
-                  className={`whitespace-nowrap px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-md text-xs font-medium transition-all duration-200 ${
+                  className={`whitespace-nowrap px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'observability'
                       ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
@@ -928,7 +928,7 @@ const App: React.FC = () => {
                   title="Observability: local execution history and Dev Unit health"
                   aria-label="Observability"
                 >
-                  <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3v18h18M7 16l4-5 3 3 5-7" />
                   </svg>
                   Observability
