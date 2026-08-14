@@ -6,6 +6,7 @@ import PromptSelector from './components/PromptSelector';
 import PromptSpace from './components/PromptSpace';
 import ArchitectureView from './components/ArchitectureView';
 import ProjectSettings from './components/ProjectSettings';
+import ObservabilityDashboard from './components/ObservabilityDashboard';
 import JobDashboard, { BatchOperation } from './components/JobDashboard';
 import TaskQueuePanel from './components/TaskQueuePanel';
 import AddToQueueModal from './components/AddToQueueModal';
@@ -22,7 +23,7 @@ import { useTaskQueue, TaskQueueItem } from './hooks/useTaskQueue';
 import { useToast } from './components/Toast';
 import { useAudioNotification } from './hooks/useAudioNotification';
 
-type View = 'devunits' | 'bug' | 'fix' | 'change' | 'settings';
+type View = 'devunits' | 'bug' | 'fix' | 'change' | 'settings' | 'observability';
 type DevUnitsSubView = 'graph' | 'list';
 
 // Parse URL hash to get initial view and prompt path
@@ -37,7 +38,7 @@ const parseHash = (): { view: View; promptPath?: string; subView?: DevUnitsSubVi
   if (viewPart === 'architecture') return { view: 'devunits', subView: 'graph', promptPath };
   if (viewPart === 'prompts') return { view: 'devunits', subView: 'list', promptPath };
 
-  const validViews: View[] = ['devunits', 'bug', 'fix', 'change', 'settings'];
+  const validViews: View[] = ['devunits', 'bug', 'fix', 'change', 'settings', 'observability'];
   const view = validViews.includes(viewPart as View) ? (viewPart as View) : 'devunits';
 
   return { view, promptPath, subView: view === 'devunits' ? 'graph' : undefined };
@@ -915,13 +916,18 @@ const App: React.FC = () => {
                   <Cog6ToothIcon className="hidden sm:inline w-4 h-4 mr-1.5" />Settings
                 </button>
                 <button
-                  onClick={() => window.location.assign('/observability')}
-                  className="px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)] transition-all duration-200"
-                  title="Open local execution history and Dev Unit health"
+                  onClick={() => setView('observability')}
+                  className={`p-2 rounded-lg transition-all duration-200 ${
+                    view === 'observability'
+                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
+                  }`}
+                  title="Observability: local execution history and Dev Unit health"
+                  aria-label="Observability"
                 >
-                  <svg className="hidden sm:inline w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3v18h18M7 16l4-5 3 3 5-7" />
-                  </svg>Observability
+                  </svg>
                 </button>
               </div>
             </div>
@@ -1242,6 +1248,19 @@ const App: React.FC = () => {
               </div>
             </div>
           )}
+          {view === 'observability' && (
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-cyan-500/15 flex items-center justify-center">
+                <svg className="w-5 h-5 text-cyan-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3v18h18M7 16l4-5 3 3 5-7" />
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-lg sm:text-xl font-semibold text-white">Observability</h2>
+                <p className="text-xs sm:text-sm text-surface-400">Local execution history and Dev Unit health</p>
+              </div>
+            </div>
+          )}
             </>
           )}
         </div>
@@ -1319,6 +1338,8 @@ const App: React.FC = () => {
               </div>
             )}
           </div>
+        ) : view === 'observability' ? (
+          <ObservabilityDashboard />
         ) : view === 'settings' ? (
           <div className="animate-fade-in">
             <ProjectSettings />

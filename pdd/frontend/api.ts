@@ -25,6 +25,33 @@ export interface ServerStatus {
   connected_clients: number;
 }
 
+export interface ObservabilityRunSummary {
+  filename: string;
+  timestamp: string;
+  argv: string[];
+  status: 'success' | 'failed';
+  total_cost: number;
+  model: string;
+  error_message: string | null;
+}
+
+export interface ObservabilityRunDetail {
+  timestamp_utc: string;
+  argv: string[];
+  total_cost: number;
+  steps: Record<string, unknown>[];
+  errors: Record<string, unknown>[];
+  terminal_output: string;
+  platform: Record<string, unknown>;
+}
+
+export interface ObservabilityModule {
+  module_name: string;
+  language: string;
+  fingerprint: Record<string, unknown>;
+  run_report: { tests_passed?: number; tests_failed?: number } | null;
+}
+
 export interface CommandInfo {
   name: string;
   description: string;
@@ -622,6 +649,18 @@ class PDDApiClient {
   // Status
   async getStatus(): Promise<ServerStatus> {
     return this.request<ServerStatus>('/api/v1/status');
+  }
+
+  async getObservabilityRuns(): Promise<ObservabilityRunSummary[]> {
+    return this.request<ObservabilityRunSummary[]>('/api/v1/observability/runs');
+  }
+
+  async getObservabilityRun(filename: string): Promise<ObservabilityRunDetail> {
+    return this.request<ObservabilityRunDetail>(`/api/v1/observability/runs/${encodeURIComponent(filename)}`);
+  }
+
+  async getObservabilityModules(): Promise<ObservabilityModule[]> {
+    return this.request<ObservabilityModule[]>('/api/v1/observability/modules');
   }
 
   // Auth
