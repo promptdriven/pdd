@@ -2286,10 +2286,6 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
             verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
             verification._ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],  # pylint: disable=protected-access
         ),
-        (
-            verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
-            verification._STORY_CONTRACT_PROFILE_BYTES[1],  # pylint: disable=protected-access
-        ),
     }
     assert (
         hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROTATION_FILE)).hexdigest(),
