@@ -3,6 +3,8 @@ import os
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from pdd.sync_determine_operation import get_pdd_file_paths
 from pdd.validate_prompt_includes import validate_prompt_includes
 
@@ -366,3 +368,63 @@ def test_get_pdd_file_paths_prefers_existing_basename_artifacts_with_architectur
     assert paths["test"] == existing_test
     assert existing_test in paths["test_files"]
     assert "Preferring basename-derived artifacts for lib_sse over architecture stem sse" in caplog.text
+
+
+# --- Markdown literal scanner parity with pdd.sync_core.includes (PR #2376) ---
+
+
+@pytest.mark.parametrize(
+    ("opener", "closer"),
+    (("```", "````"), ("~~~", "~~~~")),
+    ids=("backtick", "tilde"),
+)
+def test_validate_ignores_fence_closed_by_a_longer_run(tmp_path, monkeypatch, opener, closer):
+    """A closer at least as long as the opener still closes the fence."""
+    monkeypatch.chdir(tmp_path)
+    content = f"{opener}\n<include>path/to/missing.py</include>\n{closer}\n"
+
+    validated, invalid = validate_prompt_includes(
+        content, base_dir=tmp_path, remove_invalid=False
+    )
+
+    assert invalid == []
+    assert validated == content
+
+
+def test_validate_ignores_fence_whose_info_string_starts_with_angle(tmp_path, monkeypatch):
+    """```<html> opens an ordinary fence, not a legacy include token."""
+    monkeypatch.chdir(tmp_path)
+    content = "```<html>\n<include>path/to/missing.py</include>\n```\n"
+
+    validated, invalid = validate_prompt_includes(
+        content, base_dir=tmp_path, remove_invalid=False
+    )
+
+    assert invalid == []
+    assert validated == content
+
+
+def test_validate_ignores_inline_span_with_longer_inner_run(tmp_path, monkeypatch):
+    """A longer, non-closing backtick run does not terminate the span."""
+    monkeypatch.chdir(tmp_path)
+    content = "``a ``` b <include>path/to/missing.py</include>``\n"
+
+    validated, invalid = validate_prompt_includes(
+        content, base_dir=tmp_path, remove_invalid=False
+    )
+
+    assert invalid == []
+    assert validated == content
+
+
+@pytest.mark.parametrize("run", ("~~`", "`~~"))
+def test_validate_does_not_let_a_mixed_run_hide_a_real_include(tmp_path, monkeypatch, run):
+    """An invalid mixed-delimiter fence is ordinary text, so the include is real."""
+    monkeypatch.chdir(tmp_path)
+    content = f"{run}\n<include>path/to/missing.py</include>\n{run}\n"
+
+    _validated, invalid = validate_prompt_includes(
+        content, base_dir=tmp_path, remove_invalid=False
+    )
+
+    assert invalid == ["path/to/missing.py"]
