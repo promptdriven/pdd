@@ -2413,6 +2413,16 @@ orientation. For example, use `ready__split-pane.ui.svg` and
 relationship; do not use `mobile`, `desktop`, `AR`, or a generic orientation
 when the arrangement itself can be named.
 
+**Filename identity rule.** A frontend source filename identifies the semantic
+state and material arrangement, never its current runtime surface or rendering
+representation. Do not encode `2d`, `3d`, `ar`, `vr`, `phone`, `desktop`, an
+orientation, DPI, dimensions, or an aspect ratio in the name. If the geometry
+actually differs, name that geometry or arrangement. Vector, raster, and future
+3D source formats are distinguished by their extension and tooling, not by a
+device suffix. Put exact viewport and aspect information in the prompt's view
+contract, not the filename. This preserves the required `layout-mode`; it is
+the durable arrangement metadata, not a runtime target label.
+
 A unit may be a component, dialog, or coherent screen. It may generate one code
 file or several files that jointly implement the same responsibility. Do not
 create an extra YAML, JSON, manifest, schema, or index file for frontend
