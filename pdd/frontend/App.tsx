@@ -862,7 +862,7 @@ const App: React.FC = () => {
             <div className="flex-1 min-w-0 flex justify-center">
               <div
                 className="inline-flex w-fit max-w-full gap-0.5 md:gap-1.5 p-0.5 md:p-1.5 rounded-lg md:rounded-xl border md:border-2 border-[#FDCE49]/60 bg-surface-800/40 overflow-x-auto scrollbar-hide"
-                style={{ width: 'fit-content' }}
+                style={{ width: 'fit-content', zoom: 0.82 }}
               >
                 <button
                   onClick={() => setView('devunits')}
