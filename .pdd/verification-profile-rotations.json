@@ -646,6 +646,17 @@
       "head_policy_sha256": "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
       "base_prompt_sha256": "9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
       "head_prompt_sha256": "882876b0dea9198c1fa9492806d85bfb088b393096f4f1a0543cc8f31f40fc30"
+    },
+    {
+      "prompt_path": "pdd/prompts/user_story_tests_python.prompt",
+      "language_id": "python",
+      "from_requirement_id": "CONTRACT-SHA256:1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7",
+      "to_requirement_id": "CONTRACT-SHA256:4a7ccc500190340c1962cf222396d9d1ba70ea33a17ee2548d49b7aad145afea",
+      "policy_path": ".pdd/verification-profiles.json",
+      "base_policy_sha256": "0fcb1bb324022fbda46424be9738f3e2d8fe3f3440eb6d72fff7b5fd8411c5c1",
+      "head_policy_sha256": "25615a1de6b9aafe85fcaa235ae55d0c55450578ce2025117094648da4df00f4",
+      "base_prompt_sha256": "1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7",
+      "head_prompt_sha256": "4a7ccc500190340c1962cf222396d9d1ba70ea33a17ee2548d49b7aad145afea"
     }
   ],
   "requirement_rotation_retirements": [
@@ -695,6 +706,30 @@
         "head_policy_sha256": "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
         "base_prompt_sha256": "9eeff8491a339461447f45d020b7a7989efe6d76c51241ccac5ac46074bf2793",
         "head_prompt_sha256": "882876b0dea9198c1fa9492806d85bfb088b393096f4f1a0543cc8f31f40fc30"
+      }
+    },
+    {
+      "obsolete": {
+        "prompt_path": "pdd/prompts/user_story_tests_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": "CONTRACT-SHA256:c63d875cc5d488b8fd9bfdd72ea015f33962d22b5cde90b9be751de55a209e32",
+        "to_requirement_id": "CONTRACT-SHA256:1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7",
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
+        "head_policy_sha256": "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836",
+        "base_prompt_sha256": "c63d875cc5d488b8fd9bfdd72ea015f33962d22b5cde90b9be751de55a209e32",
+        "head_prompt_sha256": "1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7"
+      },
+      "replacement": {
+        "prompt_path": "pdd/prompts/user_story_tests_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": "CONTRACT-SHA256:1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7",
+        "to_requirement_id": "CONTRACT-SHA256:4a7ccc500190340c1962cf222396d9d1ba70ea33a17ee2548d49b7aad145afea",
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": "0fcb1bb324022fbda46424be9738f3e2d8fe3f3440eb6d72fff7b5fd8411c5c1",
+        "head_policy_sha256": "25615a1de6b9aafe85fcaa235ae55d0c55450578ce2025117094648da4df00f4",
+        "base_prompt_sha256": "1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7",
+        "head_prompt_sha256": "4a7ccc500190340c1962cf222396d9d1ba70ea33a17ee2548d49b7aad145afea"
       }
     }
   ]

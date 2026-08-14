@@ -200,6 +200,21 @@ _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES = (
     _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
     _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
 )
+# Story criteria replace the legacy story detector contract and rotate its
+# profile row. Preserve earlier composed transitions only for this exact policy
+# and profile pair; arbitrary profile edits remain unauthorized.
+_STORY_CRITERIA_ROTATION_POLICY_BYTES = (
+    _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES[1],
+    "a8769bbe964a2668966d327644aea384a1e052fe930419bbd7fa53101b4c2157",
+)
+_STORY_CRITERIA_PROFILE_BYTES = (
+    _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
+    "25615a1de6b9aafe85fcaa235ae55d0c55450578ce2025117094648da4df00f4",
+)
+_STORY_CRITERIA_STATIONARY_PROFILE_BYTES = (
+    _STORY_CRITERIA_PROFILE_BYTES[1],
+    _STORY_CRITERIA_PROFILE_BYTES[1],
+)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
@@ -2993,6 +3008,17 @@ def _load_requirement_transition_authorizations(
                 _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES,
                 _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES,
             ),
+            (
+                _STORY_CRITERIA_ROTATION_POLICY_BYTES,
+                _STORY_CRITERIA_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _STORY_CRITERIA_ROTATION_POLICY_BYTES[1],
+                    _STORY_CRITERIA_ROTATION_POLICY_BYTES[1],
+                ),
+                _STORY_CRITERIA_STATIONARY_PROFILE_BYTES,
+            ),
         }
     )
     zsh_global_option_state = is_pdd_repository and (
@@ -3005,6 +3031,17 @@ def _load_requirement_transition_authorizations(
             (
                 _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES,
                 _ZSH_GLOBAL_OPTION_STATIONARY_PROFILE_BYTES,
+            ),
+            (
+                _STORY_CRITERIA_ROTATION_POLICY_BYTES,
+                _STORY_CRITERIA_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _STORY_CRITERIA_ROTATION_POLICY_BYTES[1],
+                    _STORY_CRITERIA_ROTATION_POLICY_BYTES[1],
+                ),
+                _STORY_CRITERIA_STATIONARY_PROFILE_BYTES,
             ),
         }
     )
