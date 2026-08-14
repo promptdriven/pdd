@@ -2405,6 +2405,13 @@ prompts/ui/<unit>/
     └── <state>--<variant>__<layout-mode>.ui.svg
 ```
 
+Use a short kebab-case product or interface concept for `<unit>`, stable even
+when source files move; the directory and owning prompt basename must match.
+Prefer `account-header`, `project-sharing-panel`, or `voice-config-picker` over
+a flattened source path such as `components-account-accountheader`. Keep a
+meaningful noun such as `panel`, `modal`, `picker`, or `widget` when it explains
+the interface responsibility.
+
 Name each SVG `<state>[--<variant>]__<layout-mode>.ui.svg`. The layout mode
 names the material spatial arrangement—such as `split-pane`, `single-pane`,
 `stacked`, `side-by-side`, or `grid`—rather than a pixel size, device, or
