@@ -96,6 +96,56 @@ class OwnershipRule:
 # or altered owner/inventory fields.
 _PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 _BOOTSTRAP_HUMAN_OWNERSHIP = (
+    # PR #2374: six extracted conformance units and their review evidence.
+    OwnershipRule(
+        "pdd/conformance/__init__.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "scripts/validate_conformance_prompts.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "tests/test_conformance_prompt_compatibility_exports.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "tests/story_regression/test_story_pdd_generation_gates_preserved.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "user_stories/contracts/pdd_generation_gates_preserved.contract.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "user_stories/issues/conformance-gate-split.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "user_stories/story__pdd_generation_gates_preserved.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
     OwnershipRule(
         ".pdd/meta/agentic_architecture_python.json",
         InventoryStatus.HUMAN_OWNED,
@@ -288,7 +338,7 @@ _REPLAY_HUMAN_OWNERSHIP = tuple(
 # lose their repaired ownership, and they resurface as unowned tracked paths.
 _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES = (
     "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
-    "8ff5fb357321c85d827c8be4cb9b1ee06ad0a4a15b91bd5bf5db418e74067f20",
+    "2b4cee2ca317ff8283bc4d681dbc75b7b73cc704b3f62c1e122c20c1a7da1e38",
 )
 # Re-pinning above only tracks the current head. The repair is also replayed
 # across its own protected range, whose head predates every later edit to the
