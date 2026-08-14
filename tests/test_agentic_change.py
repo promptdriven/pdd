@@ -258,6 +258,8 @@ def test_happy_path_current_directory(mock_dependencies):
     # Verify orchestrator called with local path (the mock_path)
     call_kwargs = mock_orch.call_args[1]
     assert call_kwargs["cwd"] == mock_path
+    from pdd import DEFAULT_STRENGTH
+    assert call_kwargs["strength"] == DEFAULT_STRENGTH
     
     # Verify NO clone command was issued
     for call_obj in mock_subprocess.call_args_list:

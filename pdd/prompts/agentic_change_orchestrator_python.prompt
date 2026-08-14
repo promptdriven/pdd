@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state, reasoning_time, clean_restart)", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state, reasoning_time, clean_restart, strength)", "returns": "Tuple[bool, str, float, str, List[str]]"},
       {"name": "_artifacts_dir_for", "signature": "(work_dir: Path, issue_number: int) -> Path", "returns": "Path"},
       {"name": "_clear_step_artifacts", "signature": "(artifacts_dir: Path, step_num: int, name: str) -> None", "returns": "None"},
       {"name": "_read_step_json", "signature": "(artifacts_dir: Path, filename: str) -> Optional[dict]", "returns": "Optional[dict]"},
@@ -42,7 +42,7 @@ Orchestrator for the 13-step agentic change workflow. Runs each step as a separa
 % Requirements
 
 Decorate `run_agentic_change_orchestrator` with `provider_failure_workflow` so direct library calls own one provider-health epoch across all steps, while nested CLI calls share the existing outer epoch.
-1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = "", *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = "", *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False, strength: float = DEFAULT_STRENGTH) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run 13 steps, with steps 11-12 in a review loop (max 5 iterations)
 4. Accumulate step outputs to pass as context to subsequent steps
@@ -509,7 +509,7 @@ After the Step 12.5 gate passes and BEFORE Step 13 creates or updates the PR, ge
 
 1. Import `generate_user_story` from `pdd.user_story_tests`.
 2. Resolve changed prompt candidates from the authoritative `changed_files` set against the worktree. Include only existing `.prompt` files and exclude runtime `*_LLM.prompt` templates.
-3. Call `generate_user_story(prompt_files=..., issue=issue_url, stories_dir=str(worktree_path / "user_stories"), prompts_dir=<shared prompts root when clear>, strength=0.2, temperature=0.0, time=0.25, verbose=verbose)`. The story body must be authored from the issue, not prompt content; prompt files are used only for metadata linking.
+3. Call `generate_user_story(prompt_files=..., issue=issue_url, stories_dir=str(worktree_path / "user_stories"), prompts_dir=<shared prompts root when clear>, strength=strength, temperature=0.0, time=0.25, verbose=verbose)`, forwarding the orchestrator's own `strength` parameter rather than a fixed constant. The story body must be authored from the issue, not prompt content; prompt files are used only for metadata linking.
 4. On success, append the generated story path(s) to `changed_files` and `files_to_stage` so Step 13 commits them into the change PR. `generate_user_story` writes a two-file pair — the human-verified `user_stories/story__<slug>.md` and a generated `user_stories/contracts/<slug>.contract.md` (via `_contract_path_for_story`); stage BOTH so the contract travels with the change PR instead of landing as an untracked local file. Set `context["user_story_summary"]` to a markdown section naming each generated story (and its contract) and the linked prompt metadata.
 5. On failure, do not block the change PR. Wrap the `generate_user_story` call so that an unsuccessful result OR an unexpected exception (issue resolution, provider code, file I/O) is caught and converted into a skipped-generation outcome — it must never propagate into the orchestrator loop after the pre-PR gate. Set `context["user_story_summary"]` to a markdown section explaining that story generation was attempted and skipped, including the changed prompt(s) and failure message. This preserves review visibility without reintroducing a metadata-only hard gate.
 6. If there are no changed non-LLM prompt files, set `context["user_story_summary"] = "None"` so Step 13 omits the PR section.

@@ -245,6 +245,25 @@ _PR2376_DEPENDENCY_FIX_PROFILE_BYTES = (
     _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
     "85d01008145de7a7bc67bc6b458b7780a1fbaf24f9733708a0a1032ecb49a9f5",
 )
+
+# Story-validation strength advances seven managed prompt requirements
+# (issue #2394) on top of the conformance-split protected base (PR #2374).
+# The rotation policy file is not touched by this change, so its digest is
+# stationary at the conformance-split's consumed value. The profile digests
+# are the conformance-split's consumed value -> this change's candidate.
+_STORY_VALIDATION_STRENGTH_ROTATION_POLICY_BYTES = (
+    _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[1],
+    _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[1],
+)
+_STORY_VALIDATION_STRENGTH_PROFILE_BYTES = (
+    _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
+    "44b988c0ecdbde21e792005533a3e4e55dd84192a800c292dc51e72de3616346",
+)
+# The candidate is also evaluated against itself once the rotation has landed.
+_STORY_VALIDATION_STRENGTH_STATIONARY_PROFILE_BYTES = (
+    _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[1],
+    _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[1],
+)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
@@ -1081,6 +1100,75 @@ _PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS = (
         "e280e55b009da1afc34f31bfc8410518d17e70b2cd794170bcf8960c48214411",
         _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[0],
         _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+    ),
+)
+
+# Issue #2394 advances the story-validation-strength plumbing across four
+# managed prompts in one change. The rotation policy file is untouched (its
+# digest is stationary), so these four transitions are recognized directly
+# rather than through a `requirement_rotations` row: installing a fresh row
+# for `commands/analysis_python.prompt` or `user_story_tests_python.prompt`
+# would collide with their existing unreachable dormant rows (ambiguous
+# active rule), and neither retiring nor reissuing those rows can be proven
+# dormant while `.pdd/verification-profiles.json` itself changes in this same
+# candidate. Bound to the exact protected-base -> candidate profile bytes;
+# grants no reusable transition authority beyond these four identities.
+_STORY_VALIDATION_STRENGTH_COMPOSED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/analysis_python.prompt",
+        "python",
+        "89c8005f5fe933af745285a6a2f28f73b79112e1b96e7af4d7b0e47cde136a16",
+        "68ded0b5bfc011c87ceae30c3d141fc5a97627b8406e716f9640ffba13cac648",
+        _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[0],
+        _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/user_story_tests_python.prompt",
+        "python",
+        "1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7",
+        "f6b6facdbcdf02e49bac777fb8f0cd3444059cb6910171cdd4e022bbfda289cb",
+        _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[0],
+        _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_change_python.prompt",
+        "python",
+        "6d2f1c979d2c808521976746e33ca092f18df393a03fb7c3b15981e322b8fafd",
+        "8da0eaa4043746eba5ec6330e4ae60847adbf90e2ae64fc10717db992e6a8959",
+        _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[0],
+        _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_change_orchestrator_python.prompt",
+        "python",
+        "a5f609c2aa21b86d5b1bdb1ef7b36207c40326fc85b617c8b7d7b99dc5b23b9c",
+        "459fb83c7c5357f114a744e6664c9173f75531d4c65a8e6a2386d5bbfb0e0b9b",
+        _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[0],
+        _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/fix_python.prompt",
+        "python",
+        "9665945341cf2ac1860c535d6867cd0082f0184d462765ec277d3887cfaae583",
+        "65e4af4492ad35ea69b120c4e7fc975fb9d8319b83c73eeabd8d6a42bb022606",
+        _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[0],
+        _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/generate_python.prompt",
+        "python",
+        "91bbf9390f5489d3dbc3c8671d490feb4a7764d89270d2211875758c44a6ac2c",
+        "82b964c09f9c1a2f32d2bb9790a5f3f3276ce3e933a437cc7873a03cfffa80b2",
+        _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[0],
+        _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/commands/modify_python.prompt",
+        "python",
+        "34ec165260531e0fd13b721a7fb9bb2ae5fe70275166044ddd204166adf660be",
+        "ca2853cab45702733ff956cd61619d27e4596954885ed8477467387a0a835a4e",
+        _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[0],
+        _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[1],
     ),
 )
 
@@ -3243,6 +3331,19 @@ def _load_requirement_transition_authorizations(
             ),
         }
     )
+    story_validation_strength_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        in {
+            (
+                _STORY_VALIDATION_STRENGTH_ROTATION_POLICY_BYTES,
+                _STORY_VALIDATION_STRENGTH_PROFILE_BYTES,
+            ),
+            (
+                _STORY_VALIDATION_STRENGTH_ROTATION_POLICY_BYTES,
+                _STORY_VALIDATION_STRENGTH_STATIONARY_PROFILE_BYTES,
+            ),
+        }
+    )
     temperature_regression_state = (
         exact_pr2316_phase_a_reissue
         or exact_pr2316_stationary_reissue
@@ -3280,6 +3381,7 @@ def _load_requirement_transition_authorizations(
         or code_generator_language_gate_state
         or temperature_regression_state
         or pr2376_dependency_fix_state
+        or story_validation_strength_state
     )
     gemini_36_terra_sol_state = is_pdd_repository and (
         (policy_digests, profile_digests)
@@ -3331,7 +3433,7 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in terra_sol_identities
         ) + _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS)
-    if zsh_global_option_state:
+    if zsh_global_option_state or story_validation_strength_state:
         # Supersede the Terra/Sol row for the one identity this change moves.
         zsh_identities = {
             (item.prompt_path, item.language_id)
@@ -3371,6 +3473,7 @@ def _load_requirement_transition_authorizations(
             exact_pr2316_phase_b_state
             or code_generator_language_gate_state
             or pr2376_dependency_fix_state
+            or story_validation_strength_state
         ):
             # The transition and its exact consumed state retain protected rows
             # for these two identities.  The older Opus/Fable overlay is still
@@ -3382,7 +3485,7 @@ def _load_requirement_transition_authorizations(
                 if (item.prompt_path, item.language_id)
                 not in _PR2316_STALE_LLM_REISSUE_TARGET_IDENTITIES
             )
-        if code_generator_language_gate_state:
+        if code_generator_language_gate_state or story_validation_strength_state:
             language_gate_identities = {
                 (PurePosixPath("pdd/prompts/code_generator_main_python.prompt"), "python")
             }
@@ -3433,6 +3536,18 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id)
             not in _SYNC_ROLLOUT_REPAIR_STALE_ROTATION_IDENTITIES
         )
+    if story_validation_strength_state:
+        story_validation_strength_identities = {
+            (item.prompt_path, item.language_id)
+            for item in _STORY_VALIDATION_STRENGTH_COMPOSED_REQUIREMENT_TRANSITIONS
+        }
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id)
+            not in story_validation_strength_identities
+        ) + _STORY_VALIDATION_STRENGTH_COMPOSED_REQUIREMENT_TRANSITIONS
+        authority.update(_STORY_VALIDATION_STRENGTH_COMPOSED_REQUIREMENT_TRANSITIONS)
     pr1971_reconciliation = _is_exact_pr1971_pytest_reconciliation(
         manifest, (protected_policy, candidate_policy), policies, candidate
     )
@@ -3532,7 +3647,11 @@ def _load_requirement_transition_authorizations(
             terra_sol_consumed_state,
         )
     )
-    if consumed_profile_reconciliation or historical_composed_state:
+    if (
+        consumed_profile_reconciliation
+        or historical_composed_state
+        or story_validation_strength_state
+    ):
         # The exact historical pair both installed and consumed its authority
         # before Phase-A isolation existed; validate it as consumption below.
         new_authorizations = ()

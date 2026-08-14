@@ -9,6 +9,7 @@ from typing import Optional, Tuple, Dict, Any, List, Union
 from rich.console import Console
 
 # Relative imports for internal modules
+from .. import DEFAULT_STRENGTH
 from ..context_generator_main import context_generator_main
 from ..track_cost import track_cost
 from ..operation_log import log_operation
@@ -860,7 +861,7 @@ def test(
             success, message, cost, model, linked_prompts = cache_story_prompt_links(
                 story_file=str(story_path),
                 prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
-                strength=obj.get("strength", 0.2),
+                strength=obj.get("strength", DEFAULT_STRENGTH),
                 temperature=obj.get("temperature", 0.0),
                 time=obj.get("time", 0.25),
                 verbose=obj.get("verbose", False),
@@ -903,7 +904,7 @@ def test(
                 output=output,
                 stories_dir=os.environ.get("PDD_USER_STORIES_DIR"),
                 prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
-                strength=obj.get("strength", 0.2),
+                strength=obj.get("strength", DEFAULT_STRENGTH),
                 temperature=obj.get("temperature", 0.0),
                 time=obj.get("time", 0.25),
                 verbose=obj.get("verbose", False),

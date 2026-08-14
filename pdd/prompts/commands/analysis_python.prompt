@@ -20,7 +20,9 @@
          directories MUST NOT be accepted.
        - Call `run_user_story_tests(...)` with:
          - `prompts_dir`, `stories_dir`
-         - `strength`, `temperature`, `time`, `verbose`, `quiet` from `ctx.obj`
+         - `strength`, `temperature`, `time`, `verbose`, `quiet` from `ctx.obj`;
+           default strength to `DEFAULT_STRENGTH` and warn in human mode for an
+           explicit strength below 0.5.
          - `include_llm_prompts=include_llm`
          - `fail_fast=fail_fast`
        - Return result payload as `{"passed": passed, "results": results}` plus cost/model.

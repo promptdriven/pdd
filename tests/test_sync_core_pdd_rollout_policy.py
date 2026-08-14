@@ -2317,6 +2317,13 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
             verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
             verification._PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],  # pylint: disable=protected-access
         ),
+        # #2394 advances the analysis, user-story, and agentic-change-strength
+        # contracts on top of the conformance-split base with an exact,
+        # reviewed profile rotation; retain that resulting profile byte pair.
+        (
+            verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
+            verification._STORY_VALIDATION_STRENGTH_PROFILE_BYTES[1],  # pylint: disable=protected-access
+        ),
     }
     assert (
         hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROTATION_FILE)).hexdigest(),

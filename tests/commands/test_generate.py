@@ -626,6 +626,8 @@ def test_test_manual_mode_arg_error(runner):
 
 def test_test_story_mode_links_metadata(runner):
     """Test 'test' command auto-detects story mode for story__*.md files."""
+    from pdd import DEFAULT_STRENGTH
+
     with runner.isolated_filesystem():
         with open("story__upload_flow.md", "w") as f:
             f.write("As a user...")
@@ -639,7 +641,7 @@ def test_test_story_mode_links_metadata(runner):
     kwargs = mock_link.call_args[1]
     assert kwargs["story_file"] == "story__upload_flow.md"
     assert kwargs["prompts_dir"] is None
-    assert kwargs["strength"] == 0.2
+    assert kwargs["strength"] == DEFAULT_STRENGTH
     assert kwargs["temperature"] == 0.0
     assert kwargs["time"] == 0.25
     assert kwargs["verbose"] is False
@@ -647,6 +649,8 @@ def test_test_story_mode_links_metadata(runner):
 
 def test_test_story_generation_mode_from_prompt_inputs(runner):
     """Test 'test' command auto-detects story generation for prompt-file inputs."""
+    from pdd import DEFAULT_STRENGTH
+
     with runner.isolated_filesystem():
         with open("upload_python.prompt", "w") as f:
             f.write("Upload prompt")
@@ -682,7 +686,7 @@ def test_test_story_generation_mode_from_prompt_inputs(runner):
     assert kwargs["output"] is None
     assert kwargs["stories_dir"] is None
     assert kwargs["prompts_dir"] is None
-    assert kwargs["strength"] == 0.2
+    assert kwargs["strength"] == DEFAULT_STRENGTH
     assert kwargs["temperature"] == 0.0
     assert kwargs["time"] == 0.25
     assert kwargs["verbose"] is False

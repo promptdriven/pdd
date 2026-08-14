@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 import click
 from rich.console import Console
 
+from .. import DEFAULT_STRENGTH
 from ..core.errors import handle_error
 from ..operation_log import log_operation
 from ..track_cost import track_cost
@@ -213,7 +214,7 @@ def fix(
                 ctx=ctx,
                 story_file=first_arg,
                 prompts_dir=ctx.obj.get("prompts_dir"),
-                strength=ctx.obj.get("strength", 0.2),
+                strength=ctx.obj.get("strength", DEFAULT_STRENGTH),
                 temperature=ctx.obj.get("temperature", 0.0),
                 time=ctx.obj.get("time", 0.25),
                 budget=budget,

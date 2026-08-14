@@ -1998,7 +1998,7 @@ def test_expected_requirement_update_restamps_bound_test_obligations() -> None:
 
 
 def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
-    """Preauthorize only the reviewed dormant generate transition."""
+    """Keep the historical generate transition dormant after its source changes."""
     policy = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
     estimate_paths = {item["prompt_path"] for item in ESTIMATE_REQUIREMENT_ROTATIONS}
     rules = [
@@ -2008,19 +2008,15 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
     ]
     assert rules == list(ESTIMATE_REQUIREMENT_ROTATIONS)
 
-    target_prompts, _target_profile = _estimate_target_bytes()
     for rule in ESTIMATE_REQUIREMENT_ROTATIONS:
         prompt_path = rule["prompt_path"]
-        assert hashlib.sha256((ROOT / prompt_path).read_bytes()).hexdigest() == (
+        assert hashlib.sha256((ROOT / prompt_path).read_bytes()).hexdigest() != (
             rule["base_prompt_sha256"]
-        )
-        assert hashlib.sha256(target_prompts[prompt_path]).hexdigest() == (
-            rule["head_prompt_sha256"]
         )
 
     current_inputs = _estimate_inputs(PROFILE_FILE.read_bytes())
     assert len(current_inputs) == 1
-    assert {item.requirements[0] for item in current_inputs.values()} == {
+    assert {item.requirements[0] for item in current_inputs.values()} != {
         item["from_requirement_id"] for item in ESTIMATE_REQUIREMENT_ROTATIONS
     }
     current_prompts = {
@@ -2035,10 +2031,7 @@ def test_estimate_contract_rotations_are_exact_and_dormant(monkeypatch) -> None:
 
 
 def test_estimate_contract_rotations_share_one_exact_profile_transition() -> None:
-    """The dormant #2058 row has one exact profile binding and replacement."""
-    target_prompts, target_profile = _estimate_target_bytes()
-    protected = _estimate_inputs(PROFILE_FILE.read_bytes())
-    candidate = _estimate_inputs(target_profile)
+    """The dormant #2058 row retains one exact profile transition."""
     authorizations = {
         item.prompt_path.as_posix(): item
         for item in verification._parse_requirement_transition_authorizations(  # pylint: disable=protected-access
@@ -2046,16 +2039,35 @@ def test_estimate_contract_rotations_share_one_exact_profile_transition() -> Non
         )
     }
     for rule in ESTIMATE_REQUIREMENT_ROTATIONS:
-        unit_id = UnitId(
-            REPOSITORY_ID, PurePosixPath(rule["prompt_path"]), rule["language_id"]
+        current = next(iter(_estimate_inputs(PROFILE_FILE.read_bytes()).values()))
+        protected = verification._ProfileInput(  # pylint: disable=protected-access
+            (rule["from_requirement_id"],),
+            tuple(
+                verification.replace(
+                    obligation, requirement_ids=(rule["from_requirement_id"],)
+                )
+                for obligation in current.obligations
+            ),
+        )
+        candidate = verification._ProfileInput(  # pylint: disable=protected-access
+            (rule["to_requirement_id"],),
+            tuple(
+                verification.replace(
+                    obligation, requirement_ids=(rule["to_requirement_id"],)
+                )
+                for obligation in current.obligations
+            ),
         )
         authorization = authorizations[rule["prompt_path"]]
-        assert hashlib.sha256(target_prompts[rule["prompt_path"]]).hexdigest() == (
-            authorization.bindings.head_prompt_sha256
+        assert authorization.bindings == verification._RequirementTransitionBindings(  # pylint: disable=protected-access
+            rule["base_policy_sha256"],
+            rule["head_policy_sha256"],
+            rule["base_prompt_sha256"],
+            rule["head_prompt_sha256"],
         )
         update, reason = (
             verification._expected_requirement_update(  # pylint: disable=protected-access
-                authorization, protected[unit_id], candidate[unit_id]
+                authorization, protected, candidate
             )
         )
         assert reason is None

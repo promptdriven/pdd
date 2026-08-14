@@ -290,6 +290,26 @@ def test_user_story_mode_uses_ctx_values(runner: CliRunner, mock_deps) -> None:
     assert kwargs["quiet"] is False
 
 
+def test_user_story_mode_defaults_to_global_strength(runner: CliRunner, mock_deps) -> None:
+    """Story validation must not fall back to the legacy low-strength tier."""
+    from pdd import DEFAULT_STRENGTH
+
+    mock_deps["run_user_story_fix"].return_value = (
+        True,
+        "Story updated",
+        0.0,
+        "model",
+        [],
+    )
+    with runner.isolated_filesystem():
+        story_file = Path("story__fix-routing.md")
+        story_file.write_text("As a user, I want fix routing to work.\n", encoding="utf-8")
+        result = runner.invoke(fix, [str(story_file)], obj={})
+
+    assert result.exit_code == 0
+    assert mock_deps["run_user_story_fix"].call_args.kwargs["strength"] == DEFAULT_STRENGTH
+
+
 def test_manual_flag_overrides_url_routing(runner: CliRunner, mock_deps) -> None:
     mock_deps["fix_main"].return_value = (True, "fixed test", "fixed code", 1, 0.1, "gpt-4.1")
 

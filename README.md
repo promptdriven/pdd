@@ -746,6 +746,8 @@ PDD can validate prompt changes against user stories stored as Markdown files. T
 Defaults:
 - Stories live in `user_stories/` and match `story__*.md`.
 - Prompts are loaded from `prompts/` (excluding `*_llm.prompt` by default).
+- Story validation uses `DEFAULT_STRENGTH` (1.0 by default). An explicit value
+  below 0.5 warns; prefer `pdd --strength 0.5 detect --stories` or higher.
 
 Overrides:
 - `PDD_USER_STORIES_DIR` sets the stories directory.

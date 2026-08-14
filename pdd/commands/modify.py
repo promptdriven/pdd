@@ -10,6 +10,7 @@ import click
 from rich.console import Console
 
 # Relative imports from parent package
+from .. import DEFAULT_STRENGTH
 from ..split_main import split_main
 from ..agentic_split import run_agentic_split
 from ..change_main import change_main
@@ -399,6 +400,7 @@ def change(
                     use_github_state=not no_github_state,
                     clean_restart=clean_restart,
                     reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
+                    strength=ctx.obj.get("strength", DEFAULT_STRENGTH),
                 )
             finally:
                 if no_github_state:

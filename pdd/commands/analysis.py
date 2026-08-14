@@ -14,6 +14,7 @@ from pathlib import Path
 import click
 from typing import Optional, Tuple, List, Dict, Any
 
+from .. import DEFAULT_STRENGTH
 from ..detect_change_main import detect_change_main
 from ..conflicts_main import conflicts_main
 from ..bug_main import bug_main
@@ -41,6 +42,7 @@ _GITHUB_ISSUE_RE = re.compile(
     r"^(?:https?://)?(?:www\.)?github\.com/[^/]+/[^/]+/issues/\d+(?:[/?#].*)?$"
 )
 _SCOPE_MANIFEST_SCHEMA = "pdd.detect.stories.scope.v1"
+_STORY_VALIDATION_MIN_RECOMMENDED_STRENGTH = 0.5
 
 
 @dataclass(frozen=True)
@@ -602,6 +604,19 @@ def detect_change(
             capture_evaluator_output = machine_mode or quiet_mode
             evaluator_stdout = io.StringIO() if capture_evaluator_output else None
             evaluator_stderr = io.StringIO() if capture_evaluator_output else None
+            story_strength = obj.get("strength", DEFAULT_STRENGTH)
+            if (
+                "strength" in obj
+                and story_strength < _STORY_VALIDATION_MIN_RECOMMENDED_STRENGTH
+                and not quiet_mode
+            ):
+                click.echo(
+                    "Warning: story validation at "
+                    f"--strength {story_strength:g} is unreliable; a regressed prompt "
+                    "set verified clean in 5/5 measured runs at this tier. Minimum "
+                    "recommended: 0.5.",
+                    err=True,
+                )
             previous_rich_consoles: list[Any] = []
             if capture_evaluator_output:
                 # ``rich.print`` captures the process stream when its global
@@ -661,7 +676,7 @@ def detect_change(
                             else None
                         ),
                         contract_files=(scope.contracts if scope is not None else None),
-                        strength=obj.get("strength", 0.2),
+                        strength=story_strength,
                         temperature=obj.get("temperature", 0.0),
                         time=obj.get("time", 0.25),
                         verbose=False if machine_mode else obj.get("verbose", False),
