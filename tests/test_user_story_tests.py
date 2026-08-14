@@ -15,6 +15,7 @@ from pdd.story_criteria import (
 )
 from pdd.user_story_tests import (
     _contract_path_for_story,
+    _resolve_prompt_path,
     _story_content_hash,
     cache_story_prompt_links,
     discover_prompt_files,
@@ -1734,6 +1735,59 @@ def test_unverified_citation_is_warned_about_but_still_passes(tmp_path):
     }
 
 
+def test_criteria_link_caching_preserves_the_full_evaluated_scope(tmp_path):
+    """Satisfied prompts must not disappear from cached story metadata."""
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+    prompt_a = prompts_dir / "a_python.prompt"
+    prompt_b = prompts_dir / "b_python.prompt"
+    prompt_a.write_text("A", encoding="utf-8")
+    prompt_b.write_text("B", encoding="utf-8")
+    story = stories_dir / "story__cache_scope.md"
+    story.write_text("## Story\nCache the evaluated scope.\n", encoding="utf-8")
+    contract = _contract_path_for_story(story)
+    contract.parent.mkdir()
+    contract.write_text(
+        "## Acceptance Criteria\n- A works.\n- B works.\n", encoding="utf-8"
+    )
+
+    def fake_evaluate(_prompts, _oracle, criteria, *_args, **_kwargs):
+        return CriteriaEvaluation(
+            verdicts=[
+                CriterionVerdict(
+                    criteria[0].id,
+                    criteria[0].text,
+                    "satisfied",
+                    citation="A",
+                    prompt_name=prompt_a.name,
+                ),
+                CriterionVerdict(
+                    criteria[1].id,
+                    criteria[1].text,
+                    "unsatisfied",
+                    prompt_name=prompt_b.name,
+                ),
+            ]
+        )
+
+    with patch(
+        "pdd.user_story_tests.evaluate_acceptance_criteria", side_effect=fake_evaluate
+    ):
+        passed, _results, _cost, _model = run_user_story_tests(
+            prompts_dir=str(prompts_dir),
+            stories_dir=str(stories_dir),
+            quiet=True,
+            cache_story_prompt_links=True,
+        )
+
+    assert passed is False
+    metadata = story.read_text(encoding="utf-8").splitlines()[0]
+    assert "a_python.prompt" in metadata
+    assert "b_python.prompt" in metadata
+
+
 def test_criteria_report_names_the_model_that_produced_the_verdict(
     tmp_path, capsys
 ):
@@ -2752,3 +2806,73 @@ def test_story_fix_never_modifies_a_prompt_outside_metadata_scope(tmp_path):
     assert "Unable to resolve prompt path" in message
     assert changed == []
     mock_change.assert_not_called()
+
+
+def test_story_fix_rejects_an_ambiguous_duplicate_basename(tmp_path):
+    """A model cannot select one of two same-named scoped prompts by accident."""
+    prompts_dir = tmp_path / "prompts"
+    src_dir = tmp_path / "src"
+    stories_dir = tmp_path / "user_stories"
+    first_prompt = prompts_dir / "first" / "auth_python.prompt"
+    second_prompt = prompts_dir / "second" / "auth_python.prompt"
+    for path in (first_prompt, second_prompt):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("prompt", encoding="utf-8")
+    for path in (src_dir / "first" / "auth.py", src_dir / "second" / "auth.py"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    stories_dir.mkdir()
+    story_path = stories_dir / "story__ambiguous.md"
+    story_path.write_text(
+        "<!-- pdd-story-prompts: first/auth_python.prompt, second/auth_python.prompt -->\n"
+        "## Story\nScoped repair.\n",
+        encoding="utf-8",
+    )
+    contract = _contract_path_for_story(story_path)
+    contract.parent.mkdir()
+    contract.write_text("## Acceptance Criteria\n- Must authenticate.\n", encoding="utf-8")
+
+    def fake_evaluate(_prompts, _oracle, criteria, *_args, **_kwargs):
+        return CriteriaEvaluation(
+            verdicts=[
+                CriterionVerdict(
+                    criteria[0].id,
+                    criteria[0].text,
+                    "unsatisfied",
+                    prompt_name="auth_python.prompt",
+                )
+            ]
+        )
+
+    with (
+        patch(
+            "pdd.user_story_tests.evaluate_acceptance_criteria",
+            side_effect=fake_evaluate,
+        ),
+        patch("pdd.change_main.change_main") as mock_change,
+    ):
+        success, message, _cost, _model, changed = run_user_story_fix(
+            ctx=SimpleNamespace(obj={}),
+            story_file=str(story_path),
+            prompts_dir=str(prompts_dir),
+            quiet=True,
+        )
+
+    assert success is False
+    assert "Unable to resolve prompt path: auth_python.prompt" in message
+    assert changed == []
+    mock_change.assert_not_called()
+
+
+def test_unique_prompt_path_suffix_resolves_with_an_ancestor_in_the_root(tmp_path):
+    """The model's compact identifier need not repeat the whole prompt root."""
+    prompts_dir = tmp_path / "prompts"
+    first = prompts_dir / "archive" / "first" / "auth_python.prompt"
+    second = prompts_dir / "second" / "auth_python.prompt"
+    for path in (first, second):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("prompt", encoding="utf-8")
+
+    assert _resolve_prompt_path(
+        "first/auth_python.prompt", [first, second], prompts_dir
+    ) == first

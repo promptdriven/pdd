@@ -162,6 +162,50 @@ def test_guards_are_passed_to_the_evaluator(tmp_path):
     assert seen["guards"] == ["private helper names", "exact color of console output"]
 
 
+def test_duplicate_prompt_basenames_use_unique_relative_identifiers(tmp_path):
+    """The evaluator must be able to name either duplicate file unambiguously."""
+    first = tmp_path / "first" / "auth_python.prompt"
+    second = tmp_path / "second" / "auth_python.prompt"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_text("First MUST authenticate.", encoding="utf-8")
+    second.write_text("Second MUST authenticate.", encoding="utf-8")
+    seen = {}
+    criteria = parse_acceptance_criteria(_CONTRACT)
+
+    def fake_invoke(**kwargs):
+        seen["prompt_names"] = [
+            item["PROMPT_NAME"] for item in kwargs["input_json"]["PROMPT_LIST"]
+        ]
+        return {
+            "result": _CriteriaAssessment(
+                assessments=[
+                    _CriterionAssessment(
+                        criterion_id=criterion.id,
+                        status="satisfied",
+                        citation="MUST authenticate",
+                        prompt_name="first/auth_python.prompt",
+                    )
+                    for criterion in criteria
+                ]
+            ),
+            "cost": 0.0,
+            "model_name": "m",
+        }
+
+    with (
+        patch("pdd.story_criteria.load_prompt_template", return_value="T"),
+        patch("pdd.story_criteria.preprocess", side_effect=lambda text, **_k: text),
+        patch("pdd.story_criteria.llm_invoke", side_effect=fake_invoke),
+    ):
+        evaluate_acceptance_criteria([first, second], "story", criteria)
+
+    assert seen["prompt_names"] == [
+        "first/auth_python.prompt",
+        "second/auth_python.prompt",
+    ]
+
+
 def test_returns_nothing_without_a_criteria_section():
     assert parse_acceptance_criteria("# Story\n\nJust prose, no criteria.\n") == []
     assert parse_acceptance_criteria("") == []
@@ -551,7 +595,11 @@ def test_an_unreadable_prompt_does_not_read_as_a_missing_requirement(tmp_path):
     response = {
         "result": _CriteriaAssessment(
             assessments=[
-                _CriterionAssessment(criterion_id=c.id, status="unsatisfied")
+                _CriterionAssessment(
+                    criterion_id=c.id,
+                    status="satisfied",
+                    citation="MUST show a summary report",
+                )
                 for c in criteria
             ]
         ),
@@ -568,7 +616,8 @@ def test_an_unreadable_prompt_does_not_read_as_a_missing_requirement(tmp_path):
     assert evaluation.unsatisfied == []  # not failed on absent evidence
     assert all(v.status == "unclear" for v in evaluation.verdicts)
     assert "broken_python.prompt" in evaluation.verdicts[0].rationale
-    assert evaluation.passed is False  # and certainly not a pass
+    assert evaluation.passed is False  # and certainly not a partial-scope pass
+    assert evaluation.verified is False
 
 
 def test_no_readable_prompt_at_all_raises_rather_than_failing_the_story(tmp_path):

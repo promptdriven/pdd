@@ -77,8 +77,10 @@
         or undetermined requirement is unsatisfied.
     Rule 6. Use unclear when you are unsure. Unclear is the correct answer for a
         genuine judgement call; do not resolve uncertainty by guessing.
-    Rule 7. Set prompt_name to the file name of the prompt your citation came
-        from, or the prompt that should carry the requirement when unsatisfied.
+    Rule 7. Set prompt_name to the exact identifier from <prompt_list> for the
+        prompt your citation came from, or the prompt that should carry the
+        requirement when unsatisfied. Do not shorten a path to its basename:
+        two evaluated prompts can have the same file name.
     Rule 8. Keep rationale to one or two sentences.
 </rules>
 

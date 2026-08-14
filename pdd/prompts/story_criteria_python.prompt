@@ -44,10 +44,10 @@ on `--strength` alone.
 - Conflicting duplicate assessments for one criterion MUST resolve to the WORST
   status, not the first seen; first-wins let a model's self-correction to
   `unsatisfied` be masked by an earlier `satisfied`.
-- A linked prompt file that cannot be read MUST NOT be silently dropped: it never
-  reaches the model, so any `unsatisfied` resting on it is a false negative.
-  Downgrade those verdicts to `unclear` naming the unreadable file, and raise
-  when no linked file could be read at all.
+- A linked prompt file that cannot be read MUST NOT be silently dropped: the
+  model did not evaluate the declared scope, so downgrade EVERY verdict to
+  `unclear` naming the unreadable file and leave the evaluation incomplete.
+  Raise when no linked file could be read at all.
 - An unrecognized or empty status MUST become `unclear`, never `satisfied`.
 - Criterion identifiers MUST be matched loosely (`AC1`, `ac-1`, `1`, `criterion 1`);
   unknown identifiers are dropped and conflicting duplicates resolve to the
@@ -57,6 +57,10 @@ on `--strength` alone.
   (passing) verdict set.
 - Untrusted model text MUST be collapsed to one bounded single-line string before
   it reaches logs, JSON, or terminal output.
+- Prompt identifiers sent to the evaluator MUST be unique relative path suffixes,
+  not basenames when duplicate filenames exist. A basename-only result that
+  matches multiple evaluated prompts MUST be rejected as ambiguous rather than
+  selecting one by traversal order.
 
 % Capabilities
 - Render `unsatisfied` verdicts as `detect_change`-shaped

@@ -330,6 +330,26 @@ def _normalized_haystack(prompt_files: Sequence[Path]) -> str:
     return _WHITESPACE_RE.sub(" ", " ".join(parts)).casefold()
 
 
+def _prompt_identifier(path: Path, prompt_files: Sequence[Path]) -> str:
+    """Return the shortest unique path suffix for a prompt the model can name.
+
+    A basename is convenient until two directories contain the same prompt file.
+    In that case, handing the model only ``auth_python.prompt`` makes a repair
+    target ambiguous. A relative suffix such as ``admin/auth_python.prompt``
+    remains readable while identifying exactly one evaluated file.
+    """
+    resolved_paths = [candidate.resolve() for candidate in prompt_files]
+    resolved = path.resolve()
+    for width in range(1, len(resolved.parts) + 1):
+        candidate = Path(*resolved.parts[-width:]).as_posix()
+        if sum(
+            Path(*other.parts[-width:]).as_posix() == candidate
+            for other in resolved_paths
+        ) == 1:
+            return candidate
+    return resolved.as_posix()
+
+
 def _citation_is_verifiable(citation: str, haystack: str) -> bool:
     """Whether the quoted evidence actually appears in the evaluated prompts.
 
@@ -427,12 +447,16 @@ def _prompt_payload(
     payload: List[Dict[str, str]] = []
     unreadable: List[str] = []
     for path in prompt_files:
+        identifier = _prompt_identifier(path, prompt_files)
         try:
             payload.append(
-                {"PROMPT_NAME": path.name, "PROMPT_DESCRIPTION": path.read_text(encoding="utf-8")}
+                {
+                    "PROMPT_NAME": identifier,
+                    "PROMPT_DESCRIPTION": path.read_text(encoding="utf-8"),
+                }
             )
         except (OSError, UnicodeError):
-            unreadable.append(path.name)
+            unreadable.append(identifier)
     return payload, unreadable
 
 
@@ -509,10 +533,9 @@ def evaluate_acceptance_criteria(
 
     verdicts = _verdicts_from_assessments(criteria, result.assessments, prompt_files)
     if unreadable:
-        # A prompt the model never saw cannot support any criterion, so every
-        # verdict resting on it would be a false "unsatisfied". Downgrade those
-        # to undecided and say why, rather than failing the story on missing
-        # evidence.
+        # A prompt the model never saw makes the declared scope incomplete. Even
+        # a satisfied response only proves the readable subset, so downgrade
+        # every verdict to undecided rather than accepting a partial-scope pass.
         note = "Unreadable linked file(s): " + ", ".join(sorted(unreadable))
         verdicts = [
             replace(
@@ -520,8 +543,6 @@ def evaluate_acceptance_criteria(
                 status="unclear",
                 rationale=f"{note}. {verdict.rationale}".strip(),
             )
-            if verdict.status == "unsatisfied"
-            else verdict
             for verdict in verdicts
         ]
 

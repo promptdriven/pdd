@@ -304,6 +304,10 @@ R2 (MUST NOT): Print the diagnostic block when `quiet` is true.
      never a pass. Render unsatisfied verdicts as the existing
      `{prompt_name, change_instructions}` rows. Stories with no parseable criteria
      retain the legacy `detect_change` fallback, where an empty changes list passes.
+   - When metadata is absent and criteria validation runs, cache the complete
+     evaluated prompt scope in `pdd-story-prompts`; do not derive links only from
+     unsatisfied change rows, because prompts that satisfied other criteria must
+     remain in the next evaluation.
    - Support `fail_fast=True` to stop after first failure.
    - Respect `quiet` for console output.
    - If no stories are found, return success with zero cost.
@@ -348,6 +352,9 @@ R2 (MUST NOT): Print the diagnostic block when `quiet` is true.
      - for stories with parseable criteria, plan repairs with
        `evaluate_acceptance_criteria` and turn only `unsatisfied` verdicts into
        change rows; otherwise use the legacy `detect_change` fallback
+     - accept a model-returned unique relative path suffix when it maps to one
+       scoped prompt, but reject an ambiguous basename-only target rather than
+       choosing a file by traversal order
      - for each reported prompt, resolve prompt path robustly (case-insensitive + basename fallback)
      - map prompt file path to source file path via prompt naming convention (`<basename>_<language>.prompt`) and `get_extension(language)`
      - resolve source root from `PDD_SRC_DIR` override or default `../src` from prompts root

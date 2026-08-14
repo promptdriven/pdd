@@ -175,12 +175,35 @@ def _resolve_prompt_path(
     prompts_dir: Optional[Path] = None,
 ) -> Optional[Path]:
     """Resolve a prompt name or relative path to an existing prompt path."""
+    # A model response containing only a duplicate basename cannot safely name a
+    # repair target. Accept a relative path or a unique basename, but never let
+    # dictionary insertion order choose between same-named prompt files.
+    lower = prompt_name.lower()
+    if len(Path(prompt_name).parts) == 1:
+        basename_matches = [
+            path for path in prompt_files if path.name.lower() == lower
+        ]
+        if len(basename_matches) > 1:
+            return None
     name_map = _build_prompt_name_map(prompt_files, prompts_dir)
     if prompt_name in name_map:
         return name_map[prompt_name]
-    lower = prompt_name.lower()
     if lower in name_map:
         return name_map[lower]
+    # Criteria evaluation uses the shortest unique path suffix so that the
+    # model can distinguish duplicate basenames without needing an absolute
+    # project path. Resolve that suffix only when it identifies one file.
+    if len(Path(prompt_name).parts) > 1:
+        suffix = Path(prompt_name).as_posix().lower()
+        suffix_matches = [
+            path
+            for path in prompt_files
+            if path.resolve().as_posix().lower().endswith(f"/{suffix}")
+        ]
+        if len(suffix_matches) == 1:
+            return suffix_matches[0]
+        if len(suffix_matches) > 1:
+            return None
     # Fallback: match by basename if detect output used a short name
     for prompt_path in prompt_files:
         if prompt_path.name == prompt_name or prompt_path.name.lower() == lower:
@@ -2010,12 +2033,19 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
         results.append(result_row)
 
         if cache_story_prompt_links and not metadata_prompt_refs:
-            linked_prompt_paths, _ = _select_story_prompt_links(
-                story_content=story_content,
-                prompt_files=prompt_files,
-                prompts_root=prompts_root,
-                changes_list=changes_list,
-            )
+            # Criteria verdicts name only unsatisfied rows. Using them to create
+            # metadata would discard prompts that satisfied another criterion
+            # and silently narrow the next evaluation. Cache the full scope the
+            # criteria evaluator actually received instead.
+            if evaluation is not None:
+                linked_prompt_paths = _dedupe_prompt_paths(story_prompt_files)
+            else:
+                linked_prompt_paths, _ = _select_story_prompt_links(
+                    story_content=story_content,
+                    prompt_files=prompt_files,
+                    prompts_root=prompts_root,
+                    changes_list=changes_list,
+                )
             updated = _upsert_story_prompt_metadata(
                 story_path,
                 story_content,
