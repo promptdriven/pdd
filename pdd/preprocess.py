@@ -209,9 +209,16 @@ def _extract_inline_code_spans(text: str) -> List[Tuple[int, int]]:
 
 
 def _extract_code_spans(text: str) -> List[Tuple[int, int]]:
-    spans = _extract_fence_spans(text)
-    spans.extend(_extract_inline_code_spans(text))
-    return sorted(spans, key=lambda s: s[0])
+    """Markdown literal spans, shared with canonical dependency discovery.
+
+    Expansion and ``pdd.sync_core.includes`` must classify a directive the
+    same way. Keeping a second scanner here meant a fence closed by a longer
+    delimiter run expanded a literal, and an invalid mixed-delimiter fence
+    suppressed a real include, while the dependency graph disagreed on both.
+    """
+    from .sync_core.includes import markdown_literal_spans
+
+    return markdown_literal_spans(text)
 
 def _is_inside_any_span(idx: int, spans: List[Tuple[int, int]]) -> bool:
     for s, e in spans:

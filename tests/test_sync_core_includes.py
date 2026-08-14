@@ -83,6 +83,16 @@ def test_mixed_fence_delimiters_do_not_hide_a_real_include() -> None:
     ]
 
 
+@pytest.mark.parametrize("run", ("~~`", "`~~"))
+def test_mixed_delimiter_runs_hide_nothing_in_either_order(run: str) -> None:
+    """A fence run must be homogeneous whichever delimiter comes first."""
+    text = f"{run}\n<include>docs/fake.md</include>\n{run}\n<include>docs/real.md</include>"
+    assert [item.path for item in parse_include_references(text)] == [
+        "docs/fake.md",
+        "docs/real.md",
+    ]
+
+
 @pytest.mark.parametrize("fence", ("```", "~~~"))
 def test_fenced_include_and_include_many_examples_are_literal(fence: str) -> None:
     """Both directive grammars are ignored together inside a valid fence."""
@@ -328,3 +338,45 @@ def test_unresolved_external_package_forces_nondeterministic_closure(tmp_path) -
     assert closure.artifacts == ()
     assert closure.edges[0].target_exists is False
     assert closure.has_nondeterministic_query is True
+
+
+# --- Markdown literal scanner conformance (PR #2376 review findings) ---------
+
+
+def test_fence_with_angle_info_string_is_a_fence_not_a_legacy_include() -> None:
+    """```<html> opens an ordinary fence; only a complete ```<path>``` is legacy."""
+    text = (
+        "```<html>\n"
+        "<include>docs/fake.md</include>\n"
+        "```\n"
+        "<include>docs/real.md</include>\n"
+    )
+    assert [item.path for item in parse_include_references(text)] == ["docs/real.md"]
+
+
+def test_inline_span_with_longer_inner_run_stays_literal() -> None:
+    """A longer, non-closing backtick run does not terminate the span."""
+    text = (
+        "``a ``` b <include>docs/fake.md</include>``\n"
+        "<include>docs/real.md</include>\n"
+    )
+    assert [item.path for item in parse_include_references(text)] == ["docs/real.md"]
+
+
+def test_multiline_code_span_is_literal() -> None:
+    """CommonMark permits newlines inside a code span; the whole span is literal."""
+    text = (
+        "`example:\n"
+        "<include>docs/fake.md</include>`\n"
+        "<include>docs/real.md</include>\n"
+    )
+    assert [item.path for item in parse_include_references(text)] == ["docs/real.md"]
+
+
+def test_two_legacy_backtick_includes_on_one_line_stay_separate() -> None:
+    """Adjacent legacy tokens must not collapse into one combined path."""
+    text = "```<docs/one.md>``` and ```<docs/two.md>```\n"
+    assert [item.path for item in parse_include_references(text)] == [
+        "docs/one.md",
+        "docs/two.md",
+    ]
