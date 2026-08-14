@@ -10767,37 +10767,51 @@ class TestSetupWorktreeCleanRestart:
 class TestBuildDependencyContext:
     def test_surfaces_pdd_dependency_not_include(self, tmp_path):
         """A <pdd-dependency> edge with no matching <include> must be surfaced,
-        and an <include>-only edge (no <pdd-dependency>) must not be -- through
-        the real prompt -> architecture -> Step 6 path (PR #2376 review)."""
+        and an <include>-only edge must not be -- through the real prompt ->
+        architecture -> Step 6 path (PR #2376 review).
+
+        Architecture state is created by production auto-registration and the
+        auto-deps merge; the test never writes architecture.json itself, so CI
+        protects the mixed-provenance boundary rather than a hand-built one.
+        """
+        from pdd.architecture_sync import sync_all_prompts_to_architecture
+        from pdd.auto_deps_architecture import (
+            merge_auto_deps_includes_into_architecture,
+        )
+
         prompts_dir = tmp_path / "prompts"
         prompts_dir.mkdir()
-        (prompts_dir / "customer_service_python.prompt").write_text(
-            "<pdd-reason>test</pdd-reason>\n"
-            "<pdd-dependency>payment_status_python.prompt</pdd-dependency>\n",
-            encoding="utf-8",
-        )
-        (prompts_dir / "payment_status_python.prompt").write_text(
-            "<pdd-reason>test</pdd-reason>\n", encoding="utf-8"
-        )
-        (prompts_dir / "onboarding_python.prompt").write_text(
-            "<pdd-reason>test</pdd-reason>\n"
-            "<include>legacy_wizard_python.prompt</include>\n",
-            encoding="utf-8",
-        )
-        (prompts_dir / "legacy_wizard_python.prompt").write_text(
-            "<pdd-reason>test</pdd-reason>\n", encoding="utf-8"
-        )
+        for name, body in (
+            ("customer_service_python.prompt",
+             "<pdd-dependency>payment_status_python.prompt</pdd-dependency>\n"),
+            ("payment_status_python.prompt", ""),
+            ("onboarding_python.prompt", ""),
+            ("legacy_wizard_python.prompt", ""),
+        ):
+            (prompts_dir / name).write_text(
+                f"<pdd-reason>test</pdd-reason>\n{body}", encoding="utf-8"
+            )
 
         arch_path = tmp_path / "architecture.json"
-        arch_path.write_text(json.dumps([
-            {"filename": "customer_service_python.prompt", "dependencies": []},
-            {"filename": "payment_status_python.prompt", "dependencies": []},
-            {"filename": "onboarding_python.prompt", "dependencies": []},
-            {"filename": "legacy_wizard_python.prompt", "dependencies": []},
-        ]), encoding="utf-8")
+        arch_path.write_text("[]", encoding="utf-8")
+        sync_result = sync_all_prompts_to_architecture(
+            prompts_dir=prompts_dir, architecture_path=arch_path, dry_run=False
+        )
+        assert sync_result["success"], sync_result.get("errors")
+
+        # Production auto-deps writes the <include>-derived module edge into
+        # the same ``dependencies`` field that declared edges occupy.
+        onboarding = prompts_dir / "onboarding_python.prompt"
+        merged = merge_auto_deps_includes_into_architecture(
+            project_root=tmp_path,
+            written_prompt_path=onboarding,
+            old_prompt_text=onboarding.read_text(encoding="utf-8"),
+            new_prompt_text=onboarding.read_text(encoding="utf-8")
+            + "<include>legacy_wizard_python.prompt</include>\n",
+        )
+        assert merged["added_dependencies"] == ["legacy_wizard_python.prompt"]
 
         result = _build_dependency_context(arch_path, quiet=True)
-
         assert "payment_status" in result and "customer_service" in result
         assert "affects: customer_service" in result
         assert "legacy_wizard" not in result
