@@ -866,57 +866,67 @@ const App: React.FC = () => {
               >
                 <button
                   onClick={() => setView('devunits')}
+                  aria-label="Dev Units"
+                  title="Dev Units"
                   className={`whitespace-nowrap px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'devunits'
                       ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
-                  <Squares2X2Icon className="hidden sm:inline w-4 h-4 mr-1.5" />Dev Units
+                  <Squares2X2Icon className="inline w-4 h-4 md:mr-1.5" /><span className="hidden md:inline">Dev Units</span>
                 </button>
                 <button
                   onClick={() => setView('bug')}
+                  aria-label="Bug"
+                  title="Bug"
                   className={`whitespace-nowrap px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'bug'
                       ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
-                  <BugAntIcon className="hidden sm:inline w-4 h-4 mr-1.5" />Bug
+                  <BugAntIcon className="inline w-4 h-4 md:mr-1.5" /><span className="hidden md:inline">Bug</span>
                 </button>
                 <button
                   onClick={() => setView('fix')}
+                  aria-label="Fix"
+                  title="Fix"
                   className={`whitespace-nowrap px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'fix'
                       ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
-                  <svg className="hidden sm:inline w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="inline w-4 h-4 md:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>Fix
+                  </svg><span className="hidden md:inline">Fix</span>
                 </button>
                 <button
                   onClick={() => setView('change')}
+                  aria-label="Change"
+                  title="Change"
                   className={`whitespace-nowrap px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'change'
                       ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
-                  <svg className="hidden sm:inline w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="inline w-4 h-4 md:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-                  </svg>Change
+                  </svg><span className="hidden md:inline">Change</span>
                 </button>
                 <button
                   onClick={() => setView('settings')}
+                  aria-label="Settings"
+                  title="Settings"
                   className={`whitespace-nowrap px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'settings'
                       ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
-                  <Cog6ToothIcon className="hidden sm:inline w-4 h-4 mr-1.5" />Settings
+                  <Cog6ToothIcon className="inline w-4 h-4 md:mr-1.5" /><span className="hidden md:inline">Settings</span>
                 </button>
                 <button
                   onClick={() => setView('observability')}
