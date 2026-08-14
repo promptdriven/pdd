@@ -66,7 +66,7 @@ precise:
 - The machine-checkable contract is GENERATED from the human Story + the original
   issue and lives at `user_stories/contracts/<slug>.contract.md`. It carries the
   top-level (`##`) sections `## Covers`, `## Context`, `## Acceptance Criteria`,
-  `## Oracle`, `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`,
+  `## Entry Point`, `## Seams`, `## Oracle`, `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`,
   `## Candidate Prompts`, `## Notes` (`_REQUIRED_CONTRACT_SECTIONS`), under a
   `<!-- pdd-story-contract derived-from-story="..." story-hash="..."
   issue-ref="..." -->` header used for sync.
@@ -147,7 +147,8 @@ varies during normal development goes in `## Non-Oracle`.
   such as `<persona>`, `<capability>`, or `<benefit>` (strip a wrapping
   ``` ``` ``` fence first). The contract generator (`_llm_generate_story_contract`)
   accepts only when its output carries the full `_REQUIRED_CONTRACT_SECTIONS` set
-  (`## Covers`, `## Context`, `## Acceptance Criteria`, `## Oracle`,
+  (`## Covers`, `## Context`, `## Acceptance Criteria`, `## Entry Point`,
+  `## Seams`, `## Oracle`,
   `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, `## Candidate Prompts`,
   `## Notes`) and no placeholders. When the LLM is unavailable (no provider key,
   offline, error) OR the output is empty, missing a required section, or
@@ -315,9 +316,29 @@ R2 (MUST NOT): Print the diagnostic block when `quiet` is true.
    - `generate_user_story` writes the human Story file via
      `_llm_generate_story_markdown` (requires `## Story`) and then the contract
      file via `_generate_and_write_contract` / `_llm_generate_story_contract`
-     (requires the `_REQUIRED_CONTRACT_SECTIONS` set incl. `## Candidate Prompts`).
+     (requires the `_REQUIRED_CONTRACT_SECTIONS` set incl. `## Entry Point`,
+     `## Seams`, and `## Candidate Prompts`).
      It returns failure without writing anything when the human story is
      unavailable/invalid; a contract failure is non-blocking.
+   - `## Entry Point`/`## Seams` are populated from `PRIMARY_PROMPT_INTERFACES`,
+     which `_resolve_prompt_interfaces` builds from each linked prompt's own
+     `<pdd-interface>` block PLUS a module path PDD's file-layout convention
+     derives deterministically from the prompt's path
+     (`_module_path_for_prompt`) — never from the model. Only a `type: module`
+     interface with a resolvable module path is offered as usable; a `type: cli`
+     interface (or one whose path can't be resolved) is listed as explicitly
+     unsupported so the model cannot invent an import binding for it.
+     `_validate_contract_entry_point_and_assertions` then rejects (contract not
+     written; generation fails closed, same as a missing required section) any
+     LLM output whose `## Entry Point` module/callable isn't exactly one of
+     those offered pairs (`- module: none` / `- callable: none` is the only
+     accepted "no deterministic entry point" case), or whose `## Oracle`/
+     `## Negative Cases` bullets aren't syntactically-safe boolean expressions
+     over `result` per `story_test_generator._assertion_from_bullet`'s
+     allowlist (comparisons/boolean logic/literals/attribute+index access on
+     `result`, calls only to a small pure-builtin allowlist, no dunder names —
+     the deepest enforcement point, since these bullets are spliced into
+     `assert {expr}` in generated pytest that CI executes).
    - `_llm_generate_story_markdown` takes the resolved issue text/ref (NOT prompt
      content), loads the `generate_user_story_LLM` meta-prompt (`load_prompt_template`),
      escapes it via `preprocess(double_curly_brackets=True,

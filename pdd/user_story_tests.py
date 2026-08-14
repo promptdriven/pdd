@@ -3,6 +3,7 @@
 # pylint: disable=too-many-lines
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import logging
@@ -875,6 +876,8 @@ _REQUIRED_CONTRACT_SECTIONS = (
     "## Covers",
     "## Context",
     "## Acceptance Criteria",
+    "## Entry Point",
+    "## Seams",
     "## Oracle",
     "## Non-Oracle",
     "## Negative Cases",
@@ -1121,6 +1124,123 @@ def _prompt_inventory_descriptor(prompt_path: Path) -> str:
     return snippet[:160]
 
 
+_PDD_INTERFACE_TAG_RE = re.compile(
+    r"<pdd-interface>\s*(.*?)\s*</pdd-interface>", re.DOTALL | re.IGNORECASE
+)
+
+
+def _module_path_for_prompt(prompt_path: Path, prompts_root: Optional[Path]) -> Optional[str]:
+    """Deterministically derive the importable module a prompt compiles to.
+
+    Follows PDD's own file-layout convention: a prompt at
+    ``<prompts_root>/<sub>/<name>_python.prompt`` compiles to
+    ``<prompts_root.parent.name>/<sub>/<name>.py``, i.e. the dotted module
+    ``<prompts_root.parent.name>.<sub>.<name>``. Returns ``None`` when
+    ``prompts_root`` is unknown or the prompt doesn't follow that convention,
+    so callers never have to guess a path outside PDD's own convention.
+    """
+    if prompts_root is None:
+        return None
+    try:
+        rel = prompt_path.resolve().relative_to(prompts_root.resolve())
+    except (OSError, ValueError):
+        return None
+    if not rel.name.endswith("_python.prompt"):
+        return None
+    stem = rel.name[: -len("_python.prompt")]
+    package_root = prompts_root.resolve().parent.name
+    if not package_root:
+        return None
+    return ".".join([package_root, *rel.parts[:-1], stem])
+
+
+def _resolve_prompt_interfaces(
+    prompt_paths: Iterable[Path], prompts_root: Optional[Path] = None
+) -> List[Dict[str, object]]:
+    """Parse each linked prompt's declared ``<pdd-interface>`` and, for a plain
+    importable module interface, pair it with the deterministic module path
+    PDD's own convention derives for it (see ``_module_path_for_prompt``).
+
+    Each entry is ``{"name", "module", "functions"}``; ``module``/``functions``
+    are empty unless the interface is ``type: module`` AND the module path
+    could be derived — those are the only entries safe to offer as a
+    behavioral test Entry Point.
+    """
+    resolved: List[Dict[str, object]] = []
+    for prompt_path in _dedupe_prompt_paths(prompt_paths):
+        try:
+            text = prompt_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        match = _PDD_INTERFACE_TAG_RE.search(text)
+        if not match:
+            continue
+        try:
+            interface = json.loads(match.group(1))
+        except (ValueError, TypeError):
+            continue
+        module_path = _module_path_for_prompt(prompt_path, prompts_root)
+        functions: List[str] = []
+        signatures: List[Dict[str, object]] = []
+        if isinstance(interface, dict) and interface.get("type") == "module" and module_path:
+            module_block = interface.get("module")
+            if isinstance(module_block, dict):
+                signatures = [
+                    fn for fn in module_block.get("functions") or [] if isinstance(fn, dict) and fn.get("name")
+                ]
+                functions = [fn["name"] for fn in signatures]
+        resolved.append(
+            {
+                "name": prompt_path.name,
+                "module": module_path if functions else None,
+                "signatures": signatures,
+                "functions": functions,
+            }
+        )
+    return resolved
+
+
+def _format_prompt_interfaces(interfaces: List[Dict[str, object]]) -> str:
+    """Render resolved interfaces as the ``PRIMARY_PROMPT_INTERFACES`` block."""
+    blocks: List[str] = []
+    for item in interfaces:
+        heading = f"### {item['name']}"
+        module = item.get("module")
+        functions = item.get("functions") or []
+        if module and functions:
+            sig_lines = "\n".join(
+                f"- {fn.get('name')}{fn.get('signature', '()')}"
+                for fn in (item.get("signatures") or [])
+                if isinstance(fn, dict) and fn.get("name")
+            )
+            blocks.append(f"{heading}\nmodule: {module}\nfunctions:\n{sig_lines}")
+        else:
+            blocks.append(
+                f"{heading}\n(no usable behavioral Entry Point here — interface is "
+                "not a plain importable module, or its module path could not be "
+                "determined; do not invent a module or callable for this prompt)"
+            )
+    return "\n\n".join(blocks) or "(no declared pdd-interface found)"
+
+
+def _allowed_entry_points(interfaces: List[Dict[str, object]]) -> Dict[str, Tuple[str, ...]]:
+    """Map each offered module path to the exact callables declared for it."""
+    allowed: Dict[str, Tuple[str, ...]] = {}
+    for item in interfaces:
+        module = item.get("module")
+        functions = item.get("functions") or []
+        if module and functions:
+            allowed[module] = tuple(functions)
+    return allowed
+
+
+def _primary_prompt_interfaces(
+    prompt_paths: Iterable[Path], prompts_root: Optional[Path] = None
+) -> str:
+    """Return declared PDD interfaces for linked prompts, when available."""
+    return _format_prompt_interfaces(_resolve_prompt_interfaces(prompt_paths, prompts_root))
+
+
 def _scan_prompt_inventory(
     prompts_dir: Optional[Path],
     *,
@@ -1166,6 +1286,71 @@ def _scan_prompt_inventory(
     return inventory[:limit]
 
 
+def _validate_contract_entry_point_and_assertions(
+    markdown: str, *, allowed_entry_points: Dict[str, Tuple[str, ...]]
+) -> Optional[str]:
+    """Reject a generated contract whose Entry Point or Oracle/Negative Cases
+    bullets cannot safely compile into a behavioral test.
+
+    Returns an error string, or ``None`` when the contract is valid. The
+    ``## Entry Point`` ``module: none`` / ``callable: none`` pair is the only
+    accepted escape hatch for a Story with no deterministically-bound
+    callable; any other module/callable must exactly match one offered in
+    ``primary_prompt_interfaces`` (never an invented path), and every
+    Oracle/Negative Cases bullet must compile as a safe assertion expression
+    (``story_test_generator._assertion_from_bullet``).
+    """
+    from .story_test_generator import (  # pylint: disable=import-outside-toplevel
+        _assertion_from_bullet,
+        _bullet_lines,
+        _key_values,
+        _literal_source,
+        _parse_seams,
+        _sections,
+    )
+
+    sections = _sections(markdown)
+    entry = _key_values(sections.get("entry point", ""))
+    module = (entry.get("module") or "").strip()
+    callable_name = (entry.get("callable") or entry.get("function") or "").strip()
+    is_none_entry_point = module.lower() == "none" and callable_name.lower() == "none"
+    if not is_none_entry_point:
+        if module not in allowed_entry_points:
+            return (
+                f"Entry Point module {module!r} was not offered in "
+                "primary_prompt_interfaces; invented module paths are rejected."
+            )
+        if callable_name not in allowed_entry_points[module]:
+            return (
+                f"Entry Point callable {callable_name!r} is not declared for module "
+                f"{module!r}; invented callables are rejected."
+            )
+        try:
+            args = _literal_source(entry.get("args", "[]"), fallback="[]")
+            kwargs = _literal_source(entry.get("kwargs", "{}"), fallback="{}")
+            if not isinstance(ast.literal_eval(args), list):
+                return "Entry Point args must be a Python list literal."
+            if not isinstance(ast.literal_eval(kwargs), dict):
+                return "Entry Point kwargs must be a Python dict literal."
+        except ValueError as exc:
+            return str(exc)
+
+    seams_text = sections.get("seams", "").strip().lower()
+    if seams_text not in ("- none", "none"):
+        try:
+            _parse_seams(sections.get("seams", ""))
+        except ValueError as exc:
+            return str(exc)
+
+    bullets = _bullet_lines(sections.get("oracle", "")) + _bullet_lines(sections.get("negative cases", ""))
+    for bullet in bullets:
+        try:
+            _assertion_from_bullet(bullet)
+        except ValueError as exc:
+            return str(exc)
+    return None
+
+
 def _llm_generate_story_contract(  # pylint: disable=too-many-arguments,too-many-locals,broad-exception-caught,import-outside-toplevel
     *,
     title: str,
@@ -1173,6 +1358,8 @@ def _llm_generate_story_contract(  # pylint: disable=too-many-arguments,too-many
     issue_text: str,
     inventory: List[Tuple[str, str]],
     primary_refs: List[str],
+    primary_interfaces: str,
+    allowed_entry_points: Dict[str, Tuple[str, ...]],
     strength: float,
     temperature: float,
     time: float,
@@ -1214,6 +1401,7 @@ def _llm_generate_story_contract(  # pylint: disable=too-many-arguments,too-many
             "ISSUE_TEXT",
             "PROMPT_INVENTORY",
             "PRIMARY_PROMPTS",
+            "PRIMARY_PROMPT_INTERFACES",
         ],
     )
     try:
@@ -1225,6 +1413,7 @@ def _llm_generate_story_contract(  # pylint: disable=too-many-arguments,too-many
                 "ISSUE_TEXT": issue_text,
                 "PROMPT_INVENTORY": inventory_block,
                 "PRIMARY_PROMPTS": primary_block,
+                "PRIMARY_PROMPT_INTERFACES": primary_interfaces,
             },
             strength=strength,
             temperature=temperature,
@@ -1247,6 +1436,12 @@ def _llm_generate_story_contract(  # pylint: disable=too-many-arguments,too-many
         return None, cost, model
     if _contains_placeholder_tokens(markdown):
         logger.debug("LLM contract contains placeholder tokens.")
+        return None, cost, model
+    content_error = _validate_contract_entry_point_and_assertions(
+        markdown, allowed_entry_points=allowed_entry_points
+    )
+    if content_error:
+        logger.debug("LLM contract failed content validation: %s", content_error)
         return None, cost, model
     if not markdown.endswith("\n"):
         markdown += "\n"
@@ -1294,13 +1489,26 @@ def _generate_and_write_contract(  # pylint: disable=too-many-arguments,too-many
     Returns ``(contract_path, cost, model, error)``. ``contract_path`` is None and
     ``error`` is set when contract generation could not be completed.
     """
+    extra_prompt_paths = list(extra_prompt_paths)
     inventory = _scan_prompt_inventory(prompts_root, extra_paths=extra_prompt_paths)
+    prompt_paths = list(extra_prompt_paths)
+    if prompts_root is not None:
+        prompt_paths.extend(
+            _resolve_prompt_refs_to_paths(
+                primary_refs,
+                discover_prompt_files(str(prompts_root), include_llm=True),
+                prompts_root,
+            )
+        )
+    resolved_interfaces = _resolve_prompt_interfaces(prompt_paths, prompts_root)
     body, cost, model = _llm_generate_story_contract(
         title=title,
         story_text=story_text,
         issue_text=issue_text,
         inventory=inventory,
         primary_refs=primary_refs,
+        primary_interfaces=_format_prompt_interfaces(resolved_interfaces),
+        allowed_entry_points=_allowed_entry_points(resolved_interfaces),
         strength=strength,
         temperature=temperature,
         time=time,

@@ -31,6 +31,16 @@
     <primary_prompts>
     {PRIMARY_PROMPTS}
     </primary_prompts>
+
+    % Deterministically-resolved, importable module interfaces for the prompts
+    % already linked to this Story — computed by the tooling, not the model.
+    % Only a block with a `module:` line and a `functions:` list is usable as a
+    % behavioral test Entry Point; a block with no `module:` line means that
+    % prompt has no deterministic import binding (a CLI/Click interface, or one
+    % whose module path could not be resolved) and MUST NOT be used as one.
+    <primary_prompt_interfaces>
+    {PRIMARY_PROMPT_INTERFACES}
+    </primary_prompt_interfaces>
 </input>
 
 % What the contract must do
@@ -39,8 +49,10 @@
     - Pull concrete, behavior-changing detail from the issue (per-source vs aggregate, `--json`, a `--threshold` exit code, "MUST NOT make an LLM call") into `## Covers`, `## Acceptance Criteria`, and `## Oracle`. Preserve distinctions precisely; do not collapse them into vague wording, and do not broaden a requirement beyond the issue/Story.
     - `## Covers` lists the named requirements/acceptance-criteria the story exercises (`- AC1: <summary>` / `- R1: <summary>`), specific enough that removing that behavior fails validation.
     - `## Acceptance Criteria` are concrete Given/When/Then statements about observable behavior (prefer 2–5).
-    - `## Oracle` lists what decides pass/fail (error type, state transition, presence/absence of an external call, returned value shape). `## Non-Oracle` lists what must NOT matter.
-    - `## Negative Cases` lists forbidden outcomes (from MUST NOT / SHALL NOT rules or obviously-wrong behavior).
+    - `## Entry Point` is required. Copy `module:` and one name from that block's `functions:` list VERBATIM from a `<primary_prompt_interfaces>` block that has a `module:` line — never invent, guess, or modify either string, and never select a block that has no `module:` line (it has no deterministic import binding — e.g. a CLI/Click command — and cannot be called directly). Use Python literals for `args` (a list) and `kwargs` (a dict); choose safe, deterministic arguments that exercise this Story. If NO linked prompt has a usable `module:` block, write `- module: none` and `- callable: none` and explain the gap in `## Notes`; this is a normal, valid outcome, not an error.
+    - `## Seams` is required but may contain only `- none` when no runtime boundary needs patching. Otherwise each bullet must be `dotted.import.path = <Python literal>` and must make the behavioral test deterministic without changing the behavior under test.
+    - `## Oracle` and `## Negative Cases` bullets are each a single executable Python boolean expression evaluated with `result` bound to the Entry Point's return value — e.g. `result == 200`, `isinstance(result, dict)`, `"error" not in result`, `result.get("status") == "ok"`. Never write prose (no "returned value shape", no "error type" as free text) and never call anything other than a plain method/attribute on `result` or one of `len`, `isinstance`, `str`, `int`, `float`, `bool`, `abs`, `round`, `sorted`, `min`, `max`, `sum`, `any`, `all`, `repr`, `type` — no other function calls, no dunder names, no imports; those bullets are executed, not just displayed. If `## Entry Point` is `- module: none`, or a Story detail genuinely cannot be expressed as such a boolean expression over `result`, omit it from `## Oracle`/`## Negative Cases` and note it under `## Notes` instead. `## Oracle` lists what decides pass/fail; `## Non-Oracle` lists what must NOT matter (prose is fine there — it is not compiled).
+    - `## Negative Cases` lists forbidden outcomes (from MUST NOT / SHALL NOT rules or obviously-wrong behavior), each as the same kind of boolean expression over `result` (e.g. `result.get("called_llm") is False`).
     - `## Non-Goals` reflects the issue's own non-goals when stated.
 </guidance>
 
@@ -78,16 +90,25 @@
     1. Given <state>, when <action>, then <observable outcome>.
     2. ...
 
+    ## Entry Point
+    - module: <module: value copied verbatim from a primary_prompt_interfaces block, or `none`>
+    - callable: <a name from that block's functions: list, or `none`>
+    - args: [<Python literals>]
+    - kwargs: {<keyword>: <Python literal>}
+
+    ## Seams
+    - none
+
     ## Oracle
-    These details matter for pass/fail:
-    - <detail>
+    These details matter for pass/fail (each bullet a boolean expression over `result`):
+    - <result == ... / isinstance(result, ...) / result.attr == ... / "x" in result>
 
     ## Non-Oracle
     These details should not matter:
     - <detail>
 
     ## Negative Cases
-    - <forbidden outcome this story protects against>
+    - <boolean expression over `result` that is False for the forbidden outcome this story protects against>
 
     ## Non-Goals
     - <what this story explicitly does not cover>
