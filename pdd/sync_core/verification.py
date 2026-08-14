@@ -230,6 +230,18 @@ _CONFORMANCE_SPLIT_STATIONARY_PROFILE_BYTES = (
     _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
     _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
 )
+
+# Story-contract generation advances two managed prompt requirements while
+# retaining the same protected rollout history.  Accept only these exact final
+# policy/profile bytes when resolving that inherited history.
+_STORY_CONTRACT_ROTATION_POLICY_BYTES = (
+    "97c85b9aed1d8bbd85392292c79a7457bb842a078f474db31d0f42d0b88dcbc7",
+    "97c85b9aed1d8bbd85392292c79a7457bb842a078f474db31d0f42d0b88dcbc7",
+)
+_STORY_CONTRACT_PROFILE_BYTES = (
+    "c5ec62e0907d4301cb26b8a63e56066fe57df2a48ceb35caa7d3b600dde6c49b",
+    "c5ec62e0907d4301cb26b8a63e56066fe57df2a48ceb35caa7d3b600dde6c49b",
+)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
@@ -3154,6 +3166,13 @@ def _load_requirement_transition_authorizations(
             ),
         }
     )
+    story_contract_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        == (
+            _STORY_CONTRACT_ROTATION_POLICY_BYTES,
+            _STORY_CONTRACT_PROFILE_BYTES,
+        )
+    )
     temperature_regression_state = (
         exact_pr2316_phase_a_reissue
         or exact_pr2316_stationary_reissue
@@ -3325,6 +3344,15 @@ def _load_requirement_transition_authorizations(
             for item in candidate
             if (item.prompt_path, item.language_id)
             not in _SYNC_ROLLOUT_REPAIR_STALE_ROTATION_IDENTITIES
+        )
+    if story_contract_state:
+        # The two story-contract rows are bound to this final profile. Older
+        # rotations are already consumed and must not be replayed against it.
+        candidate = tuple(
+            item
+            for item in candidate
+            if item.bindings.head_policy_sha256
+            == _STORY_CONTRACT_PROFILE_BYTES[1]
         )
     pr1971_reconciliation = _is_exact_pr1971_pytest_reconciliation(
         manifest, (protected_policy, candidate_policy), policies, candidate
