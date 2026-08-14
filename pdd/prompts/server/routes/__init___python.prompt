@@ -7,19 +7,35 @@
 <include>context/python_preamble.prompt</include>
 
 % Requirements
-  1. Import and export routers:
+  1. Import and export module-level routers:
+     - `architecture_router` from `.architecture`
+     - `auth_router` from `.auth`
+     - `config_router` from `.config`
+     - `extracts_router` from `.extracts`
      - `files_router` from `.files`
      - `commands_router` from `.commands`
      - `websocket_router` from `.websocket`
      - `prompts_router` from `.prompts`
 
-  2. Import modules directly for namespace access:
+  2. Import and export project-scoped router factories. These routers are
+     built per project root rather than at import time, so the factory is
+     exported instead of a router object:
+     - `create_observability_router` from `.observability`
+     - `create_deployments_router` from `.deployments`
+
+  3. Import modules directly for namespace access:
+     - `from . import architecture`
+     - `from . import auth`
+     - `from . import config`
+     - `from . import extracts`
      - `from . import files`
      - `from . import commands`
      - `from . import prompts`
+     - `from . import observability`
+     - `from . import deployments`
 
-  3. Export list:
-     - `__all__ = ["files", "commands", "prompts", "files_router", "commands_router", "websocket_router", "prompts_router"]`
+  4. Export every name above via `__all__`, modules first, then routers, then
+     the factory functions.
 
 % Instructions
   - Keep this file minimal - just imports and exports
