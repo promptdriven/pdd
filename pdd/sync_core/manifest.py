@@ -96,6 +96,56 @@ class OwnershipRule:
 # or altered owner/inventory fields.
 _PDD_REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 _BOOTSTRAP_HUMAN_OWNERSHIP = (
+    # PR #2374: six extracted conformance units and their review evidence.
+    OwnershipRule(
+        "pdd/conformance/__init__.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "scripts/validate_conformance_prompts.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "tests/test_conformance_prompt_compatibility_exports.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "tests/story_regression/test_story_pdd_generation_gates_preserved.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "user_stories/contracts/pdd_generation_gates_preserved.contract.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "user_stories/issues/conformance-gate-split.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
+    OwnershipRule(
+        "user_stories/story__pdd_generation_gates_preserved.md",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
     OwnershipRule(
         ".pdd/meta/agentic_architecture_python.json",
         InventoryStatus.HUMAN_OWNED,
@@ -287,6 +337,15 @@ _REPLAY_HUMAN_OWNERSHIP = tuple(
 # bridge falls through to `base_rules`, the eight metadata paths below silently
 # lose their repaired ownership, and they resurface as unowned tracked paths.
 _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES = (
+    "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
+    "2b4cee2ca317ff8283bc4d681dbc75b7b73cc704b3f62c1e122c20c1a7da1e38",
+)
+# Re-pinning above only tracks the current head. The repair is also replayed
+# across its own protected range, whose head predates every later edit to the
+# ownership policy, so that exact historical pair stays valid authority too.
+# Both are bound to the same reviewed base, and each still has to clear the
+# unchanged-artifact and ordinary-row checks below.
+_SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES = (
     "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
     "558910b5d03c183855dbbccdbde662cc36f028765a9eb24883a85ffa040fae3a",
 )
@@ -1255,7 +1314,10 @@ def _sync_rollout_repair_ownership_rules(
             hashlib.sha256(base_policy).hexdigest(),
             hashlib.sha256(head_policy).hexdigest(),
         )
-        != _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES
+        not in (
+            _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES,
+            _SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES,
+        )
     ):
         return base_rules
 

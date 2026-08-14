@@ -50,17 +50,29 @@ local -a _pdd_global_opts
 _pdd_global_opts=(
   '--force[Overwrite existing files without asking for confirmation.]'
   '--strength[Set the strength of the AI model (0.0 to 1.0, default: 0.5)]:strength:(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)'
+  '--model[Override the model for this invocation]:model:_guard'
   '--time[Controls the reasoning allocation for LLM models (0.0 to 1.0, default: 0.25)]:time:(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0)'
   '--temperature[Set the temperature of the AI model (default: 0.0)]:temperature:(0.0 0.25 0.5 0.75 1.0)'
   '--verbose[Increase output verbosity for more detailed information.]'
   '--quiet[Decrease output verbosity (minimal information).]'
+  '--color[Force colored output.]'
+  '--no-color[Disable colored output.]'
   '--output-cost[Enable cost tracking and output a CSV file with usage details.]:filename:_files'
+  '(--estimate --dry-run-cost)'{'--estimate','--dry-run-cost'}'[Preview token usage and estimated cost without running.]'
+  '--estimate-json[Emit the estimate as JSON.]'
   '--review-examples[Review and optionally exclude few-shot examples before command execution.]'
   '--local[Run commands locally instead of in the cloud.]'
   '--context[Override automatic .pddrc context]:context-name:_guard'
+  '--keep-core-dumps[Number of core dumps to retain]:count:'
+  '--context-compression[Set global context compression mode]:mode:(off test examples contracts all)'
+  '--compression-fallback[Set behavior when compression fails]:mode:(full error)'
   '--list-contexts[List available .pddrc contexts and exit]'
+  '--core-dump[Write a JSON core dump.]'
+  '--no-core-dump[Disable JSON core dumps.]'
   '--help[Show help message and exit.]'
   '--version[Show version and exit.]'
+  '--compress-examples[Compress example code in context.]'
+  '--compress-test-context[Compress test context.]'
 )
 
 ##
@@ -478,11 +490,12 @@ _pdd_checkup_simplify() {
 # checkup
 # Usage: pdd [GLOBAL OPTIONS] checkup [OPTIONS]
 _pdd_checkup() {
-  if [[ $words[3] == gate ]]; then
+  local checkup_index=$1
+  if (( checkup_index <= CURRENT )) && [[ ${words[checkup_index + 1]} == gate ]]; then
     _pdd_checkup_gate
     return
   fi
-  if [[ $words[3] == simplify ]]; then
+  if (( checkup_index <= CURRENT )) && [[ ${words[checkup_index + 1]} == simplify ]]; then
     _pdd_checkup_simplify
     return
   fi
@@ -529,8 +542,141 @@ _pdd_checkup() {
 ##
 # Main PDD completion dispatcher
 ##
+# Resolve the first PDD subcommand and its absolute index. Global options are
+# valid before a command, so `$words[2]` cannot be assumed to be one. The
+# caller receives `<index>:<command>` in REPLY.
+_pdd_resolve_subcommand() {
+  local token index expect_value=0 options_ended=0
+  REPLY=
+
+  for (( index = 2; index <= CURRENT; index++ )); do
+    token=$words[index]
+    if (( expect_value )); then
+      expect_value=0
+      continue
+    fi
+
+    if (( options_ended )); then
+      case "$token" in
+        generate|example|test|preprocess|fix|split|change|update|detect|conflicts|crash|trace|bug|auto-deps|verify|sync|sync-architecture|checkup|contracts|extracts|report-core|replay|context|which|reconcile|install-hooks|certify|recover|baseline|validate|templates|connect|auth|sessions|firecrawl-cache|story|setup|install_completion|pytest-output)
+          REPLY="$index:$token"
+          return 0
+          ;;
+      esac
+      return 1
+    fi
+
+    case "$token" in
+      --strength|--model|--temperature|--time|--output-cost|--context|--keep-core-dumps|--context-compression|--compression-fallback)
+        expect_value=1
+        ;;
+      --strength=*|--model=*|--temperature=*|--time=*|--output-cost=*|--context=*|--keep-core-dumps=*|--context-compression=*|--compression-fallback=*)
+        ;;
+      --)
+        options_ended=1
+        ;;
+      --help|--version|--list-contexts)
+        return 1
+        ;;
+      --force|--verbose|--quiet|--color|--no-color|--estimate|--dry-run-cost|--estimate-json|--review-examples|--local|--core-dump|--no-core-dump|--compress-examples|--compress-test-context)
+        ;;
+      --*)
+        return 1
+        ;;
+      generate|example|test|preprocess|fix|split|change|update|detect|conflicts|crash|trace|bug|auto-deps|verify|sync|sync-architecture|checkup|contracts|extracts|report-core|replay|context|which|reconcile|install-hooks|certify|recover|baseline|validate|templates|connect|auth|sessions|firecrawl-cache|story|setup|install_completion|pytest-output)
+        REPLY="$index:$token"
+        return 0
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+# Return the first PDD subcommand for callers that only need its name.
+_pdd_find_subcommand() {
+  _pdd_resolve_subcommand || return 1
+  print -r -- "${REPLY#*:}"
+}
+
+_pdd_auth() {
+  local -a commands
+  commands=(
+    'login:Authenticate with PDD Cloud'
+    'status:Show authentication status'
+    'logout:Sign out of PDD Cloud'
+    'token:Print an authentication token'
+    'clear-cache:Clear cached authentication state'
+  )
+  _pdd_group_commands auth 'auth command' commands
+}
+
+_pdd_templates() {
+  local -a commands
+  commands=(
+    'list:List available templates'
+    'show:Show a template'
+    'copy:Copy a template into the project'
+  )
+  _pdd_group_commands templates 'templates command' commands
+}
+
+_pdd_contracts() {
+  local -a commands
+  commands=('check:Run deterministic contract checks')
+  _pdd_group_commands contracts 'contracts command' commands
+}
+
+_pdd_sessions() {
+  local -a commands
+  commands=(
+    'list:List remote sessions'
+    'info:Show remote session information'
+    'cleanup:Clean up remote sessions'
+  )
+  _pdd_group_commands sessions 'sessions command' commands
+}
+
+_pdd_story() {
+  local -a commands
+  commands=(
+    'add:Add a user story'
+    'list:List user stories'
+    'link:Link a user story'
+  )
+  _pdd_group_commands story 'story command' commands
+}
+
+_pdd_firecrawl_cache() {
+  local -a commands
+  commands=(
+    'stats:Show cache statistics'
+    'clear:Clear cached entries'
+    'info:Show cache configuration'
+    'check:Check whether a URL is cached'
+  )
+  _pdd_group_commands firecrawl-cache 'firecrawl-cache command' commands
+}
+
+_pdd_group_commands() {
+  local command=$1 label=$2 array_name=$3 index
+  for (( index = 2; index <= CURRENT; index++ )); do
+    [[ $words[index] == "$command" ]] && break
+  done
+  # In a native completion frame, a trailing space does not add an empty item
+  # to `$words`: CURRENT still points at the group command.  Keep this
+  # relative to the located root command so preceding global options do not
+  # change the group grammar.
+  (( index <= CURRENT )) || return 1
+  _describe -t commands "$label" "$array_name"
+}
+
 _pdd() {
   local context="$curcontext" state line
+  local pdd_command
   typeset -A opt_args
 
   # List of known subcommands with descriptions
@@ -552,14 +698,40 @@ _pdd() {
     'auto-deps:Analyze a prompt and include deps from a directory or glob'
     'verify:Verify functional correctness using LLM judgment and iteratively fix'
     'sync:Synchronize prompt, code, examples, tests with analysis'
+    'sync-architecture:Synchronize architecture documentation'
     'checkup:Run architecture/PR review loop with optional reviewer fallback'
+    'contracts:Run deterministic prompt contract checks'
+    'extracts:Manage prompt extraction artifacts'
+    'report-core:Display a saved core dump'
+    'replay:Replay a saved command run'
+    'context:Generate prompt context'
+    'which:Show the installed PDD executable'
+    'reconcile:Reconcile project artifacts'
+    'install-hooks:Install Git hooks'
+    'certify:Create a sync certificate'
+    'recover:Recover a sync transaction'
+    'baseline:Create a sync baseline'
+    'validate:Validate a sync module'
+    'templates:Manage project templates'
+    'connect:Connect to PDD Cloud'
+    'auth:Manage PDD Cloud authentication'
+    'sessions:Manage remote PDD sessions'
+    'firecrawl-cache:Manage Firecrawl cache'
+    'story:Manage regression-suite user stories'
     'setup:Interactive setup and completion install'
     'install_completion:Install shell completion for current shell'
     'pytest-output:Run pytest and capture structured output'
   )
 
-  # If there's no subcommand yet (i.e., user typed only "pdd " or "pdd -<Tab>"), offer global opts or subcommands.
-  if (( CURRENT == 2 )); then
+  local pdd_command_index
+  _pdd_resolve_subcommand
+  if [[ -n "$REPLY" ]]; then
+    pdd_command_index=${REPLY%%:*}
+    pdd_command=${REPLY#*:}
+  fi
+
+  # If no subcommand has been entered, offer global options and subcommands.
+  if [[ -z "$pdd_command" ]]; then
     _arguments -s \
       $_pdd_global_opts \
       '1: :->subcmds' && return 0
@@ -568,8 +740,8 @@ _pdd() {
     return
   fi
 
-  # If the user typed a known subcommand, dispatch to that subcommand's completion function.
-  case $words[2] in
+  # Dispatch after resolving a subcommand past any preceding global options.
+  case $pdd_command in
     generate)
       _pdd_generate
       ;;
@@ -619,7 +791,25 @@ _pdd() {
       _pdd_sync
       ;;
     checkup)
-      _pdd_checkup
+      _pdd_checkup "$pdd_command_index"
+      ;;
+    auth)
+      _pdd_auth
+      ;;
+    templates)
+      _pdd_templates
+      ;;
+    contracts)
+      _pdd_contracts
+      ;;
+    sessions)
+      _pdd_sessions
+      ;;
+    story)
+      _pdd_story
+      ;;
+    firecrawl-cache)
+      _pdd_firecrawl_cache
       ;;
     setup)
       _pdd_setup
@@ -630,9 +820,12 @@ _pdd() {
     pytest-output)
       _pdd_pytest_output
       ;;
-    # If the subcommand is unknown or not typed yet, fall back to showing the list of subcommands.
+    # Commands without a dedicated completion function still accept global
+    # options and complete positional arguments as paths.
     *)
-      _describe -t subcommands 'pdd subcommand' _pdd_subcommands
+      _arguments -s \
+        $_pdd_global_opts \
+        '*:argument:_files'
       ;;
   esac
 }

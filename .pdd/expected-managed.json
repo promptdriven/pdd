@@ -722,6 +722,30 @@
       "prompt_path": "pdd/prompts/code_generator_python.prompt"
     },
     {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/conformance/declared_surface_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/conformance/directives_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/conformance/gate_errors_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/conformance/interface_check_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/conformance/surface_python.prompt"
+    },
+    {
+      "language_id": "python",
+      "prompt_path": "pdd/prompts/conformance/test_churn_python.prompt"
+    },
+    {
       "language_id": "llm",
       "prompt_path": "pdd/prompts/code_patcher_LLM.prompt"
     },
