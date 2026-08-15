@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 from dataclasses import replace
+from functools import cache
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
@@ -469,6 +470,16 @@ STORY_PROMPT_PHASE_A_REPLACEMENT = {
         "5b1353257a64a25b303d990803bb799da66504af558c3a5e972d95ad5a04bb3b"
     ),
 }
+
+_read_git_blob = verification.read_git_blob
+
+
+@cache
+def _story_prompt_phase_a_protected_blob(path: PurePosixPath) -> bytes | None:
+    """Read an immutable Phase-A blob once, outside monkeypatched lookups."""
+    return _read_git_blob(ROOT, STORY_PROMPT_PHASE_A_PROTECTED, path)
+
+
 STORY_REGRESSION_DORMANT_ROTATION = {
     "prompt_path": "pdd/prompts/story_regression_python.prompt",
     "language_id": "python",
@@ -967,8 +978,6 @@ def _story_prompt_phase_a_manifest_with_blobs(
     candidate_prompt_bytes = (
         {} if candidate_prompt_bytes is None else candidate_prompt_bytes
     )
-    original_read = verification.read_git_blob
-
     def phase_a_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
         if path == verification.ROTATION_POLICY_PATH:
             return protected_policy if ref == "protected" else candidate_policy
@@ -976,7 +985,7 @@ def _story_prompt_phase_a_manifest_with_blobs(
             return protected_profile if ref == "protected" else candidate_profile
         if ref == "candidate" and path in candidate_prompt_bytes:
             return candidate_prompt_bytes[path]
-        return original_read(ROOT, STORY_PROMPT_PHASE_A_PROTECTED, path)
+        return _story_prompt_phase_a_protected_blob(path)
 
     monkeypatch.setattr(verification, "read_git_blob", phase_a_read)
     candidate_paths = set(candidate_prompt_bytes)
