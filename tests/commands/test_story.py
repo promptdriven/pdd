@@ -1012,6 +1012,45 @@ class TestStoryLink:
             )
             assert "adder_python.prompt" in content, content
 
+    def test_link_default_path_preserves_nested_prompt_path(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """#2379: the *default* `pdd story link` invocation (no --prompts-dir)
+        must preserve nested prompt subdirectories rather than collapsing them
+        to a bare basename.
+
+        Reproduces the exact default-CLI boundary a reviewer flagged on PR
+        #2380: `prompts_root` was only resolved when `--prompts-dir` was
+        explicitly passed, so the ordinary (unflagged) `story link` workflow
+        still wrote a lossy basename and failed the scope-manifest preflight.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+            root = Path(fs)
+            nested_prompt = root / "prompts" / "conformance" / "demo.prompt"
+            nested_prompt.parent.mkdir(parents=True, exist_ok=True)
+            nested_prompt.write_text("% demo prompt\n", encoding="utf-8")
+
+            story_file = root / "user_stories" / "story__demo.md"
+            story_file.parent.mkdir(parents=True, exist_ok=True)
+            story_file.write_text("## Story\nAs a user, I want a demo.\n", encoding="utf-8")
+
+            result = runner.invoke(
+                story,
+                [
+                    "link",
+                    str(story_file),
+                    "--prompt", "prompts/conformance/demo.prompt",
+                ],
+                obj={"quiet": True, "verbose": False},
+            )
+
+            assert result.exit_code == 0, result.output
+            content = story_file.read_text(encoding="utf-8")
+            assert "<!-- pdd-story-prompts: prompts/conformance/demo.prompt -->" in content, (
+                f"nested prompt path collapsed to a basename on the default "
+                f"(no --prompts-dir) CLI path: {content!r}"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Scenario 8b: --with-regression-status honesty + project-root resolution (#1889)
