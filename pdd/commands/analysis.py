@@ -14,6 +14,7 @@ from pathlib import Path
 import click
 from typing import Optional, Tuple, List, Dict, Any
 
+from .. import DEFAULT_STRENGTH
 from ..detect_change_main import detect_change_main
 from ..conflicts_main import conflicts_main
 from ..bug_main import bug_main
@@ -661,7 +662,7 @@ def detect_change(
                             else None
                         ),
                         contract_files=(scope.contracts if scope is not None else None),
-                        strength=obj.get("strength", 0.2),
+                        strength=obj.get("strength", DEFAULT_STRENGTH),
                         temperature=obj.get("temperature", 0.0),
                         time=obj.get("time", 0.25),
                         verbose=False if machine_mode else obj.get("verbose", False),

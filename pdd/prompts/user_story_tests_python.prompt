@@ -24,6 +24,7 @@
 </pdd-interface>
 
 <pdd-dependency>contract_ir_python.prompt</pdd-dependency>
+<pdd-dependency>story_criteria_python.prompt</pdd-dependency>
 <pdd-dependency>detect_change_python.prompt</pdd-dependency>
 <pdd-dependency>change_main_python.prompt</pdd-dependency>
 <pdd-dependency>llm_invoke_python.prompt</pdd-dependency>

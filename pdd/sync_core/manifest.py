@@ -303,6 +303,15 @@ _SYNC_ROLLOUT_REPAIR_STORY_CRITERIA_OWNERSHIP_BYTES = (
     "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
     "b23599ec1703b97c7568180ac16e6a61fc3bf98b206abaa6104bef2e3cddfd2c",
 )
+# The story-criteria branch later dropped `preauthorize_absent` from
+# `.pdd/sync-ownership.json`, which re-mints the candidate-side byte pair
+# above. That prior pair stays valid protected authority for the head that
+# minted it; this pair re-pins the bridge for the current head so the eight
+# repaired metadata rows do not fall through to `base_rules`.
+_SYNC_ROLLOUT_REPAIR_STORY_CRITERIA_CURRENT_OWNERSHIP_BYTES = (
+    "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
+    "1402941794d1b593847eb8c277c641f40ce159c1cde3012d6880400be3763c69",
+)
 _SYNC_ROLLOUT_REPAIR_METADATA_BYTES = (
     (
         ".pdd/meta/code_generator_python.json",
@@ -1272,6 +1281,7 @@ def _sync_rollout_repair_ownership_rules(
             _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES,
             _SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES,
             _SYNC_ROLLOUT_REPAIR_STORY_CRITERIA_OWNERSHIP_BYTES,
+            _SYNC_ROLLOUT_REPAIR_STORY_CRITERIA_CURRENT_OWNERSHIP_BYTES,
         )
     ):
         return base_rules

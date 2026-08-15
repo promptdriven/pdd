@@ -157,6 +157,10 @@ PR_1971_PYTEST_OBLIGATIONS = {
     },
 }
 PDD_1989_EXPECTED_MANAGED_UNITS = 468
+# The #1875 protected history and its replay predate the story-criteria (#5)
+# unit registrations that bumped EXPECTED_MANAGED_UNITS from 469 to 471, so
+# assertions against those exact historical refs must stay frozen at 469.
+PDD_1875_EXPECTED_MANAGED_UNITS = 469
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -2202,9 +2206,9 @@ def test_pdd1875_phase_a_is_dormant_on_its_composed_head() -> None:
 
     profiles = load_verification_profiles(ROOT, manifest)
 
-    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+    assert len(manifest.expected_managed) == PDD_1875_EXPECTED_MANAGED_UNITS
     assert not manifest.invalid_reasons
-    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert len(profiles.profiles) == PDD_1875_EXPECTED_MANAGED_UNITS
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
 
@@ -2222,9 +2226,9 @@ def test_replay_transitions_cover_the_actual_protected_base() -> None:
     )
     profiles = load_verification_profiles(ROOT, manifest)
 
-    assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
+    assert len(manifest.expected_managed) == PDD_1875_EXPECTED_MANAGED_UNITS
     assert not manifest.invalid_reasons
-    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert len(profiles.profiles) == PDD_1875_EXPECTED_MANAGED_UNITS
     assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
 
