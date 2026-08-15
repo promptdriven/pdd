@@ -165,10 +165,16 @@ def _bootstrap_tags_content(prompt_content: str, prompt_filename: str) -> Option
     """
     if has_pdd_tags(prompt_content):
         return None
+    # A structurally valid but empty module interface: the public surface is
+    # not yet known (no source to derive it from at this point), but an
+    # invalid placeholder (e.g. `{"type": "module"}` missing the "module"
+    # key) fails validate_interface_structure while still satisfying
+    # has_pdd_tags, so later syncs would treat the fabricated metadata as
+    # already-tagged and preserve it indefinitely.
     tag_block = (
         f"<pdd-reason>Auto-registered module: {prompt_filename}</pdd-reason>\n\n"
         "<pdd-interface>\n"
-        '{"type": "module"}\n'
+        '{"type": "module", "module": {"functions": []}}\n'
         "</pdd-interface>"
     )
     return tag_block + "\n\n" + prompt_content
@@ -417,11 +423,22 @@ def run_metadata_sync(
                 # alone cannot be synchronized by update_architecture_from_prompt.
                 # Register only this prompt-relative filename: metadata sync is
                 # intentionally scoped and must not sweep unrelated prompt drift.
+                known_filepaths: Optional[Dict[str, str]] = None
+                if code_path is not None:
+                    try:
+                        known_code_path = code_path.resolve().relative_to(
+                            resolved_repo_root
+                        ).as_posix()
+                    except (ValueError, OSError):
+                        known_code_path = None
+                    if known_code_path is not None:
+                        known_filepaths = {arch_prompt_filename: known_code_path}
                 registration = register_untracked_prompts(
                     prompts_dir=prompts_dir,
                     architecture_path=architecture_path,
                     dry_run=dry_run,
                     only_files={arch_prompt_filename},
+                    known_filepaths=known_filepaths,
                 )
                 registration_errors = registration.get("errors") or []
                 if registration_errors:

@@ -82,6 +82,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from pdd import architecture_sync
 from pdd import metadata_sync as ms
 from pdd.metadata_sync import (
     MetadataSyncResult,
@@ -790,7 +791,10 @@ def test_subdir_prompt_without_arch_entry_bootstraps_metadata(tmp_path: Path) ->
     assert "<pdd-interface>" in prompt_text
     assert result.stages["tags"].status == "ok"
     assert result.stages["architecture"].status == "ok"
-    assert any(entry["filename"] == "subpkg/demo_python.prompt" for entry in architecture)
+    entry = next(e for e in architecture if e["filename"] == "subpkg/demo_python.prompt")
+    assert (
+        architecture_sync.validate_interface_structure(entry["interface"])["valid"] is True
+    ), entry["interface"]
     assert result.stages["fingerprint"].status == "ok"
     assert result.failing_stage is None
     assert result.ok is True
@@ -878,6 +882,43 @@ def test_dry_run_reports_registration_for_already_tagged_nested_prompt(tmp_path:
     assert "would register and sync subpkg/demo_python.prompt" in (
         result.stages["architecture"].detail or ""
     )
+
+
+def test_issue_2387_nested_package_prompt_registers_authoritative_code_path(
+    tmp_path: Path,
+) -> None:
+    """A prompt nested under a package subdirectory (e.g.
+    pdd/prompts/sync_core/manifest_python.prompt) must register with its
+    real repo-relative source path (pdd/sync_core/manifest.py), not the
+    naming-convention guess that drops the package prefix
+    (sync_core/manifest.py) because prompts_dir sits inside the package
+    rather than mirroring the repo root."""
+    (tmp_path / ".pddrc").write_text("# marker\n", encoding="utf-8")
+    prompts_dir = tmp_path / "pdd" / "prompts"
+    (prompts_dir / "sync_core").mkdir(parents=True, exist_ok=True)
+    prompt_path = prompts_dir / "sync_core" / "manifest_python.prompt"
+    prompt_path.write_text(PROMPT_NO_TAGS, encoding="utf-8")
+    code_path = tmp_path / "pdd" / "sync_core" / "manifest.py"
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    code_path.write_text("# manifest\n", encoding="utf-8")
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps([]), encoding="utf-8")
+
+    result = run_metadata_sync(
+        prompt_path,
+        code_path,
+        dry_run=False,
+        repo_root=tmp_path,
+        architecture_path=arch_path,
+    )
+
+    architecture = json.loads(arch_path.read_text(encoding="utf-8"))
+    entries = {entry["filename"]: entry for entry in architecture}
+    assert "sync_core/manifest_python.prompt" in entries
+    entry = entries["sync_core/manifest_python.prompt"]
+    assert entry["filepath"] == "pdd/sync_core/manifest.py"
+    assert architecture_sync.validate_interface_structure(entry["interface"])["valid"] is True
+    assert result.ok is True
 
 
 def test_subdir_prompt_basename_fallback_when_outside_prompts_dir(tmp_path: Path) -> None:
