@@ -182,6 +182,17 @@ _CODE_GENERATOR_LANGUAGE_GATE_PROFILE_BYTES = (
     "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
     "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
 )
+# #2395 review: this PR's own self-authorizing rotation of
+# user_story_tests_python.prompt (install + consume of a managed-prompt
+# transition in one PR, forbidden by docs/ci.md) was reverted -- the prompt
+# and profile row are back to the CONTRACT-SHA256 main already recognizes, so
+# no new prompt-transition authorization is granted here. This only binds the
+# resulting whole-profile-file bytes, since the file also carries every other
+# unrelated row already committed on this branch.
+_STORY_ENTRY_POINT_ROTATION_REVERT_PROFILE_BYTES = (
+    "4a13a755b91804e29e9975fe4c63b00466db9ae65ef32f1c62d3980af9b6155a",
+    "6e765e03761e7dd678e5b02b147c60231c13fc8ab3de3fd722cf1181c017acb7",
+)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
