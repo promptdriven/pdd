@@ -292,6 +292,7 @@ R2 (MUST NOT): Print the diagnostic block when `quiet` is true.
      slug extraction. This is purely additive — no existing signature changes.
 
 2. **Story validation**
+   - Public story helpers default `strength` to `DEFAULT_STRENGTH`.
    - For each story file, read content, compose the story oracle from the human story
      plus its contract when present, and call:
      `detect_change([prompt_paths], oracle_content, strength, temperature, time, verbose=verbose)`.

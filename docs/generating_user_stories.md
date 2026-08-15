@@ -273,6 +273,9 @@ pdd detect --stories --no-fail-fast      # report all failures, don't stop at th
 pdd detect --stories --include-llm       # also validate against *_llm.prompt runtime templates
 ```
 
+Story validation uses `DEFAULT_STRENGTH` (1.0 by default). An explicit value
+below 0.5 warns; prefer `pdd --strength 0.5 detect --stories` or higher.
+
 Story mode prints PASS, FAIL, or UNKNOWN for each story and exits non-zero if
 any story does not pass. `--output` is the standard detector's CSV option and
 is not supported with `--stories`. Hosted and CI callers should use the explicit

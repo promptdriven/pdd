@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple, Any
 from rich.console import Console
 from rich.markup import escape
 
+from pdd import DEFAULT_STRENGTH
 from pdd.agentic_common import (
     provider_failure_workflow,
     branch_checked_out_worktree,
@@ -2415,6 +2416,7 @@ def run_agentic_change_orchestrator(
     use_github_state: bool = True,
     reasoning_time: Optional[float] = None,
     clean_restart: bool = False,
+    strength: float = DEFAULT_STRENGTH,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 13-step agentic change workflow.
@@ -3791,7 +3793,7 @@ def run_agentic_change_orchestrator(
             issue_url=issue_url,
             changed_files=changed_files,
             worktree_path=gate_worktree,
-            strength=0.2,
+            strength=strength,
             temperature=0.0,
             time_budget=0.25,
             verbose=verbose,

@@ -17,6 +17,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 from rich import print as rprint
 from rich.markup import escape as rich_escape
 
+from . import DEFAULT_STRENGTH
 from .detect_change import detect_change
 from .get_extension import get_extension
 
@@ -503,7 +504,7 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
     story_file: str,
     prompts_dir: Optional[str] = None,
     prompt_files: Optional[List[Path]] = None,
-    strength: float = 0.2,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = 0.25,
     verbose: bool = False,
@@ -1330,7 +1331,7 @@ def sync_user_story_contract(  # pylint: disable=too-many-arguments,too-many-loc
     *,
     issue: Optional[str] = None,
     prompts_dir: Optional[str] = None,
-    strength: float = 0.2,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = 0.25,
     verbose: bool = False,
@@ -1429,7 +1430,7 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
     output: Optional[str] = None,
     stories_dir: Optional[str] = None,
     prompts_dir: Optional[str] = None,
-    strength: float = 0.2,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = 0.25,
     verbose: bool = False,
@@ -1623,7 +1624,7 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
     story_files: Optional[List[Path]] = None,
     prompt_files: Optional[List[Path]] = None,
     contract_files: Optional[Mapping[Path, Path]] = None,
-    strength: float = 0.2,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = 0.25,
     verbose: bool = False,
@@ -1801,7 +1802,7 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     ctx: object,
     story_file: str,
     prompts_dir: Optional[str] = None,
-    strength: float = 0.2,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = 0.25,
     budget: float = 5.0,

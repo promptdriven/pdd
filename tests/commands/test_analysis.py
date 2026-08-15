@@ -7,6 +7,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
+from pdd import DEFAULT_STRENGTH
 from pdd.commands.analysis import detect_change, conflicts, bug, crash, trace
 from pdd.cli import cli as pdd_cli
 from pdd.user_story_tests import run_user_story_tests
@@ -99,6 +100,20 @@ def test_detect_stories_success(runner, mock_context_obj):
         assert kwargs["include_llm_prompts"] is False
         assert kwargs["fail_fast"] is True
         assert kwargs["cache_story_prompt_links"] is True
+        assert kwargs["strength"] == DEFAULT_STRENGTH
+
+
+def test_detect_stories_warns_for_explicit_weak_strength(runner, mock_context_obj):
+    """An explicitly weak story-validation tier remains usable but visible."""
+    mock_context_obj["strength"] = 0.2
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (True, [], 0.0, "gpt-4")
+
+        result = runner.invoke(detect_change, ["--stories"], obj=mock_context_obj)
+
+    assert result.exit_code == 0
+    assert "story validation at --strength 0.2 is unreliable" in result.output
+    assert mock_runner.call_args.kwargs["strength"] == 0.2
 
 
 def test_detect_stories_options(runner, mock_context_obj, tmp_path, monkeypatch):

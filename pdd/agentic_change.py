@@ -11,6 +11,7 @@ from typing import List, Tuple, Optional, Any
 from rich.console import Console
 
 # Internal imports
+from . import DEFAULT_STRENGTH
 from .agentic_change_orchestrator import run_agentic_change_orchestrator
 
 console = Console()
@@ -165,6 +166,7 @@ def run_agentic_change(
     use_github_state: bool = True,
     reasoning_time: Optional[float] = None,
     clean_restart: bool = False,
+    strength: float = DEFAULT_STRENGTH,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     CLI entry point for the agentic change workflow.
@@ -182,6 +184,7 @@ def run_agentic_change(
         clean_restart: If True, discard any persisted state for this issue
             and start a fresh full pdd-issue flow from the default base
             branch (issue #1149).
+        strength: Story-validation strength for generated change artifacts.
 
     Returns:
         Tuple containing:
@@ -271,4 +274,5 @@ def run_agentic_change(
         use_github_state=use_github_state,
         reasoning_time=reasoning_time,
         clean_restart=clean_restart,
+        strength=strength,
     )

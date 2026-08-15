@@ -169,6 +169,8 @@ def test_split_exception_handling(runner, mock_split_main, mock_handle_error):
 
 def test_change_agentic_success(runner, mock_run_agentic_change):
     """Test agentic mode (default) with valid arguments."""
+    from pdd import DEFAULT_STRENGTH
+
     mock_run_agentic_change.return_value = (True, "Done", 1.0, "gpt-4", ["file1.py"])
     
     result = runner.invoke(change, ['https://github.com/issue/1'])
@@ -176,8 +178,22 @@ def test_change_agentic_success(runner, mock_run_agentic_change):
     assert result.exit_code == 0
     mock_run_agentic_change.assert_called_once()
     assert mock_run_agentic_change.call_args[1]['issue_url'] == 'https://github.com/issue/1'
+    assert mock_run_agentic_change.call_args.kwargs['strength'] == DEFAULT_STRENGTH
     assert "Status: Success" in result.output
     assert "Cost: $1.0000" in result.output
+
+
+def test_change_agentic_forwards_explicit_strength(runner, mock_run_agentic_change):
+    mock_run_agentic_change.return_value = (True, "Done", 0.0, "model", [])
+
+    result = runner.invoke(
+        change,
+        ['https://github.com/issue/1'],
+        obj={'strength': 0.8},
+    )
+
+    assert result.exit_code == 0
+    assert mock_run_agentic_change.call_args.kwargs['strength'] == 0.8
 
 
 def test_change_agentic_invalid_args(runner, mock_run_agentic_change, mock_handle_error):
