@@ -318,9 +318,6 @@ R2 (MUST NOT): Print the diagnostic block when `quiet` is true.
      (requires the `_REQUIRED_CONTRACT_SECTIONS` set incl. `## Candidate Prompts`).
      It returns failure without writing anything when the human story is
      unavailable/invalid; a contract failure is non-blocking.
-   - Add `## Entry Point` only when one linked prompt maps to an existing Python
-     source file with one declared callable. Derive its module relative to
-     `PDD_SRC_DIR` (or `../src`); otherwise omit the section.
    - `_llm_generate_story_markdown` takes the resolved issue text/ref (NOT prompt
      content), loads the `generate_user_story_LLM` meta-prompt (`load_prompt_template`),
      escapes it via `preprocess(double_curly_brackets=True,

@@ -2282,12 +2282,6 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
             verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
             verification._CODE_GENERATOR_LANGUAGE_GATE_PROFILE_BYTES[1],  # pylint: disable=protected-access
         ),
-        # #2391 advances the user-story contract with an exact reviewed profile
-        # rotation; retain that resulting profile byte pair.
-        (
-            verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
-            "4a13a755b91804e29e9975fe4c63b00466db9ae65ef32f1c62d3980af9b6155a",
-        ),
     }
     assert (
         hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROTATION_FILE)).hexdigest(),

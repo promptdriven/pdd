@@ -1372,6 +1372,63 @@ def test_sync_regenerates_contract_when_story_changes(tmp_path):
     assert f'story-hash="{new_hash}"' in contract_path.read_text(encoding="utf-8")
 
 
+def test_sync_preserves_entry_point_when_story_links_one_unambiguous_prompt(tmp_path):
+    """#2395 review: a forced sync must resolve the story's pdd-story-prompts
+    refs against prompts_root and pass them through to contract generation --
+    otherwise every sync silently downgrades the regenerated contract to the
+    traceability path even when Entry Point derivation is unambiguous."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_path = prompts_dir / "upload_python.prompt"
+    prompt_path.write_text(
+        '<pdd-interface>{"type": "module", "module": {"functions": '
+        '[{"name": "summarize", "signature": "()", "returns": "dict"}]}}'
+        "</pdd-interface>\n"
+        "% Summarize an uploaded CSV.\n",
+        encoding="utf-8",
+    )
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "upload.py").write_text("def summarize(): return {}\n", encoding="utf-8")
+
+    stories_dir = tmp_path / "user_stories"
+    stories_dir.mkdir()
+    story_path = stories_dir / "story__upload.md"
+    story_path.write_text(
+        "<!-- pdd-story-prompts: upload_python.prompt -->\n"
+        "# User Story: Upload CSV\n\n"
+        "## Story\n\nAs a user, I can upload a CSV and see a summary.\n",
+        encoding="utf-8",
+    )
+
+    contract_body = (
+        "## Covers\n\n- R1: summary\n\n"
+        "## Context\n\n- n/a\n\n"
+        "## Oracle\n\n- isinstance(result, dict)\n\n"
+        "## Notes\n\n- n/a\n"
+    )
+    with (
+        patch(
+            "pdd.user_story_tests.resolve_issue_source",
+            return_value=("Issue title", "issue body", "https://example/issues/1"),
+        ),
+        patch(
+            "pdd.user_story_tests._llm_generate_story_contract",
+            return_value=(contract_body, 0.0, "contract-model"),
+        ),
+    ):
+        changed, _message, _cost, _model, contract_file = sync_user_story_contract(
+            str(story_path),
+            issue="https://example/issues/1",
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert changed is True
+    text = Path(contract_file).read_text(encoding="utf-8")
+    assert "## Entry Point" in text
+    assert "- callable: summarize" in text
+
+
 def test_validation_uses_story_plus_contract_as_oracle(tmp_path):
     """detect_change receives the human Story AND its contract combined."""
     prompts_dir = tmp_path / "prompts"

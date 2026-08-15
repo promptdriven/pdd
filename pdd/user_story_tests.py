@@ -1138,8 +1138,14 @@ def _dotted_module_for_code_path(
     return ".".join(parts)
 
 
-def _declared_interface_callables(prompt_path: Path) -> List[str]:
-    """Return the callables a prompt declares in its ``<pdd-interface>`` block."""
+def _declared_interface_callables(
+    prompt_path: Path,
+) -> List[Tuple[str, Optional[str]]]:
+    """Return ``(name, signature)`` for callables in the ``<pdd-interface>`` block.
+
+    ``signature`` is ``None`` when the prompt doesn't declare one for that
+    callable; callers must treat that as "arity unknown", not "zero-arg".
+    """
     try:
         from .architecture_sync import (  # pylint: disable=import-outside-toplevel
             parse_prompt_tags,
@@ -1155,13 +1161,39 @@ def _declared_interface_callables(prompt_path: Path) -> List[str]:
     module = interface.get("module")
     if not isinstance(module, dict):
         return []
-    names: List[str] = []
+    callables: List[Tuple[str, Optional[str]]] = []
     for entry in module.get("functions", []) or []:
         if isinstance(entry, dict):
             name = entry.get("name")
             if isinstance(name, str) and name.isidentifier():
-                names.append(name)
-    return names
+                signature = entry.get("signature")
+                callables.append(
+                    (name, signature if isinstance(signature, str) else None)
+                )
+    return callables
+
+
+def _callable_requires_arguments(signature: str) -> Optional[bool]:
+    """Return whether *signature* has at least one required parameter.
+
+    Returns ``None`` when the signature can't be parsed -- callers must treat
+    that as "unknown", not "zero-arg", since a guessed arity is exactly the
+    wrong callable produced with the right name (see ``derive_contract_entry_point``).
+    """
+    try:
+        from .architecture_sync import (  # pylint: disable=import-outside-toplevel
+            _parse_signature_parameters,
+        )
+
+        parsed = _parse_signature_parameters(signature)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+    if parsed is None:
+        return None
+    for param in parsed["parameters"]:
+        if param["kind"] in ("posonly", "arg", "kwonly") and " = " not in param["text"]:
+            return True
+    return False
 
 
 def derive_contract_entry_point(
@@ -1175,13 +1207,17 @@ def derive_contract_entry_point(
     prompt already declares its module (via the prompt->code mapping) and its
     callables (via ``<pdd-interface>``), so this is deterministic and checkable.
 
-    Emitted ONLY when a single linked prompt declares a single callable. A
-    partial or guessed Entry Point is worse than none: ``story_test_generation``
-    routes on heading presence, so a declared-but-incomplete block turns
-    ``pdd test --from-story`` into a hard error (pdd#1889 C-F7), and a wrong
-    callable produces a confidently wrong behavioural test. When the derivation
-    is not unambiguous the section is omitted and the story keeps the
-    traceability path.
+    Emitted ONLY when a single linked prompt declares a single callable AND that
+    callable's declared signature has zero required parameters. A partial or
+    guessed Entry Point is worse than none: ``story_test_generation`` routes on
+    heading presence, so a declared-but-incomplete block turns
+    ``pdd test --from-story`` into a hard error (pdd#1889 C-F7); a wrong
+    callable produces a confidently wrong behavioural test; and emitting
+    ``args: []`` for a callable that requires positional arguments produces a
+    generated test that fails with a ``TypeError`` before ever exercising the
+    Oracle -- values for those arguments cannot be inferred, only guessed. When
+    the derivation is not unambiguous the section is omitted and the story
+    keeps the traceability path.
     """
     if prompts_root is None or len(prompt_paths) != 1:
         return None
@@ -1196,13 +1232,46 @@ def derive_contract_entry_point(
     callables = _declared_interface_callables(prompt_path)
     if len(callables) != 1:
         return None
+    name, signature = callables[0]
+    if signature is None:
+        return None
+    if _callable_requires_arguments(signature) in (None, True):
+        return None
     return (
         "## Entry Point\n\n"
         f"- module: {module}\n"
-        f"- callable: {callables[0]}\n"
+        f"- callable: {name}\n"
         "- args: []\n"
         "- kwargs: {}\n"
     )
+
+
+def _oracle_bullets_are_safe_expressions(contract_body: str) -> bool:
+    """Return whether every Oracle/Negative Cases bullet is a safe expression.
+
+    The behavioural generator (``story_test_generator._assertion_from_bullet``)
+    requires each bullet under those headings to be a Python expression drawn
+    from a strict safety allowlist, since it is spliced verbatim into generated
+    pytest source. The contract meta-prompt still asks for prose there, so
+    ``## Entry Point`` must not be inserted unless the bullets that would be
+    parsed as assertions already satisfy that contract -- otherwise routing on
+    heading presence turns a working (if weak) generation into a hard error.
+    """
+    try:
+        from .story_test_generator import (  # pylint: disable=import-outside-toplevel
+            _bullet_lines,
+            _sections,
+            is_safe_oracle_expression,
+        )
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
+    sections = _sections(contract_body)
+    bullets = _bullet_lines(sections.get("oracle", "")) + _bullet_lines(
+        sections.get("negative cases", "")
+    )
+    if not bullets:
+        return False
+    return all(is_safe_oracle_expression(bullet) for bullet in bullets)
 
 
 def _insert_entry_point(contract_body: str, entry_point: str) -> str:
@@ -1414,7 +1483,7 @@ def _generate_and_write_contract(  # pylint: disable=too-many-arguments,too-many
     # section deterministically from the linked prompt's declared interface
     # instead -- no model involved, and omitted entirely when ambiguous.
     entry_point = derive_contract_entry_point(linked_prompt_paths, prompts_root)
-    if entry_point:
+    if entry_point and _oracle_bullets_are_safe_expressions(body):
         body = _insert_entry_point(body, entry_point)
 
     contract_path = _contract_path_for_story(story_path)
@@ -1499,6 +1568,17 @@ def sync_user_story_contract(  # pylint: disable=too-many-arguments,too-many-loc
         heading = heading.split(":", 1)[1].strip()
     title = heading or issue_title or _slug_from_story_path(story_p)
     primary_refs = _parse_story_prompt_metadata(story_text)
+    # Resolve the story's pdd-story-prompts refs against prompts_root so Entry
+    # Point derivation sees the same linked prompt(s) generation does -- a
+    # forced sync passing no prompts here silently downgrades the regenerated
+    # contract to the traceability path even when the story links exactly one
+    # unambiguous prompt.
+    prompt_pool = discover_prompt_files(prompts_dir)
+    linked_prompt_paths: List[Path] = []
+    for ref in primary_refs:
+        resolved = _resolve_prompt_path(ref, prompt_pool, prompts_root)
+        if resolved:
+            linked_prompt_paths.append(resolved)
     contract_path, cost, model, error = _generate_and_write_contract(
         story_path=story_p,
         story_text=story_text,
@@ -1506,7 +1586,7 @@ def sync_user_story_contract(  # pylint: disable=too-many-arguments,too-many-loc
         issue_text=issue_text,
         issue_ref=resolved_ref or issue_ref,
         prompts_root=prompts_root,
-        extra_prompt_paths=[],
+        extra_prompt_paths=_dedupe_prompt_paths(linked_prompt_paths),
         primary_refs=primary_refs,
         strength=strength,
         temperature=temperature,

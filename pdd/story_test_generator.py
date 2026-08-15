@@ -81,6 +81,63 @@ def _key_values(section: str) -> dict[str, str]:
     return values
 
 
+# Oracle/Negative Cases bullets are LLM- or issue-derived text that gets spliced
+# verbatim into generated pytest source (`render_story_test`) and executed. A
+# bare `ast.parse(mode="eval")` only rejects syntax errors, not payloads such as
+# `__import__('os').system(...)` -- so the parsed expression is additionally
+# walked against an allowlist before it is trusted. Only `result`, literals,
+# containers, subscripts/non-dunder attributes, boolean/comparison/arithmetic
+# operators, and a small set of safe builtin calls are permitted; everything
+# else (imports, arbitrary calls, lambdas, comprehensions, walrus, f-strings,
+# dunder attribute access) is rejected.
+_SAFE_ASSERTION_CALL_NAMES = frozenset(
+    {
+        "len", "abs", "round", "sorted", "min", "max", "sum", "all", "any",
+        "isinstance", "str", "int", "float", "bool", "list", "dict", "tuple", "set",
+    }
+)
+_SAFE_ASSERTION_NAMES = frozenset({"result"}) | _SAFE_ASSERTION_CALL_NAMES
+_SAFE_ASSERTION_NODE_TYPES = (
+    ast.Expression, ast.Load,
+    ast.Constant, ast.Name,
+    ast.Attribute, ast.Subscript, ast.Slice,
+    ast.List, ast.Tuple, ast.Dict, ast.Set,
+    ast.Compare, ast.BoolOp, ast.UnaryOp, ast.BinOp,
+    ast.And, ast.Or, ast.Not,
+    ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Is, ast.IsNot, ast.In, ast.NotIn,
+    ast.USub, ast.UAdd, ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.FloorDiv, ast.Pow,
+    ast.Call,
+)
+
+
+def _reject_unsafe_assertion(tree: ast.AST, bullet: str) -> None:
+    for node in ast.walk(tree):
+        if not isinstance(node, _SAFE_ASSERTION_NODE_TYPES):
+            raise ValueError(
+                "Story test generation only permits a safe expression subset "
+                f"(no imports/calls/attributes beyond an explicit allowlist); "
+                f"got: {bullet!r}"
+            )
+        if isinstance(node, ast.Name) and node.id not in _SAFE_ASSERTION_NAMES:
+            raise ValueError(
+                f"Story assertion bullet references an unknown name {node.id!r}; "
+                f"only 'result' and safe helpers are permitted: {bullet!r}"
+            )
+        if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
+            raise ValueError(
+                f"Story assertion bullet accesses a private/dunder attribute "
+                f"{node.attr!r}, which is not permitted: {bullet!r}"
+            )
+        if isinstance(node, ast.Call) and not (
+            isinstance(node.func, ast.Name)
+            and node.func.id in _SAFE_ASSERTION_CALL_NAMES
+        ):
+            raise ValueError(
+                f"Story assertion bullet calls something other than an explicit "
+                f"safe helper, which is not permitted: {bullet!r}"
+            )
+
+
 def _assertion_from_bullet(bullet: str) -> str:
     text = bullet.strip()
     if text.startswith("assert "):
@@ -90,13 +147,23 @@ def _assertion_from_bullet(bullet: str) -> str:
     if not expr:
         raise ValueError("Story assertion bullet is empty.")
     try:
-        ast.parse(expr, mode="eval")
+        tree = ast.parse(expr, mode="eval")
     except SyntaxError as exc:
         raise ValueError(
             "Story test generation requires Oracle/Negative Cases bullets to be "
             f"Python assertion expressions; got: {bullet!r}"
         ) from exc
+    _reject_unsafe_assertion(tree, bullet)
     return expr
+
+
+def is_safe_oracle_expression(bullet: str) -> bool:
+    """Return whether *bullet* would pass ``_assertion_from_bullet``'s checks."""
+    try:
+        _assertion_from_bullet(bullet)
+    except ValueError:
+        return False
+    return True
 
 
 def _literal_source(value: str, *, fallback: str) -> str:

@@ -288,7 +288,7 @@ _REPLAY_HUMAN_OWNERSHIP = tuple(
 # lose their repaired ownership, and they resurface as unowned tracked paths.
 _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES = (
     "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
-    "b3b5ed24958d6115c0a47358f30bfbab001cf13a6ef692ced94a307fc753ef9f",
+    "a18bfe5b655527387ad151a3042a4a0ac8f60250645e18eaf740c9d853e6965d",
 )
 # The previously authorized head, kept alongside the current one rather than
 # replaced: tests drive this bridge with different head refs, some frozen at a
