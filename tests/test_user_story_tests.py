@@ -2,6 +2,7 @@
 # pylint: disable=use-implicit-booleaness-not-comparison,unused-variable
 # pylint: disable=too-many-locals,line-too-long,too-many-lines
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ import pytest
 from pdd.user_story_tests import (
     _contract_path_for_story,
     _generate_and_write_contract,
+    _module_path_for_prompt,
     _primary_prompt_interfaces,
     _story_content_hash,
     cache_story_prompt_links,
@@ -2398,9 +2400,14 @@ def test_cache_story_prompt_links_honors_explicit_prompts(tmp_path, monkeypatch)
 
 
 def _write_greeter_app(root: Path, greeting: str = "Hello, {name}!") -> None:
-    app_dir = root / "app"
-    app_dir.mkdir(parents=True, exist_ok=True)
-    (app_dir / "greeter.py").write_text(
+    # PDD's actual prompt -> code mapping (`_prompt_to_code_path`): a prompt at
+    # <prompts_root>/greeter_python.prompt compiles to
+    # <prompts_root.parent>/src/greeter.py by default (review #2397 P1
+    # correctness/compatibility -- this must be the real default `src/`
+    # layout, not a reinvented convention).
+    src_dir = root / "app" / "src"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    (src_dir / "greeter.py").write_text(
         "def greet(name):\n"
         f'    return "{greeting}".format(name=name)\n',
         encoding="utf-8",
@@ -2422,6 +2429,33 @@ def _write_greeter_prompt(root: Path) -> Path:
     return prompt
 
 
+def test_module_path_for_prompt_uses_the_default_src_layout(tmp_path):
+    """review #2397 P1 correctness/compatibility: the derived module must match
+    PDD's real prompt -> code mapping (`_prompt_to_code_path`), not a
+    reinvented convention -- default layout is `<prompts_root>/../src/`."""
+    prompt = _write_greeter_prompt(tmp_path)
+    prompts_root = tmp_path / "app" / "prompts"
+
+    assert _module_path_for_prompt(prompt, prompts_root) is None  # code not generated yet
+
+    _write_greeter_app(tmp_path)
+    assert _module_path_for_prompt(prompt, prompts_root) == "greeter"
+
+
+def test_module_path_for_prompt_honors_pdd_src_dir_override(tmp_path, monkeypatch):
+    """The same mapping must honor `PDD_SRC_DIR`, matching `_resolve_src_dir`."""
+    prompt = _write_greeter_prompt(tmp_path)
+    prompts_root = tmp_path / "app" / "prompts"
+    custom_src = tmp_path / "custom_src"
+    custom_src.mkdir()
+    (custom_src / "greeter.py").write_text(
+        "def greet(name):\n    return f'Hello, {name}!'\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("PDD_SRC_DIR", str(custom_src))
+
+    assert _module_path_for_prompt(prompt, prompts_root) == "greeter"
+
+
 def _write_greeter_story(root: Path) -> Path:
     stories = root / "user_stories"
     stories.mkdir(parents=True, exist_ok=True)
@@ -2437,6 +2471,11 @@ def _write_greeter_story(root: Path) -> Path:
 
 def _generate_greeter_contract(tmp_path, contract_markdown):
     prompt = _write_greeter_prompt(tmp_path)
+    # The greeter source must exist before contract generation, matching real
+    # `pdd generate` usage: only a prompt whose code has actually been
+    # generated can offer a real Entry Point (review #2397 P1
+    # correctness/compatibility).
+    _write_greeter_app(tmp_path)
     story = _write_greeter_story(tmp_path)
     story_text = story.read_text(encoding="utf-8")
     fake_llm = {"result": contract_markdown, "cost": 0.03, "model_name": "contract-model"}
@@ -2468,7 +2507,7 @@ _GREETER_CONTRACT_MD = (
     "## Context\n\n`greet` returns a friendly greeting for a given name.\n\n"
     "## Acceptance Criteria\n\n"
     "1. Given a name, when greet is called, then it returns a greeting containing that name.\n\n"
-    "## Entry Point\n\n- module: app.greeter\n- callable: greet\n- args: [\"World\"]\n- kwargs: {}\n\n"
+    "## Entry Point\n\n- module: greeter\n- callable: greet\n- args: [\"World\"]\n- kwargs: {}\n\n"
     "## Seams\n\n- none\n\n"
     "## Oracle\n\n- result == \"Hello, World!\"\n\n"
     "## Non-Oracle\n\n- internal formatting helpers\n\n"
@@ -2499,9 +2538,15 @@ def test_valid_generated_contract_compiles_to_real_red_green_pytest(tmp_path):
     output = tmp_path / "tests" / "test_story_greeter.py"
     generate_story_test(story, output)
 
+    # The generated test imports the module by its dotted path ("greeter"),
+    # not by file path, so `app/src` -- where PDD's own convention places the
+    # generated code -- must be on PYTHONPATH, same as a real project.
+    run_env = {**os.environ, "PYTHONPATH": str(tmp_path / "app" / "src")}
+
     passing = subprocess.run(
         [sys.executable, "-m", "pytest", str(output), "-q"],
         cwd=tmp_path,
+        env=run_env,
         text=True,
         capture_output=True,
         check=False,
@@ -2514,6 +2559,7 @@ def test_valid_generated_contract_compiles_to_real_red_green_pytest(tmp_path):
     failing = subprocess.run(
         [sys.executable, "-m", "pytest", str(output), "-q"],
         cwd=tmp_path,
+        env=run_env,
         text=True,
         capture_output=True,
         check=False,
@@ -2527,8 +2573,34 @@ def test_contract_generation_rejects_invented_entry_point(tmp_path):
     invented binding (review #2397 P1) -- generation must fail closed with no
     contract written, not silently accept it."""
     bad = _GREETER_CONTRACT_MD.replace(
-        "- module: app.greeter\n- callable: greet",
-        "- module: app.greeter\n- callable: farewell",
+        "- module: greeter\n- callable: greet",
+        "- module: greeter\n- callable: farewell",
+    )
+    story, (contract_path, _cost, _model, error) = _generate_greeter_contract(tmp_path, bad)
+    assert contract_path is None
+    assert error is not None
+    assert not _contract_path_for_story(story).exists()
+
+
+def test_contract_generation_rejects_args_that_dont_bind_to_the_signature(tmp_path):
+    """review #2397 P1 correctness: `args: []` for `greet(name)` are literals,
+    but don't bind -- the emitted test would TypeError before ever reaching
+    the Oracle. Generation must fail closed instead of writing that contract."""
+    bad = _GREETER_CONTRACT_MD.replace(
+        "- module: greeter\n- callable: greet\n- args: [\"World\"]\n- kwargs: {}",
+        "- module: greeter\n- callable: greet\n- args: []\n- kwargs: {}",
+    )
+    story, (contract_path, _cost, _model, error) = _generate_greeter_contract(tmp_path, bad)
+    assert contract_path is None
+    assert error is not None
+    assert not _contract_path_for_story(story).exists()
+
+
+def test_contract_generation_rejects_unknown_kwargs(tmp_path):
+    """An extra kwarg the callable doesn't accept must also fail closed."""
+    bad = _GREETER_CONTRACT_MD.replace(
+        "- module: greeter\n- callable: greet\n- args: [\"World\"]\n- kwargs: {}",
+        '- module: greeter\n- callable: greet\n- args: ["World"]\n- kwargs: {"loud": true}',
     )
     story, (contract_path, _cost, _model, error) = _generate_greeter_contract(tmp_path, bad)
     assert contract_path is None
@@ -2571,7 +2643,7 @@ def test_contract_generation_accepts_explicit_no_entry_point(tmp_path):
     from pdd.story_test_generation import generate_story_regression_test
 
     none_contract = _GREETER_CONTRACT_MD.replace(
-        "- module: app.greeter\n- callable: greet\n- args: [\"World\"]\n- kwargs: {}",
+        "- module: greeter\n- callable: greet\n- args: [\"World\"]\n- kwargs: {}",
         "- module: none\n- callable: none\n- args: []\n- kwargs: {}",
     )
     story, (contract_path, _cost, _model, error) = _generate_greeter_contract(

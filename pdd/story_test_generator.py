@@ -83,17 +83,34 @@ def _key_values(section: str) -> dict[str, str]:
 
 # Assertion bullets are issue/LLM-derived text that gets spliced verbatim into
 # `assert {expr}` in a generated pytest file the story-regression CI lane
-# executes. Syntax validity alone does not make that safe (`__import__('os')
-# .system(...)` is syntactically valid). This allowlist constrains bullets to a
-# read-only "compare/inspect `result`" DSL: no calls to anything but a small
-# set of pure builtins, and no access to dunder names/attributes (which is how
-# a restricted-eval sandbox normally gets escaped, e.g. `type(x).__mro__`).
+# executes -- and that file also has `importlib` and `module` in module scope
+# (see `render_story_test`), so a permissive allowlist doesn't just risk
+# builtins like `__import__('os').system(...)`; a bare name check alone lets
+# `importlib.import_module("os").system(...)` and `module.os.system(...)`
+# through too. Syntax validity alone does not make an expression safe, so this
+# allowlist constrains bullets to a read-only "compare/inspect `result`" DSL:
+# - only `result` and a small set of pure builtins may appear as bare names
+# - every attribute/subscript chain must be rooted at `result` (not at
+#   `module`, `importlib`, or any other name in the generated test's scope)
+# - a call is either one of the safe builtins, or a read-only method looked up
+#   on `result` (never a mutator like `result.clear()`)
 _SAFE_ASSERTION_CALL_NAMES = frozenset(
     {
         "len", "isinstance", "str", "int", "float", "bool", "abs", "round",
         "sorted", "min", "max", "sum", "any", "all", "repr", "type",
+        "dict", "list", "tuple", "set",
     }
 )
+_SAFE_RESULT_METHOD_NAMES = frozenset(
+    {
+        "get", "keys", "values", "items", "count", "index",
+        "lower", "upper", "strip", "lstrip", "rstrip",
+        "startswith", "endswith", "split", "splitlines", "join",
+        "isdigit", "isalpha", "isalnum", "isupper", "islower", "isspace",
+        "copy",
+    }
+)
+_SAFE_ASSERTION_NAMES = frozenset({"result"}) | _SAFE_ASSERTION_CALL_NAMES
 _SAFE_ASSERTION_NODE_TYPES = (
     ast.Expression, ast.BoolOp, ast.UnaryOp, ast.BinOp, ast.Compare, ast.Call,
     ast.Name, ast.Load, ast.Constant, ast.Attribute, ast.Subscript, ast.Slice,
@@ -105,6 +122,18 @@ _SAFE_ASSERTION_NODE_TYPES = (
 )
 
 
+def _chain_root(node: ast.AST) -> ast.AST:
+    """Walk down an Attribute/Subscript chain to the value it's rooted at."""
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    return node
+
+
+def _is_rooted_at_result(node: ast.AST) -> bool:
+    root = _chain_root(node)
+    return isinstance(root, ast.Name) and root.id == "result"
+
+
 def _ensure_safe_assertion(tree: ast.AST, bullet: str) -> None:
     """Reject any assertion expression outside the safe result-inspection DSL."""
     for node in ast.walk(tree):
@@ -113,22 +142,47 @@ def _ensure_safe_assertion(tree: ast.AST, bullet: str) -> None:
                 "Story assertion bullets may only compare/inspect `result` "
                 f"(unsupported construct {type(node).__name__}): {bullet!r}"
             )
-        if isinstance(node, ast.Name) and node.id.startswith("_"):
+        if isinstance(node, ast.Name) and node.id not in _SAFE_ASSERTION_NAMES:
             raise ValueError(
-                f"Story assertion bullet references a private/dunder name: {bullet!r}"
+                "Story assertion bullet references a name other than `result` "
+                f"or a safe helper: {bullet!r}"
             )
-        if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
-            raise ValueError(
-                f"Story assertion bullet accesses a private/dunder attribute: {bullet!r}"
-            )
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id not in _SAFE_ASSERTION_CALL_NAMES:
+        if isinstance(node, ast.Attribute):
+            if node.attr.startswith("_"):
                 raise ValueError(
-                    f"Story assertion bullet calls disallowed function {node.func.id!r}; "
-                    f"only {sorted(_SAFE_ASSERTION_CALL_NAMES)} are permitted: {bullet!r}"
+                    f"Story assertion bullet accesses a private/dunder attribute: {bullet!r}"
                 )
-        elif isinstance(node, ast.Call) and not isinstance(node.func, ast.Attribute):
-            raise ValueError(f"Story assertion bullet has an unsupported call target: {bullet!r}")
+            if not _is_rooted_at_result(node):
+                raise ValueError(
+                    "Story assertion bullet accesses an attribute not rooted at "
+                    f"`result`: {bullet!r}"
+                )
+        if isinstance(node, ast.Subscript) and not _is_rooted_at_result(node):
+            raise ValueError(
+                f"Story assertion bullet subscripts something other than `result`: {bullet!r}"
+            )
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                if func.id not in _SAFE_ASSERTION_CALL_NAMES:
+                    raise ValueError(
+                        f"Story assertion bullet calls disallowed function {func.id!r}; "
+                        f"only {sorted(_SAFE_ASSERTION_CALL_NAMES)} are permitted: {bullet!r}"
+                    )
+            elif isinstance(func, ast.Attribute):
+                if not _is_rooted_at_result(func):
+                    raise ValueError(
+                        "Story assertion bullet calls a method not rooted at "
+                        f"`result`: {bullet!r}"
+                    )
+                if func.attr not in _SAFE_RESULT_METHOD_NAMES:
+                    raise ValueError(
+                        f"Story assertion bullet calls disallowed `result` method "
+                        f"{func.attr!r}; only read-only methods "
+                        f"{sorted(_SAFE_RESULT_METHOD_NAMES)} are permitted: {bullet!r}"
+                    )
+            else:
+                raise ValueError(f"Story assertion bullet has an unsupported call target: {bullet!r}")
 
 
 def _assertion_from_bullet(bullet: str) -> str:

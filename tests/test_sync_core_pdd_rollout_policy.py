@@ -2313,10 +2313,11 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
             verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
             verification._CONFORMANCE_SPLIT_PROFILE_BYTES[1],  # pylint: disable=protected-access
         ),
-        (
-            verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
-            verification._STORY_CONTRACT_PROFILE_BYTES[1],  # pylint: disable=protected-access
-        ),
+        # #2397 review: the self-authorizing story-contract rotation
+        # (_STORY_CONTRACT_ROTATION_POLICY_BYTES / _STORY_CONTRACT_PROFILE_BYTES)
+        # was removed -- installing and consuming a managed-prompt transition
+        # in the same PR is forbidden by docs/ci.md. No replacement pair is
+        # accepted here until a real Phase A rotation is merged to main first.
     }
     assert (
         hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROTATION_FILE)).hexdigest(),

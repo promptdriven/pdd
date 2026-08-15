@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -1129,29 +1130,37 @@ _PDD_INTERFACE_TAG_RE = re.compile(
 )
 
 
+def _dotted_module_for_code_path(code_path: Path, source_root: Path) -> Optional[str]:
+    """Return the importable dotted module name for a generated source file."""
+    try:
+        relative = code_path.resolve().relative_to(source_root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if relative.suffix != ".py":
+        return None
+    parts = list(relative.with_suffix("").parts)
+    if not parts or any(not part.isidentifier() for part in parts):
+        return None
+    return ".".join(parts)
+
+
 def _module_path_for_prompt(prompt_path: Path, prompts_root: Optional[Path]) -> Optional[str]:
     """Deterministically derive the importable module a prompt compiles to.
 
-    Follows PDD's own file-layout convention: a prompt at
-    ``<prompts_root>/<sub>/<name>_python.prompt`` compiles to
-    ``<prompts_root.parent.name>/<sub>/<name>.py``, i.e. the dotted module
-    ``<prompts_root.parent.name>.<sub>.<name>``. Returns ``None`` when
-    ``prompts_root`` is unknown or the prompt doesn't follow that convention,
-    so callers never have to guess a path outside PDD's own convention.
+    Uses PDD's *actual* prompt -> code mapping (``_prompt_to_code_path`` /
+    ``_resolve_src_dir``, which honors the ``PDD_SRC_DIR`` override), not a
+    reinvented layout convention: an Entry Point naming a module PDD itself
+    wouldn't generate the callable into is worse than no Entry Point at all.
+    Also requires the mapped source file to actually exist, so this never
+    offers a module for a prompt whose code hasn't been generated yet.
     """
     if prompts_root is None:
         return None
-    try:
-        rel = prompt_path.resolve().relative_to(prompts_root.resolve())
-    except (OSError, ValueError):
+    code_path = _prompt_to_code_path(prompt_path, prompts_root)
+    if code_path is None or not code_path.is_file():
         return None
-    if not rel.name.endswith("_python.prompt"):
-        return None
-    stem = rel.name[: -len("_python.prompt")]
-    package_root = prompts_root.resolve().parent.name
-    if not package_root:
-        return None
-    return ".".join([package_root, *rel.parts[:-1], stem])
+    source_root = _resolve_src_dir(prompts_root)
+    return _dotted_module_for_code_path(code_path, source_root)
 
 
 def _resolve_prompt_interfaces(
@@ -1223,15 +1232,76 @@ def _format_prompt_interfaces(interfaces: List[Dict[str, object]]) -> str:
     return "\n\n".join(blocks) or "(no declared pdd-interface found)"
 
 
-def _allowed_entry_points(interfaces: List[Dict[str, object]]) -> Dict[str, Tuple[str, ...]]:
-    """Map each offered module path to the exact callables declared for it."""
-    allowed: Dict[str, Tuple[str, ...]] = {}
+def _allowed_entry_points(interfaces: List[Dict[str, object]]) -> Dict[str, Dict[str, Optional[str]]]:
+    """Map each offered module path to ``{callable_name: declared_signature}``.
+
+    ``declared_signature`` is ``None`` when the interface didn't declare one
+    for that callable -- callers must treat that as "binding can't be
+    verified", not "any call binds" (see ``_signature_accepts_call``).
+    """
+    allowed: Dict[str, Dict[str, Optional[str]]] = {}
     for item in interfaces:
         module = item.get("module")
         functions = item.get("functions") or []
-        if module and functions:
-            allowed[module] = tuple(functions)
+        signatures = item.get("signatures") or []
+        if not (module and functions):
+            continue
+        sig_by_name: Dict[str, Optional[str]] = {}
+        for fn in signatures:
+            name = fn.get("name") if isinstance(fn, dict) else None
+            if isinstance(name, str):
+                signature = fn.get("signature")
+                sig_by_name[name] = signature if isinstance(signature, str) else None
+        allowed[module] = sig_by_name
     return allowed
+
+
+def _signature_accepts_call(
+    signature: str, args: List[object], kwargs: Dict[str, object]
+) -> Optional[bool]:
+    """Return whether calling the declared *signature* with *args*/*kwargs*
+    would actually bind, using a real ``inspect.Signature.bind`` -- checking
+    that args/kwargs are Python literals proves nothing about whether they
+    satisfy the callable's required parameters (review #2397 P1 correctness).
+
+    Returns ``None`` when *signature* can't be parsed into parameters; callers
+    must treat that as "binding can't be verified", not "binds fine".
+    """
+    from .architecture_sync import (  # pylint: disable=import-outside-toplevel
+        _parse_signature_parameters,
+    )
+
+    parsed = _parse_signature_parameters(signature)
+    if parsed is None:
+        return None
+    kind_map = {
+        "posonly": inspect.Parameter.POSITIONAL_ONLY,
+        "arg": inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        "vararg": inspect.Parameter.VAR_POSITIONAL,
+        "kwonly": inspect.Parameter.KEYWORD_ONLY,
+        "kwarg": inspect.Parameter.VAR_KEYWORD,
+    }
+    parameters = []
+    for param in parsed["parameters"]:
+        kind = kind_map.get(param["kind"])
+        if kind is None:
+            return None
+        # The binding check only needs to know whether a parameter CAN be
+        # omitted, not its actual default value, so any non-empty sentinel
+        # works here even though the real default may be a non-literal
+        # expression (e.g. a module-level constant).
+        default = None if " = " in param["text"] else inspect.Parameter.empty
+        try:
+            parameters.append(inspect.Parameter(param["name"], kind, default=default))
+        except ValueError:
+            return None
+    try:
+        inspect.Signature(parameters).bind(*args, **kwargs)
+    except TypeError:
+        return False
+    except ValueError:
+        return None
+    return True
 
 
 def _primary_prompt_interfaces(
@@ -1287,7 +1357,7 @@ def _scan_prompt_inventory(
 
 
 def _validate_contract_entry_point_and_assertions(
-    markdown: str, *, allowed_entry_points: Dict[str, Tuple[str, ...]]
+    markdown: str, *, allowed_entry_points: Dict[str, Dict[str, Optional[str]]]
 ) -> Optional[str]:
     """Reject a generated contract whose Entry Point or Oracle/Negative Cases
     bullets cannot safely compile into a behavioral test.
@@ -1326,14 +1396,31 @@ def _validate_contract_entry_point_and_assertions(
                 f"{module!r}; invented callables are rejected."
             )
         try:
-            args = _literal_source(entry.get("args", "[]"), fallback="[]")
-            kwargs = _literal_source(entry.get("kwargs", "{}"), fallback="{}")
-            if not isinstance(ast.literal_eval(args), list):
+            args_src = _literal_source(entry.get("args", "[]"), fallback="[]")
+            kwargs_src = _literal_source(entry.get("kwargs", "{}"), fallback="{}")
+            args_value = ast.literal_eval(args_src)
+            kwargs_value = ast.literal_eval(kwargs_src)
+            if not isinstance(args_value, list):
                 return "Entry Point args must be a Python list literal."
-            if not isinstance(ast.literal_eval(kwargs), dict):
+            if not isinstance(kwargs_value, dict):
                 return "Entry Point kwargs must be a Python dict literal."
         except ValueError as exc:
             return str(exc)
+
+        signature = allowed_entry_points[module].get(callable_name)
+        if signature is None:
+            return (
+                f"Entry Point callable {callable_name!r} on module {module!r} has "
+                "no declared signature to validate args/kwargs against; binding "
+                "cannot be verified."
+            )
+        binds = _signature_accepts_call(signature, args_value, kwargs_value)
+        if binds is not True:
+            return (
+                f"Entry Point args={args_value!r} kwargs={kwargs_value!r} do not "
+                f"bind to {callable_name}{signature}; invented/guessed argument "
+                "values are rejected."
+            )
 
     seams_text = sections.get("seams", "").strip().lower()
     if seams_text not in ("- none", "none"):
@@ -1359,7 +1446,7 @@ def _llm_generate_story_contract(  # pylint: disable=too-many-arguments,too-many
     inventory: List[Tuple[str, str]],
     primary_refs: List[str],
     primary_interfaces: str,
-    allowed_entry_points: Dict[str, Tuple[str, ...]],
+    allowed_entry_points: Dict[str, Dict[str, Optional[str]]],
     strength: float,
     temperature: float,
     time: float,
