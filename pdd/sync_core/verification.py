@@ -247,17 +247,19 @@ _PR2376_DEPENDENCY_FIX_PROFILE_BYTES = (
 )
 
 # Story-validation strength advances seven managed prompt requirements
-# (issue #2394) on top of the conformance-split protected base (PR #2374).
-# The rotation policy file is not touched by this change, so its digest is
-# stationary at the conformance-split's consumed value. The profile digests
-# are the conformance-split's consumed value -> this change's candidate.
+# (issue #2394) on top of the #2376 dependency-fix protected base, which is
+# itself already ahead of the conformance-split base (PR #2374) for
+# agentic_change_orchestrator_python.prompt. The rotation policy file is not
+# touched by this change, so its digest is stationary at the
+# conformance-split's consumed value. The profile digests are #2376's
+# consumed value -> this change's candidate.
 _STORY_VALIDATION_STRENGTH_ROTATION_POLICY_BYTES = (
     _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[1],
     _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[1],
 )
 _STORY_VALIDATION_STRENGTH_PROFILE_BYTES = (
-    _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
-    "44b988c0ecdbde21e792005533a3e4e55dd84192a800c292dc51e72de3616346",
+    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+    "02096493e12183fdb3e53944d4a785d963f766841f2accd011ba6322ca60703e",
 )
 # The candidate is also evaluated against itself once the rotation has landed.
 _STORY_VALIDATION_STRENGTH_STATIONARY_PROFILE_BYTES = (
@@ -1141,8 +1143,8 @@ _STORY_VALIDATION_STRENGTH_COMPOSED_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_change_orchestrator_python.prompt",
         "python",
-        "a5f609c2aa21b86d5b1bdb1ef7b36207c40326fc85b617c8b7d7b99dc5b23b9c",
-        "459fb83c7c5357f114a744e6664c9173f75531d4c65a8e6a2386d5bbfb0e0b9b",
+        "35bc67657d714841a3001883a0f86b26fa65095a07a2c3032d7e271e74a1c2fc",
+        "389e31955ce0c8b6d36fdabf2bdc87a69d64bc2334a8e0700e4ab1e5e1cec99b",
         _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[0],
         _STORY_VALIDATION_STRENGTH_PROFILE_BYTES[1],
     ),
