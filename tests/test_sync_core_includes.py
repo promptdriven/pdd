@@ -61,6 +61,61 @@ def test_literal_include_tag_in_prose_does_not_consume_later_markup() -> None:
     assert [item.path for item in references] == ["docs/actual.md"]
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Use ``<include>docs/fake.md</include>`` here\n<include>docs/real.md</include>",
+        "````markdown\n<include>docs/fake.md</include>\n`````\n<include>docs/real.md</include>",
+        "~~~\n<include-many>docs/fake.md, docs/also-fake.md</include-many>\n~~~~\n<include-many>docs/real.md</include-many>",
+    ],
+)
+def test_markdown_literal_spans_do_not_create_include_dependencies(text) -> None:
+    """Inline spans and homogeneous fences leave directives literal."""
+    assert [item.path for item in parse_include_references(text)] == ["docs/real.md"]
+
+
+def test_mixed_fence_delimiters_do_not_hide_a_real_include() -> None:
+    """An invalid mixed-delimiter fence is ordinary text, not a literal span."""
+    text = "~~`\n<include>docs/fake.md</include>\n~~`\n<include>docs/real.md</include>"
+    assert [item.path for item in parse_include_references(text)] == [
+        "docs/fake.md",
+        "docs/real.md",
+    ]
+
+
+@pytest.mark.parametrize("run", ("~~`", "`~~"))
+@pytest.mark.parametrize(
+    ("open_tag", "close_tag"),
+    (("<include>", "</include>"), ("<include-many>", "</include-many>")),
+    ids=("include", "include-many"),
+)
+def test_mixed_delimiter_runs_hide_nothing_in_either_order(
+    run: str, open_tag: str, close_tag: str
+) -> None:
+    """A fence run must be homogeneous whichever delimiter comes first."""
+    text = (
+        f"{run}\n{open_tag}docs/fake.md{close_tag}\n"
+        f"{run}\n{open_tag}docs/real.md{close_tag}"
+    )
+    assert [item.path for item in parse_include_references(text)] == [
+        "docs/fake.md",
+        "docs/real.md",
+    ]
+
+
+@pytest.mark.parametrize("fence", ("```", "~~~"))
+def test_fenced_include_and_include_many_examples_are_literal(fence: str) -> None:
+    """Both directive grammars are ignored together inside a valid fence."""
+    text = (
+        f"{fence}xml\n"
+        "<include>docs/example-only.md</include>\n"
+        "<include-many>docs/one.md, docs/two.md</include-many>\n"
+        f"{fence}\n"
+        "<include>docs/actual.md</include>\n"
+    )
+    assert [item.path for item in parse_include_references(text)] == ["docs/actual.md"]
+
+
 @pytest.mark.timeout(1, func_only=True)
 def test_malformed_include_text_is_bounded() -> None:
     """Unterminated include markup cannot trigger superlinear parser backtracking."""
@@ -293,3 +348,77 @@ def test_unresolved_external_package_forces_nondeterministic_closure(tmp_path) -
     assert closure.artifacts == ()
     assert closure.edges[0].target_exists is False
     assert closure.has_nondeterministic_query is True
+
+
+# --- Markdown literal scanner conformance (PR #2376 review findings) ---------
+#
+# Every literal case is exercised with both directive grammars, because a
+# scanner gap suppresses or invents dependencies for <include-many> exactly
+# as it does for <include>.
+
+DIRECTIVE_GRAMMARS = pytest.mark.parametrize(
+    ("open_tag", "close_tag"),
+    (("<include>", "</include>"), ("<include-many>", "</include-many>")),
+    ids=("include", "include-many"),
+)
+
+
+@DIRECTIVE_GRAMMARS
+def test_fence_with_angle_info_string_is_a_fence_not_a_legacy_include(
+    open_tag: str, close_tag: str
+) -> None:
+    """```<html> opens an ordinary fence; only a complete ```<path>``` is legacy."""
+    text = (
+        "```<html>\n"
+        f"{open_tag}docs/fake.md{close_tag}\n"
+        "```\n"
+        f"{open_tag}docs/real.md{close_tag}\n"
+    )
+    assert [item.path for item in parse_include_references(text)] == ["docs/real.md"]
+
+
+@DIRECTIVE_GRAMMARS
+def test_inline_span_with_longer_inner_run_stays_literal(
+    open_tag: str, close_tag: str
+) -> None:
+    """A longer, non-closing backtick run does not terminate the span."""
+    text = (
+        f"``a ``` b {open_tag}docs/fake.md{close_tag}``\n"
+        f"{open_tag}docs/real.md{close_tag}\n"
+    )
+    assert [item.path for item in parse_include_references(text)] == ["docs/real.md"]
+
+
+@DIRECTIVE_GRAMMARS
+def test_multiline_code_span_is_literal(open_tag: str, close_tag: str) -> None:
+    """CommonMark permits newlines inside a code span; the whole span is literal."""
+    text = (
+        "`example:\n"
+        f"{open_tag}docs/fake.md{close_tag}`\n"
+        f"{open_tag}docs/real.md{close_tag}\n"
+    )
+    assert [item.path for item in parse_include_references(text)] == ["docs/real.md"]
+
+
+@DIRECTIVE_GRAMMARS
+@pytest.mark.parametrize("fence", ("```", "~~~"))
+def test_fence_closed_by_a_longer_run_is_still_literal(
+    fence: str, open_tag: str, close_tag: str
+) -> None:
+    """A closer at least as long as the opener still closes the fence."""
+    text = (
+        f"{fence}\n"
+        f"{open_tag}docs/fake.md{close_tag}\n"
+        f"{fence}{fence[0]}\n"
+        f"{open_tag}docs/real.md{close_tag}\n"
+    )
+    assert [item.path for item in parse_include_references(text)] == ["docs/real.md"]
+
+
+def test_two_legacy_backtick_includes_on_one_line_stay_separate() -> None:
+    """Adjacent legacy tokens must not collapse into one combined path."""
+    text = "```<docs/one.md>``` and ```<docs/two.md>```\n"
+    assert [item.path for item in parse_include_references(text)] == [
+        "docs/one.md",
+        "docs/two.md",
+    ]

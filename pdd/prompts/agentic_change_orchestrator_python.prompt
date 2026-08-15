@@ -59,9 +59,10 @@ Decorate `run_agentic_change_orchestrator` with `provider_failure_workflow` so d
 11. **Sync Order Generation**: After review loop completes (before Step 13):
     - Import from pdd.sync_order: build_dependency_graph, topological_sort, get_affected_modules, generate_sync_order_script, extract_module_from_include
     - Build dependency graph from prompts_dir = worktree_path / "prompts"
-    - Extract modified modules from files_to_stage using `extract_module_from_include()` on files matching `prompts/*.prompt`
+    - Extract modified modules from files_to_stage using `_architecture_module_key()` on the prompt-relative path, preserving directories and `_LLM.prompt` identity
     - Get affected modules (modified + transitive dependents)
     - If affected modules exist, generate sync_order.sh in both user's CWD and worktree root
+    - Build the post-merge affected-module graph from `architecture.json` using `build_dependency_graph_from_architecture()`, not `build_dependency_graph(prompts_dir)`: this list must use the same declared `<pdd-dependency>` semantics as Step 6. Map changed prompt paths through `_architecture_module_key()` so path-qualified and `_LLM.prompt` modules remain distinct.
     - Generate clean `pdd sync X` command list for sync_order_list (NOT the full bash script with shebang/set -e)
     - Add to context: sync_order_script (path or ""), sync_order_list (newline-separated commands or "No modules to sync")
     - Ensure sync_order.sh is added to changed_files for Step 13 to commit
@@ -321,14 +322,16 @@ Before the step loop begins, load `.pddrc` configuration to provide context keys
 - Step 13 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list, impacted_tests, base_branch, **head_branch** (the worktree's actual current branch, derived from its HEAD and defaulting to `change/issue-{N}`; it is a `change/issue-{N}-job-*` fallback when the canonical branch was locked under clean restart — Step 13 pushes and opens/updates the PR on this branch rather than a hardcoded `change/issue-{N}`. The existing-PR guard also matches `change/issue-{N}-job-*` heads so a later normal run does not open a duplicate), **user_story_summary** (literal `None` when no story was generated/attempted, otherwise a PR-body markdown section naming generated `user_stories/story__*.md` artifacts and linked prompts), **manual_review_lines** (aggregated `MANUAL_REVIEW:` lines from Step 9 JSON/prose, Step 10 synthesized `associated_docs_conflicts`, and Step 11/12 review-loop JSON/prose manual-review entries; rendered in the PR body's "Manual Review Required" section. The Step 12.5 gate no longer contributes here — a gate failure now hard-blocks before Step 13 rather than surfacing as an advisory line), **clean_restart** (`"true"` or `"false"`) — Step 13 uses this to decide whether to force-push (`--force-with-lease`) and whether to look for an existing open PR to update in place rather than creating a new one
 
 % Dependency Context (Before Step 6)
-Before Step 6 runs, build a formatted dependency graph to help identify transitively affected modules:
+Before Step 6 runs, build a formatted module-dependency summary so the step can identify transitively affected modules. The graph must reflect declared architectural dependencies (`<pdd-dependency>` tags, read fresh from each module's prompt file — architecture.json's own `dependencies` field is not `<pdd-dependency>`-only and cannot be trusted directly) rather than the `<include>` context graph.
 
-Helper: `_build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str`:
-- Build dependency graph using `build_dependency_graph(prompts_dir)`
+Helper: `_build_dependency_context(architecture_path: Path, quiet: bool = False) -> str`:
+- Build dependency graph using `build_dependency_graph_from_architecture(architecture_path)`
 - Compute reverse dependencies (module → modules that depend on it)
-- Format as "## Module Dependency Graph" with sections showing modules sorted by number of dependents (limit top 30, max 10 dependents shown per module)
+- Format as "## Module Dependency Graph" with modules sorted deterministically by descending number of dependents, then module name. Render every module with dependents and every dependent; Step 6 must never silently truncate declared dependency context.
 - Add to `context["dependency_context"]`
-- Return empty string if prompts_dir doesn't exist or on any error
+- Return empty string if architecture_path doesn't exist or on any error
+
+Point it at `cwd / "architecture.json"` before Step 6 runs.
 
 % Files to Stage
 After Step 9 parses FILES_CREATED/FILES_MODIFIED/DIRECT_EDITS, pass the extracted file list to subsequent steps:
@@ -632,7 +635,7 @@ Import from `pdd.pre_checkup_gate`: `run_pre_checkup_gate` (Step 12.5 build/smok
 Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
 <pdd.agentic_common><include select="def:run_agentic_task,def:load_workflow_state,def:save_workflow_state,def:clear_workflow_state,def:substitute_template_variables,def:validate_cached_state,def:post_step_comment,def:set_agentic_progress,def:clear_agentic_progress">pdd/agentic_common.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
-<pdd.sync_order><include select="def:build_dependency_graph,def:topological_sort,def:get_affected_modules,def:generate_sync_order_script,def:extract_module_from_include,def:discover_associated_documents">pdd/sync_order.py</include></pdd.sync_order>
+<pdd.sync_order><include select="def:build_dependency_graph,def:build_dependency_graph_from_architecture,def:topological_sort,def:get_affected_modules,def:generate_sync_order_script,def:extract_module_from_include,def:discover_associated_documents">pdd/sync_order.py</include></pdd.sync_order>
 <pdd.construct_paths><include>context/construct_paths_example.py</include></pdd.construct_paths>
 <pdd.get_extension><include>context/get_extension_example.py</include></pdd.get_extension>
 <pdd.preprocess><include select="def:preprocess">pdd/preprocess.py</include></pdd.preprocess>

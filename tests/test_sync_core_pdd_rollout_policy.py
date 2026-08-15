@@ -2313,6 +2313,10 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
             verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
             verification._CONFORMANCE_SPLIT_PROFILE_BYTES[1],  # pylint: disable=protected-access
         ),
+        (
+            verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
+            verification._PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],  # pylint: disable=protected-access
+        ),
     }
     assert (
         hashlib.sha256(_git_blob(SYNC_ROLLOUT_PROTECTED_BASE, ROTATION_FILE)).hexdigest(),
@@ -2588,6 +2592,11 @@ def test_current_profile_reconciliation_matches_current_prompt_and_profile_rows(
     current_rows.extend(
         _requirement_authorization_row(authorization)
         for authorization in verification._ZSH_GLOBAL_OPTION_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+        if authorization.bindings.head_policy_sha256 == profile_digest
+    )
+    current_rows.extend(
+        _requirement_authorization_row(authorization)
+        for authorization in verification._PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
         if authorization.bindings.head_policy_sha256 == profile_digest
     )
     if profile_digest == verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[1]:  # pylint: disable=protected-access

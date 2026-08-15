@@ -1,3 +1,4 @@
+import json
 import os
 import stat
 import pytest
@@ -199,6 +200,34 @@ def test_extract_module_preserves_underscores_in_module_names():
     # Example files with underscores in module names
     assert sync_order.extract_module_from_include("context/code_generator_main_example.py") == "code_generator_main"
     assert sync_order.extract_module_from_include("context/auth_service_handler_example.py") == "auth_service_handler"
+
+
+# ==============================================================================
+# Unit Tests: _architecture_module_key
+# ==============================================================================
+
+def test_architecture_module_key_preserves_directory():
+    assert sync_order._architecture_module_key("commands/gate_python.prompt") == "commands/gate"
+    assert sync_order._architecture_module_key("gate_python.prompt") == "gate"
+    # These must NOT collide -- see PR #2376 review comment.
+    assert (
+        sync_order._architecture_module_key("commands/gate_python.prompt")
+        != sync_order._architecture_module_key("gate_python.prompt")
+    )
+
+
+def test_architecture_module_key_keeps_llm_prompts_distinct():
+    assert sync_order._architecture_module_key("agentic_update_python.prompt") == "agentic_update"
+    assert sync_order._architecture_module_key("agentic_update_LLM.prompt") == "agentic_update_LLM"
+    assert (
+        sync_order._architecture_module_key("agentic_update_python.prompt")
+        != sync_order._architecture_module_key("agentic_update_LLM.prompt")
+    )
+
+
+def test_architecture_module_key_non_prompt_file_returns_none():
+    assert sync_order._architecture_module_key("README.md") is None
+    assert sync_order._architecture_module_key("") is None
 
 
 # ==============================================================================
@@ -783,3 +812,265 @@ def test_issue_1048_mixed_modules_quoting_preserved(tmp_path):
         expected_quoted = shlex.quote(module)
         assert expected_quoted in content, \
             f"Bug #1048: Module {module!r} not shell-quoted. Expected {expected_quoted} in script."
+
+
+
+def _write_prompt(prompts_dir: Path, rel_path: str, *, dependencies=(), includes=()) -> None:
+    dep_tags = "".join(f"<pdd-dependency>{d}</pdd-dependency>\n" for d in dependencies)
+    include_tags = "".join(f"<include>{i}</include>\n" for i in includes)
+    content = f"<pdd-reason>test module</pdd-reason>\n{dep_tags}{include_tags}\n% Requirements\nDo the thing.\n"
+    path = prompts_dir / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def test_build_dependency_graph_from_architecture_real_flow_pdd_dependency_not_include(tmp_path):
+    """Issue #1807: a <pdd-dependency> edge must be surfaced even with no
+    matching <include>, and a plain <include> edge must NOT create a
+    dependency edge -- through the real prompt -> architecture -> graph path,
+    not a hand-written architecture.json (PR #2376 review)."""
+    prompts_dir = tmp_path / "prompts"
+    _write_prompt(
+        prompts_dir, "customer_service_python.prompt",
+        dependencies=["payment_status_python.prompt"],
+        includes=["docs/refund_policy_examples.md"],
+    )
+    _write_prompt(prompts_dir, "payment_status_python.prompt")
+    _write_prompt(prompts_dir, "onboarding_python.prompt", includes=["legacy_wizard_python.prompt"])
+    _write_prompt(prompts_dir, "legacy_wizard_python.prompt")
+
+    arch_file = tmp_path / "architecture.json"
+    arch_file.write_text(json.dumps([
+        {"filename": "customer_service_python.prompt", "dependencies": []},
+        {"filename": "payment_status_python.prompt", "dependencies": []},
+        {"filename": "onboarding_python.prompt", "dependencies": []},
+        {"filename": "legacy_wizard_python.prompt", "dependencies": []},
+    ]), encoding="utf-8")
+
+    graph = sync_order.build_dependency_graph_from_architecture(arch_file)
+
+    assert graph["customer_service"] == ["payment_status"]
+    assert graph["onboarding"] == []  # include-only edge to legacy_wizard must not appear
+
+
+def test_build_dependency_graph_from_architecture_modules_object_format(tmp_path):
+    """The {"modules": [...]} architecture.json shape must work the same as a bare array."""
+    prompts_dir = tmp_path / "prompts"
+    _write_prompt(prompts_dir, "auth_python.prompt", dependencies=["log_python.prompt", "db_python.prompt"])
+    _write_prompt(prompts_dir, "log_python.prompt")
+    _write_prompt(prompts_dir, "db_python.prompt")
+
+    arch_file = tmp_path / "architecture.json"
+    arch_file.write_text(json.dumps({
+        "modules": [
+            {"filename": "auth_python.prompt", "dependencies": []},
+            {"filename": "log_python.prompt", "dependencies": []},
+            {"filename": "db_python.prompt", "dependencies": []},
+        ]
+    }), encoding="utf-8")
+
+    graph = sync_order.build_dependency_graph_from_architecture(arch_file)
+
+    assert sorted(graph["auth"]) == ["db", "log"]
+
+
+def test_build_dependency_graph_from_architecture_path_qualified_same_basename(tmp_path):
+    """commands/gate_python.prompt and gate_python.prompt share a basename but
+    are different modules; commands/gate's declared dependency on the
+    top-level gate module must not collapse into a dropped self-edge --
+    this is a real collision found in this repo's own architecture.json."""
+    prompts_dir = tmp_path / "prompts"
+    _write_prompt(prompts_dir, "commands/gate_python.prompt", dependencies=["gate_python.prompt"])
+    _write_prompt(prompts_dir, "gate_python.prompt")
+
+    arch_file = tmp_path / "architecture.json"
+    arch_file.write_text(json.dumps([
+        {"filename": "commands/gate_python.prompt", "dependencies": []},
+        {"filename": "gate_python.prompt", "dependencies": []},
+    ]), encoding="utf-8")
+
+    graph = sync_order.build_dependency_graph_from_architecture(arch_file)
+
+    assert graph["commands/gate"] == ["gate"]
+    assert graph["gate"] == []
+
+
+def test_build_dependency_graph_from_architecture_llm_prompt_dependency(tmp_path):
+    """A declared dependency on a `_LLM.prompt` runtime prompt must be kept,
+    not silently discarded (this repo's own architecture.json has real
+    examples, e.g. agentic_arch_step2_analyze_LLM.prompt -> ...step1..._LLM.prompt)."""
+    prompts_dir = tmp_path / "prompts"
+    _write_prompt(prompts_dir, "agentic_update_python.prompt", dependencies=["agentic_update_LLM.prompt"])
+    _write_prompt(prompts_dir, "agentic_update_LLM.prompt")
+
+    arch_file = tmp_path / "architecture.json"
+    arch_file.write_text(json.dumps([
+        {"filename": "agentic_update_python.prompt", "dependencies": []},
+        {"filename": "agentic_update_LLM.prompt", "dependencies": []},
+    ]), encoding="utf-8")
+
+    graph = sync_order.build_dependency_graph_from_architecture(arch_file)
+
+    assert graph["agentic_update"] == ["agentic_update_LLM"]
+
+
+def test_build_dependency_graph_from_architecture_nested_architecture_file(tmp_path):
+    """A non-root architecture.json (e.g. a sub-project's) must resolve its
+    modules' prompt files relative to its own directory, not the caller's cwd
+    or the repo root."""
+    sub_root = tmp_path / "subproject"
+    prompts_dir = sub_root / "prompts"
+    _write_prompt(prompts_dir, "auth_python.prompt", dependencies=["log_python.prompt"])
+    _write_prompt(prompts_dir, "log_python.prompt")
+
+    arch_file = sub_root / "architecture.json"
+    arch_file.write_text(json.dumps([
+        {"filename": "auth_python.prompt", "dependencies": []},
+        {"filename": "log_python.prompt", "dependencies": []},
+    ]), encoding="utf-8")
+
+    graph = sync_order.build_dependency_graph_from_architecture(arch_file)
+
+    assert graph["auth"] == ["log"]
+
+
+def test_build_dependency_graph_from_nested_architecture_uses_ancestor_prompt_root(tmp_path):
+    """A nested architecture file can govern an ancestor project's prompts/."""
+    prompts_dir = tmp_path / "prompts"
+    _write_prompt(prompts_dir, "auth_python.prompt", dependencies=["log_python.prompt"])
+    _write_prompt(prompts_dir, "log_python.prompt")
+    arch_file = tmp_path / "backend" / "functions" / "architecture.json"
+    arch_file.parent.mkdir(parents=True)
+    arch_file.write_text(json.dumps([
+        {"filename": "auth_python.prompt", "dependencies": []},
+        {"filename": "log_python.prompt", "dependencies": []},
+    ]), encoding="utf-8")
+
+    assert sync_order.build_dependency_graph_from_architecture(arch_file)["auth"] == ["log"]
+
+
+def test_architecture_graph_follows_unregistered_declared_dependency(tmp_path):
+    """A stale registry cannot cut off a real prompt dependency chain."""
+    prompts_dir = tmp_path / "prompts"
+    _write_prompt(prompts_dir, "entry_python.prompt", dependencies=["missing_python.prompt"])
+    _write_prompt(prompts_dir, "missing_python.prompt", dependencies=["leaf_python.prompt"])
+    _write_prompt(prompts_dir, "leaf_python.prompt")
+    arch_file = tmp_path / "architecture.json"
+    arch_file.write_text(json.dumps([
+        {"filename": "entry_python.prompt", "dependencies": []},
+        {"filename": "leaf_python.prompt", "dependencies": []},
+    ]), encoding="utf-8")
+
+    graph = sync_order.build_dependency_graph_from_architecture(arch_file)
+
+    assert graph["entry"] == ["missing"]
+    assert graph["missing"] == ["leaf"]
+
+
+def test_build_dependency_graph_from_architecture_missing_or_invalid(tmp_path, mock_logger):
+    """Test behavior when architecture file is missing, can't be parsed, or is invalid."""
+    missing_file = tmp_path / "missing_architecture.json"
+    assert sync_order.build_dependency_graph_from_architecture(missing_file) == {}
+
+    bad_file = tmp_path / "bad.json"
+    bad_file.write_text("{invalid json", encoding="utf-8")
+    assert sync_order.build_dependency_graph_from_architecture(bad_file) == {}
+    mock_logger.warning.assert_called()
+
+
+def _seed_chain_prompts(prompts_dir):
+    """Root and nested modules: declared edges plus include-only edges."""
+    _write_prompt(
+        prompts_dir, "checkout_python.prompt",
+        dependencies=["pricing_python.prompt"],
+        includes=["docs/pricing_examples.md"],
+    )
+    _write_prompt(prompts_dir, "pricing_python.prompt")
+    _write_prompt(
+        prompts_dir, "billing/invoice_python.prompt",
+        dependencies=["pricing_python.prompt"],
+    )
+    _write_prompt(prompts_dir, "billing/ledger_python.prompt")
+
+
+def _run_production_chain(project_root, prompts_dir, arch_file):
+    """sync -> auto-deps merge -> Step 6, all through production entry points."""
+    from pdd.architecture_sync import sync_all_prompts_to_architecture
+    from pdd.auto_deps_architecture import merge_auto_deps_includes_into_architecture
+
+    # Production auto-registration builds every architecture entry; the test
+    # never hand-writes the integration boundary (PR #2376 review).
+    arch_file.parent.mkdir(parents=True, exist_ok=True)
+    arch_file.write_text("[]", encoding="utf-8")
+    result = sync_all_prompts_to_architecture(
+        prompts_dir=prompts_dir, architecture_path=arch_file, dry_run=False
+    )
+    assert result["success"], result.get("errors")
+
+    # The merge step writes an <include>-derived module edge into the same
+    # architecture.json ``dependencies`` field that declared edges live in.
+    nested = prompts_dir / "billing" / "invoice_python.prompt"
+    merged = merge_auto_deps_includes_into_architecture(
+        project_root=project_root,
+        written_prompt_path=nested,
+        old_prompt_text=nested.read_text(encoding="utf-8"),
+        new_prompt_text=nested.read_text(encoding="utf-8")
+        + "<include>billing/ledger_python.prompt</include>\n",
+    )
+    return result, merged
+
+
+def _assert_declared_edges_only(arch_file):
+    from pdd.agentic_change_orchestrator import _build_dependency_context
+
+    graph = sync_order.build_dependency_graph_from_architecture(arch_file)
+    assert graph["checkout"] == ["pricing"]
+    assert graph["billing/invoice"] == ["pricing"]
+    assert not any("ledger" in dep for dep in graph["billing/invoice"]), (
+        "an <include>-derived edge leaked into the declared dependency graph"
+    )
+    context = _build_dependency_context(arch_file, quiet=True)
+    assert "checkout" in context
+    assert "ledger" not in context
+
+
+def test_production_chain_root_architecture_keeps_declared_edges_only(tmp_path):
+    """Issue #1807, root flow, no hand-written architecture.json.
+
+    Drives sync_all_prompts_to_architecture -> merge_auto_deps_includes_into_
+    architecture -> _build_dependency_context so CI protects the exact
+    mixed-provenance boundary that caused the bug (PR #2376 review).
+    """
+    prompts_dir = tmp_path / "prompts"
+    _seed_chain_prompts(prompts_dir)
+    arch_file = tmp_path / "architecture.json"
+
+    _, merged = _run_production_chain(tmp_path, prompts_dir, arch_file)
+    # The merge really did write the include-derived edge, so the Step 6
+    # assertions below exercise the mixed-provenance boundary rather than a
+    # registry that happens to be clean.
+    assert merged["added_dependencies"] == ["billing/ledger_python.prompt"]
+    _assert_declared_edges_only(arch_file)
+
+
+def test_production_chain_nested_architecture_uses_ancestor_prompts(tmp_path):
+    """The same chain when architecture.json lives below the prompt root.
+
+    Step 6 resolves nested architectures against the nearest ancestor that
+    owns ``prompts/`` (``_architecture_project_root``), so declared edges must
+    survive here too.
+
+    The auto-deps merge does NOT reach this architecture file: it resolves
+    entry filenames against the architecture's own directory rather than the
+    ancestor prompt root, so the two disagree for nested registries. That
+    limitation is pinned below -- if merge is ever taught to walk up, this
+    assertion fails and the include-pollution case should be asserted here as
+    it is in the root test.
+    """
+    prompts_dir = tmp_path / "prompts"
+    _seed_chain_prompts(prompts_dir)
+    arch_file = tmp_path / "services" / "billing" / "architecture.json"
+
+    _, merged = _run_production_chain(tmp_path, prompts_dir, arch_file)
+    assert merged["updated"] is False and merged["architecture_path"] is None
+    _assert_declared_edges_only(arch_file)

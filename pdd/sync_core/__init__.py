@@ -61,6 +61,7 @@ from .includes import (
     IncludeSyntax,
     build_include_closure,
     include_paths,
+    markdown_literal_spans,
     parse_include_references,
 )
 from .language import LanguageRegistry, LanguageRegistryError, LanguageSpec
@@ -241,6 +242,7 @@ __all__ = [
     "attestation_signer_from_environment",
     "count_vendored_sync_semantics",
     "include_paths",
+    "markdown_literal_spans",
     "load_verification_profiles",
     "load_attestation",
     "load_candidate_artifact_provenance",
