@@ -7601,7 +7601,7 @@
           },
           {
             "name": "register_untracked_prompts",
-            "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[set] = None) -> Dict[str, Any]",
+            "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[set] = None, known_filepaths: Optional[Dict[str, str]] = None) -> Dict[str, Any]",
             "returns": "Dict with keys: registered, skipped, errors"
           }
         ]
