@@ -419,6 +419,9 @@ CI_DETECT_REQUIREMENT_ROTATION = {
 STORY_PROMPT_PHASE_A_POLICY_SHA256 = (
     "b8b1e11ef85bbf76231c69a06f764935a1bdd2577a003d4299a98d62fa4bf67a"
 )
+STORY_PROMPT_PHASE_A_PROTECTED = (
+    "60588697e7aeee2ad6e22332d913927297a8c2e2"
+)
 STORY_PROMPT_PHASE_A_PROFILE_SHA256 = (
     "85d01008145de7a7bc67bc6b458b7780a1fbaf24f9733708a0a1032ecb49a9f5"
 )
@@ -973,7 +976,7 @@ def _story_prompt_phase_a_manifest_with_blobs(
             return protected_profile if ref == "protected" else candidate_profile
         if ref == "candidate" and path in candidate_prompt_bytes:
             return candidate_prompt_bytes[path]
-        return original_read(ROOT, "HEAD", path)
+        return original_read(ROOT, STORY_PROMPT_PHASE_A_PROTECTED, path)
 
     monkeypatch.setattr(verification, "read_git_blob", phase_a_read)
     candidate_paths = set(candidate_prompt_bytes)
@@ -1062,7 +1065,11 @@ def _load_story_prompt_phase_a_profiles(
 @pytest.fixture(scope="module")
 def story_prompt_phase_a_manifest():
     """Provide the unchanged protected inventory for every Phase-A candidate."""
-    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    manifest = build_unit_manifest(
+        ROOT,
+        base_ref=STORY_PROMPT_PHASE_A_PROTECTED,
+        head_ref=STORY_PROMPT_PHASE_A_PROTECTED,
+    )
     assert not manifest.invalid_reasons
     return manifest
 
@@ -1071,8 +1078,8 @@ def test_story_prompt_phase_a_consumed_replacement_is_exact(  # pylint: disable=
     monkeypatch, story_prompt_phase_a_manifest
 ) -> None:
     """Only the reviewed direct consumed-row replacement preserves overlays."""
-    protected_policy = ROTATION_FILE.read_bytes()
-    profile = PROFILE_FILE.read_bytes()
+    protected_policy = _git_blob(STORY_PROMPT_PHASE_A_PROTECTED, ROTATION_FILE)
+    profile = _git_blob(STORY_PROMPT_PHASE_A_PROTECTED, PROFILE_FILE)
     candidate_policy = _story_prompt_phase_a_policy(protected_policy)
     assert hashlib.sha256(profile).hexdigest() == STORY_PROMPT_PHASE_A_PROFILE_SHA256
 
@@ -1132,8 +1139,8 @@ def test_story_prompt_phase_a_consumed_replacement_rejects_nearby_bytes(  # pyli
     monkeypatch, mutation: str, story_prompt_phase_a_manifest
 ) -> None:
     """The direct replacement cannot become reusable authority by mutation."""
-    protected_policy = ROTATION_FILE.read_bytes()
-    profile = PROFILE_FILE.read_bytes()
+    protected_policy = _git_blob(STORY_PROMPT_PHASE_A_PROTECTED, ROTATION_FILE)
+    profile = _git_blob(STORY_PROMPT_PHASE_A_PROTECTED, PROFILE_FILE)
     candidate_policy = _story_prompt_phase_a_policy(protected_policy)
     candidate_profile = profile
     if mutation == "policy-bytes":
@@ -1169,10 +1176,12 @@ def test_story_prompt_phase_a_consumed_replacement_rejects_managed_prompt_drift(
     monkeypatch, prompt_path: PurePosixPath, story_prompt_phase_a_manifest
 ) -> None:
     """The exact Phase-A exception rejects target and unrelated prompt drift."""
-    protected_policy = ROTATION_FILE.read_bytes()
-    profile = PROFILE_FILE.read_bytes()
+    protected_policy = _git_blob(STORY_PROMPT_PHASE_A_PROTECTED, ROTATION_FILE)
+    profile = _git_blob(STORY_PROMPT_PHASE_A_PROTECTED, PROFILE_FILE)
     candidate_policy = _story_prompt_phase_a_policy(protected_policy)
-    candidate_prompt = (ROOT / prompt_path).read_bytes() + b"\n% unauthorized drift\n"
+    candidate_prompt = _git_blob(
+        STORY_PROMPT_PHASE_A_PROTECTED, ROOT / prompt_path
+    ) + b"\n% unauthorized drift\n"
 
     with pytest.raises(verification.VerificationProfileError) as error:
         _load_story_prompt_phase_a_profiles(
