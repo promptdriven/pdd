@@ -161,20 +161,34 @@ contract, or other versioned source that every affected prompt can use:
 6. **Module/archetype feasibility matrix.** For each affected module, or for each
    genuinely equivalent archetype, record the current topology, input/state
    authority, start/completion evidence, progress/result channel, side effects,
-   recovery/replacement capability, and any contract gap. Do not assume one generic
-   wrapper makes heterogeneous modules equivalent.
+   recovery/replacement capability, and any contract gap. Cite an inspected seam,
+   included interface, or characterization test for every claimed "current",
+   "existing", or "native" capability; otherwise record it as absent or unknown.
+   State the target decision separately. Do not assume one generic wrapper makes
+   heterogeneous modules equivalent. In plain terms: check that the promised door
+   exists before instructions tell a generator to walk through it.
 7. **Verification mold.** Establish baseline characterization tests for existing
    behavior, behavioral evidence for every changed rule, negative tests for every
    forbidden side effect or premature call, and cross-module tests for important
-   handoffs and transitions. Where the existing coverage policy permits a temporary
-   waiver, record its scope, rationale, approver, and expiry. A waiver cannot stand
-   in for an unknown seam, authority, or required capability.
+   handoffs and transitions. Each matrix row also needs a production-shaped
+   conformance test that crosses its real admission, save, or provider boundary and
+   proves both the allowed event and the forbidden premature event. Shared fake or
+   mock adapter tests prove only shared protocol behavior, not a route's authority.
+   A convincing practice version is not proof that the real boundary made the same
+   promise. Where the existing coverage policy permits a temporary waiver, record
+   its scope, rationale, approver, and expiry. A waiver cannot stand in for an unknown seam,
+   authority, required capability, or native-boundary proof.
+8. **Representative pilots before fan-out.** For each genuinely different
+   archetype, prove one representative through its real production seam before
+   freezing the shared contract or generating a broad cohort. Then deliver the
+   remaining modules in bounded cohorts. This tests each kind of bridge before
+   building many copies of it.
 
 A compact matrix is enough; its purpose is to expose unsupported assumptions:
 
-| Module / archetype | Current topology | Input/state authority | Start/completion evidence | Progress/result channel | Side effects | Recovery/replacement | Contract gaps |
-|---|---|---|---|---|---|---|---|
-| `<unit or archetype>` | `<sync, worker, provider, ...>` | `<authority>` | `<observable proof>` | `<channel or none>` | `<allowed effects>` | `<supported or unsupported>` | `<decision needed or none>` |
+| Module / archetype | Current topology | Current evidence | Input/state authority | Start/completion evidence | Progress/result channel | Side effects | Recovery/replacement | Contract gaps | Target decision |
+|---|---|---|---|---|---|---|---|---|---|
+| `<unit or archetype>` | `<sync, worker, provider, ...>` | `<seam, interface, or test>` | `<authority>` | `<observable proof>` | `<channel or none>` | `<allowed effects>` | `<supported or unsupported>` | `<decision needed or none>` | `<adopt, change, spike, or exclude>` |
 
 If the matrix exposes an unknown seam, hidden coupling, or a capability that the
 current topology cannot provide, classify the work as weak-fit and pause production
@@ -189,6 +203,24 @@ interfaces, lifecycle vocabulary, state authority, capability boundaries, observ
 ordering, and test oracles are required intent. Private helper names, internal class
 layout, storage paths, framework primitives, and non-observable algorithms remain
 implementation details unless they are themselves a public compatibility contract.
+
+### Stop Signals During Generation and Review
+
+The readiness gate continues after the first generation. If the same
+architecture-level finding recurs twice, or a change has reached roughly four or
+five repair/review rounds, pause code repair and classify the cause. Re-open the
+prompt architecture, run a bounded feasibility spike, or split the delivery rather
+than adding another patch. Repeated trouble is a signal to revisit the blueprint,
+not proof that more patches will complete it.
+
+For a high-risk module, record the expected prompt-to-code complexity and blast
+radius before generation: affected archetypes, dev units, and an approximate size
+range. Treat a generated module that is more than about 10 times its prompt, a
+prompt that is below about 10% of its expected code without justification, or a
+story that spans multiple archetypes and dozens of dev units as a tripwire for this
+review and cohort splitting. This does not impose a line-count target; it catches a
+small instruction silently becoming an unreviewable subsystem, which often means a
+shared contract is still missing.
 
 ---
 
@@ -2278,26 +2310,41 @@ The test for every back-propagated line: **could a different, equally correct im
 
 ### Prompt Defects vs. Code Bugs
 
-In PDD, the prompt is the source of truth. However, prompts themselves can contain defects. The `pdd bug` agentic workflow (Step 5.5: Prompt Classification) distinguishes between two types of bugs:
+In PDD, the prompt is the source of truth. However, prompts and their tests can
+themselves contain defects. The `pdd bug` agentic workflow (Step 5.5: Prompt
+Classification) distinguishes code defects from two kinds of prompt defect and an
+unreliable test oracle:
 
 | Defect Type | Definition | Detection | Action |
 |-------------|------------|-----------|--------|
 | **Code Bug** | Code doesn't match the prompt specification | Tests fail because implementation diverges from requirements | Fix the code via `pdd fix` |
-| **Prompt Defect** | Prompt doesn't match the intended behavior | User-reported expected behavior contradicts the prompt | Fix the prompt, then regenerate |
+| **Behavior Prompt Defect** | Prompt doesn't match the intended behavior | User-reported expected behavior contradicts the prompt | Fix the prompt, then regenerate |
+| **Architecture-Prompt Defect** | The user outcome may be right, but the prompt lacks a lifecycle, typed seam, authority/capability decision, current-capability evidence, or usable test oracle | A review finding changes one of those shared facts, or the same architecture finding returns | Stop code repair; back-propagate the architecture-level requirement, re-approve the readiness gate, then resume |
+| **Missing or Invalid Oracle** | Tests or observations cannot show whether the required behavior really happened | A test proves only a fake/shared path, or cannot distinguish an allowed event from a premature side effect | Establish a production-shaped conformance test or characterization test before treating a repair as complete |
 
 **How Prompt Classification Works:**
 
 After root cause analysis (Step 5), the workflow examines whether:
-1. The code correctly implements the prompt, but the prompt is wrong (→ Prompt Defect)
-2. The code incorrectly implements the prompt (→ Code Bug)
+1. The code incorrectly implements an approved, implementation-ready prompt (→ Code Bug)
+2. The intended behavior contradicts the prompt (→ Behavior Prompt Defect)
+3. The prompt describes the outcome but leaves the shared architecture or proof
+   undefined (→ Architecture-Prompt Defect)
+4. The available test cannot distinguish the real event from a fake or premature
+   one (→ Missing or Invalid Oracle)
 
 **Output markers** for automation:
 - `DEFECT_TYPE: code` - Proceed with normal test generation
 - `DEFECT_TYPE: prompt` - Auto-fix the prompt file first
+- `DEFECT_TYPE: architecture-prompt` - Stop generation and reopen readiness review
+- `DEFECT_TYPE: oracle` - Establish trustworthy evidence before repair
 - `PROMPT_FIXED: path/to/file.prompt` - Indicates which prompt was modified
 - `PROMPT_REVIEW: reason` - Request human review for ambiguous cases
 
-**Default behavior:** When classification is uncertain, the workflow defaults to "code bug" to preserve backward compatibility.
+**Default behavior:** When classification is uncertain, preserve backward
+compatibility for a local module. If an architecture-readiness trigger fired or a
+finding concerns a seam, lifecycle, authority, capability, or test oracle, do not
+default to a code bug: pause for architecture-prompt review. This prevents a missing
+blueprint from being repaired repeatedly as if it were many unrelated coding errors.
 
 This classification prevents the "test oracle problem" - where tests generated from a flawed prompt would encode incorrect behavior, causing `pdd fix` to "fix" correct code to match the buggy specification.
 
@@ -2315,9 +2362,13 @@ For every change that triggers the [mandatory architecture-readiness gate](#mand
 - [ ] Are lifecycle terms and transition authorities defined precisely enough that a test can distinguish them?
 - [ ] Does the current topology provide every required durability, progress, cancellation, replacement, retry, and recovery capability? If not, is there an explicit architecture decision or feasibility spike?
 - [ ] Does a module/archetype matrix show how heterogeneous units satisfy the contract instead of assuming one wrapper fits all?
+- [ ] Does every claimed current, existing, or native capability cite an inspected seam, included interface, or characterization test, with a separate target decision?
 - [ ] Does every contract-critical `<pdd-dependency>` also have usable included interface/context where generation needs it?
 - [ ] Are authoritative input/state owners and observable side-effect ordering unambiguous?
-- [ ] Do characterization, behavioral, negative, and cross-module handoff tests exist before broad implementation begins?
+- [ ] Does each materially different archetype have one production-shaped pilot through its real boundary before broad fan-out?
+- [ ] Do characterization, behavioral, negative, and cross-module handoff tests exist before broad implementation begins, including a real-boundary conformance test per matrix row?
+- [ ] Is the expected complexity/blast radius recorded, with a cohort-splitting review for a large prompt-to-code expansion or broad multi-archetype story?
+- [ ] Has a repeated architecture finding or roughly 4-5 repair/review rounds paused the work for reclassification rather than adding another patch?
 - [ ] If any answer is unknown, has prompt generation stopped until the seam and oracle are established?
 
 ### Contract Quality
@@ -2506,7 +2557,7 @@ flowchart LR
 - [ ] Dependencies included (if external or critical)
 - [ ] High-risk MUST/MUST NOT rules have stable IDs
 - [ ] Ambiguous terms are defined in Vocabulary
-- [ ] If an architecture-readiness trigger fires, the shared contract, archetype matrix, feasibility decisions, and minimum mold gate are complete
+- [ ] If an architecture-readiness trigger fires, the shared contract, evidence-backed archetype matrix, feasibility decisions, representative pilots, and minimum mold gate are complete
 
 ### For Established Modules
 - [ ] Tests exist for known edge cases
