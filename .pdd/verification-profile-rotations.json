@@ -657,6 +657,39 @@
       "head_policy_sha256": "faf427d3891e0c4eb38a1d25d4d03f1fa4f24bcac642b7658bd65ceeaf52b953",
       "base_prompt_sha256": "882876b0dea9198c1fa9492806d85bfb088b393096f4f1a0543cc8f31f40fc30",
       "head_prompt_sha256": "a3eb3060fcf46f6534f1d483693c659b2a5d4068c5b309798c591b9166ee2704"
+    },
+    {
+      "prompt_path": "pdd/prompts/metadata_sync_python.prompt",
+      "language_id": "python",
+      "from_requirement_id": "CONTRACT-SHA256:6ab860b38af47df67f30c5281e89df9a5dad98116fe41a7b21d630a06b028bfc",
+      "to_requirement_id": "CONTRACT-SHA256:4b5dba2e4fa3363f7e12b03ab1ac248820b44491637766490e5f50ec3dc7b666",
+      "policy_path": ".pdd/verification-profiles.json",
+      "base_policy_sha256": "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
+      "head_policy_sha256": "3af7bc3a094544bb77c8956485c18f75355856239218438086f9692c1d6d3de6",
+      "base_prompt_sha256": "6ab860b38af47df67f30c5281e89df9a5dad98116fe41a7b21d630a06b028bfc",
+      "head_prompt_sha256": "4b5dba2e4fa3363f7e12b03ab1ac248820b44491637766490e5f50ec3dc7b666"
+    },
+    {
+      "prompt_path": "pdd/prompts/metadata_sync_python.prompt",
+      "language_id": "python",
+      "from_requirement_id": "CONTRACT-SHA256:6ab860b38af47df67f30c5281e89df9a5dad98116fe41a7b21d630a06b028bfc",
+      "to_requirement_id": "CONTRACT-SHA256:99b42295444978464e2f9be0528e533649e908a72bf10c0759316003526bc407",
+      "policy_path": ".pdd/verification-profiles.json",
+      "base_policy_sha256": "85d01008145de7a7bc67bc6b458b7780a1fbaf24f9733708a0a1032ecb49a9f5",
+      "head_policy_sha256": "aca4c6af396c28dfe92bf4ba1b0c19ff2e2f185890db601cde3113a8f127d194",
+      "base_prompt_sha256": "6ab860b38af47df67f30c5281e89df9a5dad98116fe41a7b21d630a06b028bfc",
+      "head_prompt_sha256": "99b42295444978464e2f9be0528e533649e908a72bf10c0759316003526bc407"
+    },
+    {
+      "prompt_path": "pdd/prompts/architecture_sync_python.prompt",
+      "language_id": "python",
+      "from_requirement_id": "CONTRACT-SHA256:a5fd7095f26859503d4f2a2c30b49b1a0fe834b78d55536f69eae26006fb9fb7",
+      "to_requirement_id": "CONTRACT-SHA256:781116a77903e388e4b5127136541dcb9a0516912f8e5eb466a2b98ff7f825ea",
+      "policy_path": ".pdd/verification-profiles.json",
+      "base_policy_sha256": "85d01008145de7a7bc67bc6b458b7780a1fbaf24f9733708a0a1032ecb49a9f5",
+      "head_policy_sha256": "aca4c6af396c28dfe92bf4ba1b0c19ff2e2f185890db601cde3113a8f127d194",
+      "base_prompt_sha256": "a5fd7095f26859503d4f2a2c30b49b1a0fe834b78d55536f69eae26006fb9fb7",
+      "head_prompt_sha256": "781116a77903e388e4b5127136541dcb9a0516912f8e5eb466a2b98ff7f825ea"
     }
   ],
   "requirement_rotation_retirements": [
@@ -730,6 +763,30 @@
         "head_policy_sha256": "faf427d3891e0c4eb38a1d25d4d03f1fa4f24bcac642b7658bd65ceeaf52b953",
         "base_prompt_sha256": "882876b0dea9198c1fa9492806d85bfb088b393096f4f1a0543cc8f31f40fc30",
         "head_prompt_sha256": "a3eb3060fcf46f6534f1d483693c659b2a5d4068c5b309798c591b9166ee2704"
+      }
+    },
+    {
+      "obsolete": {
+        "prompt_path": "pdd/prompts/metadata_sync_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": "CONTRACT-SHA256:c9dee496de479efe665cc44767871a5530bb09cdbcc797d8603fd6e3191d5561",
+        "to_requirement_id": "CONTRACT-SHA256:6ab860b38af47df67f30c5281e89df9a5dad98116fe41a7b21d630a06b028bfc",
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": "c566e1b87015632ca317e799f2756af9a25281c6e842c03ccad763b20d539bf1",
+        "head_policy_sha256": "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3",
+        "base_prompt_sha256": "c9dee496de479efe665cc44767871a5530bb09cdbcc797d8603fd6e3191d5561",
+        "head_prompt_sha256": "6ab860b38af47df67f30c5281e89df9a5dad98116fe41a7b21d630a06b028bfc"
+      },
+      "replacement": {
+        "prompt_path": "pdd/prompts/metadata_sync_python.prompt",
+        "language_id": "python",
+        "from_requirement_id": "CONTRACT-SHA256:6ab860b38af47df67f30c5281e89df9a5dad98116fe41a7b21d630a06b028bfc",
+        "to_requirement_id": "CONTRACT-SHA256:4b5dba2e4fa3363f7e12b03ab1ac248820b44491637766490e5f50ec3dc7b666",
+        "policy_path": ".pdd/verification-profiles.json",
+        "base_policy_sha256": "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
+        "head_policy_sha256": "3af7bc3a094544bb77c8956485c18f75355856239218438086f9692c1d6d3de6",
+        "base_prompt_sha256": "6ab860b38af47df67f30c5281e89df9a5dad98116fe41a7b21d630a06b028bfc",
+        "head_prompt_sha256": "4b5dba2e4fa3363f7e12b03ab1ac248820b44491637766490e5f50ec3dc7b666"
       }
     }
   ]

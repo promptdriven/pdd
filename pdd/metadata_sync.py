@@ -14,6 +14,7 @@ from .architecture_sync import (
     get_architecture_entry_for_prompt,
     has_pdd_tags,
     parse_prompt_tags,
+    register_untracked_prompts,
     update_architecture_from_prompt,
 )
 from .architecture_registry import find_architecture_for_project
@@ -154,41 +155,78 @@ def _refresh_tags_content(prompt_content: str, arch_entry: Optional[Dict[str, An
     return tag_block + "\n\n" + prompt_content
 
 
+def _bootstrap_tags_content(prompt_content: str, prompt_filename: str) -> Optional[str]:
+    """Return minimal PDD metadata for an unregistered prompt.
+
+    The architecture registry has no entry from which to seed this prompt, so
+    use a deterministic, intentionally small contract.  The architecture
+    registration pass will infer the source filepath and module tags from the
+    prompt-relative filename.  Existing metadata is never overwritten.
+    """
+    if has_pdd_tags(prompt_content):
+        return None
+    # A structurally valid but empty module interface: the public surface is
+    # not yet known (no source to derive it from at this point), but an
+    # invalid placeholder (e.g. `{"type": "module"}` missing the "module"
+    # key) fails validate_interface_structure while still satisfying
+    # has_pdd_tags, so later syncs would treat the fabricated metadata as
+    # already-tagged and preserve it indefinitely.
+    tag_block = (
+        f"<pdd-reason>Auto-registered module: {prompt_filename}</pdd-reason>\n\n"
+        "<pdd-interface>\n"
+        '{"type": "module", "module": {"functions": []}}\n'
+        "</pdd-interface>"
+    )
+    return tag_block + "\n\n" + prompt_content
+
+
+def _lookup_arch_entry_for_prompt(
+    prompt_path: Path,
+    architecture_path: Optional[Path],
+    prompts_dir: Optional[Path] = None,
+) -> tuple[Optional[Dict[str, Any]], bool]:
+    """Return the architecture entry and whether its lookup succeeded.
+
+    A nested prompt must match its prompts-dir-relative architecture filename
+    exactly. This avoids adopting metadata from a different module that happens
+    to share its basename. Flat-layout callers retain basename fallback.
+    """
+    if architecture_path is None or not architecture_path.exists():
+        return None, True
+    try:
+        relative_filename: Optional[str] = None
+        if prompts_dir is not None:
+            try:
+                relative_filename = prompt_path.resolve().relative_to(
+                    prompts_dir.resolve()
+                ).as_posix()
+            except ValueError:
+                pass
+        if relative_filename is not None:
+            entry = get_architecture_entry_for_prompt(
+                relative_filename, architecture_path
+            )
+            if entry is not None and entry.get("filename") == relative_filename:
+                return entry, True
+            if "/" in relative_filename:
+                return None, True
+        entry = get_architecture_entry_for_prompt(prompt_path.name, architecture_path)
+        return entry, True
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        return None, False
+
+
 def _load_arch_entry_for_prompt(
     prompt_path: Path,
     architecture_path: Optional[Path],
     prompts_dir: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Best-effort lookup of the architecture.json entry for this prompt.
-
-    Delegates to :func:`pdd.architecture_sync.get_architecture_entry_for_prompt`,
-    which handles both the bare-list and ``{"modules": [...]}`` shapes of
-    ``architecture.json`` and keys entries by their ``filename`` field
-    (subdirectory-aware per Issue #617). Tries the prompts-dir-relative path
-    first (e.g. ``commands/foo_python.prompt``) and falls back to the basename
-    so flat-layout repos keep working.
-    """
-    if architecture_path is None or not architecture_path.exists():
-        return None
-    try:
-        candidates: List[str] = []
-        if prompts_dir is not None:
-            try:
-                rel = prompt_path.resolve().relative_to(prompts_dir.resolve()).as_posix()
-                candidates.append(rel)
-            except ValueError:
-                pass
-        if prompt_path.name not in candidates:
-            candidates.append(prompt_path.name)
-        for filename in candidates:
-            entry = get_architecture_entry_for_prompt(filename, architecture_path)
-            if entry is not None:
-                return entry
-    except (KeyboardInterrupt, SystemExit):
-        raise
-    except Exception:
-        return None
-    return None
+    """Best-effort compatibility wrapper for architecture-entry lookup."""
+    return _lookup_arch_entry_for_prompt(
+        prompt_path, architecture_path, prompts_dir
+    )[0]
 
 
 def run_metadata_sync(
@@ -282,11 +320,22 @@ def run_metadata_sync(
     # ---- Stage 2: tags ----
     _stage_log_enter("tags")
     refreshed_prompt_content: str = prompt_content  # carry forward to architecture stage
+    bootstrapped_unregistered = False
     try:
-        arch_entry = _load_arch_entry_for_prompt(
+        arch_entry, arch_lookup_succeeded = _lookup_arch_entry_for_prompt(
             prompt_path, architecture_path, prompts_dir=prompts_dir
         )
+        if not arch_lookup_succeeded:
+            raise RuntimeError("architecture lookup failed")
         new_content = _refresh_tags_content(prompt_content, arch_entry)
+        if (
+            new_content is None
+            and arch_entry is None
+            and architecture_path is not None
+            and architecture_path.exists()
+        ):
+            new_content = _bootstrap_tags_content(prompt_content, arch_prompt_filename)
+            bootstrapped_unregistered = new_content is not None
         if new_content is None or new_content == prompt_content:
             # Already has tags or nothing to do — stable / idempotent.
             existing = parse_prompt_tags(prompt_content)
@@ -322,14 +371,19 @@ def run_metadata_sync(
                     result.stages["tags"] = StageStatus(status="ok", detail=detail)
                     _stage_log_exit("tags", "ok", detail)
         else:
-            detail = f"would prepend tag block ({len(new_content) - len(prompt_content)} chars)"
+            action = (
+                "bootstrap minimal metadata"
+                if bootstrapped_unregistered
+                else "prepend tag block"
+            )
+            detail = f"would {action} ({len(new_content) - len(prompt_content)} chars)"
             if dry_run:
                 result.stages["tags"] = StageStatus(status="dry_run", detail=detail)
                 _stage_log_exit("tags", "dry_run", detail)
             else:
                 _atomic_write(prompt_path, new_content)
                 refreshed_prompt_content = new_content
-                detail_written = f"wrote refreshed tags ({len(new_content)} chars)"
+                detail_written = f"{action} ({len(new_content)} chars)"
                 result.stages["tags"] = StageStatus(status="ok", detail=detail_written)
                 _stage_log_exit("tags", "ok", detail_written)
     except (KeyboardInterrupt, SystemExit):
@@ -365,43 +419,79 @@ def run_metadata_sync(
                 result.stages["architecture"] = StageStatus(status="skipped", reason=reason)
                 _stage_log_exit("architecture", "skipped", reason)
             else:
-                arch_result = update_architecture_from_prompt(
-                    prompt_filename=arch_prompt_filename,
+                # A newly-created prompt has no registry row yet, so tags
+                # alone cannot be synchronized by update_architecture_from_prompt.
+                # Register only this prompt-relative filename: metadata sync is
+                # intentionally scoped and must not sweep unrelated prompt drift.
+                known_filepaths: Optional[Dict[str, str]] = None
+                if code_path is not None:
+                    try:
+                        known_code_path = code_path.resolve().relative_to(
+                            resolved_repo_root
+                        ).as_posix()
+                    except (ValueError, OSError):
+                        known_code_path = None
+                    if known_code_path is not None:
+                        known_filepaths = {arch_prompt_filename: known_code_path}
+                registration = register_untracked_prompts(
                     prompts_dir=prompts_dir,
                     architecture_path=architecture_path,
                     dry_run=dry_run,
-                    prompt_content_override=refreshed_prompt_content,
+                    only_files={arch_prompt_filename},
+                    known_filepaths=known_filepaths,
                 )
-                if not arch_result.get("success", False):
-                    err = arch_result.get("error") or "architecture update failed"
-                    # Unregistered modules (no entry in architecture.json) are a
-                    # normal state for tools, scripts, and not-yet-tracked code.
-                    # Treat that as "skipped" so the fingerprint isn't gated off
-                    # and CI auto-heal doesn't revert a clean prompt update for
-                    # a module that simply isn't in the architecture index.
-                    if isinstance(err, str) and err.startswith("No architecture entry found for:"):
-                        result.stages["architecture"] = StageStatus(
-                            status="skipped", reason=err
-                        )
-                        _stage_log_exit("architecture", "skipped", err)
-                    else:
-                        raise RuntimeError(err)
+                registration_errors = registration.get("errors") or []
+                if registration_errors:
+                    raise RuntimeError("; ".join(str(error) for error in registration_errors))
+                registered = registration.get("registered") or []
+                if dry_run and (
+                    bootstrapped_unregistered or arch_prompt_filename in registered
+                ):
+                    detail = f"would register and sync {arch_prompt_filename}"
+                    result.stages["architecture"] = StageStatus(status="dry_run", detail=detail)
+                    _stage_log_exit("architecture", "dry_run", detail)
                 else:
-                    updated = arch_result.get("updated", False)
-                    changes = arch_result.get("changes") or {}
-                    change_keys = list(changes.keys()) if isinstance(changes, dict) else []
-                    if dry_run:
-                        detail = (
-                            f"would update fields: {change_keys}" if updated else "no changes"
-                        )
-                        result.stages["architecture"] = StageStatus(status="dry_run", detail=detail)
-                        _stage_log_exit("architecture", "dry_run", detail)
+                    arch_result = update_architecture_from_prompt(
+                        prompt_filename=arch_prompt_filename,
+                        prompts_dir=prompts_dir,
+                        architecture_path=architecture_path,
+                        dry_run=dry_run,
+                        prompt_content_override=refreshed_prompt_content,
+                    )
+                    if not arch_result.get("success", False):
+                        err = arch_result.get("error") or "architecture update failed"
+                        # Unregistered modules (no entry in architecture.json) are a
+                        # normal state for tools, scripts, and not-yet-tracked code.
+                        # Treat that as "skipped" so the fingerprint isn't gated off
+                        # and CI auto-heal doesn't revert a clean prompt update for
+                        # a module that simply isn't in the architecture index.
+                        if isinstance(err, str) and err.startswith(
+                            "No architecture entry found for:"
+                        ):
+                            result.stages["architecture"] = StageStatus(
+                                status="skipped", reason=err
+                            )
+                            _stage_log_exit("architecture", "skipped", err)
+                        else:
+                            raise RuntimeError(err)
                     else:
-                        detail = (
-                            f"updated fields: {change_keys}" if updated else "no changes"
-                        )
-                        result.stages["architecture"] = StageStatus(status="ok", detail=detail)
-                        _stage_log_exit("architecture", "ok", detail)
+                        updated = arch_result.get("updated", False)
+                        changes = arch_result.get("changes") or {}
+                        change_keys = list(changes.keys()) if isinstance(changes, dict) else []
+                        if dry_run:
+                            detail = (
+                                f"would update fields: {change_keys}" if updated else "no changes"
+                            )
+                            result.stages["architecture"] = StageStatus(
+                                status="dry_run", detail=detail
+                            )
+                            _stage_log_exit("architecture", "dry_run", detail)
+                        else:
+                            detail = (
+                                f"updated fields: {change_keys}" if updated else "no changes"
+                            )
+                            result.stages["architecture"] = StageStatus(status="ok", detail=detail)
+                            _stage_log_exit("architecture", "ok", detail)
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception as exc:

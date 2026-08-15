@@ -175,12 +175,12 @@ _PR2316_STALE_LLM_REISSUE_PHASE_B_STATIONARY_PROFILE_BYTES = (
 # The language-validity gate consumes one code-generator prompt transition.
 # Retain prior reconciliations only for its exact policy and profile bytes.
 _CODE_GENERATOR_LANGUAGE_GATE_ROTATION_POLICY_BYTES = (
-    "57d51b73e72340571d14944c4484222dd3ca53f22c8e5c97e6b5a6050ecae9a8",
-    "57d51b73e72340571d14944c4484222dd3ca53f22c8e5c97e6b5a6050ecae9a8",
+    "20a601f852448cc548747d7649e52896460165eb90975491114458bf6b0098da",
+    "20a601f852448cc548747d7649e52896460165eb90975491114458bf6b0098da",
 )
 _CODE_GENERATOR_LANGUAGE_GATE_PROFILE_BYTES = (
-    "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
-    "6e589170b67c9547fad99dca53d32a085ecb3e9074a564419f97fc7316546888",
+    "3af7bc3a094544bb77c8956485c18f75355856239218438086f9692c1d6d3de6",
+    "3af7bc3a094544bb77c8956485c18f75355856239218438086f9692c1d6d3de6",
 )
 # Issue #2377 lets global options precede a subcommand in the Zsh completion
 # dispatcher, moving `pdd/prompts/pdd_completion_zsh.prompt` and its profile row
@@ -244,6 +244,24 @@ _PR2376_DEPENDENCY_FIX_PROFILE_BYTES = (
     # conformance-split profile state, not the pre-#2374 zsh stationary one.
     _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
     "85d01008145de7a7bc67bc6b458b7780a1fbaf24f9733708a0a1032ecb49a9f5",
+)
+# PR #2399 fixes the metadata-sync bootstrap interface (a bare
+# `{"type": "module"}` placeholder failed `validate_interface_structure`) and
+# adds the `known_filepaths` parameter to `register_untracked_prompts` so a
+# nested prompt's registration can carry its caller-supplied `code_path`
+# instead of relying on convention-based inference. The prior branch-local
+# reconciliation (`_CODE_GENERATOR_LANGUAGE_GATE_*`) computed its head against
+# a pre-#2374/#2376 base that this branch no longer reaches after rebasing
+# onto current main; bind this exact composed transition to the real base
+# (main's #2376 dependency-fix state) instead of superseding that stale pin,
+# since other tests may still pin frozen historical refs that contain it.
+_PR2399_METADATA_ARCHITECTURE_SYNC_ROTATION_POLICY_BYTES = (
+    _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1],
+    "86af95e0cce61fb03c28042ccd829972457633280a04c5a81cfc66d624575c16",
+)
+_PR2399_METADATA_ARCHITECTURE_SYNC_PROFILE_BYTES = (
+    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+    "aca4c6af396c28dfe92bf4ba1b0c19ff2e2f185890db601cde3113a8f127d194",
 )
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
@@ -1081,6 +1099,25 @@ _PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS = (
         "e280e55b009da1afc34f31bfc8410518d17e70b2cd794170bcf8960c48214411",
         _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[0],
         _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+    ),
+)
+
+_PR2399_METADATA_ARCHITECTURE_SYNC_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/metadata_sync_python.prompt",
+        "python",
+        "6ab860b38af47df67f30c5281e89df9a5dad98116fe41a7b21d630a06b028bfc",
+        "99b42295444978464e2f9be0528e533649e908a72bf10c0759316003526bc407",
+        _PR2399_METADATA_ARCHITECTURE_SYNC_PROFILE_BYTES[0],
+        _PR2399_METADATA_ARCHITECTURE_SYNC_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/architecture_sync_python.prompt",
+        "python",
+        "a5fd7095f26859503d4f2a2c30b49b1a0fe834b78d55536f69eae26006fb9fb7",
+        "781116a77903e388e4b5127136541dcb9a0516912f8e5eb466a2b98ff7f825ea",
+        _PR2399_METADATA_ARCHITECTURE_SYNC_PROFILE_BYTES[0],
+        _PR2399_METADATA_ARCHITECTURE_SYNC_PROFILE_BYTES[1],
     ),
 )
 
@@ -3243,12 +3280,32 @@ def _load_requirement_transition_authorizations(
             ),
         }
     )
+    pr2399_metadata_architecture_sync_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        in {
+            (
+                _PR2399_METADATA_ARCHITECTURE_SYNC_ROTATION_POLICY_BYTES,
+                _PR2399_METADATA_ARCHITECTURE_SYNC_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _PR2399_METADATA_ARCHITECTURE_SYNC_ROTATION_POLICY_BYTES[1],
+                    _PR2399_METADATA_ARCHITECTURE_SYNC_ROTATION_POLICY_BYTES[1],
+                ),
+                (
+                    _PR2399_METADATA_ARCHITECTURE_SYNC_PROFILE_BYTES[1],
+                    _PR2399_METADATA_ARCHITECTURE_SYNC_PROFILE_BYTES[1],
+                ),
+            ),
+        }
+    )
     temperature_regression_state = (
         exact_pr2316_phase_a_reissue
         or exact_pr2316_stationary_reissue
         or exact_pr2316_historical_reissue
         or exact_pr2316_phase_b_state
         or pr2376_dependency_fix_state
+        or pr2399_metadata_architecture_sync_state
         or (
             is_pdd_repository
             and (policy_digests, profile_digests)
@@ -3280,6 +3337,7 @@ def _load_requirement_transition_authorizations(
         or code_generator_language_gate_state
         or temperature_regression_state
         or pr2376_dependency_fix_state
+        or pr2399_metadata_architecture_sync_state
     )
     gemini_36_terra_sol_state = is_pdd_repository and (
         (policy_digests, profile_digests)
@@ -3354,6 +3412,17 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in pr2376_identities
         ) + _PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS
         authority.update(_PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS)
+    if pr2399_metadata_architecture_sync_state:
+        pr2399_identities = {
+            (item.prompt_path, item.language_id)
+            for item in _PR2399_METADATA_ARCHITECTURE_SYNC_REQUIREMENT_TRANSITIONS
+        }
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id) not in pr2399_identities
+        ) + _PR2399_METADATA_ARCHITECTURE_SYNC_REQUIREMENT_TRANSITIONS
+        authority.update(_PR2399_METADATA_ARCHITECTURE_SYNC_REQUIREMENT_TRANSITIONS)
     if generate_reliability_state or historical_composed_state:
         reliability_identities = {
             (item.prompt_path, item.language_id)
@@ -3384,7 +3453,8 @@ def _load_requirement_transition_authorizations(
             )
         if code_generator_language_gate_state:
             language_gate_identities = {
-                (PurePosixPath("pdd/prompts/code_generator_main_python.prompt"), "python")
+                (PurePosixPath("pdd/prompts/code_generator_main_python.prompt"), "python"),
+                (PurePosixPath("pdd/prompts/metadata_sync_python.prompt"), "python"),
             }
             opus_fable_transitions = tuple(
                 item

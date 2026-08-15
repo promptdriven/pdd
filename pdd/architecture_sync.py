@@ -548,6 +548,7 @@ def register_untracked_prompts(
     architecture_path: Path = ARCHITECTURE_JSON_PATH,
     dry_run: bool = False,
     only_files: Optional[set] = None,
+    known_filepaths: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """
     Discover prompt files that have PDD tags but no architecture.json entry,
@@ -571,6 +572,19 @@ def register_untracked_prompts(
             Step 10) should pass a narrow set containing only the prompts
             touched by the current workflow, so a single ``pdd change`` run
             cannot silently sweep unrelated repo-wide drift into the PR.
+        known_filepaths: Optional map of filename (relative to prompts_dir,
+            as used in ``only_files``) to the authoritative repo-relative
+            source filepath. When a filename has an entry here, it is used
+            verbatim instead of the naming-convention inference
+            (``_infer_filepath_from_pddrc_context`` / ``_infer_filepath``),
+            which cannot always recover a package-nested source path (e.g.
+            ``pdd/prompts/sync_core/manifest_python.prompt`` -> the
+            convention-based inference resolves to ``sync_core/manifest.py``,
+            dropping the ``pdd/`` package prefix because prompts_dir sits
+            inside the package rather than mirroring the repo root). Callers
+            that already know the real source path (e.g. metadata sync
+            bootstrapping a prompt alongside its ``code_path``) should pass
+            it here rather than relying on inference.
 
     Returns:
         Dict with keys:
@@ -613,8 +627,10 @@ def register_untracked_prompts(
             skipped.append(filename)
             continue
 
+        known_filepath = known_filepaths.get(filename) if known_filepaths else None
         filepath = (
-            _infer_filepath_from_pddrc_context(filename, prompts_dir, architecture_path)
+            known_filepath
+            or _infer_filepath_from_pddrc_context(filename, prompts_dir, architecture_path)
             or _infer_filepath(filename)
         )
         module_tags = _infer_module_tags(filename)
@@ -629,7 +645,7 @@ def register_untracked_prompts(
             'filename': filename,
             'filepath': filepath,
             'tags': module_tags,
-            'interface': tags['interface'] or {'type': 'module'},
+            'interface': tags['interface'] or {'type': 'module', 'module': {'functions': []}},
         }
         arch_data.append(entry)
         existing_filenames.add(filename)

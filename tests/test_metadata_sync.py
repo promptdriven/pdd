@@ -82,6 +82,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from pdd import architecture_sync
 from pdd import metadata_sync as ms
 from pdd.metadata_sync import (
     MetadataSyncResult,
@@ -310,7 +311,10 @@ def test_dry_run_does_not_call_save_fingerprint(tmp_path: Path) -> None:
 def test_dry_run_passes_dry_run_to_architecture_call(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     arch_path = tmp_path / "architecture.json"
-    arch_path.write_text(json.dumps({"modules": []}), encoding="utf-8")
+    arch_path.write_text(
+        json.dumps({"modules": [{"filename": "demo_python.prompt"}]}),
+        encoding="utf-8",
+    )
     with patch.object(ms, "update_architecture_from_prompt", return_value=_arch_update_ok()) as mock_upd:
         run_metadata_sync(ws["prompt_path"], dry_run=True, architecture_path=arch_path)
     assert mock_upd.called
@@ -365,7 +369,10 @@ def test_find_architecture_called_when_arch_path_is_none(tmp_path: Path) -> None
 def test_explicit_architecture_path_used_when_provided(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     arch_path = tmp_path / "architecture.json"
-    arch_path.write_text(json.dumps({"modules": []}), encoding="utf-8")
+    arch_path.write_text(
+        json.dumps({"modules": [{"filename": "demo_python.prompt"}]}),
+        encoding="utf-8",
+    )
     with patch.object(ms, "find_architecture_for_project") as mock_find, \
          patch.object(ms, "update_architecture_from_prompt", return_value=_arch_update_ok()) as mock_upd:
         run_metadata_sync(ws["prompt_path"], dry_run=True, architecture_path=arch_path)
@@ -770,21 +777,147 @@ def test_subdir_prompt_tag_lookup_uses_real_arch_shape(tmp_path: Path) -> None:
     assert entry.get("filename") == "subpkg/demo_python.prompt"
 
 
-def test_subdir_prompt_without_arch_entry_is_skipped_not_failed(tmp_path: Path) -> None:
-    """A subdir prompt that has no architecture entry (unregistered module)
-    must report architecture as `skipped`, not `failed`, so fingerprint is
-    written and CI auto-heal does not revert the prompt."""
+def test_subdir_prompt_without_arch_entry_bootstraps_metadata(tmp_path: Path) -> None:
+    """A new nested prompt gains minimal tags and a path-aware registry row."""
     ws = _make_subdir_workspace(
         tmp_path, arch_filename="subpkg/demo_python.prompt", register_in_arch=False
     )
     result = run_metadata_sync(
+        ws["prompt_path"], dry_run=False, architecture_path=ws["arch_path"]
+    )
+    prompt_text = ws["prompt_path"].read_text(encoding="utf-8")
+    architecture = json.loads(ws["arch_path"].read_text(encoding="utf-8"))
+    assert "<pdd-reason>Auto-registered module: subpkg/demo_python.prompt</pdd-reason>" in prompt_text
+    assert "<pdd-interface>" in prompt_text
+    assert result.stages["tags"].status == "ok"
+    assert result.stages["architecture"].status == "ok"
+    entry = next(e for e in architecture if e["filename"] == "subpkg/demo_python.prompt")
+    assert (
+        architecture_sync.validate_interface_structure(entry["interface"])["valid"] is True
+    ), entry["interface"]
+    assert result.stages["fingerprint"].status == "ok"
+    assert result.failing_stage is None
+    assert result.ok is True
+
+
+def test_new_nested_prompt_bootstrap_dry_run_does_not_write(tmp_path: Path) -> None:
+    """Dry-run previews registration without modifying prompt or architecture."""
+    ws = _make_subdir_workspace(
+        tmp_path, arch_filename="subpkg/demo_python.prompt", register_in_arch=False
+    )
+    before_prompt = ws["prompt_path"].read_text(encoding="utf-8")
+    before_architecture = ws["arch_path"].read_text(encoding="utf-8")
+
+    result = run_metadata_sync(
         ws["prompt_path"], dry_run=True, architecture_path=ws["arch_path"]
     )
+
+    assert ws["prompt_path"].read_text(encoding="utf-8") == before_prompt
+    assert ws["arch_path"].read_text(encoding="utf-8") == before_architecture
+    assert result.stages["tags"].status == "dry_run"
+    assert result.stages["architecture"].status == "dry_run"
+    assert "would register and sync subpkg/demo_python.prompt" in (result.stages["architecture"].detail or "")
+
+
+def test_nested_prompt_does_not_borrow_unique_basename_metadata(tmp_path: Path) -> None:
+    """A nested prompt must not inherit another module's basename-only entry."""
+    ws = _make_subdir_workspace(
+        tmp_path, arch_filename="new/demo_python.prompt", register_in_arch=False
+    )
+    ws["arch_path"].write_text(
+        json.dumps([
+            {
+                "filename": "old/demo_python.prompt",
+                "filepath": "old/demo.py",
+                "reason": "old module metadata",
+                "dependencies": ["old.prompt"],
+            }
+        ]),
+        encoding="utf-8",
+    )
+
+    result = run_metadata_sync(
+        ws["prompt_path"], dry_run=False, architecture_path=ws["arch_path"]
+    )
+
+    prompt_text = ws["prompt_path"].read_text(encoding="utf-8")
+    architecture = json.loads(ws["arch_path"].read_text(encoding="utf-8"))
+    assert "Auto-registered module: new/demo_python.prompt" in prompt_text
+    assert "old module metadata" not in prompt_text
+    assert any(entry["filename"] == "new/demo_python.prompt" for entry in architecture)
+    assert result.ok is True
+
+
+def test_malformed_architecture_does_not_bootstrap_prompt_tags(tmp_path: Path) -> None:
+    """A failed lookup must not leave synthetic tags behind."""
+    ws = _make_subdir_workspace(
+        tmp_path, arch_filename="subpkg/demo_python.prompt", register_in_arch=False
+    )
+    ws["arch_path"].write_text("{malformed", encoding="utf-8")
+    before = ws["prompt_path"].read_text(encoding="utf-8")
+
+    result = run_metadata_sync(
+        ws["prompt_path"], dry_run=False, architecture_path=ws["arch_path"]
+    )
+
+    assert ws["prompt_path"].read_text(encoding="utf-8") == before
+    assert result.stages["tags"].status == "failed"
     assert result.stages["architecture"].status == "skipped"
-    assert "No architecture entry found" in (result.stages["architecture"].reason or "")
-    # Fingerprint must NOT be gated off by a skipped (vs failed) arch stage.
-    assert result.stages["fingerprint"].status == "dry_run"
-    assert result.failing_stage is None
+
+
+def test_dry_run_reports_registration_for_already_tagged_nested_prompt(tmp_path: Path) -> None:
+    """Dry-run must preview registration even when tags need no bootstrap."""
+    ws = _make_subdir_workspace(
+        tmp_path,
+        arch_filename="subpkg/demo_python.prompt",
+        prompt_text=PROMPT_WITH_TAGS,
+        register_in_arch=False,
+    )
+
+    result = run_metadata_sync(
+        ws["prompt_path"], dry_run=True, architecture_path=ws["arch_path"]
+    )
+
+    assert result.stages["architecture"].status == "dry_run"
+    assert "would register and sync subpkg/demo_python.prompt" in (
+        result.stages["architecture"].detail or ""
+    )
+
+
+def test_issue_2387_nested_package_prompt_registers_authoritative_code_path(
+    tmp_path: Path,
+) -> None:
+    """A prompt nested under a package subdirectory (e.g.
+    pdd/prompts/sync_core/manifest_python.prompt) must register with its
+    real repo-relative source path (pdd/sync_core/manifest.py), not the
+    naming-convention guess that drops the package prefix
+    (sync_core/manifest.py) because prompts_dir sits inside the package
+    rather than mirroring the repo root."""
+    (tmp_path / ".pddrc").write_text("# marker\n", encoding="utf-8")
+    prompts_dir = tmp_path / "pdd" / "prompts"
+    (prompts_dir / "sync_core").mkdir(parents=True, exist_ok=True)
+    prompt_path = prompts_dir / "sync_core" / "manifest_python.prompt"
+    prompt_path.write_text(PROMPT_NO_TAGS, encoding="utf-8")
+    code_path = tmp_path / "pdd" / "sync_core" / "manifest.py"
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    code_path.write_text("# manifest\n", encoding="utf-8")
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps([]), encoding="utf-8")
+
+    result = run_metadata_sync(
+        prompt_path,
+        code_path,
+        dry_run=False,
+        repo_root=tmp_path,
+        architecture_path=arch_path,
+    )
+
+    architecture = json.loads(arch_path.read_text(encoding="utf-8"))
+    entries = {entry["filename"]: entry for entry in architecture}
+    assert "sync_core/manifest_python.prompt" in entries
+    entry = entries["sync_core/manifest_python.prompt"]
+    assert entry["filepath"] == "pdd/sync_core/manifest.py"
+    assert architecture_sync.validate_interface_structure(entry["interface"])["valid"] is True
     assert result.ok is True
 
 
