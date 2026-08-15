@@ -951,7 +951,57 @@ def _story_prompt_phase_a_policy(protected_policy: bytes) -> bytes:
     return candidate
 
 
-def _load_story_prompt_phase_a_authorizations(
+def _story_prompt_phase_a_manifest_with_blobs(
+    monkeypatch,
+    manifest,
+    protected_policy: bytes,
+    candidate_policy: bytes,
+    protected_profile: bytes,
+    candidate_profile: bytes,
+    candidate_prompt_bytes: dict[PurePosixPath, bytes] | None = None,
+):  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    """Bind synthetic Phase-A policy, profile, and prompt blobs to exact refs."""
+    candidate_prompt_bytes = (
+        {} if candidate_prompt_bytes is None else candidate_prompt_bytes
+    )
+    original_read = verification.read_git_blob
+
+    def phase_a_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
+        if path == verification.ROTATION_POLICY_PATH:
+            return protected_policy if ref == "protected" else candidate_policy
+        if path == PROFILE_REL_PATH:
+            return protected_profile if ref == "protected" else candidate_profile
+        if ref == "candidate" and path in candidate_prompt_bytes:
+            return candidate_prompt_bytes[path]
+        return original_read(ROOT, "HEAD", path)
+
+    monkeypatch.setattr(verification, "read_git_blob", phase_a_read)
+    candidate_paths = set(candidate_prompt_bytes)
+    bound_paths = {
+        item.candidate_id.artifact_relpath
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath in candidate_paths
+    }
+    assert bound_paths == candidate_paths
+    candidate_records = tuple(
+        replace(
+            item,
+            head_object_id=hashlib.sha1(
+                candidate_prompt_bytes[item.candidate_id.artifact_relpath]
+            ).hexdigest(),
+        )
+        if item.candidate_id.artifact_relpath in candidate_prompt_bytes
+        else item
+        for item in manifest.candidates
+    )
+    return replace(
+        manifest,
+        refs=ManifestRefs("protected", "candidate"),
+        candidates=candidate_records,
+    )
+
+
+def _load_story_prompt_phase_a_authorizations(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     monkeypatch,
     manifest,
     protected_policy: bytes,
@@ -963,19 +1013,13 @@ def _load_story_prompt_phase_a_authorizations(
     tuple[verification._RequirementTransitionAuthorization, ...],
 ]:
     """Load a synthesized Phase-A policy through the production boundary."""
-    original_read = verification.read_git_blob
-
-    def phase_a_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
-        if path == verification.ROTATION_POLICY_PATH:
-            return protected_policy if ref == "protected" else candidate_policy
-        if path == PROFILE_REL_PATH:
-            return protected_profile if ref == "protected" else candidate_profile
-        return original_read(ROOT, "HEAD", path)
-
-    monkeypatch.setattr(verification, "read_git_blob", phase_a_read)
-    manifest = replace(
+    manifest = _story_prompt_phase_a_manifest_with_blobs(
+        monkeypatch,
         manifest,
-        refs=ManifestRefs("protected", "candidate"),
+        protected_policy,
+        candidate_policy,
+        protected_profile,
+        candidate_profile,
     )
     base, base_invalid = verification._load_inputs(  # pylint: disable=protected-access
         ROOT, manifest.base_ref, manifest.repository_id, {}
@@ -991,6 +1035,28 @@ def _load_story_prompt_phase_a_authorizations(
         )
     )
     return authorizations, new_authorizations
+
+
+def _load_story_prompt_phase_a_profiles(
+    monkeypatch,
+    manifest,
+    protected_policy: bytes,
+    candidate_policy: bytes,
+    protected_profile: bytes,
+    candidate_profile: bytes,
+    candidate_prompt_bytes: dict[PurePosixPath, bytes],
+):  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    """Exercise synthesized Phase-A blobs through the public profile loader."""
+    manifest = _story_prompt_phase_a_manifest_with_blobs(
+        monkeypatch,
+        manifest,
+        protected_policy,
+        candidate_policy,
+        protected_profile,
+        candidate_profile,
+        candidate_prompt_bytes,
+    )
+    return load_verification_profiles(ROOT, manifest)
 
 
 @pytest.fixture(scope="module")
@@ -1027,6 +1093,19 @@ def test_story_prompt_phase_a_consumed_replacement_is_exact(  # pylint: disable=
         if item.prompt_path.as_posix()
         == STORY_PROMPT_PHASE_A_REPLACEMENT["prompt_path"]
     ] == [STORY_PROMPT_PHASE_A_REPLACEMENT]
+
+    with monkeypatch.context() as public_loader_monkeypatch:
+        profiles = _load_story_prompt_phase_a_profiles(
+            public_loader_monkeypatch,
+            story_prompt_phase_a_manifest,
+            protected_policy,
+            candidate_policy,
+            profile,
+            profile,
+            {},
+        )
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
 
     with monkeypatch.context() as stationary_monkeypatch:
         authorizations, new_authorizations = (
@@ -1076,6 +1155,38 @@ def test_story_prompt_phase_a_consumed_replacement_rejects_nearby_bytes(  # pyli
             profile,
             candidate_profile,
         )
+
+
+@pytest.mark.parametrize(
+    "prompt_path",
+    (
+        PurePosixPath(STORY_PROMPT_PHASE_A_REPLACEMENT["prompt_path"]),
+        PurePosixPath("pdd/prompts/code_generator_main_python.prompt"),
+    ),
+    ids=("target-prompt", "unrelated-managed-prompt"),
+)
+def test_story_prompt_phase_a_consumed_replacement_rejects_managed_prompt_drift(  # pylint: disable=redefined-outer-name
+    monkeypatch, prompt_path: PurePosixPath, story_prompt_phase_a_manifest
+) -> None:
+    """The exact Phase-A exception rejects target and unrelated prompt drift."""
+    protected_policy = ROTATION_FILE.read_bytes()
+    profile = PROFILE_FILE.read_bytes()
+    candidate_policy = _story_prompt_phase_a_policy(protected_policy)
+    candidate_prompt = (ROOT / prompt_path).read_bytes() + b"\n% unauthorized drift\n"
+
+    with pytest.raises(verification.VerificationProfileError) as error:
+        _load_story_prompt_phase_a_profiles(
+            monkeypatch,
+            story_prompt_phase_a_manifest,
+            protected_policy,
+            candidate_policy,
+            profile,
+            profile,
+            {prompt_path: candidate_prompt},
+        )
+    assert str(error.value) == (
+        f"candidate retirement changes managed prompt bytes: {prompt_path}"
+    )
 
 
 def test_gemini_phase_a_policy_binds_exactly_two_future_authorizations() -> None:
