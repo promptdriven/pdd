@@ -531,7 +531,7 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
     if not prompt_files:
         return False, "No prompt files found to link user story metadata.", 0.0, "", []
 
-    prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
+    prompts_root = _resolve_prompts_dir(prompts_dir)
     story_content = _read_story(story_path)
 
     # Explicit prompt inputs are authoritative: `pdd story link --prompt` and
@@ -1389,7 +1389,7 @@ def sync_user_story_contract(  # pylint: disable=too-many-arguments,too-many-loc
             str(contract_p),
         )
 
-    prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
+    prompts_root = _resolve_prompts_dir(prompts_dir)
     heading = _issue_title_from_markdown(story_text)
     if heading and heading.lower().startswith("user story:"):
         heading = heading.split(":", 1)[1].strip()
@@ -1490,7 +1490,7 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
             [],
         )
 
-    prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
+    prompts_root = _resolve_prompts_dir(prompts_dir)
 
     # Resolve the issue source (URL / number / local markdown) BEFORE any LLM
     # call. The issue -- not the prompt -- is the behavioral input.
@@ -1659,7 +1659,7 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
         prompts_dir, include_llm=include_llm_prompts
     )
     story_files = story_files or discover_story_files(stories_dir)
-    prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
+    prompts_root = _resolve_prompts_dir(prompts_dir)
 
     if not story_files:
         return True, [], 0.0, ""
