@@ -35,20 +35,24 @@ change.
 
 ### Phase A: install dormant rows
 
-Phase A may add only dormant `requirement_rotations`, or make the narrow
-append-only stale-authority retirement described below. The prompt named by each
-new row and `.pdd/verification-profiles.json` must remain byte-for-byte
-identical to the protected base. Every other managed prompt must likewise remain
-byte-identical, resolving approved aliases to their protected canonical prompt
-path. The rest of the policy envelope, including
+Phase A normally may add only dormant `requirement_rotations`, or make the
+narrow append-only stale-authority retirement described below. This general rule
+does not itself allow removing or replacing a consumed row; the one
+repository-bound direct-replacement exception is described separately below.
+The prompt named by each new row and `.pdd/verification-profiles.json` must
+remain byte-for-byte identical to the protected base. Every other managed prompt
+must likewise remain byte-identical, resolving approved aliases to their
+protected canonical prompt path. The rest of the policy envelope, including
 `rotations`, must preserve the protected authority exactly. A retirement/reissue
 may advance only the transition envelope from schema 2 to schema 3 to append its
 retirement record; it cannot otherwise replace policy authority.
 
 For schema 2, every surviving protected row must retain its exact JSON token and
-relative order, ahead of newly added rows. A consumed row may still be removed or
-replaced after the loader proves consumption, without permitting any surviving
-protected row to be reformatted, re-escaped, or reordered.
+relative order, ahead of newly added rows. Proof that a row is consumed does not
+by itself authorize its removal or replacement. This representation rule governs
+schema-2 history only; it never permits surviving protected rows to be
+reformatted, re-escaped, or reordered, and it does not broaden the separate
+schema-3 direct-replacement exception below.
 
 Each row records the SHA-256 identities of the current prompt/profile bytes and
 the prepared Phase B prompt/profile bytes. Review those exact prepared bytes
@@ -76,6 +80,47 @@ row, fork, chain, cycle, or use wildcard identity.
 The authority-only candidate must leave all managed prompt and profile bytes
 unchanged. Its fresh replacement remains dormant until this retirement/reissue
 candidate itself is protected, and only a later Phase B can consume it.
+
+### Repository-bound consumed-row direct replacement (user-story bridge)
+
+This is not the schema-3 retirement/reissue mechanism above: that mechanism
+retains the obsolete row and is only for an unreachable *dormant* row. In
+particular, the scope of the preceding section excludes a live or consumed row.
+Likewise, the general Phase-A rule above and the schema-2 representation rule do
+not create a generic consumed-row replacement privilege.
+
+The verifier recognizes exactly one separate schema-3 direct replacement for
+repository `3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0`: protected policy digest
+`470a4e7427c958b82aafacd3f74fc6733a23ca9866798fe0c8ae15a75f37cf1e` to
+candidate policy digest
+`b8b1e11ef85bbf76231c69a06f764935a1bdd2577a003d4299a98d62fa4bf67a`, with
+the verification-profile digest
+`85d01008145de7a7bc67bc6b458b7780a1fbaf24f9733708a0a1032ecb49a9f5` on both
+sides. It removes only the already-consumed
+`pdd/prompts/user_story_tests_python.prompt` row from
+`c63d875cc5d488b8fd9bfdd72ea015f33962d22b5cde90b9be751de55a209e32` to
+`1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7` and
+installs only its dormant successor from that latter digest to
+`5b1353257a64a25b303d990803bb799da66504af558c3a5e972d95ad5a04bb3b`.
+
+This bridge has exactly three protected stages:
+
+1. A separate verifier prerequisite first lands the repository- and
+   digest-bound recognition. It is history recognition only; it adds no story
+   transition authority.
+2. A later policy-only Phase A uses precisely the policy/profile digest pair
+   above. The target prompt, `.pdd/verification-profiles.json`, and every other
+   managed prompt (after protected alias resolution) remain byte-identical; all
+   other policy authority remains unchanged. This Phase A must merge and become
+   protected before the next stage.
+3. Only a still later Phase B may consume the dormant successor using its
+   already-bound target prompt/profile bytes. It cannot be combined with either
+   prior stage.
+
+The verifier's stationary recognition of the resulting policy/profile pair is
+also repository- and digest-bound, preserves only historical overlays needed to
+load protected history, and never authorizes another row, prompt, profile, or
+managed artifact change.
 
 ### Repository-bound legacy llm-invoke retirement (#2316)
 

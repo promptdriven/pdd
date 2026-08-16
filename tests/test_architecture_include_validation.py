@@ -418,3 +418,13 @@ def test_resolve_packaged_prompt_under_pdd_prompts(tmp_path: Path) -> None:
     ]
     warnings = cross_validate_architecture_with_prompt_includes(arch, root)
     assert not any("prompt file not found" in w for w in warnings)
+
+
+def test_resolve_root_relative_context_prompt(tmp_path: Path) -> None:
+    """Architecture context entries are valid root-relative prompt sources."""
+    root = tmp_path / "repo"
+    prompt = root / "context" / "python_preamble.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% Reason\n", encoding="utf-8")
+
+    assert resolve_architecture_prompt_path("context/python_preamble.prompt", root) == prompt.resolve()

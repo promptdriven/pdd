@@ -61,6 +61,104 @@ def test_missing_contract_must_not_be_reported_pass(tmp_path):
     assert payload["errors"][0]["code"] == "story:MISSING_CONTRACT"
 
 
+def test_manifest_builder_accepts_unique_legacy_prompt_basename(tmp_path):
+    """A legacy basename resolves only through this story's manifest entry."""
+    stories, prompts, story = _scope(tmp_path)
+    nested_prompt = prompts / "conformance" / "demo.prompt"
+    nested_prompt.parent.mkdir()
+    nested_prompt.write_text("prompt", encoding="utf-8")
+    # This same-named file is deliberately not authorized. The builder must
+    # not inspect it while resolving the legacy basename.
+    (tmp_path / "demo.prompt").write_text("outside", encoding="utf-8")
+    story.write_text(
+        "<!-- pdd-story-prompts: demo.prompt -->\n## Story", encoding="utf-8"
+    )
+    contract = stories / "contracts" / "payment.contract.md"
+
+    payload = build_story_detection_document(
+        story_files=[story],
+        raw_results=[{"story": str(story), "passed": True}],
+        passed=True,
+        total_cost=0.0,
+        model="model",
+        project_root=tmp_path,
+        stories_dir=stories,
+        prompts_dir=prompts,
+        contract_files={story.resolve(): contract},
+        allowed_prompt_files=[nested_prompt],
+        manifest_story_prompts={story.resolve(): [nested_prompt]},
+        include_llm=False,
+        fail_fast=True,
+        read_only=True,
+    )
+
+    assert payload["all_pass"] is True
+    assert payload["results"][0]["verdict"] == "PASS"
+    assert not payload["results"][0]["errors"]
+
+
+def test_manifest_builder_rejects_ambiguous_legacy_prompt_basename(tmp_path):
+    """A basename shared by two authorized prompts fails closed."""
+    stories, prompts, story = _scope(tmp_path)
+    first_prompt = prompts / "first" / "demo.prompt"
+    second_prompt = prompts / "second" / "demo.prompt"
+    first_prompt.parent.mkdir()
+    second_prompt.parent.mkdir()
+    first_prompt.write_text("first", encoding="utf-8")
+    second_prompt.write_text("second", encoding="utf-8")
+    story.write_text(
+        "<!-- pdd-story-prompts: demo.prompt -->\n## Story", encoding="utf-8"
+    )
+    contract = stories / "contracts" / "payment.contract.md"
+
+    payload = build_story_detection_document(
+        story_files=[story],
+        raw_results=[{"story": str(story), "passed": True}],
+        passed=True,
+        total_cost=0.0,
+        model="model",
+        project_root=tmp_path,
+        stories_dir=stories,
+        prompts_dir=prompts,
+        contract_files={story.resolve(): contract},
+        allowed_prompt_files=[first_prompt, second_prompt],
+        manifest_story_prompts={story.resolve(): [first_prompt, second_prompt]},
+        include_llm=False,
+        fail_fast=True,
+        read_only=True,
+    )
+
+    assert payload["all_pass"] is False
+    assert payload["results"][0]["verdict"] == "UNKNOWN"
+    assert {error["code"] for error in payload["results"][0]["errors"]} >= {
+        "prompt:UNRESOLVED_LINK",
+        "scope:MANIFEST_MISMATCH",
+    }
+
+
+def test_structured_builder_accepts_relative_authorized_prompt_pool(tmp_path):
+    """Non-manifest structured mode keeps its relative prompt-pool support."""
+    stories, prompts, story = _scope(tmp_path)
+
+    payload = build_story_detection_document(
+        story_files=[story],
+        raw_results=[{"story": str(story), "passed": True}],
+        passed=True,
+        total_cost=0.0,
+        model="model",
+        project_root=tmp_path,
+        stories_dir=stories,
+        prompts_dir=prompts,
+        allowed_prompt_files=[Path("prompts/payment.prompt")],
+        include_llm=False,
+        fail_fast=True,
+        read_only=True,
+    )
+
+    assert payload["all_pass"] is True
+    assert payload["results"][0]["verdict"] == "PASS"
+
+
 def test_duplicate_verdict_must_be_unknown(tmp_path):
     stories, prompts, story = _scope(tmp_path)
     rows = [

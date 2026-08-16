@@ -1,0 +1,53 @@
+<pdd-reason>The test-churn gate: refuses to overwrite an existing test file when regeneration would rewrite more of it than the configured threshold, so accumulated regression coverage is not discarded.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "_verify_test_churn", "signature": "(existing_code: Optional[str], generated_code: str, prompt_name: str, output_path: Optional[str], prompt_content: Optional[str], adopted_human: bool = False) -> None", "returns": "None"},
+      {"name": "_compute_test_churn_ratio", "signature": "(pre_text: str, post_text: str) -> float", "returns": "float"},
+      {"name": "_calculate_test_churn_ratio", "signature": "(before: str, after: str) -> float", "returns": "float"},
+      {"name": "_get_test_churn_threshold", "signature": "() -> float", "returns": "float"},
+      {"name": "_is_test_output_path", "signature": "(output_path: Optional[str]) -> bool", "returns": "bool"},
+      {"name": "_is_python_generation", "signature": "(language: Optional[str], output_path: Optional[str]) -> bool", "returns": "bool"},
+      {"name": "_prompt_allows_test_churn", "signature": "(prompt_content: Optional[str]) -> bool", "returns": "bool"},
+      {"name": "_find_default_test_files", "signature": "(tests_dir: Optional[str], code_file_path: Optional[str]) -> List[str]", "returns": "List[str]"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>conformance/gate_errors_python.prompt</pdd-dependency>
+<pdd-dependency>conformance/directives_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Implement the test-churn gate in
+% `pdd/conformance/test_churn.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Responsibility
+  Protect test coverage from excessive regeneration churn; callers
+  provide both texts and this module never writes a file.
+
+% Contract rules
+<contract_rules>
+  R1. The gate MUST permit a missing/blank baseline, non-test path, scoped opt-out,
+      `PDD_SKIP_TEST_CHURN_GATE`, or `PDD_SKIP_CONFORMANCE` without a ratio.
+  R2. Otherwise the gate MUST raise `TestChurnError` only when churn is strictly above the
+      threshold, carrying ratio, threshold, and pre/post line counts.
+  R3. Churn MUST be the larger added-or-removed changed-line count divided by existing
+      line count, capped at 1.0. Pure additions and first generations are zero.
+  R4. `PDD_TEST_CHURN_THRESHOLD` MUST default to `0.40`, accept a ratio or percent,
+      clamp to 0.0–1.0, and log then fall back when its value cannot be parsed.
+  R5. `adopted_human` MUST only annotate a raised error; it never changes the decision.
+</contract_rules>
+
+% Classification and opt-out
+  A test path has a `tests`, `__tests__`, or `__test__` segment; starts `test_`;
+  uses case-insensitive `.test.`/`.spec.` or `_test`/`_spec` conventions; or uses
+  a case-sensitive JVM/.NET/Swift test suffix. A directive opts out
+  only when an inflection of `rewrite`,
+  `replace`, `regenerate`, `overwrite`, `churn`, `remove`, or `drop` directly
+  governs `test`/`tests`; punctuation or a conjunction breaks that relation.
+
+% Dependencies
+  `.gate_errors` and `.directives`.

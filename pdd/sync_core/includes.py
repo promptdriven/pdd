@@ -195,8 +195,211 @@ def _is_tag_boundary(text: str, index: int) -> bool:
     return index == len(text) or text[index].isspace() or text[index] in ">/"
 
 
-def _parse_xml_includes(text: str) -> list[IncludeReference]:
+_LEGACY_OPEN = "```<"
+_LEGACY_CLOSE = ">```"
+
+
+def _contains_blank_line(segment: str) -> bool:
+    """True when ``segment`` holds a line that is empty or all whitespace."""
+    index = segment.find("\n")
+    while index >= 0:
+        probe = index + 1
+        while probe < len(segment) and segment[probe] in " \t\r":
+            probe += 1
+        if probe < len(segment) and segment[probe] == "\n":
+            return True
+        index = segment.find("\n", index + 1)
+    return False
+
+
+def _legacy_include_spans(text: str) -> list[tuple[int, int, int, int]]:
+    """Locate complete ```<path>``` tokens -- PDD's legacy include syntax.
+
+    Yields ``(token_start, token_end, path_start, path_end)`` per token. A
+    token must open and close on one line, so a stray ``` later in the
+    document cannot swallow unrelated text into a single combined path.
+
+    Shared by the literal mask (which must not mangle these tokens) and by
+    :func:`_parse_backtick_includes` (which reads their paths), so the two
+    can never disagree about where a legacy token begins and ends.
+    """
+    spans: list[tuple[int, int, int, int]] = []
+    cursor = 0
+    while True:
+        start = text.find(_LEGACY_OPEN, cursor)
+        if start < 0:
+            return spans
+        path_start = start + len(_LEGACY_OPEN)
+        path_end = text.find(_LEGACY_CLOSE, path_start)
+        if path_end < 0:
+            return spans
+        if "\n" in text[path_start:path_end]:
+            # Not a token; resume just past this opener so a later, complete
+            # token on a following line is still found.
+            cursor = path_start
+            continue
+        spans.append((start, path_end + len(_LEGACY_CLOSE), path_start, path_end))
+        cursor = path_end + len(_LEGACY_CLOSE)
+
+
+def _markdown_literal_mask(text: str) -> str:
+    """Mask fenced and inline Markdown code without changing source offsets."""
+    masked = list(text)
+    legacy = _legacy_include_spans(text)
+    legacy_starts = {start for start, _end, _ps, _pe in legacy}
+
+    def legacy_end_at_or_after(index: int) -> int | None:
+        """End offset of the legacy token covering ``index``, if any."""
+        for start, end, _ps, _pe in legacy:
+            if start <= index < end:
+                return end
+        return None
+
+    def hide(start: int, end: int) -> None:
+        for index in range(start, end):
+            if masked[index] not in "\r\n":
+                masked[index] = " "
+
+    cursor = 0
+    line_start = 0
+    while cursor < len(text):
+        line_end = text.find("\n", cursor)
+        if line_end < 0:
+            line_end = len(text)
+        line = text[line_start:line_end]
+        indent = len(line) - len(line.lstrip(" "))
+        if indent <= 3 and indent < len(line) and line[indent] in "`~":
+            delimiter = line[indent]
+            run_end = indent
+            while run_end < len(line) and line[run_end] == delimiter:
+                run_end += 1
+            run_length = run_end - indent
+            # ```<path>``` is PDD's legacy include syntax, not a Markdown
+            # fence. Only a *complete* token is exempt: an ordinary fence may
+            # legitimately carry an info string that starts with "<", such as
+            # ```<html>, and masking must not skip it.
+            if run_length >= 3 and (line_start + indent) not in legacy_starts:
+                close_cursor = line_end + (line_end < len(text))
+                while close_cursor < len(text):
+                    close_end = text.find("\n", close_cursor)
+                    if close_end < 0:
+                        close_end = len(text)
+                    close_line = text[close_cursor:close_end]
+                    close_indent = len(close_line) - len(close_line.lstrip(" "))
+                    close_run_end = close_indent
+                    while (
+                        close_run_end < len(close_line)
+                        and close_line[close_run_end] == delimiter
+                    ):
+                        close_run_end += 1
+                    if (
+                        close_indent <= 3
+                        and close_run_end - close_indent >= run_length
+                        and close_line[close_run_end:].strip() == ""
+                    ):
+                        hide(line_start, close_end)
+                        cursor = close_end + (close_end < len(text))
+                        line_start = cursor
+                        break
+                    close_cursor = close_end + (close_end < len(text))
+                else:
+                    hide(line_start, len(text))
+                    break
+                continue
+        cursor = line_end + (line_end < len(text))
+        line_start = cursor
+
+    cursor = 0
+    while cursor < len(text):
+        legacy_end = legacy_end_at_or_after(cursor)
+        if legacy_end is not None:
+            # A complete legacy token is an include, not a code span. Stepping
+            # over it whole stops its backticks from pairing with a neighbour's
+            # and collapsing two tokens into one combined path.
+            cursor = legacy_end
+            continue
+        if masked[cursor] != "`":
+            cursor += 1
+            continue
+        run_end = cursor
+        while run_end < len(text) and masked[run_end] == "`":
+            run_end += 1
+        delimiter_length = run_end - cursor
+        # A code span closes on a backtick run of exactly the opening length.
+        # Longer and shorter runs are literal content, so keep scanning
+        # instead of abandoning the span at the first run that does not match.
+        scan = run_end
+        close = close_end = -1
+        while scan < len(text):
+            probe = text.find("`", scan)
+            if probe < 0:
+                break
+            probe_legacy_end = legacy_end_at_or_after(probe)
+            if probe_legacy_end is not None:
+                scan = probe_legacy_end
+                continue
+            probe_end = probe
+            while probe_end < len(text) and text[probe_end] == "`":
+                probe_end += 1
+            if probe_end - probe == delimiter_length:
+                close, close_end = probe, probe_end
+                break
+            scan = probe_end
+        if close < 0:
+            cursor = run_end
+            continue
+        # CommonMark allows a code span to cross lines but not a blank line,
+        # which ends the paragraph the span lives in.
+        if _contains_blank_line(text[run_end:close]):
+            cursor = run_end
+            continue
+        # A backtick run touching a tilde on either side is a botched,
+        # non-homogeneous fence (``~~` `` or `` `~~ ``), not a span opener.
+        # It may still close on its own line, but it must never swallow whole
+        # lines -- that is how an invalid fence hides a real include.
+        touches_tilde = (cursor > 0 and text[cursor - 1] == "~") or (
+            run_end < len(text) and text[run_end] == "~"
+        )
+        if "\n" in text[run_end:close] and touches_tilde:
+            cursor = run_end
+            continue
+        hide(cursor, close_end)
+        cursor = close_end
+    return "".join(masked)
+
+
+def markdown_literal_spans(text: str) -> list[tuple[int, int]]:
+    """Return ``[start, end)`` offsets of Markdown fences and code spans.
+
+    Prompt expansion shares this with canonical dependency discovery so the
+    two can never disagree about which include directives are literal
+    examples. Divergence would either inline a file the dependency graph
+    never recorded, or silently drop a real include.
+    """
+    if not text:
+        return []
+    masked = _markdown_literal_mask(text)
+    spans: list[tuple[int, int]] = []
+    start: int | None = None
+    for index, (original, replaced) in enumerate(zip(text, masked)):
+        if original != replaced:
+            if start is None:
+                start = index
+        elif start is not None and original in "\r\n":
+            # Line breaks are left verbatim by the mask; keep them inside the
+            # span so a multi-line literal stays one contiguous range.
+            continue
+        elif start is not None:
+            spans.append((start, index))
+            start = None
+    if start is not None:
+        spans.append((start, len(text)))
+    return spans
+
+
+def _parse_xml_includes(text: str, source: str | None = None) -> list[IncludeReference]:
     """Scan ``<include>`` markup without regex backtracking over user text."""
+    source = text if source is None else source
     references: list[IncludeReference] = []
     cursor = 0
     tag_name = "<include"
@@ -212,7 +415,7 @@ def _parse_xml_includes(text: str) -> list[IncludeReference]:
         opening_end = _tag_end(text, name_end)
         if opening_end < 0:
             return references
-        raw_attrs = text[name_end:opening_end]
+        raw_attrs = source[name_end:opening_end]
         self_closing = raw_attrs.rstrip().endswith("/")
         if self_closing:
             raw_attrs = raw_attrs.rstrip()[:-1]
@@ -225,7 +428,7 @@ def _parse_xml_includes(text: str) -> list[IncludeReference]:
             if close_start < 0:
                 cursor = opening_end + 1
                 continue
-            body = text[opening_end + 1:close_start]
+            body = source[opening_end + 1:close_start]
             path = (attrs.get("path") or body).strip()
             if any(character in path for character in "<>\r\n"):
                 cursor = opening_end + 1
@@ -245,8 +448,9 @@ def _parse_xml_includes(text: str) -> list[IncludeReference]:
             )
 
 
-def _parse_include_many(text: str) -> list[IncludeReference]:
+def _parse_include_many(text: str, source: str | None = None) -> list[IncludeReference]:
     """Scan ``<include-many>`` markup with a single forward cursor."""
+    source = text if source is None else source
     references: list[IncludeReference] = []
     cursor = 0
     tag_name = "<include-many"
@@ -262,13 +466,13 @@ def _parse_include_many(text: str) -> list[IncludeReference]:
         opening_end = _tag_end(text, name_end)
         if opening_end < 0:
             return references
-        raw_attrs = text[name_end:opening_end]
+        raw_attrs = source[name_end:opening_end]
         close_start = text.find(close_tag, opening_end + 1)
         if close_start < 0:
             cursor = opening_end + 1
             continue
         attrs = _parse_attrs(raw_attrs)
-        inner = text[opening_end + 1:close_start]
+        inner = source[opening_end + 1:close_start]
         for offset, path in enumerate(
             item.strip() for line in inner.splitlines() for item in line.split(",") if item.strip()
         ):
@@ -284,32 +488,25 @@ def _parse_include_many(text: str) -> list[IncludeReference]:
         cursor = close_start + len(close_tag)
 
 
-def _parse_backtick_includes(text: str) -> list[IncludeReference]:
+def _parse_backtick_includes(text: str, source: str | None = None) -> list[IncludeReference]:
     """Scan backtick include fences without regex matching on prompt text."""
+    source = text if source is None else source
     references: list[IncludeReference] = []
-    cursor = 0
-    opening = "```<"
-    closing = ">```"
-    while True:
-        start = text.find(opening, cursor)
-        if start < 0:
-            return references
-        path_end = text.find(closing, start + len(opening))
-        if path_end < 0:
-            return references
-        path = text[start + len(opening):path_end].strip()
+    for start, _end, path_start, path_end in _legacy_include_spans(text):
+        path = source[path_start:path_end].strip()
         if path:
             references.append(IncludeReference(start, path, IncludeSyntax.BACKTICK))
-        cursor = path_end + len(closing)
+    return references
 
 
 def parse_include_references(text: str) -> tuple[IncludeReference, ...]:
     """Parse includes once, preserving duplicates and deterministic source order."""
     if not text:
         return ()
-    references = _parse_xml_includes(text)
-    references.extend(_parse_include_many(text))
-    references.extend(_parse_backtick_includes(text))
+    scanned = _markdown_literal_mask(text)
+    references = _parse_xml_includes(scanned, text)
+    references.extend(_parse_include_many(scanned, text))
+    references.extend(_parse_backtick_includes(scanned, text))
     return tuple(sorted(references))
 
 

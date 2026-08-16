@@ -200,26 +200,18 @@ def _selector_error_for_include(path: Path, attrs: Dict[str, str]) -> str | None
     return None
 
 
-def _extract_fence_spans(text: str) -> List[Tuple[int, int]]:
-    """Return fenced-code block spans so literal include examples are ignored."""
-    spans: List[Tuple[int, int]] = []
-    for match in re.finditer(
-        r"(?m)^[ \t]*([`~]{3,})[^\n]*\n[\s\S]*?\n[ \t]*\1[ \t]*(?:\n|$)",
-        text,
-    ):
-        spans.append(match.span())
-    return spans
-
-
-def _extract_inline_code_spans(text: str) -> List[Tuple[int, int]]:
-    """Return inline-code spans so literal include examples are ignored."""
-    return [match.span() for match in re.finditer(r"(?<!`)(`+)([^\n]*?)\1", text)]
-
-
 def _extract_code_spans(text: str) -> List[Tuple[int, int]]:
-    spans = _extract_fence_spans(text)
-    spans.extend(_extract_inline_code_spans(text))
-    return sorted(spans, key=lambda span: span[0])
+    """Markdown literal spans, shared with canonical dependency discovery.
+
+    Validation, prompt expansion and ``pdd.sync_core.includes`` must agree on
+    which directives are literal examples. A local scanner here disagreed on
+    fences closed by a longer run of the same delimiter and on inline spans
+    containing a longer, non-closing run -- so a documented example could be
+    reported invalid and, with ``remove_invalid``, rewritten.
+    """
+    from .sync_core.includes import markdown_literal_spans
+
+    return markdown_literal_spans(text)
 
 
 def _intersects_any_span(start: int, end: int, spans: List[Tuple[int, int]]) -> bool:

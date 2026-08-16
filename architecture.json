@@ -2292,7 +2292,7 @@
   },
   {
     "reason": "Primary orchestration engine for transitioning .prompt files to source code, handling path resolution, incremental generation, and architectural conformance.",
-    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name (constructor accepts an optional repair_directive override for the <pdd-interface> signature check whose source of truth is the prompt, not architecture.json), and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions. Architecture conformance now also enforces the prompt's <pdd-interface> signature across module/cli/command interface types in three categories: (1) missing function/method — declared callables (including dotted methods like ContentSelector.select) absent from the generated code surface as bare names in missing_symbols; (2) missing parameter — declared parameter names absent from a matching function/method signature surface as dotted funcname.paramname entries; (3) signature drift — annotation drift is conservative (raises only when both sides specify and differ) while default drift is strict (raises when the prompt declares a default and the generated code drops or changes it, since callers omitting an optional kwarg would otherwise break with TypeError). Each category emits a distinct error sentence so the agentic_sync_runner repair loop can build a targeted directive (add missing function/method, add missing parameter, or update parameter to match the prompt's annotation/default). Issue #1012 adds two additional repair-loop gates: (a) PublicSurfaceRegressionError — for mature modules (pre-existing non-empty code file), snapshots top-level functions, classes, recursively-walked nested classes/methods (so a method on `Outer.Inner` is captured as `Outer.Inner.method`), and module-level public `ast.Assign` / bound `ast.AnnAssign` (only when `node.value is not None`; bare annotations like `PUBLIC_NAME: int` don't bind a runtime attribute and are ignored) targets plus `ast.Import`/`ast.ImportFrom` aliases (so removing a re-export like `import git` or a public constant like `PUBLIC_SETTING = ...` surfaces as a regression). When the module declares `__all__` as a clean list/tuple of string constants, that list is AUTHORITATIVE per Python semantics: a name is public iff it appears in `__all__`, even if underscore-prefixed; names NOT in `__all__` are NOT public. Classes listed in `__all__` ALSO contribute their recursively-walked members (methods, nested classes, methods on nested classes at every depth) regardless of underscore prefix — so `__all__ = [\"Service\"]` protects `Service.run`, `Service.Inner`, and `Service.Inner.method`. Computed `__all__` (`sorted(...)`, `X + Y`) or AugAssign extension (`__all__ += [...]`) falls back to the heuristic. Without `__all__`, underscore-prefixed names (including dunders) are excluded at every level; `from X import *` contributes no fixed name and is ignored. The same `__all__` precedence rule (including the class-member recursion) is applied to the parallel `_snapshot_public_signatures` so signature-drift detection sees the same public set. `_snapshot_public_signatures` entries carry a leading kind prefix (`[function]`/`[async_function]`/`[class]` at top level; `[instance]`/`[staticmethod]`/`[classmethod]`/`[property:<roles>]` inside classes; `[assignment]` for module-level rebindings; and `[import]`/`[import:<module>]`/`[import:from <module>]`/`[import:from <module>:<source>]` for re-exports) so a binding-kind flip (e.g. a re-exported `pathlib.Path` replaced by a same-named `def`) diffs even when the parameter list happens to match. For `@dataclass` classes without an explicit `__init__`, `_snapshot_public_signatures` synthesises the constructor signature from class-body `AnnAssign` fields in source order: `@dataclass(kw_only=True)` emits a leading `*` so every field is kw-only; an in-body `_: KW_ONLY` sentinel (`KW_ONLY` Name or `dataclasses.KW_ONLY` Attribute) splits positional vs kw-only fields and is recognised before the underscore-prefix skip; when both decorator and sentinel are present only ONE `*` is emitted (decorator wins); `InitVar[...]` fields ARE included (they are runtime constructor params even though not stored as instance attributes); `ClassVar[...]` fields and `field(init=False, ...)` defaults are excluded; an explicit `__init__` still wins over synthesis. Inherited dataclass fields are collected in REVERSE-MRO order (matching Python's `@dataclass`: `__dataclass_fields__` is populated by walking bases right-to-left so later bases overwrite earlier ones in dict-insertion order) — `class C(A, B)` synthesises `(b, a, c)`. A base decorated with `@dataclass(init=False)` STILL contributes its annotated fields to a derived `@dataclass`'s synth; `init=False` only suppresses the base's OWN `__init__` synthesis. Cross-module bases that resolve to imports rather than same-module `ClassDef`s are marked `[inherited_unresolved]`. When a derived class redeclares a base's field name, the derived annotation/default wins but the field's POSITION matches the base's original slot (insertion-order dict semantics). The gate raises when public symbols are removed/renamed or their callable signature changes unless the prompt body contains an anchored `BREAKING-CHANGE:` directive (regex `^\\s*BREAKING-CHANGE:\\s*` with `re.MULTILINE`) whose tail starts with a `remove`/`delete`/`drop`/`rename` action verb (followed by a comma-separated symbol list) for removals or a `change signature`/`change api`/`change contract` verb pair for signature drift. Buried mid-line marker mentions and bare `BREAKING-CHANGE:` markers do NOT disable the gate. First-time generation is exempt. (b) TestChurnError — when overwriting an existing non-empty test file through code_generator_main or cmd_test_main, computes the stdlib `difflib.unified_diff` churn ratio between pre and post test bodies and raises when the ratio exceeds `PDD_TEST_CHURN_THRESHOLD` (default 0.40, accepts both decimal `0.40` and percent `40%` strings; defensive fallback to default on unparseable values) without an anchored `BREAKING-CHANGE:` directive that pairs an opt-out verb (`rewrite`/`replace`/`regenerate`/`overwrite`/`churn`/`remove`/`drop`) with `tests` as the verb's direct object. PublicSurfaceRegressionError and TestChurnError share the existing PDD_REPAIR_DIRECTIVE plumbing so sync_main, sync_orchestration, and agentic_sync_runner route them through the same repair loop. Issue #1649 adds ProseOutputError before the architecture/public-surface/test-churn gates: when extracted generated content is empty or whitespace-only for a non-prompt target, code_generator_main raises a typed generation-output extraction failure containing provider/model, prompt, output path, extractor result, and raw-output excerpt, so sync retries once with an output-shape directive instead of misdiagnosing empty extraction as missing exports/churn. `PDD_ALLOW_EMPTY_GENERATION=1` is the explicit escape hatch for the rare intentional empty-output case. Issue #1900 makes the prompt's `<pdd-interface>` (`type: module`) the stable surface contract for DECLARED symbols: declared top-level functions, dotted methods, and constructors (including underscore-prefixed helpers/classes, resolved via patch-target signature capture) are validated against the DECLARED signature — receiver-stripped to match the snapshot — instead of the previous generation, so editing the declaration authorizes an intended change with no `BREAKING-CHANGE:` permit, while a declared callable that becomes non-callable is still rejected even under `BREAKING-CHANGE: change signature` (which relaxes only binding-kind/async, never declared parameters). Violations carry JSON-encoded `signature_detail:` lines (declared expected-vs-actual) plus declaration-aware repair advice (edit the `<pdd-interface>` declaration, not `BREAKING-CHANGE`). Undeclared symbols keep the previous-generation baseline and its `BREAKING-CHANGE:` opt-out described above.",
+    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Resolves paths, runs incremental generation with git-based original-prompt recovery, executes against the cloud or a local provider with fallback, runs post-processing hooks, and opt-in auto-wiring. The conformance gates it invokes - prose/empty-output classification, architecture and pdd-interface conformance, annotation reconciliation, public-surface regression and test churn - now live in pdd/conformance/ and are re-exported here via redundant aliases so existing `from pdd.code_generator_main import ...` call sites keep resolving. Injects PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block, bypassing incremental generation so a repair retry reaches the full generator.",
     "dependencies": [
       "construct_paths_python.prompt",
       "preprocess_python.prompt",
@@ -2304,7 +2304,13 @@
       "_keyring_timeout_python.prompt",
       "context/python_preamble.prompt",
       "context_snapshot_python.prompt",
-      "compressed_sync_context_python.prompt"
+      "compressed_sync_context_python.prompt",
+      "conformance/gate_errors_python.prompt",
+      "conformance/directives_python.prompt",
+      "conformance/test_churn_python.prompt",
+      "conformance/surface_python.prompt",
+      "conformance/declared_surface_python.prompt",
+      "conformance/interface_check_python.prompt"
     ],
     "priority": 57,
     "filename": "code_generator_main_python.prompt",
@@ -2342,31 +2348,6 @@
             "name": "code_generator_main",
             "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], original_prompt_file_path: Optional[str], force_incremental_flag: bool, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False, compress: bool = False, snapshot_context: bool = False, compressed_context: Optional[Mapping[str, Any]] = None) -> Tuple[str, bool, float, str]",
             "returns": "Tuple[str, bool, float, str]"
-          },
-          {
-            "name": "ArchitectureConformanceError",
-            "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)",
-            "returns": "ArchitectureConformanceError"
-          },
-          {
-            "name": "PublicSurfaceRegressionError",
-            "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None, signature_details: Optional[List[Tuple[str, str, str, str]]] = None)",
-            "returns": "PublicSurfaceRegressionError"
-          },
-          {
-            "name": "TestChurnError",
-            "signature": "(prompt_name: str, output_path: str, churn_ratio: float, threshold: float, pre_line_count: int, post_line_count: int, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)",
-            "returns": "TestChurnError"
-          },
-          {
-            "name": "ProseOutputError",
-            "signature": "(prompt_name: str, output_path: str, language: str, model_name: str = \"unknown\", total_cost: float = 0.0, raw_output: Optional[str] = None, extractor_result: str = \"empty\")",
-            "returns": "ProseOutputError"
-          },
-          {
-            "name": "LanguageMismatchError",
-            "signature": "(prompt_name: str, output_path: str, language: str, model_name: str = \"unknown\", total_cost: float = 0.0, raw_output: Optional[str] = None, syntax_error: str = \"\")",
-            "returns": "LanguageMismatchError"
           }
         ]
       }
@@ -9671,7 +9652,7 @@
   },
   {
     "reason": "Centralized cloud config: routes endpoint URLs (incl. submitExample) and JWT auth honoring PDD_CLOUD_URL.",
-  "description": "CloudConfig provides static methods for cloud URL resolution (get_base_url, get_endpoint_url with CLOUD_ENDPOINTS map including submitExample), environment inference (ensure_default_env), JWT auth (get_jwt_token), and cloud-environment detection (is_running_in_cloud, is_cloud_enabled). JWT auth delegates to the shared helper, preserving injected/cache/keyring-refresh credentials while explicit machine flags cause the helper to refuse device flow. Module-level get_cloud_timeout() reads PDD_CLOUD_TIMEOUT, and get_cloud_request_timeout() returns the requests timeout tuple used by cloud POST calls. Used by sync/fix auto-submit so PDD_CLOUD_URL is honored across staging/prod/local (#859).",
+    "description": "CloudConfig provides static methods for cloud URL resolution (get_base_url, get_endpoint_url with CLOUD_ENDPOINTS map including submitExample), environment inference (ensure_default_env), JWT auth (get_jwt_token), and cloud-environment detection (is_running_in_cloud, is_cloud_enabled). JWT auth delegates to the shared helper, preserving injected/cache/keyring-refresh credentials while explicit machine flags cause the helper to refuse device flow. Module-level get_cloud_timeout() reads PDD_CLOUD_TIMEOUT, and get_cloud_request_timeout() returns the requests timeout tuple used by cloud POST calls. Used by sync/fix auto-submit so PDD_CLOUD_URL is honored across staging/prod/local (#859).",
     "dependencies": [
       "auth_service_python.prompt"
     ],
@@ -12198,6 +12179,345 @@
     "position": {
       "x": 11600,
       "y": 2200
+    }
+  },
+  {
+    "reason": "Typed exceptions raised by the PDD conformance gates.",
+    "description": "Defines ArchitectureConformanceError, PublicSurfaceRegressionError, TestChurnError, ProseOutputError and LanguageMismatchError as peer click.UsageError subclasses, plus the Python language-validity and churn-nonce provenance helpers (#1903 B.4) and the shared _LANGUAGE_TEST_FILE_EXTS tuple. Extracted from code_generator_main so sync_main, sync_orchestration, one_session_sync, cmd_test_main and agentic_test_generate can catch these types without importing the generation pipeline. The message prefixes are a cross-process contract string-matched by agentic_sync_runner on child stdout and must stay byte-identical. Its prompt-to-code ratio is within the guide's 10-30% band.",
+    "dependencies": [],
+    "priority": 5,
+    "filename": "conformance/gate_errors_python.prompt",
+    "filepath": "pdd/conformance/gate_errors.py",
+    "tags": [
+      "conformance",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "ArchitectureConformanceError",
+            "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)",
+            "returns": "ArchitectureConformanceError"
+          },
+          {
+            "name": "PublicSurfaceRegressionError",
+            "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None, signature_details: Optional[List[Tuple[str, str, str, str]]] = None)",
+            "returns": "PublicSurfaceRegressionError"
+          },
+          {
+            "name": "TestChurnError",
+            "signature": "(prompt_name: str, output_path: str, churn_ratio: float, threshold: float, pre_line_count: int, post_line_count: int, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None, adopted_human: bool = False)",
+            "returns": "TestChurnError"
+          },
+          {
+            "name": "ProseOutputError",
+            "signature": "(prompt_name: str, output_path: str, language: str, model_name: str = \"unknown\", total_cost: float = 0.0, raw_output: Optional[str] = None, extractor_result: str = \"empty\")",
+            "returns": "ProseOutputError"
+          },
+          {
+            "name": "LanguageMismatchError",
+            "signature": "(prompt_name: str, output_path: str, language: str, model_name: str = \"unknown\", total_cost: float = 0.0, raw_output: Optional[str] = None, syntax_error: str = \"\")",
+            "returns": "LanguageMismatchError"
+          },
+          {
+            "name": "_verify_language_validity",
+            "signature": "(generated_code_content: str, language: str) -> Tuple[Optional[SyntaxError], str]",
+            "returns": "Tuple[Optional[SyntaxError], str]"
+          },
+          {
+            "name": "_LANGUAGE_TEST_FILE_EXTS",
+            "signature": "Tuple[str, ...]",
+            "returns": "Tuple[str, ...]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Shared BREAKING-CHANGE directive grammar and PDD_* environment-flag helpers.",
+    "description": "Parses anchored BREAKING-CHANGE: directives from the prompt BODY (front matter is stripped first so metadata cannot whitelist a removal), yielding the removal allow-list and the signature-change allow-list used by the public-surface gate. Buried mid-line marker mentions and bare markers with no named symbols do not disarm any gate; symbol tokens must be bare or wrapped in matching backticks/quotes, so prose tokens are rejected. Also owns _env_flag_enabled and _parse_llm_bool. Extracted from code_generator_main. Its prompt-to-code ratio is within the guide's 10-30% band. The module's contract is an enumerable grammar - verb families, inflections, anchoring and token rules - where every clause exists to prevent an over-broad authorization.",
+    "dependencies": [],
+    "priority": 5,
+    "filename": "conformance/directives_python.prompt",
+    "filepath": "pdd/conformance/directives.py",
+    "tags": [
+      "conformance",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_env_flag_enabled",
+            "signature": "(name: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_parse_llm_bool",
+            "signature": "(value: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_strip_yaml_front_matter",
+            "signature": "(prompt_content: Optional[str]) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "_iter_breaking_change_directives",
+            "signature": "(prompt_content: Optional[str]) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "_prompt_breaking_change_removed_symbols",
+            "signature": "(prompt_content: Optional[str]) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_prompt_breaking_change_signature_symbols",
+            "signature": "(prompt_content: Optional[str]) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_prompt_allows_breaking_change",
+            "signature": "(prompt_content: Optional[str]) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_prompt_has_breaking_change_marker",
+            "signature": "(prompt_content: Optional[str]) -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "The test-churn gate (#1012): refuses high-churn rewrites of existing test files.",
+    "description": "Computes the stdlib difflib.unified_diff churn ratio between the pre-sync and proposed test bodies and raises TestChurnError when it exceeds PDD_TEST_CHURN_THRESHOLD (default 0.40, accepting decimal or percent strings, defensively falling back on unparseable values). Owns the test-path taxonomy: tests/, __tests__/ and the singular __test__/ dirs, the test_ prefix, the case-insensitive JS/TS .test./.spec. family including .mjs/.cjs, the lowercase _test.<ext>/_spec.<ext> sibling family driven by _LANGUAGE_TEST_FILE_EXTS, and the case-sensitive PascalCase JVM/.NET/Swift suffixes. Opt-out requires an anchored BREAKING-CHANGE directive whose verb directly governs tests. Extracted from code_generator_main; also used by cmd_test_main and one-session agentic sync. Its prompt-to-code ratio is within the guide's 10-30% band. The residue is the test-path taxonomy and the opt-out verb-object grammar: enumerable data a regenerating model cannot infer, including the case-sensitivity rule that keeps latest.kt and manifest.java from reading as tests.",
+    "dependencies": [
+      "conformance/gate_errors_python.prompt",
+      "conformance/directives_python.prompt"
+    ],
+    "priority": 6,
+    "filename": "conformance/test_churn_python.prompt",
+    "filepath": "pdd/conformance/test_churn.py",
+    "tags": [
+      "conformance",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_verify_test_churn",
+            "signature": "(existing_code: Optional[str], generated_code: str, prompt_name: str, output_path: Optional[str], prompt_content: Optional[str], adopted_human: bool = False) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "_compute_test_churn_ratio",
+            "signature": "(pre_text: str, post_text: str) -> float",
+            "returns": "float"
+          },
+          {
+            "name": "_calculate_test_churn_ratio",
+            "signature": "(before: str, after: str) -> float",
+            "returns": "float"
+          },
+          {
+            "name": "_get_test_churn_threshold",
+            "signature": "() -> float",
+            "returns": "float"
+          },
+          {
+            "name": "_is_test_output_path",
+            "signature": "(output_path: Optional[str]) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_is_python_generation",
+            "signature": "(language: Optional[str], output_path: Optional[str]) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_prompt_allows_test_churn",
+            "signature": "(prompt_content: Optional[str]) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_find_default_test_files",
+            "signature": "(tests_dir: Optional[str], code_file_path: Optional[str]) -> List[str]",
+            "returns": "List[str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Static introspection of a Python module's public API: the names it exposes and the callable shape of each.",
+    "description": "One traversal answers both 'what does this module expose?' and 'what shape does each public callable have?', so the removed-symbol diff and the signature diff can never disagree about what is public. Owns the __all__ precedence rules, recursive class-member expansion, the re-export-only import rule that stopped the #1662/#1663/cloud-2256 false positives, __future__ exclusion, patch-target preservation, binding-kind-prefixed signature entries, and the @dataclass constructor synthesis that makes a field rename visible as an ABI change. Merges the former conformance/signatures and conformance/dataclass_signatures units, whose only consumer was this walk and each other.",
+    "dependencies": [],
+    "priority": 6,
+    "filename": "conformance/surface_python.prompt",
+    "filepath": "pdd/conformance/surface.py",
+    "tags": [
+      "conformance",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_snapshot_public_surface",
+            "signature": "(code_text: str, language: str, patch_targets: Optional[Set[str]]=None) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_diff_public_surface",
+            "signature": "(pre: Set[str], post: Set[str]) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "_collect_python_public_surface",
+            "signature": "(source: str) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "_extract_dunder_all",
+            "signature": "(tree: ast.Module) -> Optional[Set[str]]",
+            "returns": "Optional[Set[str]]"
+          },
+          {
+            "name": "_collect_bound_module_names",
+            "signature": "(tree: ast.Module) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_reexport_binding",
+            "signature": "(alias: ast.alias) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "_collect_patch_targets",
+            "signature": "(file_path: Optional[str]) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_effective_patch_targets",
+            "signature": "(existing_code: str, language: str, file_path: Optional[str]) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "_symbol_exists_in_module",
+            "signature": "(tree: ast.Module, symbol: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_snapshot_public_signatures",
+            "signature": "(code_text: str, language: str, patch_targets: Optional[Set[str]]=None) -> Dict[str, str]",
+            "returns": "Dict[str, str]"
+          },
+          {
+            "name": "_format_python_signature",
+            "signature": "(node: ast.AST, *, skip_first: bool = False) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "_resolve_class_node",
+            "signature": "(tree: ast.Module, symbol: str) -> Optional[ast.ClassDef]",
+            "returns": "Optional[ast.ClassDef]"
+          },
+          {
+            "name": "_synthesize_dataclass_init_signature",
+            "signature": "(class_node: ast.ClassDef, class_defs: Optional[Dict[str, ast.ClassDef]]=None, imported_names: Optional[Set[str]]=None) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "_is_dataclass_decorator",
+            "signature": "(decorator: ast.AST) -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "The public-surface regression gate (#1012, #1900), with its annotation reconciler (#1968).",
+    "description": "Rejects a regeneration that removes or reshapes public API. Declared type:module symbols are judged against the prompt declaration rather than the previous generation, which gives the repair loop a stable target and unblocked the pdd change -> pdd sync dead-end (#1900); undeclared symbols keep the previous-generation baseline and its BREAKING-CHANGE opt-outs. Comparison is semantic via interface_semantics, with per-side module default-symbol resolution so a literal-to-constant refactor is not a break while the same constant changing value is (#1558). Unparseable generated Python raises ArchitectureConformanceError rather than a phantom all-symbols-removed regression (#1612). Absorbs the former conformance/annotation_reconcile unit, which reads the same declared interface map and ran only on this gate's behalf (#1968). Reuses the test-path taxonomy from conformance/test_churn to exempt test files from the surface gate.",
+    "dependencies": [
+      "conformance/gate_errors_python.prompt",
+      "conformance/surface_python.prompt",
+      "conformance/directives_python.prompt",
+      "conformance/test_churn_python.prompt"
+    ],
+    "priority": 8,
+    "filename": "conformance/declared_surface_python.prompt",
+    "filepath": "pdd/conformance/declared_surface.py",
+    "tags": [
+      "conformance",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_verify_public_surface_regression",
+            "signature": "(existing_code: Optional[str], generated_code: str, prompt_name: str, output_path: Optional[str], language: Optional[str], prompt_content: Optional[str]) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "_collect_declared_surface",
+            "signature": "(prompt_content: Optional[str], prompt_name: str) -> Dict[str, Optional[str]]",
+            "returns": "Dict[str, Optional[str]]"
+          },
+          {
+            "name": "_reconcile_declared_annotation_drift",
+            "signature": "(existing_code: Optional[str], generated_code: str, prompt_name: str, output_path: Optional[str], language: Optional[str], prompt_content: Optional[str]) -> Optional[str]",
+            "returns": "Optional[str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Architecture and pdd-interface conformance verification.",
+    "description": "Verifies that generated code exports the symbols its architecture.json entry and its own prompt declare, with the declared parameter shapes. Reports three categories in priority order - missing function or method, missing parameter, signature drift - each in its own sentence so the subprocess parser can route them. Annotation drift is conservative (both sides must annotate and be semantically incompatible); default drift is strict and fails closed on unresolvable defaults, since a dropped default breaks callers with TypeError. Dotted parameters are attributed to their full function name. The camelCase backstop exempts names declared in either the architecture entry or the prompt interface (#1446). Extracted from code_generator_main.",
+    "dependencies": [
+      "conformance/gate_errors_python.prompt"
+    ],
+    "priority": 8,
+    "filename": "conformance/interface_check_python.prompt",
+    "filepath": "pdd/conformance/interface_check.py",
+    "tags": [
+      "conformance",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "_verify_architecture_conformance",
+            "signature": "(generated_code: str, prompt_name: str, arch_path: Optional[str], language: Optional[str], verbose: bool, output_path: Optional[str]=None, prompt_content: Optional[str]=None) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "_verify_pdd_interface_signatures",
+            "signature": "(generated_code: str, prompt_content: Optional[str], prompt_name: str, output_path: Optional[str], architecture_entry: Dict[str, Any]) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "_collect_pdd_interface_names",
+            "signature": "(prompt_content: Optional[str]) -> Set[str]",
+            "returns": "Set[str]"
+          }
+        ]
+      }
     }
   }
 ]

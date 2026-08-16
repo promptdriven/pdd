@@ -285,6 +285,8 @@ R2 (MUST NOT): Print the diagnostic block when `quiet` is true.
      and `{prompts_dir.name}/{relative_prompt_path}`. In particular, when `--prompts-dir`
      is absolute, a metadata ref like `prompts/foo_python.prompt` must still resolve
      to that prompt under the supplied prompts directory.
+   - When writing or refreshing metadata, resolve both paths, preserve nested
+     directories, and write `prompts/<relative_prompt_path>` (not a basename).
    - Expose a **public, documented `story_id` helper** that returns the `<slug>`
      of a `story__<slug>.md` path (accepting a `str` or `Path`), so the
      `@pytest.mark.story` marker mechanism and the story files share one identity

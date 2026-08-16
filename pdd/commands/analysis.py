@@ -23,6 +23,7 @@ from ..crash_main import crash_main
 from ..trace_main import trace_main
 from ..user_story_tests import (
     _parse_story_prompt_metadata,
+    _resolve_authorized_story_prompt_metadata_reference,
     discover_prompt_files,
     discover_story_files,
     run_user_story_tests,
@@ -182,7 +183,8 @@ def _scope_manifest_metadata_matches(scope: _StoryScopeManifest) -> bool:
     notices the disagreement after the fact.
     """
     for story in scope.stories:
-        expected = {path.resolve() for path in scope.story_prompts[story]}
+        authorized_prompts = scope.story_prompts[story]
+        expected = set(authorized_prompts)
         try:
             references = _parse_story_prompt_metadata(story.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, ValueError):
@@ -190,16 +192,14 @@ def _scope_manifest_metadata_matches(scope: _StoryScopeManifest) -> bool:
 
         actual: set[Path] = set()
         for reference in references:
-            for candidate in (
-                scope.project_root / reference,
-                scope.project_root / Path(reference).name,
-            ):
-                try:
-                    if candidate.is_file():
-                        actual.add(candidate.resolve())
-                        break
-                except (OSError, RuntimeError, ValueError):
-                    continue
+            resolved = _resolve_authorized_story_prompt_metadata_reference(
+                reference,
+                project_root=scope.project_root,
+                authorized_prompts=authorized_prompts,
+            )
+            if resolved is None:
+                return False
+            actual.add(resolved)
         if actual != expected:
             return False
     return True

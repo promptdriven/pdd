@@ -3438,3 +3438,39 @@ def test_xml_include_with_lines_attribute(tmp_path, monkeypatch) -> None:
     selectors = MockCS.return_value.select.call_args.kwargs["selectors"]
     assert "lines:2-3" in selectors
     assert result == "b\nc"
+
+
+# =============================================================================
+# Markdown literal scanner parity with pdd.sync_core.includes (PR #2376)
+#
+# Canonical dependency discovery and actual prompt expansion must agree on
+# what is a Markdown literal. Divergence either inlines a file the dependency
+# graph never recorded, or silently drops a real include.
+# =============================================================================
+
+
+def test_include_ignored_in_fence_closed_by_longer_run() -> None:
+    """A fence opened with ``` closes on a run of three or more backticks."""
+    prompt = "```\n<include>file.txt</include>\n````"
+    with patch('builtins.open', mock_open(read_data="Included")) as mocked_open:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mocked_open.assert_not_called()
+
+
+def test_include_many_ignored_in_tilde_fence_closed_by_longer_run() -> None:
+    """The same closing rule applies to ~~~ fences and <include-many>."""
+    prompt = "~~~\n<include-many>one.txt, two.txt</include-many>\n~~~~"
+    with patch('builtins.open', mock_open(read_data="Content")) as mocked_open:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+    mocked_open.assert_not_called()
+
+
+def test_include_expanded_despite_mixed_delimiter_fence() -> None:
+    """A mixed ~~` run is not a fence, so the include it wraps is real."""
+    prompt = "~~`\n<include>file.txt</include>\n~~`"
+    with patch('builtins.open', mock_open(read_data="Included")) as mocked_open:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert "Included" in result
+    mocked_open.assert_called()

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 from dataclasses import replace
+from functools import cache
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
@@ -91,7 +92,7 @@ PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 AUTO_HEAL_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "auto-heal.yml"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
-EXPECTED_MANAGED_UNITS = 471
+EXPECTED_MANAGED_UNITS = 477
 # #1989's dormant-bootstrap assertions retain their original immutable base;
 # the replay audit intentionally binds to the current main that it was rebased
 # onto.
@@ -157,9 +158,10 @@ PR_1971_PYTEST_OBLIGATIONS = {
     },
 }
 PDD_1989_EXPECTED_MANAGED_UNITS = 468
-# The #1875 protected history and its replay predate the story-criteria (#5)
-# unit registrations that bumped EXPECTED_MANAGED_UNITS from 469 to 471, so
-# assertions against those exact historical refs must stay frozen at 469.
+# These historical transition assertions build their manifests from frozen
+# commits that predate both the six conformance units on the current branch and
+# the story-criteria (#5) unit registrations this branch adds, so assertions
+# against those exact historical refs must stay frozen at 469.
 PDD_1875_EXPECTED_MANAGED_UNITS = 469
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
@@ -348,6 +350,13 @@ PREAUTHORIZED_CHILD_PATHS = (
     | STANDALONE_CHECKER_PREAUTHORIZED_PATHS
     | PR_2017_ABSENT_METADATA_PATHS
     | {
+        "pdd/conformance/__init__.py",
+        "scripts/validate_conformance_prompts.py",
+        "tests/test_conformance_prompt_compatibility_exports.py",
+        "tests/story_regression/test_story_pdd_generation_gates_preserved.py",
+        "user_stories/contracts/pdd_generation_gates_preserved.contract.md",
+        "user_stories/issues/conformance-gate-split.md",
+        "user_stories/story__pdd_generation_gates_preserved.md",
         ".pdd/meta/agentic_architecture_python.json",
         ".pdd/meta/commands_generate_python.json",
         ".pdd/meta/user_story_tests_python.json",
@@ -410,6 +419,69 @@ CI_DETECT_REQUIREMENT_ROTATION = {
         "f0d873e5505d40035d3c7364fd3961b5602d21519ec9be2049c2f38b16239712"
     ),
 }
+STORY_PROMPT_PHASE_A_POLICY_SHA256 = (
+    "b8b1e11ef85bbf76231c69a06f764935a1bdd2577a003d4299a98d62fa4bf67a"
+)
+STORY_PROMPT_PHASE_A_PROTECTED = (
+    "60588697e7aeee2ad6e22332d913927297a8c2e2"
+)
+STORY_PROMPT_PHASE_A_PROFILE_SHA256 = (
+    "85d01008145de7a7bc67bc6b458b7780a1fbaf24f9733708a0a1032ecb49a9f5"
+)
+STORY_PROMPT_CONSUMED_ROTATION = {
+    "prompt_path": "pdd/prompts/user_story_tests_python.prompt",
+    "language_id": "python",
+    "from_requirement_id": (
+        "CONTRACT-SHA256:c63d875cc5d488b8fd9bfdd72ea015f33962d22b5cde90b9be751de55a209e32"
+    ),
+    "to_requirement_id": (
+        "CONTRACT-SHA256:1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7"
+    ),
+    "policy_path": ".pdd/verification-profiles.json",
+    "base_policy_sha256": (
+        "fe80e8278f3f262f9902e8af6e88f79476f55fcb830929d5c3bea5a87e6e72c3"
+    ),
+    "head_policy_sha256": (
+        "79ac687426546e1c81bbf50f60d7f1067016ec2a9f34d3278bb514a6b1a72836"
+    ),
+    "base_prompt_sha256": (
+        "c63d875cc5d488b8fd9bfdd72ea015f33962d22b5cde90b9be751de55a209e32"
+    ),
+    "head_prompt_sha256": (
+        "1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7"
+    ),
+}
+STORY_PROMPT_PHASE_A_REPLACEMENT = {
+    "prompt_path": "pdd/prompts/user_story_tests_python.prompt",
+    "language_id": "python",
+    "from_requirement_id": (
+        "CONTRACT-SHA256:1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7"
+    ),
+    "to_requirement_id": (
+        "CONTRACT-SHA256:5b1353257a64a25b303d990803bb799da66504af558c3a5e972d95ad5a04bb3b"
+    ),
+    "policy_path": ".pdd/verification-profiles.json",
+    "base_policy_sha256": STORY_PROMPT_PHASE_A_PROFILE_SHA256,
+    "head_policy_sha256": (
+        "6e765e03761e7dd678e5b02b147c60231c13fc8ab3de3fd722cf1181c017acb7"
+    ),
+    "base_prompt_sha256": (
+        "1c467034344d9d87b8225995bc458bc8093e6759dd5c2eed8424b345f69a3ba7"
+    ),
+    "head_prompt_sha256": (
+        "5b1353257a64a25b303d990803bb799da66504af558c3a5e972d95ad5a04bb3b"
+    ),
+}
+
+_read_git_blob = verification.read_git_blob
+
+
+@cache
+def _story_prompt_phase_a_protected_blob(path: PurePosixPath) -> bytes | None:
+    """Read an immutable Phase-A blob once, outside monkeypatched lookups."""
+    return _read_git_blob(ROOT, STORY_PROMPT_PHASE_A_PROTECTED, path)
+
+
 STORY_REGRESSION_DORMANT_ROTATION = {
     "prompt_path": "pdd/prompts/story_regression_python.prompt",
     "language_id": "python",
@@ -870,6 +942,271 @@ def _new_requirement_authorizations(
         )
     )
     return new_authorizations
+
+
+def _story_prompt_phase_a_policy(protected_policy: bytes) -> bytes:
+    """Build the exact direct replacement allowed after source consumption."""
+    assert hashlib.sha256(protected_policy).hexdigest() == (
+        verification._PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1]  # pylint: disable=protected-access
+    )
+    payload = json.loads(protected_policy)
+    obsolete = next(
+        row
+        for row in payload["requirement_rotations"]
+        if row["prompt_path"] == STORY_PROMPT_CONSUMED_ROTATION["prompt_path"]
+        and row["from_requirement_id"]
+        == STORY_PROMPT_CONSUMED_ROTATION["from_requirement_id"]
+    )
+    assert obsolete == STORY_PROMPT_CONSUMED_ROTATION
+    payload["requirement_rotations"].remove(obsolete)
+    payload["requirement_rotations"].append(
+        copy.deepcopy(STORY_PROMPT_PHASE_A_REPLACEMENT)
+    )
+    candidate = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+    assert hashlib.sha256(candidate).hexdigest() == STORY_PROMPT_PHASE_A_POLICY_SHA256
+    return candidate
+
+
+def _story_prompt_phase_a_manifest_with_blobs(
+    monkeypatch,
+    manifest,
+    protected_policy: bytes,
+    candidate_policy: bytes,
+    protected_profile: bytes,
+    candidate_profile: bytes,
+    candidate_prompt_bytes: dict[PurePosixPath, bytes] | None = None,
+):  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    """Bind synthetic Phase-A policy, profile, and prompt blobs to exact refs."""
+    candidate_prompt_bytes = (
+        {} if candidate_prompt_bytes is None else candidate_prompt_bytes
+    )
+    def phase_a_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
+        if path == verification.ROTATION_POLICY_PATH:
+            return protected_policy if ref == "protected" else candidate_policy
+        if path == PROFILE_REL_PATH:
+            return protected_profile if ref == "protected" else candidate_profile
+        if ref == "candidate" and path in candidate_prompt_bytes:
+            return candidate_prompt_bytes[path]
+        return _story_prompt_phase_a_protected_blob(path)
+
+    monkeypatch.setattr(verification, "read_git_blob", phase_a_read)
+    candidate_paths = set(candidate_prompt_bytes)
+    bound_paths = {
+        item.candidate_id.artifact_relpath
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath in candidate_paths
+    }
+    assert bound_paths == candidate_paths
+    candidate_records = tuple(
+        replace(
+            item,
+            head_object_id=hashlib.sha1(
+                candidate_prompt_bytes[item.candidate_id.artifact_relpath]
+            ).hexdigest(),
+        )
+        if item.candidate_id.artifact_relpath in candidate_prompt_bytes
+        else item
+        for item in manifest.candidates
+    )
+    return replace(
+        manifest,
+        refs=ManifestRefs("protected", "candidate"),
+        candidates=candidate_records,
+    )
+
+
+def _load_story_prompt_phase_a_authorizations(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    monkeypatch,
+    manifest,
+    protected_policy: bytes,
+    candidate_policy: bytes,
+    protected_profile: bytes,
+    candidate_profile: bytes,
+) -> tuple[
+    tuple[verification._RequirementTransitionAuthorization, ...],
+    tuple[verification._RequirementTransitionAuthorization, ...],
+]:
+    """Load a synthesized Phase-A policy through the production boundary."""
+    manifest = _story_prompt_phase_a_manifest_with_blobs(
+        monkeypatch,
+        manifest,
+        protected_policy,
+        candidate_policy,
+        protected_profile,
+        candidate_profile,
+    )
+    base, base_invalid = verification._load_inputs(  # pylint: disable=protected-access
+        ROOT, manifest.base_ref, manifest.repository_id, {}
+    )
+    head, head_invalid = verification._load_inputs(  # pylint: disable=protected-access
+        ROOT, manifest.head_ref, manifest.repository_id, {}
+    )
+    assert not base_invalid
+    assert not head_invalid
+    authorizations, _prompts, new_authorizations = (
+        verification._load_requirement_transition_authorizations(  # pylint: disable=protected-access
+            ROOT, manifest, base, head, {}
+        )
+    )
+    return authorizations, new_authorizations
+
+
+def _load_story_prompt_phase_a_profiles(
+    monkeypatch,
+    manifest,
+    protected_policy: bytes,
+    candidate_policy: bytes,
+    protected_profile: bytes,
+    candidate_profile: bytes,
+    candidate_prompt_bytes: dict[PurePosixPath, bytes],
+):  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    """Exercise synthesized Phase-A blobs through the public profile loader."""
+    manifest = _story_prompt_phase_a_manifest_with_blobs(
+        monkeypatch,
+        manifest,
+        protected_policy,
+        candidate_policy,
+        protected_profile,
+        candidate_profile,
+        candidate_prompt_bytes,
+    )
+    return load_verification_profiles(ROOT, manifest)
+
+
+@pytest.fixture(scope="module")
+def story_prompt_phase_a_manifest():
+    """Provide the unchanged protected inventory for every Phase-A candidate."""
+    manifest = build_unit_manifest(
+        ROOT,
+        base_ref=STORY_PROMPT_PHASE_A_PROTECTED,
+        head_ref=STORY_PROMPT_PHASE_A_PROTECTED,
+    )
+    assert not manifest.invalid_reasons
+    return manifest
+
+
+def test_story_prompt_phase_a_consumed_replacement_is_exact(  # pylint: disable=redefined-outer-name
+    monkeypatch, story_prompt_phase_a_manifest
+) -> None:
+    """Only the reviewed direct consumed-row replacement preserves overlays."""
+    protected_policy = _git_blob(STORY_PROMPT_PHASE_A_PROTECTED, ROTATION_FILE)
+    profile = _git_blob(STORY_PROMPT_PHASE_A_PROTECTED, PROFILE_FILE)
+    candidate_policy = _story_prompt_phase_a_policy(protected_policy)
+    assert hashlib.sha256(profile).hexdigest() == STORY_PROMPT_PHASE_A_PROFILE_SHA256
+
+    with monkeypatch.context() as phase_a_monkeypatch:
+        authorizations, _new_authorizations = (
+            _load_story_prompt_phase_a_authorizations(
+                phase_a_monkeypatch,
+                story_prompt_phase_a_manifest,
+                protected_policy,
+                candidate_policy,
+                profile,
+                profile,
+            )
+        )
+    assert [
+        _requirement_authorization_row(item)
+        for item in authorizations
+        if item.prompt_path.as_posix()
+        == STORY_PROMPT_PHASE_A_REPLACEMENT["prompt_path"]
+    ] == [STORY_PROMPT_PHASE_A_REPLACEMENT]
+
+    with monkeypatch.context() as public_loader_monkeypatch:
+        profiles = _load_story_prompt_phase_a_profiles(
+            public_loader_monkeypatch,
+            story_prompt_phase_a_manifest,
+            protected_policy,
+            candidate_policy,
+            profile,
+            profile,
+            {},
+        )
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+    with monkeypatch.context() as stationary_monkeypatch:
+        authorizations, new_authorizations = (
+            _load_story_prompt_phase_a_authorizations(
+                stationary_monkeypatch,
+                story_prompt_phase_a_manifest,
+                candidate_policy,
+                candidate_policy,
+                profile,
+                profile,
+            )
+        )
+    assert [
+        _requirement_authorization_row(item)
+        for item in authorizations
+        if item.prompt_path.as_posix()
+        == STORY_PROMPT_PHASE_A_REPLACEMENT["prompt_path"]
+    ] == [STORY_PROMPT_PHASE_A_REPLACEMENT]
+    assert not new_authorizations
+
+
+@pytest.mark.parametrize("mutation", ("policy-bytes", "row-binding", "profile-bytes"))
+def test_story_prompt_phase_a_consumed_replacement_rejects_nearby_bytes(  # pylint: disable=redefined-outer-name
+    monkeypatch, mutation: str, story_prompt_phase_a_manifest
+) -> None:
+    """The direct replacement cannot become reusable authority by mutation."""
+    protected_policy = _git_blob(STORY_PROMPT_PHASE_A_PROTECTED, ROTATION_FILE)
+    profile = _git_blob(STORY_PROMPT_PHASE_A_PROTECTED, PROFILE_FILE)
+    candidate_policy = _story_prompt_phase_a_policy(protected_policy)
+    candidate_profile = profile
+    if mutation == "policy-bytes":
+        candidate_policy += b" "
+    elif mutation == "row-binding":
+        payload = json.loads(candidate_policy)
+        payload["requirement_rotations"][-1]["head_policy_sha256"] = "0" * 64
+        candidate_policy = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+    else:
+        assert mutation == "profile-bytes"
+        candidate_profile += b" "
+
+    with pytest.raises(verification.VerificationProfileError):
+        _load_story_prompt_phase_a_authorizations(
+            monkeypatch,
+            story_prompt_phase_a_manifest,
+            protected_policy,
+            candidate_policy,
+            profile,
+            candidate_profile,
+        )
+
+
+@pytest.mark.parametrize(
+    "prompt_path",
+    (
+        PurePosixPath(STORY_PROMPT_PHASE_A_REPLACEMENT["prompt_path"]),
+        PurePosixPath("pdd/prompts/code_generator_main_python.prompt"),
+    ),
+    ids=("target-prompt", "unrelated-managed-prompt"),
+)
+def test_story_prompt_phase_a_consumed_replacement_rejects_managed_prompt_drift(  # pylint: disable=redefined-outer-name
+    monkeypatch, prompt_path: PurePosixPath, story_prompt_phase_a_manifest
+) -> None:
+    """The exact Phase-A exception rejects target and unrelated prompt drift."""
+    protected_policy = _git_blob(STORY_PROMPT_PHASE_A_PROTECTED, ROTATION_FILE)
+    profile = _git_blob(STORY_PROMPT_PHASE_A_PROTECTED, PROFILE_FILE)
+    candidate_policy = _story_prompt_phase_a_policy(protected_policy)
+    candidate_prompt = _git_blob(
+        STORY_PROMPT_PHASE_A_PROTECTED, ROOT / prompt_path
+    ) + b"\n% unauthorized drift\n"
+
+    with pytest.raises(verification.VerificationProfileError) as error:
+        _load_story_prompt_phase_a_profiles(
+            monkeypatch,
+            story_prompt_phase_a_manifest,
+            protected_policy,
+            candidate_policy,
+            profile,
+            profile,
+            {prompt_path: candidate_prompt},
+        )
+    assert str(error.value) == (
+        f"candidate retirement changes managed prompt bytes: {prompt_path}"
+    )
 
 
 def test_gemini_phase_a_policy_binds_exactly_two_future_authorizations() -> None:
@@ -2233,6 +2570,19 @@ def test_replay_transitions_cover_the_actual_protected_base() -> None:
     assert profiles.coverage == 1.0
 
 
+def test_conformance_split_profiles_load_from_actual_merge_base() -> None:
+    """The conformance split preserves protected verification history verbatim."""
+    skip_if_authenticated_candidate_lacks_refs(ROOT, "origin/main")
+    manifest = build_unit_manifest(ROOT, base_ref="origin/main", head_ref="HEAD")
+
+    assert not manifest.invalid_reasons
+    profiles = load_verification_profiles(ROOT, manifest)
+
+    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+
+
 def test_pr2017_phase_a_is_dormant_on_its_exact_protected_base() -> None:
     """The PR #2017 prerequisite installs authority without consuming bytes."""
     skip_if_authenticated_candidate_lacks_refs(
@@ -2290,6 +2640,22 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
             verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
             verification._ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],  # pylint: disable=protected-access
         ),
+        (
+            verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
+            verification._CONFORMANCE_SPLIT_PROFILE_BYTES[1],  # pylint: disable=protected-access
+        ),
+        (
+            verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
+            verification._PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],  # pylint: disable=protected-access
+        ),
+        # Phase B consumes the preauthorized story row without changing this
+        # historical repair's policy or prompt bytes.
+        (
+            verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
+            verification._STORY_PROMPT_PHASE_B_PROFILE_BYTES[1],  # pylint: disable=protected-access
+        ),
+        # The story-criteria rotation likewise leaves this historical repair's
+        # policy and prompt bytes untouched.
         (
             verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
             verification._STORY_CRITERIA_PROFILE_BYTES[1],  # pylint: disable=protected-access
@@ -2569,6 +2935,11 @@ def test_current_profile_reconciliation_matches_current_prompt_and_profile_rows(
     current_rows.extend(
         _requirement_authorization_row(authorization)
         for authorization in verification._ZSH_GLOBAL_OPTION_COMPOSED_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
+        if authorization.bindings.head_policy_sha256 == profile_digest
+    )
+    current_rows.extend(
+        _requirement_authorization_row(authorization)
+        for authorization in verification._PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS  # pylint: disable=protected-access
         if authorization.bindings.head_policy_sha256 == profile_digest
     )
     if profile_digest == verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[1]:  # pylint: disable=protected-access
@@ -3907,7 +4278,7 @@ def test_story_bootstrap_rejects_mutated_exact_rule(monkeypatch, field, value) -
         tuple(mutated),
     )
 
-    assert result == tuple(_BOOTSTRAP_HUMAN_OWNERSHIP[1:])
+    assert result == tuple(sorted(_BOOTSTRAP_HUMAN_OWNERSHIP[1:]))
 
 
 def test_story_bootstrap_ignores_extra_candidate_rule(monkeypatch) -> None:
@@ -3929,7 +4300,7 @@ def test_story_bootstrap_ignores_extra_candidate_rule(monkeypatch) -> None:
         (*_BOOTSTRAP_HUMAN_OWNERSHIP, extra),
     )
 
-    assert result == tuple(_BOOTSTRAP_HUMAN_OWNERSHIP)
+    assert result == tuple(sorted(_BOOTSTRAP_HUMAN_OWNERSHIP))
     assert extra not in result
 
 

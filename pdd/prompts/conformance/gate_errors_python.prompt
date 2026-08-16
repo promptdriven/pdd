@@ -1,0 +1,66 @@
+<pdd-reason>Typed exceptions raised by the PDD conformance gates, catchable by sync callers without importing the generation pipeline.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "ArchitectureConformanceError", "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)", "returns": "ArchitectureConformanceError"},
+      {"name": "PublicSurfaceRegressionError", "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None, signature_details: Optional[List[Tuple[str, str, str, str]]] = None)", "returns": "PublicSurfaceRegressionError"},
+      {"name": "TestChurnError", "signature": "(prompt_name: str, output_path: str, churn_ratio: float, threshold: float, pre_line_count: int, post_line_count: int, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None, adopted_human: bool = False)", "returns": "TestChurnError"},
+      {"name": "ProseOutputError", "signature": "(prompt_name: str, output_path: str, language: str, model_name: str = \"unknown\", total_cost: float = 0.0, raw_output: Optional[str] = None, extractor_result: str = \"empty\")", "returns": "ProseOutputError"},
+      {"name": "LanguageMismatchError", "signature": "(prompt_name: str, output_path: str, language: str, model_name: str = \"unknown\", total_cost: float = 0.0, raw_output: Optional[str] = None, syntax_error: str = \"\")", "returns": "LanguageMismatchError"},
+      {"name": "_verify_language_validity", "signature": "(generated_code_content: str, language: str) -> Tuple[Optional[SyntaxError], str]", "returns": "Tuple[Optional[SyntaxError], str]"},
+      {"name": "_LANGUAGE_TEST_FILE_EXTS", "signature": "Tuple[str, ...]", "returns": "Tuple[str, ...]"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Implement the conformance gate exceptions in
+% `pdd/conformance/gate_errors.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Responsibility
+  Define the five typed, structured errors conformance gates raise and the Python
+  language-validity helper. They carry
+  human diagnostics and a model-facing repair directive, but make no gate decision.
+
+% Contract rules
+<contract_rules>
+  R1. The classes MUST directly subclass `click.UsageError`, remain peers, preserve
+      their declared structured attributes, and honour a supplied repair directive
+      verbatim.
+  R2. An empty output path MUST render as `<unknown>`; prose-output excerpts MUST be
+      bounded to two hundred forty characters (`<empty>` when absent).
+  R3. `adopted_human` MUST only annotate `TestChurnError`; it never affects a decision.
+  R4. The module MUST read the optional churn nonce safely once per process, accepting only a
+      plausible hex token. Failure yields no nonce, and only a real nonce adds its
+      `nonce:` output line.
+  R5. `_verify_language_validity` MUST only parse declared Python (case- and
+      whitespace-insensitive), return the exact parsed candidate, and retry once
+      after uniform dedenting. `LanguageMismatchError` is terminal: it exposes no
+      repair directive and reports a bounded raw-output excerpt and syntax location.
+</contract_rules>
+
+% Cross-process message and repair contract
+  `agentic_sync_runner` prefix-scans child stdout. Keep these prefixes and their
+  following one-field-per-line records byte-stable: `Architecture conformance
+  error for {prompt_name}:`; `Public surface regression for {prompt_name}:`
+  (`removed:`, `signature_changed:`, `output:`, sizes, then compact JSON
+  `signature_detail:` records); `Test churn threshold exceeded for {prompt_name}:`
+  (ratio/threshold to two decimals, output, line counts, lowercased `adopted:`,
+  optional nonce); and `Generation output extraction failure for {prompt_name}:`
+  (model, language, output, extractor result, raw excerpt); and `Language mismatch
+  for {prompt_name}:` (model, language, output, syntax error, raw excerpt).
+
+  Architecture repair text lists `Required missing exports:` and says exactly
+  `Do not modify architecture.json. Do not remove existing valid exports.`
+  Surface repair opens `Public surface regression repair required.`, restores
+  removals, reproduces pdd-interface signatures verbatim, and directs intentional
+  declared changes to that interface—not `BREAKING-CHANGE`. Churn repair opens
+  `Test churn repair required.` and preserves broad coverage while reducing churn.
+  Prose repair requests one complete source-file code block with no planning text.
+
+% Dependencies
+  Standard library plus `click`; do not import another conformance module.
