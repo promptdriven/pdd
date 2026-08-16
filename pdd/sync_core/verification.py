@@ -265,6 +265,17 @@ _STORY_PROMPT_PHASE_A_STATIONARY_PROFILE_BYTES = (
     _STORY_PROMPT_PHASE_A_PROFILE_BYTES[1],
     _STORY_PROMPT_PHASE_A_PROFILE_BYTES[1],
 )
+# Phase B consumes the protected dormant user-story row while retaining the
+# exact Phase-A policy bytes. These profile pairs retain prior historical
+# overlays only; the policy row remains the sole transition authority.
+_STORY_PROMPT_PHASE_B_PROFILE_BYTES = (
+    _STORY_PROMPT_PHASE_A_PROFILE_BYTES[1],
+    "6e765e03761e7dd678e5b02b147c60231c13fc8ab3de3fd722cf1181c017acb7",
+)
+_STORY_PROMPT_PHASE_B_STATIONARY_PROFILE_BYTES = (
+    _STORY_PROMPT_PHASE_B_PROFILE_BYTES[1],
+    _STORY_PROMPT_PHASE_B_PROFILE_BYTES[1],
+)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
@@ -3128,6 +3139,22 @@ def _load_requirement_transition_authorizations(
             ),
         }
     )
+    story_prompt_phase_b_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        in {
+            (
+                _STORY_PROMPT_PHASE_A_STATIONARY_POLICY_BYTES,
+                _STORY_PROMPT_PHASE_B_PROFILE_BYTES,
+            ),
+            (
+                _STORY_PROMPT_PHASE_A_STATIONARY_POLICY_BYTES,
+                _STORY_PROMPT_PHASE_B_STATIONARY_PROFILE_BYTES,
+            ),
+        }
+    )
+    story_prompt_historical_state = (
+        story_prompt_phase_a_state or story_prompt_phase_b_state
+    )
     generate_reliability_state = is_pdd_repository and (
         (policy_digests, profile_digests)
         in {
@@ -3197,7 +3224,7 @@ def _load_requirement_transition_authorizations(
         }
     )
     code_generator_language_gate_state = is_pdd_repository and (
-        story_prompt_phase_a_state
+        story_prompt_historical_state
         or (policy_digests, profile_digests)
         in {
             (
@@ -3238,7 +3265,7 @@ def _load_requirement_transition_authorizations(
         }
     )
     zsh_global_option_state = is_pdd_repository and (
-        story_prompt_phase_a_state
+        story_prompt_historical_state
         or (policy_digests, profile_digests)
         in {
             (
@@ -3274,7 +3301,7 @@ def _load_requirement_transition_authorizations(
         }
     )
     pr2376_dependency_fix_state = is_pdd_repository and (
-        story_prompt_phase_a_state
+        story_prompt_historical_state
         or (policy_digests, profile_digests)
         in {
             (
