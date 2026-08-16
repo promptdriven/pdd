@@ -1231,6 +1231,102 @@ def test_scope_manifest_accepts_nested_logical_prompt_metadata(tmp_path, monkeyp
     assert mock_runner.call_args.kwargs["prompt_files"] == [nested_prompt]
 
 
+@pytest.mark.parametrize(
+    "metadata_ref",
+    ["conformance/demo.prompt", "demo.prompt"],
+)
+def test_scope_manifest_accepts_unique_legacy_prompt_metadata(
+    tmp_path, monkeypatch, metadata_ref
+):
+    """Legacy suffix and basename refs are safe only when entry-local unique."""
+    stories, prompts, story, manifest = _write_scope_manifest(
+        tmp_path, prompt_ref="prompts/conformance/demo.prompt"
+    )
+    nested_prompt = prompts / "conformance" / "demo.prompt"
+    nested_prompt.parent.mkdir()
+    nested_prompt.write_text("prompt", encoding="utf-8")
+    story.write_text(
+        f"<!-- pdd-story-prompts: {metadata_ref} -->\n## Story\nOK",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (
+            True,
+            [{"story": str(story), "passed": True, "changes": []}],
+            0.0,
+            "model-safe",
+        )
+        result = CliRunner().invoke(
+            detect_change,
+            ["--stories", "--scope-manifest", str(manifest)],
+            obj={},
+        )
+
+    assert result.exit_code == 0, (result.output, mock_runner.call_args)
+    assert mock_runner.call_args.kwargs["prompt_files"] == [nested_prompt]
+
+
+def test_scope_manifest_rejects_ambiguous_legacy_prompt_basename(tmp_path, monkeypatch):
+    """A basename cannot expand the entry's prompt authorization boundary."""
+    stories, prompts, story, manifest = _write_scope_manifest(tmp_path)
+    first_prompt = prompts / "first" / "demo.prompt"
+    second_prompt = prompts / "second" / "demo.prompt"
+    first_prompt.parent.mkdir()
+    second_prompt.parent.mkdir()
+    first_prompt.write_text("first", encoding="utf-8")
+    second_prompt.write_text("second", encoding="utf-8")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["stories"][0]["prompts"] = [
+        "prompts/first/demo.prompt",
+        "prompts/second/demo.prompt",
+    ]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    story.write_text(
+        "<!-- pdd-story-prompts: demo.prompt -->\n## Story\nOK",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        result = CliRunner().invoke(
+            detect_change,
+            ["--stories", "--scope-manifest", str(manifest), "--json"],
+            obj={},
+        )
+
+    assert result.exit_code == 3
+    mock_runner.assert_not_called()
+    assert json.loads(result.output)["errors"][0]["code"] == "scope:MANIFEST_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    "metadata_ref",
+    ["<absolute>", "../prompts/a.prompt", "./prompts/a.prompt", "prompts//a.prompt", "missing.prompt"],
+)
+def test_scope_manifest_rejects_unsafe_or_unresolved_prompt_metadata(
+    tmp_path, monkeypatch, metadata_ref
+):
+    """Metadata aliases must not bypass exact-scope logical path validation."""
+    stories, prompts, story, manifest = _write_scope_manifest(tmp_path)
+    if metadata_ref == "<absolute>":
+        metadata_ref = str(prompts / "a.prompt")
+    story.write_text(
+        f"<!-- pdd-story-prompts: {metadata_ref} -->\n## Story\nOK",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        result = CliRunner().invoke(
+            detect_change,
+            ["--stories", "--scope-manifest", str(manifest), "--json"],
+            obj={},
+        )
+
+    assert result.exit_code == 3
+    mock_runner.assert_not_called()
+    assert json.loads(result.output)["errors"][0]["code"] == "scope:MANIFEST_MISMATCH"
+
+
 def test_scope_manifest_allows_shared_prompt_across_distinct_stories(
     tmp_path, monkeypatch
 ):

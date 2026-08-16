@@ -20,6 +20,7 @@ from .user_story_tests import (
     CONTRACT_SUFFIX,
     STORY_PREFIX,
     _parse_story_prompt_metadata,
+    _resolve_authorized_story_prompt_metadata_reference,
 )
 
 SCHEMA_VERSION = "pdd.detect.stories.v1"
@@ -316,6 +317,15 @@ def build_story_detection_document(
                 )
             )
         linked = sorted(_safe_reference(ref) for ref in linked_refs)
+        manifest_prompts = (
+            tuple(
+                Path(path)
+                for path in manifest_story_prompts.get(story_resolved, ())
+            )
+            if manifest_story_prompts is not None
+            else None
+        )
+        manifest_actual: set[Path] = set()
 
         contract_valid = _is_regular_in_scope(
             contract,
@@ -338,21 +348,20 @@ def build_story_detection_document(
                 )
             )
         for prompt_ref in linked_refs:
-            if allowed_prompt_files is not None:
-                allowed = tuple(Path(candidate).resolve() for candidate in allowed_prompt_files)
-                candidates = (
-                    project_root / prompt_ref,
-                    prompts_dir / prompt_ref,
-                    prompts_dir / Path(prompt_ref).name,
+            if manifest_prompts is not None:
+                resolved = _resolve_authorized_story_prompt_metadata_reference(
+                    prompt_ref,
+                    project_root=project_root,
+                    authorized_prompts=manifest_prompts,
                 )
-                resolved = next(
-                    (
-                        candidate.resolve()
-                        for candidate in candidates
-                        if candidate.is_file()
-                        and candidate.resolve() in allowed
-                    ),
-                    None,
+                if resolved is not None:
+                    manifest_actual.add(resolved)
+                prompt_in_scope = resolved is not None
+            elif allowed_prompt_files is not None:
+                resolved = _resolve_authorized_story_prompt_metadata_reference(
+                    prompt_ref,
+                    project_root=project_root,
+                    authorized_prompts=allowed_prompt_files,
                 )
                 prompt_in_scope = resolved is not None
             else:
@@ -379,8 +388,10 @@ def build_story_detection_document(
                     )
                 )
                 continue
-            if allowed_prompt_files is not None:
-                prompt_in_scope = resolved in allowed
+            if manifest_prompts is not None or allowed_prompt_files is not None:
+                # The supplied prompt pool is the only resolution source in
+                # scoped modes; do not discover a different on-disk prompt.
+                prompt_in_scope = True
             else:
                 try:
                     resolved.relative_to(prompts_dir.resolve())
@@ -405,29 +416,14 @@ def build_story_detection_document(
                         f"{_safe_reference(prompt_ref)}",
                     )
                 )
-        if manifest_story_prompts is not None:
-            expected = {
-                Path(path).resolve()
-                for path in manifest_story_prompts.get(story_resolved, ())
-            }
-            actual: set[Path] = set()
-            for prompt_ref in linked_refs:
-                for candidate in (
-                    project_root / prompt_ref,
-                    prompts_dir / prompt_ref,
-                    prompts_dir / Path(prompt_ref).name,
-                ):
-                    if candidate.is_file():
-                        actual.add(candidate.resolve())
-                        break
-            if actual != expected:
-                errors.append(
-                    StoryDiagnostic(
-                        "scope:MANIFEST_MISMATCH",
-                        "error",
-                        "Story prompt metadata does not match the exact scope manifest.",
-                    )
+        if manifest_prompts is not None and manifest_actual != set(manifest_prompts):
+            errors.append(
+                StoryDiagnostic(
+                    "scope:MANIFEST_MISMATCH",
+                    "error",
+                    "Story prompt metadata does not match the exact scope manifest.",
                 )
+            )
         if len(rows) != 1:
             code = (
                 "detector:INCOMPLETE_RESULT"

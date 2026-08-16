@@ -11,6 +11,7 @@ import pytest
 from pdd.user_story_tests import (
     _contract_path_for_story,
     _prompt_reference_for_metadata,
+    _resolve_authorized_story_prompt_metadata_reference,
     _story_content_hash,
     cache_story_prompt_links,
     discover_prompt_files,
@@ -519,9 +520,10 @@ def test_cache_story_prompt_links_skips_existing_valid_metadata(tmp_path):
     (prompts_dir / "one_python.prompt").write_text("prompt one", encoding="utf-8")
     story = stories_dir / "story__existing.md"
     story.write_text(
-        "<!-- pdd-story-prompts: one_python.prompt -->\n\nAs a user...",
+        "<!-- pdd-story-prompts: prompts/one_python.prompt -->\n\nAs a user...",
         encoding="utf-8",
     )
+    original_story = story.read_bytes()
 
     with patch("pdd.user_story_tests.detect_change") as mock_detect:
         success, message, cost, model, linked_prompts = cache_story_prompt_links(
@@ -534,7 +536,121 @@ def test_cache_story_prompt_links_skips_existing_valid_metadata(tmp_path):
     assert cost == 0.0
     assert model == ""
     assert linked_prompts == ["prompts/one_python.prompt"]
+    assert story.read_bytes() == original_story
     mock_detect.assert_not_called()
+
+
+def test_authorized_story_metadata_resolution_uses_only_supplied_paths(
+    tmp_path, monkeypatch
+):
+    """Exact-scope metadata resolution never probes the filesystem."""
+    project_root = tmp_path / "project"
+    prompt = project_root / "prompts" / "conformance" / "demo.prompt"
+
+    def fail_filesystem_probe(*_args, **_kwargs):
+        raise AssertionError("scoped metadata resolution must not probe the filesystem")
+
+    monkeypatch.setattr(Path, "is_file", fail_filesystem_probe)
+    monkeypatch.setattr(Path, "resolve", fail_filesystem_probe)
+
+    assert _resolve_authorized_story_prompt_metadata_reference(
+        "demo.prompt",
+        project_root=project_root,
+        authorized_prompts=[prompt],
+    ) == prompt
+
+
+@pytest.mark.parametrize("metadata_ref", ["demo.prompt", "DEMO.PROMPT"])
+def test_cache_story_prompt_links_canonicalizes_existing_legacy_metadata(
+    tmp_path, metadata_ref
+):
+    """A no-LLM refresh upgrades a uniquely resolvable legacy basename."""
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    nested_prompt = prompts_dir / "conformance" / "demo.prompt"
+    nested_prompt.parent.mkdir()
+    nested_prompt.write_text("prompt", encoding="utf-8")
+    story = stories_dir / "story__existing.md"
+    story.write_text(
+        f"<!-- pdd-story-prompts: {metadata_ref} -->\n\nAs a user...",
+        encoding="utf-8",
+    )
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        success, message, cost, model, linked_prompts = cache_story_prompt_links(
+            story_file=str(story),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert message == "Story prompt metadata canonicalized."
+    assert cost == 0.0
+    assert model == ""
+    assert linked_prompts == ["prompts/conformance/demo.prompt"]
+    assert (
+        "<!-- pdd-story-prompts: prompts/conformance/demo.prompt -->"
+        in story.read_text(encoding="utf-8")
+    )
+    mock_detect.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("metadata_ref", "first_relative_path"),
+    [
+        ("demo.prompt", "first/demo.prompt"),
+        ("shared/demo.prompt", "first/shared/demo.prompt"),
+    ],
+)
+def test_cache_story_prompt_links_does_not_guess_ambiguous_legacy_metadata(
+    tmp_path, metadata_ref, first_relative_path
+):
+    """Ambiguous basename and suffix metadata must fall through to detection."""
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    first_prompt = prompts_dir / first_relative_path
+    second_prompt = prompts_dir / first_relative_path.replace("first/", "second/", 1)
+    first_prompt.parent.mkdir(parents=True)
+    second_prompt.parent.mkdir(parents=True)
+    first_prompt.write_text("first", encoding="utf-8")
+    second_prompt.write_text("second", encoding="utf-8")
+    story = stories_dir / "story__existing.md"
+    story.write_text(
+        f"<!-- pdd-story-prompts: {metadata_ref} -->\n\nAs a user...",
+        encoding="utf-8",
+    )
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = (
+            [
+                {
+                    "prompt_name": f"prompts/{first_relative_path}",
+                    "change_instructions": "Use the first prompt.",
+                }
+            ],
+            0.4,
+            "gpt-test",
+        )
+        success, message, cost, model, linked_prompts = cache_story_prompt_links(
+            story_file=str(story),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert message == "Story prompt metadata linked."
+    assert cost == 0.4
+    assert model == "gpt-test"
+    assert linked_prompts == [f"prompts/{first_relative_path}"]
+    assert (
+        f"<!-- pdd-story-prompts: prompts/{first_relative_path} -->"
+        in story.read_text(encoding="utf-8")
+    )
+    mock_detect.assert_called_once()
 
 
 def test_cache_story_prompt_links_missing_story_fails(tmp_path):
