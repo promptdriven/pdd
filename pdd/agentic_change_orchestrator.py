@@ -60,6 +60,7 @@ from pdd.preprocess import preprocess
 from pdd.architecture_registry import extract_modules
 from pdd.architecture_sync import _merge_interface_signatures, register_untracked_prompts
 from pdd.pre_checkup_gate import run_pre_checkup_gate
+from pdd import DEFAULT_STRENGTH
 from pdd.user_story_tests import (
     generate_user_story,
     run_user_story_tests,
@@ -3791,7 +3792,10 @@ def run_agentic_change_orchestrator(
             issue_url=issue_url,
             changed_files=changed_files,
             worktree_path=gate_worktree,
-            strength=0.2,
+            # This strength reaches strict story validation via
+            # `run_user_story_tests`, so it must not sit below the documented
+            # default -- the weakest tier passes a regressed prompt set (#2394).
+            strength=DEFAULT_STRENGTH,
             temperature=0.0,
             time_budget=0.25,
             verbose=verbose,
