@@ -44,7 +44,10 @@ Readability is not in tension with reliability: review and edit cost sit in the 
 
 If you are new to Prompt-Driven Development (PDD), follow this recipe:
 
-1.  **Think "One Prompt = One Module":** Don't try to generate the whole app at once. Focus on one file (e.g., `user_service.py`).
+1.  **Think "One Prompt = One Coherent Unit":** For ordinary code this is
+    usually one file or module. A frontend unit may span several code files
+    that jointly implement one recognizable interface responsibility; see
+    [Frontend Prompt and SVG Files](#frontend-prompt-and-svg-files).
 2.  **Use a Template:** Start with a clear structure: Role, Requirements, Dependencies. (Start from the [Minimal Skeleton](#minimal-skeleton-default); escalate only when risk triggers fire.)
 3.  **Explicitly Include Context:** Use `<include>path/to/file</include>` to give the model *only* what it needs (e.g., a shared preamble or a dependency interface). This is a **PDD directive**, not just XML. (See [Directives & Context](#prompt-syntax-essentials).)
 4.  **Regenerate, Don't Patch:** Change behavior by changing the prompt and regenerating. If generated code fails to satisfy a correct prompt/test, use `pdd bug` / `pdd fix`. If the intended behavior is missing or wrong in the prompt, update the prompt first.
@@ -2398,16 +2401,285 @@ Key differences:
 
 ## Scoping & Modularity
 
-- One prompt → one file/module. If a prompt gets too large or brittle, split it into smaller prompts that compose via explicit interfaces.
+- For ordinary code, one prompt → one file/module. For frontend work where appearance matters, follow [Frontend Prompt and SVG Files](#frontend-prompt-and-svg-files): one prompt may describe a part of the interface that produces more than one code file, but each code file still has one generator.
 - Treat examples as interfaces: create a minimal runnable example demonstrating how the module is meant to be used.
 - Avoid "mega‑prompts" that try to implement an entire subsystem. Use the PDD graph of prompts instead. For how prompts compose via examples, see [Dependencies](#dependencies) in the Directives & Context chapter.
+
+---
+
+## Frontend Prompt and SVG Files
+
+For frontend work where spatial hierarchy or appearance matters, use one
+canonical generator prompt plus semantic SVG views. The prompt and SVGs are
+source; generated components, styles, and screenshots are output.
+
+Organize this source by a user-recognizable interface responsibility, not
+mechanically by React filename:
+
+```text
+prompts/ui/<unit>/
+├── <unit>.ui.prompt
+└── views/
+    ├── <state>__<layout-mode>.ui.svg
+    └── <state>--<variant>__<layout-mode>.ui.svg
+```
+
+Use a short kebab-case product or interface concept for `<unit>`, stable even
+when source files move; the directory and owning prompt basename must match.
+Prefer `account-header`, `project-sharing-panel`, or `voice-config-picker` over
+a flattened source path such as `components-account-accountheader`. Keep a
+meaningful noun such as `panel`, `modal`, `picker`, or `widget` when it explains
+the interface responsibility.
+
+Name each SVG `<state>[--<variant>]__<layout-mode>.ui.svg`. The layout mode
+names the material spatial arrangement—such as `split-pane`, `single-pane`,
+`stacked`, `side-by-side`, or `grid`—rather than a pixel size, device, or
+orientation. For example, use `ready__split-pane.ui.svg` and
+`ready--detail__single-pane.ui.svg`. Choose the most specific stable spatial
+relationship; do not use `mobile`, `desktop`, `AR`, or a generic orientation
+when the arrangement itself can be named.
+
+**Filename identity rule.** A frontend source filename identifies the semantic
+state and material arrangement, never its current runtime surface or rendering
+representation. Do not encode `2d`, `3d`, `ar`, `vr`, `phone`, `desktop`, an
+orientation, DPI, dimensions, or an aspect ratio in the name. If the geometry
+actually differs, name that geometry or arrangement. Vector, raster, and future
+3D source formats are distinguished by their extension and tooling, not by a
+device suffix. Put exact viewport and aspect information in the prompt's view
+contract, not the filename. This preserves the required `layout-mode`; it is
+the durable arrangement metadata, not a runtime target label.
+
+A unit may be a component, dialog, or coherent screen. It may generate one code
+file or several files that jointly implement the same responsibility. Do not
+create an extra YAML, JSON, manifest, schema, or index file for frontend
+requirements: the prompt contains the target manifest, and `.pddrc` is the
+routing source.
+
+For a simple component whose appearance is already fully determined by the
+shared design system, an ordinary prompt without SVGs is enough. Providers,
+hooks, metadata layouts, and orchestration controllers with no spatial contract
+should remain prompt-only units rather than receiving decorative SVGs.
+
+### Make the Prompt and SVGs the Generator
+
+The UI prompt is the generator, not a companion included by a separate per-file
+language prompt. Do not keep both of these authorities:
+
+```text
+per-file TypeScript/React generator prompt
+  └── includes shared UI prompt + SVGs
+```
+
+Instead, route every target directly to the canonical UI prompt. One `.pddrc`
+context still maps to one `outputs.code.path`, preserving one writer per code
+file. When several targets share a UI unit, give each target its own context and
+repeat the same `outputs.prompt.path`:
+
+```yaml
+contexts:
+  marketing_landing_page:
+    defaults:
+      outputs:
+        code:
+          path: "components/landing/LandingPage.tsx"
+        prompt:
+          path: "prompts/ui/marketing-landing/marketing-landing.ui.prompt"
+
+  marketing_landing_cta:
+    defaults:
+      outputs:
+        code:
+          path: "components/landing/LandingPageCta.tsx"
+        prompt:
+          path: "prompts/ui/marketing-landing/marketing-landing.ui.prompt"
+```
+
+Conceptually:
+
+```text
+.pddrc context A ─┬─> shared UI prompt + SVGs ─> code target A
+.pddrc context B ─┘                           └> code target B
+```
+
+The shared prompt path represents shared intent, not shared write authority.
+Each code path must appear in exactly one context. A generation run must select
+one context and write only that context's target.
+
+The prompt must contain a target manifest naming every context and code path,
+plus a target-specific contract section for each target. Shared behavior,
+accessibility, responsive rules, and visual views apply to the whole unit;
+target-specific interfaces, dependencies, route behavior, and forbidden side
+effects apply only when that target's context is active.
+
+```xml
+<target-contract context="marketing_landing_page"
+                 code-path="components/landing/LandingPage.tsx">
+  <pdd-interface>...</pdd-interface>
+  <contract_rules>...</contract_rules>
+</target-contract>
+```
+
+Do not merge units merely because one imports another. Keep a child separate
+when users recognize it independently, it is reused across surfaces, or it can
+be regenerated and verified independently. Group files when they are tightly
+coupled parts of one coherent experience and reviewing their behavior and
+layout together reduces drift.
+
+Some PDD releases infer the target language from a `_<Language>.prompt` suffix.
+If a project adopts the semantic `.ui.prompt` suffix, its repository generation
+command must supply the language and selected output without creating a second
+checked-in prompt. Keep `.pddrc` as the only prompt-to-code routing map.
+
+### Write the Prompt File
+
+The prompt describes everything that cannot be learned safely from a picture:
+
+- the unit's role and user outcome;
+- its complete context-to-code target manifest;
+- the public interface and target-specific behavior for every generated file;
+- what happens after clicks, keyboard actions, submission, cancellation, and
+  navigation;
+- loading, empty, error, success, selected, disabled, and pending states;
+- how the layout changes as available space, content fit, or interaction
+  requirements change;
+- accessible names, focus behavior, keyboard order, announcements, and actions
+  that must not happen; and
+- which shared design-system values should be used instead of copied colors or
+  framework-specific class names.
+
+Use stable `R<n>` MUST/MUST NOT rules for behavior that must survive
+regeneration. Include each SVG directly from the prompt. Immediately before the
+include, state the view ID, UI state, layout mode, when that layout applies, and
+how strictly the SVG must be followed. For a brownfield UI, default to
+`fidelity="measured"`: the SVG is a measured representation of the existing
+view, not a generic design direction. The view's layout-mode name remains its
+identity; its reference viewport records the captured comparison surface.
+
+- **Relational:** general direction only. Use this only when visual matching is
+  not an acceptance requirement.
+- **Measured (brownfield default):** preserve major region geometry,
+  alignment, spacing, the captured fold, responsive layout modes, visible token
+  colors, type hierarchy, and control geometry. It is structurally exact but
+  decoratively representative; see [Create the SVG Files](#create-the-svg-files).
+- **Exact:** preserve the stated measurements and values within a stated
+  tolerance when the output itself has a fixed external contract.
+
+State any external surrounding UI that appears in the view as `context-only`.
+It may be drawn to make the owned region intelligible, but it MUST NOT expand
+the unit's generated-code ownership, target manifest, or behavioral contract.
+
+```xml
+<view id="ready-split-pane" state="ready" layout="split-pane"
+      fidelity="measured" reference-viewport="1440x900"
+      geometry-tolerance="max(8px, 2%)" color-tolerance="token-exact">
+Use this arrangement when the available inline space supports the list and
+detail regions simultaneously without obscuring required content. Match the
+measured viewBox to the reference viewport. Preserve the measured split,
+alignment, spacing, visible fold, type hierarchy, resolved design tokens, and
+control geometry; do not substitute a generic card layout. Browser font metrics
+and antialiasing are not exact requirements. The application shell is
+context-only; this unit owns the list and detail regions only.
+<include>views/ready__split-pane.ui.svg</include>
+</view>
+
+<contract_rules>
+R1 (MUST): Clicking Close or pressing Escape closes the dialog and returns
+focus to the button that opened it.
+R2 (MUST NOT): Allow background controls to operate while the dialog is open.
+</contract_rules>
+```
+
+Preserve an exact dimension or aspect ratio only when it is an external or
+fixed-output contract, such as a social card, video frame, print artifact, or
+fixed display surface. Keep that requirement explicit in the prompt rather
+than using it as the SVG identity:
+
+```xml
+<view id="default-social-card" state="default" layout="social-card"
+      fidelity="exact">
+This external share-card output MUST render at 1200x630 pixels.
+<include>views/default__social-card.ui.svg</include>
+</view>
+```
+
+### Create the SVG Files
+
+Create an SVG only for a state or layout mode whose visual arrangement changes
+in an important way. Do not create one for every possible size.
+
+- Use `<state>[--<variant>]__<layout-mode>.ui.svg`, such as
+  `ready__split-pane.ui.svg` or `ready--detail__single-pane.ui.svg`.
+- Add a `viewBox`, `title`, and `desc`, plus stable, intent-based IDs such as
+  `region-primary-action` for important regions. Keep meaningful semantic IDs
+  and accessibility metadata even when decorative detail is simplified.
+- For a measured view, set a `viewBox` matching the declared reference
+  viewport. It is still scalable drawing coordinates, not a required runtime
+  display size; do not set root `width` or `height` unless an external or
+  fixed-output contract requires them.
+- Use attributes such as `data-intent-role` and `data-token` to name important
+  regions and design-system values. In a measured view, render the resolved
+  token colors seen in the reference exactly; do not replace them with generic
+  fallback colors.
+- Do not embed event handlers, React structure, Tailwind classes, external
+  resources, base64 files, editor metadata, or hidden alternate designs.
+
+Measured SVGs are **structurally exact but decoratively representative**. Keep
+the major composition, region bounds, alignment, spacing, media aspect ratios,
+visible controls, type hierarchy, and meaningful visible copy. Do not spend
+SVG bytes transcribing visual ornament that does not change those facts:
+
+- Express repeated grids with a reusable `<pattern>` rather than enumerated
+  lines, and consolidate atmospheric gradients to the few needed to establish
+  the observed effect.
+- Represent raster-like media, thumbnails, illustrations, and minor icons with
+  a semantic frame, overlay, label, and a small number of representative
+  shapes. Do not recreate photographic or intricate artwork path by path.
+- Secondary body copy may be representative when it retains the same line
+  count, line wrapping, and occupied text geometry. The prompt retains the
+  complete authoritative copy. Headings, labels, and controls remain exact.
+
+Mark external regions as `data-intent-scope="context-only"` (or an equivalent
+explicit semantic marker). They provide orientation only and do not imply that
+the unit owns, generates, or changes them.
+
+The SVG describes appearance; the prompt describes behavior and accessibility.
+The order of shapes in an SVG does not determine DOM or keyboard-focus order.
+The SVG is semantic source, not a DOM, CSS, or high-detail screenshot
+transcription.
+
+PDD normally supplies an included SVG to the model as XML text. When visual
+image input is needed, deterministically render an uncommitted PNG overview or
+named crops for generation/review and record the source SVG hash. The SVG stays
+authoritative; generated PNGs and contact sheets are review evidence.
+
+### Verify the Generated Frontend
+
+Before regeneration, verify that every code target has one context, every
+shared prompt's target manifest matches all contexts that reference it, and
+every SVG include resolves. Validate SVG XML and raster renderability.
+
+After regeneration, use behavior and accessibility tests for prompt
+requirements. Use browser tests at representative review/test viewport sizes
+and around layout-change thresholds; those sizes are verification parameters,
+not canonical source identity. For every measured view, compare the actual UI
+and SVG rendered at the same declared reference viewport side by side, then use
+a 50% overlay to review alignment and fold placement. Accept major geometric
+differences only within `max(8px, 2%)` of the relevant reference dimension;
+require token-exact colors. Do not reject browser font rasterization or the
+approved representative decorative details for not being pixel-identical. Test
+exact dimensions when an external or fixed-output contract requires them. Cover
+loading/error/empty/success distinctions, long text, overflow, zoom, keyboard
+access, visible focus, focus restoration, and forbidden actions. Review source
+diffs and rendered views; do not accept a screenshot as the only oracle.
 
 ---
 
 ## Why PDD Scales to Large Codebases
 
 - Explicit, curated context: use minimal examples and targeted includes instead of dumping source, reducing tokens and confusion.
-- Modular dev units: one prompt per file/module constrains scope, enabling independent regeneration and parallel work.
+- Modular dev units: one prompt per coherent unit, with one context per code
+  target, constrains scope while allowing tightly related frontend files to
+  share one visual and behavioral authority.
 - Batch, reproducible flow: eliminate long chat histories; regeneration avoids patch accumulation and incoherent diffs.
 - Accumulating tests: protect behavior across wide regenerations and refactors; failures localize issues quickly.
 - Single source of truth: prompts unify intent and dependencies, improving cross‑team coordination and reducing drift.
@@ -2464,7 +2736,9 @@ flowchart LR
 
 - Too much context: prune includes; prefer targeted examples over entire files.
 - Vague requirements: convert to explicit contracts, budgets, and behaviors.
-- Mega‑prompts: split into smaller prompts (one per file/module) and compose.
+- Mega‑prompts: split into smaller prompts and compose. Ordinary code is usually
+  one prompt per file/module; frontend visual work follows the
+  [coherent-unit guidance](#frontend-prompt-and-svg-files).
 - Prompt outweighs the code: if the prompt is larger than the generated file, it's usually over‑specifying control flow. Aim for prompts to be a fraction of the target code size; keep them at the interface/behavior level and let the model fill in routine implementation.
 - Patching code directly: make the change in the prompt and regenerate; then back-propagate any learnings into the prompt.
 - Throwing away tests: keep and expand; they are your long‑term leverage.
@@ -2473,7 +2747,10 @@ flowchart LR
 
 ## Naming & Conventions (This Repo)
 
-- One prompt per module/file, named like `${BASENAME}_${LanguageOrFramework}.prompt` (see templates under `pdd/pdd/templates`).
+- Ordinary module prompts use `${BASENAME}_${LanguageOrFramework}.prompt` (see
+  templates under `pdd/pdd/templates`). Frontend projects may use the semantic
+  `prompts/ui/<unit>/<unit>.ui.prompt` layout described above when their
+  generation command supplies language/output selection.
 - Follow codebase conventions from README.md for Python and TypeScript style.
 - Use curated examples under `context/` to encode interfaces and behaviors.
 
@@ -2526,7 +2803,11 @@ Weak-fit modules aren't permanently off-limits — but convert them only after y
 
 ### 1. Pick a high-churn module
 
-Look at your VCS history for the strong-fit files that change most often. High churn = high regeneration payoff and fresh team knowledge. Scope to a single file/module — one prompt, one module (see [Scoping & Modularity](#scoping--modularity)).
+Look at your VCS history for the strong-fit files that change most often. High
+churn = high regeneration payoff and fresh team knowledge. For ordinary code,
+scope to a single file/module — one prompt, one module (see
+[Scoping & Modularity](#scoping--modularity)). For frontend visual work, follow
+the [coherent-unit guidance](#frontend-prompt-and-svg-files) instead.
 
 ### 2. Write characterization tests around current behavior — first
 
