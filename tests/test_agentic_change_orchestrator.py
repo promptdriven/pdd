@@ -35,7 +35,7 @@ from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 pytestmark = pytest.mark.timeout(450)
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths, _generate_user_story_artifacts_for_change, _resolve_story_policy, _find_linked_stories_for_prompts
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths, _generate_user_story_artifacts_for_change, _resolve_story_policy, _find_linked_stories_for_prompts, _build_dependency_context
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -8539,7 +8539,7 @@ class TestSyncOrderPddPromptsPath:
              patch("pdd.agentic_change_orchestrator.clear_workflow_state") as mock_clear, \
              patch("pdd.agentic_change_orchestrator.load_prompt_template") as mock_template, \
              patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
-             patch("pdd.agentic_change_orchestrator.build_dependency_graph") as mock_build_graph, \
+             patch("pdd.agentic_change_orchestrator.build_dependency_graph_from_architecture") as mock_build_graph, \
              patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
              patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_get_affected, \
              patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script, \
@@ -8558,6 +8558,11 @@ class TestSyncOrderPddPromptsPath:
             prompts_dir.mkdir(parents=True)
             (prompts_dir / "embed_retrieve_python.prompt").write_text("% embed module")
             (prompts_dir / "auto_include_python.prompt").write_text("% auto include")
+            (worktree_dir / "architecture.json").write_text("[]")
+            mock_build_graph.return_value = {
+                "embed_retrieve": [],
+                "auto_include": [],
+            }
 
             # Step 9 reports files with pdd/prompts/ prefix (as git does with real paths)
             existing_state = {
@@ -8579,8 +8584,8 @@ class TestSyncOrderPddPromptsPath:
                 cwd=tmp_path, quiet=True,
             )
 
-            # build_dependency_graph should have been called (modules were detected)
-            mock_build_graph.assert_called()
+            # The sync order uses the architecture-backed graph (issue #1807).
+            mock_build_graph.assert_called_once_with(worktree_dir / "architecture.json")
             # get_affected_modules should have received the detected modules
             call_args = mock_get_affected.call_args
             detected_modules = call_args[0][1]  # second positional arg
@@ -8597,7 +8602,7 @@ class TestSyncOrderPddPromptsPath:
              patch("pdd.agentic_change_orchestrator.clear_workflow_state") as mock_clear, \
              patch("pdd.agentic_change_orchestrator.load_prompt_template") as mock_template, \
              patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
-             patch("pdd.agentic_change_orchestrator.build_dependency_graph") as mock_build_graph, \
+             patch("pdd.agentic_change_orchestrator.build_dependency_graph_from_architecture") as mock_build_graph, \
              patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
              patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_get_affected, \
              patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script:
@@ -8614,6 +8619,8 @@ class TestSyncOrderPddPromptsPath:
             prompts_dir = worktree_dir / "prompts"
             prompts_dir.mkdir(parents=True)
             (prompts_dir / "foo_python.prompt").write_text("% foo module")
+            (worktree_dir / "architecture.json").write_text("[]")
+            mock_build_graph.return_value = {"foo": []}
 
             existing_state = {
                 "last_completed_step": 12,
@@ -8631,7 +8638,7 @@ class TestSyncOrderPddPromptsPath:
                 cwd=tmp_path, quiet=True,
             )
 
-            mock_build_graph.assert_called()
+            mock_build_graph.assert_called_once_with(worktree_dir / "architecture.json")
             call_args = mock_get_affected.call_args
             detected_modules = call_args[0][1]
             assert "foo" in detected_modules
@@ -10749,3 +10756,87 @@ class TestSetupWorktreeCleanRestart:
         assert err and "clean restart" in err.lower(), (
             f"Expected a clean-restart-refusal error; got {err!r}"
         )
+
+
+# -----------------------------------------------------------------------------
+# _build_dependency_context (issue #1807): Step 6's dependency context must be
+# built from architecture.json's <pdd-dependency>-declared graph, not from
+# scanning <include> tags.
+# -----------------------------------------------------------------------------
+
+class TestBuildDependencyContext:
+    def test_surfaces_pdd_dependency_not_include(self, tmp_path):
+        """A <pdd-dependency> edge with no matching <include> must be surfaced,
+        and an <include>-only edge must not be -- through the real prompt ->
+        architecture -> Step 6 path (PR #2376 review).
+
+        Architecture state is created by production auto-registration and the
+        auto-deps merge; the test never writes architecture.json itself, so CI
+        protects the mixed-provenance boundary rather than a hand-built one.
+        """
+        from pdd.architecture_sync import sync_all_prompts_to_architecture
+        from pdd.auto_deps_architecture import (
+            merge_auto_deps_includes_into_architecture,
+        )
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        for name, body in (
+            ("customer_service_python.prompt",
+             "<pdd-dependency>payment_status_python.prompt</pdd-dependency>\n"),
+            ("payment_status_python.prompt", ""),
+            ("onboarding_python.prompt", ""),
+            ("legacy_wizard_python.prompt", ""),
+        ):
+            (prompts_dir / name).write_text(
+                f"<pdd-reason>test</pdd-reason>\n{body}", encoding="utf-8"
+            )
+
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text("[]", encoding="utf-8")
+        sync_result = sync_all_prompts_to_architecture(
+            prompts_dir=prompts_dir, architecture_path=arch_path, dry_run=False
+        )
+        assert sync_result["success"], sync_result.get("errors")
+
+        # Production auto-deps writes the <include>-derived module edge into
+        # the same ``dependencies`` field that declared edges occupy.
+        onboarding = prompts_dir / "onboarding_python.prompt"
+        merged = merge_auto_deps_includes_into_architecture(
+            project_root=tmp_path,
+            written_prompt_path=onboarding,
+            old_prompt_text=onboarding.read_text(encoding="utf-8"),
+            new_prompt_text=onboarding.read_text(encoding="utf-8")
+            + "<include>legacy_wizard_python.prompt</include>\n",
+        )
+        assert merged["added_dependencies"] == ["legacy_wizard_python.prompt"]
+
+        result = _build_dependency_context(arch_path, quiet=True)
+        assert "payment_status" in result and "customer_service" in result
+        assert "affects: customer_service" in result
+        assert "legacy_wizard" not in result
+
+    def test_returns_empty_string_when_architecture_missing(self, tmp_path):
+        missing = tmp_path / "architecture.json"
+        assert _build_dependency_context(missing, quiet=True) == ""
+
+    def test_returns_empty_string_on_empty_graph(self, tmp_path):
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps([]), encoding="utf-8")
+        assert _build_dependency_context(arch_path, quiet=True) == ""
+
+    def test_renders_all_modules_and_dependents_without_truncation(self, tmp_path):
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text("[]", encoding="utf-8")
+        graph = {
+            **{f"dependent_{index:02d}": ["shared"] for index in range(11)},
+            **{f"module_{index:02d}": [f"dependency_{index:02d}"] for index in range(31)},
+        }
+        with patch(
+            "pdd.agentic_change_orchestrator.build_dependency_graph_from_architecture",
+            return_value=graph,
+        ):
+            result = _build_dependency_context(arch_path, quiet=True)
+
+        assert "dependency_30" in result
+        assert "dependent_10" in result

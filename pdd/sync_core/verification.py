@@ -230,6 +230,52 @@ _CONFORMANCE_SPLIT_STATIONARY_PROFILE_BYTES = (
     _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
     _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
 )
+# PR #2376 changes the dependency-orchestrator, sync-order, and architecture
+# include-validation prompt contracts. Bind the three profile rows to the exact
+# post-#2377 stationary
+# policy/profile pair, so this acknowledgement cannot authorize any other
+# prompt change.
+_PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES = (
+    _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[1],
+    _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[1],
+)
+_PR2376_DEPENDENCY_FIX_PROFILE_BYTES = (
+    # After merging main, the protected base for this branch is #2374's
+    # conformance-split profile state, not the pre-#2374 zsh stationary one.
+    _CONFORMANCE_SPLIT_PROFILE_BYTES[1],
+    "85d01008145de7a7bc67bc6b458b7780a1fbaf24f9733708a0a1032ecb49a9f5",
+)
+# A future Phase A may replace the already-consumed user-story row with its
+# next dormant row.  These complete policy/profile pairs preserve the existing
+# historical overlays for that exact direct replacement and its stationary
+# protected state; they do not add requirement-transition authority.
+_STORY_PROMPT_PHASE_A_ROTATION_POLICY_BYTES = (
+    _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1],
+    "b8b1e11ef85bbf76231c69a06f764935a1bdd2577a003d4299a98d62fa4bf67a",
+)
+_STORY_PROMPT_PHASE_A_PROFILE_BYTES = (
+    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+)
+_STORY_PROMPT_PHASE_A_STATIONARY_POLICY_BYTES = (
+    _STORY_PROMPT_PHASE_A_ROTATION_POLICY_BYTES[1],
+    _STORY_PROMPT_PHASE_A_ROTATION_POLICY_BYTES[1],
+)
+_STORY_PROMPT_PHASE_A_STATIONARY_PROFILE_BYTES = (
+    _STORY_PROMPT_PHASE_A_PROFILE_BYTES[1],
+    _STORY_PROMPT_PHASE_A_PROFILE_BYTES[1],
+)
+# Phase B consumes the protected dormant user-story row while retaining the
+# exact Phase-A policy bytes. These profile pairs retain prior historical
+# overlays only; the policy row remains the sole transition authority.
+_STORY_PROMPT_PHASE_B_PROFILE_BYTES = (
+    _STORY_PROMPT_PHASE_A_PROFILE_BYTES[1],
+    "6e765e03761e7dd678e5b02b147c60231c13fc8ab3de3fd722cf1181c017acb7",
+)
+_STORY_PROMPT_PHASE_B_STATIONARY_PROFILE_BYTES = (
+    _STORY_PROMPT_PHASE_B_PROFILE_BYTES[1],
+    _STORY_PROMPT_PHASE_B_PROFILE_BYTES[1],
+)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
@@ -1039,6 +1085,33 @@ _ZSH_GLOBAL_OPTION_COMPOSED_REQUIREMENT_TRANSITIONS = (
         "488cde2f0d55b75a1cafc4f3e8f0e5f3984d4c0c0b70076c0d61820a4974365f",
         _ZSH_GLOBAL_OPTION_PROFILE_BYTES[0],
         _ZSH_GLOBAL_OPTION_PROFILE_BYTES[1],
+    ),
+)
+
+_PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/agentic_change_orchestrator_python.prompt",
+        "python",
+        "a5f609c2aa21b86d5b1bdb1ef7b36207c40326fc85b617c8b7d7b99dc5b23b9c",
+        "35bc67657d714841a3001883a0f86b26fa65095a07a2c3032d7e271e74a1c2fc",
+        _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[0],
+        _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/sync_order_python.prompt",
+        "python",
+        "4f3169caa3f9ef7429adfad3aea0514d4b7cba7ef581f7cd254064446d591df6",
+        "9f37ef643369ddcda4e054b2ef74ca3683d487920e892c10ac6c2dc98a5983f2",
+        _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[0],
+        _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+    ),
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/architecture_include_validation_python.prompt",
+        "python",
+        "fe8ce6cdcde2f7dc0ad49f1dfb90f81b505812a87afcdca57a27e12848d9d59c",
+        "e280e55b009da1afc34f31bfc8410518d17e70b2cd794170bcf8960c48214411",
+        _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[0],
+        _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
     ),
 )
 
@@ -2783,8 +2856,15 @@ def _validate_candidate_retirements(
     candidate_policy: bytes | None,
     exact_pr2316_phase_a_reissue: bool,
     exact_pr2316_historical_reissue: bool,
+    exact_story_prompt_phase_a_replacement: bool,
 ) -> None:
-    """Validate append-only retirement/reissue of unreachable protected rows."""
+    """Validate exact replacements and append-only unreachable-row reissues."""
+    if exact_story_prompt_phase_a_replacement:
+        # The full policy/profile bytes identify one direct replacement of an
+        # already-consumed row.  Phase A still cannot alter any managed prompt;
+        # the candidate loop below separately proves its replacement dormant.
+        _validate_retirement_managed_prompt_bytes(root, manifest, approved_aliases)
+        return
     protected_schema = _policy_schema_version(protected_policy, "protected")
     candidate_schema = _policy_schema_version(candidate_policy, "candidate")
     if protected_schema == 2 and candidate_schema == 2:
@@ -3039,6 +3119,42 @@ def _load_requirement_transition_authorizations(
         if policies[0] is not None and policies[1] is not None
         else None
     )
+    story_prompt_phase_a_replacement = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        == (
+            _STORY_PROMPT_PHASE_A_ROTATION_POLICY_BYTES,
+            _STORY_PROMPT_PHASE_A_PROFILE_BYTES,
+        )
+    )
+    story_prompt_phase_a_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        in {
+            (
+                _STORY_PROMPT_PHASE_A_ROTATION_POLICY_BYTES,
+                _STORY_PROMPT_PHASE_A_PROFILE_BYTES,
+            ),
+            (
+                _STORY_PROMPT_PHASE_A_STATIONARY_POLICY_BYTES,
+                _STORY_PROMPT_PHASE_A_STATIONARY_PROFILE_BYTES,
+            ),
+        }
+    )
+    story_prompt_phase_b_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        in {
+            (
+                _STORY_PROMPT_PHASE_A_STATIONARY_POLICY_BYTES,
+                _STORY_PROMPT_PHASE_B_PROFILE_BYTES,
+            ),
+            (
+                _STORY_PROMPT_PHASE_A_STATIONARY_POLICY_BYTES,
+                _STORY_PROMPT_PHASE_B_STATIONARY_PROFILE_BYTES,
+            ),
+        }
+    )
+    story_prompt_historical_state = (
+        story_prompt_phase_a_state or story_prompt_phase_b_state
+    )
     generate_reliability_state = is_pdd_repository and (
         (policy_digests, profile_digests)
         in {
@@ -3108,7 +3224,8 @@ def _load_requirement_transition_authorizations(
         }
     )
     code_generator_language_gate_state = is_pdd_repository and (
-        (policy_digests, profile_digests)
+        story_prompt_historical_state
+        or (policy_digests, profile_digests)
         in {
             (
                 _CODE_GENERATOR_LANGUAGE_GATE_ROTATION_POLICY_BYTES,
@@ -3131,10 +3248,25 @@ def _load_requirement_transition_authorizations(
                 _CONFORMANCE_SPLIT_STATIONARY_POLICY_BYTES,
                 _CONFORMANCE_SPLIT_STATIONARY_PROFILE_BYTES,
             ),
+            (
+                _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES,
+                _PR2376_DEPENDENCY_FIX_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1],
+                    _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1],
+                ),
+                (
+                    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+                    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+                ),
+            ),
         }
     )
     zsh_global_option_state = is_pdd_repository and (
-        (policy_digests, profile_digests)
+        story_prompt_historical_state
+        or (policy_digests, profile_digests)
         in {
             (
                 _ZSH_GLOBAL_OPTION_ROTATION_POLICY_BYTES,
@@ -3152,6 +3284,40 @@ def _load_requirement_transition_authorizations(
                 _CONFORMANCE_SPLIT_STATIONARY_POLICY_BYTES,
                 _CONFORMANCE_SPLIT_STATIONARY_PROFILE_BYTES,
             ),
+            (
+                _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES,
+                _PR2376_DEPENDENCY_FIX_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1],
+                    _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1],
+                ),
+                (
+                    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+                    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+                ),
+            ),
+        }
+    )
+    pr2376_dependency_fix_state = is_pdd_repository and (
+        story_prompt_historical_state
+        or (policy_digests, profile_digests)
+        in {
+            (
+                _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES,
+                _PR2376_DEPENDENCY_FIX_PROFILE_BYTES,
+            ),
+            (
+                (
+                    _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1],
+                    _PR2376_DEPENDENCY_FIX_ROTATION_POLICY_BYTES[1],
+                ),
+                (
+                    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+                    _PR2376_DEPENDENCY_FIX_PROFILE_BYTES[1],
+                ),
+            ),
         }
     )
     temperature_regression_state = (
@@ -3159,6 +3325,7 @@ def _load_requirement_transition_authorizations(
         or exact_pr2316_stationary_reissue
         or exact_pr2316_historical_reissue
         or exact_pr2316_phase_b_state
+        or pr2376_dependency_fix_state
         or (
             is_pdd_repository
             and (policy_digests, profile_digests)
@@ -3189,6 +3356,7 @@ def _load_requirement_transition_authorizations(
         or sync_rollout_repair_state
         or code_generator_language_gate_state
         or temperature_regression_state
+        or pr2376_dependency_fix_state
     )
     gemini_36_terra_sol_state = is_pdd_repository and (
         (policy_digests, profile_digests)
@@ -3252,6 +3420,17 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in zsh_identities
         ) + _ZSH_GLOBAL_OPTION_COMPOSED_REQUIREMENT_TRANSITIONS
         authority.update(_ZSH_GLOBAL_OPTION_COMPOSED_REQUIREMENT_TRANSITIONS)
+    if pr2376_dependency_fix_state:
+        pr2376_identities = {
+            (item.prompt_path, item.language_id)
+            for item in _PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS
+        }
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id) not in pr2376_identities
+        ) + _PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS
+        authority.update(_PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS)
     if generate_reliability_state or historical_composed_state:
         reliability_identities = {
             (item.prompt_path, item.language_id)
@@ -3265,7 +3444,11 @@ def _load_requirement_transition_authorizations(
         authority.update(_GENERATE_RELIABILITY_COMPOSED_REQUIREMENT_TRANSITIONS)
     if historical_composed_state:
         opus_fable_transitions = _OPUS_FABLE_COMPOSED_REQUIREMENT_TRANSITIONS
-        if exact_pr2316_phase_b_state or code_generator_language_gate_state:
+        if (
+            exact_pr2316_phase_b_state
+            or code_generator_language_gate_state
+            or pr2376_dependency_fix_state
+        ):
             # The transition and its exact consumed state retain protected rows
             # for these two identities.  The older Opus/Fable overlay is still
             # required for every other historical identity, but replacing the
@@ -3316,6 +3499,7 @@ def _load_requirement_transition_authorizations(
         sync_rollout_repair_state
         or code_generator_language_gate_state
         or temperature_regression_state
+        or pr2376_dependency_fix_state
     ):
         # These retained schema-2 rows describe historical prompt changes.
         # Their identities are already at the exact repaired prompt bytes, so
@@ -3369,6 +3553,7 @@ def _load_requirement_transition_authorizations(
         candidate_policy,
         exact_pr2316_phase_a_reissue,
         exact_pr2316_historical_reissue,
+        story_prompt_phase_a_replacement,
     )
     legacy_pdd1989_reconciliation = (
         is_pdd_repository
@@ -3448,11 +3633,12 @@ def _load_requirement_transition_authorizations(
             pdd1875_reconciliation,
             terra_sol_reconciliation,
             terra_sol_consumed_state,
-                gemini_36_terra_sol_state,
-                sync_rollout_repair_state,
-                code_generator_language_gate_state,
-            )
+            gemini_36_terra_sol_state,
+            sync_rollout_repair_state,
+            code_generator_language_gate_state,
+            pr2376_dependency_fix_state,
         )
+    )
     for item in candidate:
         if item in authority:
             if (

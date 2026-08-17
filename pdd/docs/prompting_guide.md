@@ -1644,9 +1644,28 @@ Validation is **lenient**:
 ### Relationship to Other Tags
 
 **`<pdd-dependency>` vs `<include>`**:
-- `<pdd-dependency>`: Declares architectural dependency (updates `architecture.json`)
-- `<include>`: Injects content into prompt for LLM context (does NOT affect architecture)
-- Use both when appropriate - they serve different purposes
+- `<pdd-dependency>` declares a real architectural module dependency. It is the
+  signal used when deciding which modules may need changes after a dependency
+  changes. For example, when `customer_service_python.prompt` relies on the
+  payment-status module, declare it explicitly:
+  ```xml
+  <pdd-dependency>payment_status_python.prompt</pdd-dependency>
+  ```
+  If `payment_status_python.prompt` changes, `customer_service_python.prompt`
+  may need updating too.
+- `<include>` injects content for the LLM's context. It does not by itself mean
+  that the current module architecturally depends on the included artifact:
+  ```xml
+  <include>context/refund_policy_examples.md</include>
+  <include>docs/customer_support_tone.md</include>
+  ```
+  Changing either reference does not automatically imply a change to
+  `customer_service_python.prompt`.
+- Use both when appropriate. Some maintenance paths may record prompt-to-prompt
+  include relationships in `architecture.json` for validation, so consumers
+  that require architectural dependency semantics must read the original
+  `<pdd-dependency>` tags rather than treating the derived `dependencies`
+  array as provenance-pure.
 
 **`<pdd-*>` tags vs `<pdd>` comments**:
 - `<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`: Metadata tags (processed by sync tool)

@@ -241,6 +241,76 @@ def _parse_story_prompt_metadata(story_content: str) -> List[str]:
     return [entry.strip() for entry in raw.split(",") if entry.strip()]
 
 
+def _story_prompt_metadata_reference_parts(reference: str) -> tuple[str, ...] | None:
+    """Return safe logical-path parts for an authorization metadata reference."""
+    if not reference or reference != reference.strip():
+        return None
+    if reference.startswith("/") or "\\" in reference or ":" in reference:
+        return None
+    if any(ord(character) < 32 for character in reference):
+        return None
+    parts = tuple(reference.split("/"))
+    if any(not part or part in {".", ".."} for part in parts):
+        return None
+    return parts
+
+
+def _resolve_authorized_story_prompt_metadata_reference(
+    reference: str,
+    *,
+    project_root: Path,
+    authorized_prompts: Iterable[Path],
+    case_sensitive: bool = True,
+) -> Optional[Path]:
+    """Resolve metadata only against one caller-authorized prompt collection.
+
+    Canonical metadata is project-relative. Historical metadata may be a
+    logical suffix or bare basename, but those forms are accepted only when
+    they identify exactly one supplied prompt. This intentionally performs no
+    filesystem prompt discovery: metadata is an authorization input in exact
+    scope mode.
+    """
+    reference_parts = _story_prompt_metadata_reference_parts(reference)
+    if reference_parts is None:
+        return None
+    if not case_sensitive:
+        reference_parts = tuple(part.casefold() for part in reference_parts)
+
+    if not project_root.is_absolute():
+        return None
+
+    matches: List[Path] = []
+    for prompt in authorized_prompts:
+        try:
+            authorized_prompt = Path(prompt)
+            if not authorized_prompt.is_absolute():
+                authorized_prompt = project_root / authorized_prompt
+            logical_parts = tuple(
+                authorized_prompt.relative_to(project_root).as_posix().split("/")
+            )
+        except ValueError:
+            # Callers supply an already-validated collection. If that promise
+            # is broken, fail closed instead of finding a substitute on disk.
+            return None
+        if any(part in {"", ".", ".."} for part in logical_parts):
+            return None
+        if not case_sensitive:
+            logical_parts = tuple(part.casefold() for part in logical_parts)
+
+        if reference_parts == logical_parts:
+            matches.append(authorized_prompt)
+        elif len(reference_parts) == 1:
+            if reference_parts[0] == logical_parts[-1]:
+                matches.append(authorized_prompt)
+        elif (
+            len(reference_parts) < len(logical_parts)
+            and logical_parts[-len(reference_parts) :] == reference_parts
+        ):
+            matches.append(authorized_prompt)
+
+    return matches[0] if len(matches) == 1 else None
+
+
 def parse_story_dev_unit_metadata(story_text: str) -> list[str]:
     """Extract dev-unit references from optional pdd-story-dev-units metadata."""
     match = STORY_DEV_UNITS_METADATA_RE.search(story_text)
@@ -315,7 +385,11 @@ def _prompt_reference_for_metadata(
     """Return a stable metadata reference for a prompt path."""
     if prompts_dir:
         try:
-            return prompt_path.relative_to(prompts_dir).as_posix()
+            logical_prompts_dir = Path(prompts_dir)
+            relative_prompt_path = prompt_path.resolve().relative_to(
+                logical_prompts_dir.resolve()
+            )
+            return (Path(logical_prompts_dir.name) / relative_prompt_path).as_posix()
         except ValueError:
             pass
     return prompt_path.name
@@ -403,6 +477,27 @@ def _resolve_prompt_refs_to_paths(
         if resolved:
             resolved_paths.append(resolved)
     return _dedupe_prompt_paths(resolved_paths)
+
+
+def _resolve_existing_story_metadata_reference(
+    prompt_ref: str,
+    prompt_files: List[Path],
+    prompts_root: Optional[Path],
+) -> Optional[Path]:
+    """Resolve existing metadata without guessing between legacy aliases."""
+    if prompts_root is None:
+        return None
+    try:
+        project_root = prompts_root.resolve().parent
+        authorized_prompts = tuple(path.resolve() for path in prompt_files)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return _resolve_authorized_story_prompt_metadata_reference(
+        prompt_ref,
+        project_root=project_root,
+        authorized_prompts=authorized_prompts,
+        case_sensitive=False,
+    )
 
 
 def _resolve_src_dir(prompts_dir: Path) -> Path:
@@ -498,7 +593,7 @@ def _select_story_prompt_links(
     return _dedupe_prompt_paths(prompt_files), "all_prompts"
 
 
-def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements,too-many-branches
+def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements,too-many-branches,too-many-statements
     *,
     story_file: str,
     prompts_dir: Optional[str] = None,
@@ -527,7 +622,7 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
     if not prompt_files:
         return False, "No prompt files found to link user story metadata.", 0.0, "", []
 
-    prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
+    prompts_root = _resolve_prompts_dir(prompts_dir)
     story_content = _read_story(story_path)
 
     # Explicit prompt inputs are authoritative: `pdd story link --prompt` and
@@ -581,25 +676,45 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
         return True, message, 0.0, "", linked_refs
 
     # Keep existing valid metadata unchanged unless force_relink is requested.
+    # Legacy basename metadata is still resolvable, but normalize it through
+    # the same canonical writer so later exact-scope preflight can compare
+    # project-relative references without discovering prompts on disk.
     existing_refs = _parse_story_prompt_metadata(story_content)
     if existing_refs and not force_relink:
         unresolved_refs: List[str] = []
-        resolved_refs: List[str] = []
+        resolved_paths: List[Path] = []
         for ref in existing_refs:
-            resolved = _resolve_prompt_path(ref, prompt_files, prompts_root)
+            resolved = _resolve_existing_story_metadata_reference(
+                ref, prompt_files, prompts_root
+            )
             if resolved:
-                resolved_refs.append(
-                    _prompt_reference_for_metadata(resolved, prompts_root)
-                )
+                resolved_paths.append(resolved)
             else:
                 unresolved_refs.append(ref)
-        if resolved_refs and not unresolved_refs:
+        if resolved_paths and not unresolved_refs:
+            linked_prompt_paths = _dedupe_prompt_paths(resolved_paths)
+            linked_refs = sorted(
+                {
+                    _prompt_reference_for_metadata(path.resolve(), prompts_root)
+                    for path in linked_prompt_paths
+                }
+            )
+            updated = _upsert_story_prompt_metadata(
+                story_path,
+                story_content,
+                linked_prompt_paths,
+                prompts_root,
+            )
             return (
                 True,
-                "Story already contains prompt metadata.",
+                (
+                    "Story prompt metadata canonicalized."
+                    if updated
+                    else "Story already contains prompt metadata."
+                ),
                 0.0,
                 "",
-                sorted(set(resolved_refs)),
+                linked_refs,
             )
 
     detection_error = ""
@@ -1385,7 +1500,7 @@ def sync_user_story_contract(  # pylint: disable=too-many-arguments,too-many-loc
             str(contract_p),
         )
 
-    prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
+    prompts_root = _resolve_prompts_dir(prompts_dir)
     heading = _issue_title_from_markdown(story_text)
     if heading and heading.lower().startswith("user story:"):
         heading = heading.split(":", 1)[1].strip()
@@ -1486,7 +1601,7 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
             [],
         )
 
-    prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
+    prompts_root = _resolve_prompts_dir(prompts_dir)
 
     # Resolve the issue source (URL / number / local markdown) BEFORE any LLM
     # call. The issue -- not the prompt -- is the behavioral input.
@@ -1655,7 +1770,7 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
         prompts_dir, include_llm=include_llm_prompts
     )
     story_files = story_files or discover_story_files(stories_dir)
-    prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
+    prompts_root = _resolve_prompts_dir(prompts_dir)
 
     if not story_files:
         return True, [], 0.0, ""

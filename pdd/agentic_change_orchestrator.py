@@ -43,11 +43,15 @@ from pdd.agentic_common import (
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.sync_order import (
+    # Retained as stable patch points for orchestration callers/tests while
+    # Step 6 uses the architecture-backed dependency graph below.
     build_dependency_graph,
+    extract_module_from_include,
+    build_dependency_graph_from_architecture,
+    _architecture_module_key,
     topological_sort,
     get_affected_modules,
     generate_sync_order_script,
-    extract_module_from_include,
     discover_associated_documents,
 )
 from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context
@@ -2231,25 +2235,31 @@ def _load_pddrc_context(cwd: Path) -> Dict[str, str]:
         return defaults
 
 
-def _build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str:
+def _build_dependency_context(architecture_path: Path, quiet: bool = False) -> str:
     """
     Build a formatted string describing the module dependency graph.
 
     This is used to provide Step 6 with structured dependency information
-    so it can identify transitively affected modules.
+    so it can identify transitively affected modules. The graph reflects
+    declared architectural dependencies (`<pdd-dependency>` tags, read fresh
+    from each module's prompt file — architecture.json's own `dependencies`
+    field is not `<pdd-dependency>`-only and cannot be trusted directly)
+    rather than the `<include>` context graph — see issue #1807: `<include>`
+    tags are LLM context and are not a reliable signal of "what needs
+    updating if this module changes."
 
     Args:
-        prompts_dir: Path to the prompts directory
+        architecture_path: Path to architecture.json
         quiet: Whether to suppress logging
 
     Returns:
         Formatted string describing dependencies, or empty string if unavailable
     """
-    if not prompts_dir.exists():
+    if not architecture_path.exists():
         return ""
 
     try:
-        graph = build_dependency_graph(prompts_dir)
+        graph = build_dependency_graph_from_architecture(architecture_path)
         if not graph:
             return ""
 
@@ -2273,14 +2283,13 @@ def _build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str:
         if modules_with_dependents:
             lines.append("### Modules and their dependents (modules that will be affected if changed):")
             lines.append("")
-            # Sort by number of dependents (most impactful first)
+            # Render the complete graph.  This context is the workflow's only
+            # dependency source of truth; truncating it silently omits modules
+            # that Step 6 must consider.
             for module in sorted(modules_with_dependents.keys(),
-                               key=lambda m: len(modules_with_dependents[m]),
-                               reverse=True)[:30]:  # Limit to top 30
+                               key=lambda m: (-len(modules_with_dependents[m]), m)):
                 dependents = modules_with_dependents[module]
-                lines.append(f"- **{module}** → affects: {', '.join(sorted(dependents)[:10])}")
-                if len(dependents) > 10:
-                    lines.append(f"  (and {len(dependents) - 10} more)")
+                lines.append(f"- **{module}** → affects: {', '.join(sorted(dependents))}")
 
         lines.append("")
         lines.append(f"Total modules tracked: {len(graph)}")
@@ -2846,9 +2855,9 @@ def run_agentic_change_orchestrator(
 
         # Before Step 6, build dependency context to help identify transitively affected modules
         if step_num == 6:
-            prompts_dir = cwd / "prompts"
-            if prompts_dir.exists():
-                dep_context = _build_dependency_context(prompts_dir, quiet=quiet)
+            architecture_path = cwd / "architecture.json"
+            if architecture_path.exists():
+                dep_context = _build_dependency_context(architecture_path, quiet=quiet)
                 context["dependency_context"] = dep_context
             else:
                 context["dependency_context"] = ""
@@ -3660,18 +3669,36 @@ def run_agentic_change_orchestrator(
     modified_modules: Set[str] = set()
     for file_path in file_list:
         if file_path.endswith(".prompt") and ("/prompts/" in file_path or file_path.startswith("prompts/")):
-            module = extract_module_from_include(file_path)
+            normalized_path = file_path.replace("\\", "/")
+            prompt_marker = "/prompts/"
+            prompt_filename = (
+                normalized_path.split(prompt_marker, 1)[1]
+                if prompt_marker in normalized_path
+                else normalized_path[len("prompts/"):]
+            )
+            module = _architecture_module_key(prompt_filename)
             if module: modified_modules.add(module)
 
     if worktree_path:
+        architecture_path = worktree_path / "architecture.json"
         prompts_dir = worktree_path / "prompts"
-        if prompts_dir.exists() and modified_modules:
+        if modified_modules and (architecture_path.exists() or prompts_dir.exists()):
             try:
-                graph = build_dependency_graph(prompts_dir)
+                if architecture_path.exists():
+                    graph = build_dependency_graph_from_architecture(architecture_path)
+                else:
+                    graph = build_dependency_graph(prompts_dir)
+                    modified_modules = {
+                        module
+                        for module in (
+                            extract_module_from_include(path) for path in file_list
+                        )
+                        if module
+                    }
                 sorted_modules, cycles = topological_sort(graph)
                 if cycles and not quiet:
                     console.print(f"[yellow]Warning: Circular dependencies detected: {cycles}[/yellow]")
-                cyclic_modules = set(cycles[0]) if cycles else set()
+                cyclic_modules = {module for cycle in cycles for module in cycle}
                 affected = get_affected_modules(sorted_modules, modified_modules, graph, cyclic_modules)
                 if affected:
                     # Generate clean command list for PR body (not full bash script)

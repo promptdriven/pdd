@@ -57,6 +57,8 @@
 % _resolve_architecture_prompt_path(filename: str, project_root: Path) -> Path
 %   - Resolve architecture filename to an on-disk path under the project.
 %   - If filename starts with "prompts/", resolve directly under project_root.
+%   - For a prompt-relative filename, try project_root/prompts/, project_root/pdd/prompts/,
+%     then project_root/ itself so valid context/* prompt artifacts remain resolvable.
 %   - Otherwise, resolve under project_root / "prompts".
 %   - Normalize backslashes to forward slashes and strip leading slashes.
 
