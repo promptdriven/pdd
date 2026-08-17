@@ -2736,7 +2736,9 @@ flowchart LR
 
 - Too much context: prune includes; prefer targeted examples over entire files.
 - Vague requirements: convert to explicit contracts, budgets, and behaviors.
-- Mega‑prompts: split into smaller prompts (one per file/module) and compose.
+- Mega‑prompts: split into smaller prompts and compose. Ordinary code is usually
+  one prompt per file/module; frontend visual work follows the
+  [coherent-unit guidance](#frontend-prompt-and-svg-files).
 - Prompt outweighs the code: if the prompt is larger than the generated file, it's usually over‑specifying control flow. Aim for prompts to be a fraction of the target code size; keep them at the interface/behavior level and let the model fill in routine implementation.
 - Patching code directly: make the change in the prompt and regenerate; then back-propagate any learnings into the prompt.
 - Throwing away tests: keep and expand; they are your long‑term leverage.
@@ -2801,7 +2803,11 @@ Weak-fit modules aren't permanently off-limits — but convert them only after y
 
 ### 1. Pick a high-churn module
 
-Look at your VCS history for the strong-fit files that change most often. High churn = high regeneration payoff and fresh team knowledge. Scope to a single file/module — one prompt, one module (see [Scoping & Modularity](#scoping--modularity)).
+Look at your VCS history for the strong-fit files that change most often. High
+churn = high regeneration payoff and fresh team knowledge. For ordinary code,
+scope to a single file/module — one prompt, one module (see
+[Scoping & Modularity](#scoping--modularity)). For frontend visual work, follow
+the [coherent-unit guidance](#frontend-prompt-and-svg-files) instead.
 
 ### 2. Write characterization tests around current behavior — first
 
