@@ -24,6 +24,16 @@ _PROVENANCE_FIELDNAMES = [
 ]
 _FULL_FIELDNAMES = _ATTEMPT_FIELDNAMES + _PROVENANCE_FIELDNAMES
 
+# ctx.obj key under which a tracked command may stash its
+# `(str(result), total_cost, model_name)` tuple right before raising an
+# intentional `click.exceptions.Exit` (e.g. `pdd sync` exiting 1 when the
+# aggregated result has overall_success == False, issue #1979). The wrapper
+# below writes the cost-CSV row from this stash so a failed-but-completed run
+# keeps its row — the agentic runner parses PDD_OUTPUT_COST_PATH from child
+# syncs to accumulate cost and enforce --budget. Crashes and other exceptions
+# still skip the row as before.
+EXIT_COST_RESULT_KEY = 'track_cost_exit_result'
+
 
 def looks_like_file(path_str) -> bool:
     """Check if string looks like a file path."""
@@ -73,6 +83,21 @@ def track_cost(func):
         finally:
             end_time = datetime.now()
 
+            # Pop any stashed exit-result unconditionally so it can never leak
+            # into a later tracked command sharing the same ctx.obj. It only
+            # feeds the row when the command raised an intentional click Exit.
+            stashed_exit_result = None
+            try:
+                if ctx.obj is not None and isinstance(ctx.obj, dict):
+                    stashed_exit_result = ctx.obj.pop(EXIT_COST_RESULT_KEY, None)
+            except Exception:
+                stashed_exit_result = None
+            exit_result = (
+                stashed_exit_result
+                if isinstance(exception_raised, click.exceptions.Exit)
+                else None
+            )
+
             try:
                 input_files, output_files = collect_files(args, kwargs)
 
@@ -85,7 +110,7 @@ def track_cost(func):
                                 files_set.add(abs_path)
                     ctx.obj['core_dump_files'] = files_set
 
-                if exception_raised is None:
+                if exception_raised is None or exit_result is not None:
                     if ctx.obj and hasattr(ctx.obj, 'get'):
                         output_cost_path = ctx.obj.get('output_cost') or os.getenv('PDD_OUTPUT_COST_PATH')
                     else:
@@ -93,7 +118,9 @@ def track_cost(func):
 
                     if output_cost_path and os.environ.get('PYTEST_CURRENT_TEST') is None:
                         command_name = ctx.command.name
-                        cost, model_name = extract_cost_and_model(result)
+                        cost, model_name = extract_cost_and_model(
+                            result if exception_raised is None else exit_result
+                        )
 
                         attempted_models_list = ctx.obj.get('attempted_models') if ctx.obj and isinstance(ctx.obj, dict) else None
                         if not attempted_models_list:
