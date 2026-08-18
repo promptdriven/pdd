@@ -92,7 +92,7 @@ PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 AUTO_HEAL_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "auto-heal.yml"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
-EXPECTED_MANAGED_UNITS = 475
+EXPECTED_MANAGED_UNITS = 477
 # #1989's dormant-bootstrap assertions retain their original immutable base;
 # the replay audit intentionally binds to the current main that it was rebased
 # onto.
@@ -159,7 +159,9 @@ PR_1971_PYTEST_OBLIGATIONS = {
 }
 PDD_1989_EXPECTED_MANAGED_UNITS = 468
 # These historical transition assertions build their manifests from frozen
-# commits that predate the six conformance units on the current branch.
+# commits that predate both the six conformance units on the current branch and
+# the story-criteria (#5) unit registrations this branch adds, so assertions
+# against those exact historical refs must stay frozen at 469.
 PDD_1875_EXPECTED_MANAGED_UNITS = 469
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
@@ -351,6 +353,9 @@ PREAUTHORIZED_CHILD_PATHS = (
         "pdd/conformance/__init__.py",
         "scripts/validate_conformance_prompts.py",
         "tests/test_conformance_prompt_compatibility_exports.py",
+        # PR #2390: the story-criteria evaluator's human-maintained test module,
+        # absent in the protected base this branch installs it against.
+        "tests/test_story_criteria.py",
         "tests/story_regression/test_story_pdd_generation_gates_preserved.py",
         "user_stories/contracts/pdd_generation_gates_preserved.contract.md",
         "user_stories/issues/conformance-gate-split.md",
@@ -2651,6 +2656,12 @@ def test_sync_rollout_repair_executes_the_actual_protected_transition() -> None:
         (
             verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
             verification._STORY_PROMPT_PHASE_B_PROFILE_BYTES[1],  # pylint: disable=protected-access
+        ),
+        # The story-criteria rotation likewise leaves this historical repair's
+        # policy and prompt bytes untouched.
+        (
+            verification._SYNC_ROLLOUT_REPAIR_PROFILE_BYTES[0],  # pylint: disable=protected-access
+            verification._STORY_CRITERIA_PROFILE_BYTES[1],  # pylint: disable=protected-access
         ),
     }
     assert (

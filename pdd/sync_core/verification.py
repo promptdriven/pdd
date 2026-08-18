@@ -276,6 +276,28 @@ _STORY_PROMPT_PHASE_B_STATIONARY_PROFILE_BYTES = (
     _STORY_PROMPT_PHASE_B_PROFILE_BYTES[1],
     _STORY_PROMPT_PHASE_B_PROFILE_BYTES[1],
 )
+# PR #2390 retires the already-consumed user-story successor and consumes its
+# replacement in the same hash-bound transition, exactly as PR #2374 did for the
+# code generator. Retain the composed transition overlay only at these exact
+# consumed policy bytes; arbitrary profile edits remain unauthorized.
+_STORY_CRITERIA_ROTATION_POLICY_BYTES = (
+    _STORY_PROMPT_PHASE_A_ROTATION_POLICY_BYTES[1],
+    "637167a168e0258bdd9d6300bf094d6f55ceac1ed6a78594c7e3cb950331927c",
+)
+_STORY_CRITERIA_PROFILE_BYTES = (
+    _STORY_PROMPT_PHASE_B_PROFILE_BYTES[1],
+    "c63b4a8be7ff3ab580aa4686f660a9784bfa56821ceaf21644c6b9ddae603633",
+)
+# The same policy and profile are evaluated against themselves once this exact
+# transition has landed.
+_STORY_CRITERIA_STATIONARY_POLICY_BYTES = (
+    _STORY_CRITERIA_ROTATION_POLICY_BYTES[1],
+    _STORY_CRITERIA_ROTATION_POLICY_BYTES[1],
+)
+_STORY_CRITERIA_STATIONARY_PROFILE_BYTES = (
+    _STORY_CRITERIA_PROFILE_BYTES[1],
+    _STORY_CRITERIA_PROFILE_BYTES[1],
+)
 _PR2316_STALE_LLM_REISSUE_HISTORY_PROFILE_BYTES = (
     _OPUS_FABLE_COMPOSED_PROFILE_BYTES[1],
     _TEMPERATURE_REGRESSION_PROFILE_BYTES[1],
@@ -1115,6 +1137,20 @@ _PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS = (
     ),
 )
 
+# PR #2390 moves the one user-story identity whose contract the story-criteria
+# gate rewrites.  It supersedes the row main already consumed for that identity
+# and grants no reusable transition authority.
+_STORY_CRITERIA_COMPOSED_REQUIREMENT_TRANSITIONS = (
+    _exact_bootstrap_requirement_transition(
+        "pdd/prompts/user_story_tests_python.prompt",
+        "python",
+        "5b1353257a64a25b303d990803bb799da66504af558c3a5e972d95ad5a04bb3b",
+        "51fd30da9427891bf5204a9a6757b2f91cf7176c1e72987b556075f5dccb9572",
+        _STORY_CRITERIA_PROFILE_BYTES[0],
+        _STORY_CRITERIA_PROFILE_BYTES[1],
+    ),
+)
+
 _TERRA_SOL_COMPOSED_REQUIREMENT_TRANSITIONS = (
     _exact_bootstrap_requirement_transition(
         "pdd/prompts/agentic_checkup_python.prompt",
@@ -1500,6 +1536,22 @@ _BOOTSTRAP_PROFILE_ADDITIONS = (
         "CONTRACT-SHA256:f1cf9d53c757c6735d005b92efd1fddfa5e970d78794572eb08779e45c94ccd9",
         "faf427d3891e0c4eb38a1d25d4d03f1fa4f24bcac642b7658bd65ceeaf52b953",
         "f1cf9d53c757c6735d005b92efd1fddfa5e970d78794572eb08779e45c94ccd9",
+    ),
+    # PR #2390: the story-criteria gate introduces two managed prompts. Each
+    # entry binds its initial profile to the exact policy bytes.
+    (
+        PurePosixPath("pdd/prompts/story_criteria_LLM.prompt"),
+        "llm",
+        "CONTRACT-SHA256:5ce2141794adced920c58537051b15ad36a0cb64139fddbd0b65bfb1ce23661a",
+        "c63b4a8be7ff3ab580aa4686f660a9784bfa56821ceaf21644c6b9ddae603633",
+        "5ce2141794adced920c58537051b15ad36a0cb64139fddbd0b65bfb1ce23661a",
+    ),
+    (
+        PurePosixPath("pdd/prompts/story_criteria_python.prompt"),
+        "python",
+        "CONTRACT-SHA256:6cb3dfb5c81f5ec828a4e419fd229e34acb3198761347ce6cbe58ec358efb582",
+        "c63b4a8be7ff3ab580aa4686f660a9784bfa56821ceaf21644c6b9ddae603633",
+        "6cb3dfb5c81f5ec828a4e419fd229e34acb3198761347ce6cbe58ec358efb582",
     ),
 )
 
@@ -2904,14 +2956,27 @@ def _validate_candidate_retirements(
         and _sha256(protected_policy) == _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[0]
         and _sha256(candidate_policy) == _CONFORMANCE_SPLIT_ROTATION_POLICY_BYTES[1]
     )
+    # PR #2390 does the same for the user-story row: it retires the consumed
+    # `1c4670... -> 5b1353...` successor and consumes its replacement in one
+    # transition. Both digests are whole-file rotation-policy bytes, so this
+    # names exactly one reviewed transition and lapses on any other edit.
+    exact_pr2390_story_criteria_successor = (
+        protected_policy is not None
+        and candidate_policy is not None
+        and _sha256(protected_policy) == _STORY_CRITERIA_ROTATION_POLICY_BYTES[0]
+        and _sha256(candidate_policy) == _STORY_CRITERIA_ROTATION_POLICY_BYTES[1]
+    )
+    exact_composed_successor = (
+        exact_pr2374_conformance_successor or exact_pr2390_story_criteria_successor
+    )
     if (
         new_retirements
         and not exact_pr2316_historical_reissue
-        and not exact_pr2374_conformance_successor
+        and not exact_composed_successor
     ):
         _validate_retirement_managed_prompt_bytes(root, manifest, approved_aliases)
     for retirement in new_retirements:
-        if exact_pr2374_conformance_successor:
+        if exact_composed_successor:
             continue
         if (
             retirement.obsolete not in protected_active
@@ -3155,6 +3220,19 @@ def _load_requirement_transition_authorizations(
     story_prompt_historical_state = (
         story_prompt_phase_a_state or story_prompt_phase_b_state
     )
+    story_criteria_historical_state = is_pdd_repository and (
+        (policy_digests, profile_digests)
+        in {
+            (
+                _STORY_CRITERIA_ROTATION_POLICY_BYTES,
+                _STORY_CRITERIA_PROFILE_BYTES,
+            ),
+            (
+                _STORY_CRITERIA_STATIONARY_POLICY_BYTES,
+                _STORY_CRITERIA_STATIONARY_PROFILE_BYTES,
+            ),
+        }
+    )
     generate_reliability_state = is_pdd_repository and (
         (policy_digests, profile_digests)
         in {
@@ -3225,6 +3303,7 @@ def _load_requirement_transition_authorizations(
     )
     code_generator_language_gate_state = is_pdd_repository and (
         story_prompt_historical_state
+        or story_criteria_historical_state
         or (policy_digests, profile_digests)
         in {
             (
@@ -3266,6 +3345,7 @@ def _load_requirement_transition_authorizations(
     )
     zsh_global_option_state = is_pdd_repository and (
         story_prompt_historical_state
+        or story_criteria_historical_state
         or (policy_digests, profile_digests)
         in {
             (
@@ -3302,6 +3382,7 @@ def _load_requirement_transition_authorizations(
     )
     pr2376_dependency_fix_state = is_pdd_repository and (
         story_prompt_historical_state
+        or story_criteria_historical_state
         or (policy_digests, profile_digests)
         in {
             (
@@ -3431,6 +3512,17 @@ def _load_requirement_transition_authorizations(
             if (item.prompt_path, item.language_id) not in pr2376_identities
         ) + _PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS
         authority.update(_PR2376_DEPENDENCY_FIX_REQUIREMENT_TRANSITIONS)
+    if story_criteria_historical_state:
+        story_criteria_identities = {
+            (item.prompt_path, item.language_id)
+            for item in _STORY_CRITERIA_COMPOSED_REQUIREMENT_TRANSITIONS
+        }
+        candidate = tuple(
+            item
+            for item in candidate
+            if (item.prompt_path, item.language_id) not in story_criteria_identities
+        ) + _STORY_CRITERIA_COMPOSED_REQUIREMENT_TRANSITIONS
+        authority.update(_STORY_CRITERIA_COMPOSED_REQUIREMENT_TRANSITIONS)
     if generate_reliability_state or historical_composed_state:
         reliability_identities = {
             (item.prompt_path, item.language_id)

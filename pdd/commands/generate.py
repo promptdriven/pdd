@@ -857,10 +857,12 @@ def test(
                 raise click.UsageError("Estimate mode currently supports `generate` only.")
             story_path = Path(args[0])
             obj = ctx.obj or {}
+            from .. import DEFAULT_STRENGTH
+
             success, message, cost, model, linked_prompts = cache_story_prompt_links(
                 story_file=str(story_path),
                 prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
-                strength=obj.get("strength", 0.2),
+                strength=obj.get("strength", DEFAULT_STRENGTH),
                 temperature=obj.get("temperature", 0.0),
                 time=obj.get("time", 0.25),
                 verbose=obj.get("verbose", False),
@@ -896,6 +898,8 @@ def test(
             if estimate_mode:
                 raise click.UsageError("Estimate mode currently supports `generate` only.")
             obj = ctx.obj or {}
+            from .. import DEFAULT_STRENGTH
+
             story_prompt_args = [str(Path(arg)) for arg in args]
             success, message, cost, model, generated_story_file, linked_prompts = generate_user_story(
                 prompt_files=story_prompt_args,
@@ -903,7 +907,7 @@ def test(
                 output=output,
                 stories_dir=os.environ.get("PDD_USER_STORIES_DIR"),
                 prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
-                strength=obj.get("strength", 0.2),
+                strength=obj.get("strength", DEFAULT_STRENGTH),
                 temperature=obj.get("temperature", 0.0),
                 time=obj.get("time", 0.25),
                 verbose=obj.get("verbose", False),

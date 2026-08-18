@@ -207,13 +207,18 @@ def fix(
             )
 
         if not manual and len(args) == 1 and _is_user_story_file(first_arg):
+            from .. import DEFAULT_STRENGTH
             from ..user_story_tests import run_user_story_fix
 
+            # Story repair re-validates the contract before and after the fix.
+            # It must never be pinned below the documented default: the weakest
+            # tier confidently reports a genuinely regressed prompt set as
+            # satisfied (#2394).
             success, message, cost, model, changed_files = run_user_story_fix(
                 ctx=ctx,
                 story_file=first_arg,
                 prompts_dir=ctx.obj.get("prompts_dir"),
-                strength=ctx.obj.get("strength", 0.2),
+                strength=ctx.obj.get("strength", DEFAULT_STRENGTH),
                 temperature=ctx.obj.get("temperature", 0.0),
                 time=ctx.obj.get("time", 0.25),
                 budget=budget,

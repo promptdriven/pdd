@@ -57,10 +57,12 @@ flowchart TD
     C --> E{"Human review:<br/>is this the behavior I want?"}
     E -- edit Story --> F["sync_user_story_contract()<br/>re-aligns the contract"]
     F --> E
-    E -- approved --> G["pdd detect --stories<br/>(validate vs linked prompts)"]
-    G -- fails --> H["pdd fix story__slug.md<br/>(apply story to prompts)"]
+    E -- approved --> G["pdd detect --stories<br/>(classify each contract criterion<br/>vs linked prompts)"]
+    G -- unsatisfied --> H["pdd fix story__slug.md<br/>(apply story to prompts)"]
     H --> G
-    G -- passes --> I["pdd test --from-story story__slug.md<br/>(generate executable regression)"]
+    G -- unclear --> K["review by hand or<br/>re-run at higher --strength"]
+    K --> G
+    G -- all satisfied --> I["pdd test --from-story story__slug.md<br/>(generate executable regression)"]
     I --> J[Commit Story + contract + regression test]
 ```
 
@@ -272,6 +274,30 @@ pdd detect --stories --stories-dir user_stories --prompts-dir prompts
 pdd detect --stories --no-fail-fast      # report all failures, don't stop at the first
 pdd detect --stories --include-llm       # also validate against *_llm.prompt runtime templates
 ```
+
+### What it checks
+
+Each criterion in the story's contract is classified exactly once, and the
+verdict names the criterion rather than proposing prose edits:
+
+| section | id | question |
+| --- | --- | --- |
+| `## Acceptance Criteria` | `AC<n>` | do the prompts **require** this behavior? |
+| `## Negative Cases` | `NC<n>` | do the prompts **prevent** this outcome? |
+| `## Oracle` | `OR<n>` | do the prompts **determine** this detail? |
+| `## Non-Oracle` | — | not judged: handed to the evaluator as details that may never fail a story |
+
+A `satisfied` verdict must quote the prompt text that requires it, so you can
+check the verdict instead of trusting it. Quoting a heading or an option list —
+text that names the subject without requiring anything — does not support a
+`satisfied` status.
+
+Only an `unsatisfied` criterion fails a story: a model that hedges must not be
+able to fail a correct prompt set. But `unclear` does not pass either — it, and
+any criterion the evaluator skipped, leave the story **unverified**, reported as
+`UNKNOWN`. Verification quality depends on model strength; the output names the
+model that produced the verdict so a cheap-model result is not mistaken for a
+strong one.
 
 Story mode prints PASS, FAIL, or UNKNOWN for each story and exits non-zero if
 any story does not pass. `--output` is the standard detector's CSV option and

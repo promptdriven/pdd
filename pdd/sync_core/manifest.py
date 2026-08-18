@@ -272,6 +272,16 @@ _BOOTSTRAP_HUMAN_OWNERSHIP = (
         "pdd-maintainers",
         True,
     ),
+    # PR #2390: the story-criteria evaluator's human-maintained test module.
+    # Its prompts and generated module are owned as managed units; only this
+    # test file needs an absent-path row on its first protected installation.
+    OwnershipRule(
+        "tests/test_story_criteria.py",
+        InventoryStatus.HUMAN_OWNED,
+        "human-maintained",
+        "pdd-maintainers",
+        True,
+    ),
 )
 
 # The #1998 replay was reviewed against a protected tree which already
@@ -338,6 +348,13 @@ _REPLAY_HUMAN_OWNERSHIP = tuple(
 # lose their repaired ownership, and they resurface as unowned tracked paths.
 _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES = (
     "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
+    "88eb6f8c470dca94061109463e3766fcc92025524beb665d8861febeb90fef1c",
+)
+# Current main's ownership bytes, which this branch composes with the
+# `tests/test_story_criteria.py` row. Retained so the repair keeps its authority
+# on the protected base as well as on this candidate head.
+_SYNC_ROLLOUT_REPAIR_MAIN_OWNERSHIP_BYTES = (
+    "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
     "2b4cee2ca317ff8283bc4d681dbc75b7b73cc704b3f62c1e122c20c1a7da1e38",
 )
 # Re-pinning above only tracks the current head. The repair is also replayed
@@ -348,6 +365,19 @@ _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES = (
 _SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES = (
     "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
     "558910b5d03c183855dbbccdbde662cc36f028765a9eb24883a85ffa040fae3a",
+)
+_SYNC_ROLLOUT_REPAIR_STORY_CRITERIA_OWNERSHIP_BYTES = (
+    "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
+    "b23599ec1703b97c7568180ac16e6a61fc3bf98b206abaa6104bef2e3cddfd2c",
+)
+# The story-criteria branch later dropped `preauthorize_absent` from
+# `.pdd/sync-ownership.json`, which re-mints the candidate-side byte pair
+# above. That prior pair stays valid protected authority for the head that
+# minted it; this pair re-pins the bridge for the current head so the eight
+# repaired metadata rows do not fall through to `base_rules`.
+_SYNC_ROLLOUT_REPAIR_STORY_CRITERIA_CURRENT_OWNERSHIP_BYTES = (
+    "8f5762a5dd7be6cc14c85138810b8bad8183f4403c74584489a0d81798ba2a07",
+    "1402941794d1b593847eb8c277c641f40ce159c1cde3012d6880400be3763c69",
 )
 _SYNC_ROLLOUT_REPAIR_METADATA_BYTES = (
     (
@@ -1317,6 +1347,9 @@ def _sync_rollout_repair_ownership_rules(
         not in (
             _SYNC_ROLLOUT_REPAIR_OWNERSHIP_BYTES,
             _SYNC_ROLLOUT_REPAIR_PROTECTED_OWNERSHIP_BYTES,
+            _SYNC_ROLLOUT_REPAIR_STORY_CRITERIA_OWNERSHIP_BYTES,
+            _SYNC_ROLLOUT_REPAIR_STORY_CRITERIA_CURRENT_OWNERSHIP_BYTES,
+            _SYNC_ROLLOUT_REPAIR_MAIN_OWNERSHIP_BYTES,
         )
     ):
         return base_rules

@@ -17,8 +17,18 @@ from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 from rich import print as rprint
 from rich.markup import escape as rich_escape
 
+from . import DEFAULT_STRENGTH
 from .detect_change import detect_change
 from .get_extension import get_extension
+from .story_criteria import (
+    AcceptanceCriterion,
+    CriteriaEvaluation,
+    StoryCriteriaError,
+    changes_from_verdicts,
+    evaluate_acceptance_criteria,
+    parse_acceptance_criteria,
+    parse_non_oracle_guards,
+)
 
 
 DEFAULT_STORIES_DIR = "user_stories"
@@ -166,12 +176,35 @@ def _resolve_prompt_path(
     prompts_dir: Optional[Path] = None,
 ) -> Optional[Path]:
     """Resolve a prompt name or relative path to an existing prompt path."""
+    # A model response containing only a duplicate basename cannot safely name a
+    # repair target. Accept a relative path or a unique basename, but never let
+    # dictionary insertion order choose between same-named prompt files.
+    lower = prompt_name.lower()
+    if len(Path(prompt_name).parts) == 1:
+        basename_matches = [
+            path for path in prompt_files if path.name.lower() == lower
+        ]
+        if len(basename_matches) > 1:
+            return None
     name_map = _build_prompt_name_map(prompt_files, prompts_dir)
     if prompt_name in name_map:
         return name_map[prompt_name]
-    lower = prompt_name.lower()
     if lower in name_map:
         return name_map[lower]
+    # Criteria evaluation uses the shortest unique path suffix so that the
+    # model can distinguish duplicate basenames without needing an absolute
+    # project path. Resolve that suffix only when it identifies one file.
+    if len(Path(prompt_name).parts) > 1:
+        suffix = Path(prompt_name).as_posix().lower()
+        suffix_matches = [
+            path
+            for path in prompt_files
+            if path.resolve().as_posix().lower().endswith(f"/{suffix}")
+        ]
+        if len(suffix_matches) == 1:
+            return suffix_matches[0]
+        if len(suffix_matches) > 1:
+            return None
     # Fallback: match by basename if detect output used a short name
     for prompt_path in prompt_files:
         if prompt_path.name == prompt_name or prompt_path.name.lower() == lower:
@@ -598,7 +631,7 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
     story_file: str,
     prompts_dir: Optional[str] = None,
     prompt_files: Optional[List[Path]] = None,
-    strength: float = 0.2,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = 0.25,
     verbose: bool = False,
@@ -1185,6 +1218,164 @@ def _compose_story_oracle(
     return story_content
 
 
+def _story_contract_text(
+    story_path: Path,
+    contract_path: Optional[Path] = None,
+) -> str:
+    """Return the contract markdown for a story, or ``""`` when there is none."""
+    contract_path = contract_path or _contract_path_for_story(story_path)
+    try:
+        return contract_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return ""
+
+
+def _resolve_story_criteria(
+    story_path: Path,
+    story_content: str,
+    contract_path: Optional[Path] = None,
+) -> Tuple[List[AcceptanceCriterion], str]:
+    """Return the acceptance criteria to gate on, and where they came from.
+
+    The contract is the machine-checkable oracle, so it wins when it has
+    criteria. Legacy stories predate contracts but often carry their own
+    ``## Acceptance Criteria`` section, and gating on those is still far better
+    than gating on whether a model volunteered suggestions. When neither yields
+    criteria the caller falls back to the open-ended ``detect_change`` path.
+    """
+    contract_text = _story_contract_text(story_path, contract_path)
+    criteria = parse_acceptance_criteria(contract_text)
+    if criteria:
+        return list(criteria), "contract"
+    criteria = parse_acceptance_criteria(story_content)
+    if criteria:
+        return list(criteria), "story"
+    return [], ""
+
+
+def _story_non_oracle_guards(
+    story_path: Path,
+    story_content: str,
+    contract_path: Optional[Path] = None,
+) -> List[str]:
+    """Return the contract's ``## Non-Oracle`` bullets, else the story's."""
+    guards = parse_non_oracle_guards(
+        _story_contract_text(story_path, contract_path)
+    )
+    return guards or parse_non_oracle_guards(story_content)
+
+
+def _criteria_diagnostics(evaluation: CriteriaEvaluation) -> List[Dict[str, object]]:
+    """Map advisory verdicts onto the stable story-diagnostic warning shape.
+
+    ``unclear`` is deliberately a warning and not an error: it must never move
+    the verdict, or a model that hedges would fail a correct prompt set --
+    the exact model-sensitivity this gate exists to remove.
+    """
+    diagnostics: List[Dict[str, object]] = []
+    for verdict in evaluation.unclear:
+        diagnostics.append(
+            {
+                "code": "criteria:UNCLEAR",
+                "severity": "warning",
+                "message": (
+                    f"{verdict.criterion_id} could not be decided from the prompt "
+                    f"text: {verdict.criterion_text}"
+                ),
+                "retryable": False,
+            }
+        )
+    for verdict in evaluation.verdicts:
+        if verdict.status == "satisfied" and not verdict.citation_verified:
+            diagnostics.append(
+                {
+                    "code": "criteria:UNVERIFIED_CITATION",
+                    "severity": "warning",
+                    "message": (
+                        f"{verdict.criterion_id} was reported satisfied, but the "
+                        "quoted evidence was not found verbatim in the evaluated "
+                        "prompts."
+                    ),
+                    "retryable": False,
+                }
+            )
+    return diagnostics
+
+
+def _render_criteria_report(
+    story_path: Path,
+    evaluation: CriteriaEvaluation,
+    story_prompt_files: Iterable[Path],
+    criteria_source: str,
+) -> None:
+    """Print the per-criterion verdict table for one story.
+
+    The report is the point of the bounded gate: an operator can check a
+    verdict against the quoted prompt text instead of trusting it.
+    """
+    status_styles = {
+        "satisfied": "green",
+        "unsatisfied": "red",
+        "unclear": "yellow",
+        "unevaluated": "yellow",
+    }
+    # Order matters and must match the caller's incomplete_reason chain, which
+    # checks `unevaluated` before `unsatisfied`. Judging FAIL first here made the
+    # terminal say FAIL for a run the v1 document reported as UNKNOWN/INCOMPLETE
+    # -- the same run disagreeing with itself depending on where you read it.
+    if evaluation.unevaluated:
+        headline = "UNKNOWN"
+    elif evaluation.unsatisfied:
+        headline = "FAIL"
+    elif evaluation.unclear:
+        # Undecided is neither a pass nor a failure; saying PASS here would
+        # repeat the legacy gate's fail-open behaviour.
+        headline = "UNKNOWN"
+    else:
+        headline = "PASS"
+    rprint(f"[bold]{headline}[/bold] {rich_escape(str(story_path))}")
+    rprint("")
+    rprint(
+        f"  Acceptance criteria (from {criteria_source}), "
+        f"judged by {rich_escape(evaluation.model or 'unknown model')}:"
+    )
+    for verdict in evaluation.verdicts:
+        style = status_styles.get(verdict.status, "yellow")
+        rprint(
+            f"  [{style}]{verdict.status.upper():<12}[/{style}] "
+            f"{verdict.criterion_id}: {rich_escape(verdict.criterion_text)}"
+        )
+        if verdict.status == "satisfied" and verdict.citation:
+            marker = "" if verdict.citation_verified else " (not found verbatim)"
+            rprint(
+                f"               evidence{marker}: "
+                f"{rich_escape(verdict.citation)}"
+            )
+        elif verdict.rationale:
+            rprint(f"               {rich_escape(verdict.rationale)}")
+
+    if headline == "PASS":
+        return
+
+    rprint("")
+    rprint("  Evaluated prompts:")
+    for prompt_path in story_prompt_files:
+        rprint(f"  - {rich_escape(str(prompt_path))}")
+    if evaluation.unevaluated:
+        rprint(
+            "  Next step: re-run; the evaluator returned no verdict for "
+            f"{len(evaluation.unevaluated)} criteria."
+        )
+    elif not evaluation.unsatisfied and evaluation.unclear:
+        rprint(
+            f"  Next step: {len(evaluation.unclear)} criteria were undecided. "
+            "Re-run at a higher --strength, or review them by hand; the story is "
+            "not verified either way."
+        )
+    else:
+        rprint(f"  Next step:  pdd fix {rich_escape(_story_fix_target(story_path))}")
+
+
 def _normalized_story_for_hash(story_text: str) -> str:
     """Return story text normalized for hashing.
 
@@ -1445,7 +1636,7 @@ def sync_user_story_contract(  # pylint: disable=too-many-arguments,too-many-loc
     *,
     issue: Optional[str] = None,
     prompts_dir: Optional[str] = None,
-    strength: float = 0.2,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = 0.25,
     verbose: bool = False,
@@ -1544,7 +1735,7 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
     output: Optional[str] = None,
     stories_dir: Optional[str] = None,
     prompts_dir: Optional[str] = None,
-    strength: float = 0.2,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = 0.25,
     verbose: bool = False,
@@ -1738,7 +1929,7 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
     story_files: Optional[List[Path]] = None,
     prompt_files: Optional[List[Path]] = None,
     contract_files: Optional[Mapping[Path, Path]] = None,
-    strength: float = 0.2,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = 0.25,
     verbose: bool = False,
@@ -1749,9 +1940,15 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
     link_story_prompt_metadata: Optional[bool] = None,
 ) -> Tuple[bool, List[Dict[str, object]], float, str]:
     """
-    Run user story tests by calling detect_change on each story.
+    Run user story tests by classifying each story's acceptance criteria.
 
-    A story passes if detect_change returns an empty changes_list.
+    A story passes when every acceptance criterion is evaluated and none is
+    reported ``unsatisfied``. ``unclear`` verdicts are advisory and never fail
+    a story; a criterion the evaluator skipped leaves the run incomplete, which
+    is reported as an error rather than a pass.
+
+    Stories with no parseable acceptance criteria fall back to the legacy
+    ``detect_change`` gate, which passes on an empty change list.
 
     ``link_story_prompt_metadata`` is a deprecated alias for
     ``cache_story_prompt_links`` (main API). When both are passed,
@@ -1835,43 +2032,136 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                     break
                 continue
 
-        changes_list, cost, model = detect_change(
-            [str(p) for p in story_prompt_files],
-            oracle_content,
-            strength,
-            temperature,
-            time,
-            verbose=verbose,
+        criteria, criteria_source = _resolve_story_criteria(
+            story_path, story_content, contract_path
         )
+
+        evaluation: Optional[CriteriaEvaluation] = None
+        criteria_error = ""
+        criteria_error_cost = 0.0
+        if criteria:
+            try:
+                evaluation = evaluate_acceptance_criteria(
+                    story_prompt_files,
+                    oracle_content,
+                    criteria,
+                    strength,
+                    temperature,
+                    time,
+                    verbose=verbose,
+                    guards=_story_non_oracle_guards(
+                        story_path, story_content, contract_path
+                    ),
+                )
+            except StoryCriteriaError as exception:
+                # An unusable evaluator response is a failure to evaluate, not a
+                # pass. Record it and keep going rather than falling back to the
+                # open-ended detector, whose empty answer would read as success.
+                criteria_error = str(exception)
+                criteria_error_cost = getattr(exception, "cost", 0.0)
+
+        if evaluation is not None:
+            changes_list = changes_from_verdicts(
+                evaluation.unsatisfied,
+                default_prompt_name=(
+                    story_prompt_files[0].name
+                    if len(story_prompt_files) == 1
+                    else ""
+                ),
+            )
+            cost, model = evaluation.cost, evaluation.model
+        elif criteria_error:
+            changes_list, cost, model = [], criteria_error_cost, ""
+        else:
+            changes_list, cost, model = detect_change(
+                [str(p) for p in story_prompt_files],
+                oracle_content,
+                strength,
+                temperature,
+                time,
+                verbose=verbose,
+            )
         total_cost += cost
         model_name = model or model_name
-        evaluation_incomplete = bool(unresolved_prompt_refs)
-        passed = len(changes_list) == 0 and not evaluation_incomplete
+
+        # Anything that leaves a criterion unjudged makes the run incomplete.
+        # Reporting it as an error rather than a pass is the point: the legacy
+        # gate treated a silent detector as success.
+        if unresolved_prompt_refs:
+            incomplete_reason = (
+                "Some pdd-story-prompts references could not be resolved."
+            )
+        elif criteria_error:
+            incomplete_reason = "Acceptance criteria could not be evaluated."
+        elif evaluation is not None and evaluation.unevaluated:
+            incomplete_reason = (
+                "The evaluator returned no verdict for "
+                f"{len(evaluation.unevaluated)} acceptance criteria."
+            )
+        elif (
+            evaluation is not None
+            and evaluation.unclear
+            and not evaluation.unsatisfied
+        ):
+            # "Could not decide" is not "verified fine". Reporting it as a pass
+            # is the same fail-open shape as the legacy gate treating silence as
+            # success -- measured on a weak model, a regressed prompt set scored
+            # unclear on the criterion it broke and would have passed. It still
+            # must not FAIL, or a hedging model could fail correct prompts.
+            # Must not contain the word "prompt": story_detection_result
+            # classifies a row error by substring, and any mention routes it to
+            # `prompt:UNRESOLVED_LINK` ("A linked prompt could not be
+            # resolved") -- sending an operator hunting for a broken
+            # pdd-story-prompts reference that does not exist.
+            incomplete_reason = (
+                f"{len(evaluation.unclear)} acceptance criteria were undecided; "
+                "the story is not verified."
+            )
+        else:
+            incomplete_reason = ""
+
+        evaluation_incomplete = bool(incomplete_reason)
+        passed = not changes_list and not evaluation_incomplete
         if not passed:
             all_passed = False
-        result_row = {
+        result_row: Dict[str, object] = {
             "story": str(story_path),
             "passed": passed,
             "changes": changes_list,
         }
+        if evaluation is not None:
+            result_row["criteria"] = [
+                verdict.as_dict() for verdict in evaluation.verdicts
+            ]
+            result_row["criteria_source"] = criteria_source
+            diagnostics = _criteria_diagnostics(evaluation)
+            if diagnostics:
+                result_row["warnings"] = diagnostics
         if evaluation_incomplete:
             result_row.update(
                 {
                     "evaluation_status": "incomplete",
                     "evaluated_prompts": [str(path) for path in story_prompt_files],
                     "unresolved_prompts": unresolved_prompt_refs,
-                    "error": "Some pdd-story-prompts references could not be resolved.",
+                    "error": incomplete_reason,
                 }
             )
         results.append(result_row)
 
         if cache_story_prompt_links and not metadata_prompt_refs:
-            linked_prompt_paths, _ = _select_story_prompt_links(
-                story_content=story_content,
-                prompt_files=prompt_files,
-                prompts_root=prompts_root,
-                changes_list=changes_list,
-            )
+            # Parsed criteria make ``story_prompt_files`` the scope that must be
+            # retried. This remains true when the evaluator is incomplete or
+            # errors: falling back to prose-based linking in either case can
+            # silently remove a prompt from the next attempt.
+            if criteria:
+                linked_prompt_paths = _dedupe_prompt_paths(story_prompt_files)
+            else:
+                linked_prompt_paths, _ = _select_story_prompt_links(
+                    story_content=story_content,
+                    prompt_files=prompt_files,
+                    prompts_root=prompts_root,
+                    changes_list=changes_list,
+                )
             updated = _upsert_story_prompt_metadata(
                 story_path,
                 story_content,
@@ -1882,14 +2172,24 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                 logger.info("Updated story prompt metadata links for %s", story_path)
 
         if not quiet:
-            if evaluation_incomplete:
+            if unresolved_prompt_refs:
                 _render_incomplete_story_evaluation(
                     story_path, story_prompt_files, unresolved_prompt_refs
                 )
+            elif evaluation is not None:
+                _render_criteria_report(
+                    story_path, evaluation, story_prompt_files, criteria_source
+                )
+            elif criteria_error:
+                rprint(f"[bold]UNKNOWN[/bold] {rich_escape(str(story_path))}")
+                rprint("")
+                rprint("  Story was not successfully evaluated:")
+                rprint("  Acceptance criteria could not be evaluated.")
+                rprint("  Next step: re-run after restoring provider availability.")
             else:
                 status = "PASS" if passed else "FAIL"
                 rprint(f"[bold]{status}[/bold] {rich_escape(str(story_path))}")
-            if not evaluation_incomplete and not passed:
+            if evaluation is None and not evaluation_incomplete and not passed:
                 rprint("")
                 rprint("  Evaluated prompts:")
                 for _p in story_prompt_files:
@@ -1916,7 +2216,7 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     ctx: object,
     story_file: str,
     prompts_dir: Optional[str] = None,
-    strength: float = 0.2,
+    strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = 0.25,
     budget: float = 5.0,
@@ -1926,8 +2226,10 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     """
     Attempt to fix prompts based on a single user story.
 
-    This runs detect_change on the story, then applies changes to each affected
-    prompt by calling change_main with the story as the change prompt.
+    For stories with parseable criteria, this plans repairs from the bounded
+    criteria evaluation; otherwise it falls back to ``detect_change``. It then
+    applies the scoped changes by calling ``change_main`` with the story as the
+    change prompt.
     """
     from .change_main import change_main  # pylint: disable=import-outside-toplevel
 
@@ -1943,21 +2245,110 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
         return False, f"User story file not found: {story_file}", 0.0, "", []
 
     story_content = _read_story(story_path)
+    # Story metadata is an explicit repair boundary, not merely a validation
+    # hint.  A verifier may only nominate a file it was given; otherwise a
+    # hallucinated name (or a valid but unrelated prompt name) can make ``pdd
+    # fix`` edit a prompt outside the story's declared scope.  Use the same
+    # resolution rules as ``run_user_story_tests`` and refuse to mutate when
+    # any declared reference is unresolved.
+    metadata_prompt_refs = _parse_story_prompt_metadata(story_content)
+    story_prompt_files = prompt_files
+    if metadata_prompt_refs:
+        resolved_story_prompts: List[Path] = []
+        unresolved_prompt_refs: List[str] = []
+        for ref in metadata_prompt_refs:
+            resolved = _resolve_prompt_path(ref, prompt_files, prompts_root)
+            if resolved:
+                resolved_story_prompts.append(resolved)
+            else:
+                unresolved_prompt_refs.append(ref)
+        if unresolved_prompt_refs:
+            return (
+                False,
+                "Cannot repair a story with unresolved pdd-story-prompts "
+                "metadata: " + ", ".join(unresolved_prompt_refs),
+                0.0,
+                "",
+                [],
+            )
+        if not resolved_story_prompts:
+            return (
+                False,
+                "No prompts from pdd-story-prompts metadata could be resolved.",
+                0.0,
+                "",
+                [],
+            )
+        story_prompt_files = _dedupe_prompt_paths(resolved_story_prompts)
     # Detect and repair against the SAME oracle validation uses: the human Story
     # plus its generated contract. With the two-file story model, the tiny story
     # file alone omits the acceptance criteria/oracle, so `pdd fix` would no-op or
     # produce an under-specified change that later fails `run_user_story_tests`.
     oracle_content = _compose_story_oracle(story_path, story_content)
-    changes_list, detect_cost, detect_model = detect_change(
-        [str(p) for p in prompt_files],
-        oracle_content,
-        strength,
-        temperature,
-        time,
-        verbose=verbose,
-    )
+
+    # Where a contract exists it IS the specification, so the repair is planned
+    # from the same bounded verification that judges it: each unsatisfied
+    # criterion names both the gap and the prompt that should carry it. Asking
+    # `detect_change` "what would you change?" here re-derived, less precisely,
+    # what the contract already states -- and its plan was discarded anyway,
+    # since `change_main` receives the oracle, not the change instructions.
+    criteria, _ = _resolve_story_criteria(story_path, story_content)
+
+    verified = True
+    if criteria:
+        try:
+            evaluation = evaluate_acceptance_criteria(
+                story_prompt_files,
+                oracle_content,
+                criteria,
+                strength,
+                temperature,
+                time,
+                verbose=verbose,
+                guards=_story_non_oracle_guards(story_path, story_content),
+            )
+        except StoryCriteriaError as exception:
+            return (
+                False,
+                "Could not verify the story's criteria, so there is nothing to "
+                "repair against.",
+                getattr(exception, "cost", 0.0),
+                "",
+                [],
+            )
+        detect_cost, detect_model = evaluation.cost, evaluation.model
+        verified = evaluation.verified
+        changes_list = changes_from_verdicts(
+            evaluation.unsatisfied,
+            default_prompt_name=(
+                story_prompt_files[0].name if len(story_prompt_files) == 1 else ""
+            ),
+        )
+    else:
+        changes_list, detect_cost, detect_model = detect_change(
+            [str(p) for p in story_prompt_files],
+            oracle_content,
+            strength,
+            temperature,
+            time,
+            verbose=verbose,
+        )
 
     if not changes_list:
+        # An empty change list means "nothing was shown to need changing", which
+        # is only good news when everything was actually judged. Claiming success
+        # on an undecided or silent evaluation is the same fail-open the story
+        # gate was rewritten to remove.
+        if not verified:
+            return (
+                False,
+                "No criterion was shown unsatisfied, but the story could not be "
+                "fully verified, so nothing was changed. Re-run at a higher "
+                "--strength or review the undecided criteria by hand.",
+                detect_cost,
+                detect_model,
+                [],
+            )
         return (
             True,
             "No prompt changes needed for this user story.",
@@ -2002,7 +2393,9 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     try:
         for change in changes_list:
             prompt_name = str(change.get("prompt_name") or "")
-            prompt_path = _resolve_prompt_path(prompt_name, prompt_files, prompts_root)
+            prompt_path = _resolve_prompt_path(
+                prompt_name, story_prompt_files, prompts_root
+            )
             if not prompt_path:
                 errors.append(f"Unable to resolve prompt path: {prompt_name}")
                 continue
@@ -2043,11 +2436,11 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     if errors:
         return False, "\n".join(errors), total_cost, model_name, changed_files
 
-    # Re-run validation for just this story after applying changes
+    # Re-run validation for just this story after applying changes.
     passed, _, validation_cost, validation_model = run_user_story_tests(
         prompts_dir=str(prompts_root),
         story_files=[story_path],
-        prompt_files=prompt_files,
+        prompt_files=story_prompt_files,
         strength=strength,
         temperature=temperature,
         time=time,
