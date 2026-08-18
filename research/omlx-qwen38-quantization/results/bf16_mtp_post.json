@@ -1,0 +1,417 @@
+{
+  "metadata": {
+    "model_id": "Qwen3.8-27B-MLX-bf16-mtp",
+    "source_checkpoint_revision": "fe34c8d6784c6d9b463756dd020492123137b732",
+    "omlx_version": "0.6.1",
+    "started_at": "2026-08-18T08:45:05-0700",
+    "prompt_lengths": [
+      1024,
+      4096,
+      16384
+    ],
+    "generation_length": 128,
+    "throughput_repeats": 3,
+    "coding_sample_per_suite": 20,
+    "sandbox": "best-effort macOS Seatbelt; network/home denied; 15s/256MiB limits; not adversarially secure",
+    "external_upload": false,
+    "dataset_sha256": {
+      "humaneval.jsonl": "a9e7d97ea3d65976949ff2addf9fcb5a37ce2fb9e0d630289eeff3993beacfac",
+      "mbpp.jsonl": "d2b493742690b8174f35e677396223e5ed74d57be38abdbec1a9a1a780e0f82b"
+    },
+    "sample_task_ids": [
+      [
+        "humaneval",
+        "HumanEval/163"
+      ],
+      [
+        "humaneval",
+        "HumanEval/28"
+      ],
+      [
+        "humaneval",
+        "HumanEval/6"
+      ],
+      [
+        "humaneval",
+        "HumanEval/70"
+      ],
+      [
+        "humaneval",
+        "HumanEval/62"
+      ],
+      [
+        "humaneval",
+        "HumanEval/57"
+      ],
+      [
+        "humaneval",
+        "HumanEval/35"
+      ],
+      [
+        "humaneval",
+        "HumanEval/26"
+      ],
+      [
+        "humaneval",
+        "HumanEval/139"
+      ],
+      [
+        "humaneval",
+        "HumanEval/22"
+      ],
+      [
+        "humaneval",
+        "HumanEval/151"
+      ],
+      [
+        "humaneval",
+        "HumanEval/108"
+      ],
+      [
+        "humaneval",
+        "HumanEval/8"
+      ],
+      [
+        "humaneval",
+        "HumanEval/7"
+      ],
+      [
+        "humaneval",
+        "HumanEval/23"
+      ],
+      [
+        "humaneval",
+        "HumanEval/55"
+      ],
+      [
+        "humaneval",
+        "HumanEval/59"
+      ],
+      [
+        "humaneval",
+        "HumanEval/129"
+      ],
+      [
+        "humaneval",
+        "HumanEval/154"
+      ],
+      [
+        "humaneval",
+        "HumanEval/143"
+      ],
+      [
+        "mbpp",
+        "338"
+      ],
+      [
+        "mbpp",
+        "68"
+      ],
+      [
+        "mbpp",
+        "23"
+      ],
+      [
+        "mbpp",
+        "390"
+      ],
+      [
+        "mbpp",
+        "151"
+      ],
+      [
+        "mbpp",
+        "136"
+      ],
+      [
+        "mbpp",
+        "125"
+      ],
+      [
+        "mbpp",
+        "82"
+      ],
+      [
+        "mbpp",
+        "388"
+      ],
+      [
+        "mbpp",
+        "63"
+      ],
+      [
+        "mbpp",
+        "357"
+      ],
+      [
+        "mbpp",
+        "467"
+      ],
+      [
+        "mbpp",
+        "290"
+      ],
+      [
+        "mbpp",
+        "55"
+      ],
+      [
+        "mbpp",
+        "313"
+      ],
+      [
+        "mbpp",
+        "227"
+      ],
+      [
+        "mbpp",
+        "27"
+      ],
+      [
+        "mbpp",
+        "26"
+      ],
+      [
+        "mbpp",
+        "58"
+      ],
+      [
+        "mbpp",
+        "122"
+      ]
+    ],
+    "finished_at": "2026-08-18T08:57:17-0700"
+  },
+  "arms": [
+    {
+      "label": "bf16_mtp_post",
+      "mtp_enabled": true,
+      "load_seconds": 14.714143834076822,
+      "wall_seconds": 714.7539530410431,
+      "throughput": [
+        {
+          "bench_id": "bench-c9dd5d25fa39",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1161,
+              "requested_pp": 1024,
+              "tg": 128,
+              "ttft_ms": 5697.8,
+              "tpot_ms": 116.85,
+              "gen_tps": 8.6,
+              "processing_tps": 203.8,
+              "e2e_latency_s": 20.544,
+              "total_throughput": 62.7,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1161,
+              "completion_tokens": 128,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4365,
+              "requested_pp": 4096,
+              "tg": 128,
+              "ttft_ms": 36956.5,
+              "tpot_ms": 98.21,
+              "gen_tps": 10.3,
+              "processing_tps": 118.1,
+              "e2e_latency_s": 49.433,
+              "total_throughput": 90.9,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4365,
+              "completion_tokens": 128,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15703,
+              "requested_pp": 16384,
+              "tg": 128,
+              "ttft_ms": 133550.4,
+              "tpot_ms": 108.18,
+              "gen_tps": 9.3,
+              "processing_tps": 117.6,
+              "e2e_latency_s": 143.506,
+              "total_throughput": 110.1,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15703,
+              "completion_tokens": 93,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        },
+        {
+          "bench_id": "bench-1791163d1a30",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1159,
+              "requested_pp": 1024,
+              "tg": 128,
+              "ttft_ms": 10261.6,
+              "tpot_ms": 108.22,
+              "gen_tps": 9.3,
+              "processing_tps": 112.9,
+              "e2e_latency_s": 24.009,
+              "total_throughput": 53.6,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1159,
+              "completion_tokens": 128,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4367,
+              "requested_pp": 4096,
+              "tg": 128,
+              "ttft_ms": 34803.8,
+              "tpot_ms": 96.54,
+              "gen_tps": 10.4,
+              "processing_tps": 125.5,
+              "e2e_latency_s": 47.067,
+              "total_throughput": 95.5,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4367,
+              "completion_tokens": 128,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15702,
+              "requested_pp": 16384,
+              "tg": 128,
+              "ttft_ms": 154617.1,
+              "tpot_ms": 123.94,
+              "gen_tps": 8.2,
+              "processing_tps": 101.6,
+              "e2e_latency_s": 166.332,
+              "total_throughput": 95.0,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15702,
+              "completion_tokens": 94,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        },
+        {
+          "bench_id": "bench-cb6da8db2e72",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1159,
+              "requested_pp": 1024,
+              "tg": 128,
+              "ttft_ms": 13226.7,
+              "tpot_ms": 122.87,
+              "gen_tps": 8.2,
+              "processing_tps": 87.6,
+              "e2e_latency_s": 28.837,
+              "total_throughput": 44.6,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1159,
+              "completion_tokens": 128,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4370,
+              "requested_pp": 4096,
+              "tg": 128,
+              "ttft_ms": 41998.1,
+              "tpot_ms": 108.5,
+              "gen_tps": 9.3,
+              "processing_tps": 104.1,
+              "e2e_latency_s": 55.784,
+              "total_throughput": 80.6,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4370,
+              "completion_tokens": 128,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15704,
+              "requested_pp": 16384,
+              "tg": 128,
+              "ttft_ms": 155374.7,
+              "tpot_ms": 105.75,
+              "gen_tps": 9.6,
+              "processing_tps": 101.1,
+              "e2e_latency_s": 165.215,
+              "total_throughput": 95.6,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15704,
+              "completion_tokens": 94,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        }
+      ],
+      "accuracy": null,
+      "footprint": {
+        "samples": 2579,
+        "min_bytes": 56176239368,
+        "max_bytes": 62363116368,
+        "median_bytes": 59316986704
+      },
+      "mtp_log_lines": [
+        "2026-08-18 08:45:28,699 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[0] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=5/6 (83.3%) depth[d1=2/3,d2=2/2,d3=1/1] emits[init=2,draft=4,bonus=1,verify=1] timing[backbone=450.7ms mtp=14.2ms sample=0.2ms cache=0.4ms]",
+        "2026-08-18 08:45:49,217 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[1] finish=length tokens=128 cycles=53 tok/cycle=2.42 accept=74/95 (77.9%) depth[d1=36/46,d2=25/31,d3=13/18] d0=7 emits[init=2,draft=74,bonus=31,verify=21] timing[backbone=13774.0ms mtp=1051.0ms sample=5.0ms cache=20.0ms]",
+        "2026-08-18 08:46:38,631 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[2] finish=length tokens=128 cycles=48 tok/cycle=2.67 accept=79/88 (89.8%) depth[d1=42/45,d2=32/37,d3=5/6] d0=3 emits[init=2,draft=79,bonus=38,verify=9] timing[backbone=11583.5ms mtp=836.7ms sample=3.2ms cache=7.0ms]",
+        "2026-08-18 08:49:02,127 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[3] finish=stop tokens=94 cycles=37 tok/cycle=2.54 accept=55/63 (87.3%) depth[d1=32/34,d2=21/27,d3=2/2] d0=3 emits[init=2,draft=55,bonus=29,verify=8] timing[backbone=9293.1ms mtp=631.5ms sample=2.2ms cache=4.7ms]",
+        "2026-08-18 08:49:04,539 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[4] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=5/6 (83.3%) depth[d1=2/3,d2=2/2,d3=1/1] emits[init=2,draft=4,bonus=1,verify=1] timing[backbone=393.3ms mtp=24.1ms sample=0.1ms cache=0.3ms]",
+        "2026-08-18 08:49:28,522 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[5] finish=length tokens=128 cycles=49 tok/cycle=2.61 accept=77/94 (81.9%) depth[d1=41/46,d2=27/35,d3=9/13] d0=3 emits[init=2,draft=77,bonus=32,verify=17] timing[backbone=12765.6ms mtp=923.5ms sample=12.2ms cache=16.3ms]",
+        "2026-08-18 08:50:15,511 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[6] finish=length tokens=128 cycles=42 tok/cycle=3.05 accept=84/96 (87.5%) depth[d1=35/39,d2=28/31,d3=21/26] d0=3 emits[init=2,draft=84,bonus=30,verify=12] timing[backbone=11243.8ms mtp=932.0ms sample=3.5ms cache=10.8ms]",
+        "2026-08-18 08:53:01,775 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[7] finish=stop tokens=95 cycles=38 tok/cycle=2.50 accept=57/63 (90.5%) depth[d1=34/35,d2=19/23,d3=4/5] d0=3 emits[init=2,draft=56,bonus=31,verify=6] timing[backbone=10670.0ms mtp=849.5ms sample=4.5ms cache=6.2ms]",
+        "2026-08-18 08:53:04,382 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[8] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=5/6 (83.3%) depth[d1=2/3,d2=2/2,d3=1/1] emits[init=2,draft=4,bonus=1,verify=1] timing[backbone=415.3ms mtp=14.5ms sample=0.1ms cache=0.4ms]",
+        "2026-08-18 08:53:33,130 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[9] finish=length tokens=128 cycles=58 tok/cycle=2.21 accept=68/83 (81.9%) depth[d1=43/51,d2=24/30,d3=1/2] d0=7 emits[init=2,draft=68,bonus=43,verify=15] timing[backbone=14781.5ms mtp=660.7ms sample=10.2ms cache=17.1ms]",
+        "2026-08-18 08:54:28,947 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[10] finish=length tokens=128 cycles=49 tok/cycle=2.61 accept=77/90 (85.6%) depth[d1=39/46,d2=30/34,d3=8/10] d0=3 emits[init=2,draft=77,bonus=36,verify=13] timing[backbone=12707.8ms mtp=920.4ms sample=5.8ms cache=22.5ms]",
+        "2026-08-18 08:57:14,122 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[11] finish=stop tokens=95 cycles=32 tok/cycle=2.97 accept=61/68 (89.7%) depth[d1=28/29,d2=20/25,d3=13/14] d0=3 emits[init=2,draft=61,bonus=25,verify=7] timing[backbone=9008.5ms mtp=740.3ms sample=3.5ms cache=5.5ms]"
+      ]
+    }
+  ]
+}
