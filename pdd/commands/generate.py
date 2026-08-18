@@ -826,6 +826,21 @@ def test(
                     "[bold green]Story regression test "
                     f"{action}:[/bold green] {generated.test_file}"
                 )
+                # #2392: the traceability fallback used to be silent, so every
+                # signal downstream read as "protected" for a test that never
+                # executes the code under test. Say so at the point of creation.
+                if not generated.is_behavioral:
+                    from ..story_test_generation import (
+                        TRACEABILITY_FALLBACK_WARNING,
+                    )
+
+                    console.print(
+                        f"[bold yellow]Warning:[/bold yellow] {TRACEABILITY_FALLBACK_WARNING}."
+                    )
+                    console.print(
+                        "  Add a machine-readable [bold]## Entry Point[/bold] to the "
+                        "story contract and re-run to get a behavioural test."
+                    )
             result_dict = {
                 "success": True,
                 "message": "Story regression test generated.",
