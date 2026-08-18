@@ -1,0 +1,1253 @@
+{
+  "metadata": {
+    "model_id": "Qwen3.8-27B-MLX-oQ8e-mtp",
+    "source_checkpoint_revision": "fe34c8d6784c6d9b463756dd020492123137b732",
+    "omlx_version": "0.6.1",
+    "started_at": "2026-08-18T08:26:56-0700",
+    "prompt_lengths": [
+      1024,
+      4096,
+      16384
+    ],
+    "generation_length": 128,
+    "throughput_repeats": 3,
+    "coding_sample_per_suite": 20,
+    "sandbox": "best-effort macOS Seatbelt; network/home denied; 15s/256MiB limits; not adversarially secure",
+    "external_upload": false,
+    "dataset_sha256": {
+      "humaneval.jsonl": "a9e7d97ea3d65976949ff2addf9fcb5a37ce2fb9e0d630289eeff3993beacfac",
+      "mbpp.jsonl": "d2b493742690b8174f35e677396223e5ed74d57be38abdbec1a9a1a780e0f82b"
+    },
+    "sample_task_ids": [
+      [
+        "humaneval",
+        "HumanEval/163"
+      ],
+      [
+        "humaneval",
+        "HumanEval/28"
+      ],
+      [
+        "humaneval",
+        "HumanEval/6"
+      ],
+      [
+        "humaneval",
+        "HumanEval/70"
+      ],
+      [
+        "humaneval",
+        "HumanEval/62"
+      ],
+      [
+        "humaneval",
+        "HumanEval/57"
+      ],
+      [
+        "humaneval",
+        "HumanEval/35"
+      ],
+      [
+        "humaneval",
+        "HumanEval/26"
+      ],
+      [
+        "humaneval",
+        "HumanEval/139"
+      ],
+      [
+        "humaneval",
+        "HumanEval/22"
+      ],
+      [
+        "humaneval",
+        "HumanEval/151"
+      ],
+      [
+        "humaneval",
+        "HumanEval/108"
+      ],
+      [
+        "humaneval",
+        "HumanEval/8"
+      ],
+      [
+        "humaneval",
+        "HumanEval/7"
+      ],
+      [
+        "humaneval",
+        "HumanEval/23"
+      ],
+      [
+        "humaneval",
+        "HumanEval/55"
+      ],
+      [
+        "humaneval",
+        "HumanEval/59"
+      ],
+      [
+        "humaneval",
+        "HumanEval/129"
+      ],
+      [
+        "humaneval",
+        "HumanEval/154"
+      ],
+      [
+        "humaneval",
+        "HumanEval/143"
+      ],
+      [
+        "mbpp",
+        "338"
+      ],
+      [
+        "mbpp",
+        "68"
+      ],
+      [
+        "mbpp",
+        "23"
+      ],
+      [
+        "mbpp",
+        "390"
+      ],
+      [
+        "mbpp",
+        "151"
+      ],
+      [
+        "mbpp",
+        "136"
+      ],
+      [
+        "mbpp",
+        "125"
+      ],
+      [
+        "mbpp",
+        "82"
+      ],
+      [
+        "mbpp",
+        "388"
+      ],
+      [
+        "mbpp",
+        "63"
+      ],
+      [
+        "mbpp",
+        "357"
+      ],
+      [
+        "mbpp",
+        "467"
+      ],
+      [
+        "mbpp",
+        "290"
+      ],
+      [
+        "mbpp",
+        "55"
+      ],
+      [
+        "mbpp",
+        "313"
+      ],
+      [
+        "mbpp",
+        "227"
+      ],
+      [
+        "mbpp",
+        "27"
+      ],
+      [
+        "mbpp",
+        "26"
+      ],
+      [
+        "mbpp",
+        "58"
+      ],
+      [
+        "mbpp",
+        "122"
+      ]
+    ],
+    "artifact_path": "$MODEL_DIR/Qwen3.8-27B-MLX-oQ8e-mtp",
+    "artifact_manifest": [
+      {
+        "name": "chat_template.jinja",
+        "size": 8952,
+        "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
+      },
+      {
+        "name": "config.json",
+        "size": 4151,
+        "sha256": "dadd0b0bef847ee8202db4cbd5cc04dfaead39b194ebf189daac7aba7fa4a7a7"
+      },
+      {
+        "name": "generation_config.json",
+        "size": 202,
+        "sha256": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e"
+      },
+      {
+        "name": "model-00001-of-00006.safetensors",
+        "size": 5016862596
+      },
+      {
+        "name": "model-00002-of-00006.safetensors",
+        "size": 5041543289
+      },
+      {
+        "name": "model-00003-of-00006.safetensors",
+        "size": 5041522666
+      },
+      {
+        "name": "model-00004-of-00006.safetensors",
+        "size": 5019869095
+      },
+      {
+        "name": "model-00005-of-00006.safetensors",
+        "size": 5013670661
+      },
+      {
+        "name": "model-00006-of-00006.safetensors",
+        "size": 4868173447
+      },
+      {
+        "name": "model.safetensors.index.json",
+        "size": 212223,
+        "sha256": "15c6afc067476ad5f835409ec53beb107f0b79373e9f6e2281486e3a1cecbda9"
+      },
+      {
+        "name": "oq_imatrix_report.json",
+        "size": 30935,
+        "sha256": "e89f726dfd7c84cd8cb3726569f56fa7ea43850b7cdbbd6723d196729a5faa12"
+      },
+      {
+        "name": "preprocessor_config.json",
+        "size": 390,
+        "sha256": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516"
+      },
+      {
+        "name": "processor_config.json",
+        "size": 991,
+        "sha256": "45fc17c8dd2474af6b493b52483c26c0584b0082d368c480f9fa611e73070040"
+      },
+      {
+        "name": "tokenizer.json",
+        "size": 19989325,
+        "sha256": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523"
+      },
+      {
+        "name": "tokenizer_config.json",
+        "size": 1165,
+        "sha256": "792fa3f0cb88b111e54ef3134c873531008c4df471d108da17903426e308aa7b"
+      },
+      {
+        "name": "vocab.json",
+        "size": 6722759,
+        "sha256": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"
+      }
+    ],
+    "target_config": {
+      "architectures": [
+        "Qwen3_5ForConditionalGeneration"
+      ],
+      "do_sample": true,
+      "eos_token_id": [
+        248046,
+        248044
+      ],
+      "generation_config": {
+        "bos_token_id": 248044,
+        "do_sample": true,
+        "eos_token_id": [
+          248046,
+          248044
+        ],
+        "pad_token_id": 248044,
+        "temperature": 1.0,
+        "top_k": 20,
+        "top_p": 0.95
+      },
+      "image_token_id": 248056,
+      "language_model_only": false,
+      "model_type": "qwen3_5",
+      "temperature": 1.0,
+      "text_config": {
+        "attention_bias": false,
+        "attention_dropout": 0.0,
+        "attn_output_gate": true,
+        "bos_token_id": 248044,
+        "dtype": "bfloat16",
+        "eos_token_id": 248044,
+        "full_attention_interval": 4,
+        "head_dim": 256,
+        "hidden_act": "silu",
+        "hidden_size": 5120,
+        "initializer_range": 0.02,
+        "intermediate_size": 17408,
+        "layer_types": [
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention"
+        ],
+        "linear_conv_kernel_dim": 4,
+        "linear_key_head_dim": 128,
+        "linear_num_key_heads": 16,
+        "linear_num_value_heads": 48,
+        "linear_value_head_dim": 128,
+        "mamba_ssm_dtype": "float32",
+        "max_position_embeddings": 262144,
+        "model_type": "qwen3_5_text",
+        "mtp_num_hidden_layers": 1,
+        "mtp_use_dedicated_embeddings": false,
+        "num_attention_heads": 24,
+        "num_hidden_layers": 64,
+        "num_key_value_heads": 4,
+        "output_gate_type": "swish",
+        "pad_token_id": null,
+        "partial_rotary_factor": 0.25,
+        "rms_norm_eps": 1e-06,
+        "rope_parameters": {
+          "mrope_interleaved": true,
+          "mrope_section": [
+            11,
+            11,
+            10
+          ],
+          "partial_rotary_factor": 0.25,
+          "rope_theta": 10000000,
+          "type": "default"
+        },
+        "tie_word_embeddings": false,
+        "use_cache": true,
+        "vocab_size": 248320
+      },
+      "tie_word_embeddings": false,
+      "top_k": 20,
+      "top_p": 0.95,
+      "transformers_version": "5.8.0.dev0",
+      "video_token_id": 248057,
+      "vision_config": {
+        "deepstack_visual_indexes": [],
+        "depth": 27,
+        "hidden_act": "gelu_pytorch_tanh",
+        "hidden_size": 1152,
+        "in_channels": 3,
+        "initializer_range": 0.02,
+        "intermediate_size": 4304,
+        "model_type": "qwen3_5",
+        "num_heads": 16,
+        "num_position_embeddings": 2304,
+        "out_hidden_size": 5120,
+        "patch_size": 16,
+        "spatial_merge_size": 2,
+        "temporal_patch_size": 2
+      },
+      "vision_end_token_id": 248054,
+      "vision_start_token_id": 248053,
+      "quantization": {
+        "group_size": 64,
+        "bits": 8,
+        "mode": "affine"
+      },
+      "quantization_config": {
+        "group_size": 64,
+        "bits": 8,
+        "mode": "affine"
+      }
+    },
+    "finished_at": "2026-08-18T08:44:57-0700"
+  },
+  "arms": [
+    {
+      "label": "oq8e_mtp",
+      "mtp_enabled": true,
+      "load_seconds": 6.766524791717529,
+      "wall_seconds": 1072.9905508337542,
+      "throughput": [
+        {
+          "bench_id": "bench-4e4a75251569",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1159,
+              "requested_pp": 1024,
+              "tg": 128,
+              "ttft_ms": 11648.5,
+              "tpot_ms": 65.87,
+              "gen_tps": 15.3,
+              "processing_tps": 99.5,
+              "e2e_latency_s": 20.016,
+              "total_throughput": 64.3,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1159,
+              "completion_tokens": 128,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4368,
+              "requested_pp": 4096,
+              "tg": 128,
+              "ttft_ms": 38303.2,
+              "tpot_ms": 56.41,
+              "gen_tps": 17.9,
+              "processing_tps": 114.0,
+              "e2e_latency_s": 45.47,
+              "total_throughput": 98.9,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4368,
+              "completion_tokens": 128,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15703,
+              "requested_pp": 16384,
+              "tg": 128,
+              "ttft_ms": 167157.9,
+              "tpot_ms": 71.19,
+              "gen_tps": 14.2,
+              "processing_tps": 93.9,
+              "e2e_latency_s": 172.855,
+              "total_throughput": 91.3,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15703,
+              "completion_tokens": 81,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        },
+        {
+          "bench_id": "bench-8ff01fca3ef5",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1160,
+              "requested_pp": 1024,
+              "tg": 128,
+              "ttft_ms": 12457.8,
+              "tpot_ms": 69.9,
+              "gen_tps": 14.4,
+              "processing_tps": 93.1,
+              "e2e_latency_s": 21.336,
+              "total_throughput": 60.4,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1160,
+              "completion_tokens": 128,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4365,
+              "requested_pp": 4096,
+              "tg": 128,
+              "ttft_ms": 42648.4,
+              "tpot_ms": 66.24,
+              "gen_tps": 15.2,
+              "processing_tps": 102.3,
+              "e2e_latency_s": 51.062,
+              "total_throughput": 88.0,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4365,
+              "completion_tokens": 128,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15702,
+              "requested_pp": 16384,
+              "tg": 128,
+              "ttft_ms": 164217.5,
+              "tpot_ms": 76.88,
+              "gen_tps": 13.2,
+              "processing_tps": 95.6,
+              "e2e_latency_s": 170.372,
+              "total_throughput": 92.6,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15702,
+              "completion_tokens": 81,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        },
+        {
+          "bench_id": "bench-98713a916545",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1159,
+              "requested_pp": 1024,
+              "tg": 128,
+              "ttft_ms": 13048.2,
+              "tpot_ms": 65.65,
+              "gen_tps": 15.4,
+              "processing_tps": 88.8,
+              "e2e_latency_s": 21.387,
+              "total_throughput": 60.2,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1159,
+              "completion_tokens": 128,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4369,
+              "requested_pp": 4096,
+              "tg": 128,
+              "ttft_ms": 38430.3,
+              "tpot_ms": 68.75,
+              "gen_tps": 14.7,
+              "processing_tps": 113.7,
+              "e2e_latency_s": 47.164,
+              "total_throughput": 95.3,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4369,
+              "completion_tokens": 128,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15703,
+              "requested_pp": 16384,
+              "tg": 128,
+              "ttft_ms": 164169.4,
+              "tpot_ms": 68.96,
+              "gen_tps": 14.7,
+              "processing_tps": 95.7,
+              "e2e_latency_s": 170.584,
+              "total_throughput": 92.6,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15703,
+              "completion_tokens": 94,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        }
+      ],
+      "accuracy": {
+        "seed": 42,
+        "sample_per_benchmark": 20,
+        "wall_seconds": 345.5132445837371,
+        "summary": {
+          "humaneval": {
+            "passed": 20,
+            "total": 20,
+            "score": 1.0,
+            "completion_tokens": 3063,
+            "elapsed_seconds": 209.70593025023118
+          },
+          "mbpp": {
+            "passed": 17,
+            "total": 20,
+            "score": 0.85,
+            "completion_tokens": 1716,
+            "elapsed_seconds": 133.2407518737018
+          },
+          "all": {
+            "passed": 37,
+            "total": 40,
+            "score": 0.925,
+            "completion_tokens": 4779,
+            "elapsed_seconds": 342.946682123933
+          }
+        },
+        "results": [
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/163",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 5.889932333026081,
+            "prompt_tokens": 136,
+            "completion_tokens": 57,
+            "finish_reason": "stop",
+            "raw_response": "def generate_integers(a, b):\n    low = min(a, b)\n    high = max(a, b)\n    return [i for i in range(low, high + 1) if i % 2 == 0 and i < 10]",
+            "response_sha256": "67abd65ee3cfa90671f3d8dc4ac90f09eb02997e4f6a175822652305c15ff3b8",
+            "extracted_code_sha256": "67abd65ee3cfa90671f3d8dc4ac90f09eb02997e4f6a175822652305c15ff3b8"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/28",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 2.5061256252229214,
+            "prompt_tokens": 86,
+            "completion_tokens": 17,
+            "finish_reason": "stop",
+            "raw_response": "def concatenate(strings: List[str]) -> str:\n    return ''.join(strings)",
+            "response_sha256": "c4a9ab174ac0f210284be35c2b2d2935b79e68357e7cb009f0cce9b5877c905e",
+            "extracted_code_sha256": "f5b4a482beff8d85435ac1f03f41308ca6bc295c9d1555a8b87bc595067c5cc5"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/6",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 8.392537208739668,
+            "prompt_tokens": 141,
+            "completion_tokens": 107,
+            "finish_reason": "stop",
+            "raw_response": "```python\nfrom typing import List\n\n\ndef parse_nested_parens(paren_string: str) -> List[int]:\n    result = []\n    for group in paren_string.split():\n        depth = 0\n        max_depth = 0\n        for ch in group:\n            if ch == '(':\n                depth += 1\n                max_depth = max(max_depth, depth)\n            elif ch == ')':\n                depth -= 1\n        result.append(max_depth)\n    return result\n```",
+            "response_sha256": "ce52d7f6b0b58e1a58e1c4c1a0e11cfc1328ba788c4b7f604ace898f9db8ca4e",
+            "extracted_code_sha256": "cf18591c517951021f15ff30c492c046a9dd388ea6ac3d3ed9bf7993dc2960b3"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/70",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 5.793853959068656,
+            "prompt_tokens": 156,
+            "completion_tokens": 59,
+            "finish_reason": "stop",
+            "raw_response": "def strange_sort_list(lst):\n    result = []\n    lst = lst[:]\n    while lst:\n        result.append(min(lst))\n        lst.remove(min(lst))\n        if lst:\n            result.append(max(lst))\n            lst.remove(max(lst))\n    return result",
+            "response_sha256": "236a10a2c0449036b2609af2f3ceef69a7c1c451f8e7f0839c4a0587f4a7e6bf",
+            "extracted_code_sha256": "236a10a2c0449036b2609af2f3ceef69a7c1c451f8e7f0839c4a0587f4a7e6bf"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/62",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 4.454882915597409,
+            "prompt_tokens": 140,
+            "completion_tokens": 44,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef derivative(xs: list):\n    if len(xs) <= 1:\n        return []\n    return [xs[i] * i for i in range(1, len(xs))]\n```",
+            "response_sha256": "987e2cc59ece32810bafd1b464dce69bd604d704ac302f1f44b39cc1e079422d",
+            "extracted_code_sha256": "b2d1a6635eb4371740e94cc69775972eba3595cf0f1ab4e9b04114fa1c8f6f33"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/57",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 11.869267124682665,
+            "prompt_tokens": 119,
+            "completion_tokens": 167,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef monotonic(l: list):\n    \"\"\"Return True is list elements are monotonically increasing or decreasing.\n    >>> monotonic([1, 2, 4, 20])\n    True\n    >>> monotonic([1, 20, 4, 10])\n    False\n    >>> monotonic([4, 1, 0, -10])\n    True\n    \"\"\"\n    if len(l) <= 1:\n        return True\n    increasing = all(l[i] <= l[i + 1] for i in range(len(l) - 1))\n    decreasing = all(l[i] >= l[i + 1] for i in range(len(l) - 1))\n    return increasing or decreasing\n```",
+            "response_sha256": "d549cf41e3916337803a33ee8d814ea198500df163b3ecdebe6256eb2813ff5b",
+            "extracted_code_sha256": "b4f061c15e0683dde7275d6458845f0899715e6c93bd853f4134cd01eb0bc512"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/35",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 6.717867000028491,
+            "prompt_tokens": 114,
+            "completion_tokens": 96,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef max_element(l: list):\n    \"\"\"Return maximum element in the list.\n    >>> max_element([1, 2, 3])\n    3\n    >>> max_element([5, 3, -5, 2, -3, 3, 9, 0, 123, 1, -10])\n    123\n    \"\"\"\n    return max(l)\n```",
+            "response_sha256": "8fbfb93f4ed7dcd31f27a5242e77a4b21f58a0b89991ef4c99124890db66f58d",
+            "extracted_code_sha256": "0a4e9d243342be6386d6e342cdb208ad5435625c052a73620a8025cdf81570df"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/26",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 7.920259416103363,
+            "prompt_tokens": 112,
+            "completion_tokens": 118,
+            "finish_reason": "stop",
+            "raw_response": "```python\nfrom typing import List\n\n\ndef remove_duplicates(numbers: List[int]) -> List[int]:\n    \"\"\" From a list of integers, remove all elements that occur more than once.\n    Keep order of elements left the same as in the input.\n    >>> remove_duplicates([1, 2, 3, 2, 4])\n    [1, 3, 4]\n    \"\"\"\n    from collections import Counter\n    counts = Counter(numbers)\n    return [x for x in numbers if counts[x] == 1]\n```",
+            "response_sha256": "631e260f621fcb99a3e11924e54d53ae338a7c836c981467497541e81b122ed3",
+            "extracted_code_sha256": "44bb660af63063efbce7fd04bfd4e8455d707e403fc26f85b5162a5d3379535e"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/139",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 5.383844791911542,
+            "prompt_tokens": 126,
+            "completion_tokens": 60,
+            "finish_reason": "stop",
+            "raw_response": "def special_factorial(n):\n    result = 1\n    for i in range(1, n + 1):\n        factorial = 1\n        for j in range(1, i + 1):\n            factorial *= j\n        result *= factorial\n    return result",
+            "response_sha256": "21b9785dea2c6160f964d5fb15e43d75593fe590c2a7733c371756c86fa3e523",
+            "extracted_code_sha256": "21b9785dea2c6160f964d5fb15e43d75593fe590c2a7733c371756c86fa3e523"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/22",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 8.688647749833763,
+            "prompt_tokens": 120,
+            "completion_tokens": 118,
+            "finish_reason": "stop",
+            "raw_response": "```python\nfrom typing import List, Any\n\n\ndef filter_integers(values: List[Any]) -> List[int]:\n    \"\"\" Filter given list of any python values only for integers\n    >>> filter_integers(['a', 3.14, 5])\n    [5]\n    >>> filter_integers([1, 2, 3, 'abc', {}, []])\n    [1, 2, 3]\n    \"\"\"\n    return [v for v in values if isinstance(v, int) and not isinstance(v, bool)]\n```",
+            "response_sha256": "6f15a01615688056b57997cf2025930e9d6571bc8b2e830103cd145288b83dde",
+            "extracted_code_sha256": "f394166a9afc6bf677ec8f0629a17ee7a23dc398a391925721268f7866eba4a5"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/151",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 5.728193666785955,
+            "prompt_tokens": 166,
+            "completion_tokens": 52,
+            "finish_reason": "stop",
+            "raw_response": "def double_the_difference(lst):\n    total = 0\n    for num in lst:\n        if isinstance(num, int) and num > 0 and num % 2 != 0:\n            total += num * num\n    return total",
+            "response_sha256": "44c5e9e2277722dbdd1a8415c63c64c6c5f97768c4f53a8a0f3ab5c1466747d0",
+            "extracted_code_sha256": "44c5e9e2277722dbdd1a8415c63c64c6c5f97768c4f53a8a0f3ab5c1466747d0"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/108",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 7.3327853749506176,
+            "prompt_tokens": 156,
+            "completion_tokens": 96,
+            "finish_reason": "stop",
+            "raw_response": "def count_nums(arr):\n    count = 0\n    for num in arr:\n        if num < 0:\n            digits = str(num)[1:]\n            digit_sum = -int(digits[0]) + sum(int(d) for d in digits[1:])\n        else:\n            digit_sum = sum(int(d) for d in str(num))\n        if digit_sum > 0:\n            count += 1\n    return count",
+            "response_sha256": "cdbbb04a461207c05e32025c67f12097d638bf9b896550a0b803cf1f0989a07c",
+            "extracted_code_sha256": "cdbbb04a461207c05e32025c67f12097d638bf9b896550a0b803cf1f0989a07c"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/8",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 9.855947666801512,
+            "prompt_tokens": 143,
+            "completion_tokens": 162,
+            "finish_reason": "stop",
+            "raw_response": "```python\nfrom typing import List, Tuple\n\n\ndef sum_product(numbers: List[int]) -> Tuple[int, int]:\n    \"\"\" For a given list of integers, return a tuple consisting of a sum and a product of all the integers in a list.\n    Empty sum should be equal to 0 and empty product should be equal to 1.\n    >>> sum_product([])\n    (0, 1)\n    >>> sum_product([1, 2, 3, 4])\n    (10, 24)\n    \"\"\"\n    total_sum = 0\n    total_product = 1\n    for num in numbers:\n        total_sum += num\n        total_product *= num\n    return (total_sum, total_product)\n```",
+            "response_sha256": "545a0ec81a61cb41f2193884ae8f45130beef02d62945cbc0e8a0ebd2c4789ed",
+            "extracted_code_sha256": "633660ec7ee283298ad5b8267cb9761852f8389fd7d9859ef353c3fd7594a27a"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/7",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 2.9929400417022407,
+            "prompt_tokens": 121,
+            "completion_tokens": 32,
+            "finish_reason": "stop",
+            "raw_response": "def filter_by_substring(strings: List[str], substring: str) -> List[str]:\n    return [s for s in strings if substring in s]",
+            "response_sha256": "17c65f5bf04d3080c2063359137f1b2eb0f1074396c7b95ed9c845ff4eeaf929",
+            "extracted_code_sha256": "807f22a9eff7bf17bd5c249edbe3f69b436ff9db7213a2117ff9ba2410ab951b"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/23",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 4.557878375053406,
+            "prompt_tokens": 70,
+            "completion_tokens": 52,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef strlen(string: str) -> int:\n    \"\"\" Return length of given string\n    >>> strlen('')\n    0\n    >>> strlen('abc')\n    3\n    \"\"\"\n    return len(string)\n```",
+            "response_sha256": "d4da8209ed4da3bd540867af01d1f8143dd365bf7f3e08410c0d0d7be1a8aed3",
+            "extracted_code_sha256": "831c4d6a608f99826ae7fb5dc85b3f25a5aebf7643e2dec1468c8a442c7f751b"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/55",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 7.51843695808202,
+            "prompt_tokens": 83,
+            "completion_tokens": 125,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef fib(n: int):\n    \"\"\"Return n-th Fibonacci number.\n    >>> fib(10)\n    55\n    >>> fib(1)\n    1\n    >>> fib(8)\n    21\n    \"\"\"\n    if n <= 0:\n        return 0\n    if n == 1:\n        return 1\n    a, b = 0, 1\n    for _ in range(2, n + 1):\n        a, b = b, a + b\n    return b\n```",
+            "response_sha256": "3643a8ac42a1eb5e9bfbbcf69c3b31ce2deb24ec4451ae181f8a819adf8f7f55",
+            "extracted_code_sha256": "1dfb86d7e86e50632f0354f1058296adc398b12737c909171e656be446b87508"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/59",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 11.134581124875695,
+            "prompt_tokens": 96,
+            "completion_tokens": 193,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef largest_prime_factor(n: int):\n    \"\"\"Return the largest prime factor of n. Assume n > 1 and is not a prime.\n    >>> largest_prime_factor(13195)\n    29\n    >>> largest_prime_factor(2048)\n    2\n    \"\"\"\n    largest = None\n    # Divide out all factors of 2\n    while n % 2 == 0:\n        largest = 2\n        n //= 2\n    # Now check odd factors\n    i = 3\n    while i * i <= n:\n        while n % i == 0:\n            largest = i\n            n //= i\n        i += 2\n    # If n is still greater than 1, then it's a prime factor\n    if n > 1:\n        largest = n\n    return largest\n```",
+            "response_sha256": "57735a24bdd194e46cda2d240efa8d7b297a1d63c015654cdaf596bdb0ed4538",
+            "extracted_code_sha256": "1685b2e664dd7ea4efe3759d39bafd658dd099aa6fd2eab635ea9280da8e280d"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/129",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 79.06567591708153,
+            "prompt_tokens": 434,
+            "completion_tokens": 1335,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef minPath(grid, k):\n    \"\"\"\n    Given a grid with N rows and N columns (N >= 2) and a positive integer k, \n    each cell of the grid contains a value. Every integer in the range [1, N * N]\n    inclusive appears exactly once on the cells of the grid.\n\n    You have to find the minimum path of length k in the grid. You can start\n    from any cell, and in each step you can move to any of the neighbor cells,\n    in other words, you can go to cells which share an edge with you current\n    cell.\n    Please note that a path of length k means visiting exactly k cells (not\n    necessarily distinct).\n    You CANNOT go off the grid.\n    A path A (of length k) is considered less than a path B (of length k) if\n    after making the ordered lists of the values on the cells that A and B go\n    through (let's call them lst_A and lst_B), lst_A is lexicographically less\n    than lst_B, in other words, there exist an integer index i (1 <= i <= k)\n    such that lst_A[i] < lst_B[i] and for any j (1 <= j < i) we have\n    lst_A[j] = lst_B[j].\n    It is guaranteed that the answer is unique.\n    Return an ordered list of the values on the cells that the minimum path go through.\n\n    Examples:\n\n        Input: grid = [ [1,2,3], [4,5,6], [7,8,9]], k = 3\n        Output: [1, 2, 1]\n\n        Input: grid = [ [5,9,3], [4,1,6], [7,8,2]], k = 1\n        Output: [1]\n    \"\"\"\n    n = len(grid)\n    \n    # Find the position of the minimum value (which is 1)\n    # The optimal path must start at the cell with value 1\n    # because any path starting with a value > 1 would be lexicographically larger\n    # than a path starting with 1.\n    \n    # Actually, let me think more carefully. The path of length k means visiting k cells.\n    # We want the lexicographically smallest sequence of values.\n    # The first element should be as small as possible. The smallest value in the grid is 1.\n    # So the first cell must be the one with value 1.\n    \n    # Then from that cell, we want the next cell to have the smallest possible value among neighbors.\n    # And so on.\n    \n    # But wait - can we revisit cells? Yes, \"not necessarily distinct\".\n    # So at each step, from the current cell, we can go to any neighbor (including going back).\n    \n    # Greedy approach: at each step, from the current cell, choose the neighbor with the smallest value.\n    # But is this always optimal? Let's think...\n    \n    # Actually, since we can revisit cells, and we want lexicographic minimum, the greedy approach\n    # of always picking the smallest neighbor should work. Because at each position, we want the\n    # smallest possible value, and the choice at position i doesn't affect what values are available\n    # at position i+1 in a way that would make a larger value at position i lead to a smaller value\n    # at position i+1 that compensates (since lexicographic order prioritizes earlier positions).\n    \n    # Wait, but the choice at position i determines which cell we're at, which determines the neighbors\n    # at position i+1. So it's not purely independent. However, since we're doing lexicographic comparison,\n    # we want the smallest possible value at position 1, then given that, the smallest possible at position 2, etc.\n    \n    # So the greedy approach is: start at the cell with value 1. Then at each step, from the current cell,\n    # move to the neighbor with the smallest value.\n    \n    # Let me verify with the example:\n    # grid = [[1,2,3],[4,5,6],[7,8,9]], k=3\n    # Start at (0,0) with value 1.\n    # Neighbors of (0,0): (0,1) with value 2, (1,0) with value 4. Smallest is 2.\n    # Move to (0,1) with value 2.\n    # Neighbors of (0,1): (0,0) with value 1, (0,2) with value 3, (1,1) with value 5. Smallest is 1.\n    # Move to (0,0) with value 1.\n    # Path: [1, 2, 1]. Correct!\n    \n    # Find position of value 1\n    start_r, start_c = -1, -1\n    for i in range(n):\n        for j in range(n):\n            if grid[i][j] == 1:\n                start_r, start_c = i, j\n                break\n        if start_r != -1:\n            break\n    \n    path = [1]\n    r, c = start_r, start_c\n    \n    for _ in range(k - 1):\n        # Find the neighbor with the smallest value\n        min_val = float('inf')\n        min_r, min_c = -1, -1\n        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:\n            nr, nc = r + dr, c + dc\n            if 0 <= nr < n and 0 <= nc < n:\n                if grid[nr][nc] < min_val:\n                    min_val = grid[nr][nc]\n                    min_r, min_c = nr, nc\n        path.append(min_val)\n        r, c = min_r, min_c\n    \n    return path\n```",
+            "response_sha256": "0d9a7bd71a81326f2e87e24edf0f678849a2bb58b212ab54357b68a660b65aee",
+            "extracted_code_sha256": "0cb617732a79ff37da3e28d04688a320ca7f502d6a89b449e71efeeba88ad649"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/154",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 3.9713185420259833,
+            "prompt_tokens": 153,
+            "completion_tokens": 44,
+            "finish_reason": "stop",
+            "raw_response": "def cycpattern_check(a, b):\n    for i in range(len(b)):\n        rotation = b[i:] + b[:i]\n        if rotation in a:\n            return True\n    return False",
+            "response_sha256": "392b54a2e38743b330cdb56a946e2d7e0e330efcb8fc4ab263b19859b0543f04",
+            "extracted_code_sha256": "392b54a2e38743b330cdb56a946e2d7e0e330efcb8fc4ab263b19859b0543f04"
+          },
+          {
+            "suite": "humaneval",
+            "id": "HumanEval/143",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 9.930954458657652,
+            "prompt_tokens": 186,
+            "completion_tokens": 129,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef words_in_sentence(sentence):\n    def is_prime(n):\n        if n < 2:\n            return False\n        if n == 2:\n            return True\n        if n % 2 == 0:\n            return False\n        for i in range(3, int(n**0.5) + 1, 2):\n            if n % i == 0:\n                return False\n        return True\n    \n    words = sentence.split()\n    result = [word for word in words if is_prime(len(word))]\n    return ' '.join(result)\n```",
+            "response_sha256": "d1ed2c12ddedc1271ff73d7022b730383e33d9505bdcf8fad64e4ae1b9aa9494",
+            "extracted_code_sha256": "150b6688fde68f5daecf02ca80a4a8f7a329e8352c7d938c98186dc4b3e162f1"
+          },
+          {
+            "suite": "mbpp",
+            "id": "338",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 5.56543833296746,
+            "prompt_tokens": 112,
+            "completion_tokens": 74,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef count_Substring_With_Equal_Ends(s: str) -> int:\n    from collections import Counter\n    freq = Counter(s)\n    count = 0\n    for c in freq:\n        n = freq[c]\n        count += n * (n + 1) // 2\n    return count\n```",
+            "response_sha256": "d00664f379b65c15f8ea0366d1d3dffc63b72d8ff0b8de065689240b4a4ff08c",
+            "extracted_code_sha256": "aeda82a14217ff11da730fcb9a42a87c0378998ca2dce4c7240d776186a37626"
+          },
+          {
+            "suite": "mbpp",
+            "id": "68",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 6.652583957649767,
+            "prompt_tokens": 118,
+            "completion_tokens": 91,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef is_Monotonic(arr):\n    if len(arr) <= 1:\n        return True\n    \n    increasing = True\n    decreasing = True\n    \n    for i in range(1, len(arr)):\n        if arr[i] < arr[i - 1]:\n            increasing = False\n        if arr[i] > arr[i - 1]:\n            decreasing = False\n    \n    return increasing or decreasing\n```",
+            "response_sha256": "179a400c7a426096973b183948b50709e142e9c74826f048a7104051c8e2a510",
+            "extracted_code_sha256": "2f244e409f4c770b060a0db0f27a72054412b21648650c465d154d730f8f6b9e"
+          },
+          {
+            "suite": "mbpp",
+            "id": "23",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 3.2537215421907604,
+            "prompt_tokens": 165,
+            "completion_tokens": 28,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef maximum_Sum(list_of_lists):\n    return max(sum(sublist) for sublist in list_of_lists)\n```",
+            "response_sha256": "5628b67848749a8a420ead3739d5ac56680c0e077986d788d353acd40eabed8a",
+            "extracted_code_sha256": "0db48a6740bc3ddd342577fa2b704b081c705105941396abbeff349717883396"
+          },
+          {
+            "suite": "mbpp",
+            "id": "390",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 3.473670749925077,
+            "prompt_tokens": 165,
+            "completion_tokens": 25,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef add_string(lst, prefix):\n    return [prefix.format(item) for item in lst]\n```",
+            "response_sha256": "eff07874ba4b2abc019051b97caf7d4c0f71d0ad1e8988797caa47b11b901bc3",
+            "extracted_code_sha256": "030cd71c3d8d2e7f70d73108e6aeab7057dbe48977f83e094d8874e4b8952895"
+          },
+          {
+            "suite": "mbpp",
+            "id": "151",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 5.023850082885474,
+            "prompt_tokens": 104,
+            "completion_tokens": 53,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef is_coprime(a, b):\n    def gcd(x, y):\n        while y:\n            x, y = y, x % y\n        return x\n    return gcd(a, b) == 1\n```",
+            "response_sha256": "26e5b5dfa0971c119d3c7671dac9f9afadb6ad4ea6d6c2f7dfea757e82b16f08",
+            "extracted_code_sha256": "c8a4c99d5dee4d3b27c817a3a4113e1133205e701a242b39c0a59359bf01fa36"
+          },
+          {
+            "suite": "mbpp",
+            "id": "136",
+            "passed": false,
+            "error": "Traceback (most recent call last):\n  File \"/private/tmp/omlx-code-7dy1t3qp/candidate.py\", line 9, in <module>\n    assert cal_electbill(75)==246.25\nAssertionError\n",
+            "elapsed_seconds": 7.89198716590181,
+            "prompt_tokens": 100,
+            "completion_tokens": 119,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef cal_electbill(units):\n    if units <= 100:\n        return units * 3.275\n    elif units <= 300:\n        return 100 * 3.275 + (units - 100) * 4.275\n    else:\n        return 100 * 3.275 + 200 * 4.275 + (units - 300) * 5.275\n```",
+            "response_sha256": "ca8bc5802b3657605e47b9456d8ae03fbc384c991ffe7dc6a9e47e6b3becce14",
+            "extracted_code_sha256": "97adcb3b3ed05df5e4a5742ad06d8dc55a2f236600cd22cd59f8eda919e16d05"
+          },
+          {
+            "suite": "mbpp",
+            "id": "125",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 10.914715375285596,
+            "prompt_tokens": 141,
+            "completion_tokens": 134,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef find_length(s, n):\n    # Convert 1s to -1 and 0s to +1, then find maximum subarray sum\n    # This gives the maximum difference between number of 0s and 1s in any substring\n    max_diff = 0\n    current = 0\n    for ch in s:\n        if ch == '0':\n            current += 1\n        else:\n            current -= 1\n        if current < 0:\n            current = 0\n        if current > max_diff:\n            max_diff = current\n    return max_diff\n```",
+            "response_sha256": "2266cf5b7f572c044a7ef4aa5c3f26d1c8e9355d1ecbef4d7c62acecdf0d2c1d",
+            "extracted_code_sha256": "a103aa912c1eaa32cac2853ef4703163f1a9db3498d19a2a62a56243a7f7e57b"
+          },
+          {
+            "suite": "mbpp",
+            "id": "82",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 3.198591916821897,
+            "prompt_tokens": 128,
+            "completion_tokens": 30,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef volume_sphere(radius):\n    import math\n    return (4/3) * math.pi * radius ** 3\n```",
+            "response_sha256": "7fd9e05d9dcc33a36fe33ea51cb42e67799f3aa9b16d3522a7c2c4938e57f2c5",
+            "extracted_code_sha256": "de30326f2025eb3e097ad465d76cab62fbeff32c9e96a61acbef2ba12467d03d"
+          },
+          {
+            "suite": "mbpp",
+            "id": "388",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 5.177550042048097,
+            "prompt_tokens": 110,
+            "completion_tokens": 53,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef highest_Power_of_2(n):\n    if n <= 0:\n        return 0\n    power = 1\n    while power * 2 <= n:\n        power *= 2\n    return power\n```",
+            "response_sha256": "17acf52f1e755ed045b0e9d25dc89e09f6da927b0e5e4752040f66b5a0f8d2b0",
+            "extracted_code_sha256": "0bf9c75e960345973ec0cae3b9a1f613443343dd1d6714193a1d8308f0fd67b8"
+          },
+          {
+            "suite": "mbpp",
+            "id": "63",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 5.622798249591142,
+            "prompt_tokens": 167,
+            "completion_tokens": 55,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef max_difference(pairs):\n    max_diff = 0\n    for a, b in pairs:\n        diff = abs(a - b)\n        if diff > max_diff:\n            max_diff = diff\n    return max_diff\n```",
+            "response_sha256": "9e93e45b9b6ee905aec5666926d539541a2d21bf19e8db27837c7e00a4608df6",
+            "extracted_code_sha256": "503b0c4da0e3d9519af5cdcac73e2433db00e003b0fb51f2a80b8d66650280e0"
+          },
+          {
+            "suite": "mbpp",
+            "id": "357",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 3.047146291937679,
+            "prompt_tokens": 175,
+            "completion_tokens": 22,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef find_max(records):\n    return max(max(record) for record in records)\n```",
+            "response_sha256": "6066c1d66b1ae94a2d399950b2f4066319fe8daf8ee206c0ae88add8c42f672f",
+            "extracted_code_sha256": "defa2b8cf688ad0ad4b3999ec97a26a40da4186789260c0420031f313150108a"
+          },
+          {
+            "suite": "mbpp",
+            "id": "467",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 5.489713416900486,
+            "prompt_tokens": 95,
+            "completion_tokens": 66,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef decimal_to_Octal(n):\n    if n == 0:\n        return 0\n    octal = ''\n    while n > 0:\n        octal = str(n % 8) + octal\n        n //= 8\n    return int(octal)\n```",
+            "response_sha256": "0aa4528c36ed6b506918a46e32269e5af6ecf07286cc7fad818aefef24c14792",
+            "extracted_code_sha256": "866f84dd79eb512c3dde03938e2755984cf3c782a8db9337d0abc4c8f62297f6"
+          },
+          {
+            "suite": "mbpp",
+            "id": "290",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 6.07619437482208,
+            "prompt_tokens": 184,
+            "completion_tokens": 66,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef max_length(lst):\n    max_len = 0\n    max_list = []\n    for sublist in lst:\n        if len(sublist) > max_len:\n            max_len = len(sublist)\n            max_list = sublist\n    return (max_len, max_list)\n```",
+            "response_sha256": "5adffe94a9e4d043cdd98e275adca3f3886c4dbf5201b0789b016a7ab0a8a79a",
+            "extracted_code_sha256": "585d1109b8e871f4fe806c8b23a095925a0679b36df6b4b4fb0819c1f585507c"
+          },
+          {
+            "suite": "mbpp",
+            "id": "55",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 2.5560460831038654,
+            "prompt_tokens": 96,
+            "completion_tokens": 28,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef tn_gp(a, n, r):\n    return a * (r ** (n - 1))\n```",
+            "response_sha256": "05b832233e4e4f125a4c0975b5e950560452846a770be56a53f85beed8919499",
+            "extracted_code_sha256": "e1e82dcf8b9a7aa44581a5d789e5ee746798acbe4998f9ded907faee583642b6"
+          },
+          {
+            "suite": "mbpp",
+            "id": "313",
+            "passed": false,
+            "error": "Traceback (most recent call last):\n  File \"/private/tmp/omlx-code-qq_ph13k/candidate.py\", line 4, in <module>\n    assert pos_nos([-1,-2,1,2]) == 1,2\nAssertionError: 2\n",
+            "elapsed_seconds": 3.51620737509802,
+            "prompt_tokens": 105,
+            "completion_tokens": 26,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef pos_nos(lst):\n    return tuple(x for x in lst if x > 0)\n```",
+            "response_sha256": "e46ce80cff3148e27bbb54b8f58e10738732f1ddde332abe5591d92ae93f674d",
+            "extracted_code_sha256": "5ad5bc05dd4e2927042fedef3cfddd63924d74d250e77ef4129b7eef21d021ab"
+          },
+          {
+            "suite": "mbpp",
+            "id": "227",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 3.2695367499254644,
+            "prompt_tokens": 102,
+            "completion_tokens": 25,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef min_of_three(a, b, c):\n    return min(a, b, c)\n```",
+            "response_sha256": "c714ece88335d629a5918d8d9e18c462f9d773a95e91a77968c55fd11862394a",
+            "extracted_code_sha256": "9284f2e73e9d6fee3e629415d234493dcd8c5a199f4d965dd7ee73580ce564e8"
+          },
+          {
+            "suite": "mbpp",
+            "id": "27",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 6.426117999944836,
+            "prompt_tokens": 132,
+            "completion_tokens": 69,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef remove(lst):\n    return [s.replace('0','').replace('1','').replace('2','').replace('3','').replace('4','').replace('5','').replace('6','').replace('7','').replace('8','').replace('9','') for s in lst]\n```",
+            "response_sha256": "e9ba61e4c4b25281660e153e2fe86194d3847d4a8346fa983642b0eafabd6902",
+            "extracted_code_sha256": "c3430b88a6d908666232e611bdb074a47aaa2e73bd713b0540f4df3e44cf2c9b"
+          },
+          {
+            "suite": "mbpp",
+            "id": "26",
+            "passed": false,
+            "error": "Traceback (most recent call last):\n  File \"/private/tmp/omlx-code-9sk4mtyf/candidate.py\", line 7, in <module>\n    assert check_k_elements([(4, 4), (4, 4, 4), (4, 4), (4, 4, 4, 4), (4, )], 4) == True\nAssertionError\n",
+            "elapsed_seconds": 3.2980962079018354,
+            "prompt_tokens": 158,
+            "completion_tokens": 39,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef check_k_elements(tuple_list, k):\n    for t in tuple_list:\n        if len(t) != k:\n            return False\n    return True\n```",
+            "response_sha256": "dac3a6b70e9b78898842a89a35d65567000d89a97f3b6f39d963e874647a42e8",
+            "extracted_code_sha256": "4193744ff878964f905b2d653ec549ceef981f3d90b763cf63a7137a64d53291"
+          },
+          {
+            "suite": "mbpp",
+            "id": "58",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 4.612914042081684,
+            "prompt_tokens": 100,
+            "completion_tokens": 40,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef opposite_Signs(a, b):\n    return (a > 0 and b < 0) or (a < 0 and b > 0)\n```",
+            "response_sha256": "7a060aed01032d9befd1c05db26a55906a0f729642bd851bf7151fa1070098db",
+            "extracted_code_sha256": "132ce1ec1e9538e6db48cde3b10436792b8e44e5c1e792306ce2ec4d824763ec"
+          },
+          {
+            "suite": "mbpp",
+            "id": "122",
+            "passed": true,
+            "error": "",
+            "elapsed_seconds": 38.17387191671878,
+            "prompt_tokens": 93,
+            "completion_tokens": 673,
+            "finish_reason": "stop",
+            "raw_response": "```python\ndef smartNumber(n):\n    \"\"\"\n    Find the n'th smart number.\n    A smart number is a number that has at least 3 different prime factors.\n    The first few smart numbers are: 30, 42, 60, 66, 70, 78, 84, 102, 105, 110, ...\n    \"\"\"\n    if n <= 0:\n        return None\n    \n    # We need to find the n'th number with at least 3 distinct prime factors.\n    # We'll use a sieve-like approach.\n    \n    # First, let's estimate an upper bound.\n    # The density of numbers with at least 3 distinct prime factors increases.\n    # For n=1000, the answer is 2664, so let's start with a reasonable upper bound.\n    # We'll dynamically increase the bound if needed.\n    \n    def count_distinct_prime_factors(num, smallest_prime_factor):\n        \"\"\"Count distinct prime factors using SPF array.\"\"\"\n        count = 0\n        while num > 1:\n            count += 1\n            num //= smallest_prime_factor[num]\n            while num > 1 and smallest_prime_factor[num] == smallest_prime_factor[num // smallest_prime_factor[num]]:\n                num //= smallest_prime_factor[num]\n        return count\n    \n    # Better approach: use a sieve to compute the number of distinct prime factors for each number.\n    \n    def find_nth_smart(n):\n        # Estimate upper bound\n        # For n=1, answer is 30. For n=1000, answer is 2664.\n        # Let's start with a bound and increase if needed.\n        upper = max(100, n * 10)\n        \n        while True:\n            # Sieve for smallest prime factor\n            spf = list(range(upper + 1))\n            for i in range(2, int(upper ** 0.5) + 1):\n                if spf[i] == i:  # i is prime\n                    for j in range(i * i, upper + 1, i):\n                        if spf[j] == j:\n                            spf[j] = i\n            \n            # Count distinct prime factors for each number\n            distinct_count = [0] * (upper + 1)\n            for i in range(2, upper + 1):\n                if spf[i] == i:  # i is prime\n                    for j in range(i, upper + 1, i):\n                        distinct_count[j] += 1\n            \n            # Find the n'th number with at least 3 distinct prime factors\n            count = 0\n            for i in range(2, upper + 1):\n                if distinct_count[i] >= 3:\n                    count += 1\n                    if count == n:\n                        return i\n            \n            # If we didn't find it, increase the upper bound\n            upper *= 2\n    \n    return find_nth_smart(n)\n```",
+            "response_sha256": "0619a71ff5ba977ad55f21ca9b53678da139c542fce6c1f4df957334375b4676",
+            "extracted_code_sha256": "5de4f3e1843a69cfdd693908bcb6022e241ebb6ab9b65d800adc8c3f7a87def8"
+          }
+        ]
+      },
+      "footprint": {
+        "samples": 3911,
+        "min_bytes": 30582840216,
+        "max_bytes": 40301370432,
+        "median_bytes": 37568044072
+      },
+      "mtp_log_lines": [
+        "2026-08-18 08:27:05,809 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[0] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=5/6 (83.3%) depth[d1=2/3,d2=2/2,d3=1/1] emits[init=2,draft=4,bonus=1,verify=1] timing[backbone=478.9ms mtp=3.4ms sample=0.1ms cache=0.4ms]",
+        "2026-08-18 08:27:25,812 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[1] finish=length tokens=128 cycles=51 tok/cycle=2.51 accept=75/91 (82.4%) depth[d1=37/44,d2=28/35,d3=10/12] d0=7 emits[init=2,draft=75,bonus=35,verify=16] timing[backbone=8197.1ms mtp=138.4ms sample=4.2ms cache=11.1ms]",
+        "2026-08-18 08:28:11,236 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[2] finish=length tokens=128 cycles=42 tok/cycle=3.05 accept=84/96 (87.5%) depth[d1=37/39,d2=29/33,d3=18/24] d0=3 emits[init=2,draft=84,bonus=30,verify=12] timing[backbone=7033.8ms mtp=87.8ms sample=2.7ms cache=8.8ms]",
+        "2026-08-18 08:31:04,121 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[3] finish=stop tokens=82 cycles=32 tok/cycle=2.56 accept=48/53 (90.6%) depth[d1=26/29,d2=18/20,d3=4/4] d0=3 emits[init=2,draft=48,bonus=27,verify=5] timing[backbone=5626.8ms mtp=89.6ms sample=1.9ms cache=3.2ms]",
+        "2026-08-18 08:31:06,357 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[4] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=5/6 (83.3%) depth[d1=2/3,d2=2/2,d3=1/1] emits[init=2,draft=4,bonus=1,verify=1] timing[backbone=289.1ms mtp=3.8ms sample=0.3ms cache=0.4ms]",
+        "2026-08-18 08:31:27,681 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[5] finish=length tokens=128 cycles=49 tok/cycle=2.61 accept=80/98 (81.6%) depth[d1=41/44,d2=23/34,d3=16/20] d0=5 emits[init=2,draft=78,bonus=30,verify=18] timing[backbone=8726.6ms mtp=121.9ms sample=4.3ms cache=19.4ms]",
+        "2026-08-18 08:32:18,721 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[6] finish=length tokens=128 cycles=45 tok/cycle=2.84 accept=81/93 (87.1%) depth[d1=37/40,d2=28/33,d3=16/20] d0=5 emits[init=2,draft=81,bonus=33,verify=12] timing[backbone=8268.3ms mtp=101.3ms sample=3.5ms cache=8.6ms]",
+        "2026-08-18 08:35:09,093 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[7] finish=stop tokens=82 cycles=34 tok/cycle=2.41 accept=46/47 (97.9%) depth[d1=30/31,d2=13/13,d3=3/3] d0=3 emits[init=2,draft=46,bonus=33,verify=1] timing[backbone=6103.2ms mtp=77.9ms sample=2.8ms cache=1.8ms]",
+        "2026-08-18 08:35:11,163 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[8] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=5/6 (83.3%) depth[d1=2/3,d2=2/2,d3=1/1] emits[init=2,draft=4,bonus=1,verify=1] timing[backbone=264.9ms mtp=3.4ms sample=0.1ms cache=0.4ms]",
+        "2026-08-18 08:35:32,542 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[9] finish=length tokens=128 cycles=51 tok/cycle=2.51 accept=75/91 (82.4%) depth[d1=38/46,d2=29/35,d3=8/10] d0=5 emits[init=2,draft=75,bonus=35,verify=16] timing[backbone=8272.6ms mtp=72.8ms sample=3.2ms cache=7.9ms]",
+        "2026-08-18 08:36:19,683 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[10] finish=length tokens=128 cycles=52 tok/cycle=2.46 accept=75/90 (83.3%) depth[d1=41/47,d2=28/36,d3=6/7] d0=5 emits[init=2,draft=75,bonus=36,verify=15] timing[backbone=8639.7ms mtp=69.5ms sample=3.5ms cache=7.7ms]",
+        "2026-08-18 08:39:10,269 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[11] finish=stop tokens=95 cycles=31 tok/cycle=3.06 accept=62/69 (89.9%) depth[d1=27/28,d2=20/23,d3=15/18] d0=3 emits[init=2,draft=62,bonus=24,verify=7] timing[backbone=6165.1ms mtp=227.5ms sample=2.3ms cache=4.7ms]",
+        "2026-08-18 08:39:16,722 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[12] finish=stop tokens=58 cycles=22 tok/cycle=2.64 accept=35/38 (92.1%) depth[d1=17/19,d2=13/14,d3=5/5] d0=3 emits[init=2,draft=35,bonus=18,verify=3] timing[backbone=4015.7ms mtp=42.5ms sample=1.4ms cache=2.4ms]",
+        "2026-08-18 08:39:19,291 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[13] finish=stop tokens=18 cycles=8 tok/cycle=2.25 accept=11/12 (91.7%) depth[d1=4/5,d2=4/4,d3=3/3] d0=3 emits[init=2,draft=9,bonus=6,verify=1] timing[backbone=807.9ms mtp=11.5ms sample=0.4ms cache=0.6ms]",
+        "2026-08-18 08:39:27,824 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[14] finish=stop tokens=108 cycles=33 tok/cycle=3.27 accept=74/76 (97.4%) depth[d1=30/30,d2=24/26,d3=20/20] d0=3 emits[init=2,draft=74,bonus=30,verify=2] timing[backbone=5543.0ms mtp=90.6ms sample=3.3ms cache=2.5ms]",
+        "2026-08-18 08:39:33,738 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[15] finish=stop tokens=60 cycles=21 tok/cycle=2.86 accept=39/40 (97.5%) depth[d1=18/18,d2=14/14,d3=7/8] d0=3 emits[init=2,draft=38,bonus=19,verify=1] timing[backbone=3164.2ms mtp=29.8ms sample=1.3ms cache=1.1ms]",
+        "2026-08-18 08:39:38,249 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[16] finish=stop tokens=45 cycles=16 tok/cycle=2.81 accept=27/29 (93.1%) depth[d1=12/13,d2=9/10,d3=6/6] d0=3 emits[init=2,draft=27,bonus=14,verify=2] timing[backbone=2174.3ms mtp=16.0ms sample=0.7ms cache=0.9ms]",
+        "2026-08-18 08:39:50,140 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[17] finish=stop tokens=168 cycles=52 tok/cycle=3.23 accept=116/117 (99.1%) depth[d1=49/49,d2=43/44,d3=24/24] d0=3 emits[init=2,draft=115,bonus=50,verify=1] timing[backbone=9479.8ms mtp=164.3ms sample=5.2ms cache=3.7ms]",
+        "2026-08-18 08:39:56,985 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[18] finish=stop tokens=97 cycles=30 tok/cycle=3.23 accept=68/68 (100.0%) depth[d1=27/27,d2=23/23,d3=18/18] d0=3 emits[init=2,draft=66,bonus=29,verify=0] timing[backbone=4717.0ms mtp=57.3ms sample=2.0ms cache=1.1ms]",
+        "2026-08-18 08:40:04,959 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[19] finish=stop tokens=119 cycles=38 tok/cycle=3.13 accept=81/82 (98.8%) depth[d1=35/35,d2=29/30,d3=17/17] d0=3 emits[init=2,draft=80,bonus=36,verify=1] timing[backbone=5972.6ms mtp=56.3ms sample=2.4ms cache=1.6ms]",
+        "2026-08-18 08:40:10,438 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[20] finish=stop tokens=61 cycles=21 tok/cycle=2.90 accept=41/42 (97.6%) depth[d1=18/18,d2=14/14,d3=9/10] d0=3 emits[init=2,draft=39,bonus=19,verify=1] timing[backbone=3351.5ms mtp=44.4ms sample=1.6ms cache=1.1ms]",
+        "2026-08-18 08:40:19,175 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[21] finish=stop tokens=119 cycles=42 tok/cycle=2.83 accept=76/77 (98.7%) depth[d1=39/39,d2=31/32,d3=6/6] d0=3 emits[init=2,draft=76,bonus=40,verify=1] timing[backbone=6807.4ms mtp=99.5ms sample=4.2ms cache=4.5ms]",
+        "2026-08-18 08:40:25,043 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[22] finish=stop tokens=53 cycles=19 tok/cycle=2.79 accept=32/36 (88.9%) depth[d1=16/16,d2=11/13,d3=5/7] d0=3 emits[init=2,draft=32,bonus=15,verify=4] timing[backbone=3135.5ms mtp=44.6ms sample=2.5ms cache=3.9ms]",
+        "2026-08-18 08:40:32,574 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[23] finish=stop tokens=97 cycles=30 tok/cycle=3.23 accept=65/70 (92.9%) depth[d1=26/27,d2=22/23,d3=17/20] d0=3 emits[init=2,draft=65,bonus=25,verify=5] timing[backbone=4927.9ms mtp=116.6ms sample=2.8ms cache=5.6ms]",
+        "2026-08-18 08:40:42,498 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[24] finish=stop tokens=163 cycles=50 tok/cycle=3.26 accept=111/113 (98.2%) depth[d1=47/47,d2=40/42,d3=24/24] d0=3 emits[init=2,draft=111,bonus=48,verify=2] timing[backbone=7758.3ms mtp=67.4ms sample=2.8ms cache=2.2ms]",
+        "2026-08-18 08:40:45,568 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[25] finish=stop tokens=33 cycles=11 tok/cycle=3.00 accept=20/21 (95.2%) depth[d1=8/8,d2=7/7,d3=5/6] d0=3 emits[init=2,draft=20,bonus=10,verify=1] timing[backbone=1138.8ms mtp=17.0ms sample=0.5ms cache=0.6ms]",
+        "2026-08-18 08:40:50,216 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[26] finish=stop tokens=53 cycles=18 tok/cycle=2.94 accept=34/34 (100.0%) depth[d1=15/15,d2=13/13,d3=6/6] d0=3 emits[init=2,draft=34,bonus=17,verify=0] timing[backbone=2485.4ms mtp=23.1ms sample=1.0ms cache=0.5ms]",
+        "2026-08-18 08:40:57,771 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[27] finish=stop tokens=126 cycles=39 tok/cycle=3.23 accept=87/87 (100.0%) depth[d1=36/36,d2=32/32,d3=19/19] d0=3 emits[init=2,draft=86,bonus=38,verify=0] timing[backbone=5911.7ms mtp=52.9ms sample=2.2ms cache=1.1ms]",
+        "2026-08-18 08:41:08,949 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[28] finish=stop tokens=194 cycles=61 tok/cycle=3.18 accept=133/138 (96.4%) depth[d1=57/58,d2=45/47,d3=31/33] d0=3 emits[init=2,draft=132,bonus=55,verify=5] timing[backbone=9379.4ms mtp=95.4ms sample=3.8ms cache=3.8ms]",
+        "2026-08-18 08:42:28,051 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[29] finish=stop tokens=1336 cycles=427 tok/cycle=3.13 accept=910/1001 (90.9%) depth[d1=370/408,d2=319/352,d3=221/241] d0=19 emits[init=2,draft=908,bonus=335,verify=91] timing[backbone=73397.1ms mtp=766.4ms sample=24.1ms cache=44.8ms]",
+        "2026-08-18 08:42:32,071 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[30] finish=stop tokens=45 cycles=15 tok/cycle=3.00 accept=31/31 (100.0%) depth[d1=12/12,d2=11/11,d3=8/8] d0=3 emits[init=2,draft=29,bonus=14,verify=0] timing[backbone=1674.1ms mtp=16.0ms sample=0.6ms cache=0.3ms]",
+        "2026-08-18 08:42:42,022 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[31] finish=stop tokens=130 cycles=41 tok/cycle=3.17 accept=89/90 (98.9%) depth[d1=38/38,d2=35/35,d3=16/17] d0=3 emits[init=2,draft=88,bonus=39,verify=1] timing[backbone=7044.5ms mtp=77.7ms sample=3.1ms cache=2.2ms]",
+        "2026-08-18 08:42:47,658 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[32] finish=stop tokens=75 cycles=25 tok/cycle=3.00 accept=51/52 (98.1%) depth[d1=22/22,d2=18/18,d3=11/12] d0=3 emits[init=2,draft=49,bonus=23,verify=1] timing[backbone=3733.9ms mtp=31.6ms sample=1.3ms cache=1.1ms]",
+        "2026-08-18 08:42:54,380 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[33] finish=stop tokens=92 cycles=31 tok/cycle=2.97 accept=59/59 (100.0%) depth[d1=28/28,d2=24/24,d3=7/7] d0=3 emits[init=2,draft=59,bonus=31,verify=0] timing[backbone=4606.3ms mtp=40.8ms sample=2.1ms cache=1.1ms]",
+        "2026-08-18 08:42:57,695 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[34] finish=stop tokens=29 cycles=10 tok/cycle=2.90 accept=18/18 (100.0%) depth[d1=7/7,d2=6/6,d3=5/5] d0=3 emits[init=2,draft=18,bonus=9,verify=0] timing[backbone=824.1ms mtp=9.5ms sample=0.3ms cache=0.2ms]",
+        "2026-08-18 08:43:01,187 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[35] finish=stop tokens=26 cycles=9 tok/cycle=2.89 accept=15/15 (100.0%) depth[d1=6/6,d2=5/5,d3=4/4] d0=3 emits[init=2,draft=15,bonus=9,verify=0] timing[backbone=776.4ms mtp=8.2ms sample=0.3ms cache=0.2ms]",
+        "2026-08-18 08:43:06,259 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[36] finish=stop tokens=54 cycles=18 tok/cycle=3.00 accept=35/35 (100.0%) depth[d1=15/15,d2=12/12,d3=8/8] d0=3 emits[init=2,draft=35,bonus=17,verify=0] timing[backbone=2748.1ms mtp=23.7ms sample=0.9ms cache=0.5ms]",
+        "2026-08-18 08:43:14,184 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[37] finish=stop tokens=120 cycles=38 tok/cycle=3.16 accept=82/88 (93.2%) depth[d1=35/35,d2=29/32,d3=18/21] d0=3 emits[init=2,draft=81,bonus=31,verify=6] timing[backbone=5849.1ms mtp=76.2ms sample=1.8ms cache=3.4ms]",
+        "2026-08-18 08:43:25,155 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[38] finish=stop tokens=135 cycles=50 tok/cycle=2.70 accept=84/96 (87.5%) depth[d1=44/47,d2=26/30,d3=14/19] d0=3 emits[init=2,draft=84,bonus=37,verify=12] timing[backbone=8143.7ms mtp=97.6ms sample=3.9ms cache=8.8ms]",
+        "2026-08-18 08:43:28,424 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[39] finish=stop tokens=31 cycles=12 tok/cycle=2.58 accept=20/22 (90.9%) depth[d1=9/9,d2=6/8,d3=5/5] d0=3 emits[init=2,draft=18,bonus=9,verify=2] timing[backbone=1209.0ms mtp=14.7ms sample=0.8ms cache=1.1ms]",
+        "2026-08-18 08:43:33,675 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[40] finish=stop tokens=54 cycles=18 tok/cycle=3.00 accept=35/35 (100.0%) depth[d1=15/15,d2=12/12,d3=8/8] d0=3 emits[init=2,draft=35,bonus=17,verify=0] timing[backbone=2599.7ms mtp=24.3ms sample=1.1ms cache=0.5ms]",
+        "2026-08-18 08:43:39,358 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[41] finish=stop tokens=56 cycles=20 tok/cycle=2.80 accept=36/38 (94.7%) depth[d1=16/17,d2=12/13,d3=8/8] d0=3 emits[init=2,draft=35,bonus=17,verify=2] timing[backbone=3041.6ms mtp=29.1ms sample=1.3ms cache=1.3ms]",
+        "2026-08-18 08:43:42,458 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[42] finish=stop tokens=23 cycles=9 tok/cycle=2.56 accept=14/15 (93.3%) depth[d1=5/6,d2=5/5,d3=4/4] d0=3 emits[init=2,draft=13,bonus=7,verify=1] timing[backbone=745.8ms mtp=7.6ms sample=0.3ms cache=0.4ms]",
+        "2026-08-18 08:43:47,977 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[43] finish=stop tokens=67 cycles=22 tok/cycle=3.05 accept=44/47 (93.6%) depth[d1=18/19,d2=14/15,d3=12/13] d0=3 emits[init=2,draft=44,bonus=18,verify=3] timing[backbone=3565.3ms mtp=31.5ms sample=1.1ms cache=1.7ms]",
+        "2026-08-18 08:43:54,100 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[44] finish=stop tokens=67 cycles=23 tok/cycle=2.91 accept=43/43 (100.0%) depth[d1=20/20,d2=16/16,d3=7/7] d0=3 emits[init=2,draft=43,bonus=22,verify=0] timing[backbone=3562.5ms mtp=28.4ms sample=1.4ms cache=0.8ms]",
+        "2026-08-18 08:43:56,703 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[45] finish=stop tokens=29 cycles=10 tok/cycle=2.90 accept=17/18 (94.4%) depth[d1=7/7,d2=6/6,d3=4/5] d0=3 emits[init=2,draft=17,bonus=9,verify=1] timing[backbone=984.8ms mtp=12.2ms sample=0.4ms cache=0.6ms]",
+        "2026-08-18 08:44:00,248 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[46] finish=stop tokens=27 cycles=10 tok/cycle=2.70 accept=17/18 (94.4%) depth[d1=7/7,d2=6/6,d3=4/5] d0=3 emits[init=2,draft=16,bonus=8,verify=1] timing[backbone=1234.4ms mtp=13.8ms sample=0.5ms cache=0.6ms]",
+        "2026-08-18 08:44:03,572 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[47] finish=stop tokens=26 cycles=9 tok/cycle=2.89 accept=15/15 (100.0%) depth[d1=6/6,d2=5/5,d3=4/4] d0=3 emits[init=2,draft=15,bonus=9,verify=0] timing[backbone=796.4ms mtp=10.9ms sample=0.3ms cache=0.2ms]",
+        "2026-08-18 08:44:10,063 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[48] finish=stop tokens=70 cycles=23 tok/cycle=3.04 accept=48/48 (100.0%) depth[d1=20/20,d2=16/16,d3=12/12] d0=3 emits[init=2,draft=46,bonus=22,verify=0] timing[backbone=3509.8ms mtp=46.8ms sample=1.8ms cache=0.9ms]",
+        "2026-08-18 08:44:13,418 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[49] finish=stop tokens=40 cycles=13 tok/cycle=3.08 accept=25/25 (100.0%) depth[d1=10/10,d2=9/9,d3=6/6] d0=3 emits[init=2,draft=25,bonus=13,verify=0] timing[backbone=1277.0ms mtp=13.0ms sample=0.5ms cache=0.2ms]",
+        "2026-08-18 08:44:18,075 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[50] finish=stop tokens=41 cycles=14 tok/cycle=2.93 accept=27/27 (100.0%) depth[d1=11/11,d2=10/10,d3=6/6] d0=3 emits[init=2,draft=26,bonus=13,verify=0] timing[backbone=1988.5ms mtp=16.4ms sample=0.7ms cache=0.4ms]",
+        "2026-08-18 08:44:56,300 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[51] finish=stop tokens=674 cycles=204 tok/cycle=3.30 accept=469/514 (91.2%) depth[d1=186/197,d2=158/175,d3=125/142] d0=7 emits[init=2,draft=469,bonus=158,verify=45] timing[backbone=35456.8ms mtp=444.4ms sample=13.4ms cache=29.1ms]"
+      ]
+    }
+  ]
+}
