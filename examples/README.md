@@ -39,6 +39,12 @@ The edit_file_tool_example walks through generating a complete Python tool using
 - Using the provided Makefile targets to orchestrate setup, prompt creation, and sync runs
 - Integrating automation features like command logging and optional cost tracking during sync
 
+### FastAPI Health
+The fastapi_health example demonstrates a minimal prompt-as-source workflow for generating a small FastAPI service. This example shows:
+- Driving code, tests, and documentation from a single prompt
+- Generating a `/health` endpoint that returns `{"status": "ok"}`
+- Keeping the generated API minimal and deterministic (no auth or database)
+
 ### Handpaint
 The handpaint example demonstrates how PDD can be used to create and modify a painting application. This example shows:
 - How PDD can be used to generate code for a graphical application
