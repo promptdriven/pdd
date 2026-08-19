@@ -11,6 +11,11 @@ about 1.5–1.7x faster in this session. It was **not faster at every workload**
 sample had the same pass/fail result for both models, but it is small and partly
 test-exposed, so it does not establish general accuracy parity.
 
+Follow-up: the dated
+[`DFlash2 comparison`](dflash2-analysis-2026-08-19.md) reconstructs these raw
+results, evaluates current DFlash2 primary evidence, and defines the smallest
+Apple M4 Max experiment needed before making any speedup claim.
+
 ## Environment
 
 - MacBook Pro, Apple M4 Max, 16 CPU cores, 128 GB unified memory

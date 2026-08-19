@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "accessed_date": "2026-08-19",
+  "warning": "Planning projections only. No local DFlash2 measurement is present.",
+  "external_evidence": {
+    "qwen_dflash2_h200": {
+      "source": "https://huggingface.co/incoai/Qwen3.8-27B-DFlash2/blob/dedf8df68adfb1afeaf7b7480c0a0243108177b4/README.md#throughput",
+      "hardware": "one NVIDIA H200",
+      "runtime": "SGLang",
+      "attention_backend": "FlashAttention 3",
+      "target": "Qwen/Qwen3.8-27B",
+      "draft": "incoai/Qwen3.8-27B-DFlash2",
+      "draft_revision": "dedf8df68adfb1afeaf7b7480c0a0243108177b4",
+      "block_size": 8,
+      "draft_tokens": 7,
+      "sampling": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "reasoning_effort": "xhigh"
+      },
+      "maximum_new_tokens": 4096,
+      "metric": "total output tokens divided by end-to-end wall time",
+      "concurrency_1": {
+        "GSM8K": {
+          "mtp_tps": 178.5,
+          "dflash2_tps": 236.1,
+          "mtp_acceptance_length": 5.02,
+          "dflash2_acceptance_length": 5.46
+        },
+        "MATH-500": {
+          "mtp_tps": 172.8,
+          "dflash2_tps": 230.7,
+          "mtp_acceptance_length": 4.72,
+          "dflash2_acceptance_length": 5.28
+        },
+        "HumanEval": {
+          "mtp_tps": 151.9,
+          "dflash2_tps": 214.6,
+          "mtp_acceptance_length": 3.91,
+          "dflash2_acceptance_length": 4.39
+        },
+        "MBPP": {
+          "mtp_tps": 153.1,
+          "dflash2_tps": 226.9,
+          "mtp_acceptance_length": 3.99,
+          "dflash2_acceptance_length": 4.79
+        },
+        "MT-Bench": {
+          "mtp_tps": 134.9,
+          "dflash2_tps": 184.0,
+          "mtp_acceptance_length": 3.74,
+          "dflash2_acceptance_length": 4.10
+        }
+      }
+    }
+  },
+  "apple_planning_scenarios": [
+    {
+      "name": "worst",
+      "tokens_per_cycle_ratio": 0.95,
+      "cycle_latency_ratio": 1.25,
+      "ttft_ratio": 1.0,
+      "rationale": "Allows lower acceptance and a materially slower draft-plus-verify cycle on Metal."
+    },
+    {
+      "name": "base",
+      "tokens_per_cycle_ratio": 1.25,
+      "cycle_latency_ratio": 1.10,
+      "ttft_ratio": 1.0,
+      "rationale": "Assumes a useful acceptance gain partly offset by the five-layer draft cost."
+    },
+    {
+      "name": "best",
+      "tokens_per_cycle_ratio": 1.45,
+      "cycle_latency_ratio": 1.0,
+      "ttft_ratio": 1.0,
+      "rationale": "Caps Apple planning upside near the upper observed H200 DFlash2-over-MTP throughput ratio while assuming cycle parity."
+    }
+  ]
+}
