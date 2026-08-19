@@ -145,7 +145,12 @@ def projections(inputs: dict[str, Any], baseline: dict[str, Any]) -> list[dict[s
 
 def _dflash_marker(document: dict[str, Any], arm: dict[str, Any]) -> bool:
     metadata = document.get("metadata", {})
-    return bool(metadata.get("dflash_enabled") or arm.get("dflash_enabled"))
+    markers = [
+        container["dflash_enabled"]
+        for container in (metadata, arm)
+        if "dflash_enabled" in container
+    ]
+    return bool(markers) and all(marker is True for marker in markers)
 
 
 def measured_dflash(path: Path, baseline: dict[str, Any]) -> dict[str, Any]:

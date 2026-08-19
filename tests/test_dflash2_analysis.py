@@ -64,13 +64,13 @@ def test_golden_apple_projection_values() -> None:
     )
 
 
-def _measurement_document(marked: bool = True) -> dict[str, object]:
+def _measurement_document(marker: object = True) -> dict[str, object]:
     metadata: dict[str, object] = {
         "generation_length": 128,
         "prompt_lengths": [1024, 4096, 16384],
     }
-    if marked:
-        metadata["dflash_enabled"] = True
+    if marker is not None:
+        metadata["dflash_enabled"] = marker
     rows = [
         {
             "requested_pp": prompt,
@@ -105,6 +105,21 @@ def test_measurement_adapter_requires_marker_and_preserves_kind(
         "decode_ratio_over_checked_in_oq8e_mtp"
     ] == pytest.approx(17.0 / 15.2)
 
-    path.write_text(json.dumps(_measurement_document(marked=False)), encoding="utf-8")
-    with pytest.raises(ValueError, match="dflash_enabled"):
-        analysis.measured_dflash(path, analysis.local_summary())
+    invalid_documents = [
+        _measurement_document(marker=None),
+        _measurement_document(marker=False),
+        _measurement_document(marker="false"),
+        {
+            **_measurement_document(),
+            "arms": [
+                {
+                    **_measurement_document()["arms"][0],
+                    "dflash_enabled": False,
+                }
+            ],
+        },
+    ]
+    for invalid in invalid_documents:
+        path.write_text(json.dumps(invalid), encoding="utf-8")
+        with pytest.raises(ValueError, match="dflash_enabled"):
+            analysis.measured_dflash(path, analysis.local_summary())
