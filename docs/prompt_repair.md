@@ -57,7 +57,7 @@ max_prompt_repair_seconds = 120
 | `prompt_repair` | `off` | Repair mode: `off` disables; `best-effort` repairs and continues on failure; `strict` blocks on unresolved issues after repair |
 | `max_prompt_repair_rounds` | `1` | Maximum repair-and-recheck iterations |
 | `max_prompt_token_growth` | `1000` | Maximum token increase allowed during repair |
-| `max_prompt_repair_seconds` | `120` | Wall-clock timeout for the entire repair loop |
+| `max_prompt_repair_seconds` | `120` | Hard wall-clock deadline for the entire repair loop, including an active provider call |
 
 ## CLI Flags
 
@@ -68,7 +68,7 @@ The following flags can be passed to `pdd checkup` (and related commands that in
 | `--prompt-repair MODE` | `off` | Non-interactive repair mode: `off`, `best-effort`, or `strict` |
 | `--max-prompt-repair-rounds INT` | `1` | Maximum repair-and-recheck iterations |
 | `--max-prompt-token-growth INT` | `1000` | Maximum token increase allowed during repair |
-| `--max-prompt-repair-seconds FLOAT` | `120.0` | Wall-clock timeout for the entire repair loop |
+| `--max-prompt-repair-seconds FLOAT` | `120.0` | Hard wall-clock deadline for the entire repair loop, including an active provider call |
 
 ## Token Delta Reporting
 
@@ -85,6 +85,11 @@ A warning is emitted if growth exceeds `max_prompt_token_growth`.
 
 - Deterministic source-set checkup remains the authority after every repair round
 - Prompt changes use `pdd.change.change()` and its modified-prompt delimiter contract
+- Legacy provider calls run in a supervised process group; a deadline terminates the
+  active call and its descendants rather than waiting for the provider to return
+- A timeout restores the original prompt while preserving cost and model evidence
+  from provider calls that completed before the deadline, including calls earlier
+  in the same repair round
 - No generated code edits
 - Audit note written under `.pdd/evidence/prompt_repair/<slug>-<timestamp>.json`
 
