@@ -6,6 +6,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 
+from pdd import story_coverage
 from pdd.story_coverage import (
     StoryCoverage,
     compute_story_coverage,
@@ -110,6 +111,50 @@ def test_zero_stories_is_not_applicable(tmp_path: Path):
     assert coverage.status == "not_applicable"
     assert coverage.story_coverage_pct is None
     assert "not_applicable" in format_summary_line(coverage)
+
+
+@pytest.mark.parametrize("non_test_file", [None, "helper.py", "test_notes.txt"])
+def test_collection_skips_pytest_without_test_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, non_test_file: str | None
+):
+    """Avoid starting nested pytest when the tree cannot contain tests."""
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    if non_test_file is not None:
+        (tests / non_test_file).write_text("", encoding="utf-8")
+
+    def fail_if_called(*_args, **_kwargs):
+        pytest.fail("pytest.main() should not run without test candidates")
+
+    monkeypatch.setattr(story_coverage.pytest, "main", fail_if_called)
+
+    coverage = compute_story_coverage(tmp_path, tests_dir=tests)
+
+    assert coverage.status == "not_applicable"
+    assert coverage.story_backed_test_count == 0
+
+
+@pytest.mark.parametrize("test_filename", ["test_story.py", "story_test.py"])
+def test_collection_recognizes_default_test_filename_patterns(
+    tmp_path: Path, test_filename: str
+):
+    """Keep collecting both default pytest filename patterns."""
+    stories = tmp_path / "user_stories"
+    tests = tmp_path / "tests"
+    stories.mkdir()
+    tests.mkdir()
+    _write_story(stories, "checkout_flow")
+    (tests / test_filename).write_text(
+        "import pytest\n"
+        "@pytest.mark.story('checkout_flow')\n"
+        "def test_flow():\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+
+    coverage = compute_story_coverage(tmp_path, stories_dir=stories, tests_dir=tests)
+
+    assert coverage.story_backed_test_count == 1
 
 
 def test_write_story_coverage_writes_latest_and_run_snapshot(tmp_path: Path):
