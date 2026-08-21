@@ -1,0 +1,1219 @@
+{
+  "metadata": {
+    "model_id": "Qwen3.8-27B-MLX-oQ8e-mtp",
+    "source_checkpoint_revision": "fe34c8d6784c6d9b463756dd020492123137b732",
+    "omlx_version": "0.6.1",
+    "started_at": "2026-08-20T17:09:40-0700",
+    "prompt_lengths": [
+      1024,
+      4096,
+      16384
+    ],
+    "generation_length": 512,
+    "throughput_repeats": 3,
+    "coding_sample_per_suite": 20,
+    "sandbox": "best-effort macOS Seatbelt; network/home denied; 15s/256MiB limits; not adversarially secure",
+    "accuracy_limitations": "Regression smoke sample only. MBPP prompts expose up to three tests that are also scored; generated code can deliberately circumvent an exit-code-only scorer.",
+    "external_upload": false,
+    "dataset_sha256": {
+      "humaneval.jsonl": "a9e7d97ea3d65976949ff2addf9fcb5a37ce2fb9e0d630289eeff3993beacfac",
+      "mbpp.jsonl": "d2b493742690b8174f35e677396223e5ed74d57be38abdbec1a9a1a780e0f82b"
+    },
+    "sample_task_ids": [
+      [
+        "humaneval",
+        "HumanEval/163"
+      ],
+      [
+        "humaneval",
+        "HumanEval/28"
+      ],
+      [
+        "humaneval",
+        "HumanEval/6"
+      ],
+      [
+        "humaneval",
+        "HumanEval/70"
+      ],
+      [
+        "humaneval",
+        "HumanEval/62"
+      ],
+      [
+        "humaneval",
+        "HumanEval/57"
+      ],
+      [
+        "humaneval",
+        "HumanEval/35"
+      ],
+      [
+        "humaneval",
+        "HumanEval/26"
+      ],
+      [
+        "humaneval",
+        "HumanEval/139"
+      ],
+      [
+        "humaneval",
+        "HumanEval/22"
+      ],
+      [
+        "humaneval",
+        "HumanEval/151"
+      ],
+      [
+        "humaneval",
+        "HumanEval/108"
+      ],
+      [
+        "humaneval",
+        "HumanEval/8"
+      ],
+      [
+        "humaneval",
+        "HumanEval/7"
+      ],
+      [
+        "humaneval",
+        "HumanEval/23"
+      ],
+      [
+        "humaneval",
+        "HumanEval/55"
+      ],
+      [
+        "humaneval",
+        "HumanEval/59"
+      ],
+      [
+        "humaneval",
+        "HumanEval/129"
+      ],
+      [
+        "humaneval",
+        "HumanEval/154"
+      ],
+      [
+        "humaneval",
+        "HumanEval/143"
+      ],
+      [
+        "mbpp",
+        "338"
+      ],
+      [
+        "mbpp",
+        "68"
+      ],
+      [
+        "mbpp",
+        "23"
+      ],
+      [
+        "mbpp",
+        "390"
+      ],
+      [
+        "mbpp",
+        "151"
+      ],
+      [
+        "mbpp",
+        "136"
+      ],
+      [
+        "mbpp",
+        "125"
+      ],
+      [
+        "mbpp",
+        "82"
+      ],
+      [
+        "mbpp",
+        "388"
+      ],
+      [
+        "mbpp",
+        "63"
+      ],
+      [
+        "mbpp",
+        "357"
+      ],
+      [
+        "mbpp",
+        "467"
+      ],
+      [
+        "mbpp",
+        "290"
+      ],
+      [
+        "mbpp",
+        "55"
+      ],
+      [
+        "mbpp",
+        "313"
+      ],
+      [
+        "mbpp",
+        "227"
+      ],
+      [
+        "mbpp",
+        "27"
+      ],
+      [
+        "mbpp",
+        "26"
+      ],
+      [
+        "mbpp",
+        "58"
+      ],
+      [
+        "mbpp",
+        "122"
+      ]
+    ],
+    "artifact_path": "<local-model-root>/Qwen3.8-27B-MLX-oQ8e-mtp",
+    "artifact_manifest": [
+      {
+        "name": "chat_template.jinja",
+        "size": 8952,
+        "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
+      },
+      {
+        "name": "config.json",
+        "size": 4151,
+        "sha256": "dadd0b0bef847ee8202db4cbd5cc04dfaead39b194ebf189daac7aba7fa4a7a7"
+      },
+      {
+        "name": "generation_config.json",
+        "size": 202,
+        "sha256": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e"
+      },
+      {
+        "name": "model-00001-of-00006.safetensors",
+        "size": 5016862596
+      },
+      {
+        "name": "model-00002-of-00006.safetensors",
+        "size": 5041543289
+      },
+      {
+        "name": "model-00003-of-00006.safetensors",
+        "size": 5041522666
+      },
+      {
+        "name": "model-00004-of-00006.safetensors",
+        "size": 5019869095
+      },
+      {
+        "name": "model-00005-of-00006.safetensors",
+        "size": 5013670661
+      },
+      {
+        "name": "model-00006-of-00006.safetensors",
+        "size": 4868173447
+      },
+      {
+        "name": "model.safetensors.index.json",
+        "size": 212223,
+        "sha256": "15c6afc067476ad5f835409ec53beb107f0b79373e9f6e2281486e3a1cecbda9"
+      },
+      {
+        "name": "oq_imatrix_report.json",
+        "size": 30935,
+        "sha256": "e89f726dfd7c84cd8cb3726569f56fa7ea43850b7cdbbd6723d196729a5faa12"
+      },
+      {
+        "name": "preprocessor_config.json",
+        "size": 390,
+        "sha256": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516"
+      },
+      {
+        "name": "processor_config.json",
+        "size": 991,
+        "sha256": "45fc17c8dd2474af6b493b52483c26c0584b0082d368c480f9fa611e73070040"
+      },
+      {
+        "name": "tokenizer.json",
+        "size": 19989325,
+        "sha256": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523"
+      },
+      {
+        "name": "tokenizer_config.json",
+        "size": 1165,
+        "sha256": "792fa3f0cb88b111e54ef3134c873531008c4df471d108da17903426e308aa7b"
+      },
+      {
+        "name": "vocab.json",
+        "size": 6722759,
+        "sha256": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"
+      }
+    ],
+    "target_config": {
+      "architectures": [
+        "Qwen3_5ForConditionalGeneration"
+      ],
+      "do_sample": true,
+      "eos_token_id": [
+        248046,
+        248044
+      ],
+      "generation_config": {
+        "bos_token_id": 248044,
+        "do_sample": true,
+        "eos_token_id": [
+          248046,
+          248044
+        ],
+        "pad_token_id": 248044,
+        "temperature": 1.0,
+        "top_k": 20,
+        "top_p": 0.95
+      },
+      "image_token_id": 248056,
+      "language_model_only": false,
+      "model_type": "qwen3_5",
+      "temperature": 1.0,
+      "text_config": {
+        "attention_bias": false,
+        "attention_dropout": 0.0,
+        "attn_output_gate": true,
+        "bos_token_id": 248044,
+        "dtype": "bfloat16",
+        "eos_token_id": 248044,
+        "full_attention_interval": 4,
+        "head_dim": 256,
+        "hidden_act": "silu",
+        "hidden_size": 5120,
+        "initializer_range": 0.02,
+        "intermediate_size": 17408,
+        "layer_types": [
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention",
+          "linear_attention",
+          "linear_attention",
+          "linear_attention",
+          "full_attention"
+        ],
+        "linear_conv_kernel_dim": 4,
+        "linear_key_head_dim": 128,
+        "linear_num_key_heads": 16,
+        "linear_num_value_heads": 48,
+        "linear_value_head_dim": 128,
+        "mamba_ssm_dtype": "float32",
+        "max_position_embeddings": 262144,
+        "model_type": "qwen3_5_text",
+        "mtp_num_hidden_layers": 1,
+        "mtp_use_dedicated_embeddings": false,
+        "num_attention_heads": 24,
+        "num_hidden_layers": 64,
+        "num_key_value_heads": 4,
+        "output_gate_type": "swish",
+        "pad_token_id": null,
+        "partial_rotary_factor": 0.25,
+        "rms_norm_eps": 1e-06,
+        "rope_parameters": {
+          "mrope_interleaved": true,
+          "mrope_section": [
+            11,
+            11,
+            10
+          ],
+          "partial_rotary_factor": 0.25,
+          "rope_theta": 10000000,
+          "type": "default"
+        },
+        "tie_word_embeddings": false,
+        "use_cache": true,
+        "vocab_size": 248320
+      },
+      "tie_word_embeddings": false,
+      "top_k": 20,
+      "top_p": 0.95,
+      "transformers_version": "5.8.0.dev0",
+      "video_token_id": 248057,
+      "vision_config": {
+        "deepstack_visual_indexes": [],
+        "depth": 27,
+        "hidden_act": "gelu_pytorch_tanh",
+        "hidden_size": 1152,
+        "in_channels": 3,
+        "initializer_range": 0.02,
+        "intermediate_size": 4304,
+        "model_type": "qwen3_5",
+        "num_heads": 16,
+        "num_position_embeddings": 2304,
+        "out_hidden_size": 5120,
+        "patch_size": 16,
+        "spatial_merge_size": 2,
+        "temporal_patch_size": 2
+      },
+      "vision_end_token_id": 248054,
+      "vision_start_token_id": 248053,
+      "quantization": {
+        "group_size": 64,
+        "bits": 8,
+        "mode": "affine"
+      },
+      "quantization_config": {
+        "group_size": 64,
+        "bits": 8,
+        "mode": "affine"
+      }
+    },
+    "finished_at": "2026-08-20T17:46:29-0700"
+  },
+  "arms": [
+    {
+      "label": "oq8e_mtp_d3",
+      "mtp_enabled": true,
+      "mtp_num_draft_tokens": 3,
+      "load_seconds": 2.8512588338926435,
+      "wall_seconds": 750.1866814577952,
+      "throughput": [
+        {
+          "bench_id": "bench-4e3569a9879a",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1160,
+              "requested_pp": 1024,
+              "tg": 512,
+              "ttft_ms": 5170.7,
+              "tpot_ms": 25.18,
+              "gen_tps": 39.8,
+              "processing_tps": 224.3,
+              "e2e_latency_s": 18.04,
+              "total_throughput": 92.7,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1160,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4371,
+              "requested_pp": 4096,
+              "tg": 512,
+              "ttft_ms": 23595.7,
+              "tpot_ms": 25.77,
+              "gen_tps": 38.9,
+              "processing_tps": 185.2,
+              "e2e_latency_s": 36.764,
+              "total_throughput": 132.8,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4371,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15705,
+              "requested_pp": 16384,
+              "tg": 512,
+              "ttft_ms": 120245.5,
+              "tpot_ms": 92.97,
+              "gen_tps": 10.9,
+              "processing_tps": 130.6,
+              "e2e_latency_s": 127.684,
+              "total_throughput": 123.6,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15705,
+              "completion_tokens": 81,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        },
+        {
+          "bench_id": "bench-e930a0686f71",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1157,
+              "requested_pp": 1024,
+              "tg": 512,
+              "ttft_ms": 13364.4,
+              "tpot_ms": 72.02,
+              "gen_tps": 13.9,
+              "processing_tps": 86.6,
+              "e2e_latency_s": 50.169,
+              "total_throughput": 33.3,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1157,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4367,
+              "requested_pp": 4096,
+              "tg": 512,
+              "ttft_ms": 34299.9,
+              "tpot_ms": 82.38,
+              "gen_tps": 12.2,
+              "processing_tps": 127.3,
+              "e2e_latency_s": 76.4,
+              "total_throughput": 63.9,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4367,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15703,
+              "requested_pp": 16384,
+              "tg": 512,
+              "ttft_ms": 152543.7,
+              "tpot_ms": 65.33,
+              "gen_tps": 15.5,
+              "processing_tps": 102.9,
+              "e2e_latency_s": 158.555,
+              "total_throughput": 99.6,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15703,
+              "completion_tokens": 93,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        },
+        {
+          "bench_id": "bench-79291e9faff6",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1158,
+              "requested_pp": 1024,
+              "tg": 512,
+              "ttft_ms": 10258.6,
+              "tpot_ms": 67.04,
+              "gen_tps": 14.9,
+              "processing_tps": 112.9,
+              "e2e_latency_s": 44.516,
+              "total_throughput": 37.5,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1158,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4368,
+              "requested_pp": 4096,
+              "tg": 512,
+              "ttft_ms": 36381.9,
+              "tpot_ms": 65.77,
+              "gen_tps": 15.2,
+              "processing_tps": 120.1,
+              "e2e_latency_s": 69.992,
+              "total_throughput": 69.7,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4368,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15705,
+              "requested_pp": 16384,
+              "tg": 512,
+              "ttft_ms": 156678.9,
+              "tpot_ms": 60.07,
+              "gen_tps": 16.9,
+              "processing_tps": 100.2,
+              "e2e_latency_s": 161.487,
+              "total_throughput": 97.8,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15705,
+              "completion_tokens": 81,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        }
+      ],
+      "accuracy": null,
+      "footprint": {
+        "samples": 2701,
+        "min_bytes": 30678572576,
+        "max_bytes": 40397266512,
+        "median_bytes": 38060596792
+      },
+      "mtp_log_lines": [
+        "2026-08-20 17:09:45,820 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[0] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=5/6 (83.3%) depth[d1=2/3,d2=2/2,d3=1/1] emits[init=2,draft=4,bonus=1,verify=1] timing[backbone=249.0ms mtp=2.0ms sample=0.1ms cache=0.3ms]",
+        "2026-08-20 17:10:03,850 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[1] finish=length tokens=512 cycles=145 tok/cycle=3.53 accept=366/381 (96.1%) depth[d1=133/138,d2=122/128,d3=111/115] d0=7 emits[init=2,draft=366,bonus=129,verify=15] timing[backbone=12559.9ms mtp=210.5ms sample=6.0ms cache=7.5ms]",
+        "2026-08-20 17:10:40,582 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[2] finish=length tokens=512 cycles=146 tok/cycle=3.51 accept=366/384 (95.3%) depth[d1=134/139,d2=123/129,d3=109/116] d0=7 emits[init=2,draft=365,bonus=127,verify=18] timing[backbone=12780.2ms mtp=239.0ms sample=6.6ms cache=9.8ms]",
+        "2026-08-20 17:12:48,247 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[3] finish=stop tokens=82 cycles=31 tok/cycle=2.65 accept=49/54 (90.7%) depth[d1=23/26,d2=15/16,d3=11/12] d0=5 emits[init=2,draft=49,bonus=26,verify=5] timing[backbone=7165.7ms mtp=227.1ms sample=4.1ms cache=7.5ms]",
+        "2026-08-20 17:12:50,909 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[4] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=5/6 (83.3%) depth[d1=2/3,d2=2/2,d3=1/1] emits[init=2,draft=4,bonus=1,verify=1] timing[backbone=337.6ms mtp=2.2ms sample=0.1ms cache=0.4ms]",
+        "2026-08-20 17:13:41,042 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[5] finish=length tokens=512 cycles=182 tok/cycle=2.81 accept=328/395 (83.0%) depth[d1=143/171,d2=107/129,d3=78/95] d0=11 emits[init=2,draft=328,bonus=115,verify=67] timing[backbone=35423.6ms mtp=774.2ms sample=24.9ms cache=75.0ms]",
+        "2026-08-20 17:14:57,426 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[6] finish=length tokens=512 cycles=177 tok/cycle=2.89 accept=336/382 (88.0%) depth[d1=140/151,d2=111/133,d3=85/98] d0=26 emits[init=2,draft=334,bonus=130,verify=46] timing[backbone=39692.4ms mtp=1280.3ms sample=50.2ms cache=69.6ms]",
+        "2026-08-20 17:17:36,003 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[7] finish=stop tokens=94 cycles=35 tok/cycle=2.69 accept=57/62 (91.9%) depth[d1=30/32,d2=24/26,d3=3/4] d0=3 emits[init=2,draft=57,bonus=30,verify=5] timing[backbone=6013.6ms mtp=101.0ms sample=1.6ms cache=2.5ms]",
+        "2026-08-20 17:17:37,907 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[8] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=5/6 (83.3%) depth[d1=2/3,d2=2/2,d3=1/1] emits[init=2,draft=4,bonus=1,verify=1] timing[backbone=282.3ms mtp=2.2ms sample=0.1ms cache=0.3ms]",
+        "2026-08-20 17:18:22,382 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[9] finish=length tokens=512 cycles=195 tok/cycle=2.63 accept=315/369 (85.4%) depth[d1=162/186,d2=130/150,d3=23/33] d0=9 emits[init=2,draft=315,bonus=141,verify=54] timing[backbone=33573.2ms mtp=354.0ms sample=12.0ms cache=32.6ms]",
+        "2026-08-20 17:19:32,384 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[10] finish=length tokens=512 cycles=192 tok/cycle=2.67 accept=319/358 (89.1%) depth[d1=170/183,d2=116/135,d3=33/40] d0=9 emits[init=2,draft=319,bonus=152,verify=39] timing[backbone=33051.0ms mtp=273.9ms sample=11.9ms cache=24.0ms]",
+        "2026-08-20 17:22:13,850 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[11] finish=stop tokens=82 cycles=30 tok/cycle=2.73 accept=50/53 (94.3%) depth[d1=26/27,d2=19/21,d3=5/5] d0=3 emits[init=2,draft=50,bonus=27,verify=3] timing[backbone=4676.6ms mtp=113.8ms sample=3.1ms cache=2.6ms]"
+      ]
+    },
+    {
+      "label": "oq8e_mtp_d4",
+      "mtp_enabled": true,
+      "mtp_num_draft_tokens": 4,
+      "load_seconds": 5.764024124946445,
+      "wall_seconds": 660.3727694577537,
+      "throughput": [
+        {
+          "bench_id": "bench-6ed2c26d1eb1",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1161,
+              "requested_pp": 1024,
+              "tg": 512,
+              "ttft_ms": 8636.7,
+              "tpot_ms": 55.58,
+              "gen_tps": 18.0,
+              "processing_tps": 134.4,
+              "e2e_latency_s": 37.039,
+              "total_throughput": 45.2,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1161,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4366,
+              "requested_pp": 4096,
+              "tg": 512,
+              "ttft_ms": 32232.5,
+              "tpot_ms": 53.29,
+              "gen_tps": 18.8,
+              "processing_tps": 135.5,
+              "e2e_latency_s": 59.039,
+              "total_throughput": 82.5,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4366,
+              "completion_tokens": 504,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15705,
+              "requested_pp": 16384,
+              "tg": 512,
+              "ttft_ms": 119591.2,
+              "tpot_ms": 58.99,
+              "gen_tps": 17.1,
+              "processing_tps": 131.3,
+              "e2e_latency_s": 125.113,
+              "total_throughput": 126.3,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15705,
+              "completion_tokens": 94,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        },
+        {
+          "bench_id": "bench-6b24b633c57c",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1161,
+              "requested_pp": 1024,
+              "tg": 512,
+              "ttft_ms": 9615.1,
+              "tpot_ms": 52.01,
+              "gen_tps": 19.3,
+              "processing_tps": 120.7,
+              "e2e_latency_s": 36.192,
+              "total_throughput": 46.2,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1161,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4368,
+              "requested_pp": 4096,
+              "tg": 512,
+              "ttft_ms": 31831.7,
+              "tpot_ms": 52.96,
+              "gen_tps": 18.9,
+              "processing_tps": 137.2,
+              "e2e_latency_s": 58.896,
+              "total_throughput": 82.9,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4368,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15703,
+              "requested_pp": 16384,
+              "tg": 512,
+              "ttft_ms": 119910.6,
+              "tpot_ms": 51.87,
+              "gen_tps": 19.5,
+              "processing_tps": 131.0,
+              "e2e_latency_s": 124.11,
+              "total_throughput": 127.2,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15703,
+              "completion_tokens": 81,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        },
+        {
+          "bench_id": "bench-034d6365b065",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1157,
+              "requested_pp": 1024,
+              "tg": 512,
+              "ttft_ms": 9230.3,
+              "tpot_ms": 57.55,
+              "gen_tps": 17.4,
+              "processing_tps": 125.3,
+              "e2e_latency_s": 38.642,
+              "total_throughput": 43.2,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1157,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4368,
+              "requested_pp": 4096,
+              "tg": 512,
+              "ttft_ms": 31320.7,
+              "tpot_ms": 45.54,
+              "gen_tps": 22.0,
+              "processing_tps": 139.5,
+              "e2e_latency_s": 54.591,
+              "total_throughput": 89.4,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4368,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15705,
+              "requested_pp": 16384,
+              "tg": 512,
+              "ttft_ms": 115607.5,
+              "tpot_ms": 53.94,
+              "gen_tps": 18.7,
+              "processing_tps": 135.8,
+              "e2e_latency_s": 120.627,
+              "total_throughput": 131.0,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15705,
+              "completion_tokens": 94,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        }
+      ],
+      "accuracy": null,
+      "footprint": {
+        "samples": 2391,
+        "min_bytes": 30696332856,
+        "max_bytes": 40837145512,
+        "median_bytes": 38291152440
+      },
+      "mtp_log_lines": [
+        "2026-08-20 17:22:23,114 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[0] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=6/8 (75.0%) depth[d1=2/3,d2=2/2,d3=2/2,d4=0/1] emits[init=2,draft=4,bonus=0,verify=2] timing[backbone=278.5ms mtp=10.1ms sample=0.3ms cache=1.0ms]",
+        "2026-08-20 17:23:00,149 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[1] finish=length tokens=512 cycles=180 tok/cycle=2.84 accept=330/400 (82.5%) depth[d1=145/173,d2=116/138,d3=48/62,d4=21/27] d0=7 emits[init=2,draft=330,bonus=110,verify=70] timing[backbone=27160.7ms mtp=819.8ms sample=16.3ms cache=64.5ms]",
+        "2026-08-20 17:23:59,154 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[2] finish=stop tokens=505 cycles=158 tok/cycle=3.20 accept=348/417 (83.5%) depth[d1=129/151,d2=108/121,d3=64/90,d4=47/55] d0=7 emits[init=2,draft=346,bonus=88,verify=69] timing[backbone=25310.5ms mtp=1122.0ms sample=14.4ms cache=62.5ms]",
+        "2026-08-20 17:26:04,280 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[3] finish=stop tokens=95 cycles=31 tok/cycle=3.06 accept=65/70 (92.9%) depth[d1=27/28,d2=19/22,d3=12/12,d4=7/8] d0=3 emits[init=2,draft=63,bonus=25,verify=5] timing[backbone=5258.9ms mtp=261.1ms sample=2.4ms cache=4.0ms]",
+        "2026-08-20 17:26:06,053 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[4] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=6/8 (75.0%) depth[d1=2/3,d2=2/2,d3=2/2,d4=0/1] emits[init=2,draft=4,bonus=0,verify=2] timing[backbone=322.2ms mtp=7.4ms sample=0.1ms cache=0.5ms]",
+        "2026-08-20 17:26:42,223 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[5] finish=length tokens=512 cycles=156 tok/cycle=3.28 accept=356/408 (87.3%) depth[d1=132/152,d2=97/118,d3=78/86,d4=49/52] d0=4 emits[init=2,draft=355,bonus=103,verify=52] timing[backbone=25271.9ms mtp=948.7ms sample=14.3ms cache=43.1ms]",
+        "2026-08-20 17:27:41,062 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[6] finish=length tokens=512 cycles=159 tok/cycle=3.22 accept=354/400 (88.5%) depth[d1=140/152,d2=105/118,d3=71/83,d4=38/47] d0=7 emits[init=2,draft=352,bonus=112,verify=46] timing[backbone=25654.5ms mtp=1027.5ms sample=15.2ms cache=41.6ms]",
+        "2026-08-20 17:29:45,216 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[7] finish=stop tokens=82 cycles=26 tok/cycle=3.15 accept=57/62 (91.9%) depth[d1=22/23,d2=15/18,d3=13/13,d4=7/8] d0=3 emits[init=2,draft=55,bonus=20,verify=5] timing[backbone=3995.8ms mtp=199.6ms sample=1.9ms cache=4.2ms]",
+        "2026-08-20 17:29:47,491 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[8] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=6/8 (75.0%) depth[d1=2/3,d2=2/2,d3=2/2,d4=0/1] emits[init=2,draft=4,bonus=0,verify=2] timing[backbone=309.1ms mtp=7.1ms sample=0.1ms cache=0.6ms]",
+        "2026-08-20 17:30:26,075 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[9] finish=length tokens=512 cycles=172 tok/cycle=2.98 accept=338/409 (82.6%) depth[d1=140/163,d2=105/128,d3=67/84,d4=26/34] d0=9 emits[init=2,draft=338,bonus=101,verify=71] timing[backbone=28104.4ms mtp=904.2ms sample=17.5ms cache=63.1ms]",
+        "2026-08-20 17:31:20,679 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[10] finish=length tokens=512 cycles=142 tok/cycle=3.61 accept=369/381 (96.9%) depth[d1=131/135,d2=116/121,d3=92/93,d4=30/32] d0=7 emits[init=2,draft=369,bonus=129,verify=12] timing[backbone=22267.1ms mtp=673.2ms sample=11.5ms cache=13.7ms]",
+        "2026-08-20 17:33:21,330 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[11] finish=stop tokens=95 cycles=29 tok/cycle=3.28 accept=66/69 (95.7%) depth[d1=25/26,d2=17/19,d3=13/13,d4=11/11] d0=3 emits[init=2,draft=65,bonus=25,verify=3] timing[backbone=4761.0ms mtp=241.4ms sample=2.6ms cache=2.2ms]"
+      ]
+    },
+    {
+      "label": "oq8e_mtp_d5",
+      "mtp_enabled": true,
+      "mtp_num_draft_tokens": 5,
+      "load_seconds": 4.416120832785964,
+      "wall_seconds": 781.7530774590559,
+      "throughput": [
+        {
+          "bench_id": "bench-68554c9e5383",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1159,
+              "requested_pp": 1024,
+              "tg": 512,
+              "ttft_ms": 8239.0,
+              "tpot_ms": 50.77,
+              "gen_tps": 19.7,
+              "processing_tps": 140.7,
+              "e2e_latency_s": 34.185,
+              "total_throughput": 48.9,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1159,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4369,
+              "requested_pp": 4096,
+              "tg": 512,
+              "ttft_ms": 31606.7,
+              "tpot_ms": 42.5,
+              "gen_tps": 23.6,
+              "processing_tps": 138.2,
+              "e2e_latency_s": 53.328,
+              "total_throughput": 91.5,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4369,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15701,
+              "requested_pp": 16384,
+              "tg": 512,
+              "ttft_ms": 115441.6,
+              "tpot_ms": 51.52,
+              "gen_tps": 19.7,
+              "processing_tps": 136.0,
+              "e2e_latency_s": 119.566,
+              "total_throughput": 132.0,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15701,
+              "completion_tokens": 81,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        },
+        {
+          "bench_id": "bench-6202f6031281",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1160,
+              "requested_pp": 1024,
+              "tg": 512,
+              "ttft_ms": 8974.7,
+              "tpot_ms": 51.49,
+              "gen_tps": 19.5,
+              "processing_tps": 129.3,
+              "e2e_latency_s": 35.289,
+              "total_throughput": 47.4,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1160,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4367,
+              "requested_pp": 4096,
+              "tg": 512,
+              "ttft_ms": 30726.8,
+              "tpot_ms": 56.7,
+              "gen_tps": 17.7,
+              "processing_tps": 142.1,
+              "e2e_latency_s": 59.706,
+              "total_throughput": 81.7,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4367,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15702,
+              "requested_pp": 16384,
+              "tg": 512,
+              "ttft_ms": 149529.6,
+              "tpot_ms": 68.08,
+              "gen_tps": 14.7,
+              "processing_tps": 105.0,
+              "e2e_latency_s": 184.32,
+              "total_throughput": 88.0,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15702,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        },
+        {
+          "bench_id": "bench-1e4720585cbe",
+          "status": "completed",
+          "context_profile": "code_python",
+          "results": [
+            {
+              "test_type": "single",
+              "pp": 1160,
+              "requested_pp": 1024,
+              "tg": 512,
+              "ttft_ms": 10780.3,
+              "tpot_ms": 66.48,
+              "gen_tps": 15.1,
+              "processing_tps": 107.6,
+              "e2e_latency_s": 44.75,
+              "total_throughput": 37.4,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 1160,
+              "completion_tokens": 512,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 4371,
+              "requested_pp": 4096,
+              "tg": 512,
+              "ttft_ms": 38909.2,
+              "tpot_ms": 72.73,
+              "gen_tps": 13.8,
+              "processing_tps": 112.3,
+              "e2e_latency_s": 74.186,
+              "total_throughput": 65.5,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 4371,
+              "completion_tokens": 486,
+              "cached_tokens": 0
+            },
+            {
+              "test_type": "single",
+              "pp": 15701,
+              "requested_pp": 16384,
+              "tg": 512,
+              "ttft_ms": 164224.5,
+              "tpot_ms": 63.24,
+              "gen_tps": 16.0,
+              "processing_tps": 95.6,
+              "e2e_latency_s": 170.075,
+              "total_throughput": 92.9,
+              "peak_memory_bytes": null,
+              "prompt_tokens": 15701,
+              "completion_tokens": 93,
+              "cached_tokens": 0
+            }
+          ],
+          "error": null,
+          "upload_state": {
+            "phase": "skipped",
+            "results": [],
+            "total": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "owner_hash": null,
+            "skipped_reason": "external_endpoint",
+            "skipped_features": [],
+            "feature_flags": []
+          }
+        }
+      ],
+      "accuracy": null,
+      "footprint": {
+        "samples": 2850,
+        "min_bytes": 30686502456,
+        "max_bytes": 44202991184,
+        "median_bytes": 38767468112
+      },
+      "mtp_log_lines": [
+        "2026-08-20 17:33:28,885 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[0] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=6/9 (66.7%) depth[d1=2/3,d2=2/2,d3=2/2,d4=0/2,d5=0/0] emits[init=2,draft=4,bonus=0,verify=2] timing[backbone=394.1ms mtp=14.5ms sample=0.1ms cache=0.7ms]",
+        "2026-08-20 17:34:03,049 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[1] finish=length tokens=512 cycles=163 tok/cycle=3.14 accept=348/411 (84.7%) depth[d1=129/156,d2=106/123,d3=68/80,d4=42/49,d5=3/3] d0=7 emits[init=2,draft=348,bonus=99,verify=63] timing[backbone=24578.1ms mtp=1028.0ms sample=13.8ms cache=60.2ms]",
+        "2026-08-20 17:34:56,341 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[2] finish=length tokens=512 cycles=133 tok/cycle=3.85 accept=381/396 (96.2%) depth[d1=122/126,d2=113/116,d3=96/102,d4=46/47,d5=4/5] d0=7 emits[init=2,draft=378,bonus=117,verify=15] timing[backbone=20553.0ms mtp=831.8ms sample=13.5ms cache=18.5ms]",
+        "2026-08-20 17:36:55,867 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[3] finish=stop tokens=82 cycles=26 tok/cycle=3.15 accept=54/59 (91.5%) depth[d1=22/23,d2=15/18,d3=13/13,d4=3/4,d5=1/1] d0=3 emits[init=2,draft=54,bonus=21,verify=5] timing[backbone=3910.0ms mtp=222.7ms sample=1.8ms cache=4.0ms]",
+        "2026-08-20 17:36:57,746 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[4] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=6/9 (66.7%) depth[d1=2/3,d2=2/2,d3=2/2,d4=0/2,d5=0/0] emits[init=2,draft=4,bonus=0,verify=2] timing[backbone=357.6ms mtp=24.5ms sample=0.1ms cache=0.8ms]",
+        "2026-08-20 17:37:33,013 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[5] finish=length tokens=512 cycles=154 tok/cycle=3.32 accept=359/416 (86.3%) depth[d1=129/147,d2=104/117,d3=74/91,d4=48/56,d5=4/5] d0=7 emits[init=2,draft=357,bonus=96,verify=57] timing[backbone=24726.3ms mtp=1207.0ms sample=14.1ms cache=54.8ms]",
+        "2026-08-20 17:38:32,432 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[6] finish=length tokens=512 cycles=132 tok/cycle=3.88 accept=379/394 (96.2%) depth[d1=117/121,d2=101/104,d3=80/84,d4=53/56,d5=28/29] d0=11 emits[init=2,draft=379,bonus=117,verify=14] timing[backbone=25342.9ms mtp=1785.5ms sample=298.7ms cache=29.6ms]",
+        "2026-08-20 17:41:37,029 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[7] finish=length tokens=512 cycles=157 tok/cycle=3.26 accept=356/424 (84.0%) depth[d1=130/150,d2=104/119,d3=72/96,d4=49/56,d5=1/3] d0=7 emits[init=2,draft=354,bonus=88,verify=68] timing[backbone=32680.9ms mtp=1894.2ms sample=8.6ms cache=27.7ms]",
+        "2026-08-20 17:41:39,253 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[8] finish=length tokens=8 cycles=3 tok/cycle=2.67 accept=6/9 (66.7%) depth[d1=2/3,d2=2/2,d3=2/2,d4=0/2,d5=0/0] emits[init=2,draft=4,bonus=0,verify=2] timing[backbone=378.5ms mtp=23.7ms sample=0.1ms cache=1.8ms]",
+        "2026-08-20 17:42:24,003 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[9] finish=length tokens=512 cycles=161 tok/cycle=3.18 accept=349/426 (81.9%) depth[d1=130/154,d2=98/119,d3=68/86,d4=45/57,d5=8/10] d0=7 emits[init=2,draft=349,bonus=84,verify=77] timing[backbone=32570.4ms mtp=1217.2ms sample=8.7ms cache=32.0ms]",
+        "2026-08-20 17:43:38,156 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[10] finish=stop tokens=487 cycles=175 tok/cycle=2.78 accept=310/381 (81.4%) depth[d1=138/166,d2=90/113,d3=58/74,d4=16/19,d5=8/9] d0=9 emits[init=2,draft=310,bonus=104,verify=71] timing[backbone=34211.5ms mtp=834.2ms sample=10.6ms cache=37.5ms]",
+        "2026-08-20 17:46:28,252 - omlx.patches.mlx_lm_mtp.batch_generator - INFO - [-] - MTP[11] finish=stop tokens=94 cycles=26 tok/cycle=3.62 accept=69/74 (93.2%) depth[d1=21/23,d2=18/20,d3=17/17,d4=11/12,d5=2/2] d0=3 emits[init=2,draft=67,bonus=20,verify=5] timing[backbone=5575.7ms mtp=373.6ms sample=1.3ms cache=2.4ms]"
+      ]
+    }
+  ],
+  "comparison": {
+    "throughput": {
+      "1024": {
+        "oq8e_mtp_d3": {
+          "generation_tps": [
+            39.8,
+            13.9,
+            14.9
+          ],
+          "median": 14.9,
+          "speedup_vs_first_arm": 1.0
+        },
+        "oq8e_mtp_d4": {
+          "generation_tps": [
+            18.0,
+            19.3,
+            17.4
+          ],
+          "median": 18.0,
+          "speedup_vs_first_arm": 1.2080536912751678
+        },
+        "oq8e_mtp_d5": {
+          "generation_tps": [
+            19.7,
+            19.5,
+            15.1
+          ],
+          "median": 19.5,
+          "speedup_vs_first_arm": 1.308724832214765
+        }
+      },
+      "4096": {
+        "oq8e_mtp_d3": {
+          "generation_tps": [
+            38.9,
+            12.2,
+            15.2
+          ],
+          "median": 15.2,
+          "speedup_vs_first_arm": 1.0
+        },
+        "oq8e_mtp_d4": {
+          "generation_tps": [
+            18.8,
+            18.9,
+            22.0
+          ],
+          "median": 18.9,
+          "speedup_vs_first_arm": 1.243421052631579
+        },
+        "oq8e_mtp_d5": {
+          "generation_tps": [
+            23.6,
+            17.7,
+            13.8
+          ],
+          "median": 17.7,
+          "speedup_vs_first_arm": 1.1644736842105263
+        }
+      },
+      "16384": {
+        "oq8e_mtp_d3": {
+          "generation_tps": [
+            10.9,
+            15.5,
+            16.9
+          ],
+          "median": 15.5,
+          "speedup_vs_first_arm": 1.0
+        },
+        "oq8e_mtp_d4": {
+          "generation_tps": [
+            17.1,
+            19.5,
+            18.7
+          ],
+          "median": 18.7,
+          "speedup_vs_first_arm": 1.2064516129032257
+        },
+        "oq8e_mtp_d5": {
+          "generation_tps": [
+            19.7,
+            14.7,
+            16.0
+          ],
+          "median": 16.0,
+          "speedup_vs_first_arm": 1.032258064516129
+        }
+      }
+    }
+  }
+}

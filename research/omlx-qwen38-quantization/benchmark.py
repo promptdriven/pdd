@@ -58,6 +58,7 @@ SAMPLE_PER_BENCHMARK = 20
 THROUGHPUT_REPEATS = 3
 PROMPT_LENGTHS = [1024, 4096, 16384]
 GENERATION_LENGTH = 128
+TEMP_PROFILE_NAMES: set[str] = set()
 
 
 def say(message: str) -> None:
@@ -163,7 +164,10 @@ def unload_all(session: requests.Session) -> None:
             unload_model(session, model["id"])
 
 
-def set_arm(session: requests.Session, mtp_enabled: bool) -> None:
+def set_arm(
+    session: requests.Session,
+    mtp_enabled: bool,
+) -> None:
     body = {
         "temperature": 0.0,
         "top_p": 1.0,
@@ -190,6 +194,53 @@ def set_arm(session: requests.Session, mtp_enabled: bool) -> None:
     )
 
 
+def apply_mtp_depth_profile(
+    session: requests.Session, mtp_depth: int | None
+) -> str:
+    """Apply depth through profiles, since the 0.6.x settings route omits it."""
+    depth_label = "default" if mtp_depth is None else str(mtp_depth)
+    profile_name = f"codex-depth-sweep-{os.getpid()}-{depth_label}"
+    target = next(model for model in get_models(session) if model["id"] == MODEL_ID)
+    settings = dict(target.get("settings") or {})
+    settings["mtp_num_draft_tokens"] = mtp_depth
+    checked(
+        session.post(
+            f"{BASE_URL}/admin/api/models/{MODEL_ID}/profiles",
+            json={
+                "name": profile_name,
+                "display_name": f"Temporary depth {mtp_depth} benchmark",
+                "description": "Temporary profile created by the local depth sweep",
+                "settings": settings,
+                "expose_as_model": False,
+            },
+            timeout=60,
+        )
+    )
+    TEMP_PROFILE_NAMES.add(profile_name)
+    applied = checked(
+        session.post(
+            f"{BASE_URL}/admin/api/models/{MODEL_ID}/profiles/{profile_name}/apply",
+            timeout=60,
+        )
+    )
+    actual = applied.get("settings", {}).get("mtp_num_draft_tokens")
+    if actual != mtp_depth:
+        raise RuntimeError(
+            f"Requested MTP depth {mtp_depth}, but applied profile reports {actual}"
+        )
+    return profile_name
+
+
+def delete_temp_profile(session: requests.Session, profile_name: str) -> None:
+    response = session.delete(
+        f"{BASE_URL}/admin/api/models/{MODEL_ID}/profiles/{profile_name}",
+        timeout=60,
+    )
+    if response.status_code not in (200, 404):
+        checked(response)
+    TEMP_PROFILE_NAMES.discard(profile_name)
+
+
 def restore_settings(session: requests.Session, settings: dict[str, Any]) -> None:
     """Restore the target's complete pre-benchmark settings snapshot."""
     if not settings:
@@ -202,6 +253,14 @@ def restore_settings(session: requests.Session, settings: dict[str, Any]) -> Non
             timeout=60,
         )
     )
+    # oMLX 0.6.x omits this field from its ordinary settings request schema.
+    # Applying a temporary profile is the only API route that restores an
+    # explicit value, including the semantic default represented by null.
+    if "mtp_num_draft_tokens" in settings:
+        profile_name = apply_mtp_depth_profile(
+            session, settings["mtp_num_draft_tokens"]
+        )
+        delete_temp_profile(session, profile_name)
 
 
 def load_target(session: requests.Session) -> float:
@@ -581,10 +640,16 @@ def run_arm(
     api_key: str,
     *,
     throughput_only: bool = False,
+    mtp_depth: int | None = None,
 ) -> dict[str, Any]:
-    say(f"=== Starting arm: {label} (mtp_enabled={mtp_enabled}) ===")
+    say(
+        f"=== Starting arm: {label} (mtp_enabled={mtp_enabled}, "
+        f"mtp_depth={mtp_depth}) ==="
+    )
     unload_all(session)
     set_arm(session, mtp_enabled)
+    if mtp_depth is not None:
+        apply_mtp_depth_profile(session, mtp_depth)
     log_offset = LOG_PATH.stat().st_size if LOG_PATH.exists() else 0
     load_seconds = load_target(session)
     say(f"Loaded target in {load_seconds:.1f}s")
@@ -602,6 +667,7 @@ def run_arm(
     arm = {
         "label": label,
         "mtp_enabled": mtp_enabled,
+        "mtp_num_draft_tokens": mtp_depth,
         "load_seconds": load_seconds,
         "wall_seconds": time.perf_counter() - started,
         "throughput": throughput,
@@ -670,6 +736,29 @@ def summarize_comparison(arms: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def summarize_depth_sweep(arms: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize generation throughput for a multi-depth MTP sweep."""
+    throughput: dict[str, Any] = {}
+    for requested_pp in PROMPT_LENGTHS:
+        prompt: dict[str, Any] = {}
+        for arm in arms:
+            values = [
+                float(row["gen_tps"])
+                for run in arm["throughput"]
+                for row in run["results"]
+                if int(row["requested_pp"]) == requested_pp
+            ]
+            prompt[arm["label"]] = {
+                "generation_tps": values,
+                "median": statistics.median(values),
+            }
+        baseline = prompt[arms[0]["label"]]["median"]
+        for values in prompt.values():
+            values["speedup_vs_first_arm"] = values["median"] / baseline
+        throughput[str(requested_pp)] = prompt
+    return {"throughput": throughput}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -692,8 +781,18 @@ def main() -> None:
     parser.add_argument(
         "--label", default="oq8e_mtp", help="Result arm label in single-model mode"
     )
+    parser.add_argument(
+        "--mtp-depths",
+        help="Comma-separated MTP maximum depths to sweep in single-model mode",
+    )
+    parser.add_argument(
+        "--generation-length",
+        type=int,
+        help="Override the generated-token count used by throughput runs",
+    )
     args = parser.parse_args()
-    global MODEL_ID, RESULT_PATH, SAMPLE_PER_BENCHMARK, THROUGHPUT_REPEATS, PROMPT_LENGTHS
+    global MODEL_ID, RESULT_PATH, SAMPLE_PER_BENCHMARK, THROUGHPUT_REPEATS
+    global PROMPT_LENGTHS, GENERATION_LENGTH
     if args.single_model:
         if not args.result_path:
             parser.error("--result-path is required with --single-model")
@@ -703,6 +802,20 @@ def main() -> None:
         SAMPLE_PER_BENCHMARK = 1
         THROUGHPUT_REPEATS = 1
         PROMPT_LENGTHS = [1024]
+    if args.generation_length:
+        if args.generation_length < 1:
+            parser.error("--generation-length must be positive")
+        GENERATION_LENGTH = args.generation_length
+    mtp_depths: list[int] = []
+    if args.mtp_depths:
+        if not args.single_model:
+            parser.error("--mtp-depths requires --single-model")
+        try:
+            mtp_depths = [int(value) for value in args.mtp_depths.split(",")]
+        except ValueError:
+            parser.error("--mtp-depths must be comma-separated integers")
+        if not mtp_depths or any(depth < 1 or depth > 8 for depth in mtp_depths):
+            parser.error("--mtp-depths values must be between 1 and 8")
 
     api_key = load_api_key()
     session = admin_session(api_key)
@@ -765,15 +878,32 @@ def main() -> None:
                     document["metadata"]["target_config"] = json.loads(
                         config_path.read_text(encoding="utf-8")
                     )
-            document["arms"].append(
-                run_arm(
-                    args.label,
-                    True,
-                    session,
-                    api_key,
-                    throughput_only=args.throughput_only,
+            if mtp_depths:
+                for depth in mtp_depths:
+                    document["arms"].append(
+                        run_arm(
+                            f"{args.label}_d{depth}",
+                            True,
+                            session,
+                            api_key,
+                            throughput_only=True,
+                            mtp_depth=depth,
+                        )
+                    )
+                    RESULT_PATH.write_text(
+                        json.dumps(document, indent=2), encoding="utf-8"
+                    )
+                document["comparison"] = summarize_depth_sweep(document["arms"])
+            else:
+                document["arms"].append(
+                    run_arm(
+                        args.label,
+                        True,
+                        session,
+                        api_key,
+                        throughput_only=args.throughput_only,
+                    )
                 )
-            )
         else:
             document["arms"].append(
                 run_arm("standard_bf16", False, session, api_key)
@@ -791,6 +921,8 @@ def main() -> None:
     finally:
         try:
             unload_model(session, MODEL_ID)
+            for profile_name in list(TEMP_PROFILE_NAMES):
+                delete_temp_profile(session, profile_name)
             restore_settings(session, original_target_settings)
             for model_id in originally_loaded:
                 model = next(

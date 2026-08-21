@@ -16,6 +16,12 @@ Follow-up: the dated
 results, evaluates current DFlash2 primary evidence, and defines the smallest
 Apple M4 Max experiment needed before making any speedup claim.
 
+The first local follow-up, an
+[`MTP maximum-depth sweep`](mtp-depth-sweep-2026-08-20.md), found depth 4 to be
+the best candidate: 20.6–24.3% higher median decode throughput than the current
+depth-3 default in a directional three-repeat run. Its report documents the
+substantial trajectory variance and the paired validation still required.
+
 ## Environment
 
 - MacBook Pro, Apple M4 Max, 16 CPU cores, 128 GB unified memory
@@ -182,6 +188,8 @@ loaded models around a benchmark session.
   regression sample
 - [`results/bf16_mtp_post.json`](results/bf16_mtp_post.json): BF16+MTP throughput
   bracket after oQ8e
+- [`results/oq8e_mtp_depth_sweep.json`](results/oq8e_mtp_depth_sweep.json):
+  oQ8e native-MTP maximum-depth 3/4/5 sweep with 512-token generation targets
 
 ## Recommendation boundary
 
