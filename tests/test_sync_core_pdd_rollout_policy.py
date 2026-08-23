@@ -386,6 +386,11 @@ PREAUTHORIZED_CHILD_PATHS = (
         "scripts/manual_validate_pr_1875.py",
         "tests/test_e2e_story_failure_diagnostics.py",
         "tests/test_story_detection_result.py",
+        "research/omlx-qwen38-pi-prime/README.md",
+        "research/omlx-qwen38-pi-prime/analyze.py",
+        "research/omlx-qwen38-pi-prime/benchmark.py",
+        "research/omlx-qwen38-pi-prime/results/2026-08-19-clean.json",
+        "tests/test_omlx_pi_prime_benchmark.py",
     }
 )
 PREAUTHORIZED_CHILD_OWNERSHIP = {
