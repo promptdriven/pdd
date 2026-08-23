@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "0.73.1"
+  }
+}
